@@ -1,5 +1,5 @@
 //! Http client errors
-use std::{error::Error, io};
+use std::{error::Error, io, rc::Rc};
 
 use serde_json::error::Error as JsonError;
 use thiserror::Error;
@@ -34,7 +34,7 @@ pub enum ConnectError {
     /// SSL error
     #[cfg(feature = "openssl")]
     #[error("{0}")]
-    SslError(#[from] SslError),
+    SslError(Rc<SslError>),
 
     /// SSL Handshake error
     #[cfg(feature = "openssl")]
@@ -60,6 +60,42 @@ pub enum ConnectError {
     /// Unresolved host name
     #[error("Connector received `Connect` method with unresolved host")]
     Unresolved,
+}
+
+impl Clone for ConnectError {
+    fn clone(&self) -> Self {
+        match self {
+            ConnectError::SslIsNotSupported => ConnectError::SslIsNotSupported,
+            #[cfg(feature = "openssl")]
+            ConnectError::SslError(e) => ConnectError::SslError(e.clone()),
+            #[cfg(feature = "openssl")]
+            ConnectError::SslHandshakeError(e) => {
+                ConnectError::SslHandshakeError(e.clone())
+            }
+            ConnectError::Resolver(e) => {
+                ConnectError::Resolver(io::Error::new(e.kind(), format!("{}", e)))
+            }
+            ConnectError::NoRecords => ConnectError::NoRecords,
+            ConnectError::Timeout => ConnectError::Timeout,
+            ConnectError::Disconnected(e) => {
+                if let Some(e) = e {
+                    ConnectError::Disconnected(Some(io::Error::new(
+                        e.kind(),
+                        format!("{}", e),
+                    )))
+                } else {
+                    ConnectError::Disconnected(None)
+                }
+            }
+            ConnectError::Unresolved => ConnectError::Unresolved,
+        }
+    }
+}
+
+impl From<SslError> for ConnectError {
+    fn from(err: SslError) -> Self {
+        ConnectError::SslError(Rc::new(err))
+    }
 }
 
 impl From<crate::connect::ConnectError> for ConnectError {

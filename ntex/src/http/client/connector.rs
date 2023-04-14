@@ -1,11 +1,13 @@
-use std::{rc::Rc, task::Context, task::Poll, time::Duration};
+use std::{task::Context, task::Poll, time::Duration};
 
 use ntex_h2::{self as h2};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::service::{apply_fn, boxed, Service};
 use crate::time::{Millis, Seconds};
-use crate::util::{timeout::TimeoutError, timeout::TimeoutService, Either, Ready};
+use crate::util::{
+    shared::SharedService, timeout::TimeoutError, timeout::TimeoutService, Either, Ready,
+};
 use crate::{http::Uri, io::IoBoxed};
 
 use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
@@ -231,7 +233,7 @@ impl Connector {
             None
         };
 
-        Rc::new(InnerConnector {
+        SharedService::new(InnerConnector {
             tcp_pool: ConnectionPool::new(
                 tcp_service,
                 self.conn_lifetime,

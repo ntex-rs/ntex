@@ -279,28 +279,6 @@ where
     }
 }
 
-impl<S, Req> Service<Req> for Rc<S>
-where
-    S: Service<Req> + ?Sized,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future<'f> = S::Future<'f> where S: 'f, Req: 'f;
-
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        (**self).poll_ready(cx)
-    }
-
-    #[inline]
-    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        (**self).poll_shutdown(cx)
-    }
-
-    fn call(&self, request: Req) -> S::Future<'_> {
-        (**self).call(request)
-    }
-}
-
 impl<S, Req, Cfg> ServiceFactory<Req, Cfg> for Rc<S>
 where
     S: ServiceFactory<Req, Cfg>,

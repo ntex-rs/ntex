@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.2] - 2023-04-14
+
+* Remove Rc<S> where S: Service as it brakes readiness check validity
+
 ## [1.0.1] - 2023-01-24
 
 * Add `FnShutdown` service to provide on_shutdown callback
