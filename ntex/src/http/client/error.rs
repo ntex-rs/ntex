@@ -1,5 +1,5 @@
 //! Http client errors
-use std::{error::Error, io, rc::Rc};
+use std::{error::Error, io};
 
 use serde_json::error::Error as JsonError;
 use thiserror::Error;
@@ -34,7 +34,7 @@ pub enum ConnectError {
     /// SSL error
     #[cfg(feature = "openssl")]
     #[error("{0}")]
-    SslError(Rc<SslError>),
+    SslError(std::rc::Rc<SslError>),
 
     /// SSL Handshake error
     #[cfg(feature = "openssl")]
@@ -92,9 +92,10 @@ impl Clone for ConnectError {
     }
 }
 
+#[cfg(feature = "openssl")]
 impl From<SslError> for ConnectError {
     fn from(err: SslError) -> Self {
-        ConnectError::SslError(Rc::new(err))
+        ConnectError::SslError(std::rc::Rc::new(err))
     }
 }
 
