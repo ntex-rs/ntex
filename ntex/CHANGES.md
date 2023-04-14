@@ -1,5 +1,9 @@
 # Changes
 
+## [0.6.7] - 2023-04-14
+
+* Remove Rc<Service> usage, update service and util deps
+
 ## [0.6.6] - 2023-04-11
 
 * http: Better http2 config handling
