@@ -52,12 +52,12 @@ where
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.waker.register(cx.waker());
         if self.service.poll_ready(cx)?.is_pending() {
             Poll::Pending
         } else if self.ready.get() {
             Poll::Ready(Ok(()))
         } else {
-            self.waker.register(cx.waker());
             Poll::Pending
         }
     }
