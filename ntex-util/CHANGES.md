@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.2] - 2023-04-20
+
+* Add OneRequest service, service that allows to handle one request at time
+
 ## [0.2.1] - 2023-04-14
 
 * Add SharedService, a service that can be checked for readiness by multiple tasks
