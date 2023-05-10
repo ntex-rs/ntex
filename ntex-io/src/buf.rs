@@ -373,14 +373,17 @@ impl<'a> ReadBuf<'a> {
     #[inline]
     /// Set destination read buffer
     pub fn set_dst(&self, dst: Option<BytesVec>) {
-        if let Some(buf) = self.curr.0.take() {
-            self.io.memory_pool().release_read_buf(buf);
-        }
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_read_buf(dst);
             } else {
-                self.curr.0.set(Some(dst));
+                if let Some(mut buf) = self.curr.0.take() {
+                    buf.extend_from_slice(&dst);
+                    self.curr.0.set(Some(buf));
+                    self.io.memory_pool().release_read_buf(dst);
+                } else {
+                    self.curr.0.set(Some(dst));
+                }
             }
         }
     }
@@ -505,15 +508,19 @@ impl<'a> WriteBuf<'a> {
     #[inline]
     /// Set destination write buffer
     pub fn set_dst(&self, dst: Option<BytesVec>) {
-        if let Some(buf) = self.next.1.take() {
-            self.io.memory_pool().release_write_buf(buf);
-        }
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_write_buf(dst);
             } else {
-                self.need_write.set(self.need_write.get() | !dst.is_empty());
-                self.next.1.set(Some(dst));
+                self.need_write.set(true);
+
+                if let Some(mut buf) = self.curr.0.take() {
+                    buf.extend_from_slice(&dst);
+                    self.next.1.set(Some(buf));
+                    self.io.memory_pool().release_write_buf(dst);
+                } else {
+                    self.next.1.set(Some(dst));
+                }
             }
         }
     }
