@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.10] - 2023-05-10
+
+* ReadBuf::set_dst()/WriteBuf::set_dst() extend existing buffer if exists
+
 ## [0.2.9] - 2023-01-31
 
 * Register Dispatcher waker when service is not ready
