@@ -265,7 +265,6 @@ impl Stack {
     }
 }
 
-// #[derive(Debug)]
 pub struct ReadBuf<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) curr: &'a Buffer,
@@ -349,11 +348,12 @@ impl<'a> ReadBuf<'a> {
     #[inline]
     /// Set source read buffer
     pub fn set_src(&self, src: Option<BytesVec>) {
-        if let Some(buf) = self.next.0.take() {
-            self.io.memory_pool().release_read_buf(buf);
-        }
         if let Some(src) = src {
             if src.is_empty() {
+                self.io.memory_pool().release_read_buf(src);
+            } else if let Some(mut buf) = self.next.0.take() {
+                buf.extend_from_slice(&src);
+                self.next.0.set(Some(buf));
                 self.io.memory_pool().release_read_buf(src);
             } else {
                 self.next.0.set(Some(src));
@@ -373,14 +373,17 @@ impl<'a> ReadBuf<'a> {
     #[inline]
     /// Set destination read buffer
     pub fn set_dst(&self, dst: Option<BytesVec>) {
-        if let Some(buf) = self.curr.0.take() {
-            self.io.memory_pool().release_read_buf(buf);
-        }
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_read_buf(dst);
             } else {
-                self.curr.0.set(Some(dst));
+                if let Some(mut buf) = self.curr.0.take() {
+                    buf.extend_from_slice(&dst);
+                    self.curr.0.set(Some(buf));
+                    self.io.memory_pool().release_read_buf(dst);
+                } else {
+                    self.curr.0.set(Some(dst));
+                }
             }
         }
     }
@@ -402,7 +405,6 @@ impl<'a> ReadBuf<'a> {
     }
 }
 
-// #[derive(Debug)]
 pub struct WriteBuf<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) curr: &'a Buffer,
@@ -481,14 +483,15 @@ impl<'a> WriteBuf<'a> {
     #[inline]
     /// Set source write buffer
     pub fn set_src(&self, src: Option<BytesVec>) {
-        if let Some(buf) = self.curr.1.take() {
-            self.io.memory_pool().release_write_buf(buf);
-        }
-        if let Some(buf) = src {
-            if buf.is_empty() {
-                self.io.memory_pool().release_write_buf(buf);
-            } else {
+        if let Some(src) = src {
+            if src.is_empty() {
+                self.io.memory_pool().release_write_buf(src);
+            } else if let Some(mut buf) = self.curr.1.take() {
+                buf.extend_from_slice(&src);
                 self.curr.1.set(Some(buf));
+                self.io.memory_pool().release_write_buf(src);
+            } else {
+                self.curr.1.set(Some(src));
             }
         }
     }
@@ -505,15 +508,19 @@ impl<'a> WriteBuf<'a> {
     #[inline]
     /// Set destination write buffer
     pub fn set_dst(&self, dst: Option<BytesVec>) {
-        if let Some(buf) = self.next.1.take() {
-            self.io.memory_pool().release_write_buf(buf);
-        }
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_write_buf(dst);
             } else {
-                self.need_write.set(self.need_write.get() | !dst.is_empty());
-                self.next.1.set(Some(dst));
+                self.need_write.set(true);
+
+                if let Some(mut buf) = self.next.1.take() {
+                    buf.extend_from_slice(&dst);
+                    self.next.1.set(Some(buf));
+                    self.io.memory_pool().release_write_buf(dst);
+                } else {
+                    self.next.1.set(Some(dst));
+                }
             }
         }
     }
