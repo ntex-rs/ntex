@@ -106,7 +106,8 @@ enum IoWriteState {
 }
 
 enum Shutdown {
-    None(Pin<Box<dyn Future<Output = glommio::Result<(), ()>>>>),
+    Flush,
+    Close(Pin<Box<dyn Future<Output = glommio::Result<(), ()>>>>),
     Stopping(u16),
 }
 
@@ -177,11 +178,7 @@ impl Future for WriteTask {
                             sleep(time)
                         };
 
-                        let io = this.io.clone();
-                        let fut = Box::pin(async move {
-                            io.0.borrow().shutdown(std::net::Shutdown::Write).await
-                        });
-                        this.st = IoWriteState::Shutdown(timeout, Shutdown::None(fut));
+                        this.st = IoWriteState::Shutdown(timeout, Shutdown::Flush);
                         self.poll(cx)
                     }
                     Poll::Ready(WriteStatus::Terminate) => {
@@ -204,11 +201,11 @@ impl Future for WriteTask {
                             let mut io = this.io.0.borrow_mut();
                             match this.state.with_buf(|buf| flush_io(&mut *io, buf, cx)) {
                                 Poll::Ready(Ok(())) => {
-                                    if ready!(fut.poll(cx)).is_err() {
-                                        this.state.close(None);
-                                        return Poll::Ready(());
-                                    }
-                                    *st = Shutdown::Stopping(0);
+                                    let io = this.io.clone();
+                                    let fut = Box::pin(async move {
+                                        io.0.borrow().shutdown(std::net::Shutdown::Write).await
+                                    });
+                                    *st = Shutdown::Close(fut);
                                     continue;
                                 }
                                 Poll::Ready(Err(err)) => {
@@ -221,6 +218,14 @@ impl Future for WriteTask {
                                 }
                                 Poll::Pending => (),
                             }
+                        }
+                        Shutdown::Close(ref mut fut) => {
+                            if ready!(fut.poll(cx)).is_err() {
+                                this.state.close(None);
+                                return Poll::Ready(());
+                            }
+                            *st = Shutdown::Stopping(0);
+                            continue;
                         }
                         Shutdown::Stopping(ref mut count) => {
                             // read until 0 or err
