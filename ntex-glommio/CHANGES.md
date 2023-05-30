@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.4] - 2023-05-30
+
+* Fix borrow mut panic #204
+
 ## [0.2.3] - 2023-04-11
 
 * Chore upgrade glommio to 0.8
