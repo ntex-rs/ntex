@@ -1,7 +1,7 @@
 //! Utilities for futures
 use std::{future::Future, mem, pin::Pin, task::Context, task::Poll};
 
-pub use futures_core::Stream;
+pub use futures_core::{Stream, TryFuture};
 pub use futures_sink::Sink;
 
 mod either;
