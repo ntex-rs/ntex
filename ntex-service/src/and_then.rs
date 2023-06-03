@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
-use super::{Service, ServiceFactory};
+use super::{Service, ServiceFactory, Ctx, ServiceCall};
 
 /// Service for the `and_then` combinator, chaining a computation onto the end
 /// of another service which completes successfully.
@@ -59,11 +59,12 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future<'_> {
+    fn call(&self, req: Req, ctx: Ctx<Self>) -> Self::Future<'_> {
         AndThenServiceResponse {
             slf: self,
             state: State::A {
-                fut: self.svc1.call(req),
+                fut: ctx.call(&self.svc1, req),
+                ctx: Some(ctx),
             },
         }
     }
@@ -91,8 +92,8 @@ pin_project_lite::pin_project! {
         B: Service<A::Response, Error = A::Error>,
         B: 'f,
     {
-        A { #[pin] fut: A::Future<'f> },
-        B { #[pin] fut: B::Future<'f> },
+        A { #[pin] fut: A::Future<'f>, ctx: Option<Ctx<AndThen<A, B>>> },
+        B { #[pin] fut: ServiceCall<'f, B, A::Response> },
         Empty,
     }
 }
@@ -108,9 +109,9 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            StateProject::A { fut } => match fut.poll(cx)? {
+            StateProject::A { fut, ctx } => match fut.poll(cx)? {
                 Poll::Ready(res) => {
-                    let fut = this.slf.svc2.call(res);
+                    let fut = ctx.take().unwrap().call_when_ready(&this.slf.svc2, res);
                     this.state.set(State::B { fut });
                     self.poll(cx)
                 }
