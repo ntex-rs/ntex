@@ -293,6 +293,7 @@ where
 ///
 /// This type allows you to wait on a sequence of instants with a certain
 /// duration between each instant.
+#[must_use = "futures do nothing unless you `.await` or poll them"]
 #[derive(Debug)]
 pub struct Interval {
     hnd: TimerHandle,
@@ -350,6 +351,8 @@ mod tests {
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
     #[ntex_macros::rt_test2]
     async fn lowres_time_does_not_immediately_change() {
+        let _ = sleep(Seconds(1));
+
         assert_eq!(now(), now())
     }
 
@@ -359,6 +362,8 @@ mod tests {
     /// and second value is greater than the first one at least by a 1ms interval.
     #[ntex_macros::rt_test2]
     async fn lowres_time_updates_after_resolution_interval() {
+        let _ = sleep(Seconds(1));
+
         let first_time = now();
 
         sleep(Millis(25)).await;
@@ -372,6 +377,8 @@ mod tests {
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
     #[ntex_macros::rt_test2]
     async fn system_time_service_time_does_not_immediately_change() {
+        let _ = sleep(Seconds(1));
+
         assert_eq!(system_time(), system_time());
         assert_eq!(system_time(), query_system_time());
     }
@@ -382,6 +389,8 @@ mod tests {
     /// and second value is greater than the first one at least by a resolution interval.
     #[ntex_macros::rt_test2]
     async fn system_time_service_time_updates_after_resolution_interval() {
+        let _ = sleep(Seconds(1));
+
         let wait_time = 300;
 
         let first_time = system_time()
@@ -399,6 +408,8 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_sleep_0() {
+        let _ = sleep(Seconds(1));
+
         let first_time = now();
         sleep(Millis(0)).await;
         let second_time = now();
@@ -429,6 +440,8 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_deadline() {
+        let _ = sleep(Seconds(1));
+
         let first_time = now();
         let dl = deadline(Millis(1));
         dl.await;

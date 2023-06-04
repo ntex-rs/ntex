@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.3] - 2023-06-04
+
+* Refactor timer driver
+
 ## [0.2.2] - 2023-04-20
 
 * Add OneRequest service, service that allows to handle one request at time
