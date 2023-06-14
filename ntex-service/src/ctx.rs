@@ -139,10 +139,12 @@ impl<'b, S: ?Sized> Ctx<'b, S> {
         R: 'b,
     {
         ServiceCall {
-            svc,
-            index: self.index,
-            waiters: self.waiters,
-            state: ServiceCallState::Ready { req: Some(req) },
+            state: ServiceCallState::Ready {
+                svc,
+                req: Some(req),
+                index: self.index,
+                waiters: self.waiters,
+            },
         }
     }
 }
@@ -166,9 +168,6 @@ pin_project_lite::pin_project! {
         T: ?Sized,
         Req: 'a,
     {
-        svc: &'a T,
-        index: usize,
-        waiters: &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
         #[pin]
         state: ServiceCallState<'a, T, Req>,
     }
@@ -183,7 +182,11 @@ pin_project_lite::pin_project! {
         T: ?Sized,
         Req: 'a,
     {
-        Ready { req: Option<Req> },
+        Ready { req: Option<Req>,
+                svc: &'a T,
+                index: usize,
+                waiters: &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
+        },
         Call { #[pin] fut: T::Future<'a> },
         Empty,
     }
@@ -199,19 +202,24 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            ServiceCallStateProject::Ready { req } => match this.svc.poll_ready(cx)? {
+            ServiceCallStateProject::Ready {
+                req,
+                svc,
+                index,
+                waiters,
+            } => match svc.poll_ready(cx)? {
                 Poll::Ready(()) => {
-                    for (_, waker) in &mut *this.waiters.borrow_mut() {
+                    for (_, waker) in &mut *waiters.borrow_mut() {
                         if let Some(waker) = waker.take() {
                             waker.wake();
                         }
                     }
 
-                    let fut = this.svc.call(
+                    let fut = svc.call(
                         req.take().unwrap(),
                         Ctx {
-                            index: *this.index,
-                            waiters: this.waiters,
+                            waiters,
+                            index: *index,
                             _t: marker::PhantomData,
                         },
                     );
@@ -219,7 +227,7 @@ where
                     self.poll(cx)
                 }
                 Poll::Pending => {
-                    this.waiters.borrow_mut()[*this.index] = Some(cx.waker().clone());
+                    waiters.borrow_mut()[*index] = Some(cx.waker().clone());
                     Poll::Pending
                 }
             },
