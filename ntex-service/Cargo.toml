@@ -21,4 +21,5 @@ slab = "0.4"
 
 [dev-dependencies]
 ntex = { version = "0.6.0", features = ["tokio"] }
-ntex-util = "0.2.0"
+#ntex-util = "0.3.0"
+ntex-util = { path = "../ntex-util" }
