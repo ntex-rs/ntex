@@ -1,6 +1,6 @@
 use std::{future::ready, future::Future, future::Ready, marker::PhantomData};
 
-use crate::{IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 #[inline]
 /// Create `ServiceFactory` for function that can act as a `Service`
@@ -40,7 +40,7 @@ where
 ///     });
 ///
 ///     // construct new service
-///     let srv = factory.create(&()).await?;
+///     let srv = factory.container(&()).await?;
 ///
 ///     // now we can use `div` service
 ///     let result = srv.call((10, 20)).await?;
@@ -81,7 +81,7 @@ where
 ///     });
 ///
 ///     // construct new service with config argument
-///     let srv = factory.create(&10).await?;
+///     let srv = factory.container(&10).await?;
 ///
 ///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);
@@ -128,7 +128,10 @@ where
     type Future<'f> = Fut where Self: 'f, Req: 'f;
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        Req: 'a,
+    {
         (self.f)(req)
     }
 }
@@ -190,7 +193,10 @@ where
     type Future<'f> = Fut where Self: 'f;
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        Req: 'a,
+    {
         (self.f)(req)
     }
 }
@@ -348,19 +354,19 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{Service, ServiceFactory};
+    use crate::{Container, ServiceFactory};
 
     #[ntex::test]
     async fn test_fn_service() {
         let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
 
-        let srv = new_srv.create(()).await.unwrap();
+        let srv = Container::new(new_srv.create(()).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
 
-        let srv2 = new_srv.clone();
+        let srv2 = Container::new(new_srv.clone());
         let res = srv2.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
@@ -370,12 +376,14 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_service_service() {
-        let srv = fn_service(|()| async { Ok::<_, ()>("srv") })
-            .clone()
-            .create(&())
-            .await
-            .unwrap()
-            .clone();
+        let srv = Container::new(
+            fn_service(|()| async { Ok::<_, ()>("srv") })
+                .clone()
+                .create(&())
+                .await
+                .unwrap()
+                .clone(),
+        );
 
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
@@ -396,7 +404,7 @@ mod tests {
         })
         .clone();
 
-        let srv = new_srv.create(&1).await.unwrap();
+        let srv = Container::new(new_srv.create(&1).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

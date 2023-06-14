@@ -3,7 +3,7 @@ use std::future::{ready, Ready};
 use std::marker::PhantomData;
 use std::task::{Context, Poll};
 
-use crate::Service;
+use crate::{Ctx, Service};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
@@ -60,7 +60,10 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        Req: 'a,
+    {
         ready(Ok(req))
     }
 }
@@ -70,7 +73,7 @@ mod tests {
     use ntex_util::future::lazy;
     use std::{rc::Rc, task::Poll};
 
-    use crate::{fn_service, pipeline};
+    use crate::{fn_service, pipeline, Container};
 
     use super::*;
 
@@ -83,7 +86,7 @@ mod tests {
             is_called2.set(true);
         });
 
-        let pipe = pipeline(srv).and_then(on_shutdown).clone();
+        let pipe = Container::new(pipeline(srv).and_then(on_shutdown).clone());
 
         let res = pipe.call(()).await;
         assert_eq!(lazy(|cx| pipe.poll_ready(cx)).await, Poll::Ready(Ok(())));

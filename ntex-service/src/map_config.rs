@@ -115,6 +115,7 @@ where
 }
 
 pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
     pub struct UnitConfigFuture<'f, A, R, C>
     where A: ServiceFactory<R>,
           A: 'f,

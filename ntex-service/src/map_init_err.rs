@@ -60,6 +60,7 @@ where
 }
 
 pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
     pub struct MapInitErrFuture<'f, A, R, C, F, E>
     where
         A: ServiceFactory<R, C>,
