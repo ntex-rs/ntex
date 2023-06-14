@@ -1,6 +1,6 @@
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
-use super::{Service, ServiceFactory};
+use super::{Ctx, Service, ServiceCall, ServiceFactory};
 
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
@@ -54,15 +54,19 @@ where
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        Req: 'a,
+    {
         MapFuture {
-            fut: self.service.call(req),
+            fut: ctx.call(&self.service, req),
             slf: self,
         }
     }
 }
 
 pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
     pub struct MapFuture<'f, A, F, Req, Res>
     where
         A: Service<Req>,
@@ -72,7 +76,7 @@ pin_project_lite::pin_project! {
     {
         slf: &'f Map<A, F, Req, Res>,
         #[pin]
-        fut: A::Future<'f>,
+        fut: ServiceCall<'f, A, Req>,
     }
 }
 
@@ -154,6 +158,7 @@ where
 }
 
 pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
     pub struct MapFactoryFuture<'f, A, F, Req, Res, Cfg>
     where
         A: ServiceFactory<Req, Cfg>,
@@ -190,7 +195,7 @@ mod tests {
     use ntex_util::future::{lazy, Ready};
 
     use super::*;
-    use crate::{fn_factory, Service, ServiceFactory};
+    use crate::{fn_factory, Container, Ctx, Service, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv;
@@ -204,14 +209,17 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&self, _: ()) -> Self::Future<'_> {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
+        where
+            (): 'a,
+        {
             Ready::Ok(())
         }
     }
 
     #[ntex::test]
     async fn test_service() {
-        let srv = Srv.map(|_| "ok").clone();
+        let srv = Container::new(Srv.map(|_| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -225,7 +233,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = crate::pipeline(Srv).map(|_| "ok").clone();
+        let srv = Container::new(crate::pipeline(Srv).map(|_| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -242,7 +250,7 @@ mod tests {
         let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv) })
             .map(|_| "ok")
             .clone();
-        let srv = new_srv.create(&()).await.unwrap();
+        let srv = Container::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
@@ -253,7 +261,7 @@ mod tests {
         let new_srv = crate::pipeline_factory(fn_factory(|| async { Ok::<_, ()>(Srv) }))
             .map(|_| "ok")
             .clone();
-        let srv = new_srv.create(&()).await.unwrap();
+        let srv = Container::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
