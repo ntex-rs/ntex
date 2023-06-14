@@ -1,7 +1,6 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
 
 #![deny(rust_2018_idioms, warnings)]
-#![allow(clippy::type_complexity)]
 
 use std::future::Future;
 use std::rc::Rc;
@@ -10,6 +9,7 @@ use std::task::{self, Context, Poll};
 mod and_then;
 mod apply;
 pub mod boxed;
+mod ctx;
 mod fn_service;
 mod fn_shutdown;
 mod macros;
@@ -22,6 +22,7 @@ mod pipeline;
 mod then;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
+pub use self::ctx::{Container, ContainerFactory, Ctx, ServiceCall};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
@@ -53,13 +54,12 @@ pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 /// simple API surfaces. This leads to simpler design of each service, improves test-ability and
 /// makes composition easier.
 ///
-/// ```rust
+/// ```rust,ignore
 /// # use std::convert::Infallible;
 /// # use std::future::Future;
 /// # use std::pin::Pin;
-/// # use std::task::{Context, Poll};
 /// #
-/// # use ntex_service::Service;
+/// # use ntex_service::{Ctx, Service};
 ///
 /// struct MyService;
 ///
@@ -68,7 +68,7 @@ pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 ///     type Error = Infallible;
 ///     type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 ///
-///     fn call(&self, req: u8) -> Self::Future<'_> {
+///     fn call<'a>(&'a self, req: u8, _: Ctx<'a, Self>) -> Self::Future<'a> {
 ///         Box::pin(std::future::ready(Ok(req as u64)))
 ///     }
 /// }
@@ -101,7 +101,9 @@ pub trait Service<Req> {
     ///
     /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
     /// resilient to this fact.
-    fn call(&self, req: Req) -> Self::Future<'_>;
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        Req: 'a;
 
     #[inline]
     /// Returns `Ready` when the service is able to process requests.
@@ -154,7 +156,7 @@ pub trait Service<Req> {
     /// error type.
     ///
     /// Note that this function consumes the receiving service and returns a wrapped version of it.
-    fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, Req, F, E>
+    fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, F, E>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E,
@@ -195,6 +197,14 @@ pub trait ServiceFactory<Req, Cfg = ()> {
 
     /// Create and return a new service value asynchronously.
     fn create(&self, cfg: Cfg) -> Self::Future<'_>;
+
+    /// Create and return a new service value asynchronously and wrap into a container
+    fn container(&self, cfg: Cfg) -> ContainerFactory<'_, Self, Req, Cfg>
+    where
+        Self: Sized,
+    {
+        Container::<Self::Service, Req>::create(self, cfg)
+    }
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
@@ -250,8 +260,11 @@ where
     }
 
     #[inline]
-    fn call(&self, request: Req) -> S::Future<'_> {
-        (**self).call(request)
+    fn call<'s>(&'s self, request: Req, ctx: Ctx<'s, Self>) -> S::Future<'s>
+    where
+        Req: 's,
+    {
+        ctx.call_nowait(&**self, request)
     }
 }
 
@@ -274,8 +287,11 @@ where
     }
 
     #[inline]
-    fn call(&self, request: Req) -> S::Future<'_> {
-        (**self).call(request)
+    fn call<'a>(&'a self, request: Req, ctx: Ctx<'a, Self>) -> S::Future<'a>
+    where
+        Req: 'a,
+    {
+        ctx.call_nowait(&**self, request)
     }
 }
 

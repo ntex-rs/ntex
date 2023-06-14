@@ -1,20 +1,20 @@
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
-use super::{Service, ServiceFactory};
+use super::{Ctx, Service, ServiceCall, ServiceFactory};
 
 /// Service for the `map_err` combinator, changing the type of a service's
 /// error.
 ///
 /// This is created by the `ServiceExt::map_err` method.
-pub struct MapErr<A, R, F, E> {
+pub struct MapErr<A, F, E> {
     service: A,
     f: F,
-    _t: PhantomData<fn(R) -> E>,
+    _t: PhantomData<E>,
 }
 
-impl<A, R, F, E> MapErr<A, R, F, E> {
+impl<A, F, E> MapErr<A, F, E> {
     /// Create new `MapErr` combinator
-    pub(crate) fn new(service: A, f: F) -> Self
+    pub(crate) fn new<R>(service: A, f: F) -> Self
     where
         A: Service<R>,
         F: Fn(A::Error) -> E,
@@ -27,7 +27,7 @@ impl<A, R, F, E> MapErr<A, R, F, E> {
     }
 }
 
-impl<A, R, F, E> Clone for MapErr<A, R, F, E>
+impl<A, F, E> Clone for MapErr<A, F, E>
 where
     A: Clone,
     F: Clone,
@@ -42,7 +42,7 @@ where
     }
 }
 
-impl<A, R, F, E> Service<R> for MapErr<A, R, F, E>
+impl<A, R, F, E> Service<R> for MapErr<A, F, E>
 where
     A: Service<R>,
     F: Fn(A::Error) -> E,
@@ -57,10 +57,13 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        R: 'a,
+    {
         MapErrFuture {
             slf: self,
-            fut: self.service.call(req),
+            fut: ctx.call(&self.service, req),
         }
     }
 
@@ -68,6 +71,7 @@ where
 }
 
 pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
     pub struct MapErrFuture<'f, A, R, F, E>
     where
         A: Service<R>,
@@ -75,9 +79,9 @@ pin_project_lite::pin_project! {
         R: 'f,
         F: Fn(A::Error) -> E,
     {
-        slf: &'f MapErr<A, R, F, E>,
+        slf: &'f MapErr<A, F, E>,
         #[pin]
-        fut: A::Future<'f>,
+        fut: ServiceCall<'f, A, R>,
     }
 }
 
@@ -145,7 +149,7 @@ where
     type Response = A::Response;
     type Error = E;
 
-    type Service = MapErr<A::Service, R, F, E>;
+    type Service = MapErr<A::Service, F, E>;
     type InitError = A::InitError;
     type Future<'f> = MapErrFactoryFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
 
@@ -159,6 +163,7 @@ where
 }
 
 pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
     pub struct MapErrFactoryFuture<'f, A, R, C, F, E>
     where
         A: ServiceFactory<R, C>,
@@ -177,7 +182,7 @@ where
     A: ServiceFactory<R, C>,
     F: Fn(A::Error) -> E + Clone,
 {
-    type Output = Result<MapErr<A::Service, R, F, E>, A::InitError>;
+    type Output = Result<MapErr<A::Service, F, E>, A::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -191,12 +196,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{fn_factory, Service, ServiceFactory};
     use ntex_util::future::{lazy, Ready};
 
+    use super::*;
+    use crate::{fn_factory, Container, Ctx, Service, ServiceFactory};
+
     #[derive(Clone)]
-    struct Srv;
+    struct Srv(bool);
 
     impl Service<()> for Srv {
         type Response = ();
@@ -204,17 +210,24 @@ mod tests {
         type Future<'f> = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Err(()))
+            if self.0 {
+                Poll::Ready(Err(()))
+            } else {
+                Poll::Ready(Ok(()))
+            }
         }
 
-        fn call(&self, _: ()) -> Self::Future<'_> {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
+        where
+            (): 'a,
+        {
             Ready::Err(())
         }
     }
 
     #[ntex::test]
     async fn test_poll_ready() {
-        let srv = Srv.map_err(|_| "error");
+        let srv = Srv(true).map_err(|_| "error");
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Err("error")));
 
@@ -224,7 +237,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_service() {
-        let srv = Srv.map_err(|_| "error").clone();
+        let srv = Container::new(Srv(false).map_err(|_| "error").clone());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -232,7 +245,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = crate::pipeline(Srv).map_err(|_| "error").clone();
+        let srv = Container::new(crate::pipeline(Srv(false)).map_err(|_| "error").clone());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -240,10 +253,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv = fn_factory(|| Ready::<_, ()>::Ok(Srv))
+        let new_srv = fn_factory(|| Ready::<_, ()>::Ok(Srv(false)))
             .map_err(|_| "error")
             .clone();
-        let srv = new_srv.create(&()).await.unwrap();
+        let srv = Container::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -251,10 +264,11 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv = crate::pipeline_factory(fn_factory(|| async { Ok::<Srv, ()>(Srv) }))
-            .map_err(|_| "error")
-            .clone();
-        let srv = new_srv.create(&()).await.unwrap();
+        let new_srv =
+            crate::pipeline_factory(fn_factory(|| async { Ok::<Srv, ()>(Srv(false)) }))
+                .map_err(|_| "error")
+                .clone();
+        let srv = Container::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");

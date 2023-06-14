@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::and_then::{AndThen, AndThenFactory};
+use crate::ctx::{Container, Ctx, ServiceCall};
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
@@ -105,7 +106,7 @@ impl<Req, Svc: Service<Req>> Pipeline<Req, Svc> {
     ///
     /// Note that this function consumes the receiving service and returns a
     /// wrapped version of it.
-    pub fn map_err<F, Err>(self, f: F) -> Pipeline<Req, MapErr<Svc, Req, F, Err>>
+    pub fn map_err<F, Err>(self, f: F) -> Pipeline<Req, MapErr<Svc, F, Err>>
     where
         Self: Sized,
         F: Fn(Svc::Error) -> Err,
@@ -114,6 +115,11 @@ impl<Req, Svc: Service<Req>> Pipeline<Req, Svc> {
             service: MapErr::new(self.service, f),
             _t: PhantomData,
         }
+    }
+
+    /// Create service container
+    pub fn container(self) -> Container<Svc, Req> {
+        Container::new(self.service)
     }
 }
 
@@ -132,14 +138,17 @@ where
 impl<Req, Svc: Service<Req>> Service<Req> for Pipeline<Req, Svc> {
     type Response = Svc::Response;
     type Error = Svc::Error;
-    type Future<'f> = Svc::Future<'f> where Self: 'f, Req: 'f;
+    type Future<'f> = ServiceCall<'f, Svc, Req> where Self: 'f, Req: 'f;
 
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future<'_> {
-        self.service.call(req)
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        Req: 'a,
+    {
+        ctx.call(&self.service, req)
     }
 }
 

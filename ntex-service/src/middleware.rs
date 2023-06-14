@@ -136,6 +136,7 @@ where
 }
 
 pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
     pub struct ApplyMiddlewareFuture<'f, T, S, R, C>
     where
         S: ServiceFactory<R, C>,
@@ -213,7 +214,7 @@ mod tests {
     use std::marker;
 
     use super::*;
-    use crate::{fn_service, Service, ServiceFactory};
+    use crate::{fn_service, Container, Ctx, Service, ServiceCall, ServiceFactory};
 
     #[derive(Clone)]
     struct Tr<R>(marker::PhantomData<R>);
@@ -232,14 +233,17 @@ mod tests {
     impl<S: Service<R>, R> Service<R> for Srv<S, R> {
         type Response = S::Response;
         type Error = S::Error;
-        type Future<'f> = S::Future<'f> where Self: 'f, R: 'f;
+        type Future<'f> = ServiceCall<'f, S, R> where Self: 'f, R: 'f;
 
         fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.poll_ready(cx)
         }
 
-        fn call(&self, req: R) -> Self::Future<'_> {
-            self.0.call(req)
+        fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+        where
+            R: 'a,
+        {
+            ctx.call(&self.0, req)
         }
     }
 
@@ -251,7 +255,7 @@ mod tests {
         )
         .clone();
 
-        let srv = factory.create(&()).await.unwrap().clone();
+        let srv = Container::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -267,7 +271,7 @@ mod tests {
                 .apply(Rc::new(Tr(marker::PhantomData).clone()))
                 .clone();
 
-        let srv = factory.create(&()).await.unwrap().clone();
+        let srv = Container::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);

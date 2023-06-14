@@ -1,8 +1,7 @@
-use std::{
-    future::Future, marker::PhantomData, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+#![allow(clippy::type_complexity)]
+use std::{cell::RefCell, future::Future, marker, pin::Pin, rc::Rc, task, task::Poll};
 
-use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
+use super::{Ctx, IntoService, IntoServiceFactory, Service, ServiceCall, ServiceFactory};
 
 /// Apply transform function to a service.
 pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
@@ -11,7 +10,7 @@ pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
 ) -> Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, Rc<T>) -> R,
+    F: Fn(In, ApplyService<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
     U: IntoService<T, Req>,
 {
@@ -25,7 +24,7 @@ pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
 ) -> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, Rc<T::Service>) -> R + Clone,
+    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
     U: IntoServiceFactory<T, Req, Cfg>,
 {
@@ -39,13 +38,13 @@ where
 {
     service: Rc<T>,
     f: F,
-    r: PhantomData<fn(Req) -> (In, Out, R)>,
+    r: marker::PhantomData<fn(Req) -> (In, Out, R)>,
 }
 
 impl<T, Req, F, R, In, Out, Err> Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, Rc<T>) -> R,
+    F: Fn(In, ApplyService<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `Apply` combinator
@@ -53,7 +52,7 @@ where
         Self {
             f,
             service: Rc::new(service),
-            r: PhantomData,
+            r: marker::PhantomData,
         }
     }
 }
@@ -61,22 +60,37 @@ where
 impl<T, Req, F, R, In, Out, Err> Clone for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err> + Clone,
-    F: Fn(In, Rc<T>) -> R + Clone,
+    F: Fn(In, ApplyService<T>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
         Apply {
             service: self.service.clone(),
             f: self.f.clone(),
-            r: PhantomData,
+            r: marker::PhantomData,
         }
+    }
+}
+
+pub struct ApplyService<S> {
+    svc: Rc<S>,
+    index: usize,
+    waiters: Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
+}
+
+impl<S> ApplyService<S> {
+    pub fn call<R>(&self, req: R) -> ServiceCall<'_, S, R>
+    where
+        S: Service<R>,
+    {
+        Ctx::<S>::new(self.index, &self.waiters).call(&self.svc, req)
     }
 }
 
 impl<T, Req, F, R, In, Out, Err> Service<In> for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, Rc<T>) -> R,
+    F: Fn(In, ApplyService<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Response = Out;
@@ -87,8 +101,17 @@ where
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call(&self, req: In) -> Self::Future<'_> {
-        (self.f)(req, self.service.clone())
+    fn call<'a>(&'a self, req: In, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        In: 'a,
+    {
+        let (index, waiters) = ctx.into_inner();
+        let svc = ApplyService {
+            index,
+            waiters: waiters.clone(),
+            svc: self.service.clone(),
+        };
+        (self.f)(req, svc)
     }
 }
 
@@ -96,18 +119,18 @@ where
 pub struct ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, Rc<T::Service>) -> R + Clone,
+    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     service: T,
     f: F,
-    r: PhantomData<fn(Req, Cfg) -> (R, In, Out)>,
+    r: marker::PhantomData<fn(Req, Cfg) -> (R, In, Out)>,
 }
 
 impl<T, Req, Cfg, F, R, In, Out, Err> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, Rc<T::Service>) -> R + Clone,
+    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `ApplyNewService` new service instance
@@ -115,7 +138,7 @@ where
         Self {
             f,
             service,
-            r: PhantomData,
+            r: marker::PhantomData,
         }
     }
 }
@@ -124,14 +147,14 @@ impl<T, Req, Cfg, F, R, In, Out, Err> Clone
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err> + Clone,
-    F: Fn(In, Rc<T::Service>) -> R + Clone,
+    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
         Self {
             service: self.service.clone(),
             f: self.f.clone(),
-            r: PhantomData,
+            r: marker::PhantomData,
         }
     }
 }
@@ -140,7 +163,7 @@ impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, Rc<T::Service>) -> R + Clone,
+    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     type Response = Out;
@@ -155,7 +178,7 @@ where
         ApplyFactoryResponse {
             fut: self.service.create(cfg),
             f: Some(self.f.clone()),
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -165,14 +188,14 @@ pin_project_lite::pin_project! {
     where
         T: ServiceFactory<Req, Cfg, Error = Err>,
         T: 'f,
-        F: Fn(In, Rc<T::Service>) -> R,
+        F: Fn(In, ApplyService<T::Service>) -> R,
         R: Future<Output = Result<Out, Err>>,
         Cfg: 'f,
     {
         #[pin]
         fut: T::Future<'f>,
         f: Option<F>,
-        _t: PhantomData<(In, Out)>,
+        _t: marker::PhantomData<(In, Out)>,
     }
 }
 
@@ -180,12 +203,12 @@ impl<'f, T, Req, Cfg, F, R, In, Out, Err> Future
     for ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, Rc<T::Service>) -> R,
+    F: Fn(In, ApplyService<T::Service>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Output = Result<Apply<T::Service, Req, F, R, In, Out, Err>, T::InitError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         if let Poll::Ready(svc) = this.fut.poll(cx)? {
@@ -202,7 +225,7 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{pipeline, pipeline_factory, Service, ServiceFactory};
+    use crate::{pipeline, pipeline_factory, Ctx, Service, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv;
@@ -212,7 +235,10 @@ mod tests {
         type Error = ();
         type Future<'f> = Ready<(), ()>;
 
-        fn call(&self, _: ()) -> Self::Future<'_> {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
+        where
+            (): 'a,
+        {
             Ready::Ok(())
         }
     }
@@ -220,15 +246,13 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let srv = pipeline(
-            apply_fn(Srv, |req: &'static str, srv| {
-                let fut = srv.call(());
-                async move {
-                    fut.await.unwrap();
-                    Ok((req, ()))
-                }
+            apply_fn(Srv, |req: &'static str, srv| async move {
+                srv.call(()).await.unwrap();
+                Ok((req, ()))
             })
             .clone(),
-        );
+        )
+        .container();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         let res = lazy(|cx| srv.poll_shutdown(cx)).await;
@@ -244,18 +268,15 @@ mod tests {
         let new_srv = pipeline_factory(
             apply_fn_factory(
                 || Ready::<_, ()>::Ok(Srv),
-                |req: &'static str, srv| {
-                    let fut = srv.call(());
-                    async move {
-                        fut.await.unwrap();
-                        Ok((req, ()))
-                    }
+                |req: &'static str, srv| async move {
+                    srv.call(()).await.unwrap();
+                    Ok((req, ()))
                 },
             )
             .clone(),
         );
 
-        let srv = new_srv.create(&()).await.unwrap();
+        let srv = new_srv.container(&()).await.unwrap();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 

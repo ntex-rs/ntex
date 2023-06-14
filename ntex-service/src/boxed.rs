@@ -1,4 +1,7 @@
-use std::{future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::task::{Context, Poll, Waker};
+use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
+
+use crate::Ctx;
 
 pub type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 
@@ -54,7 +57,12 @@ pub trait ServiceObj<Req> {
 
     fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()>;
 
-    fn call<'a>(&'a self, req: Req) -> BoxFuture<'a, Self::Response, Self::Error>
+    fn call<'a>(
+        &'a self,
+        req: Req,
+        idx: usize,
+        waiters: &'a Rc<RefCell<slab::Slab<Option<Waker>>>>,
+    ) -> BoxFuture<'a, Self::Response, Self::Error>
     where
         Req: 'a;
 }
@@ -78,11 +86,16 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req) -> BoxFuture<'a, Self::Response, Self::Error>
+    fn call<'a>(
+        &'a self,
+        req: Req,
+        idx: usize,
+        waiters: &'a Rc<RefCell<slab::Slab<Option<Waker>>>>,
+    ) -> BoxFuture<'a, Self::Response, Self::Error>
     where
         Req: 'a,
     {
-        Box::pin(crate::Service::call(self, req))
+        Box::pin(Ctx::<'a, S>::new(idx, waiters).call_nowait(self, req))
     }
 }
 
@@ -181,8 +194,12 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future<'_> {
-        self.0.call(req)
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        Req: 'a,
+    {
+        let (index, waiters) = ctx.into_inner();
+        self.0.call(req, index, waiters)
     }
 }
 
@@ -213,8 +230,12 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Req) -> Self::Future<'_> {
-        self.0.call(req)
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+    where
+        Req: 'a,
+    {
+        let (index, waiters) = ctx.into_inner();
+        self.0.call(req, index, waiters)
     }
 }
 

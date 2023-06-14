@@ -1,5 +1,11 @@
 # Changes
 
+## [1.2.0] - 2023-06-xx
+
+* Enforce service readiness during call
+
+* Introduce service sharable readiness
+
 ## [1.0.2] - 2023-04-14
 
 * Remove Rc<S> where S: Service as it brakes readiness check validity
