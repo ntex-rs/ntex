@@ -361,7 +361,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    use crate::service::Service;
     use crate::web::test::{init_service, TestRequest};
     use crate::web::{self, App, HttpResponse};
 

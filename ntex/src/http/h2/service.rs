@@ -181,7 +181,7 @@ where
         self.config.service.poll_shutdown(cx)
     }
 
-    fn call<'a>(&'a self, io: Io<F>, ctx: Ctx<'a, Self>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, io: Io<F>, _: Ctx<'a, Self>) -> Self::Future<'_> {
         log::trace!(
             "New http2 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
@@ -280,7 +280,7 @@ where
         Ready<Self::Response, Self::Error>,
     >;
 
-    fn call<'a>(&'a self, mut msg: h2::Message, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, mut msg: h2::Message, _: Ctx<'a, Self>) -> Self::Future<'a> {
         let (io, pseudo, headers, eof, payload) = match msg.kind().take() {
             h2::MessageKind::Headers {
                 pseudo,
@@ -363,7 +363,7 @@ where
             head.headers = headers;
             head.io = CurrentIo::Ref(io);
 
-            let (mut res, mut body) = match ctx.call(&cfg.service, req).await {
+            let (mut res, mut body) = match cfg.service.call(req).await {
                 Ok(res) => res.into().into_parts(),
                 Err(err) => {
                     let (res, body) = Response::from(&err).into_parts();

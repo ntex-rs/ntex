@@ -448,7 +448,7 @@ impl<'a> fmt::Display for FormatDisplay<'a> {
 mod tests {
     use super::*;
     use crate::http::{header, StatusCode};
-    use crate::service::{IntoService, Middleware};
+    use crate::service::{Container, IntoService, Middleware};
     use crate::util::lazy;
     use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};
@@ -468,7 +468,7 @@ mod tests {
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
             .exclude("/test");
 
-        let srv = Middleware::create(&logger, srv.into_service());
+        let srv = Container::new(Middleware::create(&logger, srv.into_service()));
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 

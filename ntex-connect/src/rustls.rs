@@ -13,7 +13,7 @@ use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
 /// Rustls connector factory
 pub struct Connector<T> {
-    connector: Container<BaseConnector<T>, Connect<T>>,
+    connector: Container<BaseConnector<T>>,
     inner: TlsConnector,
 }
 
@@ -121,7 +121,7 @@ mod tests {
     use tls_rustls::{OwnedTrustAnchor, RootCertStore};
 
     use super::*;
-    use ntex_service::{Service, ServiceFactory};
+    use ntex_service::ServiceFactory;
     use ntex_util::future::lazy;
 
     #[ntex::test]
@@ -145,9 +145,11 @@ mod tests {
             .with_root_certificates(cert_store)
             .with_no_client_auth();
         let _ = Connector::<&'static str>::new(config.clone()).clone();
-        let factory = Connector::from(Arc::new(config)).memory_pool(PoolId::P5);
+        let factory = Connector::from(Arc::new(config))
+            .memory_pool(PoolId::P5)
+            .clone();
 
-        let srv = factory.create(&()).await.unwrap();
+        let srv = factory.container(&()).await.unwrap();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

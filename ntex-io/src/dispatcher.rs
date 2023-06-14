@@ -51,7 +51,7 @@ where
 {
     io: IoBoxed,
     codec: U,
-    service: Container<S, DispatchItem<U>>,
+    service: Container<S>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<usize>,
 }
@@ -340,7 +340,7 @@ where
 {
     fn poll_service(
         &self,
-        srv: &Container<S, DispatchItem<U>>,
+        srv: &Container<S>,
         cx: &mut Context<'_>,
         io: &IoBoxed,
     ) -> Poll<PollService<U>> {

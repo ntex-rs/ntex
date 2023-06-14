@@ -12,7 +12,7 @@ use ntex_util::future::{BoxFuture, Ready};
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
 pub struct Connector<T> {
-    connector: Container<BaseConnector<T>, Connect<T>>,
+    connector: Container<BaseConnector<T>>,
     openssl: SslConnector,
 }
 
@@ -33,7 +33,7 @@ impl<T: Address> Connector<T> {
         let connector = self
             .connector
             .into_service()
-            .unwrap()
+            .expect("Connector has been cloned")
             .memory_pool(id)
             .into();
 
@@ -115,7 +115,7 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ntex_service::{Service, ServiceFactory};
+    use ntex_service::ServiceFactory;
 
     #[ntex::test]
     async fn test_openssl_connect() {
@@ -124,9 +124,9 @@ mod tests {
         });
 
         let ssl = SslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = Connector::new(ssl.build()).clone().memory_pool(PoolId::P5);
+        let factory = Connector::new(ssl.build()).memory_pool(PoolId::P5).clone();
 
-        let srv = factory.create(&()).await.unwrap();
+        let srv = factory.container(&()).await.unwrap();
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;

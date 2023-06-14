@@ -25,7 +25,7 @@ use super::transport::WsTransport;
 
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
-    connector: Container<T, Connect<Uri>>,
+    connector: Container<T>,
     head: Rc<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,

@@ -13,7 +13,7 @@ use crate::util::{
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
-use super::{counter::Counter, counter::CounterGuard, socket::Stream, Token};
+use super::{counter::Counter, socket::Stream, Token};
 
 #[derive(Debug)]
 pub(super) struct WorkerCommand(Connection);
@@ -138,7 +138,7 @@ pub(super) struct Worker {
 struct WorkerService {
     factory: usize,
     status: WorkerServiceStatus,
-    service: Container<BoxedServerService, (Option<CounterGuard>, ServerMessage)>,
+    service: Container<BoxedServerService>,
 }
 
 impl WorkerService {
@@ -490,9 +490,12 @@ impl Future for Worker {
                                 self.factories[srv.factory].name(msg.token)
                             );
                         }
-                        let _ = srv
-                            .service
-                            .call((Some(guard), ServerMessage::Connect(msg.io)));
+                        let srv = srv.service.clone();
+                        spawn(async move {
+                            let _ = srv
+                                .call((Some(guard), ServerMessage::Connect(msg.io)))
+                                .await;
+                        });
                     } else {
                         return Poll::Ready(());
                     }
@@ -509,7 +512,7 @@ mod tests {
     use super::*;
     use crate::io::Io;
     use crate::server::service::Factory;
-    use crate::service::{Service, ServiceFactory};
+    use crate::service::{Ctx, Service, ServiceFactory};
     use crate::util::{lazy, Ready};
 
     #[derive(Clone, Copy, Debug)]
@@ -569,7 +572,7 @@ mod tests {
             }
         }
 
-        fn call(&self, _: Io) -> Self::Future<'_> {
+        fn call<'a>(&'a self, _: Io, _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(())
         }
     }

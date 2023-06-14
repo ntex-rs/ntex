@@ -643,7 +643,7 @@ mod tests {
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Method, StatusCode};
-    use crate::service::{fn_service, Service};
+    use crate::service::fn_service;
     use crate::util::{Bytes, Ready};
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;

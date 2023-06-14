@@ -460,7 +460,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
     }
 }
 
-pub type BoxResourceRouterResponse<'a, Err: ErrorRenderer> =
+type BoxResourceRouterResponse<'a, Err: ErrorRenderer> =
     ServiceCall<'a, RouteService<Err>, WebRequest<Err>>;
 
 pub struct ResourceRouter<Err: ErrorRenderer> {

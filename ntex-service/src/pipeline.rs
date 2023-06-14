@@ -118,7 +118,7 @@ impl<Req, Svc: Service<Req>> Pipeline<Req, Svc> {
     }
 
     /// Create service container
-    pub fn container(self) -> Container<Svc, Req> {
+    pub fn container(self) -> Container<Svc> {
         Container::new(self.service)
     }
 }

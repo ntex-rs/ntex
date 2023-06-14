@@ -226,7 +226,7 @@ impl Service<h2::Message> for H2PublishService {
     type Error = &'static str;
     type Future<'f> = Ready<Self::Response, Self::Error>;
 
-    fn call<'a>(&'a self, mut msg: h2::Message, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, mut msg: h2::Message, _: Ctx<'a, Self>) -> Self::Future<'a> {
         match msg.kind().take() {
             h2::MessageKind::Headers {
                 pseudo,

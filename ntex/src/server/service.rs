@@ -33,7 +33,7 @@ pub(super) trait InternalServiceFactory: Send {
 }
 
 pub(super) type BoxedServerService =
-    boxed::RcService<(Option<CounterGuard>, ServerMessage), (), ()>;
+    boxed::BoxService<(Option<CounterGuard>, ServerMessage), (), ()>;
 
 #[derive(Clone)]
 pub(super) struct StreamService<T> {
@@ -151,8 +151,7 @@ where
         Box::pin(async move {
             match factory.create(()).await {
                 Ok(inner) => {
-                    let service: BoxedServerService =
-                        boxed::rcservice(StreamService::new(inner, pool));
+                    let service = boxed::service(StreamService::new(inner, pool));
                     Ok(vec![(token, service)])
                 }
                 Err(_) => Err(()),

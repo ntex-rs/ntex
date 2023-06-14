@@ -44,7 +44,7 @@ struct AvailableConnection {
 
 /// Connections pool
 pub(super) struct ConnectionPool<T> {
-    connector: Container<T, Connect>,
+    connector: Container<T>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
@@ -121,9 +121,8 @@ where
     crate::forward_poll_ready!(connector);
     crate::forward_poll_shutdown!(connector);
 
-    fn call<'a>(&'a self, req: Connect, ctx: Ctx<'a, Self>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect, _: Ctx<'a, Self>) -> Self::Future<'_> {
         trace!("Get connection for {:?}", req.uri);
-        let connector = self.connector.clone();
         let inner = self.inner.clone();
         let waiters = self.waiters.clone();
 
@@ -151,7 +150,7 @@ where
                     trace!("Connecting to {:?}", req.uri);
                     let uri = req.uri.clone();
                     let (tx, rx) = waiters.borrow_mut().pool.channel();
-                    OpenConnection::spawn(key, tx, uri, inner, connector, req);
+                    OpenConnection::spawn(key, tx, uri, inner, self.connector.clone(), req);
 
                     match rx.await {
                         Err(_) => Err(ConnectError::Disconnected(None)),
@@ -308,7 +307,7 @@ impl Inner {
 }
 
 struct ConnectionPoolSupport<T> {
-    connector: Container<T, Connect>,
+    connector: Container<T>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
@@ -409,7 +408,7 @@ where
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        connector: Container<T, Connect>,
+        connector: Container<T>,
         msg: Connect,
     ) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;
@@ -629,19 +628,21 @@ mod tests {
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
 
-        let pool = ConnectionPool::new(
-            fn_service(move |req| {
-                let (client, server) = Io::create();
-                store2.borrow_mut().push((req, server));
-                Box::pin(async move { Ok(IoBoxed::from(nio::Io::new(client))) })
-            }),
-            Duration::from_secs(10),
-            Duration::from_secs(10),
-            Millis::ZERO,
-            1,
-            h2::Config::client(),
-        )
-        .clone();
+        let pool = Container::new(
+            ConnectionPool::new(
+                fn_service(move |req| {
+                    let (client, server) = Io::create();
+                    store2.borrow_mut().push((req, server));
+                    Box::pin(async move { Ok(IoBoxed::from(nio::Io::new(client))) })
+                }),
+                Duration::from_secs(10),
+                Duration::from_secs(10),
+                Millis::ZERO,
+                1,
+                h2::Config::client(),
+            )
+            .clone(),
+        );
 
         // uri must contain authority
         let req = Connect {

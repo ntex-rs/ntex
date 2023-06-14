@@ -201,7 +201,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     where
         Self: Sized,
     {
-        Container::<Self::Service, Req>::create(self, cfg)
+        Container::<Self::Service>::create(self, cfg)
     }
 
     #[inline]

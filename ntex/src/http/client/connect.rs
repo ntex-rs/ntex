@@ -7,7 +7,7 @@ use super::error::{ConnectError, SendRequestError};
 use super::response::ClientResponse;
 use super::{Connect as ClientConnect, Connection};
 
-pub(super) struct ConnectorWrapper<T>(pub(crate) Container<T, ClientConnect>);
+pub(super) struct ConnectorWrapper<T>(pub(crate) Container<T>);
 
 pub(super) trait Connect {
     fn send_request(

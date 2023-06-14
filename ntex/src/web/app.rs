@@ -591,7 +591,7 @@ mod tests {
     use super::*;
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
-    use crate::service::{fn_service, Service};
+    use crate::service::fn_service;
     use crate::util::{Bytes, Ready};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{
@@ -604,7 +604,7 @@ mod tests {
         let srv = App::new()
             .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
             .finish()
-            .create(())
+            .container(())
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
@@ -628,7 +628,7 @@ mod tests {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .with_config(Default::default())
-            .create(())
+            .container(())
             .await
             .unwrap();
 
