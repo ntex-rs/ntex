@@ -14,7 +14,7 @@ use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 use crate::router::{Path, ResourceDef};
 use crate::service::{
-    map_config, IntoService, IntoServiceFactory, Service, ServiceFactory,
+    map_config, Container, IntoService, IntoServiceFactory, Service, ServiceFactory,
 };
 use crate::time::{sleep, Millis, Seconds};
 use crate::util::{stream_recv, Bytes, BytesMut, Extensions, Ready, Stream};
@@ -108,7 +108,7 @@ where
     S: Service<R, Response = WebResponse, Error = E>,
     E: std::fmt::Debug,
 {
-    app.call(req).await.unwrap()
+    Container::new(app).call(req).await.unwrap()
 }
 
 /// Helper function that returns a response body of a TestRequest
@@ -140,7 +140,7 @@ pub async fn read_response<S>(app: &S, req: Request) -> Bytes
 where
     S: Service<Request, Response = WebResponse>,
 {
-    let mut resp = app
+    let mut resp = Container::new(app)
         .call(req)
         .await
         .unwrap_or_else(|_| panic!("read_response failed at application call"));

@@ -26,11 +26,13 @@ ntex-io = { path = "ntex-io" }
 ntex-http = { path = "ntex-http" }
 ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
-#ntex-service = { path = "ntex-service" }
+ntex-service = { path = "ntex-service" }
 ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }
-#ntex-util = { path = "ntex-util" }
+ntex-util = { path = "ntex-util" }
 
 ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
+
+ntex-h2 = { path = "../dev/ntex-h2" }

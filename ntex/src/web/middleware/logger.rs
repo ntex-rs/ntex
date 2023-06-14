@@ -7,7 +7,7 @@ use regex::Regex;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
-use crate::service::{Middleware, Service};
+use crate::service::{Ctx, Middleware, Service, ServiceCall};
 use crate::util::{Bytes, Either, HashSet};
 use crate::web::{HttpResponse, WebRequest, WebResponse};
 
@@ -136,15 +136,15 @@ where
 {
     type Response = WebResponse;
     type Error = S::Error;
-    type Future<'f> = Either<LoggerResponse<'f, S, E>, S::Future<'f>> where S: 'f, E: 'f;
+    type Future<'f> = Either<LoggerResponse<'f, S, E>, ServiceCall<'f, S, WebRequest<E>>> where S: 'f, E: 'f;
 
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: WebRequest<E>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         if self.inner.exclude.contains(req.path()) {
-            Either::Right(self.service.call(req))
+            Either::Right(ctx.call(&self.service, req))
         } else {
             let time = time::SystemTime::now();
             let mut format = self.inner.format.clone();
@@ -155,7 +155,7 @@ where
             Either::Left(LoggerResponse {
                 time,
                 format: Some(format),
-                fut: self.service.call(req),
+                fut: ctx.call(&self.service, req),
                 _t: PhantomData,
             })
         }
@@ -168,7 +168,7 @@ pin_project_lite::pin_project! {
     where S: 'f, E: 'f
     {
         #[pin]
-        fut: S::Future<'f>,
+        fut: ServiceCall<'f, S, WebRequest<E>>,
         time: time::SystemTime,
         format: Option<Format>,
         _t: PhantomData<E>

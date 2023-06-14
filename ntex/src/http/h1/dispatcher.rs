@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use std::{cell::RefCell, error::Error, future::Future, io, marker, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Filter, Io, IoBoxed, IoStatusUpdate, RecvError};
-use crate::{service::Service, util::ready, util::BoxFuture, util::Bytes};
+use crate::{service::Ctx, service::Service, util::ready, util::BoxFuture, util::Bytes};
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -475,9 +475,9 @@ where
         }
     }
 
-    fn service_call(&self, req: Request) -> CallState<S, X> {
+    fn service_call<'a>(&self, req: Request, ctx: Ctx<'a, Self>) -> CallState<S, X> {
         // Handle normal requests
-        let fut = self.config.service.call(req);
+        let fut = ctx.call(&self.config.service, req);
         let st = CallState::Service {
             fut: unsafe { mem::transmute_copy(&fut) },
         };
@@ -485,9 +485,14 @@ where
         st
     }
 
-    fn service_filter(&self, req: Request, f: &OnRequest) -> CallState<S, X> {
+    fn service_filter<'a>(
+        &self,
+        req: Request,
+        f: &OnRequest,
+        ctx: Ctx<'a, Self>,
+    ) -> CallState<S, X> {
         // Handle filter fut
-        let fut = f.call((req, self.io.get_ref()));
+        let fut = ctx.call(&f, (req, self.io.get_ref()));
         let st = CallState::Filter {
             fut: unsafe { mem::transmute_copy(&fut) },
         };
@@ -495,9 +500,9 @@ where
         st
     }
 
-    fn service_expect(&self, req: Request) -> CallState<S, X> {
+    fn service_expect<'a>(&self, req: Request, ctx: Ctx<'a, Self>) -> CallState<S, X> {
         // Handle normal requests with EXPECT: 100-Continue` header
-        let fut = self.config.expect.call(req);
+        let fut = ctx.call(&self.config.expect, req);
         let st = CallState::Expect {
             fut: unsafe { mem::transmute_copy(&fut) },
         };
@@ -505,7 +510,11 @@ where
         st
     }
 
-    fn service_upgrade(&mut self, mut req: Request) -> CallState<S, X> {
+    fn service_upgrade<'a>(
+        &mut self,
+        mut req: Request,
+        ctx: Ctx<'a, Self>,
+    ) -> CallState<S, X> {
         // Move io into request
         let io: IoBoxed = self.io.take().into();
         req.head_mut().io = CurrentIo::Io(Rc::new((
@@ -513,7 +522,7 @@ where
             RefCell::new(Some(Box::new((io, self.codec.clone())))),
         )));
         // Handle upgrade requests
-        let fut = self.config.service.call(req);
+        let fut = ctx.call(&self.config.service, req);
         let st = CallState::ServiceUpgrade {
             fut: unsafe { mem::transmute_copy(&fut) },
         };
@@ -521,9 +530,10 @@ where
         st
     }
 
-    fn read_request(
+    fn read_request<'a>(
         &mut self,
         cx: &mut Context<'_>,
+        ctx: Ctx<'a, Self>,
         call_state: &mut std::pin::Pin<&mut CallState<S, X>>,
     ) -> Poll<State<B>> {
         log::trace!("trying to read http message");
@@ -575,13 +585,13 @@ where
                             req.head_mut().io = CurrentIo::Ref(self.io.get_ref());
                         }
                         call_state.set(if let Some(ref f) = self.config.on_request {
-                            self.service_filter(req, f)
+                            self.service_filter(req, f, ctx)
                         } else if req.head().expect() {
-                            self.service_expect(req)
+                            self.service_expect(req, ctx)
                         } else if self.flags.contains(Flags::UPGRADE_HND) {
-                            self.service_upgrade(req)
+                            self.service_upgrade(req, ctx)
                         } else {
-                            self.service_call(req)
+                            self.service_call(req, ctx)
                         });
                         Poll::Ready(State::Call)
                     }

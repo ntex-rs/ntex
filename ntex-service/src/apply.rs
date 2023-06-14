@@ -101,10 +101,7 @@ where
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: In, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        In: 'a,
-    {
+    fn call<'a>(&'a self, req: In, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         let (index, waiters) = ctx.into_inner();
         let svc = ApplyService {
             index,
@@ -235,10 +232,7 @@ mod tests {
         type Error = ();
         type Future<'f> = Ready<(), ()>;
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            (): 'a,
-        {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(())
         }
     }

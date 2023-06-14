@@ -129,7 +129,6 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
 
         fn call<'a>(&'a self, req: $enum_type<V1R, $($R,)+>, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-        where $enum_type<V1R, $($R,)+>: 'a
         {
             match req {
                 $enum_type::V1(req) => $mod_name::ServiceResponse::V1 { fut: ctx.call(&self.V1, req) },
@@ -322,10 +321,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            (): 'a,
-        {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::<_, ()>::Ok(1)
         }
     }
@@ -346,10 +342,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            (): 'a,
-        {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::<_, ()>::Ok(2)
         }
     }

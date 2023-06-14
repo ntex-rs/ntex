@@ -376,14 +376,12 @@ impl<'a> ReadBuf<'a> {
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.memory_pool().release_read_buf(dst);
+            } else if let Some(mut buf) = self.curr.0.take() {
+                buf.extend_from_slice(&dst);
+                self.curr.0.set(Some(buf));
+                self.io.memory_pool().release_read_buf(dst);
             } else {
-                if let Some(mut buf) = self.curr.0.take() {
-                    buf.extend_from_slice(&dst);
-                    self.curr.0.set(Some(buf));
-                    self.io.memory_pool().release_read_buf(dst);
-                } else {
-                    self.curr.0.set(Some(dst));
-                }
+                self.curr.0.set(Some(dst));
             }
         }
     }

@@ -138,10 +138,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        R: 'a,
-    {
+    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         if self.ready.get() {
             self.ready.set(false);
             Either::Left(ctx.call(&self.service, req))
@@ -188,7 +185,7 @@ where
 
         let res = ready!(this.fut.poll(cx));
         this.slf.waker.wake();
-        return Poll::Ready(res);
+        Poll::Ready(res)
     }
 }
 
@@ -223,10 +220,7 @@ mod tests {
             }
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            (): 'a,
-        {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ready::Ok(())

@@ -113,10 +113,7 @@ where
         }
     }
 
-    fn call<'a>(&'a self, req: R, _: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        R: 'a,
-    {
+    fn call<'a>(&'a self, req: R, _: Ctx<'a, Self>) -> Self::Future<'a> {
         self.expire.set(now());
         Ready::Ok(req)
     }

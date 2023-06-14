@@ -5,7 +5,7 @@ pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_bytes::PoolId;
 use ntex_io::{FilterFactory, Io, Layer};
-use ntex_service::{Service, ServiceFactory};
+use ntex_service::{Container, Ctx, Service, ServiceFactory};
 use ntex_tls::rustls::TlsConnector;
 use ntex_util::future::{BoxFuture, Ready};
 
@@ -13,24 +13,24 @@ use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
 /// Rustls connector factory
 pub struct Connector<T> {
-    connector: BaseConnector<T>,
+    connector: Container<BaseConnector<T>, Connect<T>>,
     inner: TlsConnector,
 }
 
-impl<T> From<std::sync::Arc<ClientConfig>> for Connector<T> {
+impl<T: Address> From<std::sync::Arc<ClientConfig>> for Connector<T> {
     fn from(cfg: std::sync::Arc<ClientConfig>) -> Self {
         Connector {
             inner: TlsConnector::new(cfg),
-            connector: BaseConnector::default(),
+            connector: BaseConnector::default().into(),
         }
     }
 }
 
-impl<T> Connector<T> {
+impl<T: Address> Connector<T> {
     pub fn new(config: ClientConfig) -> Self {
         Connector {
             inner: TlsConnector::new(std::sync::Arc::new(config)),
-            connector: BaseConnector::default(),
+            connector: BaseConnector::default().into(),
         }
     }
 
@@ -39,8 +39,14 @@ impl<T> Connector<T> {
     /// Use specified memory pool for memory allocations. By default P0
     /// memory pool is used.
     pub fn memory_pool(self, id: PoolId) -> Self {
+        let connector = self
+            .connector
+            .into_service()
+            .unwrap()
+            .memory_pool(id)
+            .into();
         Self {
-            connector: self.connector.memory_pool(id),
+            connector,
             inner: self.inner,
         }
     }
@@ -104,7 +110,7 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Error = ConnectError;
     type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
-    fn call(&self, req: Connect<T>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect<T>, _: Ctx<'a, Self>) -> Self::Future<'a> {
         Box::pin(self.connect(req))
     }
 }

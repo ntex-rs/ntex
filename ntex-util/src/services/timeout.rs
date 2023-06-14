@@ -125,10 +125,7 @@ where
     type Error = TimeoutError<S::Error>;
     type Future<'f> = Either<TimeoutServiceResponse<'f, S, R>, TimeoutServiceResponse2<'f, S, R>> where Self: 'f, R: 'f;
 
-    fn call<'a>(&'a self, request: R, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        R: 'a,
-    {
+    fn call<'a>(&'a self, request: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         if self.timeout.is_zero() {
             Either::Right(TimeoutServiceResponse2 {
                 fut: ctx.call(&self.service, request),
@@ -239,10 +236,7 @@ mod tests {
         type Error = SrvError;
         type Future<'f> = BoxFuture<'f, Result<(), SrvError>>;
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            (): 'a,
-        {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             let fut = crate::time::sleep(self.0);
             Box::pin(async move {
                 fut.await;

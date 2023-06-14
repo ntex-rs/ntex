@@ -62,6 +62,12 @@ where
             _t: marker::PhantomData,
         }
     }
+
+    pub fn into_service(self) -> Option<S> {
+        let svc = self.svc.clone();
+        drop(self);
+        Rc::into_inner(svc)
+    }
 }
 
 impl<S, R> Clone for Container<S, R> {
@@ -297,10 +303,7 @@ mod tests {
             self.1.poll_ready(cx).map(|_| Ok(()))
         }
 
-        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            &'static str: 'a,
-        {
+        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(req)
         }
     }

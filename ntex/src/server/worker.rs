@@ -5,7 +5,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 
 use crate::rt::{spawn, Arbiter};
-use crate::service::Service;
+use crate::service::Container;
 use crate::time::{sleep, Millis, Sleep};
 use crate::util::{
     join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
@@ -13,7 +13,7 @@ use crate::util::{
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
-use super::{counter::Counter, socket::Stream, Token};
+use super::{counter::Counter, counter::CounterGuard, socket::Stream, Token};
 
 #[derive(Debug)]
 pub(super) struct WorkerCommand(Connection);
@@ -138,12 +138,12 @@ pub(super) struct Worker {
 struct WorkerService {
     factory: usize,
     status: WorkerServiceStatus,
-    service: BoxedServerService,
+    service: Container<BoxedServerService, (Option<CounterGuard>, ServerMessage)>,
 }
 
 impl WorkerService {
     fn created(&mut self, service: BoxedServerService) {
-        self.service = service;
+        self.service = Container::new(service);
         self.status = WorkerServiceStatus::Unavailable;
     }
 }
@@ -239,7 +239,7 @@ impl Worker {
                         assert_eq!(token.0, wrk.services.len());
                         wrk.services.push(WorkerService {
                             factory,
-                            service,
+                            service: service.into(),
                             status: WorkerServiceStatus::Unavailable,
                         });
                     }

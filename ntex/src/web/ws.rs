@@ -5,7 +5,7 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{body::BodySize, h1, StatusCode};
 use crate::service::{
-    apply_fn, fn_factory_with_config, IntoServiceFactory, Service, ServiceFactory,
+    apply_fn, fn_factory_with_config, IntoServiceFactory, ServiceFactory,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};

@@ -6,9 +6,10 @@ use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
+use crate::service::{Container, Ctx, Service, ServiceCall};
 use crate::time::{now, Millis};
 use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
-use crate::{channel::pool, rt::spawn, service::Service, task::LocalWaker};
+use crate::{channel::pool, rt::spawn, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
 use super::h2proto::{H2Client, H2PublishService};
@@ -43,7 +44,7 @@ struct AvailableConnection {
 
 /// Connections pool
 pub(super) struct ConnectionPool<T> {
-    connector: Rc<T>,
+    connector: Container<T, Connect>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
@@ -60,7 +61,7 @@ where
         limit: usize,
         h2config: h2::Config,
     ) -> Self {
-        let connector = Rc::new(connector);
+        let connector = Container::new(connector);
         let waiters = Rc::new(RefCell::new(Waiters {
             waiters: HashMap::default(),
             pool: pool::new(),
@@ -120,8 +121,7 @@ where
     crate::forward_poll_ready!(connector);
     crate::forward_poll_shutdown!(connector);
 
-    #[inline]
-    fn call(&self, req: Connect) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect, ctx: Ctx<'a, Self>) -> Self::Future<'_> {
         trace!("Get connection for {:?}", req.uri);
         let connector = self.connector.clone();
         let inner = self.inner.clone();
@@ -308,7 +308,7 @@ impl Inner {
 }
 
 struct ConnectionPoolSupport<T> {
-    connector: Rc<T>,
+    connector: Container<T, Connect>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
@@ -391,7 +391,7 @@ pin_project_lite::pin_project! {
     {
         key: Key,
         #[pin]
-        fut: T::Future<'f>,
+        fut: ServiceCall<'f, T, Connect>,
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,
@@ -409,7 +409,7 @@ where
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        connector: Rc<T>,
+        connector: Container<T, Connect>,
         msg: Connect,
     ) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;

@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
-use crate::service::{Middleware, Service};
+use crate::service::{Ctx, Middleware, Service};
 use crate::util::BoxFuture;
 use crate::web::{WebRequest, WebResponse};
 
@@ -115,9 +115,9 @@ where
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
-    fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: WebRequest<E>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         Box::pin(async move {
-            let mut res = self.service.call(req).await?;
+            let mut res = ctx.call(&self.service, req).await?;
 
             // set response headers
             for (key, value) in self.inner.headers.iter() {

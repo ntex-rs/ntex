@@ -239,10 +239,7 @@ mod tests {
             self.0.poll_ready(cx)
         }
 
-        fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            R: 'a,
-        {
+        fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
             ctx.call(&self.0, req)
         }
     }

@@ -76,10 +76,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        R: 'a,
-    {
+    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         InFlightServiceResponse {
             fut: ctx.call(&self.service, req),
             _guard: self.count.get(),
@@ -125,10 +122,7 @@ mod tests {
         type Error = ();
         type Future<'f> = BoxFuture<'f, Result<(), ()>>;
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            (): 'a,
-        {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Box::pin(async move {
                 let _ = self.0.recv().await;
                 Ok::<_, ()>(())
