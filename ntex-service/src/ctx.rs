@@ -88,7 +88,14 @@ where
 
 impl<S, R> Drop for Container<S, R> {
     fn drop(&mut self) {
-        self.waiters.borrow_mut().remove(self.index);
+        let mut waiters = self.waiters.borrow_mut();
+
+        waiters.remove(self.index);
+        for (_, waker) in &mut *waiters {
+            if let Some(waker) = waker.take() {
+                waker.wake();
+            }
+        }
     }
 }
 
@@ -132,6 +139,7 @@ impl<'b, S: ?Sized> Ctx<'b, S> {
         )
     }
 
+    #[inline]
     /// Wait for service readiness and then call service
     pub fn call<T, R>(&self, svc: &'b T, req: R) -> ServiceCall<'b, T, R>
     where
@@ -267,5 +275,96 @@ where
             .project()
             .fut
             .poll(cx))?)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ntex_util::{channel::condition, future::lazy, future::Ready, time};
+    use std::{cell::Cell, cell::RefCell, rc::Rc, task::Context, task::Poll};
+
+    use super::*;
+
+    struct Srv(Rc<Cell<usize>>, condition::Waiter);
+
+    impl Service<&'static str> for Srv {
+        type Response = &'static str;
+        type Error = ();
+        type Future<'f> = Ready<Self::Response, ()>;
+
+        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.0.set(self.0.get() + 1);
+            self.1.poll_ready(cx).map(|_| Ok(()))
+        }
+
+        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a>
+        where
+            &'static str: 'a,
+        {
+            Ready::Ok(req)
+        }
+    }
+
+    #[ntex::test]
+    async fn test_poll_ready() {
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+
+        let srv1 = Container::from(Srv(cnt.clone(), con.wait()));
+        let srv2 = srv1.clone();
+
+        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+        assert_eq!(cnt.get(), 1);
+
+        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+        assert_eq!(cnt.get(), 2);
+
+        con.notify();
+
+        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 3);
+
+        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+        assert_eq!(cnt.get(), 4);
+    }
+
+    #[ntex::test]
+    async fn test_shared_call() {
+        let data = Rc::new(RefCell::new(Vec::new()));
+
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+
+        let srv1 = Container::from(Srv(cnt.clone(), con.wait()));
+        let srv2 = srv1.clone();
+
+        let data1 = data.clone();
+        ntex::rt::spawn(async move {
+            let i = srv1.call("srv1").await.unwrap();
+            data1.borrow_mut().push(i);
+        });
+
+        let data2 = data.clone();
+        ntex::rt::spawn(async move {
+            let i = srv2.call("srv2").await.unwrap();
+            data2.borrow_mut().push(i);
+        });
+        time::sleep(time::Millis(50)).await;
+
+        con.notify();
+        time::sleep(time::Millis(150)).await;
+
+        assert_eq!(cnt.get(), 4);
+        assert_eq!(&*data.borrow(), &["srv2"]);
+
+        con.notify();
+        time::sleep(time::Millis(150)).await;
+
+        assert_eq!(cnt.get(), 5);
+        assert_eq!(&*data.borrow(), &["srv2", "srv1"]);
     }
 }

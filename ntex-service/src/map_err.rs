@@ -202,7 +202,7 @@ mod tests {
     use crate::{fn_factory, Container, Ctx, Service, ServiceFactory};
 
     #[derive(Clone)]
-    struct Srv;
+    struct Srv(bool);
 
     impl Service<()> for Srv {
         type Response = ();
@@ -210,7 +210,11 @@ mod tests {
         type Future<'f> = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Err(()))
+            if self.0 {
+                Poll::Ready(Err(()))
+            } else {
+                Poll::Ready(Ok(()))
+            }
         }
 
         fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
@@ -223,7 +227,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_poll_ready() {
-        let srv = Srv.map_err(|_| "error");
+        let srv = Srv(true).map_err(|_| "error");
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Err("error")));
 
@@ -233,7 +237,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_service() {
-        let srv = Container::new(Srv.map_err(|_| "error").clone());
+        let srv = Container::new(Srv(false).map_err(|_| "error").clone());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -241,7 +245,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = Container::new(crate::pipeline(Srv).map_err(|_| "error").clone());
+        let srv = Container::new(crate::pipeline(Srv(false)).map_err(|_| "error").clone());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -249,7 +253,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv = fn_factory(|| Ready::<_, ()>::Ok(Srv))
+        let new_srv = fn_factory(|| Ready::<_, ()>::Ok(Srv(false)))
             .map_err(|_| "error")
             .clone();
         let srv = Container::new(new_srv.create(&()).await.unwrap());
@@ -260,9 +264,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv = crate::pipeline_factory(fn_factory(|| async { Ok::<Srv, ()>(Srv) }))
-            .map_err(|_| "error")
-            .clone();
+        let new_srv =
+            crate::pipeline_factory(fn_factory(|| async { Ok::<Srv, ()>(Srv(false)) }))
+                .map_err(|_| "error")
+                .clone();
         let srv = Container::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());
