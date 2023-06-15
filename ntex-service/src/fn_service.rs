@@ -128,10 +128,7 @@ where
     type Future<'f> = Fut where Self: 'f, Req: 'f;
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a> {
         (self.f)(req)
     }
 }
@@ -193,10 +190,7 @@ where
     type Future<'f> = Fut where Self: 'f;
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a> {
         (self.f)(req)
     }
 }

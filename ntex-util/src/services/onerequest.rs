@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests to 1.
 use std::{cell::Cell, future::Future, pin::Pin, task::Context, task::Poll};
 
-use ntex_service::{IntoService, Middleware, Service};
+use ntex_service::{Ctx, IntoService, Middleware, Service, ServiceCall};
 
 use crate::task::LocalWaker;
 
@@ -63,11 +63,11 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         self.ready.set(false);
 
         OneRequestServiceResponse {
-            fut: self.service.call(req),
+            fut: ctx.call(&self.service, req),
             service: self,
         }
     }
@@ -81,7 +81,7 @@ pin_project_lite::pin_project! {
     where T: 'f, R: 'f
     {
         #[pin]
-        fut: T::Future<'f>,
+        fut: ServiceCall<'f, T, R>,
         service: &'f OneRequestService<T>,
     }
 }
@@ -101,23 +101,22 @@ impl<'f, T: Service<R>, R> Future for OneRequestServiceResponse<'f, T, R> {
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{apply, fn_factory, Service, ServiceFactory};
-    use std::{task::Poll, time::Duration};
+    use ntex_service::{apply, fn_factory, Container, Ctx, Service, ServiceFactory};
+    use std::{cell::RefCell, task::Poll, time::Duration};
 
     use super::*;
-    use crate::future::{lazy, BoxFuture};
+    use crate::{channel::oneshot, future::lazy, future::BoxFuture};
 
-    struct SleepService(Duration);
+    struct SleepService(oneshot::Receiver<()>);
 
     impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
         type Future<'f> = BoxFuture<'f, Result<(), ()>>;
 
-        fn call(&self, _: ()) -> Self::Future<'_> {
-            let fut = crate::time::sleep(self.0);
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Box::pin(async move {
-                fut.await;
+                let _ = self.0.recv().await;
                 Ok::<_, ()>(())
             })
         }
@@ -125,15 +124,20 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_oneshot() {
-        let wait_time = Duration::from_millis(50);
+        let (tx, rx) = oneshot::channel();
 
-        let srv = OneRequestService::new(SleepService(wait_time));
+        let srv = Container::new(OneRequestService::new(SleepService(rx)));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let res = srv.call(());
+        let srv2 = srv.clone();
+        ntex::rt::spawn(async move {
+            let _ = srv2.call(()).await;
+        });
+        crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
-        let _ = res.await;
+        let _ = tx.send(());
+        crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
     }
@@ -142,19 +146,28 @@ mod tests {
     async fn test_middleware() {
         assert_eq!(format!("{:?}", OneRequest), "OneRequest");
 
-        let wait_time = Duration::from_millis(50);
+        let (tx, rx) = oneshot::channel();
+        let rx = RefCell::new(Some(rx));
         let srv = apply(
             OneRequest,
-            fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
+            fn_factory(move || {
+                let rx = rx.borrow_mut().take().unwrap();
+                async move { Ok::<_, ()>(SleepService(rx)) }
+            }),
         );
 
-        let srv = srv.create(&()).await.unwrap();
+        let srv = srv.container(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let res = srv.call(());
+        let srv2 = srv.clone();
+        ntex::rt::spawn(async move {
+            let _ = srv2.call(()).await;
+        });
+        crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
-        let _ = res.await;
+        let _ = tx.send(());
+        crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
 }

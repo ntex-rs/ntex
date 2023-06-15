@@ -54,10 +54,7 @@ where
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         MapFuture {
             fut: ctx.call(&self.service, req),
             slf: self,
@@ -209,10 +206,7 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            (): 'a,
-        {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(())
         }
     }

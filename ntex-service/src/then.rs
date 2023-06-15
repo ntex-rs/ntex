@@ -60,10 +60,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        R: 'a,
-    {
+    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         ThenServiceResponse {
             slf: self,
             state: State::A {
@@ -270,10 +267,7 @@ mod tests {
             &'a self,
             req: Result<&'static str, &'static str>,
             _: Ctx<'a, Self>,
-        ) -> Self::Future<'a>
-        where
-            Result<&'static str, &'static str>: 'a,
-        {
+        ) -> Self::Future<'a> {
             match req {
                 Ok(msg) => Ready::Ok(msg),
                 Err(_) => Ready::Err(()),
@@ -298,10 +292,7 @@ mod tests {
             &'a self,
             req: Result<&'static str, ()>,
             _: Ctx<'a, Self>,
-        ) -> Self::Future<'a>
-        where
-            Result<&'static str, ()>: 'a,
-        {
+        ) -> Self::Future<'a> {
             match req {
                 Ok(msg) => Ready::Ok((msg, "ok")),
                 Err(()) => Ready::Ok(("srv2", "err")),
@@ -329,7 +320,6 @@ mod tests {
             .container();
 
         let res = srv.call(Ok("srv1")).await;
-        println!("=========== {:?}", res);
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));
 

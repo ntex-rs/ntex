@@ -1,5 +1,4 @@
 #![allow(
-    clippy::derive_hash_xor_eq,
     clippy::should_implement_trait,
     clippy::no_effect,
     clippy::missing_safety_doc
@@ -8,6 +7,7 @@ use std::{cmp, error::Error, fmt, str, str::FromStr};
 
 use ntex_bytes::{ByteString, Bytes};
 
+#[allow(clippy::derived_hash_with_manual_eq)]
 /// Represents an HTTP header field value.
 ///
 /// In practice, HTTP header field values are usually valid ASCII. However, the
@@ -17,7 +17,7 @@ use ntex_bytes::{ByteString, Bytes};
 /// To handle this, the `HeaderValue` is useable as a type and can be compared
 /// with strings and implements `Debug`. A `to_str` fn is provided that returns
 /// an `Err` if the header value contains non visible ascii characters.
-#[derive(Clone, Hash)]
+#[derive(Clone, Hash, Eq)]
 pub struct HeaderValue {
     inner: Bytes,
     is_sensitive: bool,
@@ -541,8 +541,6 @@ impl PartialEq for HeaderValue {
         self.inner == other.inner
     }
 }
-
-impl Eq for HeaderValue {}
 
 impl PartialOrd for HeaderValue {
     #[inline]

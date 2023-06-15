@@ -16,7 +16,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, AUTHORIZATIO
 use crate::http::{body::BodySize, client::ClientResponse, error::HttpError, h1};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Sealed};
-use crate::service::{apply_fn, into_service, IntoService, Service};
+use crate::service::{apply_fn, into_service, Container, IntoService, Service};
 use crate::time::{timeout, Millis, Seconds};
 use crate::{channel::mpsc, rt, util::Ready, ws};
 
@@ -25,7 +25,7 @@ use super::transport::WsTransport;
 
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
-    connector: T,
+    connector: Container<T>,
     head: Rc<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
@@ -630,7 +630,7 @@ where
         }
 
         Ok(WsClient {
-            connector: inner.connector,
+            connector: inner.connector.into(),
             head: Rc::new(inner.head),
             addr: inner.addr,
             max_size: inner.max_size,

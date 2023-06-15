@@ -3,8 +3,9 @@ use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time, time::Duration};
 use ntex_h2::{self as h2};
 
 use crate::http::{Request, Response};
+use crate::service::{boxed::BoxService, Container};
 use crate::time::{sleep, Millis, Seconds};
-use crate::{io::IoRef, service::boxed::BoxService, util::BytesMut};
+use crate::{io::IoRef, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -101,16 +102,16 @@ impl ServiceConfig {
 pub(super) type OnRequest = BoxService<(Request, IoRef), Request, Response>;
 
 pub(super) struct DispatcherConfig<S, X, U> {
-    pub(super) service: S,
-    pub(super) expect: X,
-    pub(super) upgrade: Option<U>,
+    pub(super) service: Container<S>,
+    pub(super) expect: Container<X>,
+    pub(super) upgrade: Option<Container<U>>,
     pub(super) keep_alive: Duration,
     pub(super) client_timeout: Duration,
     pub(super) client_disconnect: Seconds,
     pub(super) h2config: h2::Config,
     pub(super) ka_enabled: bool,
     pub(super) timer: DateService,
-    pub(super) on_request: Option<OnRequest>,
+    pub(super) on_request: Option<Container<OnRequest>>,
 }
 
 impl<S, X, U> DispatcherConfig<S, X, U> {
@@ -122,10 +123,10 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
         on_request: Option<OnRequest>,
     ) -> Self {
         DispatcherConfig {
-            service,
-            expect,
-            upgrade,
-            on_request,
+            service: service.into(),
+            expect: expect.into(),
+            upgrade: upgrade.map(|v| v.into()),
+            on_request: on_request.map(|v| v.into()),
             keep_alive: Duration::from(cfg.0.keep_alive),
             client_timeout: Duration::from(cfg.0.client_timeout),
             client_disconnect: cfg.0.client_disconnect,

@@ -1,18 +1,14 @@
-use std::{cell::RefCell, future::Future, marker, pin::Pin, rc::Rc, task, task::Poll};
+use std::{cell::RefCell, future::Future, marker, ops, pin::Pin, rc::Rc, task, task::Poll};
 
 use crate::{Service, ServiceFactory};
 
-pub struct Container<S, R> {
+pub struct Container<S> {
     svc: Rc<S>,
     index: usize,
     waiters: Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
-    _t: marker::PhantomData<R>,
 }
 
-impl<S, R> Container<S, R>
-where
-    S: Service<R>,
-{
+impl<S> Container<S> {
     #[inline]
     pub fn new(svc: S) -> Self {
         let mut waiters = slab::Slab::new();
@@ -21,13 +17,15 @@ where
             index,
             svc: Rc::new(svc),
             waiters: Rc::new(RefCell::new(waiters)),
-            _t: marker::PhantomData,
         }
     }
 
     #[inline]
     /// Returns `Ready` when the service is able to process requests.
-    pub fn poll_ready(&self, cx: &mut task::Context<'_>) -> Poll<Result<(), S::Error>> {
+    pub fn poll_ready<R>(&self, cx: &mut task::Context<'_>) -> Poll<Result<(), S::Error>>
+    where
+        S: Service<R>,
+    {
         let res = self.svc.poll_ready(cx);
 
         if res.is_pending() {
@@ -38,13 +36,19 @@ where
 
     #[inline]
     /// Shutdown enclosed service.
-    pub fn poll_shutdown(&self, cx: &mut task::Context<'_>) -> Poll<()> {
+    pub fn poll_shutdown<R>(&self, cx: &mut task::Context<'_>) -> Poll<()>
+    where
+        S: Service<R>,
+    {
         self.svc.poll_shutdown(cx)
     }
 
     #[inline]
     /// Process the request and return the response asynchronously.
-    pub fn call<'a>(&'a self, req: R) -> ServiceCall<'a, S, R> {
+    pub fn call<'a, R>(&'a self, req: R) -> ServiceCall<'a, S, R>
+    where
+        S: Service<R>,
+    {
         let ctx = Ctx::<'a, S> {
             index: self.index,
             waiters: &self.waiters,
@@ -53,7 +57,7 @@ where
         ctx.call(self.svc.as_ref(), req)
     }
 
-    pub(crate) fn create<F: ServiceFactory<R, C>, C>(
+    pub(crate) fn create<F: ServiceFactory<R, C>, R, C>(
         f: &F,
         cfg: C,
     ) -> ContainerFactory<'_, F, R, C> {
@@ -62,9 +66,15 @@ where
             _t: marker::PhantomData,
         }
     }
+
+    pub fn into_service(self) -> Option<S> {
+        let svc = self.svc.clone();
+        drop(self);
+        Rc::try_unwrap(svc).ok()
+    }
 }
 
-impl<S, R> Clone for Container<S, R> {
+impl<S> Clone for Container<S> {
     fn clone(&self) -> Self {
         let index = self.waiters.borrow_mut().insert(None);
 
@@ -72,21 +82,26 @@ impl<S, R> Clone for Container<S, R> {
             index,
             svc: self.svc.clone(),
             waiters: self.waiters.clone(),
-            _t: marker::PhantomData,
         }
     }
 }
 
-impl<S, R> From<S> for Container<S, R>
-where
-    S: Service<R>,
-{
+impl<S> From<S> for Container<S> {
     fn from(svc: S) -> Self {
         Container::new(svc)
     }
 }
 
-impl<S, R> Drop for Container<S, R> {
+impl<S> ops::Deref for Container<S> {
+    type Target = S;
+
+    #[inline]
+    fn deref(&self) -> &S {
+        self.svc.as_ref()
+    }
+}
+
+impl<S> Drop for Container<S> {
     fn drop(&mut self) {
         let mut waiters = self.waiters.borrow_mut();
 
@@ -268,7 +283,7 @@ impl<'f, F, R, C> Future for ContainerFactory<'f, F, R, C>
 where
     F: ServiceFactory<R, C> + 'f,
 {
-    type Output = Result<Container<F::Service, R>, F::InitError>;
+    type Output = Result<Container<F::Service>, F::InitError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         Poll::Ready(Ok(Container::new(task::ready!(self
@@ -297,10 +312,7 @@ mod tests {
             self.1.poll_ready(cx).map(|_| Ok(()))
         }
 
-        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            &'static str: 'a,
-        {
+        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(req)
         }
     }

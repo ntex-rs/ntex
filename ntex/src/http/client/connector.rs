@@ -3,11 +3,9 @@ use std::{task::Context, task::Poll, time::Duration};
 use ntex_h2::{self as h2};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::service::{apply_fn, boxed, Service};
+use crate::service::{apply_fn, boxed, Ctx, Service, ServiceCall};
 use crate::time::{Millis, Seconds};
-use crate::util::{
-    shared::SharedService, timeout::TimeoutError, timeout::TimeoutService, Either, Ready,
-};
+use crate::util::{timeout::TimeoutError, timeout::TimeoutService, Either, Ready};
 use crate::{http::Uri, io::IoBoxed};
 
 use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
@@ -216,7 +214,7 @@ impl Connector {
     /// its combinator chain.
     pub fn finish(
         self,
-    ) -> impl Service<Connect, Response = Connection, Error = ConnectError> + Clone {
+    ) -> impl Service<Connect, Response = Connection, Error = ConnectError> {
         let tcp_service = connector(self.connector, self.timeout, self.disconnect_timeout);
 
         let ssl_pool = if let Some(ssl_connector) = self.ssl_connector {
@@ -233,7 +231,7 @@ impl Connector {
             None
         };
 
-        SharedService::new(InnerConnector {
+        InnerConnector {
             tcp_pool: ConnectionPool::new(
                 tcp_service,
                 self.conn_lifetime,
@@ -243,7 +241,7 @@ impl Connector {
                 self.h2config.clone(),
             ),
             ssl_pool,
-        })
+        }
     }
 }
 
@@ -283,7 +281,7 @@ where
     type Response = <ConnectionPool<T> as Service<Connect>>::Response;
     type Error = ConnectError;
     type Future<'f> = Either<
-        <ConnectionPool<T> as Service<Connect>>::Future<'f>,
+        ServiceCall<'f, ConnectionPool<T>, Connect>,
         Ready<Self::Response, Self::Error>,
     >;
 
@@ -317,16 +315,16 @@ where
         }
     }
 
-    fn call(&self, req: Connect) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect, ctx: Ctx<'a, Self>) -> Self::Future<'_> {
         match req.uri.scheme_str() {
             Some("https") | Some("wss") => {
                 if let Some(ref conn) = self.ssl_pool {
-                    Either::Left(conn.call(req))
+                    Either::Left(ctx.call(conn, req))
                 } else {
                     Either::Right(Ready::Err(ConnectError::SslIsNotSupported))
                 }
             }
-            _ => Either::Left(self.tcp_pool.call(req)),
+            _ => Either::Left(ctx.call(&self.tcp_pool, req)),
         }
     }
 }

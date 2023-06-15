@@ -2,8 +2,9 @@
 use std::task::{Context, Poll};
 use std::{cell::RefCell, error::Error, future::Future, io, marker, mem, pin::Pin, rc::Rc};
 
-use crate::io::{Filter, Io, IoBoxed, IoStatusUpdate, RecvError};
-use crate::{service::Service, util::ready, util::BoxFuture, util::Bytes};
+use crate::io::{Filter, Io, IoBoxed, IoRef, IoStatusUpdate, RecvError};
+use crate::service::{Container, Service, ServiceCall};
+use crate::util::{ready, Bytes};
 
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
@@ -46,7 +47,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-#[derive(thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 enum State<B> {
     #[error("State::Call")]
     Call,
@@ -77,10 +78,10 @@ pin_project_lite::pin_project! {
     where S: 'static, X: 'static
     {
         None,
-        Service { #[pin] fut: S::Future<'static> },
-        ServiceUpgrade { #[pin] fut: S::Future<'static> },
-        Expect { #[pin] fut: X::Future<'static> },
-        Filter { fut: BoxFuture<'static, Result<Request, Response>> }
+        Service { #[pin] fut: ServiceCall<'static, S, Request> },
+        ServiceUpgrade { #[pin] fut: ServiceCall<'static, S, Request>  },
+        Expect { #[pin] fut: ServiceCall<'static, X, Request> },
+        Filter { fut: ServiceCall<'static, OnRequest, (Request, IoRef)> }
     }
 }
 
@@ -485,7 +486,7 @@ where
         st
     }
 
-    fn service_filter(&self, req: Request, f: &OnRequest) -> CallState<S, X> {
+    fn service_filter(&self, req: Request, f: &Container<OnRequest>) -> CallState<S, X> {
         // Handle filter fut
         let fut = f.call((req, self.io.get_ref()));
         let st = CallState::Filter {

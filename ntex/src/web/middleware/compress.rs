@@ -4,7 +4,7 @@ use std::{cmp, future::Future, marker, pin::Pin, str::FromStr};
 
 use crate::http::encoding::Encoder;
 use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
-use crate::service::{Middleware, Service};
+use crate::service::{Ctx, Middleware, Service, ServiceCall};
 use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
@@ -71,7 +71,7 @@ where
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
-    fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: WebRequest<E>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {
             if let Ok(enc) = val.to_str() {
@@ -85,7 +85,7 @@ where
 
         CompressResponse {
             encoding,
-            fut: self.service.call(req),
+            fut: ctx.call(&self.service, req),
             _t: marker::PhantomData,
         }
     }
@@ -97,7 +97,7 @@ pin_project_lite::pin_project! {
     where S: 'f, E: 'f
     {
         #[pin]
-        fut: S::Future<'f>,
+        fut: ServiceCall<'f, S, WebRequest<E>>,
         encoding: ContentEncoding,
         _t: marker::PhantomData<E>,
     }

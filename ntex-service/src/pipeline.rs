@@ -118,7 +118,7 @@ impl<Req, Svc: Service<Req>> Pipeline<Req, Svc> {
     }
 
     /// Create service container
-    pub fn container(self) -> Container<Svc, Req> {
+    pub fn container(self) -> Container<Svc> {
         Container::new(self.service)
     }
 }
@@ -144,10 +144,7 @@ impl<Req, Svc: Service<Req>> Service<Req> for Pipeline<Req, Svc> {
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         ctx.call(&self.service, req)
     }
 }

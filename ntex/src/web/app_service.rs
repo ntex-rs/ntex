@@ -4,8 +4,10 @@ use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{fn_service, Middleware, PipelineFactory, Service, ServiceFactory};
-use crate::util::{BoxFuture, Extensions};
+use crate::service::{
+    fn_service, Ctx, Middleware, PipelineFactory, Service, ServiceCall, ServiceFactory,
+};
+use crate::util::{BoxFuture, Either, Extensions};
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
@@ -21,8 +23,8 @@ type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
-type BoxResponse<'f, Err: ErrorRenderer> =
-    BoxFuture<'f, Result<WebResponse, Err::Container>>;
+type BoxResponse<'a, Err: ErrorRenderer> =
+    ServiceCall<'a, HttpService<Err>, WebRequest<Err>>;
 type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extensions, ()>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
@@ -198,12 +200,12 @@ where
 {
     type Response = WebResponse;
     type Error = T::Error;
-    type Future<'f> = T::Future<'f> where T: 'f;
+    type Future<'f> = ServiceCall<'f, T, WebRequest<Err>> where T: 'f;
 
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
-    fn call(&self, req: Request) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Request, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         let (head, payload) = req.into_parts();
 
         let req = if let Some(mut req) = self.pool.get_request() {
@@ -223,7 +225,7 @@ where
                 self.pool,
             )
         };
-        self.service.call(WebRequest::new(req))
+        ctx.call(&self.service, WebRequest::new(req))
     }
 }
 
@@ -245,9 +247,14 @@ struct AppRouting<Err: ErrorRenderer> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future<'f> = BoxResponse<'f, Err>;
+    type Future<'f> =
+        Either<BoxResponse<'f, Err>, BoxFuture<'f, Result<WebResponse, Err::Container>>>;
 
-    fn call(&self, mut req: WebRequest<Err>) -> Self::Future<'_> {
+    fn call<'a>(
+        &'a self,
+        mut req: WebRequest<Err>,
+        ctx: Ctx<'a, Self>,
+    ) -> Self::Future<'a> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
@@ -260,12 +267,14 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
         });
 
         if let Some((srv, _info)) = res {
-            srv.call(req)
+            Either::Left(ctx.call(srv, req))
         } else if let Some(ref default) = self.default {
-            default.call(req)
+            Either::Left(ctx.call(default, req))
         } else {
             let req = req.into_parts().0;
-            Box::pin(async { Ok(WebResponse::new(Response::NotFound().finish(), req)) })
+            Either::Right(Box::pin(async {
+                Ok(WebResponse::new(Response::NotFound().finish(), req))
+            }))
         }
     }
 }
@@ -296,23 +305,28 @@ where
         }
     }
 
-    fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: WebRequest<Err>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         AppServiceResponse {
-            filter: self.filter.call(req),
+            filter: ctx.call(&self.filter, req),
             routing: &self.routing,
             endpoint: None,
+            ctx,
         }
     }
 }
+
+type BoxAppServiceResponse<'a, Err: ErrorRenderer> =
+    ServiceCall<'a, AppRouting<Err>, WebRequest<Err>>;
 
 pin_project_lite::pin_project! {
     pub struct AppServiceResponse<'f, F: Service<WebRequest<Err>>, Err: ErrorRenderer>
     where F: 'f
     {
         #[pin]
-        filter: F::Future<'f>,
+        filter: ServiceCall<'f, F, WebRequest<Err>>,
         routing: &'f AppRouting<Err>,
-        endpoint: Option<BoxResponse<'f, Err>>,
+        endpoint: Option<BoxAppServiceResponse<'f, Err>>,
+        ctx: Ctx<'f, AppService<F, Err>>,
     }
 }
 
@@ -335,7 +349,7 @@ where
                 } else {
                     return Poll::Pending;
                 };
-                *this.endpoint = Some(this.routing.call(res));
+                *this.endpoint = Some(this.ctx.call(this.routing, res));
                 this = self.as_mut().project();
             }
         }
@@ -347,7 +361,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    use crate::service::Service;
     use crate::web::test::{init_service, TestRequest};
     use crate::web::{self, App, HttpResponse};
 

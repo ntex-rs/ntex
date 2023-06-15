@@ -62,9 +62,7 @@ pub trait ServiceObj<Req> {
         req: Req,
         idx: usize,
         waiters: &'a Rc<RefCell<slab::Slab<Option<Waker>>>>,
-    ) -> BoxFuture<'a, Self::Response, Self::Error>
-    where
-        Req: 'a;
+    ) -> BoxFuture<'a, Self::Response, Self::Error>;
 }
 
 impl<S, Req> ServiceObj<Req> for S
@@ -91,10 +89,7 @@ where
         req: Req,
         idx: usize,
         waiters: &'a Rc<RefCell<slab::Slab<Option<Waker>>>>,
-    ) -> BoxFuture<'a, Self::Response, Self::Error>
-    where
-        Req: 'a,
-    {
+    ) -> BoxFuture<'a, Self::Response, Self::Error> {
         Box::pin(Ctx::<'a, S>::new(idx, waiters).call_nowait(self, req))
     }
 }
@@ -194,10 +189,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         let (index, waiters) = ctx.into_inner();
         self.0.call(req, index, waiters)
     }
@@ -230,10 +222,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         let (index, waiters) = ctx.into_inner();
         self.0.call(req, index, waiters)
     }

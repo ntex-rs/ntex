@@ -4,7 +4,7 @@ use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{map_config, pipeline_factory, IntoServiceFactory, PipelineFactory};
-use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack};
+use crate::service::{Ctx, Identity, Middleware, Service, ServiceFactory, Stack};
 use crate::util::{BoxFuture, Extensions, Ready};
 
 use super::app_service::{AppFactory, AppService};
@@ -581,7 +581,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for Filter<Err> {
     type Future<'f> = Ready<WebRequest<Err>, Err::Container>;
 
     #[inline]
-    fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: WebRequest<Err>, _: Ctx<'a, Self>) -> Self::Future<'a> {
         Ready::Ok(req)
     }
 }
@@ -591,7 +591,7 @@ mod tests {
     use super::*;
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
-    use crate::service::{fn_service, Service};
+    use crate::service::fn_service;
     use crate::util::{Bytes, Ready};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{
@@ -604,7 +604,7 @@ mod tests {
         let srv = App::new()
             .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
             .finish()
-            .create(())
+            .container(())
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
@@ -628,7 +628,7 @@ mod tests {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .with_config(Default::default())
-            .create(())
+            .container(())
             .await
             .unwrap();
 

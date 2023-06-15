@@ -1,7 +1,7 @@
 use std::{fmt, io, marker, net};
 
 use ntex_rt::spawn_blocking;
-use ntex_service::{Service, ServiceFactory};
+use ntex_service::{Ctx, Service, ServiceFactory};
 use ntex_util::future::{BoxFuture, Either, Ready};
 
 use crate::{Address, Connect, ConnectError};
@@ -115,7 +115,7 @@ impl<T: Address> Service<Connect<T>> for Resolver<T> {
     type Future<'f> = BoxFuture<'f, Result<Connect<T>, Self::Error>>;
 
     #[inline]
-    fn call(&self, req: Connect<T>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect<T>, _: Ctx<'a, Self>) -> Self::Future<'_> {
         Box::pin(self.lookup(req))
     }
 }
@@ -129,7 +129,7 @@ mod tests {
     async fn resolver() {
         let resolver = Resolver::default().clone();
         assert!(format!("{:?}", resolver).contains("Resolver"));
-        let srv = resolver.create(()).await.unwrap();
+        let srv = resolver.container(()).await.unwrap();
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
 
         let res = srv.call(Connect::new("www.rust-lang.org")).await;

@@ -101,7 +101,6 @@ mod tests {
 
     use super::*;
     use crate::http::StatusCode;
-    use crate::service::Service;
     use crate::web::test::{self, init_service, TestRequest};
     use crate::web::{self, App, HttpResponse};
 

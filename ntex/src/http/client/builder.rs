@@ -36,7 +36,7 @@ impl ClientBuilder {
             config: ClientConfig {
                 headers: HeaderMap::new(),
                 timeout: Millis(5_000),
-                connector: Box::new(ConnectorWrapper(Connector::default().finish())),
+                connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
             },
         }
     }
@@ -46,7 +46,7 @@ impl ClientBuilder {
     where
         T: Service<Connect, Response = Connection, Error = ConnectError> + 'static,
     {
-        self.config.connector = Box::new(ConnectorWrapper(connector));
+        self.config.connector = Box::new(ConnectorWrapper(connector.into()));
         self
     }
 

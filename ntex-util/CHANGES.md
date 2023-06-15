@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2023-06-xx
+
+* Upgrade to ntex-service 1.2
+
 ## [0.2.3] - 2023-06-04
 
 * Refactor timer driver

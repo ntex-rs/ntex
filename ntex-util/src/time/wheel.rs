@@ -711,7 +711,7 @@ impl Future for LowresTimerDriver {
             flags.remove(Flags::LOWRES_TIMER);
             self.0.flags.set(flags);
         }
-        return Poll::Pending;
+        Poll::Pending
     }
 }
 
