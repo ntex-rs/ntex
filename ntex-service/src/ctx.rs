@@ -114,16 +114,16 @@ impl<S> Drop for Container<S> {
     }
 }
 
-pub struct Ctx<'b, S: ?Sized> {
+pub struct Ctx<'a, S: ?Sized> {
     index: usize,
-    waiters: &'b Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
+    waiters: &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
     _t: marker::PhantomData<Rc<S>>,
 }
 
-impl<'b, S: ?Sized> Ctx<'b, S> {
+impl<'a, S: ?Sized> Ctx<'a, S> {
     pub(crate) fn new(
         index: usize,
-        waiters: &'b Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
+        waiters: &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
     ) -> Self {
         Self {
             index,
@@ -134,15 +134,15 @@ impl<'b, S: ?Sized> Ctx<'b, S> {
 
     pub(crate) fn into_inner(
         self,
-    ) -> (usize, &'b Rc<RefCell<slab::Slab<Option<task::Waker>>>>) {
+    ) -> (usize, &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>) {
         (self.index, self.waiters)
     }
 
     /// Call service, do not check service readiness
-    pub(crate) fn call_nowait<T, R>(&self, svc: &'b T, req: R) -> T::Future<'b>
+    pub(crate) fn call_nowait<T, R>(&self, svc: &'a T, req: R) -> T::Future<'a>
     where
         T: Service<R> + ?Sized,
-        R: 'b,
+        R: 'a,
     {
         svc.call(
             req,
@@ -156,10 +156,10 @@ impl<'b, S: ?Sized> Ctx<'b, S> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub fn call<T, R>(&self, svc: &'b T, req: R) -> ServiceCall<'b, T, R>
+    pub fn call<T, R>(&self, svc: &'a T, req: R) -> ServiceCall<'a, T, R>
     where
         T: Service<R> + ?Sized,
-        R: 'b,
+        R: 'a,
     {
         ServiceCall {
             state: ServiceCallState::Ready {
@@ -172,7 +172,9 @@ impl<'b, S: ?Sized> Ctx<'b, S> {
     }
 }
 
-impl<'b, S: ?Sized> Clone for Ctx<'b, S> {
+impl<'a, S: ?Sized> Copy for Ctx<'a, S> {}
+
+impl<'a, S: ?Sized> Clone for Ctx<'a, S> {
     fn clone(&self) -> Self {
         Self {
             index: self.index,

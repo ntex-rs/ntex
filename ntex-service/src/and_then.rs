@@ -63,7 +63,7 @@ where
         AndThenServiceResponse {
             slf: self,
             state: State::A {
-                fut: ctx.clone().call(&self.svc1, req),
+                fut: ctx.call(&self.svc1, req),
                 ctx: Some(ctx),
             },
         }
