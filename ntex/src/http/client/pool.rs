@@ -413,6 +413,7 @@ where
     ) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
+        #[allow(clippy::redundant_async_block)]
         spawn(async move {
             OpenConnection::<T> {
                 fut: connector.call(msg),

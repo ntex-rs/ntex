@@ -491,7 +491,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {
             }
         }
         if let Some(ref default) = self.default {
-            Either::Right(Either::Right(ctx.call(&default, req)))
+            Either::Right(Either::Right(ctx.call(default, req)))
         } else {
             Either::Right(Either::Left(Ready::Ok(WebResponse::new(
                 Response::MethodNotAllowed().finish(),

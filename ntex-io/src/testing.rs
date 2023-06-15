@@ -80,18 +80,13 @@ impl Default for IoTestFlags {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 enum IoTestState {
+    #[default]
     Ok,
     Pending,
     Close,
     Err(io::Error),
-}
-
-impl Default for IoTestState {
-    fn default() -> Self {
-        IoTestState::Ok
-    }
 }
 
 impl IoTest {
