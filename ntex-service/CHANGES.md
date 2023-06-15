@@ -6,6 +6,8 @@
 
 * Introduce service sharable readiness
 
+* Remove boxed rc service
+
 ## [1.0.2] - 2023-04-14
 
 * Remove Rc<S> where S: Service as it brakes readiness check validity
