@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2023-06-xx
+
+* Migrate to ntex-service 1.2
+
 ## [0.2.3] - 2023-03-11
 
 * Fix signal handling #183

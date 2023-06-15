@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2023-06-xx
+
+* Migrate to ntex-service 1.2
+
 ## [0.2.10] - 2023-05-10
 
 * ReadBuf::set_dst()/WriteBuf::set_dst() extend existing buffer if exists

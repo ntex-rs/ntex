@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.0] - 2023-06-xx
+
+* Migrate to ntex-service 1.2
+
 ## [0.6.7] - 2023-04-14
 
 * Remove Rc<Service> usage, update service and util deps
