@@ -53,7 +53,7 @@ impl FilterLayer for TlsServerFilter {
                 None
             }
         } else if id == any::TypeId::of::<Servername>() {
-            if let Some(name) = self.session.borrow().sni_hostname() {
+            if let Some(name) = self.session.borrow().server_name() {
                 Some(Box::new(Servername(name.to_string())))
             } else {
                 None

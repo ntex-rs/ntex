@@ -36,7 +36,7 @@ pin-project-lite = "0.2"
 tls_openssl = { version="0.10", package = "openssl", optional = true }
 
 # rustls
-tls_rust = { version = "0.20", package = "rustls", optional = true }
+tls_rust = { version = "0.21", package = "rustls", optional = true }
 
 [dev-dependencies]
 ntex = { version = "0.6.3", features = ["openssl", "rustls", "tokio"] }
