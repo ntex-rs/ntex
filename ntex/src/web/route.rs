@@ -1,7 +1,7 @@
 use std::{mem, rc::Rc};
 
 use crate::util::{BoxFuture, Ready};
-use crate::{http::Method, service::Service, service::ServiceFactory};
+use crate::{http::Method, service::Ctx, service::Service, service::ServiceFactory};
 
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
@@ -90,7 +90,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
     type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
     #[inline]
-    fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: WebRequest<Err>, _: Ctx<'a, Self>) -> Self::Future<'a> {
         self.handler.call(req)
     }
 }

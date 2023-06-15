@@ -82,7 +82,7 @@ pub(self) struct ClientConfig {
 impl Default for Client {
     fn default() -> Self {
         Client(Rc::new(ClientConfig {
-            connector: Box::new(ConnectorWrapper(Connector::default().finish())),
+            connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
             headers: HeaderMap::new(),
             timeout: Millis(5_000),
         }))

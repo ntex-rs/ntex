@@ -59,10 +59,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         AndThenServiceResponse {
             slf: self,
             state: State::A {
@@ -253,10 +250,7 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            &'static str: 'a,
-        {
+        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(req)
         }
     }
@@ -274,10 +268,7 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            &'static str: 'a,
-        {
+        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok((req, "srv2"))
         }
     }

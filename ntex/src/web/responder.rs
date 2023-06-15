@@ -404,7 +404,7 @@ pub(crate) mod tests {
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Response as HttpResponse, StatusCode};
     use crate::web::test::{init_service, TestRequest};
-    use crate::{service::Service, util::Bytes, util::BytesMut, web};
+    use crate::{util::Bytes, util::BytesMut, web};
 
     fn responder<T: Responder<DefaultError>>(responder: T) -> impl Responder<DefaultError> {
         responder

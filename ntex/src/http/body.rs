@@ -55,6 +55,7 @@ impl<T: MessageBody> MessageBody for Box<T> {
     }
 }
 
+#[derive(Debug)]
 pub enum ResponseBody<B> {
     Body(B),
     Other(Body),

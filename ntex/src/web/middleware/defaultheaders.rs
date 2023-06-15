@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
-use crate::service::{Middleware, Service};
+use crate::service::{Ctx, Middleware, Service};
 use crate::util::BoxFuture;
 use crate::web::{WebRequest, WebResponse};
 
@@ -115,9 +115,9 @@ where
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
-    fn call(&self, req: WebRequest<E>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: WebRequest<E>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         Box::pin(async move {
-            let mut res = self.service.call(req).await?;
+            let mut res = ctx.call(&self.service, req).await?;
 
             // set response headers
             for (key, value) in self.inner.headers.iter() {
@@ -141,7 +141,7 @@ where
 mod tests {
     use super::*;
     use crate::http::header::CONTENT_TYPE;
-    use crate::service::IntoService;
+    use crate::service::{Container, IntoService};
     use crate::util::lazy;
     use crate::web::request::WebRequest;
     use crate::web::test::{ok_service, TestRequest};
@@ -149,9 +149,11 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_default_headers() {
-        let mw = DefaultHeaders::new()
-            .header(CONTENT_TYPE, "0001")
-            .create(ok_service());
+        let mw = Container::new(
+            DefaultHeaders::new()
+                .header(CONTENT_TYPE, "0001")
+                .create(ok_service()),
+        );
 
         assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| mw.poll_shutdown(cx).is_ready()).await);
@@ -166,9 +168,11 @@ mod tests {
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
             )
         };
-        let mw = DefaultHeaders::new()
-            .header(CONTENT_TYPE, "0001")
-            .create(srv.into_service());
+        let mw = Container::new(
+            DefaultHeaders::new()
+                .header(CONTENT_TYPE, "0001")
+                .create(srv.into_service()),
+        );
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
     }
@@ -178,9 +182,11 @@ mod tests {
         let srv = |req: WebRequest<DefaultError>| async move {
             Ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
         };
-        let mw = DefaultHeaders::new()
-            .content_type()
-            .create(srv.into_service());
+        let mw = Container::new(
+            DefaultHeaders::new()
+                .content_type()
+                .create(srv.into_service()),
+        );
 
         let req = TestRequest::default().to_srv_request();
         let resp = mw.call(req).await.unwrap();

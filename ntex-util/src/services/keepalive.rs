@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{cell::Cell, convert::Infallible, marker, time::Duration, time::Instant};
 
-use ntex_service::{Service, ServiceFactory};
+use ntex_service::{Ctx, Service, ServiceFactory};
 
 use crate::future::Ready;
 use crate::time::{now, sleep, Millis, Sleep};
@@ -113,7 +113,7 @@ where
         }
     }
 
-    fn call(&self, req: R) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: R, _: Ctx<'a, Self>) -> Self::Future<'a> {
         self.expire.set(now());
         Ready::Ok(req)
     }
@@ -121,7 +121,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{Service, ServiceFactory};
+    use ntex_service::ServiceFactory;
 
     use super::*;
     use crate::future::lazy;
@@ -134,7 +134,7 @@ mod tests {
         let factory = KeepAlive::new(Millis(100), || TestErr);
         let _ = factory.clone();
 
-        let service = factory.create(&()).await.unwrap();
+        let service = factory.container(&()).await.unwrap();
 
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());

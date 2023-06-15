@@ -54,7 +54,7 @@ pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 /// simple API surfaces. This leads to simpler design of each service, improves test-ability and
 /// makes composition easier.
 ///
-/// ```rust,ignore
+/// ```rust
 /// # use std::convert::Infallible;
 /// # use std::future::Future;
 /// # use std::pin::Pin;
@@ -101,9 +101,7 @@ pub trait Service<Req> {
     ///
     /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
     /// resilient to this fact.
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a;
+    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>;
 
     #[inline]
     /// Returns `Ready` when the service is able to process requests.
@@ -203,7 +201,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     where
         Self: Sized,
     {
-        Container::<Self::Service, Req>::create(self, cfg)
+        Container::<Self::Service>::create(self, cfg)
     }
 
     #[inline]
@@ -260,10 +258,7 @@ where
     }
 
     #[inline]
-    fn call<'s>(&'s self, request: Req, ctx: Ctx<'s, Self>) -> S::Future<'s>
-    where
-        Req: 's,
-    {
+    fn call<'s>(&'s self, request: Req, ctx: Ctx<'s, Self>) -> S::Future<'s> {
         ctx.call_nowait(&**self, request)
     }
 }
@@ -287,10 +282,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, request: Req, ctx: Ctx<'a, Self>) -> S::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, request: Req, ctx: Ctx<'a, Self>) -> S::Future<'a> {
         ctx.call_nowait(&**self, request)
     }
 }

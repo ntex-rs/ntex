@@ -10,7 +10,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{types, Filter, Io, IoBoxed, IoRef};
-use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use crate::service::{Ctx, IntoServiceFactory, Service, ServiceFactory};
 use crate::util::{poll_fn, BoxFuture, Bytes, BytesMut, Either, HashMap, Ready};
 
 use super::payload::{Payload, PayloadSender};
@@ -181,7 +181,7 @@ where
         self.config.service.poll_shutdown(cx)
     }
 
-    fn call(&self, io: Io<F>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, io: Io<F>, _: Ctx<'a, Self>) -> Self::Future<'_> {
         log::trace!(
             "New http2 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
@@ -230,7 +230,11 @@ impl Service<h2::ControlMessage<H2Error>> for ControlService {
     type Error = ();
     type Future<'f> = Ready<Self::Response, Self::Error>;
 
-    fn call(&self, msg: h2::ControlMessage<H2Error>) -> Self::Future<'_> {
+    fn call<'a>(
+        &'a self,
+        msg: h2::ControlMessage<H2Error>,
+        _: Ctx<'a, Self>,
+    ) -> Self::Future<'a> {
         log::trace!("Control message: {:?}", msg);
         Ready::Ok::<_, ()>(msg.ack())
     }
@@ -276,7 +280,7 @@ where
         Ready<Self::Response, Self::Error>,
     >;
 
-    fn call(&self, mut msg: h2::Message) -> Self::Future<'_> {
+    fn call<'a>(&'a self, mut msg: h2::Message, _: Ctx<'a, Self>) -> Self::Future<'a> {
         let (io, pseudo, headers, eof, payload) = match msg.kind().take() {
             h2::MessageKind::Headers {
                 pseudo,

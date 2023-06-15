@@ -3,7 +3,7 @@ use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll, time}
 
 use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
-use ntex_service::{IntoService, Service};
+use ntex_service::{Container, IntoService, Service};
 use ntex_util::time::Seconds;
 use ntex_util::{future::Either, ready, spawn};
 
@@ -51,7 +51,7 @@ where
 {
     io: IoBoxed,
     codec: U,
-    service: S,
+    service: Container<S>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<usize>,
 }
@@ -107,7 +107,7 @@ where
             codec,
             error: Cell::new(None),
             inflight: Cell::new(0),
-            service: service.into_service(),
+            service: Container::new(service.into_service()),
         });
 
         Dispatcher {
@@ -340,7 +340,7 @@ where
 {
     fn poll_service(
         &self,
-        srv: &S,
+        srv: &Container<S>,
         cx: &mut Context<'_>,
         io: &IoBoxed,
     ) -> Poll<PollService<U>> {
@@ -426,6 +426,7 @@ mod tests {
 
     use ntex_bytes::{Bytes, PoolId, PoolRef};
     use ntex_codec::BytesCodec;
+    use ntex_service::Ctx;
     use ntex_util::{future::Ready, time::sleep, time::Millis, time::Seconds};
 
     use super::*;
@@ -475,7 +476,7 @@ mod tests {
                 io: state.into(),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
-                service: service.into_service(),
+                service: Container::new(service.into_service()),
             });
 
             (
@@ -621,7 +622,11 @@ mod tests {
                 Poll::Ready(Err(()))
             }
 
-            fn call(&self, _: DispatchItem<BytesCodec>) -> Self::Future<'_> {
+            fn call<'a>(
+                &'a self,
+                _: DispatchItem<BytesCodec>,
+                _: Ctx<'a, Self>,
+            ) -> Self::Future<'a> {
                 Ready::Ok(None)
             }
         }

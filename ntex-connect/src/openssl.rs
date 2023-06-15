@@ -5,22 +5,22 @@ pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslM
 
 use ntex_bytes::PoolId;
 use ntex_io::{FilterFactory, Io, Layer};
-use ntex_service::{Service, ServiceFactory};
+use ntex_service::{Container, Ctx, Service, ServiceFactory};
 use ntex_tls::openssl::SslConnector as IoSslConnector;
 use ntex_util::future::{BoxFuture, Ready};
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
 pub struct Connector<T> {
-    connector: BaseConnector<T>,
+    connector: Container<BaseConnector<T>>,
     openssl: SslConnector,
 }
 
-impl<T> Connector<T> {
+impl<T: Address> Connector<T> {
     /// Construct new OpensslConnectService factory
     pub fn new(connector: SslConnector) -> Self {
         Connector {
-            connector: BaseConnector::default(),
+            connector: BaseConnector::default().into(),
             openssl: connector,
         }
     }
@@ -30,8 +30,15 @@ impl<T> Connector<T> {
     /// Use specified memory pool for memory allocations. By default P0
     /// memory pool is used.
     pub fn memory_pool(self, id: PoolId) -> Self {
+        let connector = self
+            .connector
+            .into_service()
+            .expect("Connector has been cloned")
+            .memory_pool(id)
+            .into();
+
         Self {
-            connector: self.connector.memory_pool(id),
+            connector,
             openssl: self.openssl,
         }
     }
@@ -100,7 +107,7 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
     #[inline]
-    fn call(&self, req: Connect<T>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect<T>, _: Ctx<'a, Self>) -> Self::Future<'a> {
         Box::pin(self.connect(req))
     }
 }
@@ -108,7 +115,7 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ntex_service::{Service, ServiceFactory};
+    use ntex_service::ServiceFactory;
 
     #[ntex::test]
     async fn test_openssl_connect() {
@@ -117,9 +124,9 @@ mod tests {
         });
 
         let ssl = SslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = Connector::new(ssl.build()).clone().memory_pool(PoolId::P5);
+        let factory = Connector::new(ssl.build()).memory_pool(PoolId::P5).clone();
 
-        let srv = factory.create(&()).await.unwrap();
+        let srv = factory.container(&()).await.unwrap();
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;

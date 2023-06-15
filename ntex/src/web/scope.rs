@@ -6,7 +6,9 @@ use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{pipeline_factory, IntoServiceFactory, PipelineFactory};
-use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack};
+use crate::service::{
+    Ctx, Identity, Middleware, Service, ServiceCall, ServiceFactory, Stack,
+};
 use crate::util::{BoxFuture, Either, Extensions, Ready};
 
 use super::app::Filter;
@@ -27,7 +29,7 @@ type HttpService<Err: ErrorRenderer> =
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type BoxResponse<'a, Err: ErrorRenderer> =
-    BoxFuture<'a, Result<WebResponse, Err::Container>>;
+    ServiceCall<'a, HttpService<Err>, WebRequest<Err>>;
 
 /// Resources scope.
 ///
@@ -503,11 +505,12 @@ where
         }
     }
 
-    fn call(&self, req: WebRequest<Err>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: WebRequest<Err>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         ScopeServiceResponse {
-            filter: self.filter.call(req),
+            filter: ctx.call(&self.filter, req),
             routing: &self.routing,
             endpoint: None,
+            ctx,
         }
     }
 }
@@ -517,9 +520,10 @@ pin_project_lite::pin_project! {
     where F: 'f
     {
         #[pin]
-        filter: F::Future<'f>,
+        filter: ServiceCall<'f, F, WebRequest<Err>>,
         routing: &'f ScopeRouter<Err>,
-        endpoint: Option<<ScopeRouter<Err> as Service<WebRequest<Err>>>::Future<'f>>,
+        ctx: Ctx<'f, ScopeService<F, Err>>,
+        endpoint: Option<ServiceCall<'f, ScopeRouter<Err>, WebRequest<Err>>>,
     }
 }
 
@@ -536,15 +540,15 @@ where
         loop {
             if let Some(fut) = this.endpoint.as_mut() {
                 return Pin::new(fut).poll(cx);
-            } else {
-                let res = if let Poll::Ready(res) = this.filter.poll(cx) {
-                    res?
-                } else {
-                    return Poll::Pending;
-                };
-                *this.endpoint = Some(this.routing.call(res));
-                this = self.as_mut().project();
             }
+
+            let res = if let Poll::Ready(res) = this.filter.poll(cx) {
+                res?
+            } else {
+                return Poll::Pending;
+            };
+            *this.endpoint = Some(this.ctx.call(this.routing, res));
+            this = self.as_mut().project();
         }
     }
 }
@@ -601,7 +605,11 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
     type Error = Err::Container;
     type Future<'f> = Either<BoxResponse<'f, Err>, Ready<Self::Response, Self::Error>>;
 
-    fn call(&self, mut req: WebRequest<Err>) -> Self::Future<'_> {
+    fn call<'a>(
+        &'a self,
+        mut req: WebRequest<Err>,
+        ctx: Ctx<'a, Self>,
+    ) -> Self::Future<'a> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
@@ -617,9 +625,9 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
             if let Some(ref state) = self.state {
                 req.set_state_container(state.clone());
             }
-            Either::Left(srv.call(req))
+            Either::Left(ctx.call(srv, req))
         } else if let Some(ref default) = self.default {
-            Either::Left(default.call(req))
+            Either::Left(ctx.call(default, req))
         } else {
             let req = req.into_parts().0;
             Either::Right(Ready::Ok(WebResponse::new(
@@ -635,7 +643,7 @@ mod tests {
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::{HeaderValue, CONTENT_TYPE};
     use crate::http::{Method, StatusCode};
-    use crate::service::{fn_service, Service};
+    use crate::service::fn_service;
     use crate::util::{Bytes, Ready};
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;

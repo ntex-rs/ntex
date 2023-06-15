@@ -5,7 +5,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 
 use crate::rt::{spawn, Arbiter};
-use crate::service::Service;
+use crate::service::Container;
 use crate::time::{sleep, Millis, Sleep};
 use crate::util::{
     join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
@@ -138,12 +138,12 @@ pub(super) struct Worker {
 struct WorkerService {
     factory: usize,
     status: WorkerServiceStatus,
-    service: BoxedServerService,
+    service: Container<BoxedServerService>,
 }
 
 impl WorkerService {
     fn created(&mut self, service: BoxedServerService) {
-        self.service = service;
+        self.service = Container::new(service);
         self.status = WorkerServiceStatus::Unavailable;
     }
 }
@@ -239,7 +239,7 @@ impl Worker {
                         assert_eq!(token.0, wrk.services.len());
                         wrk.services.push(WorkerService {
                             factory,
-                            service,
+                            service: service.into(),
                             status: WorkerServiceStatus::Unavailable,
                         });
                     }
@@ -490,9 +490,12 @@ impl Future for Worker {
                                 self.factories[srv.factory].name(msg.token)
                             );
                         }
-                        let _ = srv
-                            .service
-                            .call((Some(guard), ServerMessage::Connect(msg.io)));
+                        let srv = srv.service.clone();
+                        spawn(async move {
+                            let _ = srv
+                                .call((Some(guard), ServerMessage::Connect(msg.io)))
+                                .await;
+                        });
                     } else {
                         return Poll::Ready(());
                     }
@@ -509,7 +512,7 @@ mod tests {
     use super::*;
     use crate::io::Io;
     use crate::server::service::Factory;
-    use crate::service::{Service, ServiceFactory};
+    use crate::service::{Ctx, Service, ServiceFactory};
     use crate::util::{lazy, Ready};
 
     #[derive(Clone, Copy, Debug)]
@@ -569,7 +572,7 @@ mod tests {
             }
         }
 
-        fn call(&self, _: Io) -> Self::Future<'_> {
+        fn call<'a>(&'a self, _: Io, _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(())
         }
     }

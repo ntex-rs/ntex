@@ -2,11 +2,9 @@
 //!
 //! If the response does not complete within the specified timeout, the response
 //! will be aborted.
-use std::{
-    fmt, future::Future, marker, marker::PhantomData, pin::Pin, task::Context, task::Poll,
-};
+use std::{fmt, future::Future, marker, pin::Pin, task::Context, task::Poll};
 
-use ntex_service::{IntoService, Middleware, Service};
+use ntex_service::{Ctx, IntoService, Middleware, Service, ServiceCall};
 
 use crate::future::Either;
 use crate::time::{sleep, Millis, Sleep};
@@ -127,17 +125,17 @@ where
     type Error = TimeoutError<S::Error>;
     type Future<'f> = Either<TimeoutServiceResponse<'f, S, R>, TimeoutServiceResponse2<'f, S, R>> where Self: 'f, R: 'f;
 
-    fn call(&self, request: R) -> Self::Future<'_> {
+    fn call<'a>(&'a self, request: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         if self.timeout.is_zero() {
             Either::Right(TimeoutServiceResponse2 {
-                fut: self.service.call(request),
-                _t: PhantomData,
+                fut: ctx.call(&self.service, request),
+                _t: marker::PhantomData,
             })
         } else {
             Either::Left(TimeoutServiceResponse {
-                fut: self.service.call(request),
+                fut: ctx.call(&self.service, request),
                 sleep: sleep(self.timeout),
-                _t: PhantomData,
+                _t: marker::PhantomData,
             })
         }
     }
@@ -149,14 +147,14 @@ where
 pin_project_lite::pin_project! {
     /// `TimeoutService` response future
     #[doc(hidden)]
-    #[derive(Debug)]
+    #[must_use = "futures do nothing unless polled"]
     pub struct TimeoutServiceResponse<'f, T: Service<R>, R>
     where T: 'f, R: 'f,
     {
         #[pin]
-        fut: T::Future<'f>,
+        fut: ServiceCall<'f, T, R>,
         sleep: Sleep,
-        _t: PhantomData<R>
+        _t: marker::PhantomData<R>
     }
 }
 
@@ -187,13 +185,13 @@ where
 pin_project_lite::pin_project! {
     /// `TimeoutService` response future
     #[doc(hidden)]
-    #[derive(Debug)]
+    #[must_use = "futures do nothing unless polled"]
     pub struct TimeoutServiceResponse2<'f, T: Service<R>, R>
     where T: 'f, R: 'f,
     {
         #[pin]
-        fut: T::Future<'f>,
-        _t: PhantomData<R>,
+        fut: ServiceCall<'f, T, R>,
+        _t: marker::PhantomData<R>,
     }
 }
 
@@ -216,7 +214,7 @@ where
 mod tests {
     use std::{fmt, time::Duration};
 
-    use ntex_service::{apply, fn_factory, Service, ServiceFactory};
+    use ntex_service::{apply, fn_factory, Container, Service, ServiceFactory};
 
     use super::*;
     use crate::future::{lazy, BoxFuture};
@@ -238,7 +236,7 @@ mod tests {
         type Error = SrvError;
         type Future<'f> = BoxFuture<'f, Result<(), SrvError>>;
 
-        fn call(&self, _: ()) -> Self::Future<'_> {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             let fut = crate::time::sleep(self.0);
             Box::pin(async move {
                 fut.await;
@@ -252,7 +250,9 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let timeout = TimeoutService::new(resolution, SleepService(wait_time)).clone();
+        let timeout = Container::new(
+            TimeoutService::new(resolution, SleepService(wait_time)).clone(),
+        );
         assert_eq!(timeout.call(()).await, Ok(()));
         assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| timeout.poll_shutdown(cx)).await.is_ready());
@@ -263,7 +263,8 @@ mod tests {
         let wait_time = Duration::from_millis(50);
         let resolution = Duration::from_millis(0);
 
-        let timeout = TimeoutService::new(resolution, SleepService(wait_time));
+        let timeout =
+            Container::new(TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Ok(()));
         assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
     }
@@ -273,7 +274,8 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
 
-        let timeout = TimeoutService::new(resolution, SleepService(wait_time));
+        let timeout =
+            Container::new(TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
@@ -287,7 +289,7 @@ mod tests {
             Timeout::new(resolution).clone(),
             fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
         );
-        let srv = timeout.create(&()).await.unwrap();
+        let srv = timeout.container(&()).await.unwrap();
 
         let res = srv.call(()).await.unwrap_err();
         assert_eq!(res, TimeoutError::Timeout);

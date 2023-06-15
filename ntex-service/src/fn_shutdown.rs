@@ -60,10 +60,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        Req: 'a,
-    {
+    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a> {
         ready(Ok(req))
     }
 }

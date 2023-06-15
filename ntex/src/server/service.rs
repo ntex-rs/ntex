@@ -2,10 +2,9 @@ use std::{net::SocketAddr, rc::Rc, task::Context, task::Poll};
 
 use log::error;
 
-use crate::io::Io;
-use crate::service::{boxed, Service, ServiceFactory};
-use crate::util::{BoxFuture, Pool, PoolId, Ready};
-use crate::{rt::spawn, time::Millis};
+use crate::service::{boxed, Ctx, Service, ServiceFactory};
+use crate::util::{BoxFuture, Pool, PoolId};
+use crate::{io::Io, time::Millis};
 
 use super::{counter::CounterGuard, socket::Stream, Config, Token};
 
@@ -34,7 +33,7 @@ pub(super) trait InternalServiceFactory: Send {
 }
 
 pub(super) type BoxedServerService =
-    boxed::RcService<(Option<CounterGuard>, ServerMessage), (), ()>;
+    boxed::BoxService<(Option<CounterGuard>, ServerMessage), (), ()>;
 
 #[derive(Clone)]
 pub(super) struct StreamService<T> {
@@ -53,12 +52,11 @@ impl<T> StreamService<T> {
 
 impl<T> Service<(Option<CounterGuard>, ServerMessage)> for StreamService<T>
 where
-    T: Service<Io> + 'static,
-    T::Error: 'static,
+    T: Service<Io>,
 {
     type Response = ();
     type Error = ();
-    type Future<'f> = Ready<(), ()> where T: 'f;
+    type Future<'f> = BoxFuture<'f, Result<(), ()>> where T: 'f;
 
     crate::forward_poll_shutdown!(service);
 
@@ -73,31 +71,31 @@ where
         }
     }
 
-    fn call(
-        &self,
+    fn call<'a>(
+        &'a self,
         (guard, req): (Option<CounterGuard>, ServerMessage),
-    ) -> Self::Future<'_> {
-        match req {
-            ServerMessage::Connect(stream) => {
-                let stream = stream.try_into().map_err(|e| {
-                    error!("Cannot convert to an async io stream: {}", e);
-                });
-
-                if let Ok(stream) = stream {
-                    let stream: Io<_> = stream;
-                    stream.set_memory_pool(self.pool.pool_ref());
-                    let svc = self.service.clone();
-                    spawn(async move {
-                        let _ = svc.call(stream).await;
-                        drop(guard);
+        ctx: Ctx<'a, Self>,
+    ) -> Self::Future<'a> {
+        Box::pin(async move {
+            match req {
+                ServerMessage::Connect(stream) => {
+                    let stream = stream.try_into().map_err(|e| {
+                        error!("Cannot convert to an async io stream: {}", e);
                     });
-                    Ready::Ok(())
-                } else {
-                    Ready::Err(())
+
+                    if let Ok(stream) = stream {
+                        let stream: Io<_> = stream;
+                        stream.set_memory_pool(self.pool.pool_ref());
+                        let _ = ctx.call(self.service.as_ref(), stream).await;
+                        drop(guard);
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
                 }
+                _ => Ok(()),
             }
-            _ => Ready::Ok(()),
-        }
+        })
     }
 }
 
@@ -153,8 +151,7 @@ where
         Box::pin(async move {
             match factory.create(()).await {
                 Ok(inner) => {
-                    let service: BoxedServerService =
-                        boxed::rcservice(StreamService::new(inner, pool));
+                    let service = boxed::service(StreamService::new(inner, pool));
                     Ok(vec![(token, service)])
                 }
                 Err(_) => Err(()),

@@ -57,10 +57,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a>
-    where
-        R: 'a,
-    {
+    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
         MapErrFuture {
             slf: self,
             fut: ctx.call(&self.service, req),
@@ -217,10 +214,7 @@ mod tests {
             }
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a>
-        where
-            (): 'a,
-        {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::Err(())
         }
     }

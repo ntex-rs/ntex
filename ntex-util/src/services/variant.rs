@@ -1,7 +1,7 @@
 //! Contains `Variant` service and related types and functions.
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
-use ntex_service::{IntoServiceFactory, Service, ServiceFactory};
+use ntex_service::{Ctx, IntoServiceFactory, Service, ServiceCall, ServiceFactory};
 
 /// Construct `Variant` service factory.
 ///
@@ -103,7 +103,8 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     {
         type Response = V1::Response;
         type Error = V1::Error;
-        type Future<'f> = $mod_name::ServiceResponse<V1::Future<'f>, $($T::Future<'f>),+> where Self: 'f, V1: 'f;
+        type Future<'f> = $mod_name::ServiceResponse<
+            ServiceCall<'f, V1, V1R>, $(ServiceCall<'f, $T, $R>),+> where Self: 'f, V1: 'f;
 
         fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let mut ready = self.V1.poll_ready(cx)?.is_ready();
@@ -127,10 +128,11 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }
         }
 
-        fn call(&self, req: $enum_type<V1R, $($R,)+>) -> Self::Future<'_> {
+        fn call<'a>(&'a self, req: $enum_type<V1R, $($R,)+>, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+        {
             match req {
-                $enum_type::V1(req) => $mod_name::ServiceResponse::V1 { fut: self.V1.call(req) },
-                $($enum_type::$T(req) => $mod_name::ServiceResponse::$T { fut: self.$T.call(req) },)+
+                $enum_type::V1(req) => $mod_name::ServiceResponse::V1 { fut: ctx.call(&self.V1, req) },
+                $($enum_type::$T(req) => $mod_name::ServiceResponse::$T { fut: ctx.call(&self.$T, req) },)+
             }
         }
     }
@@ -319,7 +321,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        fn call(&self, _: ()) -> Self::Future<'_> {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::<_, ()>::Ok(1)
         }
     }
@@ -340,7 +342,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        fn call(&self, _: ()) -> Self::Future<'_> {
+        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
             Ready::<_, ()>::Ok(2)
         }
     }
@@ -352,7 +354,7 @@ mod tests {
             .clone()
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
-        let service = factory.create(&()).await.unwrap().clone();
+        let service = factory.container(&()).await.unwrap().clone();
 
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| service.poll_shutdown(cx)).await.is_ready());

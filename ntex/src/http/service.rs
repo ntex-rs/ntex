@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
 
 use crate::io::{types, Filter, Io};
-use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use crate::service::{Ctx, IntoServiceFactory, Service, ServiceFactory};
 use crate::time::{Millis, Seconds};
 use crate::util::BoxFuture;
 
@@ -368,7 +368,7 @@ where
         }
     }
 
-    fn call(&self, io: Io<F>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, io: Io<F>, _: Ctx<'a, Self>) -> Self::Future<'a> {
         log::trace!(
             "New http connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()

@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
 use ntex::io::{DispatchItem, Dispatcher, Io};
-use ntex::service::{fn_factory, Service};
+use ntex::service::{fn_factory, Ctx, Service};
 use ntex::util::{BoxFuture, ByteString, Bytes, Ready};
 use ntex::ws::{self, handshake, handshake_response};
 
@@ -40,7 +40,11 @@ impl Service<(Request, Io, h1::Codec)> for WsService {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&self, (req, io, codec): (Request, Io, h1::Codec)) -> Self::Future<'_> {
+    fn call<'a>(
+        &'a self,
+        (req, io, codec): (Request, Io, h1::Codec),
+        _: Ctx<'a, Self>,
+    ) -> Self::Future<'a> {
         let fut = async move {
             let res = handshake(req.head()).unwrap().message_body(());
 

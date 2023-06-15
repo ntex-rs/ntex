@@ -1,6 +1,6 @@
 [package]
 name = "ntex-connect"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork connect utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -34,28 +34,28 @@ glommio = ["ntex-rt/glommio", "ntex-glommio"]
 async-std = ["ntex-rt/async-std", "ntex-async-std"]
 
 [dependencies]
-ntex-service = "1.0.0"
+ntex-service = "1.2.0"
 ntex-bytes = "0.1.19"
 ntex-http = "0.1.8"
-ntex-io = "0.2.1"
+ntex-io = "0.3.0"
 ntex-rt = "0.4.7"
-ntex-tls = "0.2.1"
-ntex-util = "0.2.0"
+ntex-tls = "0.3.0"
+ntex-util = "0.3.0"
 log = "0.4"
 thiserror = "1.0"
 
-ntex-tokio = { version = "0.2.3", optional = true }
-ntex-glommio = { version = "0.2.4", optional = true }
-ntex-async-std = { version = "0.2.2", optional = true }
+ntex-tokio = { version = "0.3.0", optional = true }
+ntex-glommio = { version = "0.3.0", optional = true }
+ntex-async-std = { version = "0.3.0", optional = true }
 
 # openssl
 tls-openssl = { version="0.10", package = "openssl", optional = true }
 
 # rustls
-tls-rustls = { version = "0.20", package = "rustls", optional = true }
-webpki-roots = { version = "0.22", optional = true }
+tls-rustls = { version = "0.21", package = "rustls", optional = true }
+webpki-roots = { version = "0.23", optional = true }
 
 [dev-dependencies]
 rand = "0.8"
 env_logger = "0.10"
-ntex = { version = "0.6.0", features = ["tokio"] }
+ntex = { version = "0.7.0", features = ["tokio"] }

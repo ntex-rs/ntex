@@ -1,19 +1,15 @@
-use std::{
-    cell::Cell, cell::RefCell, fmt, future::Future, io, marker::PhantomData, mem, net,
-    rc::Rc,
-};
+use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, rc::Rc};
 
 use log::error;
 
+use crate::io::Io;
 use crate::service::{self, boxed, ServiceFactory as NServiceFactory};
-use crate::util::{BoxFuture, HashMap, Ready};
-use crate::{io::Io, util::PoolId};
+use crate::util::{BoxFuture, HashMap, PoolId, Ready};
 
 use super::service::{
     BoxedServerService, InternalServiceFactory, ServerMessage, StreamService,
 };
-use super::Token;
-use super::{builder::bind_addr, counter::CounterGuard};
+use super::{builder::bind_addr, counter::CounterGuard, Token};
 
 #[derive(Clone)]
 pub struct Config(Rc<InnerServiceConfig>);
@@ -66,7 +62,7 @@ impl ServiceConfig {
                     not_configured();
                     Ready::Ok::<_, &'static str>(())
                 },
-                _t: PhantomData,
+                _t: marker::PhantomData,
             })),
         })))
     }
@@ -95,7 +91,7 @@ impl ServiceConfig {
                         not_configured();
                         Ready::Ok::<_, &'static str>(())
                     },
-                    _t: PhantomData,
+                    _t: marker::PhantomData,
                 }));
             }
             inner.services.push((name.as_ref().to_string(), lst));
@@ -114,7 +110,10 @@ impl ServiceConfig {
         E: fmt::Display + 'static,
     {
         self.0.borrow_mut().applied = true;
-        self.0.borrow_mut().apply = Some(Box::new(ConfigWrapper { f, _t: PhantomData }));
+        self.0.borrow_mut().apply = Some(Box::new(ConfigWrapper {
+            f,
+            _t: marker::PhantomData,
+        }));
         Ok(())
     }
 }
@@ -192,7 +191,7 @@ impl InternalServiceFactory for ConfiguredService {
                     let name = names.remove(&token).unwrap().0;
                     res.push((
                         token,
-                        boxed::rcservice(StreamService::new(
+                        boxed::service(StreamService::new(
                             service::fn_service(move |_: Io| {
                                 error!("Service {:?} is not configured", name);
                                 Ready::<_, ()>::Ok(())
@@ -215,7 +214,7 @@ pub(super) trait ServiceRuntimeConfiguration {
 
 pub(super) struct ConfigWrapper<F, R, E> {
     pub(super) f: F,
-    pub(super) _t: PhantomData<(R, E)>,
+    pub(super) _t: marker::PhantomData<(R, E)>,
 }
 
 // SAFETY: we dont store R or E in ConfigWrapper
@@ -230,7 +229,7 @@ where
     fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send> {
         Box::new(ConfigWrapper {
             f: self.f.clone(),
-            _t: PhantomData,
+            _t: marker::PhantomData,
         })
     }
 
@@ -304,7 +303,7 @@ impl ServiceRuntime {
             let token = *token;
             inner.services.insert(
                 token,
-                boxed::rcfactory(ServiceFactory {
+                boxed::factory(ServiceFactory {
                     pool,
                     inner: service.into_factory(),
                 }),
@@ -323,8 +322,13 @@ impl ServiceRuntime {
     }
 }
 
-type BoxServiceFactory =
-    service::boxed::RcServiceFactory<(), (Option<CounterGuard>, ServerMessage), (), (), ()>;
+type BoxServiceFactory = service::boxed::BoxServiceFactory<
+    (),
+    (Option<CounterGuard>, ServerMessage),
+    (),
+    (),
+    (),
+>;
 
 struct ServiceFactory<T> {
     inner: T,
@@ -349,7 +353,7 @@ where
         let fut = self.inner.create(());
         Box::pin(async move {
             match fut.await {
-                Ok(s) => Ok(boxed::rcservice(StreamService::new(s, pool))),
+                Ok(s) => Ok(boxed::service(StreamService::new(s, pool))),
                 Err(e) => {
                     error!("Cannot construct service: {:?}", e);
                     Err(())

@@ -6,9 +6,10 @@ use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
+use crate::service::{Container, Ctx, Service, ServiceCall};
 use crate::time::{now, Millis};
 use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
-use crate::{channel::pool, rt::spawn, service::Service, task::LocalWaker};
+use crate::{channel::pool, rt::spawn, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
 use super::h2proto::{H2Client, H2PublishService};
@@ -43,7 +44,7 @@ struct AvailableConnection {
 
 /// Connections pool
 pub(super) struct ConnectionPool<T> {
-    connector: Rc<T>,
+    connector: Container<T>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
@@ -60,7 +61,7 @@ where
         limit: usize,
         h2config: h2::Config,
     ) -> Self {
-        let connector = Rc::new(connector);
+        let connector = Container::new(connector);
         let waiters = Rc::new(RefCell::new(Waiters {
             waiters: HashMap::default(),
             pool: pool::new(),
@@ -120,10 +121,8 @@ where
     crate::forward_poll_ready!(connector);
     crate::forward_poll_shutdown!(connector);
 
-    #[inline]
-    fn call(&self, req: Connect) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect, _: Ctx<'a, Self>) -> Self::Future<'_> {
         trace!("Get connection for {:?}", req.uri);
-        let connector = self.connector.clone();
         let inner = self.inner.clone();
         let waiters = self.waiters.clone();
 
@@ -151,7 +150,7 @@ where
                     trace!("Connecting to {:?}", req.uri);
                     let uri = req.uri.clone();
                     let (tx, rx) = waiters.borrow_mut().pool.channel();
-                    OpenConnection::spawn(key, tx, uri, inner, connector, req);
+                    OpenConnection::spawn(key, tx, uri, inner, self.connector.clone(), req);
 
                     match rx.await {
                         Err(_) => Err(ConnectError::Disconnected(None)),
@@ -308,7 +307,7 @@ impl Inner {
 }
 
 struct ConnectionPoolSupport<T> {
-    connector: Rc<T>,
+    connector: Container<T>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
@@ -391,7 +390,7 @@ pin_project_lite::pin_project! {
     {
         key: Key,
         #[pin]
-        fut: T::Future<'f>,
+        fut: ServiceCall<'f, T, Connect>,
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,
@@ -409,11 +408,12 @@ where
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        connector: Rc<T>,
+        connector: Container<T>,
         msg: Connect,
     ) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
+        #[allow(clippy::redundant_async_block)]
         spawn(async move {
             OpenConnection::<T> {
                 fut: connector.call(msg),
@@ -629,19 +629,21 @@ mod tests {
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
 
-        let pool = ConnectionPool::new(
-            fn_service(move |req| {
-                let (client, server) = Io::create();
-                store2.borrow_mut().push((req, server));
-                Box::pin(async move { Ok(IoBoxed::from(nio::Io::new(client))) })
-            }),
-            Duration::from_secs(10),
-            Duration::from_secs(10),
-            Millis::ZERO,
-            1,
-            h2::Config::client(),
-        )
-        .clone();
+        let pool = Container::new(
+            ConnectionPool::new(
+                fn_service(move |req| {
+                    let (client, server) = Io::create();
+                    store2.borrow_mut().push((req, server));
+                    Box::pin(async move { Ok(IoBoxed::from(nio::Io::new(client))) })
+                }),
+                Duration::from_secs(10),
+                Duration::from_secs(10),
+                Millis::ZERO,
+                1,
+                h2::Config::client(),
+            )
+            .clone(),
+        );
 
         // uri must contain authority
         let req = Connect {

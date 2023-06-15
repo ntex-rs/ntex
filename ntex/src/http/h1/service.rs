@@ -5,7 +5,7 @@ use crate::http::config::{DispatcherConfig, OnRequest, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
 use crate::io::{types, Filter, Io};
-use crate::service::{IntoServiceFactory, Service, ServiceFactory};
+use crate::service::{Ctx, IntoServiceFactory, Service, ServiceFactory};
 use crate::{time::Millis, util::BoxFuture};
 
 use super::codec::Codec;
@@ -331,7 +331,7 @@ where
         }
     }
 
-    fn call(&self, io: Io<F>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, io: Io<F>, _: Ctx<'a, Self>) -> Self::Future<'_> {
         log::trace!(
             "New http1 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
