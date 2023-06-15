@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2023-06-xx
+
+* Migrate to ntex-service 1.2
+
 ## [0.2.4] - 2023-01-29
 
 * Update buffer api

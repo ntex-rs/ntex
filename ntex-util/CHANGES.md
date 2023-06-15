@@ -4,6 +4,8 @@
 
 * Upgrade to ntex-service 1.2
 
+* Remove unneeded SharedService
+
 ## [0.2.3] - 2023-06-04
 
 * Refactor timer driver
