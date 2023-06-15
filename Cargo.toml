@@ -35,4 +35,4 @@ ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
 
-ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "0-3" }
+ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git" }
