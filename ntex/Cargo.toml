@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.7.0"
+version = "0.7.0-beta.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -49,20 +49,20 @@ async-std = ["ntex-rt/async-std", "ntex-async-std", "ntex-connect/async-std"]
 
 [dependencies]
 ntex-codec = "0.6.2"
-ntex-connect = "0.3.0"
+ntex-connect = "0.3.0-beta.0"
 ntex-http = "0.1.9"
 ntex-router = "0.5.1"
-ntex-service = "1.2.0"
+ntex-service = "1.2.0-beta.0"
 ntex-macros = "0.1.3"
-ntex-util = "0.3.0"
+ntex-util = "0.3.0-beta.0"
 ntex-bytes = "0.1.19"
-ntex-h2 = "0.3.0"
+ntex-h2 = "0.3.0-beta.0"
 ntex-rt = "0.4.9"
-ntex-io = "0.3.0"
-ntex-tls = "0.3.0"
-ntex-tokio = { version = "0.3.0", optional = true }
-ntex-glommio = { version = "0.3.0", optional = true }
-ntex-async-std = { version = "0.3.0", optional = true }
+ntex-io = "0.3.0-beta.0"
+ntex-tls = "0.3.0-beta.0"
+ntex-tokio = { version = "0.3.0-beta.0", optional = true }
+ntex-glommio = { version = "0.3.0-beta.0", optional = true }
+ntex-async-std = { version = "0.3.0-beta.0", optional = true }
 
 async-oneshot = "0.5.0"
 async-channel = "1.8.0"

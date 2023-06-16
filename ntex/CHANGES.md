@@ -1,6 +1,6 @@
 # Changes
 
-## [0.7.0] - 2023-06-xx
+## [0.7.0-beta.0] - 2023-06-16
 
 * Migrate to ntex-service 1.2
 
