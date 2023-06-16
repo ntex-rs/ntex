@@ -1,6 +1,6 @@
 # Changes
 
-## [1.2.0] - 2023-06-xx
+## [1.2.0-beta.0] - 2023-06-16
 
 * Enforce service readiness during call
 

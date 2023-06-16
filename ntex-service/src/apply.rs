@@ -1,7 +1,8 @@
 #![allow(clippy::type_complexity)]
-use std::{cell::RefCell, future::Future, marker, pin::Pin, rc::Rc, task, task::Poll};
+use std::{future::Future, marker, pin::Pin, rc::Rc, task, task::Poll};
 
-use super::{Ctx, IntoService, IntoServiceFactory, Service, ServiceCall, ServiceFactory};
+use super::ctx::{Ctx, ServiceCall, Waiters};
+use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply transform function to a service.
 pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
@@ -10,7 +11,7 @@ pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
 ) -> Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, ApplyService<T>) -> R,
+    for<'r> F: Fn(In, ApplyService<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
     U: IntoService<T, Req>,
 {
@@ -74,8 +75,7 @@ where
 
 pub struct ApplyService<S> {
     svc: Rc<S>,
-    index: usize,
-    waiters: Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
+    waiters: Waiters,
 }
 
 impl<S> ApplyService<S> {
@@ -83,7 +83,7 @@ impl<S> ApplyService<S> {
     where
         S: Service<R>,
     {
-        Ctx::<S>::new(self.index, &self.waiters).call(&self.svc, req)
+        Ctx::<S>::new(&self.waiters).call(&self.svc, req)
     }
 }
 
@@ -102,11 +102,9 @@ where
 
     #[inline]
     fn call<'a>(&'a self, req: In, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
-        let (index, waiters) = ctx.into_inner();
         let svc = ApplyService {
-            index,
-            waiters: waiters.clone(),
             svc: self.service.clone(),
+            waiters: ctx.waiters().clone(),
         };
         (self.f)(req, svc)
     }
@@ -161,7 +159,7 @@ impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
     F: Fn(In, ApplyService<T::Service>) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
+    for<'r> R: Future<Output = Result<Out, Err>> + 'r,
 {
     type Response = Out;
     type Error = Err;
@@ -186,6 +184,7 @@ pin_project_lite::pin_project! {
         T: ServiceFactory<Req, Cfg, Error = Err>,
         T: 'f,
         F: Fn(In, ApplyService<T::Service>) -> R,
+        T::Service: 'f,
         R: Future<Output = Result<Out, Err>>,
         Cfg: 'f,
     {

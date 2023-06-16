@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "0.3.0"
+version = "0.3.0-beta.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for encoding and decoding frames"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,8 +18,8 @@ path = "src/lib.rs"
 [dependencies]
 ntex-codec = "0.6.2"
 ntex-bytes = "0.1.19"
-ntex-util = "0.3.0"
-ntex-service = "1.2.0"
+ntex-util = "0.3.0-beta.0"
+ntex-service = "1.2.0-beta.0"
 
 bitflags = "1.3"
 log = "0.4"
@@ -29,4 +29,4 @@ pin-project-lite = "0.2"
 rand = "0.8"
 env_logger = "0.10"
 
-ntex = { version = "0.7.0", features = ["tokio"] }
+ntex = { version = "0.7.0-beta.0", features = ["tokio"] }
