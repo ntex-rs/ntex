@@ -80,6 +80,10 @@ pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 /// ```rust,ignore
 /// async fn my_service(req: u8) -> Result<u64, Infallible>;
 /// ```
+///
+/// Service cannot be called directly, it must be wrapped to an instance of [`Container`] or
+/// by using `ctx` argument of the call method in case of chanined services.
+///
 pub trait Service<Req> {
     /// Responses given by the service.
     type Response;
@@ -96,11 +100,9 @@ pub trait Service<Req> {
     /// Process the request and return the response asynchronously.
     ///
     /// This function is expected to be callable off-task. As such, implementations of `call`
-    /// should take care to not call `poll_ready`. If the  service is at capacity and the request
-    /// is unable to be handled, the returned `Future` should resolve to an error.
-    ///
-    /// Invoking `call` without first invoking `poll_ready` is permitted. Implementations must be
-    /// resilient to this fact.
+    /// should take care to not call `poll_ready`. Caller of the service verifies readiness,
+    /// Only way to make a `call` is to use `ctx` argument, it enforces readiness before calling
+    /// service.
     fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>;
 
     #[inline]
@@ -116,7 +118,8 @@ pub trait Service<Req> {
     /// # Notes
     ///
     /// 1. `.poll_ready()` might be called on different task from actual service call.
-    /// 1. In case of chained services, `.poll_ready()` is called for all services at once.
+    /// 2. In case of chained services, `.poll_ready()` is called for all services at once.
+    /// 3. Every `.call()` in chained services enforces readiness.
     fn poll_ready(&self, cx: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }

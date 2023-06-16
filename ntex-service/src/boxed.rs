@@ -1,7 +1,6 @@
-use std::task::{Context, Poll, Waker};
-use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
+use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
-use crate::Ctx;
+use crate::ctx::{Ctx, Waiters};
 
 pub type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 
@@ -44,8 +43,7 @@ trait ServiceObj<Req> {
     fn call<'a>(
         &'a self,
         req: Req,
-        idx: usize,
-        waiters: &'a Rc<RefCell<slab::Slab<Option<Waker>>>>,
+        waiters: &'a Waiters,
     ) -> BoxFuture<'a, Self::Response, Self::Error>;
 }
 
@@ -71,10 +69,9 @@ where
     fn call<'a>(
         &'a self,
         req: Req,
-        idx: usize,
-        waiters: &'a Rc<RefCell<slab::Slab<Option<Waker>>>>,
+        waiters: &'a Waiters,
     ) -> BoxFuture<'a, Self::Response, Self::Error> {
-        Box::pin(Ctx::<'a, S>::new(idx, waiters).call_nowait(self, req))
+        Box::pin(Ctx::<'a, S>::new(waiters).call_nowait(self, req))
     }
 }
 
@@ -135,8 +132,7 @@ where
 
     #[inline]
     fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
-        let (index, waiters) = ctx.into_inner();
-        self.0.call(req, index, waiters)
+        self.0.call(req, ctx.waiters())
     }
 }
 

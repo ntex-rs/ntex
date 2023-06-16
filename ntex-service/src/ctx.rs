@@ -1,22 +1,75 @@
-use std::{cell::RefCell, future::Future, marker, ops, pin::Pin, rc::Rc, task, task::Poll};
+use std::{
+    cell::UnsafeCell, future::Future, marker, ops, pin::Pin, rc::Rc, task, task::Poll,
+};
 
 use crate::{Service, ServiceFactory};
 
+/// Container for a service.
+///
+/// Container allows to call enclosed service and adds support of shared readiness.
 pub struct Container<S> {
     svc: Rc<S>,
+    waiters: Waiters,
+}
+
+pub struct Ctx<'a, S: ?Sized> {
+    waiters: &'a Waiters,
+    _t: marker::PhantomData<Rc<S>>,
+}
+
+pub(crate) struct Waiters {
     index: usize,
-    waiters: Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
+    waiters: Rc<UnsafeCell<slab::Slab<Option<task::Waker>>>>,
+}
+
+impl Waiters {
+    #[allow(clippy::mut_from_ref)]
+    fn get(&self) -> &mut slab::Slab<Option<task::Waker>> {
+        unsafe { &mut *self.waiters.as_ref().get() }
+    }
+
+    fn notify(&self) {
+        for (_, waker) in self.get().iter_mut() {
+            if let Some(waker) = waker.take() {
+                waker.wake();
+            }
+        }
+    }
+
+    fn register(&self, cx: &mut task::Context<'_>) {
+        self.get()[self.index] = Some(cx.waker().clone());
+    }
+}
+
+impl Clone for Waiters {
+    fn clone(&self) -> Self {
+        Waiters {
+            index: self.get().insert(None),
+            waiters: self.waiters.clone(),
+        }
+    }
+}
+
+impl Drop for Waiters {
+    #[inline]
+    fn drop(&mut self) {
+        self.get().remove(self.index);
+        self.notify();
+    }
 }
 
 impl<S> Container<S> {
     #[inline]
+    /// Construct new container instance.
     pub fn new(svc: S) -> Self {
         let mut waiters = slab::Slab::new();
         let index = waiters.insert(None);
         Container {
-            index,
             svc: Rc::new(svc),
-            waiters: Rc::new(RefCell::new(waiters)),
+            waiters: Waiters {
+                index,
+                waiters: Rc::new(UnsafeCell::new(waiters)),
+            },
         }
     }
 
@@ -27,9 +80,10 @@ impl<S> Container<S> {
         S: Service<R>,
     {
         let res = self.svc.poll_ready(cx);
-
         if res.is_pending() {
-            self.waiters.borrow_mut()[self.index] = Some(cx.waker().clone());
+            self.waiters.register(cx)
+        } else {
+            self.waiters.notify()
         }
         res
     }
@@ -50,7 +104,6 @@ impl<S> Container<S> {
         S: Service<R>,
     {
         let ctx = Ctx::<'a, S> {
-            index: self.index,
             waiters: &self.waiters,
             _t: marker::PhantomData,
         };
@@ -61,12 +114,10 @@ impl<S> Container<S> {
         f: &F,
         cfg: C,
     ) -> ContainerFactory<'_, F, R, C> {
-        ContainerFactory {
-            fut: f.create(cfg),
-            _t: marker::PhantomData,
-        }
+        ContainerFactory { fut: f.create(cfg) }
     }
 
+    /// Extract service if container hadnt been cloned before.
     pub fn into_service(self) -> Option<S> {
         let svc = self.svc.clone();
         drop(self);
@@ -75,11 +126,9 @@ impl<S> Container<S> {
 }
 
 impl<S> Clone for Container<S> {
+    #[inline]
     fn clone(&self) -> Self {
-        let index = self.waiters.borrow_mut().insert(None);
-
         Self {
-            index,
             svc: self.svc.clone(),
             waiters: self.waiters.clone(),
         }
@@ -87,6 +136,7 @@ impl<S> Clone for Container<S> {
 }
 
 impl<S> From<S> for Container<S> {
+    #[inline]
     fn from(svc: S) -> Self {
         Container::new(svc)
     }
@@ -101,41 +151,16 @@ impl<S> ops::Deref for Container<S> {
     }
 }
 
-impl<S> Drop for Container<S> {
-    fn drop(&mut self) {
-        let mut waiters = self.waiters.borrow_mut();
-
-        waiters.remove(self.index);
-        for (_, waker) in &mut *waiters {
-            if let Some(waker) = waker.take() {
-                waker.wake();
-            }
-        }
-    }
-}
-
-pub struct Ctx<'a, S: ?Sized> {
-    index: usize,
-    waiters: &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
-    _t: marker::PhantomData<Rc<S>>,
-}
-
 impl<'a, S: ?Sized> Ctx<'a, S> {
-    pub(crate) fn new(
-        index: usize,
-        waiters: &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
-    ) -> Self {
+    pub(crate) fn new(waiters: &'a Waiters) -> Self {
         Self {
-            index,
             waiters,
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn into_inner(
-        self,
-    ) -> (usize, &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>) {
-        (self.index, self.waiters)
+    pub(crate) fn waiters(self) -> &'a Waiters {
+        self.waiters
     }
 
     /// Call service, do not check service readiness
@@ -147,7 +172,6 @@ impl<'a, S: ?Sized> Ctx<'a, S> {
         svc.call(
             req,
             Ctx {
-                index: self.index,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             },
@@ -165,7 +189,6 @@ impl<'a, S: ?Sized> Ctx<'a, S> {
             state: ServiceCallState::Ready {
                 svc,
                 req: Some(req),
-                index: self.index,
                 waiters: self.waiters,
             },
         }
@@ -175,9 +198,9 @@ impl<'a, S: ?Sized> Ctx<'a, S> {
 impl<'a, S: ?Sized> Copy for Ctx<'a, S> {}
 
 impl<'a, S: ?Sized> Clone for Ctx<'a, S> {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
-            index: self.index,
             waiters: self.waiters,
             _t: marker::PhantomData,
         }
@@ -209,8 +232,7 @@ pin_project_lite::pin_project! {
     {
         Ready { req: Option<Req>,
                 svc: &'a T,
-                index: usize,
-                waiters: &'a Rc<RefCell<slab::Slab<Option<task::Waker>>>>,
+                waiters: &'a Waiters,
         },
         Call { #[pin] fut: T::Future<'a> },
         Empty,
@@ -227,35 +249,27 @@ where
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            ServiceCallStateProject::Ready {
-                req,
-                svc,
-                index,
-                waiters,
-            } => match svc.poll_ready(cx)? {
-                Poll::Ready(()) => {
-                    for (_, waker) in &mut *waiters.borrow_mut() {
-                        if let Some(waker) = waker.take() {
-                            waker.wake();
-                        }
-                    }
+            ServiceCallStateProject::Ready { req, svc, waiters } => {
+                match svc.poll_ready(cx)? {
+                    Poll::Ready(()) => {
+                        waiters.notify();
 
-                    let fut = svc.call(
-                        req.take().unwrap(),
-                        Ctx {
-                            waiters,
-                            index: *index,
-                            _t: marker::PhantomData,
-                        },
-                    );
-                    this.state.set(ServiceCallState::Call { fut });
-                    self.poll(cx)
+                        let fut = svc.call(
+                            req.take().unwrap(),
+                            Ctx {
+                                waiters,
+                                _t: marker::PhantomData,
+                            },
+                        );
+                        this.state.set(ServiceCallState::Call { fut });
+                        self.poll(cx)
+                    }
+                    Poll::Pending => {
+                        waiters.register(cx);
+                        Poll::Pending
+                    }
                 }
-                Poll::Pending => {
-                    waiters.borrow_mut()[*index] = Some(cx.waker().clone());
-                    Poll::Pending
-                }
-            },
+            }
             ServiceCallStateProject::Call { fut } => fut.poll(cx).map(|r| {
                 this.state.set(ServiceCallState::Empty);
                 r
@@ -277,7 +291,6 @@ pin_project_lite::pin_project! {
     {
         #[pin]
         fut: F::Future<'f>,
-        _t: marker::PhantomData<(R, C)>,
     }
 }
 
