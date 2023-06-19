@@ -3,7 +3,7 @@ use std::future::{ready, Ready};
 use std::marker::PhantomData;
 use std::task::{Context, Poll};
 
-use crate::{Ctx, Service};
+use crate::{Service, ServiceCtx};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
@@ -60,7 +60,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Req, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         ready(Ok(req))
     }
 }

@@ -5,7 +5,8 @@ use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{
-    fn_service, Ctx, Middleware, PipelineFactory, Service, ServiceCall, ServiceFactory,
+    fn_service, Middleware, PipelineFactory, Service, ServiceCall, ServiceCtx,
+    ServiceFactory,
 };
 use crate::util::{BoxFuture, Either, Extensions};
 
@@ -205,7 +206,7 @@ where
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
-    fn call<'a>(&'a self, req: Request, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Request, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         let (head, payload) = req.into_parts();
 
         let req = if let Some(mut req) = self.pool.get_request() {
@@ -253,7 +254,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
     fn call<'a>(
         &'a self,
         mut req: WebRequest<Err>,
-        ctx: Ctx<'a, Self>,
+        ctx: ServiceCtx<'a, Self>,
     ) -> Self::Future<'a> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
@@ -305,7 +306,11 @@ where
         }
     }
 
-    fn call<'a>(&'a self, req: WebRequest<Err>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(
+        &'a self,
+        req: WebRequest<Err>,
+        ctx: ServiceCtx<'a, Self>,
+    ) -> Self::Future<'a> {
         AppServiceResponse {
             filter: ctx.call(&self.filter, req),
             routing: &self.routing,
@@ -326,7 +331,7 @@ pin_project_lite::pin_project! {
         filter: ServiceCall<'f, F, WebRequest<Err>>,
         routing: &'f AppRouting<Err>,
         endpoint: Option<BoxAppServiceResponse<'f, Err>>,
-        ctx: Ctx<'f, AppService<F, Err>>,
+        ctx: ServiceCtx<'f, AppService<F, Err>>,
     }
 }
 

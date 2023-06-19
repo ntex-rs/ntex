@@ -2,7 +2,7 @@ use std::{net::SocketAddr, rc::Rc, task::Context, task::Poll};
 
 use log::error;
 
-use crate::service::{boxed, Ctx, Service, ServiceFactory};
+use crate::service::{boxed, Service, ServiceCtx, ServiceFactory};
 use crate::util::{BoxFuture, Pool, PoolId};
 use crate::{io::Io, time::Millis};
 
@@ -74,7 +74,7 @@ where
     fn call<'a>(
         &'a self,
         (guard, req): (Option<CounterGuard>, ServerMessage),
-        ctx: Ctx<'a, Self>,
+        ctx: ServiceCtx<'a, Self>,
     ) -> Self::Future<'a> {
         Box::pin(async move {
             match req {

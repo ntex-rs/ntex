@@ -5,7 +5,7 @@ pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_bytes::PoolId;
 use ntex_io::{FilterFactory, Io, Layer};
-use ntex_service::{Container, Ctx, Service, ServiceFactory};
+use ntex_service::{Container, Service, ServiceCtx, ServiceFactory};
 use ntex_tls::rustls::TlsConnector;
 use ntex_util::future::{BoxFuture, Ready};
 
@@ -110,7 +110,7 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Error = ConnectError;
     type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
-    fn call<'a>(&'a self, req: Connect<T>, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Connect<T>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         Box::pin(self.connect(req))
     }
 }

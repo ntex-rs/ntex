@@ -214,7 +214,7 @@ mod tests {
     use std::marker;
 
     use super::*;
-    use crate::{fn_service, Container, Ctx, Service, ServiceCall, ServiceFactory};
+    use crate::{fn_service, Container, Service, ServiceCall, ServiceCtx, ServiceFactory};
 
     #[derive(Clone)]
     struct Tr<R>(marker::PhantomData<R>);
@@ -239,7 +239,7 @@ mod tests {
             self.0.poll_ready(cx)
         }
 
-        fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(&'a self, req: R, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
             ctx.call(&self.0, req)
         }
     }

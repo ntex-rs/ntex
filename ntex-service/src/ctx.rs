@@ -12,7 +12,7 @@ pub struct Container<S> {
     waiters: Waiters,
 }
 
-pub struct Ctx<'a, S: ?Sized> {
+pub struct ServiceCtx<'a, S: ?Sized> {
     waiters: &'a Waiters,
     _t: marker::PhantomData<Rc<S>>,
 }
@@ -103,7 +103,7 @@ impl<S> Container<S> {
     where
         S: Service<R>,
     {
-        let ctx = Ctx::<'a, S> {
+        let ctx = ServiceCtx::<'a, S> {
             waiters: &self.waiters,
             _t: marker::PhantomData,
         };
@@ -151,7 +151,7 @@ impl<S> ops::Deref for Container<S> {
     }
 }
 
-impl<'a, S: ?Sized> Ctx<'a, S> {
+impl<'a, S: ?Sized> ServiceCtx<'a, S> {
     pub(crate) fn new(waiters: &'a Waiters) -> Self {
         Self {
             waiters,
@@ -171,7 +171,7 @@ impl<'a, S: ?Sized> Ctx<'a, S> {
     {
         svc.call(
             req,
-            Ctx {
+            ServiceCtx {
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             },
@@ -195,9 +195,9 @@ impl<'a, S: ?Sized> Ctx<'a, S> {
     }
 }
 
-impl<'a, S: ?Sized> Copy for Ctx<'a, S> {}
+impl<'a, S: ?Sized> Copy for ServiceCtx<'a, S> {}
 
-impl<'a, S: ?Sized> Clone for Ctx<'a, S> {
+impl<'a, S: ?Sized> Clone for ServiceCtx<'a, S> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -256,7 +256,7 @@ where
 
                         let fut = svc.call(
                             req.take().unwrap(),
-                            Ctx {
+                            ServiceCtx {
                                 waiters,
                                 _t: marker::PhantomData,
                             },
@@ -327,7 +327,11 @@ mod tests {
             self.1.poll_ready(cx).map(|_| Ok(()))
         }
 
-        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(
+            &'a self,
+            req: &'static str,
+            _: ServiceCtx<'a, Self>,
+        ) -> Self::Future<'a> {
             Ready::Ok(req)
         }
     }

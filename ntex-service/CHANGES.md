@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.0-beta.1] - 2023-06-19
+
+* Rename Ctx to ServiceCtx
+
 ## [1.2.0-beta.0] - 2023-06-16
 
 * Enforce service readiness during call

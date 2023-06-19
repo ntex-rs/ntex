@@ -7,7 +7,7 @@ use regex::Regex;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
-use crate::service::{Ctx, Middleware, Service, ServiceCall};
+use crate::service::{Middleware, Service, ServiceCall, ServiceCtx};
 use crate::util::{Bytes, Either, HashSet};
 use crate::web::{HttpResponse, WebRequest, WebResponse};
 
@@ -142,7 +142,11 @@ where
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: WebRequest<E>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(
+        &'a self,
+        req: WebRequest<E>,
+        ctx: ServiceCtx<'a, Self>,
+    ) -> Self::Future<'a> {
         if self.inner.exclude.contains(req.path()) {
             Either::Right(ctx.call(&self.service, req))
         } else {

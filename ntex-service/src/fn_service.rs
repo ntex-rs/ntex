@@ -1,6 +1,6 @@
 use std::{future::ready, future::Future, future::Ready, marker::PhantomData};
 
-use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
+use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
 #[inline]
 /// Create `ServiceFactory` for function that can act as a `Service`
@@ -128,7 +128,7 @@ where
     type Future<'f> = Fut where Self: 'f, Req: 'f;
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Req, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         (self.f)(req)
     }
 }
@@ -190,7 +190,7 @@ where
     type Future<'f> = Fut where Self: 'f;
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Req, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         (self.f)(req)
     }
 }

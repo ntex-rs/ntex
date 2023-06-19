@@ -426,7 +426,7 @@ mod tests {
 
     use ntex_bytes::{Bytes, PoolId, PoolRef};
     use ntex_codec::BytesCodec;
-    use ntex_service::Ctx;
+    use ntex_service::ServiceCtx;
     use ntex_util::{future::Ready, time::sleep, time::Millis, time::Seconds};
 
     use super::*;
@@ -625,7 +625,7 @@ mod tests {
             fn call<'a>(
                 &'a self,
                 _: DispatchItem<BytesCodec>,
-                _: Ctx<'a, Self>,
+                _: ServiceCtx<'a, Self>,
             ) -> Self::Future<'a> {
                 Ready::Ok(None)
             }

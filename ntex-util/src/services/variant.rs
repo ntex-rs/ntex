@@ -1,7 +1,7 @@
 //! Contains `Variant` service and related types and functions.
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
-use ntex_service::{Ctx, IntoServiceFactory, Service, ServiceCall, ServiceFactory};
+use ntex_service::{IntoServiceFactory, Service, ServiceCall, ServiceCtx, ServiceFactory};
 
 /// Construct `Variant` service factory.
 ///
@@ -128,7 +128,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }
         }
 
-        fn call<'a>(&'a self, req: $enum_type<V1R, $($R,)+>, ctx: Ctx<'a, Self>) -> Self::Future<'a>
+        fn call<'a>(&'a self, req: $enum_type<V1R, $($R,)+>, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a>
         {
             match req {
                 $enum_type::V1(req) => $mod_name::ServiceResponse::V1 { fut: ctx.call(&self.V1, req) },
@@ -321,7 +321,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
             Ready::<_, ()>::Ok(1)
         }
     }
@@ -342,7 +342,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
             Ready::<_, ()>::Ok(2)
         }
     }

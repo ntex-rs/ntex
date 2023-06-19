@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests.
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
-use ntex_service::{Ctx, IntoService, Middleware, Service, ServiceCall};
+use ntex_service::{IntoService, Middleware, Service, ServiceCall, ServiceCtx};
 
 use super::counter::{Counter, CounterGuard};
 
@@ -76,7 +76,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: R, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         InFlightServiceResponse {
             fut: ctx.call(&self.service, req),
             _guard: self.count.get(),
@@ -109,7 +109,7 @@ impl<'f, T: Service<R>, R> Future for InFlightServiceResponse<'f, T, R> {
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{apply, fn_factory, Container, Ctx, Service, ServiceFactory};
+    use ntex_service::{apply, fn_factory, Container, Service, ServiceCtx, ServiceFactory};
     use std::{cell::RefCell, task::Poll, time::Duration};
 
     use super::*;
@@ -122,7 +122,7 @@ mod tests {
         type Error = ();
         type Future<'f> = BoxFuture<'f, Result<(), ()>>;
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
             Box::pin(async move {
                 let _ = self.0.recv().await;
                 Ok::<_, ()>(())

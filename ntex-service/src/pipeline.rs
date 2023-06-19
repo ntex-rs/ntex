@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::and_then::{AndThen, AndThenFactory};
-use crate::ctx::{Container, Ctx, ServiceCall};
+use crate::ctx::{Container, ServiceCall, ServiceCtx};
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
@@ -144,7 +144,7 @@ impl<Req, Svc: Service<Req>> Service<Req> for Pipeline<Req, Svc> {
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Req, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         ctx.call(&self.service, req)
     }
 }

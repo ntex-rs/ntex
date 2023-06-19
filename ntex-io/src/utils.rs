@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use ntex_service::{fn_service, pipeline_factory, Ctx, Service, ServiceFactory};
+use ntex_service::{fn_service, pipeline_factory, Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::Ready;
 
 use crate::{Filter, FilterFactory, Io, IoBoxed, Layer};
@@ -75,7 +75,7 @@ where
     type Future<'f> = T::Future where T: 'f, F: 'f;
 
     #[inline]
-    fn call<'a>(&'a self, req: Io<F>, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Io<F>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         self.filter.clone().create(req)
     }
 }

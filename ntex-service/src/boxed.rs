@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
-use crate::ctx::{Ctx, Waiters};
+use crate::ctx::{ServiceCtx, Waiters};
 
 pub type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 
@@ -71,7 +71,7 @@ where
         req: Req,
         waiters: &'a Waiters,
     ) -> BoxFuture<'a, Self::Response, Self::Error> {
-        Box::pin(Ctx::<'a, S>::new(waiters).call_nowait(self, req))
+        Box::pin(ServiceCtx::<'a, S>::new(waiters).call_nowait(self, req))
     }
 }
 
@@ -131,7 +131,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Req, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         self.0.call(req, ctx.waiters())
     }
 }

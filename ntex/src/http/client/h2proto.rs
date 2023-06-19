@@ -7,7 +7,7 @@ use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::{h2::payload, payload::Payload, Method, Version};
 use crate::util::{poll_fn, ByteString, Bytes, HashMap, Ready};
-use crate::{channel::oneshot, service::Ctx, service::Service};
+use crate::{channel::oneshot, Service, ServiceCtx};
 
 use super::error::SendRequestError;
 
@@ -226,7 +226,11 @@ impl Service<h2::Message> for H2PublishService {
     type Error = &'static str;
     type Future<'f> = Ready<Self::Response, Self::Error>;
 
-    fn call<'a>(&'a self, mut msg: h2::Message, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(
+        &'a self,
+        mut msg: h2::Message,
+        _: ServiceCtx<'a, Self>,
+    ) -> Self::Future<'a> {
         match msg.kind().take() {
             h2::MessageKind::Headers {
                 pseudo,

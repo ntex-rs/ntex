@@ -38,8 +38,8 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    fn_service, into_service, pipeline, pipeline_factory, Container, Ctx, IntoService,
-    IntoServiceFactory, Middleware, Service, ServiceCall, ServiceFactory,
+    fn_service, into_service, pipeline, pipeline_factory, Container, IntoService,
+    IntoServiceFactory, Middleware, Service, ServiceCall, ServiceCtx, ServiceFactory,
 };
 
 pub use ntex_util::{channel, task};

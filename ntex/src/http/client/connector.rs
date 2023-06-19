@@ -3,7 +3,7 @@ use std::{task::Context, task::Poll, time::Duration};
 use ntex_h2::{self as h2};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::service::{apply_fn, boxed, Ctx, Service, ServiceCall};
+use crate::service::{apply_fn, boxed, Service, ServiceCall, ServiceCtx};
 use crate::time::{Millis, Seconds};
 use crate::util::{timeout::TimeoutError, timeout::TimeoutService, Either, Ready};
 use crate::{http::Uri, io::IoBoxed};
@@ -315,7 +315,7 @@ where
         }
     }
 
-    fn call<'a>(&'a self, req: Connect, ctx: Ctx<'a, Self>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect, ctx: ServiceCtx<'a, Self>) -> Self::Future<'_> {
         match req.uri.scheme_str() {
             Some("https") | Some("wss") => {
                 if let Some(ref conn) = self.ssl_pool {

@@ -2,7 +2,7 @@ use std::task::{Context, Poll};
 use std::{error::Error, future::Future, marker::PhantomData, pin::Pin};
 
 use ntex_io::{Filter, FilterFactory, Io, Layer};
-use ntex_service::{Ctx, Service, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{future::Ready, time::Millis};
 use tls_openssl::ssl::SslAcceptor;
 
@@ -95,7 +95,7 @@ impl<F: Filter> Service<Io<F>> for AcceptorService<F> {
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Io<F>, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Io<F>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         AcceptorServiceResponse {
             _guard: self.conns.get(),
             fut: self.acceptor.clone().create(req),

@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::task::{ready, Context, Poll};
 use std::{collections::VecDeque, future::Future, marker::PhantomData, pin::Pin};
 
-use ntex_service::{Ctx, IntoService, Middleware, Service, ServiceCall};
+use ntex_service::{IntoService, Middleware, Service, ServiceCall, ServiceCtx};
 
 use crate::{channel::oneshot, future::Either, task::LocalWaker};
 
@@ -138,7 +138,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: R, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         if self.ready.get() {
             self.ready.set(false);
             Either::Left(ctx.call(&self.service, req))
@@ -220,7 +220,7 @@ mod tests {
             }
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ready::Ok(())

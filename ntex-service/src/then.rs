@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
-use super::{Ctx, Service, ServiceCall, ServiceFactory};
+use super::{Service, ServiceCall, ServiceCtx, ServiceFactory};
 
 /// Service for the `then` combinator, chaining a computation onto the end of
 /// another service.
@@ -60,7 +60,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: R, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         ThenServiceResponse {
             slf: self,
             state: State::A {
@@ -95,7 +95,7 @@ pin_project_lite::pin_project! {
         B: 'f,
         R: 'f,
     {
-        A { #[pin] fut: ServiceCall<'f, A, R>, ctx: Ctx<'f, Then<A, B>> },
+        A { #[pin] fut: ServiceCall<'f, A, R>, ctx: ServiceCtx<'f, Then<A, B>> },
         B { #[pin] fut: ServiceCall<'f, B, Result<A::Response, A::Error>> },
         Empty,
     }
@@ -248,7 +248,7 @@ mod tests {
     use ntex_util::future::{lazy, Ready};
     use std::{cell::Cell, rc::Rc, task::Context, task::Poll};
 
-    use crate::{pipeline, pipeline_factory, Ctx, Service, ServiceFactory};
+    use crate::{pipeline, pipeline_factory, Service, ServiceCtx, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>);
@@ -266,7 +266,7 @@ mod tests {
         fn call<'a>(
             &'a self,
             req: Result<&'static str, &'static str>,
-            _: Ctx<'a, Self>,
+            _: ServiceCtx<'a, Self>,
         ) -> Self::Future<'a> {
             match req {
                 Ok(msg) => Ready::Ok(msg),
@@ -291,7 +291,7 @@ mod tests {
         fn call<'a>(
             &'a self,
             req: Result<&'static str, ()>,
-            _: Ctx<'a, Self>,
+            _: ServiceCtx<'a, Self>,
         ) -> Self::Future<'a> {
             match req {
                 Ok(msg) => Ready::Ok((msg, "ok")),

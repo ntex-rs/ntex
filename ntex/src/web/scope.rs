@@ -7,7 +7,7 @@ use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{pipeline_factory, IntoServiceFactory, PipelineFactory};
 use crate::service::{
-    Ctx, Identity, Middleware, Service, ServiceCall, ServiceFactory, Stack,
+    Identity, Middleware, Service, ServiceCall, ServiceCtx, ServiceFactory, Stack,
 };
 use crate::util::{BoxFuture, Either, Extensions, Ready};
 
@@ -505,7 +505,11 @@ where
         }
     }
 
-    fn call<'a>(&'a self, req: WebRequest<Err>, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(
+        &'a self,
+        req: WebRequest<Err>,
+        ctx: ServiceCtx<'a, Self>,
+    ) -> Self::Future<'a> {
         ScopeServiceResponse {
             filter: ctx.call(&self.filter, req),
             routing: &self.routing,
@@ -522,7 +526,7 @@ pin_project_lite::pin_project! {
         #[pin]
         filter: ServiceCall<'f, F, WebRequest<Err>>,
         routing: &'f ScopeRouter<Err>,
-        ctx: Ctx<'f, ScopeService<F, Err>>,
+        ctx: ServiceCtx<'f, ScopeService<F, Err>>,
         endpoint: Option<ServiceCall<'f, ScopeRouter<Err>, WebRequest<Err>>>,
     }
 }
@@ -608,7 +612,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
     fn call<'a>(
         &'a self,
         mut req: WebRequest<Err>,
-        ctx: Ctx<'a, Self>,
+        ctx: ServiceCtx<'a, Self>,
     ) -> Self::Future<'a> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {

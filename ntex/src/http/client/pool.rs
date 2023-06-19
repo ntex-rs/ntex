@@ -6,7 +6,7 @@ use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
-use crate::service::{Container, Ctx, Service, ServiceCall};
+use crate::service::{Container, Service, ServiceCall, ServiceCtx};
 use crate::time::{now, Millis};
 use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker};
@@ -121,7 +121,7 @@ where
     crate::forward_poll_ready!(connector);
     crate::forward_poll_shutdown!(connector);
 
-    fn call<'a>(&'a self, req: Connect, _: Ctx<'a, Self>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect, _: ServiceCtx<'a, Self>) -> Self::Future<'_> {
         trace!("Get connection for {:?}", req.uri);
         let inner = self.inner.clone();
         let waiters = self.waiters.clone();

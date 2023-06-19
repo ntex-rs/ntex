@@ -1,7 +1,7 @@
 use std::{fmt, io, marker, net};
 
 use ntex_rt::spawn_blocking;
-use ntex_service::{Ctx, Service, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::{BoxFuture, Either, Ready};
 
 use crate::{Address, Connect, ConnectError};
@@ -115,7 +115,7 @@ impl<T: Address> Service<Connect<T>> for Resolver<T> {
     type Future<'f> = BoxFuture<'f, Result<Connect<T>, Self::Error>>;
 
     #[inline]
-    fn call<'a>(&'a self, req: Connect<T>, _: Ctx<'a, Self>) -> Self::Future<'_> {
+    fn call<'a>(&'a self, req: Connect<T>, _: ServiceCtx<'a, Self>) -> Self::Future<'_> {
         Box::pin(self.lookup(req))
     }
 }

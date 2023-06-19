@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
-use super::{Ctx, Service, ServiceCall, ServiceFactory};
+use super::{Service, ServiceCall, ServiceCtx, ServiceFactory};
 
 /// Service for the `and_then` combinator, chaining a computation onto the end
 /// of another service which completes successfully.
@@ -59,7 +59,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Req, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         AndThenServiceResponse {
             slf: self,
             state: State::A {
@@ -93,7 +93,7 @@ pin_project_lite::pin_project! {
         B: Service<A::Response, Error = A::Error>,
         B: 'f,
     {
-        A { #[pin] fut: ServiceCall<'f, A, Req>, ctx: Option<Ctx<'f, AndThen<A, B>>> },
+        A { #[pin] fut: ServiceCall<'f, A, Req>, ctx: Option<ServiceCtx<'f, AndThen<A, B>>> },
         B { #[pin] fut: ServiceCall<'f, B, A::Response> },
         Empty,
     }
@@ -234,7 +234,9 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc, task::Context, task::Poll};
 
-    use crate::{fn_factory, pipeline, pipeline_factory, Ctx, Service, ServiceFactory};
+    use crate::{
+        fn_factory, pipeline, pipeline_factory, Service, ServiceCtx, ServiceFactory,
+    };
     use ntex_util::future::{lazy, Ready};
 
     #[derive(Clone)]
@@ -250,7 +252,11 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(
+            &'a self,
+            req: &'static str,
+            _: ServiceCtx<'a, Self>,
+        ) -> Self::Future<'a> {
             Ready::Ok(req)
         }
     }
@@ -268,7 +274,11 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call<'a>(&'a self, req: &'static str, _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(
+            &'a self,
+            req: &'static str,
+            _: ServiceCtx<'a, Self>,
+        ) -> Self::Future<'a> {
             Ready::Ok((req, "srv2"))
         }
     }

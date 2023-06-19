@@ -4,7 +4,7 @@ use std::{future::Future, io, marker::PhantomData, pin::Pin, sync::Arc};
 use tls_rust::ServerConfig;
 
 use ntex_io::{Filter, FilterFactory, Io, Layer};
-use ntex_service::{Ctx, Service, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{future::Ready, time::Millis};
 
 use super::{TlsAcceptor, TlsFilter};
@@ -93,7 +93,7 @@ impl<F: Filter> Service<Io<F>> for AcceptorService<F> {
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Io<F>, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Io<F>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         AcceptorServiceFut {
             _guard: self.conns.get(),
             fut: self.acceptor.clone().create(req),

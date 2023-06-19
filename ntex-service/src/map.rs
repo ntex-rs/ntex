@@ -1,6 +1,6 @@
 use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
-use super::{Ctx, Service, ServiceCall, ServiceFactory};
+use super::{Service, ServiceCall, ServiceCtx, ServiceFactory};
 
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
@@ -54,7 +54,7 @@ where
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Req, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         MapFuture {
             fut: ctx.call(&self.service, req),
             slf: self,
@@ -192,7 +192,7 @@ mod tests {
     use ntex_util::future::{lazy, Ready};
 
     use super::*;
-    use crate::{fn_factory, Container, Ctx, Service, ServiceFactory};
+    use crate::{fn_factory, Container, Service, ServiceCtx, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv;
@@ -206,7 +206,7 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(())
         }
     }

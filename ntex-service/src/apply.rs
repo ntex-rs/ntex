@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 use std::{future::Future, marker, pin::Pin, rc::Rc, task, task::Poll};
 
-use super::ctx::{Ctx, ServiceCall, Waiters};
+use super::ctx::{ServiceCall, ServiceCtx, Waiters};
 use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply transform function to a service.
@@ -83,7 +83,7 @@ impl<S> ApplyService<S> {
     where
         S: Service<R>,
     {
-        Ctx::<S>::new(&self.waiters).call(&self.svc, req)
+        ServiceCtx::<S>::new(&self.waiters).call(&self.svc, req)
     }
 }
 
@@ -101,7 +101,7 @@ where
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: In, ctx: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: In, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         let svc = ApplyService {
             svc: self.service.clone(),
             waiters: ctx.waiters().clone(),
@@ -221,7 +221,7 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{pipeline, pipeline_factory, Ctx, Service, ServiceFactory};
+    use crate::{pipeline, pipeline_factory, Service, ServiceCtx, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv;
@@ -231,7 +231,7 @@ mod tests {
         type Error = ();
         type Future<'f> = Ready<(), ()>;
 
-        fn call<'a>(&'a self, _: (), _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(())
         }
     }

@@ -4,7 +4,7 @@ use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{
-    dev::AndThen, pipeline, pipeline_factory, Ctx, Pipeline, PipelineFactory,
+    dev::AndThen, pipeline, pipeline_factory, Pipeline, PipelineFactory, ServiceCtx,
 };
 use crate::service::{
     Identity, IntoServiceFactory, Middleware, Service, ServiceCall, ServiceFactory, Stack,
@@ -480,7 +480,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {
     fn call<'a>(
         &'a self,
         mut req: WebRequest<Err>,
-        ctx: Ctx<'a, Self>,
+        ctx: ServiceCtx<'a, Self>,
     ) -> Self::Future<'a> {
         for route in self.routes.iter() {
             if route.check(&mut req) {

@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{cell::Cell, convert::Infallible, marker, time::Duration, time::Instant};
 
-use ntex_service::{Ctx, Service, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
 use crate::future::Ready;
 use crate::time::{now, sleep, Millis, Sleep};
@@ -113,7 +113,7 @@ where
         }
     }
 
-    fn call<'a>(&'a self, req: R, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: R, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         self.expire.set(now());
         Ready::Ok(req)
     }

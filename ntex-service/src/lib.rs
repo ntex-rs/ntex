@@ -22,7 +22,7 @@ mod pipeline;
 mod then;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::ctx::{Container, ContainerFactory, Ctx, ServiceCall};
+pub use self::ctx::{Container, ContainerFactory, ServiceCall, ServiceCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
@@ -59,7 +59,7 @@ pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 /// # use std::future::Future;
 /// # use std::pin::Pin;
 /// #
-/// # use ntex_service::{Ctx, Service};
+/// # use ntex_service::{Service, ServiceCtx};
 ///
 /// struct MyService;
 ///
@@ -68,7 +68,7 @@ pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
 ///     type Error = Infallible;
 ///     type Future<'f> = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 ///
-///     fn call<'a>(&'a self, req: u8, _: Ctx<'a, Self>) -> Self::Future<'a> {
+///     fn call<'a>(&'a self, req: u8, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
 ///         Box::pin(std::future::ready(Ok(req as u64)))
 ///     }
 /// }
@@ -103,7 +103,7 @@ pub trait Service<Req> {
     /// should take care to not call `poll_ready`. Caller of the service verifies readiness,
     /// Only way to make a `call` is to use `ctx` argument, it enforces readiness before calling
     /// service.
-    fn call<'a>(&'a self, req: Req, ctx: Ctx<'a, Self>) -> Self::Future<'a>;
+    fn call<'a>(&'a self, req: Req, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a>;
 
     #[inline]
     /// Returns `Ready` when the service is able to process requests.
@@ -261,7 +261,7 @@ where
     }
 
     #[inline]
-    fn call<'s>(&'s self, request: Req, ctx: Ctx<'s, Self>) -> S::Future<'s> {
+    fn call<'s>(&'s self, request: Req, ctx: ServiceCtx<'s, Self>) -> S::Future<'s> {
         ctx.call_nowait(&**self, request)
     }
 }
@@ -285,7 +285,7 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, request: Req, ctx: Ctx<'a, Self>) -> S::Future<'a> {
+    fn call<'a>(&'a self, request: Req, ctx: ServiceCtx<'a, Self>) -> S::Future<'a> {
         ctx.call_nowait(&**self, request)
     }
 }

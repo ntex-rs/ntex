@@ -512,7 +512,7 @@ mod tests {
     use super::*;
     use crate::io::Io;
     use crate::server::service::Factory;
-    use crate::service::{Ctx, Service, ServiceFactory};
+    use crate::service::{Service, ServiceCtx, ServiceFactory};
     use crate::util::{lazy, Ready};
 
     #[derive(Clone, Copy, Debug)]
@@ -572,7 +572,7 @@ mod tests {
             }
         }
 
-        fn call<'a>(&'a self, _: Io, _: Ctx<'a, Self>) -> Self::Future<'a> {
+        fn call<'a>(&'a self, _: Io, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
             Ready::Ok(())
         }
     }

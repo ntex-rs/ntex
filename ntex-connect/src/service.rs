@@ -3,7 +3,7 @@ use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
 
 use ntex_bytes::{PoolId, PoolRef};
 use ntex_io::{types, Io};
-use ntex_service::{Ctx, Service, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::{BoxFuture, Either, Ready};
 
 use crate::{net::tcp_connect_in, Address, Connect, ConnectError, Resolver};
@@ -80,7 +80,7 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Future<'f> = ConnectServiceResponse<'f, T>;
 
     #[inline]
-    fn call<'a>(&'a self, req: Connect<T>, _: Ctx<'a, Self>) -> Self::Future<'a> {
+    fn call<'a>(&'a self, req: Connect<T>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
         ConnectServiceResponse::new(Box::pin(self.resolver.lookup(req)))
     }
 }
