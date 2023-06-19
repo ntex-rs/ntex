@@ -664,49 +664,49 @@ mod tests {
         assert_eq!(store.borrow().len(), 1);
         assert!(format!("{:?}", conn).contains("H1Connection"));
         assert_eq!(conn.protocol(), HttpProtocol::Http1);
-        assert_eq!(pool.inner.borrow().acquired, 1);
-        assert!(pool.inner.borrow().connecting.is_empty());
+        assert_eq!(pool.get_ref().inner.borrow().acquired, 1);
+        assert!(pool.get_ref().inner.borrow().connecting.is_empty());
 
         // pool is full, waiting
         let mut fut = pool.call(req.clone());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
-        assert_eq!(pool.waiters.borrow().waiters.len(), 1);
+        assert_eq!(pool.get_ref().waiters.borrow().waiters.len(), 1);
 
         // release connection and push it to next waiter
         conn.release(false);
-        assert_eq!(pool.inner.borrow().acquired, 0);
+        assert_eq!(pool.get_ref().inner.borrow().acquired, 0);
         let _conn = fut.await.unwrap();
         assert_eq!(store.borrow().len(), 1);
-        assert!(pool.waiters.borrow().waiters.is_empty());
+        assert!(pool.get_ref().waiters.borrow().waiters.is_empty());
         drop(_conn);
 
         // close connnection
         let conn = pool.call(req.clone()).await.unwrap();
         assert_eq!(store.borrow().len(), 2);
-        assert_eq!(pool.inner.borrow().acquired, 1);
-        assert!(pool.inner.borrow().connecting.is_empty());
+        assert_eq!(pool.get_ref().inner.borrow().acquired, 1);
+        assert!(pool.get_ref().inner.borrow().connecting.is_empty());
         let mut fut = pool.call(req.clone());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
-        assert_eq!(pool.waiters.borrow().waiters.len(), 1);
+        assert_eq!(pool.get_ref().waiters.borrow().waiters.len(), 1);
 
         // release and close
         conn.release(true);
-        assert_eq!(pool.inner.borrow().acquired, 0);
-        assert!(pool.inner.borrow().connecting.is_empty());
+        assert_eq!(pool.get_ref().inner.borrow().acquired, 0);
+        assert!(pool.get_ref().inner.borrow().connecting.is_empty());
 
         let conn = fut.await.unwrap();
         assert_eq!(store.borrow().len(), 3);
-        assert!(pool.waiters.borrow().waiters.is_empty());
-        assert!(pool.inner.borrow().connecting.is_empty());
-        assert_eq!(pool.inner.borrow().acquired, 1);
+        assert!(pool.get_ref().waiters.borrow().waiters.is_empty());
+        assert!(pool.get_ref().inner.borrow().connecting.is_empty());
+        assert_eq!(pool.get_ref().inner.borrow().acquired, 1);
 
         // drop waiter, no interest in connection
         let mut fut = pool.call(req.clone());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
         sleep(Millis(50)).await;
-        pool.inner.borrow_mut().check_availibility();
-        assert!(pool.waiters.borrow().waiters.is_empty());
+        pool.get_ref().inner.borrow_mut().check_availibility();
+        assert!(pool.get_ref().waiters.borrow().waiters.is_empty());
 
         // different uri
         let req = Connect {
@@ -715,19 +715,19 @@ mod tests {
         };
         let mut fut = pool.call(req.clone());
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
-        assert_eq!(pool.waiters.borrow().waiters.len(), 1);
+        assert_eq!(pool.get_ref().waiters.borrow().waiters.len(), 1);
         conn.release(false);
-        assert_eq!(pool.inner.borrow().acquired, 0);
-        assert_eq!(pool.inner.borrow().available.len(), 1);
+        assert_eq!(pool.get_ref().inner.borrow().acquired, 0);
+        assert_eq!(pool.get_ref().inner.borrow().available.len(), 1);
 
         let conn = fut.await.unwrap();
         assert_eq!(store.borrow().len(), 4);
-        assert!(pool.waiters.borrow().waiters.is_empty());
-        assert!(pool.inner.borrow().connecting.is_empty());
-        assert_eq!(pool.inner.borrow().acquired, 1);
+        assert!(pool.get_ref().waiters.borrow().waiters.is_empty());
+        assert!(pool.get_ref().inner.borrow().connecting.is_empty());
+        assert_eq!(pool.get_ref().inner.borrow().acquired, 1);
         conn.release(false);
-        assert_eq!(pool.inner.borrow().acquired, 0);
-        assert_eq!(pool.inner.borrow().available.len(), 2);
+        assert_eq!(pool.get_ref().inner.borrow().acquired, 0);
+        assert_eq!(pool.get_ref().inner.borrow().available.len(), 2);
 
         assert!(lazy(|cx| pool.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| pool.poll_shutdown(cx)).await.is_ready());
