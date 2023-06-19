@@ -1,6 +1,6 @@
 [package]
 name = "ntex-service"
-version = "1.2.0-beta.1"
+version = "1.2.0-beta.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex service"
 keywords = ["network", "framework", "async", "futures"]

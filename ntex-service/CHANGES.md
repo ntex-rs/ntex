@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.0-beta.2] - 2023-06-19
+
+* Remove Deref for Container<T>
+
 ## [1.2.0-beta.1] - 2023-06-19
 
 * Rename Ctx to ServiceCtx

@@ -1,6 +1,4 @@
-use std::{
-    cell::UnsafeCell, future::Future, marker, ops, pin::Pin, rc::Rc, task, task::Poll,
-};
+use std::{cell::UnsafeCell, future::Future, marker, pin::Pin, rc::Rc, task, task::Poll};
 
 use crate::{Service, ServiceFactory};
 
@@ -73,6 +71,11 @@ impl<S> Container<S> {
         }
     }
 
+    /// Return reference to inner type
+    pub fn get_ref(&self) -> &S {
+        self.svc.as_ref()
+    }
+
     #[inline]
     /// Returns `Ready` when the service is able to process requests.
     pub fn poll_ready<R>(&self, cx: &mut task::Context<'_>) -> Poll<Result<(), S::Error>>
@@ -139,15 +142,6 @@ impl<S> From<S> for Container<S> {
     #[inline]
     fn from(svc: S) -> Self {
         Container::new(svc)
-    }
-}
-
-impl<S> ops::Deref for Container<S> {
-    type Target = S;
-
-    #[inline]
-    fn deref(&self) -> &S {
-        self.svc.as_ref()
     }
 }
 
