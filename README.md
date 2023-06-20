@@ -6,7 +6,7 @@
 [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions?query=workflow%3A"CI+(Linux)") 
 [![crates.io](https://img.shields.io/crates/v/ntex.svg)](https://crates.io/crates/ntex) 
 [![Documentation](https://img.shields.io/docsrs/ntex/latest)](https://docs.rs/ntex) 
-[![Version](https://img.shields.io/badge/rustc-1.65+-lightgray.svg)](https://blog.rust-lang.org/2022/11/03/Rust-1.65.0.html) 
+[![Version](https://img.shields.io/badge/rustc-1.66+-lightgray.svg)](https://blog.rust-lang.org/2022/12/15/Rust-1.66.0.html) 
 ![License](https://img.shields.io/crates/l/ntex.svg) 
 [![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/master/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex) 
 [![Chat on Discord](https://img.shields.io/discord/919288597826387979?label=chat&logo=discord)](https://discord.gg/zBNyhVRz) 
@@ -29,7 +29,7 @@ Starting ntex v0.5 async runtime must be selected as a feature. Available option
 
 ```toml
 [dependencies]
-ntex = { version = "0.6", features = ["glommio"] }
+ntex = { version = "0.7", features = ["tokio"] }
 ```
 
 ## Documentation & community resources
