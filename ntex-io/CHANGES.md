@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0-beta.3] - 2023-06-21
+
+* Use .static_call() for dispatcher
+
 ## [0.3.0-beta.0] - 2023-06-16
 
 * Migrate to ntex-service 1.2
