@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
-use std::{future::Future, marker, pin::Pin, rc::Rc, task, task::Poll};
+use std::{future::Future, marker, pin::Pin, task, task::Poll};
 
-use super::ctx::{ServiceCall, ServiceCtx, Waiters};
+use super::ctx::{Container, ServiceCtx};
 use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply transform function to a service.
@@ -11,11 +11,15 @@ pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
 ) -> Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    for<'r> F: Fn(In, ApplyService<T>) -> R,
+    F: Fn(In, Container<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
     U: IntoService<T, Req>,
 {
-    Apply::new(service.into_service(), f)
+    Apply {
+        f,
+        service: Container::new(service.into_service()),
+        r: marker::PhantomData,
+    }
 }
 
 /// Service factory that produces `apply_fn` service.
@@ -25,7 +29,7 @@ pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
 ) -> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Container<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
     U: IntoServiceFactory<T, Req, Cfg>,
 {
@@ -37,31 +41,15 @@ pub struct Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
 {
-    service: Rc<T>,
+    service: Container<T>,
     f: F,
     r: marker::PhantomData<fn(Req) -> (In, Out, R)>,
-}
-
-impl<T, Req, F, R, In, Out, Err> Apply<T, Req, F, R, In, Out, Err>
-where
-    T: Service<Req, Error = Err>,
-    F: Fn(In, ApplyService<T>) -> R,
-    R: Future<Output = Result<Out, Err>>,
-{
-    /// Create new `Apply` combinator
-    fn new(service: T, f: F) -> Self {
-        Self {
-            f,
-            service: Rc::new(service),
-            r: marker::PhantomData,
-        }
-    }
 }
 
 impl<T, Req, F, R, In, Out, Err> Clone for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err> + Clone,
-    F: Fn(In, ApplyService<T>) -> R + Clone,
+    F: Fn(In, Container<T>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
@@ -73,24 +61,10 @@ where
     }
 }
 
-pub struct ApplyService<S> {
-    svc: Rc<S>,
-    waiters: Waiters,
-}
-
-impl<S> ApplyService<S> {
-    pub fn call<R>(&self, req: R) -> ServiceCall<'_, S, R>
-    where
-        S: Service<R>,
-    {
-        ServiceCtx::<S>::new(&self.waiters).call(&self.svc, req)
-    }
-}
-
 impl<T, Req, F, R, In, Out, Err> Service<In> for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, ApplyService<T>) -> R,
+    F: Fn(In, Container<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Response = Out;
@@ -101,12 +75,8 @@ where
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: In, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        let svc = ApplyService {
-            svc: self.service.clone(),
-            waiters: ctx.waiters().clone(),
-        };
-        (self.f)(req, svc)
+    fn call<'a>(&'a self, req: In, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
+        (self.f)(req, self.service.clone())
     }
 }
 
@@ -114,7 +84,7 @@ where
 pub struct ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Container<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     service: T,
@@ -125,7 +95,7 @@ where
 impl<T, Req, Cfg, F, R, In, Out, Err> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Container<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `ApplyNewService` new service instance
@@ -142,7 +112,7 @@ impl<T, Req, Cfg, F, R, In, Out, Err> Clone
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err> + Clone,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Container<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
@@ -158,7 +128,7 @@ impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Container<T::Service>) -> R + Clone,
     for<'r> R: Future<Output = Result<Out, Err>> + 'r,
 {
     type Response = Out;
@@ -183,7 +153,7 @@ pin_project_lite::pin_project! {
     where
         T: ServiceFactory<Req, Cfg, Error = Err>,
         T: 'f,
-        F: Fn(In, ApplyService<T::Service>) -> R,
+        F: Fn(In, Container<T::Service>) -> R,
         T::Service: 'f,
         R: Future<Output = Result<Out, Err>>,
         Cfg: 'f,
@@ -199,7 +169,7 @@ impl<'f, T, Req, Cfg, F, R, In, Out, Err> Future
     for ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R,
+    F: Fn(In, Container<T::Service>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Output = Result<Apply<T::Service, Req, F, R, In, Out, Err>, T::InitError>;
@@ -208,7 +178,11 @@ where
         let this = self.project();
 
         if let Poll::Ready(svc) = this.fut.poll(cx)? {
-            Poll::Ready(Ok(Apply::new(svc, this.f.take().unwrap())))
+            Poll::Ready(Ok(Apply {
+                service: svc.into(),
+                f: this.f.take().unwrap(),
+                r: marker::PhantomData,
+            }))
         } else {
             Poll::Pending
         }
@@ -239,8 +213,8 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let srv = pipeline(
-            apply_fn(Srv, |req: &'static str, srv| async move {
-                srv.call(()).await.unwrap();
+            apply_fn(Srv, |req: &'static str, svc| async move {
+                svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
             .clone(),

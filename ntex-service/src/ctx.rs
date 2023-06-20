@@ -11,19 +11,35 @@ pub struct Container<S> {
 }
 
 pub struct ServiceCtx<'a, S: ?Sized> {
-    waiters: &'a Waiters,
+    idx: usize,
+    waiters: &'a WaitersRef,
     _t: marker::PhantomData<Rc<S>>,
 }
 
+pub(crate) struct WaitersRef(UnsafeCell<slab::Slab<Option<task::Waker>>>);
+
 pub(crate) struct Waiters {
     index: usize,
-    waiters: Rc<UnsafeCell<slab::Slab<Option<task::Waker>>>>,
+    waiters: Rc<WaitersRef>,
 }
 
-impl Waiters {
+impl WaitersRef {
     #[allow(clippy::mut_from_ref)]
     fn get(&self) -> &mut slab::Slab<Option<task::Waker>> {
-        unsafe { &mut *self.waiters.as_ref().get() }
+        unsafe { &mut *self.0.get() }
+    }
+
+    fn insert(&self) -> usize {
+        self.get().insert(None)
+    }
+
+    fn remove(&self, idx: usize) {
+        self.notify();
+        self.get().remove(idx);
+    }
+
+    fn register(&self, idx: usize, cx: &mut task::Context<'_>) {
+        self.get()[idx] = Some(cx.waker().clone());
     }
 
     fn notify(&self) {
@@ -33,16 +49,22 @@ impl Waiters {
             }
         }
     }
+}
 
+impl Waiters {
     fn register(&self, cx: &mut task::Context<'_>) {
-        self.get()[self.index] = Some(cx.waker().clone());
+        self.waiters.register(self.index, cx)
+    }
+
+    fn notify(&self) {
+        self.waiters.notify()
     }
 }
 
 impl Clone for Waiters {
     fn clone(&self) -> Self {
         Waiters {
-            index: self.get().insert(None),
+            index: self.waiters.insert(),
             waiters: self.waiters.clone(),
         }
     }
@@ -51,8 +73,7 @@ impl Clone for Waiters {
 impl Drop for Waiters {
     #[inline]
     fn drop(&mut self) {
-        self.get().remove(self.index);
-        self.notify();
+        self.waiters.remove(self.index);
     }
 }
 
@@ -66,7 +87,7 @@ impl<S> Container<S> {
             svc: Rc::new(svc),
             waiters: Waiters {
                 index,
-                waiters: Rc::new(UnsafeCell::new(waiters)),
+                waiters: Rc::new(WaitersRef(UnsafeCell::new(waiters))),
             },
         }
     }
@@ -107,10 +128,42 @@ impl<S> Container<S> {
         S: Service<R>,
     {
         let ctx = ServiceCtx::<'a, S> {
-            waiters: &self.waiters,
+            idx: self.waiters.index,
+            waiters: self.waiters.waiters.as_ref(),
             _t: marker::PhantomData,
         };
         ctx.call(self.svc.as_ref(), req)
+    }
+
+    #[inline]
+    /// Call service and create future object that resolves to service result.
+    ///
+    /// Returned future is suitable for spawning into a async runtime.
+    /// Note, this call does not check service readiness.
+    pub fn static_call<R>(&self, req: R) -> StaticCall<S, R>
+    where
+        S: Service<R> + 'static,
+        R: 'static,
+    {
+        let container = self.clone();
+        let svc_call = container.svc.call(
+            req,
+            ServiceCtx {
+                idx: self.waiters.index,
+                waiters: self.waiters.waiters.as_ref(),
+                _t: marker::PhantomData,
+            },
+        );
+
+        // SAFETY: `svc_call` has same lifetime same as lifetime of `container.svc`
+        // Container::svc is heap allocated(Rc<S>), we keep it alive until
+        // `svc_call` get resolved to result
+        let fut = ServiceCall {
+            state: ServiceCallState::Call {
+                fut: unsafe { std::mem::transmute(svc_call) },
+            },
+        };
+        StaticCall { fut, container }
     }
 
     pub(crate) fn create<F: ServiceFactory<R, C>, R, C>(
@@ -128,6 +181,13 @@ impl<S> Container<S> {
     }
 }
 
+impl<S> From<S> for Container<S> {
+    #[inline]
+    fn from(svc: S) -> Self {
+        Container::new(svc)
+    }
+}
+
 impl<S> Clone for Container<S> {
     #[inline]
     fn clone(&self) -> Self {
@@ -138,23 +198,17 @@ impl<S> Clone for Container<S> {
     }
 }
 
-impl<S> From<S> for Container<S> {
-    #[inline]
-    fn from(svc: S) -> Self {
-        Container::new(svc)
-    }
-}
-
 impl<'a, S: ?Sized> ServiceCtx<'a, S> {
-    pub(crate) fn new(waiters: &'a Waiters) -> Self {
+    pub(crate) fn new(idx: usize, waiters: &'a WaitersRef) -> Self {
         Self {
+            idx,
             waiters,
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn waiters(self) -> &'a Waiters {
-        self.waiters
+    pub(crate) fn inner(self) -> (usize, &'a WaitersRef) {
+        (self.idx, self.waiters)
     }
 
     /// Call service, do not check service readiness
@@ -166,6 +220,7 @@ impl<'a, S: ?Sized> ServiceCtx<'a, S> {
         svc.call(
             req,
             ServiceCtx {
+                idx: self.idx,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             },
@@ -183,6 +238,7 @@ impl<'a, S: ?Sized> ServiceCtx<'a, S> {
             state: ServiceCallState::Ready {
                 svc,
                 req: Some(req),
+                idx: self.idx,
                 waiters: self.waiters,
             },
         }
@@ -195,6 +251,7 @@ impl<'a, S: ?Sized> Clone for ServiceCtx<'a, S> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
+            idx: self.idx,
             waiters: self.waiters,
             _t: marker::PhantomData,
         }
@@ -203,67 +260,98 @@ impl<'a, S: ?Sized> Clone for ServiceCtx<'a, S> {
 
 pin_project_lite::pin_project! {
     #[must_use = "futures do nothing unless polled"]
-    pub struct ServiceCall<'a, T, Req>
+    pub struct StaticCall<S, R>
     where
-        T: Service<Req>,
-        T: 'a,
-        T: ?Sized,
+        S: Service<R>,
+        S: 'static,
+        R: 'static,
+    {
+        #[pin]
+        fut: ServiceCall<'static, S, R>,
+        container: Container<S>,
+    }
+}
+
+impl<S, R> Future for StaticCall<S, R>
+where
+    S: Service<R>,
+{
+    type Output = Result<S::Response, S::Error>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        self.project().fut.poll(cx)
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
+    pub struct ServiceCall<'a, S, Req>
+    where
+        S: Service<Req>,
+        S: 'a,
+        S: ?Sized,
         Req: 'a,
     {
         #[pin]
-        state: ServiceCallState<'a, T, Req>,
+        state: ServiceCallState<'a, S, Req>,
     }
 }
 
 pin_project_lite::pin_project! {
     #[project = ServiceCallStateProject]
-    enum ServiceCallState<'a, T, Req>
+    enum ServiceCallState<'a, S, Req>
     where
-        T: Service<Req>,
-        T: 'a,
-        T: ?Sized,
+        S: Service<Req>,
+        S: 'a,
+        S: ?Sized,
         Req: 'a,
     {
         Ready { req: Option<Req>,
-                svc: &'a T,
-                waiters: &'a Waiters,
+                svc: &'a S,
+                idx: usize,
+                waiters: &'a WaitersRef,
         },
-        Call { #[pin] fut: T::Future<'a> },
+        Call { #[pin] fut: S::Future<'a> },
         Empty,
     }
 }
 
-impl<'a, T, Req> Future for ServiceCall<'a, T, Req>
+impl<'a, S, Req> Future for ServiceCall<'a, S, Req>
 where
-    T: Service<Req> + ?Sized,
+    S: Service<Req> + ?Sized,
 {
-    type Output = Result<T::Response, T::Error>;
+    type Output = Result<S::Response, S::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
-            ServiceCallStateProject::Ready { req, svc, waiters } => {
-                match svc.poll_ready(cx)? {
-                    Poll::Ready(()) => {
-                        waiters.notify();
+            ServiceCallStateProject::Ready {
+                req,
+                svc,
+                idx,
+                waiters,
+            } => match svc.poll_ready(cx)? {
+                Poll::Ready(()) => {
+                    waiters.notify();
 
-                        let fut = svc.call(
-                            req.take().unwrap(),
-                            ServiceCtx {
-                                waiters,
-                                _t: marker::PhantomData,
-                            },
-                        );
-                        this.state.set(ServiceCallState::Call { fut });
-                        self.poll(cx)
-                    }
-                    Poll::Pending => {
-                        waiters.register(cx);
-                        Poll::Pending
-                    }
+                    let fut = svc.call(
+                        req.take().unwrap(),
+                        ServiceCtx {
+                            idx: *idx,
+                            waiters,
+                            _t: marker::PhantomData,
+                        },
+                    );
+                    this.state.set(ServiceCallState::Call { fut });
+                    self.poll(cx)
                 }
-            }
+                Poll::Pending => {
+                    waiters.register(*idx, cx);
+                    Poll::Pending
+                }
+            },
             ServiceCallStateProject::Call { fut } => fut.poll(cx).map(|r| {
                 this.state.set(ServiceCallState::Empty);
                 r
