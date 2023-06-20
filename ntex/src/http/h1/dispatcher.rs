@@ -479,21 +479,21 @@ where
     fn service_call(&self, req: Request) -> CallState<S, X> {
         // Handle normal requests
         CallState::Service {
-            fut: self.config.service.call(req).into_static(),
+            fut: self.config.service.container_call(req).into_static(),
         }
     }
 
     fn service_filter(&self, req: Request, f: &Container<OnRequest>) -> CallState<S, X> {
         // Handle filter fut
         CallState::Filter {
-            fut: f.call((req, self.io.get_ref())).into_static(),
+            fut: f.container_call((req, self.io.get_ref())).into_static(),
         }
     }
 
     fn service_expect(&self, req: Request) -> CallState<S, X> {
         // Handle normal requests with EXPECT: 100-Continue` header
         CallState::Expect {
-            fut: self.config.expect.call(req).into_static(),
+            fut: self.config.expect.container_call(req).into_static(),
         }
     }
 
@@ -506,7 +506,7 @@ where
         )));
         // Handle upgrade requests
         CallState::ServiceUpgrade {
-            fut: self.config.service.call(req).into_static(),
+            fut: self.config.service.container_call(req).into_static(),
         }
     }
 

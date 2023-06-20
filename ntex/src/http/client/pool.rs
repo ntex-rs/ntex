@@ -6,7 +6,7 @@ use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
-use crate::service::{Container, ContainerCall, Service, ServiceCtx};
+use crate::service::{Container, Service, ServiceCall, ServiceCtx};
 use crate::time::{now, Millis};
 use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker};
@@ -390,7 +390,7 @@ pin_project_lite::pin_project! {
     {
         key: Key,
         #[pin]
-        fut: ContainerCall<'f, T, Connect>,
+        fut: ServiceCall<'f, T, Connect>,
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,

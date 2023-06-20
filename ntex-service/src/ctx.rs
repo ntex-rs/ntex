@@ -125,7 +125,23 @@ impl<S> Container<S> {
     /// Call service and create future object that resolves to service result.
     ///
     /// Note, this call does not check service readiness.
-    pub fn call<R>(&self, req: R) -> ContainerCall<'_, S, R>
+    pub fn call<'a, R>(&'a self, req: R) -> ServiceCall<'a, S, R>
+    where
+        S: Service<R>,
+    {
+        let ctx = ServiceCtx::<'a, S> {
+            idx: self.waiters.index,
+            waiters: self.waiters.waiters.as_ref(),
+            _t: marker::PhantomData,
+        };
+        ctx.call(self.svc.as_ref(), req)
+    }
+
+    #[inline]
+    /// Call service and create future object that resolves to service result.
+    ///
+    /// Note, this call does not check service readiness.
+    pub fn container_call<R>(&self, req: R) -> ContainerCall<'_, S, R>
     where
         S: Service<R>,
     {
@@ -394,7 +410,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_util::{channel::condition, future::lazy, future::Ready, time};
+    use ntex_util::future::{lazy, poll_fn, Ready};
+    use ntex_util::{channel::condition, time};
     use std::{cell::Cell, cell::RefCell, rc::Rc, task::Context, task::Poll};
 
     use super::*;
@@ -459,13 +476,14 @@ mod tests {
 
         let data1 = data.clone();
         ntex::rt::spawn(async move {
-            let i = srv1.call("srv1").await.unwrap();
+            let _ = poll_fn(|cx| srv1.poll_ready(cx)).await;
+            let i = srv1.container_call("srv1").await.unwrap();
             data1.borrow_mut().push(i);
         });
 
         let data2 = data.clone();
         ntex::rt::spawn(async move {
-            let i = srv2.call("srv2").await.unwrap();
+            let i = srv2.svc_call("srv2").await.unwrap();
             data2.borrow_mut().push(i);
         });
         time::sleep(time::Millis(50)).await;

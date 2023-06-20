@@ -382,7 +382,7 @@ impl Future for ReadBody {
                         Poll::Ready(Err(PayloadError::Incomplete(Some(
                             std::io::Error::new(
                                 std::io::ErrorKind::TimedOut,
-                                "Operation timed our",
+                                "Operation timed out",
                             ),
                         ))))
                     } else {
