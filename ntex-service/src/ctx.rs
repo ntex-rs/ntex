@@ -483,7 +483,7 @@ mod tests {
 
         let data2 = data.clone();
         ntex::rt::spawn(async move {
-            let i = srv2.svc_call("srv2").await.unwrap();
+            let i = srv2.call("srv2").await.unwrap();
             data2.borrow_mut().push(i);
         });
         time::sleep(time::Millis(50)).await;
