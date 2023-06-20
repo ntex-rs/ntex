@@ -122,35 +122,19 @@ impl<S> Container<S> {
     }
 
     #[inline]
-    /// Process the request and return the response asynchronously.
-    pub fn call<'a, R>(&'a self, req: R) -> ServiceCall<'a, S, R>
-    where
-        S: Service<R>,
-    {
-        let ctx = ServiceCtx::<'a, S> {
-            idx: self.waiters.index,
-            waiters: self.waiters.waiters.as_ref(),
-            _t: marker::PhantomData,
-        };
-        ctx.call(self.svc.as_ref(), req)
-    }
-
-    #[inline]
     /// Call service and create future object that resolves to service result.
     ///
-    /// Returned future is suitable for spawning into a async runtime.
     /// Note, this call does not check service readiness.
-    pub fn static_call<R>(&self, req: R) -> StaticCall<S, R>
+    pub fn call<R>(&self, req: R) -> ContainerCall<'_, S, R>
     where
-        S: Service<R> + 'static,
-        R: 'static,
+        S: Service<R>,
     {
         let container = self.clone();
         let svc_call = container.svc.call(
             req,
             ServiceCtx {
-                idx: self.waiters.index,
-                waiters: self.waiters.waiters.as_ref(),
+                idx: container.waiters.index,
+                waiters: container.waiters.waiters.as_ref(),
                 _t: marker::PhantomData,
             },
         );
@@ -158,12 +142,8 @@ impl<S> Container<S> {
         // SAFETY: `svc_call` has same lifetime same as lifetime of `container.svc`
         // Container::svc is heap allocated(Rc<S>), we keep it alive until
         // `svc_call` get resolved to result
-        let fut = ServiceCall {
-            state: ServiceCallState::Call {
-                fut: unsafe { std::mem::transmute(svc_call) },
-            },
-        };
-        StaticCall { fut, container }
+        let fut = unsafe { std::mem::transmute(svc_call) };
+        ContainerCall { fut, container }
     }
 
     pub(crate) fn create<F: ServiceFactory<R, C>, R, C>(
@@ -260,19 +240,41 @@ impl<'a, S: ?Sized> Clone for ServiceCtx<'a, S> {
 
 pin_project_lite::pin_project! {
     #[must_use = "futures do nothing unless polled"]
-    pub struct StaticCall<S, R>
+    pub struct ContainerCall<'f, S, R>
     where
         S: Service<R>,
-        S: 'static,
-        R: 'static,
+        S: 'f,
+        R: 'f,
     {
         #[pin]
-        fut: ServiceCall<'static, S, R>,
+        fut: S::Future<'f>,
         container: Container<S>,
     }
 }
 
-impl<S, R> Future for StaticCall<S, R>
+impl<'f, S, R> ContainerCall<'f, S, R>
+where
+    S: Service<R> + 'f,
+    R: 'f,
+{
+    #[inline]
+    /// Call service and create future object that resolves to service result.
+    ///
+    /// Returned future is suitable for spawning into a async runtime.
+    /// Note, this call does not check service readiness.
+    pub fn into_static(self) -> ContainerCall<'static, S, R> {
+        let svc_call = self.fut;
+        let container = self.container;
+
+        // SAFETY: `svc_call` has same lifetime same as lifetime of `container.svc`
+        // Container::svc is heap allocated(Rc<S>), we keep it alive until
+        // `svc_call` get resolved to result
+        let fut = unsafe { std::mem::transmute(svc_call) };
+        ContainerCall { fut, container }
+    }
+}
+
+impl<'f, S, R> Future for ContainerCall<'f, S, R>
 where
     S: Service<R>,
 {
