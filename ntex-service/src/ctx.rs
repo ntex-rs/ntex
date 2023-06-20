@@ -207,22 +207,6 @@ impl<'a, S: ?Sized> ServiceCtx<'a, S> {
         (self.idx, self.waiters)
     }
 
-    /// Call service, do not check service readiness
-    pub(crate) fn call_nowait<T, R>(&self, svc: &'a T, req: R) -> T::Future<'a>
-    where
-        T: Service<R> + ?Sized,
-        R: 'a,
-    {
-        svc.call(
-            req,
-            ServiceCtx {
-                idx: self.idx,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            },
-        )
-    }
-
     #[inline]
     /// Wait for service readiness and then call service
     pub fn call<T, R>(&self, svc: &'a T, req: R) -> ServiceCall<'a, T, R>
@@ -238,6 +222,24 @@ impl<'a, S: ?Sized> ServiceCtx<'a, S> {
                 waiters: self.waiters,
             },
         }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Call service, do not check service readiness
+    pub fn call_nowait<T, R>(&self, svc: &'a T, req: R) -> T::Future<'a>
+    where
+        T: Service<R> + ?Sized,
+        R: 'a,
+    {
+        svc.call(
+            req,
+            ServiceCtx {
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            },
+        )
     }
 }
 
