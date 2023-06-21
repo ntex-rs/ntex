@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.0-beta.4] - 2023-06-2x
+
+* Link apply_fn service readiness with parent
+
 ## [1.2.0-beta.3] - 2023-06-21
 
 * Add custom ContainerCall future

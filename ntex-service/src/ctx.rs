@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, future::Future, marker, pin::Pin, rc::Rc, task, task::Poll};
+use std::{cell::Cell, cell::UnsafeCell, future::Future, marker, pin::Pin, rc::Rc, task};
 
 use crate::{Service, ServiceFactory};
 
@@ -8,6 +8,7 @@ use crate::{Service, ServiceFactory};
 pub struct Container<S> {
     svc: Rc<S>,
     waiters: Waiters,
+    pending: Cell<bool>,
 }
 
 pub struct ServiceCtx<'a, S: ?Sized> {
@@ -85,6 +86,7 @@ impl<S> Container<S> {
         let index = waiters.insert(None);
         Container {
             svc: Rc::new(svc),
+            pending: Cell::new(false),
             waiters: Waiters {
                 index,
                 waiters: Rc::new(WaitersRef(UnsafeCell::new(waiters))),
@@ -92,21 +94,27 @@ impl<S> Container<S> {
         }
     }
 
-    /// Return reference to inner type
+    #[inline]
+    /// Return reference to enclosed service
     pub fn get_ref(&self) -> &S {
         self.svc.as_ref()
     }
 
     #[inline]
     /// Returns `Ready` when the service is able to process requests.
-    pub fn poll_ready<R>(&self, cx: &mut task::Context<'_>) -> Poll<Result<(), S::Error>>
+    pub fn poll_ready<R>(
+        &self,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Result<(), S::Error>>
     where
         S: Service<R>,
     {
         let res = self.svc.poll_ready(cx);
         if res.is_pending() {
+            self.pending.set(true);
             self.waiters.register(cx)
-        } else {
+        } else if self.pending.get() {
+            self.pending.set(false);
             self.waiters.notify()
         }
         res
@@ -114,7 +122,7 @@ impl<S> Container<S> {
 
     #[inline]
     /// Shutdown enclosed service.
-    pub fn poll_shutdown<R>(&self, cx: &mut task::Context<'_>) -> Poll<()>
+    pub fn poll_shutdown<R>(&self, cx: &mut task::Context<'_>) -> task::Poll<()>
     where
         S: Service<R>,
     {
@@ -189,6 +197,7 @@ impl<S> Clone for Container<S> {
     fn clone(&self) -> Self {
         Self {
             svc: self.svc.clone(),
+            pending: Cell::new(false),
             waiters: self.waiters.clone(),
         }
     }
@@ -299,7 +308,7 @@ where
     type Output = Result<S::Response, S::Error>;
 
     #[inline]
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         self.project().fut.poll(cx)
     }
 }
@@ -343,7 +352,10 @@ where
 {
     type Output = Result<S::Response, S::Error>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Self::Output> {
         let mut this = self.as_mut().project();
 
         match this.state.as_mut().project() {
@@ -353,7 +365,7 @@ where
                 idx,
                 waiters,
             } => match svc.poll_ready(cx)? {
-                Poll::Ready(()) => {
+                task::Poll::Ready(()) => {
                     waiters.notify();
 
                     let fut = svc.call(
@@ -367,9 +379,9 @@ where
                     this.state.set(ServiceCallState::Call { fut });
                     self.poll(cx)
                 }
-                Poll::Pending => {
+                task::Poll::Pending => {
                     waiters.register(*idx, cx);
-                    Poll::Pending
+                    task::Poll::Pending
                 }
             },
             ServiceCallStateProject::Call { fut } => fut.poll(cx).map(|r| {
@@ -402,8 +414,8 @@ where
 {
     type Output = Result<Container<F::Service>, F::InitError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(Ok(Container::new(task::ready!(self
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+        task::Poll::Ready(Ok(Container::new(task::ready!(self
             .project()
             .fut
             .poll(cx))?)))

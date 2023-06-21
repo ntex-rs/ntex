@@ -352,7 +352,7 @@ where
 
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
-    pub use crate::apply::{Apply, ApplyFactory};
+    pub use crate::apply::{Apply, ApplyFactory, ApplyService};
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
