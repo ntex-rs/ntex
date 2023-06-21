@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.0-beta.2] - 2023-06-21
+
+* Remove unsafe from h1 dispatcher
+
 ## [0.7.0-beta.1] - 2023-06-19
 
 * Rename Ctx to ServiceCtx

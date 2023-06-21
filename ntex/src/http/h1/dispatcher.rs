@@ -1,9 +1,9 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{cell::RefCell, error::Error, future::Future, io, marker, mem, pin::Pin, rc::Rc};
+use std::{cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
 
 use crate::io::{Filter, Io, IoBoxed, IoRef, IoStatusUpdate, RecvError};
-use crate::service::{Container, Service, ServiceCall};
+use crate::service::{Container, ContainerCall, Service};
 use crate::util::{ready, Bytes};
 
 use crate::http;
@@ -78,10 +78,10 @@ pin_project_lite::pin_project! {
     where S: 'static, X: 'static
     {
         None,
-        Service { #[pin] fut: ServiceCall<'static, S, Request> },
-        ServiceUpgrade { #[pin] fut: ServiceCall<'static, S, Request>  },
-        Expect { #[pin] fut: ServiceCall<'static, X, Request> },
-        Filter { fut: ServiceCall<'static, OnRequest, (Request, IoRef)> }
+        Service { #[pin] fut: ContainerCall<'static, S, Request> },
+        ServiceUpgrade { #[pin] fut: ContainerCall<'static, S, Request>  },
+        Expect { #[pin] fut: ContainerCall<'static, X, Request> },
+        Filter { fut: ContainerCall<'static, OnRequest, (Request, IoRef)> }
     }
 }
 
@@ -478,32 +478,23 @@ where
 
     fn service_call(&self, req: Request) -> CallState<S, X> {
         // Handle normal requests
-        let fut = self.config.service.call(req);
-        let st = CallState::Service {
-            fut: unsafe { mem::transmute_copy(&fut) },
-        };
-        mem::forget(fut);
-        st
+        CallState::Service {
+            fut: self.config.service.container_call(req).into_static(),
+        }
     }
 
     fn service_filter(&self, req: Request, f: &Container<OnRequest>) -> CallState<S, X> {
         // Handle filter fut
-        let fut = f.call((req, self.io.get_ref()));
-        let st = CallState::Filter {
-            fut: unsafe { mem::transmute_copy(&fut) },
-        };
-        mem::forget(fut);
-        st
+        CallState::Filter {
+            fut: f.container_call((req, self.io.get_ref())).into_static(),
+        }
     }
 
     fn service_expect(&self, req: Request) -> CallState<S, X> {
         // Handle normal requests with EXPECT: 100-Continue` header
-        let fut = self.config.expect.call(req);
-        let st = CallState::Expect {
-            fut: unsafe { mem::transmute_copy(&fut) },
-        };
-        mem::forget(fut);
-        st
+        CallState::Expect {
+            fut: self.config.expect.container_call(req).into_static(),
+        }
     }
 
     fn service_upgrade(&mut self, mut req: Request) -> CallState<S, X> {
@@ -514,12 +505,9 @@ where
             RefCell::new(Some(Box::new((io, self.codec.clone())))),
         )));
         // Handle upgrade requests
-        let fut = self.config.service.call(req);
-        let st = CallState::ServiceUpgrade {
-            fut: unsafe { mem::transmute_copy(&fut) },
-        };
-        mem::forget(fut);
-        st
+        CallState::ServiceUpgrade {
+            fut: self.config.service.container_call(req).into_static(),
+        }
     }
 
     fn read_request(

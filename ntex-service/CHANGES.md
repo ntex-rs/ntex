@@ -1,5 +1,11 @@
 # Changes
 
+## [1.2.0-beta.3] - 2023-06-21
+
+* Add custom ContainerCall future
+
+* Allow to turn ContainerCall to static
+
 ## [1.2.0-beta.2] - 2023-06-19
 
 * Remove Deref for Container<T>
