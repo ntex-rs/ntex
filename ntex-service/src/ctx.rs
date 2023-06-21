@@ -130,9 +130,8 @@ impl<S> Container<S> {
     }
 
     #[inline]
-    /// Call service and create future object that resolves to service result.
-    ///
-    /// Note, this call does not check service readiness.
+    /// Wait for service readiness and then create future object
+    /// that resolves to service result.
     pub fn call<'a, R>(&'a self, req: R) -> ServiceCall<'a, S, R>
     where
         S: Service<R>,
@@ -285,7 +284,7 @@ where
     R: 'f,
 {
     #[inline]
-    /// Call service and create future object that resolves to service result.
+    /// Convert future object to static version.
     ///
     /// Returned future is suitable for spawning into a async runtime.
     /// Note, this call does not check service readiness.
