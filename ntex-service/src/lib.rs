@@ -23,7 +23,7 @@ mod pipeline;
 mod then;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::chain::{svc, svc_factory};
+pub use self::chain::{chain, chain_factory};
 pub use self::ctx::{ServiceCall, ServiceCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
@@ -134,6 +134,47 @@ pub trait Service<Req> {
     fn poll_shutdown(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         Poll::Ready(())
     }
+
+    #[inline]
+    /// Map this service's output to a different type, returning a new service of the resulting type.
+    ///
+    /// This function is similar to the `Option::map` or `Iterator::map` where it will change
+    /// the type of the underlying service.
+    ///
+    /// Note that this function consumes the receiving service and returns a wrapped version of it,
+    /// similar to the existing `map` methods in the standard library.
+    fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Req, Res>, Req>
+    where
+        Self: Sized,
+        F: Fn(Self::Response) -> Res,
+    {
+        chain(dev::Map::new(self, f))
+    }
+
+    #[inline]
+    /// Map this service's error to a different error, returning a new service.
+    ///
+    /// This function is similar to the `Result::map_err` where it will change the error type of
+    /// the underlying service. This is useful for example to ensure that services have the same
+    /// error type.
+    ///
+    /// Note that this function consumes the receiving service and returns a wrapped version of it.
+    fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>, Req>
+    where
+        Self: Sized,
+        F: Fn(Self::Error) -> E,
+    {
+        chain(dev::MapErr::new(self, f))
+    }
+
+    #[inline]
+    /// Convert `Self` to a `ServiceChain`
+    fn chain(self) -> dev::ServiceChain<Self, Req>
+    where
+        Self: Sized,
+    {
+        chain(self)
+    }
 }
 
 /// Factory for creating `Service`s.
@@ -175,6 +216,46 @@ pub trait ServiceFactory<Req, Cfg = ()> {
         Self: Sized,
     {
         dev::CreatePipeline::new(self.create(cfg))
+    }
+
+    #[inline]
+    /// Map this service's output to a different type, returning a new service
+    /// of the resulting type.
+    fn map<F, Res>(
+        self,
+        f: F,
+    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, Req, Res, Cfg>, Req, Cfg>
+    where
+        Self: Sized,
+        F: Fn(Self::Response) -> Res + Clone,
+    {
+        chain_factory(dev::MapFactory::new(self, f))
+    }
+
+    #[inline]
+    /// Map this service's error to a different error, returning a new service.
+    fn map_err<F, E>(
+        self,
+        f: F,
+    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, Req, Cfg, F, E>, Req, Cfg>
+    where
+        Self: Sized,
+        F: Fn(Self::Error) -> E + Clone,
+    {
+        chain_factory(dev::MapErrFactory::new(self, f))
+    }
+
+    #[inline]
+    /// Map this factory's init error to a different error, returning a new service.
+    fn map_init_err<F, E>(
+        self,
+        f: F,
+    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, Req, Cfg, F, E>, Req, Cfg>
+    where
+        Self: Sized,
+        F: Fn(Self::InitError) -> E + Clone,
+    {
+        chain_factory(dev::MapInitErr::new(self, f))
     }
 }
 
@@ -248,6 +329,15 @@ where
 {
     /// Convert to a `Service`
     fn into_service(self) -> Svc;
+
+    #[inline]
+    /// Convert `Self` to a `ServiceChain`
+    fn into_chain(self) -> dev::ServiceChain<Svc, Req>
+    where
+        Self: Sized,
+    {
+        chain(self)
+    }
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
@@ -257,12 +347,22 @@ where
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> T;
+
+    #[inline]
+    /// Convert `Self` to a `ServiceChainFactory`
+    fn chain(self) -> dev::ServiceChainFactory<T, Req, Cfg>
+    where
+        Self: Sized,
+    {
+        chain_factory(self)
+    }
 }
 
 impl<Svc, Req> IntoService<Svc, Req> for Svc
 where
     Svc: Service<Req>,
 {
+    #[inline]
     fn into_service(self) -> Svc {
         self
     }
@@ -272,6 +372,7 @@ impl<T, Req, Cfg> IntoServiceFactory<T, Req, Cfg> for T
 where
     T: ServiceFactory<Req, Cfg>,
 {
+    #[inline]
     fn into_factory(self) -> T {
         self
     }

@@ -47,7 +47,7 @@ mod openssl {
     use ntex_tls::openssl::{Acceptor, SslFilter};
     use tls_openssl::ssl::SslAcceptor;
 
-    use crate::{io::Layer, server::SslError, service::pipeline_factory};
+    use crate::{io::Layer, server::SslError};
 
     use super::*;
 
@@ -69,13 +69,12 @@ mod openssl {
             Error = SslError<DispatchError>,
             InitError = S::InitError,
         > {
-            pipeline_factory(
-                Acceptor::new(acceptor)
-                    .timeout(self.cfg.0.ssl_handshake_timeout)
-                    .map_err(SslError::Ssl)
-                    .map_init_err(|_| panic!()),
-            )
-            .and_then(self.map_err(SslError::Service))
+            Acceptor::new(acceptor)
+                .timeout(self.cfg.0.ssl_handshake_timeout)
+                .chain()
+                .map_err(SslError::Ssl)
+                .map_init_err(|_| panic!())
+                .and_then(self.chain().map_err(SslError::Service))
         }
     }
 }
@@ -86,7 +85,7 @@ mod rustls {
     use tls_rustls::ServerConfig;
 
     use super::*;
-    use crate::{io::Layer, server::SslError, service::pipeline_factory};
+    use crate::{io::Layer, server::SslError};
 
     impl<F, S, B> H2Service<Layer<TlsFilter, F>, S, B>
     where
@@ -109,13 +108,12 @@ mod rustls {
             let protos = vec!["h2".to_string().into()];
             config.alpn_protocols = protos;
 
-            pipeline_factory(
-                Acceptor::from(config)
-                    .timeout(self.cfg.0.ssl_handshake_timeout)
-                    .map_err(|e| SslError::Ssl(Box::new(e)))
-                    .map_init_err(|_| panic!()),
-            )
-            .and_then(self.map_err(SslError::Service))
+            Acceptor::from(config)
+                .timeout(self.cfg.0.ssl_handshake_timeout)
+                .chain()
+                .map_err(|e| SslError::Ssl(Box::new(e)))
+                .map_init_err(|_| panic!())
+                .and_then(self.chain().map_err(SslError::Service))
         }
     }
 }

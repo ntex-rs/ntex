@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use ntex_service::{fn_service, pipeline_factory, Service, ServiceCtx, ServiceFactory};
+use ntex_service::{chain_factory, fn_service, Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::Ready;
 
 use crate::{Filter, FilterFactory, Io, IoBoxed, Layer};
@@ -20,10 +20,9 @@ where
     S: ServiceFactory<IoBoxed, C>,
     C: Clone,
 {
-    pipeline_factory(
-        fn_service(|io: Io<F>| Ready::Ok(IoBoxed::from(io))).map_init_err(|_| panic!()),
-    )
-    .and_then(srv)
+    chain_factory(fn_service(|io: Io<F>| Ready::Ok(IoBoxed::from(io))))
+        .map_init_err(|_| panic!())
+        .and_then(srv)
 }
 
 /// Create filter factory service
@@ -106,7 +105,7 @@ mod tests {
                 .unwrap();
             Ok::<_, ()>(())
         }))
-        .container(())
+        .pipeline(())
         .await
         .unwrap();
         let _ = svc.call(Io::new(server)).await;
@@ -143,7 +142,7 @@ mod tests {
     #[ntex::test]
     async fn test_utils_filter() {
         let (_, server) = IoTest::create();
-        let svc = pipeline_factory(
+        let svc = chain_factory(
             filter::<_, crate::filter::Base>(TestFilterFactory)
                 .map_err(|_| ())
                 .map_init_err(|_| ()),
@@ -152,7 +151,7 @@ mod tests {
             let _ = io.recv(&BytesCodec).await;
             Ok::<_, ()>(())
         })))
-        .container(())
+        .pipeline(())
         .await
         .unwrap();
         let _ = svc.call(Io::new(server)).await;

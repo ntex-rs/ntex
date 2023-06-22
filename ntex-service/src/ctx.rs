@@ -241,6 +241,7 @@ mod tests {
     use std::{cell::Cell, cell::RefCell, rc::Rc, task::Context, task::Poll};
 
     use super::*;
+    use crate::Pipeline;
 
     struct Srv(Rc<Cell<usize>>, condition::Waiter);
 
@@ -268,7 +269,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Container::from(Srv(cnt.clone(), con.wait()));
+        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait()));
         let srv2 = srv1.clone();
 
         let res = lazy(|cx| srv1.poll_ready(cx)).await;
@@ -297,19 +298,19 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Container::from(Srv(cnt.clone(), con.wait()));
+        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait()));
         let srv2 = srv1.clone();
 
         let data1 = data.clone();
         ntex::rt::spawn(async move {
             let _ = poll_fn(|cx| srv1.poll_ready(cx)).await;
-            let i = srv1.container_call("srv1").await.unwrap();
+            let i = srv1.call("srv1").await.unwrap();
             data1.borrow_mut().push(i);
         });
 
         let data2 = data.clone();
         ntex::rt::spawn(async move {
-            let i = srv2.call("srv2").await.unwrap();
+            let i = srv2.service_call("srv2").await.unwrap();
             data2.borrow_mut().push(i);
         });
         time::sleep(time::Millis(50)).await;

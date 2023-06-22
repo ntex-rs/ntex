@@ -89,11 +89,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{fn_factory_with_config, into_service, pipeline_factory, ServiceFactory};
+    use crate::{chain_factory, fn_factory_with_config, into_service, ServiceFactory};
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = pipeline_factory(fn_factory_with_config(|err: &bool| {
+        let factory = chain_factory(fn_factory_with_config(|err: &bool| {
             let err = *err;
             async move {
                 if err {

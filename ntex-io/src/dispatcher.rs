@@ -3,7 +3,7 @@ use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll, time}
 
 use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
-use ntex_service::{Container, IntoService, Service};
+use ntex_service::{IntoService, Pipeline, Service};
 use ntex_util::time::Seconds;
 use ntex_util::{future::Either, ready, spawn};
 
@@ -51,7 +51,7 @@ where
 {
     io: IoBoxed,
     codec: U,
-    service: Container<S>,
+    service: Pipeline<S>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<usize>,
 }
@@ -107,7 +107,7 @@ where
             codec,
             error: Cell::new(None),
             inflight: Cell::new(0),
-            service: Container::new(service.into_service()),
+            service: Pipeline::new(service.into_service()),
         });
 
         Dispatcher {
@@ -250,7 +250,7 @@ where
                     // call service
                     let shared = slf.shared.clone();
                     shared.inflight.set(shared.inflight.get() + 1);
-                    let fut = shared.service.container_call(item).into_static();
+                    let fut = shared.service.call(item).into_static();
                     spawn(async move {
                         let result = fut.await;
                         shared.handle_result(result, &shared.io);
@@ -276,7 +276,7 @@ where
                     // call service
                     let shared = slf.shared.clone();
                     shared.inflight.set(shared.inflight.get() + 1);
-                    let fut = shared.service.container_call(item).into_static();
+                    let fut = shared.service.call(item).into_static();
                     spawn(async move {
                         let result = fut.await;
                         shared.handle_result(result, &shared.io);
@@ -342,7 +342,7 @@ where
 {
     fn poll_service(
         &self,
-        srv: &Container<S>,
+        srv: &Pipeline<S>,
         cx: &mut Context<'_>,
         io: &IoBoxed,
     ) -> Poll<PollService<U>> {
@@ -478,7 +478,7 @@ mod tests {
                 io: state.into(),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
-                service: Container::new(service.into_service()),
+                service: Pipeline::new(service.into_service()),
             });
 
             (

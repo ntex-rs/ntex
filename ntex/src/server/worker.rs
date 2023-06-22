@@ -5,7 +5,7 @@ use async_channel::{unbounded, Receiver, Sender};
 use async_oneshot as oneshot;
 
 use crate::rt::{spawn, Arbiter};
-use crate::service::Container;
+use crate::service::Pipeline;
 use crate::time::{sleep, Millis, Sleep};
 use crate::util::{
     join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
@@ -138,12 +138,12 @@ pub(super) struct Worker {
 struct WorkerService {
     factory: usize,
     status: WorkerServiceStatus,
-    service: Container<BoxedServerService>,
+    service: Pipeline<BoxedServerService>,
 }
 
 impl WorkerService {
     fn created(&mut self, service: BoxedServerService) {
-        self.service = Container::new(service);
+        self.service = Pipeline::new(service);
         self.status = WorkerServiceStatus::Unavailable;
     }
 }

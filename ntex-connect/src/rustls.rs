@@ -5,7 +5,7 @@ pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_bytes::PoolId;
 use ntex_io::{FilterFactory, Io, Layer};
-use ntex_service::{Container, Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use ntex_tls::rustls::TlsConnector;
 use ntex_util::future::{BoxFuture, Ready};
 
@@ -13,7 +13,7 @@ use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
 /// Rustls connector factory
 pub struct Connector<T> {
-    connector: Container<BaseConnector<T>>,
+    connector: Pipeline<BaseConnector<T>>,
     inner: TlsConnector,
 }
 
@@ -149,7 +149,7 @@ mod tests {
             .memory_pool(PoolId::P5)
             .clone();
 
-        let srv = factory.container(&()).await.unwrap();
+        let srv = factory.pipeline(&()).await.unwrap();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

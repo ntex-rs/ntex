@@ -53,6 +53,7 @@ impl Connector {
         let conn = Connector {
             connector: boxed::service(
                 TcpConnector::new()
+                    .chain()
                     .map(IoBoxed::from)
                     .map_err(ConnectError::from),
             ),
@@ -192,8 +193,12 @@ impl Connector {
         T: Service<TcpConnect<Uri>, Error = crate::connect::ConnectError> + 'static,
         IoBoxed: From<T::Response>,
     {
-        self.connector =
-            boxed::service(connector.map(IoBoxed::from).map_err(ConnectError::from));
+        self.connector = boxed::service(
+            connector
+                .chain()
+                .map(IoBoxed::from)
+                .map_err(ConnectError::from),
+        );
         self
     }
 
@@ -204,7 +209,10 @@ impl Connector {
         IoBoxed: From<T::Response>,
     {
         self.ssl_connector = Some(boxed::service(
-            connector.map(IoBoxed::from).map_err(ConnectError::from),
+            connector
+                .chain()
+                .map(IoBoxed::from)
+                .map_err(ConnectError::from),
         ));
         self
     }
@@ -257,6 +265,7 @@ fn connector(
                 async move { srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await },
             )
         })
+        .chain()
         .map(move |io: IoBoxed| {
             io.set_disconnect_timeout(disconnect_timeout);
             io

@@ -212,7 +212,7 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{pipeline, pipeline_factory, Service, ServiceCtx, ServiceFactory};
+    use crate::{chain, chain_factory, Service, ServiceCtx};
 
     #[derive(Clone)]
     struct Srv;
@@ -229,14 +229,14 @@ mod tests {
 
     #[ntex::test]
     async fn test_call() {
-        let srv = pipeline(
+        let srv = chain(
             apply_fn(Srv, |req: &'static str, svc| async move {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
             .clone(),
         )
-        .container();
+        .pipeline();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         let res = lazy(|cx| srv.poll_shutdown(cx)).await;
@@ -249,7 +249,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_create() {
-        let new_srv = pipeline_factory(
+        let new_srv = chain_factory(
             apply_fn_factory(
                 || Ready::<_, ()>::Ok(Srv),
                 |req: &'static str, srv| async move {
@@ -260,7 +260,7 @@ mod tests {
             .clone(),
         );
 
-        let srv = new_srv.container(&()).await.unwrap();
+        let srv = new_srv.pipeline(&()).await.unwrap();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 

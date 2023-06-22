@@ -34,3 +34,5 @@ ntex-util = { path = "ntex-util" }
 ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
+
+ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "release-0.3" }

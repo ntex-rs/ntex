@@ -145,7 +145,7 @@ where
 mod tests {
     use super::*;
     use crate::http::header::CONTENT_TYPE;
-    use crate::service::{Container, IntoService};
+    use crate::service::{IntoService, Pipeline};
     use crate::util::lazy;
     use crate::web::request::WebRequest;
     use crate::web::test::{ok_service, TestRequest};
@@ -153,7 +153,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_default_headers() {
-        let mw = Container::new(
+        let mw = Pipeline::new(
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(ok_service()),
@@ -172,7 +172,7 @@ mod tests {
                 req.into_response(HttpResponse::Ok().header(CONTENT_TYPE, "0002").finish()),
             )
         };
-        let mw = Container::new(
+        let mw = Pipeline::new(
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(srv.into_service()),
@@ -186,7 +186,7 @@ mod tests {
         let srv = |req: WebRequest<DefaultError>| async move {
             Ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
         };
-        let mw = Container::new(
+        let mw = Pipeline::new(
             DefaultHeaders::new()
                 .content_type()
                 .create(srv.into_service()),

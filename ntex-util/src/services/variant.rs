@@ -354,7 +354,7 @@ mod tests {
             .clone()
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
-        let service = factory.container(&()).await.unwrap().clone();
+        let service = factory.pipeline(&()).await.unwrap().clone();
 
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| service.poll_shutdown(cx)).await.is_ready());

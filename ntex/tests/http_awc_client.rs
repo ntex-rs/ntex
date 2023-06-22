@@ -13,7 +13,7 @@ use ntex::http::client::error::{JsonPayloadError, SendRequestError};
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{header, HttpMessage, HttpService, Method};
-use ntex::service::{map_config, pipeline_factory};
+use ntex::service::{chain_factory, map_config};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
 use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
@@ -208,7 +208,7 @@ async fn test_connection_reuse() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        pipeline_factory(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
         })
@@ -243,7 +243,7 @@ async fn test_connection_force_close() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        pipeline_factory(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
         })
@@ -279,7 +279,7 @@ async fn test_connection_server_close() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        pipeline_factory(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
         })
@@ -314,7 +314,7 @@ async fn test_connection_wait_queue() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        pipeline_factory(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
         })
@@ -360,7 +360,7 @@ async fn test_connection_wait_queue_force_close() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        pipeline_factory(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
         })

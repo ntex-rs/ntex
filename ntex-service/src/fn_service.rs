@@ -40,7 +40,7 @@ where
 ///     });
 ///
 ///     // construct new service
-///     let srv = factory.container(&()).await?;
+///     let srv = factory.pipeline(&()).await?;
 ///
 ///     // now we can use `div` service
 ///     let result = srv.call((10, 20)).await?;
@@ -81,7 +81,7 @@ where
 ///     });
 ///
 ///     // construct new service with config argument
-///     let srv = factory.container(&10).await?;
+///     let srv = factory.pipeline(&10).await?;
 ///
 ///     let result = srv.call(10).await?;
 ///     assert_eq!(result, 100);
@@ -348,19 +348,19 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{Container, ServiceFactory};
+    use crate::{Pipeline, ServiceFactory};
 
     #[ntex::test]
     async fn test_fn_service() {
         let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
 
-        let srv = Container::new(new_srv.create(()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
 
-        let srv2 = Container::new(new_srv.clone());
+        let srv2 = Pipeline::new(new_srv.clone());
         let res = srv2.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
@@ -370,7 +370,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_fn_service_service() {
-        let srv = Container::new(
+        let srv = Pipeline::new(
             fn_service(|()| async { Ok::<_, ()>("srv") })
                 .clone()
                 .create(&())
@@ -398,7 +398,7 @@ mod tests {
         })
         .clone();
 
-        let srv = Container::new(new_srv.create(&1).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(&1).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

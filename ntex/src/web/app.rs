@@ -3,7 +3,9 @@ use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, rc::Rc};
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
-use crate::service::{map_config, pipeline_factory, IntoServiceFactory, PipelineFactory};
+use crate::service::{
+    chain_factory, dev::ServiceChainFactory, map_config, IntoServiceFactory,
+};
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory, Stack};
 use crate::util::{BoxFuture, Extensions, Ready};
 
@@ -24,7 +26,7 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 /// for building application instances.
 pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
-    filter: PipelineFactory<WebRequest<Err>, F>,
+    filter: ServiceChainFactory<F, WebRequest<Err>>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
     default: Option<Rc<HttpNewService<Err>>>,
     external: Vec<ResourceDef>,
@@ -39,7 +41,7 @@ impl App<Identity, Filter<DefaultError>, DefaultError> {
     pub fn new() -> Self {
         App {
             middleware: Identity,
-            filter: pipeline_factory(Filter::new()),
+            filter: chain_factory(Filter::new()),
             state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
@@ -56,7 +58,7 @@ impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
     pub fn with(err: Err) -> Self {
         App {
             middleware: Identity,
-            filter: pipeline_factory(Filter::new()),
+            filter: chain_factory(Filter::new()),
             state_factories: Vec::new(),
             services: Vec::new(),
             default: None,
@@ -267,9 +269,9 @@ where
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Some(Rc::new(boxed::factory(f.into_factory().map_init_err(
-            |e| log::error!("Cannot construct default service: {:?}", e),
-        ))));
+        self.default = Some(Rc::new(boxed::factory(f.chain().map_init_err(|e| {
+            log::error!("Cannot construct default service: {:?}", e)
+        }))));
 
         self
     }
@@ -608,7 +610,7 @@ mod tests {
         let srv = App::new()
             .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
             .finish()
-            .container(())
+            .pipeline(())
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
@@ -632,7 +634,7 @@ mod tests {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .with_config(Default::default())
-            .container(())
+            .pipeline(())
             .await
             .unwrap();
 

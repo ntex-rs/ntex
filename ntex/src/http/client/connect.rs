@@ -1,13 +1,13 @@
 use std::net;
 
 use crate::http::{body::Body, RequestHeadType};
-use crate::{service::Container, service::Service, util::BoxFuture};
+use crate::{service::Pipeline, service::Service, util::BoxFuture};
 
 use super::error::{ConnectError, SendRequestError};
 use super::response::ClientResponse;
 use super::{Connect as ClientConnect, Connection};
 
-pub(super) struct ConnectorWrapper<T>(pub(crate) Container<T>);
+pub(super) struct ConnectorWrapper<T>(pub(crate) Pipeline<T>);
 
 pub(super) trait Connect {
     fn send_request(

@@ -55,7 +55,7 @@ mod openssl {
     use tls_openssl::ssl::SslAcceptor;
 
     use super::*;
-    use crate::{io::Layer, server::SslError, service::pipeline_factory};
+    use crate::{io::Layer, server::SslError};
 
     impl<F, S, B, X, U> H1Service<Layer<SslFilter, F>, S, B, X, U>
     where
@@ -83,13 +83,12 @@ mod openssl {
             Error = SslError<DispatchError>,
             InitError = (),
         > {
-            pipeline_factory(
-                Acceptor::new(acceptor)
-                    .timeout(self.handshake_timeout)
-                    .map_err(SslError::Ssl)
-                    .map_init_err(|_| panic!()),
-            )
-            .and_then(self.map_err(SslError::Service))
+            Acceptor::new(acceptor)
+                .timeout(self.handshake_timeout)
+                .chain()
+                .map_err(SslError::Ssl)
+                .map_init_err(|_| panic!())
+                .and_then(self.chain().map_err(SslError::Service))
         }
     }
 }
@@ -102,7 +101,7 @@ mod rustls {
     use tls_rustls::ServerConfig;
 
     use super::*;
-    use crate::{io::Layer, server::SslError, service::pipeline_factory};
+    use crate::{io::Layer, server::SslError};
 
     impl<F, S, B, X, U> H1Service<Layer<TlsFilter, F>, S, B, X, U>
     where
@@ -130,13 +129,12 @@ mod rustls {
             Error = SslError<DispatchError>,
             InitError = (),
         > {
-            pipeline_factory(
-                Acceptor::from(config)
-                    .timeout(self.handshake_timeout)
-                    .map_err(|e| SslError::Ssl(Box::new(e)))
-                    .map_init_err(|_| panic!()),
-            )
-            .and_then(self.map_err(SslError::Service))
+            Acceptor::from(config)
+                .timeout(self.handshake_timeout)
+                .chain()
+                .map_err(|e| SslError::Ssl(Box::new(e)))
+                .map_init_err(|_| panic!())
+                .and_then(self.chain().map_err(SslError::Service))
         }
     }
 }

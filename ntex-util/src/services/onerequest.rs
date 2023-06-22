@@ -101,7 +101,7 @@ impl<'f, T: Service<R>, R> Future for OneRequestServiceResponse<'f, T, R> {
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{apply, fn_factory, Container, Service, ServiceCtx, ServiceFactory};
+    use ntex_service::{apply, fn_factory, Pipeline, Service, ServiceCtx, ServiceFactory};
     use std::{cell::RefCell, task::Poll, time::Duration};
 
     use super::*;
@@ -126,7 +126,7 @@ mod tests {
     async fn test_oneshot() {
         let (tx, rx) = oneshot::channel();
 
-        let srv = Container::new(OneRequestService::new(SleepService(rx)));
+        let srv = Pipeline::new(OneRequestService::new(SleepService(rx)));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();
@@ -156,7 +156,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.container(&()).await.unwrap();
+        let srv = srv.pipeline(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();

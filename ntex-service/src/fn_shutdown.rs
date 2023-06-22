@@ -70,7 +70,7 @@ mod tests {
     use ntex_util::future::lazy;
     use std::{rc::Rc, task::Poll};
 
-    use crate::{fn_service, pipeline, Container};
+    use crate::{chain, fn_service, Pipeline};
 
     use super::*;
 
@@ -83,7 +83,7 @@ mod tests {
             is_called2.set(true);
         });
 
-        let pipe = Container::new(pipeline(srv).and_then(on_shutdown).clone());
+        let pipe = Pipeline::new(chain(srv).and_then(on_shutdown).clone());
 
         let res = pipe.call(()).await;
         assert_eq!(lazy(|cx| pipe.poll_ready(cx)).await, Poll::Ready(Ok(())));

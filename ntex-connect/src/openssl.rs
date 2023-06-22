@@ -5,14 +5,14 @@ pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslM
 
 use ntex_bytes::PoolId;
 use ntex_io::{FilterFactory, Io, Layer};
-use ntex_service::{Container, Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use ntex_tls::openssl::SslConnector as IoSslConnector;
 use ntex_util::future::{BoxFuture, Ready};
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
 pub struct Connector<T> {
-    connector: Container<BaseConnector<T>>,
+    connector: Pipeline<BaseConnector<T>>,
     openssl: SslConnector,
 }
 
@@ -126,7 +126,7 @@ mod tests {
         let ssl = SslConnector::builder(SslMethod::tls()).unwrap();
         let factory = Connector::new(ssl.build()).memory_pool(PoolId::P5).clone();
 
-        let srv = factory.container(&()).await.unwrap();
+        let srv = factory.pipeline(&()).await.unwrap();
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;

@@ -214,7 +214,7 @@ where
 mod tests {
     use std::{fmt, time::Duration};
 
-    use ntex_service::{apply, fn_factory, Container, Service, ServiceFactory};
+    use ntex_service::{apply, fn_factory, Pipeline, Service, ServiceFactory};
 
     use super::*;
     use crate::future::{lazy, BoxFuture};
@@ -250,9 +250,8 @@ mod tests {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
 
-        let timeout = Container::new(
-            TimeoutService::new(resolution, SleepService(wait_time)).clone(),
-        );
+        let timeout =
+            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)).clone());
         assert_eq!(timeout.call(()).await, Ok(()));
         assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
         assert!(lazy(|cx| timeout.poll_shutdown(cx)).await.is_ready());
@@ -264,7 +263,7 @@ mod tests {
         let resolution = Duration::from_millis(0);
 
         let timeout =
-            Container::new(TimeoutService::new(resolution, SleepService(wait_time)));
+            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Ok(()));
         assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
     }
@@ -275,7 +274,7 @@ mod tests {
         let wait_time = Duration::from_millis(500);
 
         let timeout =
-            Container::new(TimeoutService::new(resolution, SleepService(wait_time)));
+            Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
@@ -289,7 +288,7 @@ mod tests {
             Timeout::new(resolution).clone(),
             fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
         );
-        let srv = timeout.container(&()).await.unwrap();
+        let srv = timeout.pipeline(&()).await.unwrap();
 
         let res = srv.call(()).await.unwrap_err();
         assert_eq!(res, TimeoutError::Timeout);
