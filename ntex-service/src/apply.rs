@@ -1,8 +1,8 @@
 #![allow(clippy::type_complexity)]
 use std::{future::Future, marker, pin::Pin, task, task::Poll};
 
-use super::ctx::{Container, ServiceCall, ServiceCtx};
-use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
+use super::ctx::{ServiceCall, ServiceCtx};
+use super::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Apply transform function to a service.
 pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
@@ -17,7 +17,7 @@ where
 {
     Apply {
         f,
-        service: Container::new(service.into_service()),
+        service: Pipeline::new(service.into_service()),
         r: marker::PhantomData,
     }
 }
@@ -41,13 +41,13 @@ pub struct Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
 {
-    service: Container<T>,
+    service: Pipeline<T>,
     f: F,
     r: marker::PhantomData<fn(Req) -> (In, Out, R)>,
 }
 
 pub struct ApplyService<S> {
-    service: Container<S>,
+    service: Pipeline<S>,
 }
 
 impl<S> ApplyService<S> {

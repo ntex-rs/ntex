@@ -9,6 +9,7 @@ use std::task::{self, Context, Poll};
 mod and_then;
 mod apply;
 pub mod boxed;
+mod builder;
 mod ctx;
 mod fn_service;
 mod fn_shutdown;
@@ -22,12 +23,13 @@ mod pipeline;
 mod then;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::ctx::{Container, ContainerCall, ContainerFactory, ServiceCall, ServiceCtx};
+pub use self::builder::{service, service_factory, ServiceBuilder, ServiceFactoryBuilder};
+pub use self::ctx::{ServiceCall, ServiceCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{apply, Identity, Middleware, Stack};
-pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
+pub use self::pipeline::{Pipeline, PipelineCall};
 
 #[allow(unused_variables)]
 /// An asynchronous function of `Request` to a `Response`.
@@ -132,38 +134,6 @@ pub trait Service<Req> {
     fn poll_shutdown(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         Poll::Ready(())
     }
-
-    #[inline]
-    /// Map this service's output to a different type, returning a new service of the resulting type.
-    ///
-    /// This function is similar to the `Option::map` or `Iterator::map` where it will change
-    /// the type of the underlying service.
-    ///
-    /// Note that this function consumes the receiving service and returns a wrapped version of it,
-    /// similar to the existing `map` methods in the standard library.
-    fn map<F, Res>(self, f: F) -> crate::dev::Map<Self, F, Req, Res>
-    where
-        Self: Sized,
-        F: Fn(Self::Response) -> Res,
-    {
-        crate::dev::Map::new(self, f)
-    }
-
-    #[inline]
-    /// Map this service's error to a different error, returning a new service.
-    ///
-    /// This function is similar to the `Result::map_err` where it will change the error type of
-    /// the underlying service. This is useful for example to ensure that services have the same
-    /// error type.
-    ///
-    /// Note that this function consumes the receiving service and returns a wrapped version of it.
-    fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, F, E>
-    where
-        Self: Sized,
-        F: Fn(Self::Error) -> E,
-    {
-        crate::dev::MapErr::new(self, f)
-    }
 }
 
 /// Factory for creating `Service`s.
@@ -200,45 +170,11 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     fn create(&self, cfg: Cfg) -> Self::Future<'_>;
 
     /// Create and return a new service value asynchronously and wrap into a container
-    fn container(&self, cfg: Cfg) -> ContainerFactory<'_, Self, Req, Cfg>
+    fn pipeline(&self, cfg: Cfg) -> dev::CreatePipeline<'_, Self, Req, Cfg>
     where
         Self: Sized,
     {
-        Container::<Self::Service>::create(self, cfg)
-    }
-
-    #[inline]
-    /// Map this service's output to a different type, returning a new service
-    /// of the resulting type.
-    fn map<F, Res>(self, f: F) -> crate::map::MapFactory<Self, F, Req, Res, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::Response) -> Res + Clone,
-    {
-        crate::map::MapFactory::new(self, f)
-    }
-
-    #[inline]
-    /// Map this service's error to a different error, returning a new service.
-    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrFactory<Self, Req, Cfg, F, E>
-    where
-        Self: Sized,
-        F: Fn(Self::Error) -> E + Clone,
-    {
-        crate::map_err::MapErrFactory::new(self, f)
-    }
-
-    #[inline]
-    /// Map this factory's init error to a different error, returning a new service.
-    fn map_init_err<F, E>(
-        self,
-        f: F,
-    ) -> crate::map_init_err::MapInitErr<Self, Req, Cfg, F, E>
-    where
-        Self: Sized,
-        F: Fn(Self::InitError) -> E + Clone,
-    {
-        crate::map_init_err::MapInitErr::new(self, f)
+        Pipeline::<Self::Service>::create(self, cfg)
     }
 }
 
@@ -362,5 +298,6 @@ pub mod dev {
     pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
     pub use crate::middleware::ApplyMiddleware;
+    pub use crate::pipeline::CreatePipeline;
     pub use crate::then::{Then, ThenFactory};
 }

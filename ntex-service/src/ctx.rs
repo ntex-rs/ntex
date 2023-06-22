@@ -1,15 +1,6 @@
-use std::{cell::Cell, cell::UnsafeCell, future::Future, marker, pin::Pin, rc::Rc, task};
+use std::{cell::UnsafeCell, future::Future, marker, pin::Pin, rc::Rc, task};
 
-use crate::{Service, ServiceFactory};
-
-/// Container for a service.
-///
-/// Container allows to call enclosed service and adds support of shared readiness.
-pub struct Container<S> {
-    svc: Rc<S>,
-    waiters: Waiters,
-    pending: Cell<bool>,
-}
+use crate::Service;
 
 pub struct ServiceCtx<'a, S: ?Sized> {
     idx: usize,
@@ -53,11 +44,24 @@ impl WaitersRef {
 }
 
 impl Waiters {
-    fn register(&self, cx: &mut task::Context<'_>) {
+    pub(crate) fn new() -> Self {
+        let mut waiters = slab::Slab::new();
+        let index = waiters.insert(None);
+        Waiters {
+            index,
+            waiters: Rc::new(WaitersRef(UnsafeCell::new(waiters))),
+        }
+    }
+
+    pub(crate) fn get_ref(&self) -> &WaitersRef {
+        self.waiters.as_ref()
+    }
+
+    pub(crate) fn register(&self, cx: &mut task::Context<'_>) {
         self.waiters.register(self.index, cx)
     }
 
-    fn notify(&self) {
+    pub(crate) fn notify(&self) {
         self.waiters.notify()
     }
 }
@@ -78,132 +82,16 @@ impl Drop for Waiters {
     }
 }
 
-impl<S> Container<S> {
-    #[inline]
-    /// Construct new container instance.
-    pub fn new(svc: S) -> Self {
-        let mut waiters = slab::Slab::new();
-        let index = waiters.insert(None);
-        Container {
-            svc: Rc::new(svc),
-            pending: Cell::new(false),
-            waiters: Waiters {
-                index,
-                waiters: Rc::new(WaitersRef(UnsafeCell::new(waiters))),
-            },
-        }
-    }
-
-    #[inline]
-    /// Return reference to enclosed service
-    pub fn get_ref(&self) -> &S {
-        self.svc.as_ref()
-    }
-
-    #[inline]
-    /// Returns `Ready` when the service is able to process requests.
-    pub fn poll_ready<R>(
-        &self,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Result<(), S::Error>>
-    where
-        S: Service<R>,
-    {
-        let res = self.svc.poll_ready(cx);
-        if res.is_pending() {
-            self.pending.set(true);
-            self.waiters.register(cx)
-        } else if self.pending.get() {
-            self.pending.set(false);
-            self.waiters.notify()
-        }
-        res
-    }
-
-    #[inline]
-    /// Shutdown enclosed service.
-    pub fn poll_shutdown<R>(&self, cx: &mut task::Context<'_>) -> task::Poll<()>
-    where
-        S: Service<R>,
-    {
-        self.svc.poll_shutdown(cx)
-    }
-
-    #[inline]
-    /// Wait for service readiness and then create future object
-    /// that resolves to service result.
-    pub fn call<'a, R>(&'a self, req: R) -> ServiceCall<'a, S, R>
-    where
-        S: Service<R>,
-    {
-        let ctx = ServiceCtx::<'a, S> {
-            idx: self.waiters.index,
-            waiters: self.waiters.waiters.as_ref(),
-            _t: marker::PhantomData,
-        };
-        ctx.call(self.svc.as_ref(), req)
-    }
-
-    #[inline]
-    /// Call service and create future object that resolves to service result.
-    ///
-    /// Note, this call does not check service readiness.
-    pub fn container_call<R>(&self, req: R) -> ContainerCall<'_, S, R>
-    where
-        S: Service<R>,
-    {
-        let container = self.clone();
-        let svc_call = container.svc.call(
-            req,
-            ServiceCtx {
-                idx: container.waiters.index,
-                waiters: container.waiters.waiters.as_ref(),
-                _t: marker::PhantomData,
-            },
-        );
-
-        // SAFETY: `svc_call` has same lifetime same as lifetime of `container.svc`
-        // Container::svc is heap allocated(Rc<S>), we keep it alive until
-        // `svc_call` get resolved to result
-        let fut = unsafe { std::mem::transmute(svc_call) };
-        ContainerCall { fut, container }
-    }
-
-    pub(crate) fn create<F: ServiceFactory<R, C>, R, C>(
-        f: &F,
-        cfg: C,
-    ) -> ContainerFactory<'_, F, R, C> {
-        ContainerFactory { fut: f.create(cfg) }
-    }
-
-    /// Extract service if container hadnt been cloned before.
-    pub fn into_service(self) -> Option<S> {
-        let svc = self.svc.clone();
-        drop(self);
-        Rc::try_unwrap(svc).ok()
-    }
-}
-
-impl<S> From<S> for Container<S> {
-    #[inline]
-    fn from(svc: S) -> Self {
-        Container::new(svc)
-    }
-}
-
-impl<S> Clone for Container<S> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            svc: self.svc.clone(),
-            pending: Cell::new(false),
-            waiters: self.waiters.clone(),
-        }
-    }
-}
-
 impl<'a, S: ?Sized> ServiceCtx<'a, S> {
-    pub(crate) fn new(idx: usize, waiters: &'a WaitersRef) -> Self {
+    pub(crate) fn new(waiters: &'a Waiters) -> Self {
+        Self {
+            idx: waiters.index,
+            waiters: waiters.get_ref(),
+            _t: marker::PhantomData,
+        }
+    }
+
+    pub(crate) fn from_ref(idx: usize, waiters: &'a WaitersRef) -> Self {
         Self {
             idx,
             waiters,
@@ -261,54 +149,6 @@ impl<'a, S: ?Sized> Clone for ServiceCtx<'a, S> {
             waiters: self.waiters,
             _t: marker::PhantomData,
         }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct ContainerCall<'f, S, R>
-    where
-        S: Service<R>,
-        S: 'f,
-        R: 'f,
-    {
-        #[pin]
-        fut: S::Future<'f>,
-        container: Container<S>,
-    }
-}
-
-impl<'f, S, R> ContainerCall<'f, S, R>
-where
-    S: Service<R> + 'f,
-    R: 'f,
-{
-    #[inline]
-    /// Convert future object to static version.
-    ///
-    /// Returned future is suitable for spawning into a async runtime.
-    /// Note, this call does not check service readiness.
-    pub fn into_static(self) -> ContainerCall<'static, S, R> {
-        let svc_call = self.fut;
-        let container = self.container;
-
-        // SAFETY: `svc_call` has same lifetime same as lifetime of `container.svc`
-        // Container::svc is heap allocated(Rc<S>), we keep it alive until
-        // `svc_call` get resolved to result
-        let fut = unsafe { std::mem::transmute(svc_call) };
-        ContainerCall { fut, container }
-    }
-}
-
-impl<'f, S, R> Future for ContainerCall<'f, S, R>
-where
-    S: Service<R>,
-{
-    type Output = Result<S::Response, S::Error>;
-
-    #[inline]
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-        self.project().fut.poll(cx)
     }
 }
 
@@ -391,33 +231,6 @@ where
                 panic!("future must not be polled after it returned `Poll::Ready`")
             }
         }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct ContainerFactory<'f, F, R, C>
-    where F: ServiceFactory<R, C>,
-          F: ?Sized,
-          F: 'f,
-          C: 'f,
-    {
-        #[pin]
-        fut: F::Future<'f>,
-    }
-}
-
-impl<'f, F, R, C> Future for ContainerFactory<'f, F, R, C>
-where
-    F: ServiceFactory<R, C> + 'f,
-{
-    type Output = Result<Container<F::Service>, F::InitError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-        task::Poll::Ready(Ok(Container::new(task::ready!(self
-            .project()
-            .fut
-            .poll(cx))?)))
     }
 }
 

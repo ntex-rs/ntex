@@ -73,7 +73,7 @@ where
         idx: usize,
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, Self::Response, Self::Error> {
-        Box::pin(ServiceCtx::<'a, S>::new(idx, waiters).call_nowait(self, req))
+        Box::pin(ServiceCtx::<'a, S>::from_ref(idx, waiters).call_nowait(self, req))
     }
 }
 
