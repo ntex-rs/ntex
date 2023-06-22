@@ -56,7 +56,7 @@ impl<S> ApplyService<S> {
     where
         S: Service<R>,
     {
-        self.service.call(req)
+        self.service.service_call(req)
     }
 }
 

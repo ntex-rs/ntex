@@ -9,7 +9,7 @@ use std::task::{self, Context, Poll};
 mod and_then;
 mod apply;
 pub mod boxed;
-mod builder;
+mod chain;
 mod ctx;
 mod fn_service;
 mod fn_shutdown;
@@ -23,7 +23,7 @@ mod pipeline;
 mod then;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::builder::{service, service_factory, ServiceBuilder, ServiceFactoryBuilder};
+pub use self::chain::{svc, svc_factory};
 pub use self::ctx::{ServiceCall, ServiceCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
@@ -174,7 +174,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     where
         Self: Sized,
     {
-        Pipeline::<Self::Service>::create(self, cfg)
+        dev::CreatePipeline::new(self.create(cfg))
     }
 }
 
@@ -289,6 +289,7 @@ where
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
     pub use crate::apply::{Apply, ApplyFactory, ApplyService};
+    pub use crate::chain::{ServiceChain, ServiceChainFactory};
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
