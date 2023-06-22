@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.0] - 2023-06-22
+
+* Release v0.7.0
+
 ## [0.7.0-beta.2] - 2023-06-21
 
 * Remove unsafe from h1 dispatcher

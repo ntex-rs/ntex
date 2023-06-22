@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2023-06-22
+
+* Release v0.3.0
+
 ## [0.3.0-beta.3] - 2023-06-21
 
 * Use static ContainerCall for dispatcher

@@ -1,6 +1,8 @@
 # Changes
 
-## [1.2.0-beta.4] - 2023-06-2x
+## [1.2.0] - 2023-06-22
+
+* Rename Container to Pipeline
 
 * Link apply_fn service readiness with parent
 
