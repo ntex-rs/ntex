@@ -1,6 +1,6 @@
 use std::{fs::File, io, io::BufReader, sync::Arc};
 
-use ntex::service::{fn_service, pipeline_factory};
+use ntex::service::{chain_factory, fn_service};
 use ntex::{codec, io::filter, io::Io, server, util::Either};
 use ntex_tls::rustls::TlsAcceptor;
 use rustls_pemfile::{certs, rsa_private_keys};
@@ -34,7 +34,7 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", move |_| {
-            pipeline_factory(filter(TlsAcceptor::new(tls_config.clone()))).and_then(
+            chain_factory(filter(TlsAcceptor::new(tls_config.clone()))).and_then(
                 fn_service(|io: Io<_>| async move {
                     println!("New client is connected");
 

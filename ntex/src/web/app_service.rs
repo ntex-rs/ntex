@@ -4,9 +4,9 @@ use std::{cell::RefCell, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::service::dev::ServiceChainFactory;
 use crate::service::{
-    fn_service, Middleware, PipelineFactory, Service, ServiceCall, ServiceCtx,
-    ServiceFactory,
+    fn_service, Middleware, Service, ServiceCall, ServiceCtx, ServiceFactory,
 };
 use crate::util::{BoxFuture, Either, Extensions};
 
@@ -41,7 +41,7 @@ where
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: PipelineFactory<WebRequest<Err>, F>,
+    pub(super) filter: ServiceChainFactory<F, WebRequest<Err>>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,

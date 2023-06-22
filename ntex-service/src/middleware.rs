@@ -214,7 +214,7 @@ mod tests {
     use std::marker;
 
     use super::*;
-    use crate::{fn_service, Container, Service, ServiceCall, ServiceCtx, ServiceFactory};
+    use crate::{fn_service, Pipeline, Service, ServiceCall, ServiceCtx, ServiceFactory};
 
     #[derive(Clone)]
     struct Tr<R>(marker::PhantomData<R>);
@@ -252,7 +252,7 @@ mod tests {
         )
         .clone();
 
-        let srv = Container::new(factory.create(&()).await.unwrap().clone());
+        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
@@ -264,11 +264,11 @@ mod tests {
         assert_eq!(res, Poll::Ready(()));
 
         let factory =
-            crate::pipeline_factory(fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)))
+            crate::chain_factory(fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)))
                 .apply(Rc::new(Tr(marker::PhantomData).clone()))
                 .clone();
 
-        let srv = Container::new(factory.create(&()).await.unwrap().clone());
+        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);

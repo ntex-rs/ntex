@@ -1,8 +1,8 @@
 #![allow(clippy::type_complexity)]
 use std::{future::Future, marker, pin::Pin, task, task::Poll};
 
-use super::ctx::{Container, ServiceCall, ServiceCtx};
-use super::{IntoService, IntoServiceFactory, Service, ServiceFactory};
+use super::ctx::{ServiceCall, ServiceCtx};
+use super::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Apply transform function to a service.
 pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
@@ -17,7 +17,7 @@ where
 {
     Apply {
         f,
-        service: Container::new(service.into_service()),
+        service: Pipeline::new(service.into_service()),
         r: marker::PhantomData,
     }
 }
@@ -41,13 +41,13 @@ pub struct Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
 {
-    service: Container<T>,
+    service: Pipeline<T>,
     f: F,
     r: marker::PhantomData<fn(Req) -> (In, Out, R)>,
 }
 
 pub struct ApplyService<S> {
-    service: Container<S>,
+    service: Pipeline<S>,
 }
 
 impl<S> ApplyService<S> {
@@ -56,7 +56,7 @@ impl<S> ApplyService<S> {
     where
         S: Service<R>,
     {
-        self.service.call(req)
+        self.service.service_call(req)
     }
 }
 
@@ -212,7 +212,7 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{pipeline, pipeline_factory, Service, ServiceCtx, ServiceFactory};
+    use crate::{chain, chain_factory, Service, ServiceCtx};
 
     #[derive(Clone)]
     struct Srv;
@@ -229,14 +229,14 @@ mod tests {
 
     #[ntex::test]
     async fn test_call() {
-        let srv = pipeline(
+        let srv = chain(
             apply_fn(Srv, |req: &'static str, svc| async move {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
             .clone(),
         )
-        .container();
+        .pipeline();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         let res = lazy(|cx| srv.poll_shutdown(cx)).await;
@@ -249,7 +249,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_create() {
-        let new_srv = pipeline_factory(
+        let new_srv = chain_factory(
             apply_fn_factory(
                 || Ready::<_, ()>::Ok(Srv),
                 |req: &'static str, srv| async move {
@@ -260,7 +260,7 @@ mod tests {
             .clone(),
         );
 
-        let srv = new_srv.container(&()).await.unwrap();
+        let srv = new_srv.pipeline(&()).await.unwrap();
 
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 

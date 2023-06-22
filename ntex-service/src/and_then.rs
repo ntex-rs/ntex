@@ -234,9 +234,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc, task::Context, task::Poll};
 
-    use crate::{
-        fn_factory, pipeline, pipeline_factory, Service, ServiceCtx, ServiceFactory,
-    };
+    use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
     use ntex_util::future::{lazy, Ready};
 
     #[derive(Clone)]
@@ -286,9 +284,7 @@ mod tests {
     #[ntex::test]
     async fn test_poll_ready() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = pipeline(Srv1(cnt.clone()))
-            .and_then(Srv2(cnt.clone()))
-            .clone();
+        let srv = chain(Srv1(cnt.clone())).and_then(Srv2(cnt.clone())).clone();
         let res = lazy(|cx| srv.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 2);
@@ -299,7 +295,7 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = pipeline(Srv1(cnt.clone())).and_then(Srv2(cnt)).container();
+        let srv = chain(Srv1(cnt.clone())).and_then(Srv2(cnt)).pipeline();
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));
@@ -309,13 +305,13 @@ mod tests {
     async fn test_factory() {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
-        let new_srv = pipeline_factory(fn_factory(move || {
+        let new_srv = chain_factory(fn_factory(move || {
             Ready::from(Ok::<_, ()>(Srv1(cnt2.clone())))
         }))
         .and_then(move || Ready::from(Ok(Srv2(cnt.clone()))))
         .clone();
 
-        let srv = new_srv.container(&()).await.unwrap();
+        let srv = new_srv.pipeline(&()).await.unwrap();
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));

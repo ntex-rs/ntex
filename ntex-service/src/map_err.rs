@@ -196,7 +196,7 @@ mod tests {
     use ntex_util::future::{lazy, Ready};
 
     use super::*;
-    use crate::{fn_factory, Container, Service, ServiceCtx, ServiceFactory};
+    use crate::{fn_factory, Pipeline, Service, ServiceCtx, ServiceFactory};
 
     #[derive(Clone)]
     struct Srv(bool);
@@ -231,7 +231,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_service() {
-        let srv = Container::new(Srv(false).map_err(|_| "error").clone());
+        let srv = Pipeline::new(Srv(false).map_err(|_| "error").clone());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -239,7 +239,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = Container::new(crate::pipeline(Srv(false)).map_err(|_| "error").clone());
+        let srv = Pipeline::new(crate::chain(Srv(false)).map_err(|_| "error").clone());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -250,7 +250,7 @@ mod tests {
         let new_srv = fn_factory(|| Ready::<_, ()>::Ok(Srv(false)))
             .map_err(|_| "error")
             .clone();
-        let srv = Container::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -259,10 +259,10 @@ mod tests {
     #[ntex::test]
     async fn test_pipeline_factory() {
         let new_srv =
-            crate::pipeline_factory(fn_factory(|| async { Ok::<Srv, ()>(Srv(false)) }))
+            crate::chain_factory(fn_factory(|| async { Ok::<Srv, ()>(Srv(false)) }))
                 .map_err(|_| "error")
                 .clone();
-        let srv = Container::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");

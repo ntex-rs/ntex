@@ -6,7 +6,7 @@ use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
-use crate::service::{Container, Service, ServiceCall, ServiceCtx};
+use crate::service::{Pipeline, Service, ServiceCall, ServiceCtx};
 use crate::time::{now, Millis};
 use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker};
@@ -44,7 +44,7 @@ struct AvailableConnection {
 
 /// Connections pool
 pub(super) struct ConnectionPool<T> {
-    connector: Container<T>,
+    connector: Pipeline<T>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
@@ -61,7 +61,7 @@ where
         limit: usize,
         h2config: h2::Config,
     ) -> Self {
-        let connector = Container::new(connector);
+        let connector = Pipeline::new(connector);
         let waiters = Rc::new(RefCell::new(Waiters {
             waiters: HashMap::default(),
             pool: pool::new(),
@@ -307,7 +307,7 @@ impl Inner {
 }
 
 struct ConnectionPoolSupport<T> {
-    connector: Container<T>,
+    connector: Pipeline<T>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
 }
@@ -408,7 +408,7 @@ where
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        connector: Container<T>,
+        pipeline: Pipeline<T>,
         msg: Connect,
     ) {
         let disconnect_timeout = inner.borrow().disconnect_timeout;
@@ -416,7 +416,7 @@ where
         #[allow(clippy::redundant_async_block)]
         spawn(async move {
             OpenConnection::<T> {
-                fut: connector.call(msg),
+                fut: pipeline.service_call(msg),
                 tx: Some(tx),
                 key: key.clone(),
                 inner: inner.clone(),
@@ -629,7 +629,7 @@ mod tests {
         let store = Rc::new(RefCell::new(Vec::new()));
         let store2 = store.clone();
 
-        let pool = Container::new(
+        let pool = Pipeline::new(
             ConnectionPool::new(
                 fn_service(move |req| {
                     let (client, server) = Io::create();

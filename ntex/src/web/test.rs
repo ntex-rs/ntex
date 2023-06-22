@@ -13,7 +13,7 @@ use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 use crate::router::{Path, ResourceDef};
 use crate::service::{
-    map_config, Container, IntoService, IntoServiceFactory, Service, ServiceFactory,
+    map_config, IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory,
 };
 use crate::time::{sleep, Millis, Seconds};
 use crate::util::{stream_recv, Bytes, BytesMut, Extensions, Ready, Stream};
@@ -69,14 +69,14 @@ pub fn default_service<Err: ErrorRenderer>(
 /// ```
 pub async fn init_service<R, S, E>(
     app: R,
-) -> Container<impl Service<Request, Response = WebResponse, Error = E>>
+) -> Pipeline<impl Service<Request, Response = WebResponse, Error = E>>
 where
     R: IntoServiceFactory<S, Request, AppConfig>,
     S: ServiceFactory<Request, AppConfig, Response = WebResponse, Error = E>,
     S::InitError: std::fmt::Debug,
 {
     let srv = app.into_factory();
-    srv.container(AppConfig::default()).await.unwrap()
+    srv.pipeline(AppConfig::default()).await.unwrap()
 }
 
 /// Calls service and waits for response future completion.
@@ -102,7 +102,7 @@ where
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn call_service<S, R, E>(app: &Container<S>, req: R) -> S::Response
+pub async fn call_service<S, R, E>(app: &Pipeline<S>, req: R) -> S::Response
 where
     S: Service<R, Response = WebResponse, Error = E>,
     E: std::fmt::Debug,
@@ -135,7 +135,7 @@ where
 ///     assert_eq!(result, Bytes::from_static(b"welcome!"));
 /// }
 /// ```
-pub async fn read_response<S>(app: &Container<S>, req: Request) -> Bytes
+pub async fn read_response<S>(app: &Pipeline<S>, req: Request) -> Bytes
 where
     S: Service<Request, Response = WebResponse>,
 {
@@ -234,7 +234,7 @@ where
 ///     let result: Person = test::read_response_json(&mut app, req).await;
 /// }
 /// ```
-pub async fn read_response_json<S, T>(app: &Container<S>, req: Request) -> T
+pub async fn read_response_json<S, T>(app: &Pipeline<S>, req: Request) -> T
 where
     S: Service<Request, Response = WebResponse>,
     T: DeserializeOwned,

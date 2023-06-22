@@ -5,7 +5,7 @@ use std::{
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{pipeline_factory, IntoServiceFactory, PipelineFactory};
+use crate::service::{chain_factory, dev::ServiceChainFactory, IntoServiceFactory};
 use crate::service::{
     Identity, Middleware, Service, ServiceCall, ServiceCtx, ServiceFactory, Stack,
 };
@@ -62,7 +62,7 @@ type BoxResponse<'a, Err: ErrorRenderer> =
 ///
 pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: PipelineFactory<WebRequest<Err>, T>,
+    filter: ServiceChainFactory<T, WebRequest<Err>>,
     rdef: Vec<String>,
     state: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
@@ -77,7 +77,7 @@ impl<Err: ErrorRenderer> Scope<Err> {
     pub fn new<T: IntoPattern>(path: T) -> Scope<Err> {
         Scope {
             middleware: Identity,
-            filter: pipeline_factory(Filter::new()),
+            filter: chain_factory(Filter::new()),
             rdef: path.patterns(),
             state: None,
             guards: Vec::new(),
@@ -288,7 +288,7 @@ where
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            f.into_factory()
+            f.chain()
                 .map_init_err(|e| log::error!("Cannot construct default service: {:?}", e)),
         )))));
 

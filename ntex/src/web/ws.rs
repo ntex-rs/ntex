@@ -19,7 +19,7 @@ where
     F: IntoServiceFactory<T, Frame, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
-    let inner_factory = Rc::new(factory.into_factory().map_err(WsError::Service));
+    let inner_factory = Rc::new(factory.chain().map_err(WsError::Service));
 
     let factory = fn_factory_with_config(move |sink: WsSink| {
         let factory = inner_factory.clone();

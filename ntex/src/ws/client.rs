@@ -16,7 +16,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, AUTHORIZATIO
 use crate::http::{body::BodySize, client::ClientResponse, error::HttpError, h1};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Sealed};
-use crate::service::{apply_fn, into_service, Container, IntoService, Service};
+use crate::service::{apply_fn, into_service, IntoService, Pipeline, Service};
 use crate::time::{timeout, Millis, Seconds};
 use crate::{channel::mpsc, rt, util::Ready, ws};
 
@@ -25,7 +25,7 @@ use super::transport::WsTransport;
 
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
-    connector: Container<T>,
+    connector: Pipeline<T>,
     head: Rc<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
@@ -754,7 +754,7 @@ impl WsConnection<Sealed> {
         U: IntoService<T, ws::Frame>,
     {
         let service = apply_fn(
-            service.into_service().map_err(WsError::Service),
+            service.into_chain().map_err(WsError::Service),
             |req, svc| async move {
                 match req {
                     DispatchItem::<ws::Codec>::Item(item) => svc.call(item).await,

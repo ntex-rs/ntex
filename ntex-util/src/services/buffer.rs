@@ -191,7 +191,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{apply, fn_factory, Container, Service, ServiceFactory};
+    use ntex_service::{apply, fn_factory, Pipeline, Service, ServiceFactory};
     use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
     use super::*;
@@ -235,7 +235,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = Container::new(BufferService::new(2, TestService(inner.clone())).clone());
+        let srv = Pipeline::new(BufferService::new(2, TestService(inner.clone())).clone());
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.clone();
@@ -274,7 +274,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = Container::new(BufferService::new(2, TestService(inner.clone())));
+        let srv = Pipeline::new(BufferService::new(2, TestService(inner.clone())));
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         let _ = srv.call(()).await;
         assert_eq!(inner.count.get(), 1);
@@ -296,7 +296,7 @@ mod tests {
             fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
         );
 
-        let srv = srv.container(&()).await.unwrap();
+        let srv = srv.pipeline(&()).await.unwrap();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv1 = srv.clone();

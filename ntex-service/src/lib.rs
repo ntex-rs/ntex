@@ -9,6 +9,7 @@ use std::task::{self, Context, Poll};
 mod and_then;
 mod apply;
 pub mod boxed;
+mod chain;
 mod ctx;
 mod fn_service;
 mod fn_shutdown;
@@ -22,12 +23,13 @@ mod pipeline;
 mod then;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::ctx::{Container, ContainerCall, ContainerFactory, ServiceCall, ServiceCtx};
+pub use self::chain::{chain, chain_factory};
+pub use self::ctx::{ServiceCall, ServiceCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{apply, Identity, Middleware, Stack};
-pub use self::pipeline::{pipeline, pipeline_factory, Pipeline, PipelineFactory};
+pub use self::pipeline::{Pipeline, PipelineCall};
 
 #[allow(unused_variables)]
 /// An asynchronous function of `Request` to a `Response`.
@@ -141,12 +143,12 @@ pub trait Service<Req> {
     ///
     /// Note that this function consumes the receiving service and returns a wrapped version of it,
     /// similar to the existing `map` methods in the standard library.
-    fn map<F, Res>(self, f: F) -> crate::dev::Map<Self, F, Req, Res>
+    fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Req, Res>, Req>
     where
         Self: Sized,
         F: Fn(Self::Response) -> Res,
     {
-        crate::dev::Map::new(self, f)
+        chain(dev::Map::new(self, f))
     }
 
     #[inline]
@@ -157,12 +159,21 @@ pub trait Service<Req> {
     /// error type.
     ///
     /// Note that this function consumes the receiving service and returns a wrapped version of it.
-    fn map_err<F, E>(self, f: F) -> crate::dev::MapErr<Self, F, E>
+    fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>, Req>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E,
     {
-        crate::dev::MapErr::new(self, f)
+        chain(dev::MapErr::new(self, f))
+    }
+
+    #[inline]
+    /// Convert `Self` to a `ServiceChain`
+    fn chain(self) -> dev::ServiceChain<Self, Req>
+    where
+        Self: Sized,
+    {
+        chain(self)
     }
 }
 
@@ -200,32 +211,38 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     fn create(&self, cfg: Cfg) -> Self::Future<'_>;
 
     /// Create and return a new service value asynchronously and wrap into a container
-    fn container(&self, cfg: Cfg) -> ContainerFactory<'_, Self, Req, Cfg>
+    fn pipeline(&self, cfg: Cfg) -> dev::CreatePipeline<'_, Self, Req, Cfg>
     where
         Self: Sized,
     {
-        Container::<Self::Service>::create(self, cfg)
+        dev::CreatePipeline::new(self.create(cfg))
     }
 
     #[inline]
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
-    fn map<F, Res>(self, f: F) -> crate::map::MapFactory<Self, F, Req, Res, Cfg>
+    fn map<F, Res>(
+        self,
+        f: F,
+    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, Req, Res, Cfg>, Req, Cfg>
     where
         Self: Sized,
         F: Fn(Self::Response) -> Res + Clone,
     {
-        crate::map::MapFactory::new(self, f)
+        chain_factory(dev::MapFactory::new(self, f))
     }
 
     #[inline]
     /// Map this service's error to a different error, returning a new service.
-    fn map_err<F, E>(self, f: F) -> crate::map_err::MapErrFactory<Self, Req, Cfg, F, E>
+    fn map_err<F, E>(
+        self,
+        f: F,
+    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, Req, Cfg, F, E>, Req, Cfg>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
     {
-        crate::map_err::MapErrFactory::new(self, f)
+        chain_factory(dev::MapErrFactory::new(self, f))
     }
 
     #[inline]
@@ -233,12 +250,12 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     fn map_init_err<F, E>(
         self,
         f: F,
-    ) -> crate::map_init_err::MapInitErr<Self, Req, Cfg, F, E>
+    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, Req, Cfg, F, E>, Req, Cfg>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
     {
-        crate::map_init_err::MapInitErr::new(self, f)
+        chain_factory(dev::MapInitErr::new(self, f))
     }
 }
 
@@ -312,6 +329,15 @@ where
 {
     /// Convert to a `Service`
     fn into_service(self) -> Svc;
+
+    #[inline]
+    /// Convert `Self` to a `ServiceChain`
+    fn into_chain(self) -> dev::ServiceChain<Svc, Req>
+    where
+        Self: Sized,
+    {
+        chain(self)
+    }
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
@@ -321,12 +347,22 @@ where
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> T;
+
+    #[inline]
+    /// Convert `Self` to a `ServiceChainFactory`
+    fn chain(self) -> dev::ServiceChainFactory<T, Req, Cfg>
+    where
+        Self: Sized,
+    {
+        chain_factory(self)
+    }
 }
 
 impl<Svc, Req> IntoService<Svc, Req> for Svc
 where
     Svc: Service<Req>,
 {
+    #[inline]
     fn into_service(self) -> Svc {
         self
     }
@@ -336,6 +372,7 @@ impl<T, Req, Cfg> IntoServiceFactory<T, Req, Cfg> for T
 where
     T: ServiceFactory<Req, Cfg>,
 {
+    #[inline]
     fn into_factory(self) -> T {
         self
     }
@@ -353,6 +390,7 @@ where
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
     pub use crate::apply::{Apply, ApplyFactory, ApplyService};
+    pub use crate::chain::{ServiceChain, ServiceChainFactory};
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
@@ -362,5 +400,6 @@ pub mod dev {
     pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
     pub use crate::middleware::ApplyMiddleware;
+    pub use crate::pipeline::CreatePipeline;
     pub use crate::then::{Then, ThenFactory};
 }

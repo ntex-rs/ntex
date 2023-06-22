@@ -8,7 +8,7 @@ use tls_openssl::ssl::{
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Version};
-use ntex::service::{map_config, pipeline_factory, ServiceFactory};
+use ntex::service::{chain_factory, map_config, ServiceFactory};
 use ntex::web::{self, dev::AppConfig, App, HttpResponse};
 use ntex::{time::Seconds, util::Ready};
 
@@ -40,7 +40,7 @@ async fn test_connection_reuse_h2() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        pipeline_factory(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
         })
