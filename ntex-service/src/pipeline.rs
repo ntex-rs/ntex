@@ -69,9 +69,10 @@ impl<S> Pipeline<S> {
     /// Call service and create future object that resolves to service result.
     ///
     /// Note, this call does not check service readiness.
-    pub fn call<R>(&self, req: R) -> PipelineCall<'_, S, R>
+    pub fn call<R>(&self, req: R) -> PipelineCall<S, R>
     where
-        S: Service<R>,
+        S: Service<R> + 'static,
+        R: 'static,
     {
         let pipeline = self.clone();
         let svc_call = pipeline.svc.call(req, ServiceCtx::new(&pipeline.waiters));
@@ -111,41 +112,19 @@ impl<S> Clone for Pipeline<S> {
 
 pin_project_lite::pin_project! {
     #[must_use = "futures do nothing unless polled"]
-    pub struct PipelineCall<'f, S, R>
+    pub struct PipelineCall<S, R>
     where
         S: Service<R>,
-        S: 'f,
-        R: 'f,
+        S: 'static,
+        R: 'static,
     {
         #[pin]
-        fut: S::Future<'f>,
+        fut: S::Future<'static>,
         pipeline: Pipeline<S>,
     }
 }
 
-impl<'f, S, R> PipelineCall<'f, S, R>
-where
-    S: Service<R> + 'f,
-    R: 'f,
-{
-    #[inline]
-    /// Convert future object to static version.
-    ///
-    /// Returned future is suitable for spawning into a async runtime.
-    /// Note, this call does not check service readiness.
-    pub fn into_static(self) -> PipelineCall<'static, S, R> {
-        let svc_call = self.fut;
-        let pipeline = self.pipeline;
-
-        // SAFETY: `svc_call` has same lifetime same as lifetime of `pipeline.svc`
-        // Pipeline::svc is heap allocated(Rc<S>), we keep it alive until
-        // `svc_call` get resolved to result
-        let fut = unsafe { std::mem::transmute(svc_call) };
-        PipelineCall { fut, pipeline }
-    }
-}
-
-impl<'f, S, R> future::Future for PipelineCall<'f, S, R>
+impl<S, R> future::Future for PipelineCall<S, R>
 where
     S: Service<R>,
 {

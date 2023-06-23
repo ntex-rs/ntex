@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.1] - 2023-06-23
+
+* `PipelineCall` is static
+
 ## [0.7.0] - 2023-06-22
 
 * Release v0.7.0

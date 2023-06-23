@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.1] - 2023-06-23
+
+* Make `PipelineCall` static
+
 ## [1.2.0] - 2023-06-22
 
 * Rename Container to Pipeline

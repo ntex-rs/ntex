@@ -78,10 +78,10 @@ pin_project_lite::pin_project! {
     where S: 'static, X: 'static
     {
         None,
-        Service { #[pin] fut: PipelineCall<'static, S, Request> },
-        ServiceUpgrade { #[pin] fut: PipelineCall<'static, S, Request>  },
-        Expect { #[pin] fut: PipelineCall<'static, X, Request> },
-        Filter { fut: PipelineCall<'static, OnRequest, (Request, IoRef)> }
+        Service { #[pin] fut: PipelineCall<S, Request> },
+        ServiceUpgrade { #[pin] fut: PipelineCall<S, Request>  },
+        Expect { #[pin] fut: PipelineCall<X, Request> },
+        Filter { fut: PipelineCall<OnRequest, (Request, IoRef)> }
     }
 }
 
@@ -479,21 +479,21 @@ where
     fn service_call(&self, req: Request) -> CallState<S, X> {
         // Handle normal requests
         CallState::Service {
-            fut: self.config.service.call(req).into_static(),
+            fut: self.config.service.call(req),
         }
     }
 
     fn service_filter(&self, req: Request, f: &Pipeline<OnRequest>) -> CallState<S, X> {
         // Handle filter fut
         CallState::Filter {
-            fut: f.call((req, self.io.get_ref())).into_static(),
+            fut: f.call((req, self.io.get_ref())),
         }
     }
 
     fn service_expect(&self, req: Request) -> CallState<S, X> {
         // Handle normal requests with EXPECT: 100-Continue` header
         CallState::Expect {
-            fut: self.config.expect.call(req).into_static(),
+            fut: self.config.expect.call(req),
         }
     }
 
@@ -506,7 +506,7 @@ where
         )));
         // Handle upgrade requests
         CallState::ServiceUpgrade {
-            fut: self.config.service.call(req).into_static(),
+            fut: self.config.service.call(req),
         }
     }
 

@@ -30,7 +30,8 @@ where
     ) -> BoxFuture<'_, Result<ClientResponse, SendRequestError>> {
         Box::pin(async move {
             // connect to the host
-            let fut = self.0.call(ClientConnect {
+            let pl = self.0.clone();
+            let fut = pl.service_call(ClientConnect {
                 uri: head.as_ref().uri.clone(),
                 addr,
             });
