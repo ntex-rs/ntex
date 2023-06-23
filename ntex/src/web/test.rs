@@ -107,7 +107,7 @@ where
     S: Service<R, Response = WebResponse, Error = E>,
     E: std::fmt::Debug,
 {
-    app.call(req).await.unwrap()
+    app.service_call(req).await.unwrap()
 }
 
 /// Helper function that returns a response body of a TestRequest
@@ -140,7 +140,7 @@ where
     S: Service<Request, Response = WebResponse>,
 {
     let mut resp = app
-        .call(req)
+        .service_call(req)
         .await
         .unwrap_or_else(|_| panic!("read_response failed at application call"));
 

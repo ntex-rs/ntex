@@ -158,7 +158,7 @@ where
         let msg = Connect::new(head.uri.clone()).set_addr(self.addr);
         log::trace!("Open ws connection to {:?} addr: {:?}", head.uri, self.addr);
 
-        let io = self.connector.call(msg).await?;
+        let io = self.connector.clone().service_call(msg).await?;
 
         // create Framed and send request
         let codec = h1::ClientCodec::default();
