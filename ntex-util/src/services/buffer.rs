@@ -309,7 +309,7 @@ mod tests {
     use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
     use super::*;
-    use crate::future::{lazy, Ready};
+    use crate::{future::{lazy, Ready}, task::LocalWaker};
 
     #[derive(Clone)]
     struct TestService(Rc<Inner>);
