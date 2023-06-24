@@ -5,8 +5,7 @@ use std::{collections::VecDeque, future::Future, marker::PhantomData, pin::Pin};
 
 use ntex_service::{IntoService, Middleware, Service, ServiceCallToCall, ServiceCtx};
 
-use crate::channel::Canceled;
-use crate::{channel::oneshot, task::LocalWaker};
+use crate::channel::{oneshot, Canceled};
 
 /// Buffer - service factory for service that can buffer incoming request.
 ///
@@ -33,6 +32,9 @@ impl<R> Buffer<R> {
         self
     }
 
+    /// Cancel all buffered requests on shutdown
+    ///
+    /// By default buffered requests are flushed during poll_shutdown
     pub fn cancel_on_shutdown(mut self) -> Self {
         self.cancel_on_shutdown = true;
         self
@@ -61,7 +63,6 @@ where
             size: self.buf_size,
             cancel_on_shutdown: self.cancel_on_shutdown,
             ready: Cell::new(false),
-            waker: LocalWaker::default(),
             buf: RefCell::new(VecDeque::with_capacity(self.buf_size)),
             next_call: RefCell::default(),
             _t: PhantomData,
@@ -77,7 +78,6 @@ pub struct BufferService<R, S: Service<R>> {
     cancel_on_shutdown: bool,
     ready: Cell<bool>,
     service: S,
-    waker: LocalWaker,
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
     _t: PhantomData<R>,
@@ -96,7 +96,6 @@ where
             cancel_on_shutdown: false,
             ready: Cell::new(false),
             service: service.into_service(),
-            waker: LocalWaker::default(),
             buf: RefCell::new(VecDeque::with_capacity(size)),
             next_call: RefCell::default(),
             _t: PhantomData,
@@ -121,7 +120,6 @@ where
             cancel_on_shutdown: self.cancel_on_shutdown,
             ready: Cell::new(false),
             service: self.service.clone(),
-            waker: LocalWaker::default(),
             buf: RefCell::new(VecDeque::with_capacity(self.size)),
             next_call: RefCell::default(),
             _t: PhantomData,
@@ -139,7 +137,6 @@ where
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.waker.register(cx.waker());
         let mut buffer = self.buf.borrow_mut();
         let mut next_call = self.next_call.borrow_mut();
         if let Some(next_call) = &*next_call {
@@ -199,7 +196,6 @@ where
     }
 
     fn poll_shutdown(&self, cx: &mut std::task::Context<'_>) -> Poll<()> {
-        self.waker.register(cx.waker());
         let mut buffer = self.buf.borrow_mut();
         if self.cancel_on_shutdown {
             buffer.clear();
@@ -288,7 +284,6 @@ where
                 };
 
                 this.state.set(ResponseState::Running { fut });
-                this.slf.waker.wake();
                 self.poll(cx)
             }
             ResponseStateProject::Running { fut } => fut.poll(cx).map_err(|e| e.into()),
