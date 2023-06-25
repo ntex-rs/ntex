@@ -132,7 +132,7 @@ where
     S: Service<R>,
 {
     type Response = S::Response;
-    type Error = BufferServiceRequestError<S::Error>;
+    type Error = BufferServiceError<S::Error>;
     type Future<'f> = BufferServiceResponse<'f, R, S> where Self: 'f, R: 'f;
 
     #[inline]
@@ -259,7 +259,7 @@ impl<'f, R, S> Future for BufferServiceResponse<'f, R, S>
 where
     S: Service<R>,
 {
-    type Output = Result<S::Response, BufferServiceRequestError<S::Error>>;
+    type Output = Result<S::Response, BufferServiceError<S::Error>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut().project();
@@ -273,7 +273,7 @@ where
                     }
                     Err(Canceled) => {
                         log::trace!("Buffered service request cancelled");
-                        Poll::Ready(Err(BufferServiceRequestError::RequestCancelled))
+                        Poll::Ready(Err(BufferServiceError::RequestCanceled))
                     }
                 }
             }
@@ -292,16 +292,29 @@ where
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BufferServiceRequestError<E> {
+pub enum BufferServiceError<E> {
     Service(E),
-    RequestCancelled,
+    RequestCanceled,
 }
 
-impl<E> From<E> for BufferServiceRequestError<E> {
+impl<E> From<E> for BufferServiceError<E> {
     fn from(err: E) -> Self {
-        BufferServiceRequestError::Service(err)
+        BufferServiceError::Service(err)
     }
 }
+
+impl<E: std::fmt::Display> std::fmt::Display for BufferServiceError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BufferServiceError::Service(e) => std::fmt::Display::fmt(e, f),
+            BufferServiceError::RequestCanceled => {
+                f.write_str("buffer service request canceled")
+            }
+        }
+    }
+}
+
+impl<E: std::fmt::Display + std::fmt::Debug> std::error::Error for BufferServiceError<E> {}
 
 #[cfg(test)]
 mod tests {
@@ -309,10 +322,8 @@ mod tests {
     use std::{rc::Rc, task::Context, task::Poll, time::Duration};
 
     use super::*;
-    use crate::{
-        future::{lazy, Ready},
-        task::LocalWaker,
-    };
+    use crate::future::{lazy, Ready};
+    use crate::task::LocalWaker;
 
     #[derive(Clone)]
     struct TestService(Rc<Inner>);
