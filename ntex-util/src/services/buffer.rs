@@ -272,7 +272,7 @@ where
                         self.poll(cx)
                     }
                     Err(Canceled) => {
-                        log::trace!("Buffered service request cancelled");
+                        log::trace!("Buffered service request canceled");
                         Poll::Ready(Err(BufferServiceError::RequestCanceled))
                     }
                 }
