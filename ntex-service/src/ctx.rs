@@ -230,8 +230,8 @@ where
                     let fut = svc.call(
                         req.take().unwrap(),
                         ServiceCtx {
-                            idx: *idx,
                             waiters,
+                            idx: *idx,
                             _t: marker::PhantomData,
                         },
                     );
@@ -293,8 +293,8 @@ where
                     let fut = svc.call(
                         req.take().unwrap(),
                         ServiceCtx {
-                            idx: *idx,
                             waiters,
+                            idx: *idx,
                             _t: marker::PhantomData,
                         },
                     );
@@ -340,8 +340,9 @@ mod tests {
         fn call<'a>(
             &'a self,
             req: &'static str,
-            _: ServiceCtx<'a, Self>,
+            ctx: ServiceCtx<'a, Self>,
         ) -> Self::Future<'a> {
+            let _ = ctx.clone();
             Ready::Ok(req)
         }
     }
@@ -408,5 +409,34 @@ mod tests {
 
         assert_eq!(cnt.get(), 5);
         assert_eq!(&*data.borrow(), &["srv2", "srv1"]);
+    }
+
+    #[ntex::test]
+    async fn test_advance_to_call() {
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+        let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
+
+        let mut fut = srv.service_call("test").advance_to_call();
+        let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
+        con.notify();
+
+        let res = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
+        assert!(res.is_ready());
+    }
+
+    #[ntex::test]
+    #[should_panic]
+    async fn test_advance_to_call_panic() {
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+        let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
+
+        let mut fut = srv.service_call("test");
+        let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
+        con.notify();
+
+        let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
+        let _f = fut.advance_to_call();
     }
 }

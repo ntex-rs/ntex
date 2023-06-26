@@ -109,4 +109,23 @@ mod tests {
         assert!(factory.create(&true).await.is_err());
         assert!(factory.create(&false).await.is_ok());
     }
+
+    #[ntex::test]
+    async fn map_init_err2() {
+        let factory = fn_factory_with_config(|err: &bool| {
+            let err = *err;
+            async move {
+                if err {
+                    Err(())
+                } else {
+                    Ok(into_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+                }
+            }
+        })
+        .map_init_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "err"))
+        .clone();
+
+        assert!(factory.create(&true).await.is_err());
+        assert!(factory.create(&false).await.is_ok());
+    }
 }

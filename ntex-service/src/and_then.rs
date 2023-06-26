@@ -293,6 +293,17 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn test_poll_ready2() {
+        let cnt = Rc::new(Cell::new(0));
+        let srv = Box::new(chain(Srv1(cnt.clone())).and_then(Srv2(cnt.clone())));
+        let res = lazy(|cx| srv.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 2);
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
+        assert_eq!(res, Poll::Ready(()));
+    }
+
+    #[ntex::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
         let srv = chain(Srv1(cnt.clone())).and_then(Srv2(cnt)).pipeline();
