@@ -166,6 +166,26 @@ pin_project_lite::pin_project! {
     }
 }
 
+impl<'a, S, Req> ServiceCall<'a, S, Req>
+where
+    S: Service<Req>,
+    S: 'a,
+    S: ?Sized,
+    Req: 'a,
+{
+    pub fn advance_to_call(self) -> ServiceCallToCall<'a, S, Req> {
+        match self.state {
+            ServiceCallState::Ready { .. } => {}
+            ServiceCallState::Call { .. } | ServiceCallState::Empty => {
+                panic!(
+                    "`ServiceCall::advance_to_call` must be called before `ServiceCall::poll`"
+                )
+            }
+        }
+        ServiceCallToCall { state: self.state }
+    }
+}
+
 pin_project_lite::pin_project! {
     #[project = ServiceCallStateProject]
     enum ServiceCallState<'a, S, Req>
@@ -227,6 +247,68 @@ where
                 this.state.set(ServiceCallState::Empty);
                 r
             }),
+            ServiceCallStateProject::Empty => {
+                panic!("future must not be polled after it returned `Poll::Ready`")
+            }
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[must_use = "futures do nothing unless polled"]
+    pub struct ServiceCallToCall<'a, S, Req>
+    where
+        S: Service<Req>,
+        S: 'a,
+        S: ?Sized,
+        Req: 'a,
+    {
+        #[pin]
+        state: ServiceCallState<'a, S, Req>,
+    }
+}
+
+impl<'a, S, Req> Future for ServiceCallToCall<'a, S, Req>
+where
+    S: Service<Req> + ?Sized,
+{
+    type Output = Result<S::Future<'a>, S::Error>;
+
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Self::Output> {
+        let mut this = self.as_mut().project();
+
+        match this.state.as_mut().project() {
+            ServiceCallStateProject::Ready {
+                req,
+                svc,
+                idx,
+                waiters,
+            } => match svc.poll_ready(cx)? {
+                task::Poll::Ready(()) => {
+                    waiters.notify();
+
+                    let fut = svc.call(
+                        req.take().unwrap(),
+                        ServiceCtx {
+                            idx: *idx,
+                            waiters,
+                            _t: marker::PhantomData,
+                        },
+                    );
+                    this.state.set(ServiceCallState::Empty);
+                    task::Poll::Ready(Ok(fut))
+                }
+                task::Poll::Pending => {
+                    waiters.register(*idx, cx);
+                    task::Poll::Pending
+                }
+            },
+            ServiceCallStateProject::Call { .. } => {
+                unreachable!("`ServiceCallToCall` can only be constructed in `Ready` state")
+            }
             ServiceCallStateProject::Empty => {
                 panic!("future must not be polled after it returned `Poll::Ready`")
             }

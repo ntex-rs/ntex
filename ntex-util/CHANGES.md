@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.1] - 2023-06-24
+
+* Changed `BufferService` to maintain order 
+
+* Buffer error type changed to indicate cancellation
+
 ## [0.3.0] - 2023-06-22
 
 * Release v0.3.0

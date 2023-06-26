@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.2] - 2023-06-24
+
+* Added `ServiceCall::advance_to_call`
+
 ## [1.2.1] - 2023-06-23
 
 * Make `PipelineCall` static
