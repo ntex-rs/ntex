@@ -174,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(unix))]
+    #[cfg(unix)]
     fn uds() {
         use std::os::unix::net::UnixListener;
 

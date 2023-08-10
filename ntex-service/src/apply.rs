@@ -56,7 +56,7 @@ impl<S> ApplyService<S> {
     where
         S: Service<R>,
     {
-        self.service.service_call(req)
+        self.service.call(req)
     }
 }
 
@@ -85,7 +85,6 @@ where
     type Error = Err;
     type Future<'f> = R where Self: 'f, In: 'f, R: 'f;
 
-    crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
     #[inline]

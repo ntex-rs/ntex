@@ -85,7 +85,7 @@ mod tests {
 
         let pipe = Pipeline::new(chain(srv).and_then(on_shutdown).clone());
 
-        let res = pipe.service_call(()).await;
+        let res = pipe.call(()).await;
         assert_eq!(lazy(|cx| pipe.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "pipe");

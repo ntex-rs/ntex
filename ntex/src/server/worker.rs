@@ -255,9 +255,11 @@ impl Worker {
             self.services.iter_mut().for_each(|srv| {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopped;
-                    let svc = srv.service.clone();
+                    let fut = srv
+                        .service
+                        .call_static((None, ServerMessage::ForceShutdown));
                     spawn(async move {
-                        let _ = svc.call((None, ServerMessage::ForceShutdown)).await;
+                        let _ = fut.await;
                     });
                 }
             });
@@ -267,9 +269,11 @@ impl Worker {
                 if srv.status == WorkerServiceStatus::Available {
                     srv.status = WorkerServiceStatus::Stopping;
 
-                    let svc = srv.service.clone();
+                    let fut = srv
+                        .service
+                        .call_static((None, ServerMessage::Shutdown(timeout)));
                     spawn(async move {
-                        let _ = svc.call((None, ServerMessage::Shutdown(timeout))).await;
+                        let _ = fut.await;
                     });
                 }
             });
@@ -490,11 +494,11 @@ impl Future for Worker {
                                 self.factories[srv.factory].name(msg.token)
                             );
                         }
-                        let srv = srv.service.clone();
+                        let fut = srv
+                            .service
+                            .call_static((Some(guard), ServerMessage::Connect(msg.io)));
                         spawn(async move {
-                            let _ = srv
-                                .call((Some(guard), ServerMessage::Connect(msg.io)))
-                                .await;
+                            let _ = fut.await;
                         });
                     } else {
                         return Poll::Ready(());
