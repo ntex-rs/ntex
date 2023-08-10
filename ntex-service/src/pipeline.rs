@@ -1,15 +1,14 @@
-use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{cell::Cell, future, pin::Pin, rc::Rc, task, task::Context, task::Poll};
 
-use crate::ctx::{ServiceCall, ServiceCtx, Waiters};
-use crate::{Service, ServiceFactory};
+use crate::{ctx::ServiceCall, ctx::Waiters, Service, ServiceCtx, ServiceFactory};
 
 /// Container for a service.
 ///
 /// Container allows to call enclosed service and adds support of shared readiness.
 pub struct Pipeline<S> {
     svc: Rc<S>,
-    waiters: Waiters,
     pending: Cell<bool>,
+    pub(crate) waiters: Waiters,
 }
 
 impl<S> Pipeline<S> {
@@ -55,33 +54,53 @@ impl<S> Pipeline<S> {
         self.svc.poll_shutdown(cx)
     }
 
+    #[deprecated(since = "1.2.3", note = "Use Pipeline::call() instead")]
+    #[doc(hidden)]
     #[inline]
     /// Wait for service readiness and then create future object
     /// that resolves to service result.
-    pub fn service_call<'a, R>(&'a self, req: R) -> ServiceCall<'a, S, R>
+    pub fn service_call<R>(&self, req: R) -> ServiceCall<'_, S, R>
     where
         S: Service<R>,
     {
-        ServiceCtx::<'a, S>::new(&self.waiters).call(self.svc.as_ref(), req)
+        ServiceCall::call_pipeline(req, self)
+    }
+
+    #[inline]
+    /// Wait for service readiness and then create future object
+    /// that resolves to service result.
+    pub fn call<R>(&self, req: R) -> ServiceCall<'_, S, R>
+    where
+        S: Service<R>,
+    {
+        ServiceCall::call_pipeline(req, self)
+    }
+
+    #[inline]
+    /// Wait for service readiness and then create future object
+    /// that resolves to service result.
+    pub fn call_static<R>(&self, req: R) -> PipelineCall<S, R>
+    where
+        S: Service<R> + 'static,
+    {
+        PipelineCall {
+            state: PipelineCallState::Ready { req: Some(req) },
+            pipeline: self.clone(),
+        }
     }
 
     #[inline]
     /// Call service and create future object that resolves to service result.
     ///
     /// Note, this call does not check service readiness.
-    pub fn call<R>(&self, req: R) -> PipelineCall<S, R>
+    pub fn call_nowait<R>(&self, req: R) -> PipelineCall<S, R>
     where
         S: Service<R> + 'static,
-        R: 'static,
     {
-        let pipeline = self.clone();
-        let svc_call = pipeline.svc.call(req, ServiceCtx::new(&pipeline.waiters));
-
-        // SAFETY: `svc_call` has same lifetime same as lifetime of `pipeline.svc`
-        // Pipeline::svc is heap allocated(Rc<S>), we keep it alive until
-        // `svc_call` get resolved to result
-        let fut = unsafe { std::mem::transmute(svc_call) };
-        PipelineCall { fut, pipeline }
+        PipelineCall {
+            state: PipelineCallState::new_call(self, req),
+            pipeline: self.clone(),
+        }
     }
 
     /// Extract service if container hadnt been cloned before.
@@ -119,8 +138,40 @@ pin_project_lite::pin_project! {
         R: 'static,
     {
         #[pin]
-        fut: S::Future<'static>,
+        state: PipelineCallState<S, R>,
         pipeline: Pipeline<S>,
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[project = PipelineCallStateProject]
+    enum PipelineCallState<S, Req>
+    where
+        S: Service<Req>,
+        S: 'static,
+        Req: 'static,
+    {
+        Ready { req: Option<Req> },
+        Call { #[pin] fut: S::Future<'static> },
+        Empty,
+    }
+}
+
+impl<S, R> PipelineCallState<S, R>
+where
+    S: Service<R> + 'static,
+    R: 'static,
+{
+    fn new_call(pl: &Pipeline<S>, req: R) -> Self {
+        let ctx = ServiceCtx::new(&pl.waiters);
+        let svc_call = pl.get_ref().call(req, ctx);
+
+        // SAFETY: `svc_call` has same lifetime same as lifetime of `pl.svc`
+        // Pipeline::svc is heap allocated(Rc<S>), we keep it alive until
+        // `svc_call` get resolved to result
+        let fut = unsafe { std::mem::transmute(svc_call) };
+
+        PipelineCallState::Call { fut }
     }
 }
 
@@ -131,8 +182,25 @@ where
     type Output = Result<S::Response, S::Error>;
 
     #[inline]
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.project().fut.poll(cx)
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut().project();
+
+        match this.state.as_mut().project() {
+            PipelineCallStateProject::Ready { req } => {
+                task::ready!(this.pipeline.poll_ready(cx))?;
+
+                let st = PipelineCallState::new_call(this.pipeline, req.take().unwrap());
+                this.state.set(st);
+                self.poll(cx)
+            }
+            PipelineCallStateProject::Call { fut, .. } => fut.poll(cx).map(|r| {
+                this.state.set(PipelineCallState::Empty);
+                r
+            }),
+            PipelineCallStateProject::Empty => {
+                panic!("future must not be polled after it returned `Poll::Ready`")
+            }
+        }
     }
 }
 

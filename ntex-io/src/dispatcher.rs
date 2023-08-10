@@ -250,9 +250,8 @@ where
                     // call service
                     let shared = slf.shared.clone();
                     shared.inflight.set(shared.inflight.get() + 1);
-                    let fut = shared.service.call(item);
                     spawn(async move {
-                        let result = fut.await;
+                        let result = shared.service.call(item).await;
                         shared.handle_result(result, &shared.io);
                     });
                 }
@@ -276,9 +275,8 @@ where
                     // call service
                     let shared = slf.shared.clone();
                     shared.inflight.set(shared.inflight.get() + 1);
-                    let fut = shared.service.call(item);
                     spawn(async move {
-                        let result = fut.await;
+                        let result = shared.service.call(item).await;
                         shared.handle_result(result, &shared.io);
                     });
                 }

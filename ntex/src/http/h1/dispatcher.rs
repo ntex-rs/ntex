@@ -479,21 +479,21 @@ where
     fn service_call(&self, req: Request) -> CallState<S, X> {
         // Handle normal requests
         CallState::Service {
-            fut: self.config.service.call(req),
+            fut: self.config.service.call_nowait(req),
         }
     }
 
     fn service_filter(&self, req: Request, f: &Pipeline<OnRequest>) -> CallState<S, X> {
         // Handle filter fut
         CallState::Filter {
-            fut: f.call((req, self.io.get_ref())),
+            fut: f.call_nowait((req, self.io.get_ref())),
         }
     }
 
     fn service_expect(&self, req: Request) -> CallState<S, X> {
         // Handle normal requests with EXPECT: 100-Continue` header
         CallState::Expect {
-            fut: self.config.expect.call(req),
+            fut: self.config.expect.call_nowait(req),
         }
     }
 
@@ -506,7 +506,7 @@ where
         )));
         // Handle upgrade requests
         CallState::ServiceUpgrade {
-            fut: self.config.service.call(req),
+            fut: self.config.service.call_nowait(req),
         }
     }
 

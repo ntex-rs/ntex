@@ -128,7 +128,7 @@ impl Future for WriteTask {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().get_mut();
+        let this = self.as_mut().get_mut();
 
         match this.st {
             IoWriteState::Processing(ref mut delay) => {
@@ -523,7 +523,7 @@ mod unixstream {
         type Output = ();
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let mut this = self.as_mut().get_mut();
+            let this = self.as_mut().get_mut();
 
             match this.st {
                 IoWriteState::Processing(ref mut delay) => {

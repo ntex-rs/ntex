@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.2] - 2023-08-10
+
+* Replace `PipelineCall` with `ServiceCall<'static, S, R>`
+
 ## [0.3.1] - 2023-06-23
 
 * `PipelineCall` is static

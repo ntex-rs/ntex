@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.3] - 2023-08-10
+
+* Update ntex-service
+
 ## [0.7.1] - 2023-06-23
 
 * `PipelineCall` is static

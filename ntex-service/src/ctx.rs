@@ -1,6 +1,6 @@
 use std::{cell::UnsafeCell, future::Future, marker, pin::Pin, rc::Rc, task};
 
-use crate::Service;
+use crate::{Pipeline, Service};
 
 pub struct ServiceCtx<'a, S: ?Sized> {
     idx: usize,
@@ -82,7 +82,7 @@ impl Drop for Waiters {
     }
 }
 
-impl<'a, S: ?Sized> ServiceCtx<'a, S> {
+impl<'a, S> ServiceCtx<'a, S> {
     pub(crate) fn new(waiters: &'a Waiters) -> Self {
         Self {
             idx: waiters.index,
@@ -107,7 +107,7 @@ impl<'a, S: ?Sized> ServiceCtx<'a, S> {
     /// Wait for service readiness and then call service
     pub fn call<T, R>(&self, svc: &'a T, req: R) -> ServiceCall<'a, T, R>
     where
-        T: Service<R> + ?Sized,
+        T: Service<R>,
         R: 'a,
     {
         ServiceCall {
@@ -125,7 +125,7 @@ impl<'a, S: ?Sized> ServiceCtx<'a, S> {
     /// Call service, do not check service readiness
     pub fn call_nowait<T, R>(&self, svc: &'a T, req: R) -> T::Future<'a>
     where
-        T: Service<R> + ?Sized,
+        T: Service<R>,
         R: 'a,
     {
         svc.call(
@@ -139,9 +139,9 @@ impl<'a, S: ?Sized> ServiceCtx<'a, S> {
     }
 }
 
-impl<'a, S: ?Sized> Copy for ServiceCtx<'a, S> {}
+impl<'a, S> Copy for ServiceCtx<'a, S> {}
 
-impl<'a, S: ?Sized> Clone for ServiceCtx<'a, S> {
+impl<'a, S> Clone for ServiceCtx<'a, S> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -157,8 +157,6 @@ pin_project_lite::pin_project! {
     pub struct ServiceCall<'a, S, Req>
     where
         S: Service<Req>,
-        S: 'a,
-        S: ?Sized,
         Req: 'a,
     {
         #[pin]
@@ -166,16 +164,45 @@ pin_project_lite::pin_project! {
     }
 }
 
+pin_project_lite::pin_project! {
+    #[project = ServiceCallStateProject]
+    enum ServiceCallState<'a, S, Req>
+    where
+        S: Service<Req>,
+        Req: 'a,
+    {
+        Ready { req: Option<Req>,
+                svc: &'a S,
+                idx: usize,
+                waiters: &'a WaitersRef,
+        },
+        ReadyPl { req: Option<Req>,
+                  svc: &'a Pipeline<S>,
+                  pl: Pipeline<S>,
+        },
+        Call { #[pin] fut: S::Future<'a> },
+        Empty,
+    }
+}
+
 impl<'a, S, Req> ServiceCall<'a, S, Req>
 where
     S: Service<Req>,
-    S: 'a,
-    S: ?Sized,
     Req: 'a,
 {
+    pub(crate) fn call_pipeline(req: Req, svc: &'a Pipeline<S>) -> Self {
+        ServiceCall {
+            state: ServiceCallState::ReadyPl {
+                req: Some(req),
+                pl: svc.clone(),
+                svc,
+            },
+        }
+    }
+
     pub fn advance_to_call(self) -> ServiceCallToCall<'a, S, Req> {
         match self.state {
-            ServiceCallState::Ready { .. } => {}
+            ServiceCallState::Ready { .. } | ServiceCallState::ReadyPl { .. } => {}
             ServiceCallState::Call { .. } | ServiceCallState::Empty => {
                 panic!(
                     "`ServiceCall::advance_to_call` must be called before `ServiceCall::poll`"
@@ -186,28 +213,9 @@ where
     }
 }
 
-pin_project_lite::pin_project! {
-    #[project = ServiceCallStateProject]
-    enum ServiceCallState<'a, S, Req>
-    where
-        S: Service<Req>,
-        S: 'a,
-        S: ?Sized,
-        Req: 'a,
-    {
-        Ready { req: Option<Req>,
-                svc: &'a S,
-                idx: usize,
-                waiters: &'a WaitersRef,
-        },
-        Call { #[pin] fut: S::Future<'a> },
-        Empty,
-    }
-}
-
 impl<'a, S, Req> Future for ServiceCall<'a, S, Req>
 where
-    S: Service<Req> + ?Sized,
+    S: Service<Req>,
 {
     type Output = Result<S::Response, S::Error>;
 
@@ -243,7 +251,21 @@ where
                     task::Poll::Pending
                 }
             },
-            ServiceCallStateProject::Call { fut } => fut.poll(cx).map(|r| {
+            ServiceCallStateProject::ReadyPl { req, svc, pl } => {
+                task::ready!(pl.poll_ready(cx))?;
+
+                let ctx = ServiceCtx::new(&svc.waiters);
+                let svc_call = svc.get_ref().call(req.take().unwrap(), ctx);
+
+                // SAFETY: `svc_call` has same lifetime same as lifetime of `pl.svc`
+                // Pipeline::svc is heap allocated(Rc<S>), we keep it alive until
+                // `svc_call` get resolved to result
+                let fut = unsafe { std::mem::transmute(svc_call) };
+
+                this.state.set(ServiceCallState::Call { fut });
+                self.poll(cx)
+            }
+            ServiceCallStateProject::Call { fut, .. } => fut.poll(cx).map(|r| {
                 this.state.set(ServiceCallState::Empty);
                 r
             }),
@@ -259,8 +281,6 @@ pin_project_lite::pin_project! {
     pub struct ServiceCallToCall<'a, S, Req>
     where
         S: Service<Req>,
-        S: 'a,
-        S: ?Sized,
         Req: 'a,
     {
         #[pin]
@@ -270,7 +290,7 @@ pin_project_lite::pin_project! {
 
 impl<'a, S, Req> Future for ServiceCallToCall<'a, S, Req>
 where
-    S: Service<Req> + ?Sized,
+    S: Service<Req>,
 {
     type Output = Result<S::Future<'a>, S::Error>;
 
@@ -306,6 +326,12 @@ where
                     task::Poll::Pending
                 }
             },
+            ServiceCallStateProject::ReadyPl { req, svc, pl } => {
+                task::ready!(pl.poll_ready(cx))?;
+
+                let ctx = ServiceCtx::new(&svc.waiters);
+                task::Poll::Ready(Ok(svc.get_ref().call(req.take().unwrap(), ctx)))
+            }
             ServiceCallStateProject::Call { .. } => {
                 unreachable!("`ServiceCallToCall` can only be constructed in `Ready` state")
             }
@@ -387,13 +413,13 @@ mod tests {
         let data1 = data.clone();
         ntex::rt::spawn(async move {
             let _ = poll_fn(|cx| srv1.poll_ready(cx)).await;
-            let i = srv1.call("srv1").await.unwrap();
+            let i = srv1.call_nowait("srv1").await.unwrap();
             data1.borrow_mut().push(i);
         });
 
         let data2 = data.clone();
         ntex::rt::spawn(async move {
-            let i = srv2.service_call("srv2").await.unwrap();
+            let i = srv2.call_static("srv2").await.unwrap();
             data2.borrow_mut().push(i);
         });
         time::sleep(time::Millis(50)).await;
@@ -417,7 +443,7 @@ mod tests {
         let con = condition::Condition::new();
         let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
 
-        let mut fut = srv.service_call("test").advance_to_call();
+        let mut fut = srv.call("test").advance_to_call();
         let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
         con.notify();
 
@@ -432,7 +458,7 @@ mod tests {
         let con = condition::Condition::new();
         let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
 
-        let mut fut = srv.service_call("test");
+        let mut fut = srv.call("test");
         let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
         con.notify();
 

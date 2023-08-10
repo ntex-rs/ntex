@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.3] - 2023-08-10
+
+* Check readiness for pipeline calls
+
 ## [1.2.2] - 2023-06-24
 
 * Added `ServiceCall::advance_to_call`

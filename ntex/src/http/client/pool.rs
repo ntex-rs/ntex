@@ -6,7 +6,7 @@ use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
-use crate::service::{Pipeline, Service, ServiceCall, ServiceCtx};
+use crate::service::{Pipeline, PipelineCall, Service, ServiceCtx};
 use crate::time::{now, Millis};
 use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker};
@@ -150,7 +150,7 @@ where
                     trace!("Connecting to {:?}", req.uri);
                     let uri = req.uri.clone();
                     let (tx, rx) = waiters.borrow_mut().pool.channel();
-                    OpenConnection::spawn(key, tx, uri, inner, self.connector.clone(), req);
+                    OpenConnection::spawn(key, tx, uri, inner, &self.connector, req);
 
                     match rx.await {
                         Err(_) => Err(ConnectError::Disconnected(None)),
@@ -368,7 +368,7 @@ where
                             tx,
                             uri,
                             this.inner.clone(),
-                            this.connector.clone(),
+                            &this.connector,
                             connect,
                         );
                     }
@@ -385,12 +385,12 @@ where
 }
 
 pin_project_lite::pin_project! {
-    struct OpenConnection<'f, T: Service<Connect>>
-    where T: 'f
+    struct OpenConnection<T: Service<Connect>>
+    where T: 'static
     {
         key: Key,
         #[pin]
-        fut: ServiceCall<'f, T, Connect>,
+        fut: PipelineCall<T, Connect>,
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,
@@ -399,7 +399,7 @@ pin_project_lite::pin_project! {
     }
 }
 
-impl<'f, T> OpenConnection<'f, T>
+impl<T> OpenConnection<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
@@ -408,19 +408,20 @@ where
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        pipeline: Pipeline<T>,
+        pipeline: &Pipeline<T>,
         msg: Connect,
     ) {
+        let fut = pipeline.call_static(msg);
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
         #[allow(clippy::redundant_async_block)]
         spawn(async move {
             OpenConnection::<T> {
-                fut: pipeline.service_call(msg),
                 tx: Some(tx),
                 key: key.clone(),
                 inner: inner.clone(),
                 guard: Some(OpenGuard::new(key, inner)),
+                fut,
                 uri,
                 disconnect_timeout,
             }
@@ -429,7 +430,7 @@ where
     }
 }
 
-impl<'f, T> Future for OpenConnection<'f, T>
+impl<T> Future for OpenConnection<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError>,
 {

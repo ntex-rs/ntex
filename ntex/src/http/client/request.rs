@@ -537,7 +537,7 @@ impl ClientRequest {
             if https {
                 slf = slf.set_header_if_none(header::ACCEPT_ENCODING, HTTPS_ENCODING)
             } else {
-                #[cfg(any(feature = "compress"))]
+                #[cfg(feature = "compress")]
                 {
                     slf = slf.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate")
                 }

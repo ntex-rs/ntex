@@ -261,7 +261,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
 
 impl<'a, S, Req> Service<Req> for &'a S
 where
-    S: Service<Req> + ?Sized,
+    S: Service<Req>,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -285,7 +285,7 @@ where
 
 impl<S, Req> Service<Req> for Box<S>
 where
-    S: Service<Req> + ?Sized,
+    S: Service<Req>,
 {
     type Response = S::Response;
     type Error = S::Error;
