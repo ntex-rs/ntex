@@ -1,5 +1,11 @@
 # Changes
 
+## [1.2.4] - 2023-08-12
+
+* Forward readiness check for Apply service
+
+* Add .apply_fn() for chain and chanin factory
+
 ## [1.2.3] - 2023-08-10
 
 * Check readiness for pipeline calls
