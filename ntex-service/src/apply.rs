@@ -15,11 +15,7 @@ where
     R: Future<Output = Result<Out, Err>>,
     U: IntoService<T, Req>,
 {
-    Apply {
-        f,
-        service: Pipeline::new(service.into_service()),
-        r: marker::PhantomData,
-    }
+    Apply::new(service.into_service(), f)
 }
 
 /// Service factory that produces `apply_fn` service.
@@ -60,6 +56,21 @@ impl<S> ApplyService<S> {
     }
 }
 
+impl<T, Req, F, R, In, Out, Err> Apply<T, Req, F, R, In, Out, Err>
+where
+    T: Service<Req, Error = Err>,
+    F: Fn(In, ApplyService<T>) -> R,
+    R: Future<Output = Result<Out, Err>>,
+{
+    pub(crate) fn new(service: T, f: F) -> Self {
+        Apply {
+            f,
+            service: Pipeline::new(service),
+            r: marker::PhantomData,
+        }
+    }
+}
+
 impl<T, Req, F, R, In, Out, Err> Clone for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err> + Clone,
@@ -85,6 +96,7 @@ where
     type Error = Err;
     type Future<'f> = R where Self: 'f, In: 'f, R: 'f;
 
+    crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
     #[inline]
@@ -115,7 +127,7 @@ where
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `ApplyNewService` new service instance
-    fn new(service: T, f: F) -> Self {
+    pub(crate) fn new(service: T, f: F) -> Self {
         Self {
             f,
             service,
@@ -247,6 +259,25 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn test_call_chain() {
+        let srv = chain(Srv)
+            .apply_fn(|req: &'static str, svc| async move {
+                svc.call(()).await.unwrap();
+                Ok((req, ()))
+            })
+            .clone()
+            .pipeline();
+
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
+        assert_eq!(res, Poll::Ready(()));
+
+        let res = srv.call("srv").await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), ("srv", ()));
+    }
+
+    #[ntex::test]
     async fn test_create() {
         let new_srv = chain_factory(
             apply_fn_factory(
@@ -258,6 +289,24 @@ mod tests {
             )
             .clone(),
         );
+
+        let srv = new_srv.pipeline(&()).await.unwrap();
+
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let res = srv.call("srv").await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), ("srv", ()));
+    }
+
+    #[ntex::test]
+    async fn test_create_chain() {
+        let new_srv = chain_factory(|| Ready::<_, ()>::Ok(Srv))
+            .apply_fn(|req: &'static str, srv| async move {
+                srv.call(()).await.unwrap();
+                Ok((req, ()))
+            })
+            .clone();
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 

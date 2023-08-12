@@ -1,6 +1,7 @@
-use std::marker::PhantomData;
+use std::{future::Future, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
+use crate::apply::{Apply, ApplyFactory, ApplyService};
 use crate::ctx::{ServiceCall, ServiceCtx};
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
@@ -118,6 +119,24 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
         }
     }
 
+    /// Use function as middleware for current service.
+    ///
+    /// Short version of `apply_fn(chain(...), fn)`
+    pub fn apply_fn<F, R, In, Out, Err>(
+        self,
+        f: F,
+    ) -> ServiceChain<Apply<Svc, Req, F, R, In, Out, Err>, In>
+    where
+        F: Fn(In, ApplyService<Svc>) -> R,
+        R: Future<Output = Result<Out, Err>>,
+        Svc: Service<Req, Error = Err>,
+    {
+        ServiceChain {
+            service: Apply::new(self.service, f),
+            _t: PhantomData,
+        }
+    }
+
     /// Create service pipeline
     pub fn pipeline(self) -> Pipeline<Svc> {
         Pipeline::new(self.service)
@@ -175,13 +194,31 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
 
     /// Apply middleware to current service factory.
     ///
-    /// Short version of `apply(middleware, pipeline_factory(...))`
+    /// Short version of `apply(middleware, chain_factory(...))`
     pub fn apply<U>(self, tr: U) -> ServiceChainFactory<ApplyMiddleware<U, T, C>, Req, C>
     where
         U: Middleware<T::Service>,
     {
         ServiceChainFactory {
             factory: ApplyMiddleware::new(tr, self.factory),
+            _t: PhantomData,
+        }
+    }
+
+    /// Apply function middleware to current service factory.
+    ///
+    /// Short version of `apply_fn_factory(chain_factory(...), fn)`
+    pub fn apply_fn<F, R, In, Out, Err>(
+        self,
+        f: F,
+    ) -> ServiceChainFactory<ApplyFactory<T, Req, C, F, R, In, Out, Err>, In, C>
+    where
+        F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+        R: Future<Output = Result<Out, Err>>,
+        T: ServiceFactory<Req, C, Error = Err>,
+    {
+        ServiceChainFactory {
+            factory: ApplyFactory::new(self.factory, f),
             _t: PhantomData,
         }
     }
