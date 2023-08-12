@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 use std::{future::Future, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
