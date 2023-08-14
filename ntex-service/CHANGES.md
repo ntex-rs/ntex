@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.5] - 2023-08-14
+
+* Use Pipeline<T> instead of ApplyService<T>
+
 ## [1.2.4] - 2023-08-12
 
 * Forward readiness check for Apply service

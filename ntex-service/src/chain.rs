@@ -2,7 +2,7 @@
 use std::{future::Future, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
-use crate::apply::{Apply, ApplyFactory, ApplyService};
+use crate::apply::{Apply, ApplyFactory};
 use crate::ctx::{ServiceCall, ServiceCtx};
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
@@ -128,7 +128,7 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
         f: F,
     ) -> ServiceChain<Apply<Svc, Req, F, R, In, Out, Err>, In>
     where
-        F: Fn(In, ApplyService<Svc>) -> R,
+        F: Fn(In, Pipeline<Svc>) -> R,
         R: Future<Output = Result<Out, Err>>,
         Svc: Service<Req, Error = Err>,
     {
@@ -214,7 +214,7 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
         f: F,
     ) -> ServiceChainFactory<ApplyFactory<T, Req, C, F, R, In, Out, Err>, In, C>
     where
-        F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+        F: Fn(In, Pipeline<T::Service>) -> R + Clone,
         R: Future<Output = Result<Out, Err>>,
         T: ServiceFactory<Req, C, Error = Err>,
     {

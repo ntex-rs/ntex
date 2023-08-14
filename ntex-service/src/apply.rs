@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 use std::{future::Future, marker, pin::Pin, task, task::Poll};
 
-use super::ctx::{ServiceCall, ServiceCtx};
+use super::ctx::ServiceCtx;
 use super::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Apply transform function to a service.
@@ -11,7 +11,7 @@ pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
 ) -> Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, ApplyService<T>) -> R,
+    F: Fn(In, Pipeline<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
     U: IntoService<T, Req>,
 {
@@ -25,7 +25,7 @@ pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
 ) -> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
     U: IntoServiceFactory<T, Req, Cfg>,
 {
@@ -42,24 +42,10 @@ where
     r: marker::PhantomData<fn(Req) -> (In, Out, R)>,
 }
 
-pub struct ApplyService<S> {
-    service: Pipeline<S>,
-}
-
-impl<S> ApplyService<S> {
-    /// Check readiness and call enclosed service.
-    pub fn call<R>(&self, req: R) -> ServiceCall<'_, S, R>
-    where
-        S: Service<R>,
-    {
-        self.service.call(req)
-    }
-}
-
 impl<T, Req, F, R, In, Out, Err> Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, ApplyService<T>) -> R,
+    F: Fn(In, Pipeline<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     pub(crate) fn new(service: T, f: F) -> Self {
@@ -74,7 +60,7 @@ where
 impl<T, Req, F, R, In, Out, Err> Clone for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err> + Clone,
-    F: Fn(In, ApplyService<T>) -> R + Clone,
+    F: Fn(In, Pipeline<T>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
@@ -89,7 +75,7 @@ where
 impl<T, Req, F, R, In, Out, Err> Service<In> for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
-    F: Fn(In, ApplyService<T>) -> R,
+    F: Fn(In, Pipeline<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Response = Out;
@@ -101,10 +87,7 @@ where
 
     #[inline]
     fn call<'a>(&'a self, req: In, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        let svc = ApplyService {
-            service: self.service.clone(),
-        };
-        (self.f)(req, svc)
+        (self.f)(req, self.service.clone())
     }
 }
 
@@ -112,7 +95,7 @@ where
 pub struct ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     service: T,
@@ -123,7 +106,7 @@ where
 impl<T, Req, Cfg, F, R, In, Out, Err> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     /// Create new `ApplyNewService` new service instance
@@ -140,7 +123,7 @@ impl<T, Req, Cfg, F, R, In, Out, Err> Clone
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err> + Clone,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
     fn clone(&self) -> Self {
@@ -156,7 +139,7 @@ impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R + Clone,
+    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     for<'r> R: Future<Output = Result<Out, Err>> + 'r,
 {
     type Response = Out;
@@ -181,7 +164,7 @@ pin_project_lite::pin_project! {
     where
         T: ServiceFactory<Req, Cfg, Error = Err>,
         T: 'f,
-        F: Fn(In, ApplyService<T::Service>) -> R,
+        F: Fn(In, Pipeline<T::Service>) -> R,
         T::Service: 'f,
         R: Future<Output = Result<Out, Err>>,
         Cfg: 'f,
@@ -197,7 +180,7 @@ impl<'f, T, Req, Cfg, F, R, In, Out, Err> Future
     for ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg, Error = Err>,
-    F: Fn(In, ApplyService<T::Service>) -> R,
+    F: Fn(In, Pipeline<T::Service>) -> R,
     R: Future<Output = Result<Out, Err>>,
 {
     type Output = Result<Apply<T::Service, Req, F, R, In, Out, Err>, T::InitError>;

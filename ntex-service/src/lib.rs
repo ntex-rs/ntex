@@ -389,7 +389,7 @@ where
 
 pub mod dev {
     pub use crate::and_then::{AndThen, AndThenFactory};
-    pub use crate::apply::{Apply, ApplyFactory, ApplyService};
+    pub use crate::apply::{Apply, ApplyFactory};
     pub use crate::chain::{ServiceChain, ServiceChainFactory};
     pub use crate::fn_service::{
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
@@ -402,4 +402,7 @@ pub mod dev {
     pub use crate::middleware::ApplyMiddleware;
     pub use crate::pipeline::CreatePipeline;
     pub use crate::then::{Then, ThenFactory};
+
+    #[doc(hidden)]
+    pub type ApplyService<T> = crate::Pipeline<T>;
 }
