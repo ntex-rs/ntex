@@ -73,7 +73,7 @@ pub struct Connect {
 #[derive(Clone)]
 pub struct Client(Rc<ClientConfig>);
 
-pub(self) struct ClientConfig {
+struct ClientConfig {
     pub(self) connector: Box<dyn HttpConnect>,
     pub(self) headers: HeaderMap,
     pub(self) timeout: Millis,

@@ -1607,11 +1607,7 @@ impl BufMut for BytesMut {
         self.reserve(len);
 
         unsafe {
-            ptr::copy_nonoverlapping(
-                src.as_ptr(),
-                self.chunk_mut().as_mut_ptr() as *mut u8,
-                len,
-            );
+            ptr::copy_nonoverlapping(src.as_ptr(), self.chunk_mut().as_mut_ptr(), len);
             self.advance_mut(len);
         }
     }
@@ -2418,11 +2414,7 @@ impl BufMut for BytesVec {
         self.reserve(len);
 
         unsafe {
-            ptr::copy_nonoverlapping(
-                src.as_ptr(),
-                self.chunk_mut().as_mut_ptr() as *mut u8,
-                len,
-            );
+            ptr::copy_nonoverlapping(src.as_ptr(), self.chunk_mut().as_mut_ptr(), len);
             self.advance_mut(len);
         }
     }

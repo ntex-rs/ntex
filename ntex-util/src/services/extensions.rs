@@ -53,7 +53,7 @@ impl Extensions {
 
     /// Add all items from other `Extensions`
     pub fn extend(&mut self, other: Extensions) {
-        self.map.extend(other.map.into_iter());
+        self.map.extend(other.map);
     }
 
     #[inline]

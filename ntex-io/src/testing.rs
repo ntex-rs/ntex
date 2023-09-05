@@ -1,8 +1,7 @@
 //! utilities and helpers for testing
-use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 use std::task::{ready, Context, Poll, Waker};
-use std::{any, cmp, fmt, future::Future, io, mem, net, pin::Pin, rc::Rc};
+use std::{any, cell::RefCell, cmp, fmt, future::Future, io, mem, net, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut, Bytes, BytesVec};
 use ntex_util::future::poll_fn;
@@ -32,7 +31,7 @@ impl fmt::Debug for AtomicWaker {
 pub struct IoTest {
     tp: Type,
     peer_addr: Option<net::SocketAddr>,
-    state: Arc<Cell<State>>,
+    state: Arc<Mutex<RefCell<State>>>,
     local: Arc<Mutex<RefCell<Channel>>>,
     remote: Arc<Mutex<RefCell<Channel>>>,
 }
@@ -68,6 +67,9 @@ struct Channel {
     write: IoTestState,
 }
 
+unsafe impl Sync for Channel {}
+unsafe impl Send for Channel {}
+
 impl Channel {
     fn is_closed(&self) -> bool {
         self.flags.contains(IoTestFlags::CLOSED)
@@ -94,7 +96,7 @@ impl IoTest {
     pub fn create() -> (IoTest, IoTest) {
         let local = Arc::new(Mutex::new(RefCell::new(Channel::default())));
         let remote = Arc::new(Mutex::new(RefCell::new(Channel::default())));
-        let state = Arc::new(Cell::new(State::default()));
+        let state = Arc::new(Mutex::new(RefCell::new(State::default())));
 
         (
             IoTest {
@@ -115,11 +117,11 @@ impl IoTest {
     }
 
     pub fn is_client_dropped(&self) -> bool {
-        self.state.get().client_dropped
+        self.state.lock().unwrap().borrow().client_dropped
     }
 
     pub fn is_server_dropped(&self) -> bool {
-        self.state.get().server_dropped
+        self.state.lock().unwrap().borrow().server_dropped
     }
 
     /// Check if channel is closed from remoote side
@@ -332,13 +334,13 @@ impl Clone for IoTest {
 
 impl Drop for IoTest {
     fn drop(&mut self) {
-        let mut state = self.state.get();
+        let mut state = *self.state.lock().unwrap().borrow();
         match self.tp {
             Type::Server => state.server_dropped = true,
             Type::Client => state.client_dropped = true,
             _ => (),
         }
-        self.state.set(state);
+        *self.state.lock().unwrap().borrow_mut() = state;
 
         let guard = self.remote.lock().unwrap();
         let mut remote = guard.borrow_mut();

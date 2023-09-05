@@ -9,7 +9,7 @@ mod encoder;
 pub use self::decoder::Decoder;
 pub use self::encoder::Encoder;
 
-pub(self) struct Writer {
+struct Writer {
     buf: BytesMut,
 }
 

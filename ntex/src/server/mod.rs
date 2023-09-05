@@ -37,7 +37,7 @@ pub enum ServerStatus {
 
 /// Socket id token
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(self) struct Token(usize);
+struct Token(usize);
 
 impl Token {
     pub(self) fn next(&mut self) -> Token {

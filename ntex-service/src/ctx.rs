@@ -144,11 +144,7 @@ impl<'a, S> Copy for ServiceCtx<'a, S> {}
 impl<'a, S> Clone for ServiceCtx<'a, S> {
     #[inline]
     fn clone(&self) -> Self {
-        Self {
-            idx: self.idx,
-            waiters: self.waiters,
-            _t: marker::PhantomData,
-        }
+        *self
     }
 }
 
