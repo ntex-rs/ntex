@@ -158,8 +158,9 @@ impl<T: Address> TcpConnectorResponse<T> {
         pool: PoolRef,
     ) -> TcpConnectorResponse<T> {
         trace!(
-            "TCP connector - connecting to {:?} port:{}",
+            "TCP connector - connecting to {:?} addr:{:?} port:{}",
             req.host(),
+            addr,
             port
         );
 
