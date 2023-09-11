@@ -36,10 +36,10 @@ async-std = ["ntex-rt/async-std", "ntex-async-std"]
 [dependencies]
 ntex-service = "1.2.6"
 ntex-bytes = "0.1.19"
-ntex-http = "0.1.8"
-ntex-io = "0.3.0"
+ntex-http = "0.1.10"
+ntex-io = "0.3.3"
 ntex-rt = "0.4.7"
-ntex-tls = "0.3.0"
+ntex-tls = "0.3.1"
 ntex-util = "0.3.2"
 log = "0.4"
 thiserror = "1.0"
