@@ -18,7 +18,7 @@ members = [
 ]
 
 [patch.crates-io]
-#ntex = { path = "ntex" }
+ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
 ntex-connect = { path = "ntex-connect" }
