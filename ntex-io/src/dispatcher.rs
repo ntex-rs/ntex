@@ -44,7 +44,7 @@ where
     pool: Pool,
 }
 
-pub struct DispatcherShared<S, U>
+pub(crate) struct DispatcherShared<S, U>
 where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
@@ -64,6 +64,7 @@ enum DispatcherState {
     Shutdown,
 }
 
+#[derive(Debug)]
 enum DispatcherError<S, U> {
     Encoder(U),
     Service(S),

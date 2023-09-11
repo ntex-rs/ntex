@@ -236,7 +236,7 @@ impl hash::Hash for IoRef {
 impl fmt::Debug for IoRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IoRef")
-            .field("open", &!self.is_closed())
+            .field("state", self.0.as_ref())
             .finish()
     }
 }

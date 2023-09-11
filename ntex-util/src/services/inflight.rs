@@ -37,6 +37,7 @@ impl<S> Middleware<S> for InFlight {
     }
 }
 
+#[derive(Debug)]
 pub struct InFlightService<S> {
     count: Counter,
     service: S,

@@ -1,4 +1,6 @@
 //! Utilities for ntex framework
+#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+
 pub mod channel;
 pub mod future;
 pub mod services;

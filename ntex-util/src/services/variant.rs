@@ -1,5 +1,5 @@
 //! Contains `Variant` service and related types and functions.
-use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use ntex_service::{IntoServiceFactory, Service, ServiceCall, ServiceCtx, ServiceFactory};
 
@@ -46,6 +46,17 @@ where
     }
 }
 
+impl<A, AR, AC> fmt::Debug for Variant<A, AR, AC>
+where
+    A: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Variant")
+            .field("V1", &self.factory)
+            .finish()
+    }
+}
+
 macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident, $r_name:ident, $m_name:ident, ($($T:ident),+), ($($R:ident),+)} => {
 
     #[allow(non_snake_case)]
@@ -73,7 +84,7 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
 
 macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, $fac_type:ident, $(($n:tt, $T:ident, $R:ident)),+} => {
 
-    #[allow(non_snake_case)]
+    #[allow(non_snake_case, missing_debug_implementations)]
     pub enum $enum_type<V1R, $($R),+> {
         V1(V1R),
         $($T($R),)+
@@ -93,6 +104,15 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
                 V1: self.V1.clone(),
                 $($T: self.$T.clone(),)+
             }
+        }
+    }
+
+    impl<V1: fmt::Debug, $($T: fmt::Debug,)+ V1R, $($R,)+> fmt::Debug for $srv_type<V1, $($T,)+ V1R, $($R,)+> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct(stringify!($srv_type))
+                .field("V1", &self.V1)
+                $(.field(stringify!($T), &self.$T))+
+                .finish()
         }
     }
 
@@ -151,6 +171,15 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
                 V1: self.V1.clone(),
                 $($T: self.$T.clone(),)+
             }
+        }
+    }
+
+    impl<V1: fmt::Debug, V1C, $($T: fmt::Debug,)+ V1R, $($R,)+> fmt::Debug for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct(stringify!(fac_type))
+                .field("V1", &self.V1)
+                $(.field(stringify!($T), &self.$T))+
+                .finish()
         }
     }
 

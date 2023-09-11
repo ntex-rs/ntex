@@ -12,8 +12,9 @@ use crate::Servername;
 
 use super::{PeerCert, PeerCertChain};
 
+#[derive(Debug)]
 /// An implementation of SSL streams
-pub struct TlsServerFilter {
+pub(crate) struct TlsServerFilter {
     inner: IoInner,
     session: RefCell<ServerConnection>,
 }

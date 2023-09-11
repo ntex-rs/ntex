@@ -14,6 +14,7 @@ use super::{Client, ClientConfig, Connect, Connection, Connector};
 ///
 /// This type can be used to construct an instance of `Client` through a
 /// builder-like pattern.
+#[derive(Debug)]
 pub struct ClientBuilder {
     config: ClientConfig,
     default_headers: bool,
@@ -44,7 +45,9 @@ impl ClientBuilder {
     /// Use custom connector service.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
-        T: Service<Connect, Response = Connection, Error = ConnectError> + 'static,
+        T: Service<Connect, Response = Connection, Error = ConnectError>
+            + fmt::Debug
+            + 'static,
     {
         self.config.connector = Box::new(ConnectorWrapper(connector.into()));
         self

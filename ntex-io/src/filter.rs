@@ -2,6 +2,7 @@ use std::{any, io, task::Context, task::Poll};
 
 use super::{buf::Stack, io::Flags, FilterLayer, IoRef, ReadStatus, WriteStatus};
 
+#[derive(Debug)]
 /// Default `Io` filter
 pub struct Base(IoRef);
 
@@ -11,6 +12,7 @@ impl Base {
     }
 }
 
+#[derive(Debug)]
 pub struct Layer<F, L = Base>(pub(crate) F, L);
 
 impl<F: FilterLayer, L: Filter> Layer<F, L> {

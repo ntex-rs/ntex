@@ -1,7 +1,7 @@
 //! Service that buffers incomming requests.
 use std::cell::{Cell, RefCell};
 use std::task::{ready, Context, Poll};
-use std::{collections::VecDeque, future::Future, marker::PhantomData, pin::Pin};
+use std::{collections::VecDeque, fmt, future::Future, marker::PhantomData, pin::Pin};
 
 use ntex_service::{IntoService, Middleware, Service, ServiceCallToCall, ServiceCtx};
 
@@ -16,16 +16,6 @@ pub struct Buffer<R> {
     _t: PhantomData<R>,
 }
 
-impl<R> Default for Buffer<R> {
-    fn default() -> Self {
-        Self {
-            buf_size: 16,
-            cancel_on_shutdown: false,
-            _t: PhantomData,
-        }
-    }
-}
-
 impl<R> Buffer<R> {
     pub fn buf_size(mut self, size: usize) -> Self {
         self.buf_size = size;
@@ -38,6 +28,25 @@ impl<R> Buffer<R> {
     pub fn cancel_on_shutdown(mut self) -> Self {
         self.cancel_on_shutdown = true;
         self
+    }
+}
+
+impl<R> Default for Buffer<R> {
+    fn default() -> Self {
+        Self {
+            buf_size: 16,
+            cancel_on_shutdown: false,
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<R> fmt::Debug for Buffer<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Buffer")
+            .field("buf_size", &self.buf_size)
+            .field("cancel_on_shutdown", &self.cancel_on_shutdown)
+            .finish()
     }
 }
 
@@ -124,6 +133,22 @@ where
             next_call: RefCell::default(),
             _t: PhantomData,
         }
+    }
+}
+
+impl<R, S> fmt::Debug for BufferService<R, S>
+where
+    S: Service<R> + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufferService")
+            .field("size", &self.size)
+            .field("cancel_on_shutdown", &self.cancel_on_shutdown)
+            .field("ready", &self.ready)
+            .field("service", &self.service)
+            .field("buf", &self.buf)
+            .field("next_call", &self.next_call)
+            .finish()
     }
 }
 

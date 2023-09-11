@@ -253,6 +253,21 @@ impl Default for JsonConfig {
     }
 }
 
+impl fmt::Debug for JsonConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsonConfig")
+            .field("limit", &self.limit)
+            .field(
+                "content_type",
+                &self
+                    .content_type
+                    .as_ref()
+                    .map(|_| "Arc<dyn Fn(mime::Mime) -> bool + Send + Sync>"),
+            )
+            .finish()
+    }
+}
+
 /// Request's payload json parser, it resolves to a deserialized `T` value.
 ///
 /// Returns error:

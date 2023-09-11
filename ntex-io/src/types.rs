@@ -65,3 +65,13 @@ impl<T: any::Any> QueryItem<T> {
         }
     }
 }
+
+impl<T: any::Any + fmt::Debug> fmt::Debug for QueryItem<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(v) = self.as_ref() {
+            f.debug_tuple("QueryItem").field(v).finish()
+        } else {
+            f.debug_tuple("QueryItem").field(&None::<T>).finish()
+        }
+    }
+}

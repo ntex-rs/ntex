@@ -3,12 +3,13 @@ use std::{cell::Cell, rc::Rc, task};
 
 use ntex_util::task::LocalWaker;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 /// Simple counter with ability to notify task on reaching specific number
 ///
 /// Counter could be cloned, total count is shared across all clones.
 pub(super) struct Counter(Rc<CounterInner>);
 
+#[derive(Debug)]
 struct CounterInner {
     count: Cell<usize>,
     capacity: usize,
@@ -17,7 +18,7 @@ struct CounterInner {
 
 impl Counter {
     /// Create `Counter` instance and set max value.
-    pub fn new(capacity: usize) -> Self {
+    pub(super) fn new(capacity: usize) -> Self {
         Counter(Rc::new(CounterInner {
             capacity,
             count: Cell::new(0),
@@ -26,13 +27,13 @@ impl Counter {
     }
 
     /// Get counter guard.
-    pub fn get(&self) -> CounterGuard {
+    pub(super) fn get(&self) -> CounterGuard {
         CounterGuard::new(self.0.clone())
     }
 
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub fn available(&self, cx: &mut task::Context<'_>) -> bool {
+    pub(super) fn available(&self, cx: &mut task::Context<'_>) -> bool {
         self.0.available(cx)
     }
 }

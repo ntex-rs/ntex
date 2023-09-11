@@ -46,6 +46,7 @@ impl<T> Cell<T> {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct WeakCell<T> {
     inner: Weak<UnsafeCell<T>>,
 }

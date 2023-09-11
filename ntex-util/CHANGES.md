@@ -1,8 +1,12 @@
 # Changes
 
+## [0.3.2] - 2023-09-11
+
+* Add missing fmt::Debug impls
+
 ## [0.3.1] - 2023-06-24
 
-* Changed `BufferService` to maintain order 
+* Changed `BufferService` to maintain order
 
 * Buffer error type changed to indicate cancellation
 

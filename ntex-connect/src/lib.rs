@@ -1,4 +1,6 @@
 //! Tcp connector service
+#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+
 #[macro_use]
 extern crate log;
 

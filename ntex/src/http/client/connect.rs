@@ -1,4 +1,4 @@
-use std::net;
+use std::{fmt, net};
 
 use crate::http::{body::Body, RequestHeadType};
 use crate::{service::Pipeline, service::Service, util::BoxFuture};
@@ -7,9 +7,21 @@ use super::error::{ConnectError, SendRequestError};
 use super::response::ClientResponse;
 use super::{Connect as ClientConnect, Connection};
 
+// #[derive(Debug)]
 pub(super) struct ConnectorWrapper<T>(pub(crate) Pipeline<T>);
 
-pub(super) trait Connect {
+impl<T> fmt::Debug for ConnectorWrapper<T>
+where
+    T: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Connector")
+            .field("service", &self.0)
+            .finish()
+    }
+}
+
+pub(super) trait Connect: fmt::Debug {
     fn send_request(
         &self,
         head: RequestHeadType,
@@ -20,7 +32,7 @@ pub(super) trait Connect {
 
 impl<T> Connect for ConnectorWrapper<T>
 where
-    T: Service<ClientConnect, Response = Connection, Error = ConnectError>,
+    T: Service<ClientConnect, Response = Connection, Error = ConnectError> + fmt::Debug,
 {
     fn send_request(
         &self,

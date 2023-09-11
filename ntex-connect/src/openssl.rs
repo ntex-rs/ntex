@@ -1,4 +1,4 @@
-use std::io;
+use std::{fmt, io};
 
 pub use ntex_tls::openssl::SslFilter;
 pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
@@ -85,6 +85,15 @@ impl<T> Clone for Connector<T> {
             connector: self.connector.clone(),
             openssl: self.openssl.clone(),
         }
+    }
+}
+
+impl<T> fmt::Debug for Connector<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Connector(openssl)")
+            .field("connector", &self.connector)
+            .field("openssl", &self.openssl)
+            .finish()
     }
 }
 

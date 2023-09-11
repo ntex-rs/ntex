@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{collections::VecDeque, future::Future, io, net::SocketAddr, pin::Pin};
+use std::{collections::VecDeque, fmt, future::Future, io, net::SocketAddr, pin::Pin};
 
 use ntex_bytes::{PoolId, PoolRef};
 use ntex_io::{types, Io};
@@ -61,6 +61,15 @@ impl<T> Clone for Connector<T> {
     }
 }
 
+impl<T> fmt::Debug for Connector<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Connector")
+            .field("resolver", &self.resolver)
+            .field("memory_pool", &self.pool)
+            .finish()
+    }
+}
+
 impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
@@ -102,6 +111,14 @@ impl<'f, T: Address> ConnectServiceResponse<'f, T> {
             state: ConnectState::Resolve(fut),
             pool: PoolId::P0.pool_ref(),
         }
+    }
+}
+
+impl<'f, T: Address> fmt::Debug for ConnectServiceResponse<'f, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectServiceResponse")
+            .field("pool", &self.pool)
+            .finish()
     }
 }
 

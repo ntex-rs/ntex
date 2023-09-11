@@ -5,8 +5,10 @@ use crate::task::LocalWaker;
 /// Simple counter with ability to notify task on reaching specific number
 ///
 /// Counter could be cloned, total count is shared across all clones.
+#[derive(Debug)]
 pub struct Counter(Rc<CounterInner>);
 
+#[derive(Debug)]
 struct CounterInner {
     count: Cell<usize>,
     capacity: usize,
@@ -40,6 +42,7 @@ impl Counter {
     }
 }
 
+#[derive(Debug)]
 pub struct CounterGuard(Rc<CounterInner>);
 
 impl CounterGuard {

@@ -58,6 +58,12 @@ impl LocalWaker {
     }
 }
 
+impl Clone for LocalWaker {
+    fn clone(&self) -> Self {
+        LocalWaker::new()
+    }
+}
+
 impl fmt::Debug for LocalWaker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "LocalWaker")

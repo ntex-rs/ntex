@@ -1,4 +1,4 @@
-use std::io;
+use std::{fmt, io};
 
 pub use ntex_tls::rustls::TlsFilter;
 pub use tls_rustls::{ClientConfig, ServerName};
@@ -89,6 +89,14 @@ impl<T> Clone for Connector<T> {
             inner: self.inner.clone(),
             connector: self.connector.clone(),
         }
+    }
+}
+
+impl<T> fmt::Debug for Connector<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Connector(rustls)")
+            .field("connector", &self.connector)
+            .finish()
     }
 }
 

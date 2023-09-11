@@ -3,9 +3,10 @@ use std::{future::Future, rc::Rc};
 use crate::io::{IoRef, OnDisconnect};
 use crate::ws;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WsSink(Rc<WsSinkInner>);
 
+#[derive(Debug)]
 struct WsSinkInner {
     io: IoRef,
     codec: ws::Codec,

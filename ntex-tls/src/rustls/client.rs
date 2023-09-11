@@ -11,8 +11,9 @@ use crate::rustls::{IoInner, TlsFilter, Wrapper};
 
 use super::{PeerCert, PeerCertChain};
 
+#[derive(Debug)]
 /// An implementation of SSL streams
-pub struct TlsClientFilter {
+pub(crate) struct TlsClientFilter {
     inner: IoInner,
     session: RefCell<ClientConnection>,
 }
