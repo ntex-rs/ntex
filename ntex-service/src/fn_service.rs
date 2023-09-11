@@ -1,4 +1,4 @@
-use std::{future::ready, future::Future, future::Ready, marker::PhantomData};
+use std::{fmt, future::ready, future::Future, future::Ready, marker::PhantomData};
 
 use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
@@ -118,6 +118,14 @@ where
     }
 }
 
+impl<F, Req> fmt::Debug for FnService<F, Req> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FnService")
+            .field("f", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
 impl<F, Fut, Req, Res, Err> Service<Req> for FnService<F, Req>
 where
     F: Fn(Req) -> Fut,
@@ -177,6 +185,18 @@ where
             f: self.f.clone(),
             _t: PhantomData,
         }
+    }
+}
+
+impl<F, Fut, Req, Res, Err, Cfg> fmt::Debug for FnServiceFactory<F, Fut, Req, Res, Err, Cfg>
+where
+    F: Fn(Req) -> Fut,
+    Fut: Future<Output = Result<Res, Err>>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FnServiceFactory")
+            .field("f", &std::any::type_name::<F>())
+            .finish()
     }
 }
 
@@ -255,6 +275,19 @@ where
     }
 }
 
+impl<F, Fut, Cfg, Srv, Req, Err> fmt::Debug for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
+where
+    F: Fn(Cfg) -> Fut,
+    Fut: Future<Output = Result<Srv, Err>>,
+    Srv: Service<Req>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FnServiceConfig")
+            .field("f", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
 impl<F, Fut, Cfg, Srv, Req, Err> ServiceFactory<Req, Cfg>
     for FnServiceConfig<F, Fut, Cfg, Srv, Req, Err>
 where
@@ -328,6 +361,19 @@ where
     }
 }
 
+impl<F, S, R, Req, E> fmt::Debug for FnServiceNoConfig<F, S, R, Req, E>
+where
+    F: Fn() -> R,
+    R: Future<Output = Result<S, E>>,
+    S: Service<Req>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FnServiceNoConfig")
+            .field("f", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
 impl<F, S, R, Req, E, C> IntoServiceFactory<FnServiceNoConfig<F, S, R, Req, E>, Req, C>
     for F
 where
@@ -353,17 +399,20 @@ mod tests {
     #[ntex::test]
     async fn test_fn_service() {
         let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
+        format!("{:?}", new_srv);
 
         let srv = Pipeline::new(new_srv.create(()).await.unwrap());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
+        format!("{:?}", srv);
 
         let srv2 = Pipeline::new(new_srv.clone());
         let res = srv2.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
+        format!("{:?}", srv2);
 
         assert_eq!(lazy(|cx| srv2.poll_shutdown(cx)).await, Poll::Ready(()));
     }

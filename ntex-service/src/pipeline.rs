@@ -2,6 +2,7 @@ use std::{cell::Cell, future, pin::Pin, rc::Rc, task, task::Context, task::Poll}
 
 use crate::{ctx::ServiceCall, ctx::Waiters, Service, ServiceCtx, ServiceFactory};
 
+#[derive(Debug)]
 /// Container for a service.
 ///
 /// Container allows to call enclosed service and adds support of shared readiness.

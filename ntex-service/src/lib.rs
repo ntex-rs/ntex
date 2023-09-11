@@ -1,6 +1,10 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
-
-#![deny(rust_2018_idioms, warnings)]
+#![deny(
+    rust_2018_idioms,
+    warnings,
+    unreachable_pub,
+    missing_debug_implementations
+)]
 
 use std::future::Future;
 use std::rc::Rc;

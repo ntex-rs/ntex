@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, future::Future, marker, pin::Pin, rc::Rc, task};
+use std::{cell::UnsafeCell, fmt, future::Future, marker, pin::Pin, rc::Rc, task};
 
 use crate::{Pipeline, Service};
 
@@ -75,6 +75,15 @@ impl Clone for Waiters {
     }
 }
 
+impl fmt::Debug for Waiters {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Waiters")
+            .field("index", &self.index)
+            .field("waiters", &self.waiters.get().len())
+            .finish()
+    }
+}
+
 impl Drop for Waiters {
     #[inline]
     fn drop(&mut self) {
@@ -145,6 +154,15 @@ impl<'a, S> Clone for ServiceCtx<'a, S> {
     #[inline]
     fn clone(&self) -> Self {
         *self
+    }
+}
+
+impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceCtx")
+            .field("idx", &self.idx)
+            .field("waiters", &self.waiters.get().len())
+            .finish()
     }
 }
 

@@ -1,4 +1,4 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use super::{IntoServiceFactory, ServiceFactory};
 
@@ -56,6 +56,18 @@ where
     }
 }
 
+impl<A, F, C, C2> fmt::Debug for MapConfig<A, F, C, C2>
+where
+    A: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MapConfig")
+            .field("factory", &self.a)
+            .field("map", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
 impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2>
 where
     A: ServiceFactory<R, C2>,
@@ -74,24 +86,16 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
 /// `unit_config()` config combinator
 pub struct UnitConfig<A> {
-    a: A,
+    factory: A,
 }
 
 impl<A> UnitConfig<A> {
     /// Create new `UnitConfig` combinator
-    pub(crate) fn new(a: A) -> Self {
-        Self { a }
-    }
-}
-
-impl<A> Clone for UnitConfig<A>
-where
-    A: Clone,
-{
-    fn clone(&self) -> Self {
-        Self { a: self.a.clone() }
+    pub(crate) fn new(factory: A) -> Self {
+        Self { factory }
     }
 }
 
@@ -108,7 +112,7 @@ where
 
     fn create(&self, _: C) -> Self::Future<'_> {
         UnitConfigFuture {
-            fut: self.a.create(()),
+            fut: self.factory.create(()),
             _t: PhantomData,
         }
     }
@@ -161,6 +165,7 @@ mod tests {
 
         let _ = factory.create(&10).await;
         assert_eq!(item.get(), 11);
+        format!("{:?}", factory);
     }
 
     #[ntex::test]

@@ -1,5 +1,4 @@
-#![allow(clippy::type_complexity)]
-use std::{future::Future, marker::PhantomData};
+use std::{fmt, future::Future, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::apply::{Apply, ApplyFactory};
@@ -153,6 +152,17 @@ where
             service: self.service.clone(),
             _t: PhantomData,
         }
+    }
+}
+
+impl<Svc, Req> fmt::Debug for ServiceChain<Svc, Req>
+where
+    Svc: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceChain")
+            .field("service", &self.service)
+            .finish()
     }
 }
 
@@ -312,6 +322,17 @@ where
             factory: self.factory.clone(),
             _t: PhantomData,
         }
+    }
+}
+
+impl<T, R, C> fmt::Debug for ServiceChainFactory<T, R, C>
+where
+    T: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceChainFactory")
+            .field("factory", &self.factory)
+            .finish()
     }
 }
 

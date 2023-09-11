@@ -1,7 +1,5 @@
-use std::cell::Cell;
-use std::future::{ready, Ready};
-use std::marker::PhantomData;
 use std::task::{Context, Poll};
+use std::{cell::Cell, fmt, future::ready, future::Ready, marker::PhantomData};
 
 use crate::{Service, ServiceCtx};
 
@@ -40,6 +38,14 @@ where
             f_shutdown: Cell::new(f),
             _t: PhantomData,
         }
+    }
+}
+
+impl<Req, Err, F> fmt::Debug for FnShutdown<Req, Err, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FnShutdown")
+            .field("fn", &std::any::type_name::<F>())
+            .finish()
     }
 }
 
@@ -91,5 +97,7 @@ mod tests {
         assert_eq!(res.unwrap(), "pipe");
         assert_eq!(lazy(|cx| pipe.poll_shutdown(cx)).await, Poll::Ready(()));
         assert!(is_called.get());
+
+        format!("{:?}", pipe);
     }
 }

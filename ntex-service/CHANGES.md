@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.6] - 2023-09-11
+
+* Add fmt::Debug impls
+
 ## [1.2.5] - 2023-08-14
 
 * Use Pipeline<T> instead of ApplyService<T>
