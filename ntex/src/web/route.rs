@@ -1,4 +1,4 @@
-use std::{mem, rc::Rc};
+use std::{fmt, mem, rc::Rc};
 
 use crate::util::{BoxFuture, Ready};
 use crate::{http::Method, service::Service, service::ServiceCtx, service::ServiceFactory};
@@ -6,7 +6,7 @@ use crate::{http::Method, service::Service, service::ServiceCtx, service::Servic
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
 use super::extract::FromRequest;
-use super::guard::{self, Guard};
+use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
 use super::request::WebRequest;
 use super::response::WebResponse;
@@ -19,7 +19,7 @@ use super::HttpResponse;
 pub struct Route<Err: ErrorRenderer = DefaultError> {
     handler: Rc<dyn HandlerFn<Err>>,
     methods: Vec<Method>,
-    guards: Rc<Vec<Box<dyn Guard>>>,
+    guards: Rc<AllGuard>,
 }
 
 impl<Err: ErrorRenderer> Route<Err> {
@@ -28,7 +28,7 @@ impl<Err: ErrorRenderer> Route<Err> {
         Route {
             handler: Rc::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
             methods: Vec::new(),
-            guards: Rc::new(Vec::new()),
+            guards: Default::default(),
         }
     }
 
@@ -36,10 +36,10 @@ impl<Err: ErrorRenderer> Route<Err> {
         for m in &self.methods {
             Rc::get_mut(&mut self.guards)
                 .unwrap()
-                .push(Box::new(guard::Method(m.clone())));
+                .add(guard::Method(m.clone()));
         }
 
-        mem::take(Rc::get_mut(&mut self.guards).unwrap())
+        mem::take(&mut Rc::get_mut(&mut self.guards).unwrap().0)
     }
 
     pub(super) fn service(&self) -> RouteService<Err> {
@@ -48,6 +48,16 @@ impl<Err: ErrorRenderer> Route<Err> {
             guards: self.guards.clone(),
             methods: self.methods.clone(),
         }
+    }
+}
+
+impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Route")
+            .field("handler", &self.handler)
+            .field("methods", &self.methods)
+            .field("guards", &self.guards)
+            .finish()
     }
 }
 
@@ -66,7 +76,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
 pub struct RouteService<Err: ErrorRenderer> {
     handler: Rc<dyn HandlerFn<Err>>,
     methods: Vec<Method>,
-    guards: Rc<Vec<Box<dyn Guard>>>,
+    guards: Rc<AllGuard>,
 }
 
 impl<Err: ErrorRenderer> RouteService<Err> {
@@ -75,12 +85,17 @@ impl<Err: ErrorRenderer> RouteService<Err> {
             return false;
         }
 
-        for f in self.guards.iter() {
-            if !f.check(req.head()) {
-                return false;
-            }
-        }
-        true
+        self.guards.check(req.head())
+    }
+}
+
+impl<Err: ErrorRenderer> fmt::Debug for RouteService<Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RouteService")
+            .field("handler", &self.handler)
+            .field("methods", &self.methods)
+            .field("guards", &self.guards)
+            .finish()
     }
 }
 
@@ -132,7 +147,7 @@ impl<Err: ErrorRenderer> Route<Err> {
     /// # }
     /// ```
     pub fn guard<F: Guard + 'static>(mut self, f: F) -> Self {
-        Rc::get_mut(&mut self.guards).unwrap().push(Box::new(f));
+        Rc::get_mut(&mut self.guards).unwrap().add(f);
         self
     }
 

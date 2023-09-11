@@ -512,7 +512,7 @@ fn is_valid(b: u8) -> bool {
 impl Error for InvalidHeaderValue {}
 
 impl fmt::Debug for InvalidHeaderValue {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InvalidHeaderValue")
             // skip _priv noise
             .finish()

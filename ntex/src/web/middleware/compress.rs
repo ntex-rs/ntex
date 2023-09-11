@@ -54,6 +54,7 @@ impl<S> Middleware<S> for Compress {
     }
 }
 
+#[derive(Debug)]
 pub struct CompressMiddleware<S> {
     service: S,
     encoding: ContentEncoding,

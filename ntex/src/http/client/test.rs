@@ -9,6 +9,7 @@ use crate::util::Bytes;
 
 use super::ClientResponse;
 
+#[derive(Debug)]
 /// Test `ClientResponse` builder
 pub struct TestResponse {
     head: ResponseHead,

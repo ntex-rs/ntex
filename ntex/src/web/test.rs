@@ -295,6 +295,7 @@ pub async fn respond_to<T: Responder<DefaultError>>(
 ///     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 /// }
 /// ```
+#[derive(Debug)]
 pub struct TestRequest {
     req: HttpTestRequest,
     rmap: ResourceMap,
@@ -828,6 +829,7 @@ impl TestServerConfig {
     }
 }
 
+#[derive(Debug)]
 /// Test server controller
 pub struct TestServer {
     addr: net::SocketAddr,

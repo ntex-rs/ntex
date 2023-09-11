@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.10] - 2023-09-11
+
+* Add missing fmt::Debug impls
+
 ## [0.1.9] - 2022-12-09
 
 * Add helper method HeaderValue::as_shared()

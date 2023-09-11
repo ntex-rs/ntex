@@ -83,6 +83,7 @@ impl Stream for Payload {
 }
 
 /// Sender part of the payload stream
+#[derive(Debug)]
 pub struct PayloadSender {
     inner: Weak<RefCell<Inner>>,
 }

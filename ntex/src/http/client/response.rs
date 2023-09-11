@@ -166,6 +166,7 @@ impl fmt::Debug for ClientResponse {
     }
 }
 
+#[derive(Debug)]
 /// Future that resolves to a complete http message body.
 pub struct MessageBody {
     length: Option<usize>,
@@ -244,6 +245,7 @@ impl Future for MessageBody {
     }
 }
 
+#[derive(Debug)]
 /// Response's payload json parser, it resolves to a deserialized `T` value.
 ///
 /// Returns error:
@@ -342,6 +344,7 @@ where
     }
 }
 
+#[derive(Debug)]
 struct ReadBody {
     stream: Payload,
     buf: BytesMut,

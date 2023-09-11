@@ -242,6 +242,7 @@ impl<B: MessageBody> fmt::Debug for Response<B> {
 }
 
 #[cfg(feature = "cookie")]
+#[derive(Debug)]
 pub struct CookieIter<'a> {
     iter: header::GetAll<'a>,
 }

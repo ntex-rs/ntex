@@ -67,10 +67,12 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 ///
 /// `%{FOO}e`  os.environ['FOO']
 ///
+#[derive(Debug)]
 pub struct Logger {
     inner: Rc<Inner>,
 }
 
+#[derive(Debug)]
 struct Inner {
     format: Format,
     exclude: HashSet<String>,
@@ -124,6 +126,7 @@ impl<S> Middleware<S> for Logger {
     }
 }
 
+#[derive(Debug)]
 /// Logger middleware
 pub struct LoggerMiddleware<S> {
     inner: Rc<Inner>,
@@ -251,7 +254,7 @@ impl MessageBody for StreamLog {
 
 /// A formatting style for the `Logger`, consisting of multiple
 /// `FormatText`s concatenated into one line.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[doc(hidden)]
 struct Format(Vec<FormatText>);
 

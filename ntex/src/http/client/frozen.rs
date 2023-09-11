@@ -135,6 +135,7 @@ impl fmt::Debug for FrozenClientRequest {
 }
 
 /// Builder that allows to modify extra headers.
+#[derive(Debug)]
 pub struct FrozenSendBuilder {
     req: FrozenClientRequest,
     extra_headers: HeaderMap,

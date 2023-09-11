@@ -1,4 +1,4 @@
-use std::{future::Future, marker::PhantomData};
+use std::{fmt, future::Future, marker::PhantomData};
 
 use crate::util::BoxFuture;
 
@@ -36,7 +36,7 @@ where
     }
 }
 
-pub(super) trait HandlerFn<Err: ErrorRenderer> {
+pub(super) trait HandlerFn<Err: ErrorRenderer>: fmt::Debug {
     fn call(
         &self,
         _: WebRequest<Err>,
@@ -54,6 +54,12 @@ impl<F, T, Err> HandlerWrapper<F, T, Err> {
             hnd,
             _t: PhantomData,
         }
+    }
+}
+
+impl<F, T, Err> fmt::Debug for HandlerWrapper<F, T, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Handler({:?})", std::any::type_name::<F>())
     }
 }
 

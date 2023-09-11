@@ -7,7 +7,7 @@ use crate::util::Extensions;
 use super::config::AppConfig;
 use super::dev::insert_slash;
 use super::error::ErrorRenderer;
-use super::guard::Guard;
+use super::guard::{AllGuard, Guard};
 use super::{request::WebRequest, response::WebResponse, rmap::ResourceMap};
 
 pub trait WebServiceFactory<Err: ErrorRenderer> {
@@ -194,10 +194,11 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
 ///         .finish(my_service)
 /// );
 /// ```
+#[derive(Debug)]
 pub struct WebServiceAdapter {
     rdef: Vec<String>,
     name: Option<String>,
-    guards: Vec<Box<dyn Guard>>,
+    guards: AllGuard,
 }
 
 impl WebServiceAdapter {
@@ -206,7 +207,7 @@ impl WebServiceAdapter {
         WebServiceAdapter {
             rdef: path.patterns(),
             name: None,
-            guards: Vec::new(),
+            guards: Default::default(),
         }
     }
 
@@ -237,7 +238,7 @@ impl WebServiceAdapter {
     /// }
     /// ```
     pub fn guard<G: Guard + 'static>(mut self, guard: G) -> Self {
-        self.guards.push(Box::new(guard));
+        self.guards.add(guard);
         self
     }
 
@@ -266,7 +267,7 @@ struct WebServiceImpl<T> {
     srv: T,
     rdef: Vec<String>,
     name: Option<String>,
-    guards: Vec<Box<dyn Guard>>,
+    guards: AllGuard,
 }
 
 impl<T, Err> WebServiceFactory<Err> for WebServiceImpl<T>
@@ -280,10 +281,10 @@ where
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
-        let guards = if self.guards.is_empty() {
+        let guards = if self.guards.0.is_empty() {
             None
         } else {
-            Some(std::mem::take(&mut self.guards))
+            Some(std::mem::take(&mut self.guards.0))
         };
 
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {

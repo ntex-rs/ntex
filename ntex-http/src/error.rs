@@ -36,7 +36,7 @@ enum ErrorKind {
 }
 
 impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("ntex_http::Error")
             // Skip the noise of the ErrorKind enum
             .field(&self.get_ref())

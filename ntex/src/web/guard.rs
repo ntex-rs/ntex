@@ -27,6 +27,8 @@
 //! ```
 #![allow(non_snake_case)]
 
+use std::fmt;
+
 use crate::http::{header, Method, RequestHead, Uri};
 
 /// Trait defines resource guards. Guards are used for route selection.
@@ -37,6 +39,11 @@ use crate::http::{header, Method, RequestHead, Uri};
 pub trait Guard {
     /// Check if request matches predicate
     fn check(&self, request: &RequestHead) -> bool;
+
+    /// Debug format
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Guard").finish()
+    }
 }
 
 /// Create guard object for supplied function.
@@ -71,6 +78,13 @@ where
     fn check(&self, head: &RequestHead) -> bool {
         (self.0)(head)
     }
+
+    /// Debug format
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("FnGuard")
+            .field(&std::any::type_name::<F>())
+            .finish()
+    }
 }
 
 impl<F> Guard for F
@@ -99,8 +113,9 @@ pub fn Any<F: Guard + 'static>(guard: F) -> AnyGuard {
     AnyGuard(vec![Box::new(guard)])
 }
 
+#[derive(Default)]
 /// Matches if any of supplied guards matche.
-pub struct AnyGuard(Vec<Box<dyn Guard>>);
+pub struct AnyGuard(pub Vec<Box<dyn Guard>>);
 
 impl AnyGuard {
     /// Add guard to a list of guards to check
@@ -118,6 +133,21 @@ impl Guard for AnyGuard {
             }
         }
         false
+    }
+
+    /// Debug format
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AnyGuard(")?;
+        self.0.iter().for_each(|t| {
+            let _ = t.fmt(f);
+        });
+        write!(f, ")")
+    }
+}
+
+impl fmt::Debug for AnyGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Guard::fmt(self, f)
     }
 }
 
@@ -139,14 +169,20 @@ pub fn All<F: Guard + 'static>(guard: F) -> AllGuard {
     AllGuard(vec![Box::new(guard)])
 }
 
+#[derive(Default)]
 /// Matches if all of supplied guards.
-pub struct AllGuard(Vec<Box<dyn Guard>>);
+pub struct AllGuard(pub(super) Vec<Box<dyn Guard>>);
 
 impl AllGuard {
     /// Add new guard to the list of guards to check
     pub fn and<F: Guard + 'static>(mut self, guard: F) -> Self {
         self.0.push(Box::new(guard));
         self
+    }
+
+    /// Add guard to a list of guards to check
+    pub fn add<F: Guard + 'static>(&mut self, guard: F) {
+        self.0.push(Box::new(guard));
     }
 }
 
@@ -158,6 +194,21 @@ impl Guard for AllGuard {
             }
         }
         true
+    }
+
+    /// Debug format
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AllGuard(")?;
+        self.0.iter().for_each(|t| {
+            let _ = t.fmt(f);
+        });
+        write!(f, ")")
+    }
+}
+
+impl fmt::Debug for AllGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Guard::fmt(self, f)
     }
 }
 
@@ -173,15 +224,34 @@ impl Guard for NotGuard {
     fn check(&self, request: &RequestHead) -> bool {
         !self.0.check(request)
     }
+
+    /// Debug format
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NotGuard(")?;
+        self.0.fmt(f)?;
+        write!(f, ")")
+    }
+}
+
+impl fmt::Debug for NotGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Guard::fmt(self, f)
+    }
 }
 
 /// Http method guard
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct MethodGuard(Method);
 
 impl Guard for MethodGuard {
     fn check(&self, request: &RequestHead) -> bool {
         request.method == self.0
+    }
+
+    /// Debug format
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
     }
 }
 
@@ -245,6 +315,7 @@ pub fn Header(name: &'static str, value: &'static str) -> HeaderGuard {
 }
 
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct HeaderGuard(header::HeaderName, header::HeaderValue);
 
 impl Guard for HeaderGuard {
@@ -253,6 +324,11 @@ impl Guard for HeaderGuard {
             return val == self.1;
         }
         false
+    }
+
+    /// Debug format
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
     }
 }
 
@@ -284,6 +360,7 @@ fn get_host_uri(req: &RequestHead) -> Option<Uri> {
 }
 
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct HostGuard(String, Option<String>);
 
 impl HostGuard {
@@ -317,6 +394,11 @@ impl Guard for HostGuard {
         }
 
         true
+    }
+
+    /// Debug format
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
     }
 }
 

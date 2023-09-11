@@ -15,6 +15,7 @@ use super::header::{self, HeaderMap, HeaderName, HeaderValue};
 use super::payload::Payload;
 use super::{Method, Request, Uri, Version};
 
+#[derive(Debug)]
 /// Test `Request` builder
 ///
 /// ```rust,no_run
@@ -39,6 +40,7 @@ use super::{Method, Request, Uri, Version};
 /// ```
 pub struct TestRequest(Option<Inner>);
 
+#[derive(Debug)]
 struct Inner {
     version: Version,
     method: Method,
@@ -276,6 +278,7 @@ where
     }
 }
 
+#[derive(Debug)]
 /// Test server controller
 pub struct TestServer {
     addr: net::SocketAddr,
