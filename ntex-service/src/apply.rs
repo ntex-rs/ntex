@@ -1,5 +1,5 @@
 #![allow(clippy::type_complexity)]
-use std::{future::Future, marker, pin::Pin, task, task::Poll};
+use std::{fmt, future::Future, marker, pin::Pin, task, task::Poll};
 
 use super::ctx::ServiceCtx;
 use super::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
@@ -72,6 +72,18 @@ where
     }
 }
 
+impl<T, Req, F, R, In, Out, Err> fmt::Debug for Apply<T, Req, F, R, In, Out, Err>
+where
+    T: Service<Req, Error = Err> + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Apply")
+            .field("service", &self.service)
+            .field("map", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
 impl<T, Req, F, R, In, Out, Err> Service<In> for Apply<T, Req, F, R, In, Out, Err>
 where
     T: Service<Req, Error = Err>,
@@ -132,6 +144,21 @@ where
             f: self.f.clone(),
             r: marker::PhantomData,
         }
+    }
+}
+
+impl<T, Req, Cfg, F, R, In, Out, Err> fmt::Debug
+    for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
+where
+    T: ServiceFactory<Req, Cfg, Error = Err> + fmt::Debug,
+    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
+    R: Future<Output = Result<Out, Err>>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApplyFactory")
+            .field("factory", &self.service)
+            .field("map", &std::any::type_name::<F>())
+            .finish()
     }
 }
 
@@ -208,7 +235,7 @@ mod tests {
     use super::*;
     use crate::{chain, chain_factory, Service, ServiceCtx};
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     struct Srv;
 
     impl Service<()> for Srv {
@@ -258,6 +285,7 @@ mod tests {
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
+        format!("{:?}", srv);
     }
 
     #[ntex::test]
@@ -280,6 +308,7 @@ mod tests {
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
+        format!("{:?}", new_srv);
     }
 
     #[ntex::test]
@@ -298,5 +327,6 @@ mod tests {
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
+        format!("{:?}", new_srv);
     }
 }

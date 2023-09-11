@@ -1,6 +1,6 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::cell::{Cell, RefCell};
-use std::{any, cmp, error::Error, io, task::Context, task::Poll};
+use std::{any, cmp, error::Error, fmt, io, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec};
 use ntex_io::{types, Filter, FilterFactory, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
@@ -22,11 +22,13 @@ pub struct PeerCert(pub X509);
 pub struct PeerCertChain(pub Vec<X509>);
 
 /// An implementation of SSL streams
+#[derive(Debug)]
 pub struct SslFilter {
     inner: RefCell<SslStream<IoInner>>,
     handshake: Cell<bool>,
 }
 
+#[derive(Debug)]
 struct IoInner {
     source: Option<BytesVec>,
     destination: Option<BytesVec>,
@@ -242,6 +244,14 @@ impl Clone for SslAcceptor {
     }
 }
 
+impl fmt::Debug for SslAcceptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SslAcceptor")
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
 impl<F: Filter> FilterFactory<F> for SslAcceptor {
     type Filter = SslFilter;
 
@@ -292,6 +302,7 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
     }
 }
 
+#[derive(Debug)]
 pub struct SslConnector {
     ssl: ssl::Ssl,
 }

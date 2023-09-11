@@ -40,9 +40,11 @@ impl From<Option<usize>> for KeepAlive {
     }
 }
 
+#[derive(Debug)]
 /// Http service configuration
 pub struct ServiceConfig(pub(super) Rc<Inner>);
 
+#[derive(Debug)]
 pub(super) struct Inner {
     pub(super) keep_alive: Millis,
     pub(super) client_timeout: Millis,

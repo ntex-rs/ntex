@@ -1,9 +1,15 @@
-use std::ops;
+use std::{fmt, ops};
 
 use crate::{filter::Filter, Io};
 
 /// Sealed filter type
 pub struct Sealed(pub(crate) Box<dyn Filter>);
+
+impl fmt::Debug for Sealed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sealed").finish()
+    }
+}
 
 #[derive(Debug)]
 /// Boxed `Io` object with erased filter type

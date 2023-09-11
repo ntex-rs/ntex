@@ -15,6 +15,7 @@ bitflags::bitflags! {
     }
 }
 
+#[derive(Clone, Debug)]
 /// An implementation of WebSockets streams
 pub struct WsTransport {
     pool: PoolRef,
@@ -171,6 +172,7 @@ impl FilterLayer for WsTransport {
     }
 }
 
+#[derive(Clone, Debug)]
 /// WebSockets transport factory
 pub struct WsTransportFactory {
     codec: Codec,

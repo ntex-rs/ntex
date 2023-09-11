@@ -15,7 +15,7 @@ use super::error::{self, ErrorContainer, ErrorRenderer, WebResponseError};
 use super::{HttpRequest, HttpResponse};
 
 /// Default error type
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct DefaultError;
 
 impl ErrorRenderer for DefaultError {

@@ -1,4 +1,6 @@
-use std::{cell::Cell, io, sync::mpsc, sync::Arc, thread, time::Duration, time::Instant};
+use std::{
+    cell::Cell, fmt, io, sync::mpsc, sync::Arc, thread, time::Duration, time::Instant,
+};
 
 use polling::{Event, Poller};
 
@@ -22,6 +24,7 @@ pub(super) enum Command {
     WorkerAvailable,
 }
 
+#[derive(Debug)]
 struct ServerSocketInfo {
     addr: SocketAddr,
     token: Token,
@@ -104,6 +107,16 @@ impl AcceptLoop {
             self.notify.clone(),
             status_handler,
         );
+    }
+}
+
+impl fmt::Debug for AcceptLoop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AcceptLoop")
+            .field("notify", &self.notify)
+            .field("inner", &self.inner)
+            .field("status_handler", &self.status_handler.is_some())
+            .finish()
     }
 }
 

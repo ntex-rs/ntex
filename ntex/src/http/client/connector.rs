@@ -1,4 +1,4 @@
-use std::{task::Context, task::Poll, time::Duration};
+use std::{fmt, task::Context, task::Poll, time::Duration};
 
 use ntex_h2::{self as h2};
 
@@ -18,6 +18,7 @@ use crate::connect::rustls::ClientConfig;
 
 type BoxedConnector = boxed::BoxService<TcpConnect<Uri>, IoBoxed, ConnectError>;
 
+#[derive(Debug)]
 /// Manages http client network connectivity.
 ///
 /// The `Connector` type uses a builder-like combinator pattern for service
@@ -222,7 +223,8 @@ impl Connector {
     /// its combinator chain.
     pub fn finish(
         self,
-    ) -> impl Service<Connect, Response = Connection, Error = ConnectError> {
+    ) -> impl Service<Connect, Response = Connection, Error = ConnectError> + fmt::Debug
+    {
         let tcp_service = connector(self.connector, self.timeout, self.disconnect_timeout);
 
         let ssl_pool = if let Some(ssl_connector) = self.ssl_connector {
@@ -257,7 +259,7 @@ fn connector(
     connector: BoxedConnector,
     timeout: Millis,
     disconnect_timeout: Millis,
-) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError> {
+) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError> + fmt::Debug {
     TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, srv| {
@@ -278,6 +280,7 @@ fn connector(
     })
 }
 
+#[derive(Debug)]
 struct InnerConnector<T> {
     tcp_pool: ConnectionPool<T>,
     ssl_pool: Option<ConnectionPool<T>>,

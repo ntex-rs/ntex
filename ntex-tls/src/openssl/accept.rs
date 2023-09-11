@@ -11,6 +11,7 @@ use crate::MAX_SSL_ACCEPT_COUNTER;
 
 use super::{SslAcceptor as IoSslAcceptor, SslFilter};
 
+#[derive(Debug)]
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type
@@ -71,6 +72,7 @@ impl<F: Filter, C: 'static> ServiceFactory<Io<F>, C> for Acceptor<F> {
     }
 }
 
+#[derive(Debug)]
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type

@@ -5,9 +5,10 @@ use super::cell::Cell;
 use crate::{future::poll_fn, task::LocalWaker};
 
 /// Condition allows to notify multiple waiters at the same time
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Condition(Cell<Inner>);
 
+#[derive(Debug)]
 struct Inner {
     data: Slab<Option<LocalWaker>>,
 }
@@ -50,6 +51,7 @@ impl Drop for Condition {
     }
 }
 
+#[derive(Debug)]
 #[must_use = "Waiter do nothing unless polled"]
 pub struct Waiter {
     token: usize,

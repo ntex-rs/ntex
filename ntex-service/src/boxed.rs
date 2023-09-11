@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
 use crate::ctx::{ServiceCtx, WaitersRef};
 
@@ -30,6 +30,20 @@ where
     S: crate::Service<R> + 'static,
 {
     BoxService(Box::new(service))
+}
+
+impl<Req, Res, Err> fmt::Debug for BoxService<Req, Res, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoxService").finish()
+    }
+}
+
+impl<Cfg, Req, Res, Err, InitErr> fmt::Debug
+    for BoxServiceFactory<Cfg, Req, Res, Err, InitErr>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoxServiceFactory").finish()
+    }
 }
 
 trait ServiceObj<Req> {

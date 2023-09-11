@@ -11,9 +11,10 @@ use super::service::{
 };
 use super::{builder::bind_addr, counter::CounterGuard, Token};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config(Rc<InnerServiceConfig>);
 
+#[derive(Debug)]
 pub(super) struct InnerServiceConfig {
     pub(super) pool: Cell<PoolId>,
 }

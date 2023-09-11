@@ -153,6 +153,23 @@ impl Drop for IoState {
     }
 }
 
+impl fmt::Debug for IoState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let err = self.error.take();
+        let res = f
+            .debug_struct("IoState")
+            .field("flags", &self.flags)
+            .field("pool", &self.pool)
+            .field("disconnect_timeout", &self.disconnect_timeout)
+            .field("error", &err)
+            .field("buffer", &self.buffer)
+            .field("keepalive", &self.keepalive)
+            .finish();
+        self.error.set(err);
+        res
+    }
+}
+
 impl Io {
     #[inline]
     /// Create `Io` instance
@@ -601,9 +618,7 @@ impl<F> hash::Hash for Io<F> {
 
 impl<F> fmt::Debug for Io<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Io")
-            .field("open", &!self.is_closed())
-            .finish()
+        f.debug_struct("Io").field("state", &self.0).finish()
     }
 }
 
@@ -771,6 +786,7 @@ impl<F: Filter> FilterItem<F> {
     }
 }
 
+#[derive(Debug)]
 /// OnDisconnect future resolves when socket get disconnected
 #[must_use = "OnDisconnect do nothing unless polled"]
 pub struct OnDisconnect {

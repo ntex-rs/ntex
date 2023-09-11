@@ -2,6 +2,7 @@ use std::{future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::{Service, ServiceCall, ServiceCtx, ServiceFactory};
 
+#[derive(Debug, Clone)]
 /// Service for the `then` combinator, chaining a computation onto the end of
 /// another service.
 ///
@@ -15,19 +16,6 @@ impl<A, B> Then<A, B> {
     /// Create new `.then()` combinator
     pub(crate) fn new(svc1: A, svc2: B) -> Then<A, B> {
         Self { svc1, svc2 }
-    }
-}
-
-impl<A, B> Clone for Then<A, B>
-where
-    A: Clone,
-    B: Clone,
-{
-    fn clone(&self) -> Self {
-        Then {
-            svc1: self.svc1.clone(),
-            svc2: self.svc2.clone(),
-        }
     }
 }
 
@@ -131,6 +119,7 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 /// `.then()` service factory combinator
 pub struct ThenFactory<A, B> {
     svc1: A,
@@ -168,19 +157,6 @@ where
             fut_b: self.svc2.create(cfg),
             a: None,
             b: None,
-        }
-    }
-}
-
-impl<A, B> Clone for ThenFactory<A, B>
-where
-    A: Clone,
-    B: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            svc1: self.svc1.clone(),
-            svc2: self.svc2.clone(),
         }
     }
 }

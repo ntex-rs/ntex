@@ -47,7 +47,7 @@ use crate::time::Millis;
 
 use self::connect::{Connect as HttpConnect, ConnectorWrapper};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Connect {
     pub uri: Uri,
     pub addr: Option<std::net::SocketAddr>,
@@ -70,9 +70,10 @@ pub struct Connect {
 ///      println!("Response: {:?}", res);
 /// }
 /// ```
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Client(Rc<ClientConfig>);
 
+#[derive(Debug)]
 struct ClientConfig {
     pub(self) connector: Box<dyn HttpConnect>,
     pub(self) headers: HeaderMap,

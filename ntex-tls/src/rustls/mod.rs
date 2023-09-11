@@ -25,11 +25,13 @@ pub struct PeerCert(pub Certificate);
 #[derive(Debug)]
 pub struct PeerCertChain(pub Vec<Certificate>);
 
+#[derive(Debug)]
 /// An implementation of SSL streams
 pub struct TlsFilter {
     inner: InnerTlsFilter,
 }
 
+#[derive(Debug)]
 enum InnerTlsFilter {
     Server(TlsServerFilter),
     Client(TlsClientFilter),
@@ -110,6 +112,7 @@ impl FilterLayer for TlsFilter {
     }
 }
 
+#[derive(Debug)]
 pub struct TlsAcceptor {
     cfg: Arc<ServerConfig>,
     timeout: Millis,
@@ -162,6 +165,7 @@ impl<F: Filter> FilterFactory<F> for TlsAcceptor {
     }
 }
 
+#[derive(Debug)]
 pub struct TlsConnector {
     cfg: Arc<ClientConfig>,
 }
@@ -189,6 +193,7 @@ impl Clone for TlsConnector {
     }
 }
 
+#[derive(Debug)]
 pub struct TlsConnectorConfigured {
     cfg: Arc<ClientConfig>,
     server_name: ServerName,
@@ -217,6 +222,7 @@ impl<F: Filter> FilterFactory<F> for TlsConnectorConfigured {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct IoInner {
     handshake: Cell<bool>,
 }

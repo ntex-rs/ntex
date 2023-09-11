@@ -1,4 +1,6 @@
 //! Utilities for abstructing io streams
+#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+
 use std::{
     any::Any, any::TypeId, fmt, future::Future, io as sio, io::Error as IoError,
     task::Context, task::Poll,

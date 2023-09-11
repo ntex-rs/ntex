@@ -1,4 +1,4 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use super::ServiceFactory;
 
@@ -35,6 +35,18 @@ where
             f: self.f.clone(),
             e: PhantomData,
         }
+    }
+}
+
+impl<A, R, C, F, E> fmt::Debug for MapInitErr<A, R, C, F, E>
+where
+    A: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MapInitErr")
+            .field("service", &self.a)
+            .field("map", &std::any::type_name::<F>())
+            .finish()
     }
 }
 
@@ -108,6 +120,7 @@ mod tests {
 
         assert!(factory.create(&true).await.is_err());
         assert!(factory.create(&false).await.is_ok());
+        format!("{:?}", factory);
     }
 
     #[ntex::test]
@@ -127,5 +140,6 @@ mod tests {
 
         assert!(factory.create(&true).await.is_err());
         assert!(factory.create(&false).await.is_ok());
+        format!("{:?}", factory);
     }
 }

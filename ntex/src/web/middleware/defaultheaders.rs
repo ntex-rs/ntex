@@ -25,11 +25,12 @@ use crate::web::{WebRequest, WebResponse};
 ///         );
 /// }
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DefaultHeaders {
     inner: Rc<Inner>,
 }
 
+#[derive(Debug)]
 struct Inner {
     ct: bool,
     headers: HeaderMap,
@@ -97,6 +98,7 @@ impl<S> Middleware<S> for DefaultHeaders {
     }
 }
 
+#[derive(Debug)]
 pub struct DefaultHeadersMiddleware<S> {
     service: S,
     inner: Rc<Inner>,

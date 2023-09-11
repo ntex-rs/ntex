@@ -3,6 +3,7 @@ use std::io;
 use crate::service::{Service, ServiceCtx, ServiceFactory};
 use crate::{http::request::Request, util::Ready};
 
+#[derive(Copy, Clone, Debug)]
 pub struct ExpectHandler;
 
 impl ServiceFactory<Request> for ExpectHandler {

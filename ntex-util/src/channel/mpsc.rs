@@ -124,6 +124,7 @@ impl<T> Drop for Sender<T> {
     }
 }
 
+#[derive(Debug)]
 /// Weak sender type
 pub struct WeakSender<T> {
     shared: WeakCell<Shared<T>>,

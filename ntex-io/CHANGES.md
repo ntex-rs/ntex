@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.3] - 2023-09-11
+
+* Add missing fmt::Debug impls
+
 ## [0.3.2] - 2023-08-10
 
 * Replace `PipelineCall` with `ServiceCall<'static, S, R>`

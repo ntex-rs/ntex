@@ -1,4 +1,6 @@
 //! An implementations of SSL streams for ntex ecosystem
+#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[doc(hidden)]

@@ -1,4 +1,4 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use super::{Service, ServiceCall, ServiceCtx, ServiceFactory};
 
@@ -39,6 +39,18 @@ where
             f: self.f.clone(),
             _t: PhantomData,
         }
+    }
+}
+
+impl<A, F, E> fmt::Debug for MapErr<A, F, E>
+where
+    A: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MapErr")
+            .field("svc", &self.service)
+            .field("map", &std::any::type_name::<F>())
+            .finish()
     }
 }
 
@@ -138,6 +150,19 @@ where
     }
 }
 
+impl<A, R, C, F, E> fmt::Debug for MapErrFactory<A, R, C, F, E>
+where
+    A: ServiceFactory<R, C> + fmt::Debug,
+    F: Fn(A::Error) -> E + Clone,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MapErrFactory")
+            .field("factory", &self.a)
+            .field("map", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
 impl<A, R, C, F, E> ServiceFactory<R, C> for MapErrFactory<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
@@ -198,7 +223,7 @@ mod tests {
     use super::*;
     use crate::{fn_factory, Pipeline, Service, ServiceCtx, ServiceFactory};
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     struct Srv(bool);
 
     impl Service<()> for Srv {
@@ -235,6 +260,8 @@ mod tests {
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
+
+        format!("{:?}", srv);
     }
 
     #[ntex::test]
@@ -243,6 +270,8 @@ mod tests {
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
+
+        format!("{:?}", srv);
     }
 
     #[ntex::test]
@@ -254,6 +283,7 @@ mod tests {
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
+        format!("{:?}", new_srv);
     }
 
     #[ntex::test]
@@ -266,5 +296,6 @@ mod tests {
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
+        format!("{:?}", new_srv);
     }
 }

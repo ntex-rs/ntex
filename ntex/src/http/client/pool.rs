@@ -43,6 +43,7 @@ struct AvailableConnection {
 }
 
 /// Connections pool
+#[derive(Debug)]
 pub(super) struct ConnectionPool<T> {
     connector: Pipeline<T>,
     inner: Rc<RefCell<Inner>>,
@@ -174,6 +175,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub(super) struct Inner {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
@@ -187,6 +189,7 @@ pub(super) struct Inner {
     waiters: Rc<RefCell<Waiters>>,
 }
 
+#[derive(Debug)]
 struct Waiters {
     waiters: HashMap<Key, VecDeque<(Connect, Waiter)>>,
     pool: pool::Pool<Result<Connection, ConnectError>>,

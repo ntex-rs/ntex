@@ -4,6 +4,7 @@ use ntex_bytes::{BytesVec, PoolRef};
 
 use super::{io::Flags, IoRef, ReadStatus, WriteStatus};
 
+#[derive(Debug)]
 /// Context for io read task
 pub struct ReadContext(IoRef);
 
@@ -97,6 +98,7 @@ impl ReadContext {
     }
 }
 
+#[derive(Debug)]
 /// Context for io write task
 pub struct WriteContext(IoRef);
 

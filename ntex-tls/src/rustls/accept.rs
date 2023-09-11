@@ -10,6 +10,7 @@ use ntex_util::{future::Ready, time::Millis};
 use super::{TlsAcceptor, TlsFilter};
 use crate::{counter::Counter, counter::CounterGuard, MAX_SSL_ACCEPT_COUNTER};
 
+#[derive(Debug)]
 /// Support `SSL` connections via rustls package
 ///
 /// `rust-tls` feature enables `RustlsAcceptor` type
@@ -71,6 +72,7 @@ impl<F: Filter, C: 'static> ServiceFactory<Io<F>, C> for Acceptor<F> {
     }
 }
 
+#[derive(Debug)]
 /// RusTLS based `Acceptor` service
 pub struct AcceptorService<F> {
     acceptor: TlsAcceptor,

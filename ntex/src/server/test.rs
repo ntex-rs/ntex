@@ -92,6 +92,7 @@ where
     }
 }
 
+#[derive(Debug)]
 /// Test server controller
 pub struct TestServer {
     addr: net::SocketAddr,

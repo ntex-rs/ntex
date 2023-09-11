@@ -22,6 +22,7 @@ impl<S> Middleware<S> for OneRequest {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct OneRequestService<S> {
     waker: LocalWaker,
     service: S,

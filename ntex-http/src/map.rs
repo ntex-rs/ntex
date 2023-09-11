@@ -62,6 +62,7 @@ impl Value {
     }
 }
 
+#[derive(Debug)]
 pub struct ValueIntoIter {
     value: Value,
 }
@@ -444,6 +445,7 @@ impl TryFrom<&str> for Value {
     }
 }
 
+#[derive(Debug)]
 pub struct GetAll<'a> {
     idx: usize,
     item: Option<&'a Value>,
@@ -477,6 +479,7 @@ impl<'a> Iterator for GetAll<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct Keys<'a>(hash_map::Keys<'a, HeaderName, Value>);
 
 impl<'a> Iterator for Keys<'a> {
@@ -497,6 +500,7 @@ impl<'a> IntoIterator for &'a HeaderMap {
     }
 }
 
+#[derive(Debug)]
 pub struct Iter<'a> {
     idx: usize,
     current: Option<(&'a HeaderName, &'a VecDeque<HeaderValue>)>,

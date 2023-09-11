@@ -1,5 +1,5 @@
 //! Stream encoder
-use std::{future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
 
 use brotli2::write::BrotliEncoder;
 use flate2::write::{GzEncoder, ZlibEncoder};
@@ -14,6 +14,7 @@ use super::Writer;
 
 const INPLACE: usize = 1024;
 
+#[derive(Debug)]
 pub struct Encoder<B> {
     eof: bool,
     body: EncoderBody<B>,
@@ -65,6 +66,16 @@ enum EncoderBody<B> {
     Bytes(Bytes),
     Stream(B),
     BoxedStream(Box<dyn MessageBody>),
+}
+
+impl<B> fmt::Debug for EncoderBody<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EncoderBody::Bytes(ref b) => write!(f, "EncoderBody::Bytes({:?})", b),
+            EncoderBody::Stream(_) => write!(f, "EncoderBody::Stream(_)"),
+            EncoderBody::BoxedStream(_) => write!(f, "EncoderBody::BoxedStream(_)"),
+        }
+    }
 }
 
 impl<B: MessageBody> MessageBody for Encoder<B> {
@@ -245,6 +256,16 @@ impl ContentEncoder {
                     Err(err)
                 }
             },
+        }
+    }
+}
+
+impl fmt::Debug for ContentEncoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ContentEncoder::Deflate(_) => write!(f, "ContentEncoder::Deflate"),
+            ContentEncoder::Gzip(_) => write!(f, "ContentEncoder::Gzip"),
+            ContentEncoder::Br(_) => write!(f, "ContentEncoder::Br"),
         }
     }
 }

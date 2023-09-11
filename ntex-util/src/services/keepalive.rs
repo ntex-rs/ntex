@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{cell::Cell, convert::Infallible, marker, time::Duration, time::Instant};
+use std::{cell::Cell, convert::Infallible, fmt, marker, time::Duration, time::Instant};
 
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
@@ -45,6 +45,15 @@ where
     }
 }
 
+impl<R, E, F> fmt::Debug for KeepAlive<R, E, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeepAlive")
+            .field("ka", &self.ka)
+            .field("f", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
 impl<R, E, F, C: 'static> ServiceFactory<R, C> for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
@@ -83,6 +92,16 @@ where
             sleep: sleep(dur),
             _t: marker::PhantomData,
         }
+    }
+}
+
+impl<R, E, F> fmt::Debug for KeepAliveService<R, E, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeepAliveService")
+            .field("dur", &self.dur)
+            .field("expire", &self.expire)
+            .field("f", &std::any::type_name::<F>())
+            .finish()
     }
 }
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.4] - 2023-09-11
+
+* Add missing fmt::Debug impls
+
 ## [0.7.3] - 2023-08-10
 
 * Update ntex-service

@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{fmt, marker::PhantomData};
 
 use ntex_service::{chain_factory, fn_service, Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::Ready;
@@ -41,6 +41,14 @@ pub struct FilterServiceFactory<T, F> {
     _t: PhantomData<F>,
 }
 
+impl<T: FilterFactory<F> + fmt::Debug, F> fmt::Debug for FilterServiceFactory<T, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FilterServiceFactory")
+            .field("filter_factory", &self.filter)
+            .finish()
+    }
+}
+
 impl<T, F> ServiceFactory<Io<F>> for FilterServiceFactory<T, F>
 where
     T: FilterFactory<F> + Clone,
@@ -63,6 +71,14 @@ where
 pub struct FilterService<T, F> {
     filter: T,
     _t: PhantomData<F>,
+}
+
+impl<T: FilterFactory<F> + fmt::Debug, F> fmt::Debug for FilterService<T, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FilterService")
+            .field("filter_factory", &self.filter)
+            .finish()
+    }
 }
 
 impl<T, F> Service<Io<F>> for FilterService<T, F>
