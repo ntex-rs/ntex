@@ -375,6 +375,7 @@ mod tests {
         assert_eq!(waiter.await, ());
     }
 
+    #[derive(Debug)]
     struct Counter {
         idx: usize,
         in_bytes: Rc<Cell<usize>>,

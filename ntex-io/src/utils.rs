@@ -130,6 +130,7 @@ mod tests {
         assert_eq!(buf, b"RES".as_ref());
     }
 
+    #[derive(Debug)]
     pub(crate) struct TestFilter;
 
     impl FilterLayer for TestFilter {
