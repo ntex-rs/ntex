@@ -1,4 +1,9 @@
-#![deny(rust_2018_idioms, unreachable_pub)]
+#![deny(
+    rust_2018_idioms,
+    warnings,
+    unreachable_pub,
+    missing_debug_implementations
+)]
 #![warn(nonstandard_style, future_incompatible)]
 
 //! Resource path matching library.
@@ -14,6 +19,7 @@ pub use self::resource::ResourceDef;
 pub use self::router::{ResourceId, Router, RouterBuilder};
 
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct ResourceInfo;
 
 pub trait Resource<T: ResourcePath> {

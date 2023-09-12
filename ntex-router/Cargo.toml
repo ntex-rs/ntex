@@ -1,6 +1,6 @@
 [package]
 name = "ntex-router"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Path router"
 keywords = ["ntex"]
@@ -18,10 +18,10 @@ default = ["http"]
 
 [dependencies]
 serde = "1.0"
-ntex-bytes = "0.1.9"
+ntex-bytes = "0.1.19"
 log = "0.4"
 http = { version = "0.2", optional = true }
-regex = { version = "1.7.0", default-features = false, features = ["std"] }
+regex = { version = "1.9.5", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 http = "0.2"

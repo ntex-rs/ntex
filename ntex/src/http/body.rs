@@ -269,6 +269,15 @@ where
     }
 }
 
+impl<S> From<BoxedBodyStream<S>> for Body
+where
+    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
+{
+    fn from(s: BoxedBodyStream<S>) -> Body {
+        Body::from_message(s)
+    }
+}
+
 impl MessageBody for Bytes {
     fn size(&self) -> BodySize {
         BodySize::Sized(self.len() as u64)
@@ -372,6 +381,7 @@ impl MessageBody for String {
 }
 
 /// Type represent streaming body.
+///
 /// Response does not contain `content-length` header and appropriate transfer encoding is used.
 pub struct BodyStream<S, E> {
     stream: S,
@@ -388,6 +398,15 @@ where
             stream,
             _t: PhantomData,
         }
+    }
+}
+
+impl<S, E> fmt::Debug for BodyStream<S, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BodyStream")
+            .field("stream", &std::any::type_name::<S>())
+            .field("error", &std::any::type_name::<E>())
+            .finish()
     }
 }
 
@@ -434,6 +453,14 @@ where
     }
 }
 
+impl<S> fmt::Debug for BoxedBodyStream<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoxedBodyStream")
+            .field("stream", &std::any::type_name::<S>())
+            .finish()
+    }
+}
+
 impl<S> MessageBody for BoxedBodyStream<S>
 where
     S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
@@ -474,6 +501,15 @@ where
 {
     pub fn new(size: u64, stream: S) -> Self {
         SizedStream { size, stream }
+    }
+}
+
+impl<S> fmt::Debug for SizedStream<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SizedStream")
+            .field("size", &self.size)
+            .field("stream", &std::any::type_name::<S>())
+            .finish()
     }
 }
 
@@ -695,6 +731,21 @@ mod tests {
     #[crate::rt_test]
     async fn body_stream() {
         let st = BodyStream::new(stream::once(Ready::<_, io::Error>::Ok(Bytes::from("1"))));
+        assert!(format!("{:?}", st).contains("BodyStream"));
+        let body: Body = st.into();
+        assert!(format!("{:?}", body).contains("Body::Message(_)"));
+        assert!(body != Body::None);
+
+        let res = ResponseBody::new(body);
+        assert!(res.as_ref().is_some());
+    }
+
+    #[crate::rt_test]
+    async fn boxed_body_stream() {
+        let st = BoxedBodyStream::new(stream::once(Ready::<_, Box<dyn Error>>::Ok(
+            Bytes::from("1"),
+        )));
+        assert!(format!("{:?}", st).contains("BoxedBodyStream"));
         let body: Body = st.into();
         assert!(format!("{:?}", body).contains("Body::Message(_)"));
         assert!(body != Body::None);
@@ -726,6 +777,7 @@ mod tests {
             2,
             stream::iter(["1", "", "2"].iter().map(|&v| Ok(Bytes::from(v)))),
         );
+        assert!(format!("{:?}", body).contains("SizedStream"));
         assert_eq!(
             poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("1")),

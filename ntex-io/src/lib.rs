@@ -53,7 +53,7 @@ pub enum WriteStatus {
 }
 
 #[allow(unused_variables)]
-pub trait FilterLayer: 'static {
+pub trait FilterLayer: fmt::Debug + 'static {
     /// Create buffers for this filter
     const BUFFERS: bool = true;
 

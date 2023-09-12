@@ -41,8 +41,10 @@ impl Config {
     }
 }
 
+#[derive(Debug)]
 pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
 
+#[derive(Debug)]
 pub(super) struct ServiceConfigInner {
     pub(super) services: Vec<(String, net::TcpListener)>,
     pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration + Send>>,
@@ -207,7 +209,7 @@ impl InternalServiceFactory for ConfiguredService {
     }
 }
 
-pub(super) trait ServiceRuntimeConfiguration {
+pub(super) trait ServiceRuntimeConfiguration: fmt::Debug {
     fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send>;
 
     fn configure(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>>;
@@ -220,6 +222,14 @@ pub(super) struct ConfigWrapper<F, R, E> {
 
 // SAFETY: we dont store R or E in ConfigWrapper
 unsafe impl<F: Send, R, E> Send for ConfigWrapper<F, R, E> {}
+
+impl<F, R, E> fmt::Debug for ConfigWrapper<F, R, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConfigWrapper")
+            .field("f", &std::any::type_name::<F>())
+            .finish()
+    }
+}
 
 impl<F, R, E> ServiceRuntimeConfiguration for ConfigWrapper<F, R, E>
 where
@@ -254,6 +264,17 @@ struct ServiceRuntimeInner {
     names: HashMap<String, Token>,
     services: HashMap<Token, BoxServiceFactory>,
     onstart: Vec<BoxFuture<'static, ()>>,
+}
+
+impl fmt::Debug for ServiceRuntime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let inner = self.0.borrow();
+        f.debug_struct("ServiceRuntimer")
+            .field("names", &inner.names)
+            .field("services", &inner.services)
+            .field("onstart", &inner.onstart.len())
+            .finish()
+    }
 }
 
 impl ServiceRuntime {

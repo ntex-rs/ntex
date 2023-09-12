@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.2] - 2023-09-12
+
+* Add missing fmt::Debug impls
+
 ## [0.5.1] - 2021-08-23
 
 * Fix: segments could be lost in case of immediate match

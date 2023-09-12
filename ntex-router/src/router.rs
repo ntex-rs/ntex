@@ -5,7 +5,7 @@ use super::{IntoPattern, Resource, ResourceDef, ResourcePath};
 pub struct ResourceId(u16);
 
 /// Resource router.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Router<T, U = ()> {
     tree: Tree,
     resources: Vec<(ResourceDef, T, Option<U>)>,
@@ -111,6 +111,7 @@ impl<T, U> Router<T, U> {
     }
 }
 
+#[derive(Debug)]
 pub struct RouterBuilder<T, U = ()> {
     insensitive: bool,
     resources: Vec<(ResourceDef, T, Option<U>)>,

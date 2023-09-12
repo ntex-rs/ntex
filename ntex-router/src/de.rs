@@ -1,8 +1,7 @@
 use serde::de::{self, Deserializer, Error as DeError, Visitor};
 use serde::forward_to_deserialize_any;
 
-use crate::path::{Path, PathIter};
-use crate::ResourcePath;
+use crate::{path::Path, path::PathIter, ResourcePath};
 
 macro_rules! unsupported_type {
     ($trait_fn:ident, $name:expr) => {
@@ -42,6 +41,7 @@ macro_rules! parse_single_value {
     };
 }
 
+#[derive(Debug)]
 pub struct PathDeserializer<'de, T: ResourcePath> {
     path: &'de Path<T>,
 }
