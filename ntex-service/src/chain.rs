@@ -130,7 +130,8 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     where
         F: Fn(In, Pipeline<Svc>) -> R,
         R: Future<Output = Result<Out, Err>>,
-        Svc: Service<Req, Error = Err>,
+        Svc: Service<Req>,
+        Err: From<Svc::Error>,
     {
         ServiceChain {
             service: Apply::new(self.service, f),
@@ -227,7 +228,8 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
     where
         F: Fn(In, Pipeline<T::Service>) -> R + Clone,
         R: Future<Output = Result<Out, Err>>,
-        T: ServiceFactory<Req, C, Error = Err>,
+        T: ServiceFactory<Req, C>,
+        Err: From<T::Error>,
     {
         ServiceChainFactory {
             factory: ApplyFactory::new(self.factory, f),
