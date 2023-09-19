@@ -104,7 +104,7 @@ flate2 = { version = "1.0.22", optional = true }
 [dev-dependencies]
 env_logger = "0.10"
 rand = "0.8"
-time = "0.3"
+time = "=0.3.27"
 futures-util = "0.3"
 tls-openssl = { version="0.10", package = "openssl" }
 tls-rustls = { version = "0.21", package="rustls", features = ["dangerous_configuration"]  }
