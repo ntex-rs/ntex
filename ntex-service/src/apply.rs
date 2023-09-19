@@ -10,10 +10,11 @@ pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
     f: F,
 ) -> Apply<T, Req, F, R, In, Out, Err>
 where
-    T: Service<Req, Error = Err>,
+    T: Service<Req>,
     F: Fn(In, Pipeline<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
     U: IntoService<T, Req>,
+    Err: From<T::Error>,
 {
     Apply::new(service.into_service(), f)
 }
@@ -24,10 +25,11 @@ pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
     f: F,
 ) -> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg>,
     F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
     U: IntoServiceFactory<T, Req, Cfg>,
+    Err: From<T::Error>,
 {
     ApplyFactory::new(service.into_factory(), f)
 }
@@ -35,18 +37,19 @@ where
 /// `Apply` service combinator
 pub struct Apply<T, Req, F, R, In, Out, Err>
 where
-    T: Service<Req, Error = Err>,
+    T: Service<Req>,
 {
     service: Pipeline<T>,
     f: F,
-    r: marker::PhantomData<fn(Req) -> (In, Out, R)>,
+    r: marker::PhantomData<fn(Req) -> (In, Out, R, Err)>,
 }
 
 impl<T, Req, F, R, In, Out, Err> Apply<T, Req, F, R, In, Out, Err>
 where
-    T: Service<Req, Error = Err>,
+    T: Service<Req>,
     F: Fn(In, Pipeline<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
+    Err: From<T::Error>,
 {
     pub(crate) fn new(service: T, f: F) -> Self {
         Apply {
@@ -59,9 +62,10 @@ where
 
 impl<T, Req, F, R, In, Out, Err> Clone for Apply<T, Req, F, R, In, Out, Err>
 where
-    T: Service<Req, Error = Err> + Clone,
+    T: Service<Req> + Clone,
     F: Fn(In, Pipeline<T>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
+    Err: From<T::Error>,
 {
     fn clone(&self) -> Self {
         Apply {
@@ -74,7 +78,7 @@ where
 
 impl<T, Req, F, R, In, Out, Err> fmt::Debug for Apply<T, Req, F, R, In, Out, Err>
 where
-    T: Service<Req, Error = Err> + fmt::Debug,
+    T: Service<Req> + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Apply")
@@ -86,9 +90,10 @@ where
 
 impl<T, Req, F, R, In, Out, Err> Service<In> for Apply<T, Req, F, R, In, Out, Err>
 where
-    T: Service<Req, Error = Err>,
+    T: Service<Req>,
     F: Fn(In, Pipeline<T>) -> R,
     R: Future<Output = Result<Out, Err>>,
+    Err: From<T::Error>,
 {
     type Response = Out;
     type Error = Err;
@@ -106,7 +111,7 @@ where
 /// `apply()` service factory
 pub struct ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg>,
     F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
 {
@@ -117,9 +122,10 @@ where
 
 impl<T, Req, Cfg, F, R, In, Out, Err> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg>,
     F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
+    Err: From<T::Error>,
 {
     /// Create new `ApplyNewService` new service instance
     pub(crate) fn new(service: T, f: F) -> Self {
@@ -134,9 +140,10 @@ where
 impl<T, Req, Cfg, F, R, In, Out, Err> Clone
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Cfg, Error = Err> + Clone,
+    T: ServiceFactory<Req, Cfg> + Clone,
     F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
+    Err: From<T::Error>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -150,9 +157,10 @@ where
 impl<T, Req, Cfg, F, R, In, Out, Err> fmt::Debug
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Cfg, Error = Err> + fmt::Debug,
+    T: ServiceFactory<Req, Cfg> + fmt::Debug,
     F: Fn(In, Pipeline<T::Service>) -> R + Clone,
     R: Future<Output = Result<Out, Err>>,
+    Err: From<T::Error>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApplyFactory")
@@ -165,9 +173,10 @@ where
 impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
     for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg>,
     F: Fn(In, Pipeline<T::Service>) -> R + Clone,
-    for<'r> R: Future<Output = Result<Out, Err>> + 'r,
+    R: Future<Output = Result<Out, Err>>,
+    Err: From<T::Error>,
 {
     type Response = Out;
     type Error = Err;
@@ -189,12 +198,13 @@ where
 pin_project_lite::pin_project! {
     pub struct ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
     where
-        T: ServiceFactory<Req, Cfg, Error = Err>,
+        T: ServiceFactory<Req, Cfg>,
         T: 'f,
         F: Fn(In, Pipeline<T::Service>) -> R,
         T::Service: 'f,
         R: Future<Output = Result<Out, Err>>,
         Cfg: 'f,
+        Err: From<T::Error>,
     {
         #[pin]
         fut: T::Future<'f>,
@@ -206,9 +216,10 @@ pin_project_lite::pin_project! {
 impl<'f, T, Req, Cfg, F, R, In, Out, Err> Future
     for ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
 where
-    T: ServiceFactory<Req, Cfg, Error = Err>,
+    T: ServiceFactory<Req, Cfg>,
     F: Fn(In, Pipeline<T::Service>) -> R,
     R: Future<Output = Result<Out, Err>>,
+    Err: From<T::Error>,
 {
     type Output = Result<Apply<T::Service, Req, F, R, In, Out, Err>, T::InitError>;
 
@@ -248,6 +259,15 @@ mod tests {
         }
     }
 
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    struct Err;
+
+    impl From<()> for Err {
+        fn from(_: ()) -> Self {
+            Err
+        }
+    }
+
     #[ntex::test]
     async fn test_call() {
         let srv = chain(
@@ -259,7 +279,10 @@ mod tests {
         )
         .pipeline();
 
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(
+            lazy(|cx| srv.poll_ready(cx)).await,
+            Poll::Ready(Ok::<_, Err>(()))
+        );
         let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
 
@@ -278,7 +301,10 @@ mod tests {
             .clone()
             .pipeline();
 
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(
+            lazy(|cx| srv.poll_ready(cx)).await,
+            Poll::Ready(Ok::<_, Err>(()))
+        );
         let res = lazy(|cx| srv.poll_shutdown(cx)).await;
         assert_eq!(res, Poll::Ready(()));
 
@@ -303,7 +329,10 @@ mod tests {
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(
+            lazy(|cx| srv.poll_ready(cx)).await,
+            Poll::Ready(Ok::<_, Err>(()))
+        );
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
@@ -322,7 +351,10 @@ mod tests {
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(
+            lazy(|cx| srv.poll_ready(cx)).await,
+            Poll::Ready(Ok::<_, Err>(()))
+        );
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());

@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.7] - 2023-09-19
+
+* Use From<T::Error> for apply_fn util
+
 ## [1.2.6] - 2023-09-11
 
 * Add fmt::Debug impls
