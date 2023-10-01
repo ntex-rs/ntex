@@ -67,12 +67,10 @@ impl<B: fmt::Debug> fmt::Debug for Encoder<B> {
             .field("eof", &self.eof)
             .field("body", &self.body)
             .field("encoder", &self.encoder)
-            .field("fut", &self.fut.as_ref().map(|_|"JoinHandle(_)"))
+            .field("fut", &self.fut.as_ref().map(|_| "JoinHandle(_)"))
             .finish()
     }
 }
-
-
 
 enum EncoderBody<B> {
     Bytes(Bytes),
