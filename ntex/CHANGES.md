@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.5] - 2023-10-01
+
+* Fix compile error for 'compress' feature with async-std & glommio #226
+
 ## [0.7.4] - 2023-09-11
 
 * Add missing fmt::Debug impls
