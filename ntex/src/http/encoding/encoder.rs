@@ -14,7 +14,6 @@ use super::Writer;
 
 const INPLACE: usize = 1024;
 
-#[derive(Debug)]
 pub struct Encoder<B> {
     eof: bool,
     body: EncoderBody<B>,
@@ -61,6 +60,19 @@ impl<B: MessageBody + 'static> Encoder<B> {
         }
     }
 }
+
+impl<B: fmt::Debug> fmt::Debug for Encoder<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Encoder")
+            .field("eof", &self.eof)
+            .field("body", &self.body)
+            .field("encoder", &self.encoder)
+            .field("fut", &self.fut.as_ref().map(|_|"JoinHandle(_)"))
+            .finish()
+    }
+}
+
+
 
 enum EncoderBody<B> {
     Bytes(Bytes),
