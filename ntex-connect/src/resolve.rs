@@ -126,6 +126,7 @@ mod tests {
     use super::*;
     use ntex_util::future::lazy;
 
+    #[allow(clippy::clone_on_copy)]
     #[ntex::test]
     async fn resolver() {
         let resolver = Resolver::default().clone();
