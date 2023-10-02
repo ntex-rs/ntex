@@ -1,6 +1,6 @@
 [package]
 name = "ntex-connect"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork connect utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -53,7 +53,7 @@ tls-openssl = { version="0.10", package = "openssl", optional = true }
 
 # rustls
 tls-rustls = { version = "0.21", package = "rustls", optional = true }
-webpki-roots = { version = "0.23", optional = true }
+webpki-roots = { version = "0.25", optional = true }
 
 [dev-dependencies]
 rand = "0.8"

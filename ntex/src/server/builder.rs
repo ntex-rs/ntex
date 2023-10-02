@@ -6,19 +6,16 @@ use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::rt::{spawn, Signal, System};
-use crate::{
-    io::Io, service::ServiceFactory, time::sleep, time::Millis, util::join_all,
-    util::Stream,
-};
+use crate::time::{sleep, Millis};
+use crate::{io::Io, service::ServiceFactory, util::join_all, util::Stream};
 
 use super::accept::{AcceptLoop, AcceptNotify, Command};
 use super::config::{
     Config, ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime,
 };
 use super::service::{Factory, InternalServiceFactory};
-use super::socket::Listener;
 use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use super::{Server, ServerCommand, ServerStatus, Token};
+use super::{socket::Listener, Server, ServerCommand, ServerStatus, Token};
 
 const STOP_DELAY: Millis = Millis(300);
 

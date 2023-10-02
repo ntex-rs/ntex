@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.2] - 2023-10-02
+
+* Add `Clone` impl for `Connect<T>` type
+
 ## [0.3.1] - 2023-09-11
 
 * Add missing fmt::Debug impls

@@ -6,14 +6,9 @@ use ntex_util::future::{BoxFuture, Either, Ready};
 
 use crate::{Address, Connect, ConnectError};
 
+#[derive(Copy)]
 /// DNS Resolver Service
 pub struct Resolver<T>(marker::PhantomData<T>);
-
-impl<T> fmt::Debug for Resolver<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Resolver").finish()
-    }
-}
 
 impl<T> Resolver<T> {
     /// Create new resolver instance with custom configuration and options.
@@ -93,6 +88,12 @@ impl<T> Default for Resolver<T> {
 impl<T> Clone for Resolver<T> {
     fn clone(&self) -> Self {
         Resolver(marker::PhantomData)
+    }
+}
+
+impl<T> fmt::Debug for Resolver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Resolver").finish()
     }
 }
 

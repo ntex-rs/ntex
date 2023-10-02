@@ -8,6 +8,7 @@ use ntex_util::future::{BoxFuture, Either, Ready};
 
 use crate::{net::tcp_connect_in, Address, Connect, ConnectError, Resolver};
 
+#[derive(Copy)]
 pub struct Connector<T> {
     resolver: Resolver<T>,
     pool: PoolRef,

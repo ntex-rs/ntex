@@ -159,6 +159,16 @@ impl<T: Address> Connect<T> {
     }
 }
 
+impl<T: Clone> Clone for Connect<T> {
+    fn clone(&self) -> Self {
+        Connect {
+            req: self.req.clone(),
+            port: self.port,
+            addr: self.addr.clone(),
+        }
+    }
+}
+
 impl<T: Address> From<T> for Connect<T> {
     fn from(addr: T) -> Self {
         Connect::new(addr)
