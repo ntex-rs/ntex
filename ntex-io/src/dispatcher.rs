@@ -562,9 +562,8 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         st.close();
-        // TODO! fix
-        //sleep(Millis(50)).await;
-        //assert!(client.is_server_dropped());
+        sleep(Millis(1500)).await;
+        assert!(client.is_server_dropped());
     }
 
     #[ntex::test]
@@ -599,8 +598,8 @@ mod tests {
         // close read side
         client.close().await;
 
-        // TODO! fix
-        // assert!(client.is_server_dropped());
+        // dispatcher is closed
+        assert!(client.is_server_dropped());
     }
 
     #[ntex::test]
