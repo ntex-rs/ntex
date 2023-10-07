@@ -556,6 +556,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct Filter<Err>(PhantomData<Err>);
 
 impl<Err: ErrorRenderer> Filter<Err> {
