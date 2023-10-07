@@ -182,6 +182,7 @@ where
 }
 
 /// Service to convert `Request` to a `WebRequest<Err>`
+#[derive(Debug)]
 pub struct AppFactoryService<T, Err>
 where
     T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,

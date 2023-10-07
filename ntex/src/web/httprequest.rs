@@ -18,6 +18,7 @@ use super::service::AppState;
 /// An HTTP Request
 pub struct HttpRequest(pub(crate) Rc<HttpRequestInner>);
 
+#[derive(Debug)]
 pub(crate) struct HttpRequestInner {
     pub(crate) head: Message<RequestHead>,
     pub(crate) path: Path<Uri>,
@@ -312,6 +313,7 @@ impl fmt::Debug for HttpRequest {
 }
 
 /// Request's objects pool
+#[derive(Debug)]
 pub(crate) struct HttpRequestPool(RefCell<Vec<Rc<HttpRequestInner>>>);
 
 impl HttpRequestPool {

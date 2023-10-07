@@ -396,6 +396,7 @@ impl Head for ResponseHead {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Message<T: Head> {
     head: Rc<T>,
 }
