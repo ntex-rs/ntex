@@ -109,7 +109,7 @@ where
             .extensions
             .borrow_mut()
             .take()
-            .unwrap_or_else(Extensions::new);
+            .unwrap_or_default();
         let middleware = self.middleware.clone();
         let external = std::mem::take(&mut *self.external.borrow_mut());
 
