@@ -11,6 +11,7 @@ use super::error::{
 };
 use super::httprequest::HttpRequest;
 
+#[derive(Debug)]
 pub struct Ready<T>(Option<T>);
 
 impl<T> Unpin for Ready<T> {}
