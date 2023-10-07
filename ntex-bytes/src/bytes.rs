@@ -979,7 +979,7 @@ impl PartialEq for Bytes {
 
 impl PartialOrd for Bytes {
     fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
-        self.inner.as_ref().partial_cmp(other.inner.as_ref())
+		Some(self.cmp(other))
     }
 }
 
