@@ -141,7 +141,7 @@ where
             .extra_headers
             .borrow_mut()
             .take()
-            .unwrap_or_else(HeaderMap::new);
+            .unwrap_or_default();
 
         // Generate a random key for the `Sec-WebSocket-Key` header.
         // a base64-encoded (see Section 4 of [RFC4648]) value that,
