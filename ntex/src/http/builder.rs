@@ -18,6 +18,7 @@ use crate::time::{Millis, Seconds};
 ///
 /// This type can be used to construct an instance of `http service` through a
 /// builder-like pattern.
+#[derive(Debug)]
 pub struct HttpServiceBuilder<F, S, X = ExpectHandler, U = UpgradeHandler<F>> {
     keep_alive: KeepAlive,
     client_timeout: Millis,
