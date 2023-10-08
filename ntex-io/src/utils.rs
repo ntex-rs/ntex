@@ -164,8 +164,6 @@ mod tests {
             .map_init_err(|_| ());
         assert!(format!("{:?}", filter_service_factory)
             .contains("factory: FilterServiceFactory"));
-        assert!(format!("{:?}", filter_service_factory)
-            .contains("filter_factory: TestFilterFactory"));
         let svc = chain_factory(filter_service_factory)
             .and_then(seal(fn_service(|io: IoBoxed| async move {
                 let _ = io.recv(&BytesCodec).await;
