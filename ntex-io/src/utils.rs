@@ -159,18 +159,21 @@ mod tests {
     #[ntex::test]
     async fn test_utils_filter() {
         let (_, server) = IoTest::create();
-        let svc = chain_factory(
-            filter::<_, crate::filter::Base>(TestFilterFactory)
-                .map_err(|_| ())
-                .map_init_err(|_| ()),
-        )
-        .and_then(seal(fn_service(|io: IoBoxed| async move {
-            let _ = io.recv(&BytesCodec).await;
-            Ok::<_, ()>(())
-        })))
-        .pipeline(())
-        .await
-        .unwrap();
+        let filter_service_factory = filter::<_, crate::filter::Base>(TestFilterFactory)
+            .map_err(|_| ())
+            .map_init_err(|_| ());
+        assert!(format!("{:?}", filter_service_factory)
+            .contains("factory: FilterServiceFactory"));
+        assert!(format!("{:?}", filter_service_factory)
+            .contains("filter_factory: TestFilterFactory"));
+        let svc = chain_factory(filter_service_factory)
+            .and_then(seal(fn_service(|io: IoBoxed| async move {
+                let _ = io.recv(&BytesCodec).await;
+                Ok::<_, ()>(())
+            })))
+            .pipeline(())
+            .await
+            .unwrap();
         let _ = svc.call(Io::new(server)).await;
     }
 
