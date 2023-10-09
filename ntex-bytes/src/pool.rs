@@ -26,6 +26,7 @@ pub struct BufParams {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
         const SPAWNED    = 0b0000_0001;
         const INCREASED  = 0b0000_0010;

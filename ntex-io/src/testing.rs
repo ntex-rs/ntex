@@ -37,6 +37,7 @@ pub struct IoTest {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct IoTestFlags: u8 {
         const FLUSHED = 0b0000_0001;
         const CLOSED  = 0b0000_0010;

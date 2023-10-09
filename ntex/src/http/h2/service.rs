@@ -278,21 +278,18 @@ where
         Ready<Self::Response, Self::Error>,
     >;
 
-    fn call<'a>(
-        &'a self,
-        mut msg: h2::Message,
-        _: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
-        let (io, pseudo, headers, eof, payload) = match msg.kind().take() {
+    fn call<'a>(&'a self, msg: h2::Message, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
+        let h2::Message { stream, kind } = msg;
+        let (io, pseudo, headers, eof, payload) = match kind {
             h2::MessageKind::Headers {
                 pseudo,
                 headers,
                 eof,
             } => {
                 let pl = if !eof {
-                    log::debug!("Creating local payload stream for {:?}", msg.id());
-                    let (sender, payload) = Payload::create(msg.stream().empty_capacity());
-                    self.streams.borrow_mut().insert(msg.id(), sender);
+                    log::debug!("Creating local payload stream for {:?}", stream.id());
+                    let (sender, payload) = Payload::create(stream.empty_capacity());
+                    self.streams.borrow_mut().insert(stream.id(), sender);
                     Some(payload)
                 } else {
                     None
@@ -300,17 +297,17 @@ where
                 (self.io.clone(), pseudo, headers, eof, pl)
             }
             h2::MessageKind::Data(data, cap) => {
-                log::debug!("Got data chunk for {:?}: {:?}", msg.id(), data.len());
-                if let Some(sender) = self.streams.borrow_mut().get_mut(&msg.id()) {
+                log::debug!("Got data chunk for {:?}: {:?}", stream.id(), data.len());
+                if let Some(sender) = self.streams.borrow_mut().get_mut(&stream.id()) {
                     sender.feed_data(data, cap)
                 } else {
-                    log::error!("Payload stream does not exists for {:?}", msg.id());
+                    log::error!("Payload stream does not exists for {:?}", stream.id());
                 };
                 return Either::Right(Ready::Ok(()));
             }
             h2::MessageKind::Eof(item) => {
-                log::debug!("Got payload eof for {:?}: {:?}", msg.id(), item);
-                if let Some(mut sender) = self.streams.borrow_mut().remove(&msg.id()) {
+                log::debug!("Got payload eof for {:?}: {:?}", stream.id(), item);
+                if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     match item {
                         h2::StreamEof::Data(data) => {
                             sender.feed_eof(data);
@@ -325,12 +322,11 @@ where
             }
             h2::MessageKind::Disconnect(err) => {
                 log::debug!("Connection is disconnected {:?}", err);
-                if let Some(mut sender) = self.streams.borrow_mut().remove(&msg.id()) {
+                if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     sender.set_error(io::Error::new(io::ErrorKind::Other, err).into());
                 }
                 return Either::Right(Ready::Ok(()));
             }
-            h2::MessageKind::Empty => return Either::Right(Ready::Ok(())),
         };
 
         let cfg = self.config.clone();
@@ -338,7 +334,7 @@ where
         Either::Left(Box::pin(async move {
             log::trace!(
                 "{:?} got request (eof: {}): {:#?}\nheaders: {:#?}",
-                msg.id(),
+                stream.id(),
                 eof,
                 pseudo,
                 headers
@@ -381,25 +377,25 @@ where
 
             let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
             if size.is_eof() || is_head_req {
-                msg.stream().send_response(head.status, hdrs, true)?;
+                stream.send_response(head.status, hdrs, true)?;
             } else {
-                msg.stream().send_response(head.status, hdrs, false)?;
+                stream.send_response(head.status, hdrs, false)?;
 
                 loop {
                     match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                         None => {
-                            log::debug!("{:?} closing payload stream", msg.id());
-                            msg.stream().send_payload(Bytes::new(), true).await?;
+                            log::debug!("{:?} closing payload stream", stream.id());
+                            stream.send_payload(Bytes::new(), true).await?;
                             break;
                         }
                         Some(Ok(chunk)) => {
                             log::debug!(
                                 "{:?} sending data chunk {:?} bytes",
-                                msg.id(),
+                                stream.id(),
                                 chunk.len()
                             );
                             if !chunk.is_empty() {
-                                msg.stream().send_payload(chunk, false).await?;
+                                stream.send_payload(chunk, false).await?;
                             }
                         }
                         Some(Err(e)) => {

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.6] - 2023-10-xx
+
+* Upgrade ntex-h2 to 0.4
+
 ## [0.7.5] - 2023-10-01
 
 * Fix compile error for 'compress' feature with async-std & glommio #226

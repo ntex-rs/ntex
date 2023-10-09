@@ -12,8 +12,7 @@ use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
-use super::h2proto::{H2Client, H2PublishService};
-use super::{error::ConnectError, Connect};
+use super::{error::ConnectError, h2proto::H2Client, Connect};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(super) struct Key {
@@ -472,24 +471,13 @@ where
                         ByteString::new()
                     };
 
-                    let connection = h2::client::ClientConnection::with_params(
+                    let client = h2::client::SimpleClient::new(
                         io,
                         this.inner.borrow().h2config.clone(),
-                        this.uri.scheme() == Some(&Scheme::HTTPS),
+                        this.uri.scheme().cloned().unwrap_or(Scheme::HTTPS),
                         auth,
                     );
-                    let client = H2Client::new(connection.client());
-                    let key = this.key.clone();
-                    let publish = H2PublishService::new(client.clone());
-                    crate::rt::spawn(async move {
-                        let res = connection.start(publish).await;
-                        log::trace!(
-                            "Http/2 connection is closed for {:?} with {:?}",
-                            key.authority,
-                            res
-                        );
-                    });
-
+                    let client = H2Client::new(client);
                     let guard = this.guard.take().unwrap().consume();
                     let conn = Connection::new(
                         ConnectionType::H2(client.clone()),

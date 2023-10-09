@@ -25,6 +25,7 @@ pin_project_lite::pin_project! {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8  {
         const READY_ERR  = 0b0001;
         const IO_ERR     = 0b0010;
