@@ -15,6 +15,7 @@ use crate::util::BytesMut;
 use super::{decoder, decoder::PayloadType, encoder, Message};
 
 bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
         const HEAD              = 0b0000_0001;
         const STREAM            = 0b0000_0010;

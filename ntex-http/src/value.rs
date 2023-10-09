@@ -545,7 +545,7 @@ impl PartialEq for HeaderValue {
 impl PartialOrd for HeaderValue {
     #[inline]
     fn partial_cmp(&self, other: &HeaderValue) -> Option<cmp::Ordering> {
-        self.inner.partial_cmp(&other.inner)
+        Some(self.cmp(other))
     }
 }
 

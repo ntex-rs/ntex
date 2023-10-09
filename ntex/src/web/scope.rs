@@ -204,7 +204,7 @@ where
         self.external.extend(cfg.external);
 
         if !cfg.state.is_empty() {
-            let mut state = self.state.unwrap_or_else(Extensions::new);
+            let mut state = self.state.unwrap_or_default();
             state.extend(cfg.state);
             self.state = Some(state);
         }

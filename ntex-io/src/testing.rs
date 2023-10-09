@@ -37,6 +37,7 @@ pub struct IoTest {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct IoTestFlags: u8 {
         const FLUSHED = 0b0000_0001;
         const CLOSED  = 0b0000_0010;
@@ -565,7 +566,7 @@ impl Future for WriteTask {
                                         log::trace!("write task is stopped");
                                         return Poll::Ready(());
                                     }
-                                    Poll::Ready(Ok(n)) if n == 0 => {
+                                    Poll::Ready(Ok(0)) => {
                                         this.state.close(None);
                                         log::trace!("write task is stopped");
                                         return Poll::Ready(());

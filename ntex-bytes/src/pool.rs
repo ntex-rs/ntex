@@ -26,6 +26,7 @@ pub struct BufParams {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
         const SPAWNED    = 0b0000_0001;
         const INCREASED  = 0b0000_0010;
@@ -116,8 +117,7 @@ impl PoolId {
     where
         T: Fn(Pin<Box<dyn Future<Output = ()>>>) + 'static,
     {
-        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> =
-            Rc::new(move |fut| f(fut));
+        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> = Rc::new(f);
 
         POOLS.with(move |pools| {
             *pools[self.0 as usize].spawn.borrow_mut() = Some(spawn.clone());
@@ -131,8 +131,7 @@ impl PoolId {
     where
         T: Fn(Pin<Box<dyn Future<Output = ()>>>) + 'static,
     {
-        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> =
-            Rc::new(move |fut| f(fut));
+        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> = Rc::new(f);
 
         POOLS.with(move |pools| {
             for pool in pools.iter().take(15) {
