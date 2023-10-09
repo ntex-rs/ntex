@@ -8,6 +8,7 @@ use crate::util::{BufMut, PoolRef, Ready};
 use super::{CloseCode, CloseReason, Codec, Frame, Item, Message};
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8  {
         const CLOSED       = 0b0001;
         const CONTINUATION = 0b0010;

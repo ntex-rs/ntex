@@ -26,6 +26,7 @@ impl<T> fmt::Debug for Pool<T> {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
         const SENDER = 0b0000_0001;
         const RECEIVER = 0b0000_0010;

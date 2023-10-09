@@ -14,6 +14,7 @@ use crate::tasks::{ReadContext, WriteContext};
 use crate::{FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u16 {
         /// io is closed
         const IO_STOPPED          = 0b0000_0000_0000_0001;

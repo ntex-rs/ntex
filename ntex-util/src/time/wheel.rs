@@ -131,6 +131,7 @@ impl Drop for TimerHandle {
 }
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u8 {
         const DRIVER_STARTED = 0b0000_0001;
         const DRIVER_RECALC  = 0b0000_0010;

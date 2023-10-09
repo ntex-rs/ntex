@@ -19,6 +19,7 @@ use super::payload::{Payload, PayloadSender, PayloadStatus};
 use super::{codec::Codec, Message};
 
 bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u16 {
         /// We parsed one complete request message
         const STARTED              = 0b0000_0001;
