@@ -566,7 +566,7 @@ impl Future for WriteTask {
                                         log::trace!("write task is stopped");
                                         return Poll::Ready(());
                                     }
-                                    Poll::Ready(Ok(n)) if n == 0 => {
+                                    Poll::Ready(Ok(0)) => {
                                         this.state.close(None);
                                         log::trace!("write task is stopped");
                                         return Poll::Ready(());

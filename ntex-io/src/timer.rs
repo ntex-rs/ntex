@@ -38,7 +38,7 @@ pub(crate) fn register(timeout: Duration, io: &IoRef) -> Instant {
         inner
             .notifications
             .entry(expire)
-            .or_insert_with(HashSet::default)
+            .or_default()
             .insert(io.0.clone());
 
         if !inner.running {

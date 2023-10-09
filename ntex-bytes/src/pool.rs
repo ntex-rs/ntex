@@ -117,8 +117,7 @@ impl PoolId {
     where
         T: Fn(Pin<Box<dyn Future<Output = ()>>>) + 'static,
     {
-        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> =
-            Rc::new(move |fut| f(fut));
+        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> = Rc::new(f);
 
         POOLS.with(move |pools| {
             *pools[self.0 as usize].spawn.borrow_mut() = Some(spawn.clone());
@@ -132,8 +131,7 @@ impl PoolId {
     where
         T: Fn(Pin<Box<dyn Future<Output = ()>>>) + 'static,
     {
-        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> =
-            Rc::new(move |fut| f(fut));
+        let spawn: Rc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>)> = Rc::new(f);
 
         POOLS.with(move |pools| {
             for pool in pools.iter().take(15) {

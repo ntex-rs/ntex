@@ -201,7 +201,7 @@ impl Waiters {
         let key: Key = connect.uri.authority().unwrap().clone().into();
         self.waiters
             .entry(key)
-            .or_insert_with(VecDeque::new)
+            .or_default()
             .push_back((connect, tx));
         rx
     }

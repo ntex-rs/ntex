@@ -105,11 +105,7 @@ where
 
         let filter_fut = self.filter.create(());
         let state_factories = self.state_factories.clone();
-        let mut extensions = self
-            .extensions
-            .borrow_mut()
-            .take()
-            .unwrap_or_else(Extensions::new);
+        let mut extensions = self.extensions.borrow_mut().take().unwrap_or_default();
         let middleware = self.middleware.clone();
         let external = std::mem::take(&mut *self.external.borrow_mut());
 
