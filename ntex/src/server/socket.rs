@@ -107,7 +107,17 @@ impl Listener {
 #[cfg(unix)]
 mod listener_impl {
     use super::*;
+    use std::os::fd::{AsFd, BorrowedFd};
     use std::os::unix::io::{AsRawFd, RawFd};
+
+    impl AsFd for Listener {
+        fn as_fd(&self) -> BorrowedFd<'_> {
+            match *self {
+                Listener::Tcp(ref lst) => lst.as_fd(),
+                Listener::Uds(ref lst) => lst.as_fd(),
+            }
+        }
+    }
 
     impl AsRawFd for Listener {
         fn as_raw_fd(&self) -> RawFd {
@@ -122,7 +132,16 @@ mod listener_impl {
 #[cfg(windows)]
 mod listener_impl {
     use super::*;
+    use std::os::fd::{AsFd, BorrowedFd};
     use std::os::windows::io::{AsRawSocket, RawSocket};
+
+    impl AsFd for Listener {
+        fn as_fd(&self) -> BorrowedFd<'_> {
+            match *self {
+                Listener::Tcp(ref lst) => lst.as_fd(),
+            }
+        }
+    }
 
     impl AsRawSocket for Listener {
         fn as_raw_socket(&self) -> RawSocket {
