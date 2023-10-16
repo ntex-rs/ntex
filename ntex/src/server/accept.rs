@@ -1,8 +1,7 @@
-use std::{
-    cell::Cell, fmt, io, sync::mpsc, sync::Arc, thread, time::Duration, time::Instant,
-};
+use std::time::{Duration, Instant};
+use std::{cell::Cell, fmt, io, num::NonZeroUsize, sync::mpsc, sync::Arc, thread};
 
-use polling::{Event, Poller};
+use polling::{Event, Events, Poller};
 
 use crate::rt::System;
 use crate::time::{sleep, Millis};
@@ -202,7 +201,7 @@ impl Accept {
         }
 
         // Create storage for events
-        let mut events = Vec::with_capacity(128);
+        let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
 
         loop {
             if let Err(e) = self.poller.wait(&mut events, None) {
@@ -241,7 +240,7 @@ impl Accept {
             let result = if info.registered.get() {
                 self.poller.modify(&info.sock, Event::readable(idx))
             } else {
-                self.poller.add(&info.sock, Event::readable(idx))
+                unsafe { self.poller.add(&info.sock, Event::readable(idx)) }
             };
             if let Err(err) = result {
                 if err.kind() == io::ErrorKind::WouldBlock {
