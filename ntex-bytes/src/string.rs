@@ -406,12 +406,6 @@ mod test {
 
         s.clear();
         assert_eq!(s, "");
-
-        assert!(ByteString::try_from(b"\xc3\x28".as_ref()).is_err());
-        assert!(ByteString::try_from(vec![b'\xc3']).is_err());
-        assert!(ByteString::try_from(Bytes::from_static(b"\xc3\x28")).is_err());
-        assert!(ByteString::try_from(&Bytes::from_static(b"\xc3\x28")).is_err());
-        assert!(ByteString::try_from(BytesMut::copy_from_slice(b"\xc3\x28")).is_err());
     }
 
     #[test]
@@ -465,12 +459,23 @@ mod test {
     #[test]
     fn test_try_from() {
         let _ = ByteString::try_from(&b"nice bytes"[..]).unwrap();
+        assert!(ByteString::try_from(b"\xc3\x28".as_ref()).is_err());
+
         let _ = ByteString::try_from(b"nice bytes".to_vec()).unwrap();
+        assert!(ByteString::try_from(vec![b'\xc3']).is_err());
+
         let _ = ByteString::try_from(Bytes::from_static(b"nice bytes")).unwrap();
+        assert!(ByteString::try_from(Bytes::from_static(b"\xc3\x28")).is_err());
+
         let _ = ByteString::try_from(&Bytes::from_static(b"nice bytes")).unwrap();
+        assert!(ByteString::try_from(&Bytes::from_static(b"\xc3\x28")).is_err());
+
         let _ = ByteString::try_from(BytesMut::from(&b"nice bytes"[..])).unwrap();
+        assert!(ByteString::try_from(BytesMut::copy_from_slice(b"\xc3\x28")).is_err());
+
         let _ =
             ByteString::try_from(BytesVec::copy_from_slice(&b"nice bytes"[..])).unwrap();
+        assert!(ByteString::try_from(BytesVec::copy_from_slice(b"\xc3\x28")).is_err());
     }
 
     #[test]
