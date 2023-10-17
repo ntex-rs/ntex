@@ -56,7 +56,7 @@ ntex-service = "1.2.6"
 ntex-macros = "0.1.3"
 ntex-util = "0.3.2"
 ntex-bytes = "0.1.19"
-ntex-h2 = "0.4.2"
+ntex-h2 = "0.4.3"
 ntex-rt = "0.4.9"
 ntex-io = "0.3.4"
 ntex-tls = "0.3.1"
@@ -71,9 +71,9 @@ bitflags = "2.4"
 log = "0.4"
 num_cpus = "1.13"
 nanorand = { version = "0.7.0", default-features = false, features = ["std", "wyrand"] }
-polling = "2.5.1"
+polling = "3.2.0"
 pin-project-lite = "0.2"
-regex = { version = "1.7.0", default-features = false, features = ["std"] }
+regex = { version = "1.10.1", default-features = false, features = ["std"] }
 sha-1 = "0.10"
 serde = { version = "1.0", features=["derive"] }
 socket2 = "0.5"
@@ -95,7 +95,7 @@ tls-openssl = { version="0.10", package = "openssl", optional = true }
 
 # rustls
 tls-rustls = { version = "0.21", package = "rustls", optional = true }
-webpki-roots = { version = "0.23", optional = true }
+webpki-roots = { version = "0.25.2", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }
@@ -109,4 +109,4 @@ futures-util = "0.3"
 tls-openssl = { version="0.10", package = "openssl" }
 tls-rustls = { version = "0.21", package="rustls", features = ["dangerous_configuration"]  }
 rustls-pemfile = "1.0"
-webpki-roots = "0.23"
+webpki-roots = "0.25"
