@@ -164,8 +164,7 @@ mod tests {
             .map_err(|_| ())
             .map_init_err(|_| ());
 
-        assert!(format!("{:?}", filter_service_factory)
-            .contains("FilterServiceFactory"));
+        assert!(format!("{:?}", filter_service_factory).contains("FilterServiceFactory"));
 
         let svc = chain_factory(filter_service_factory)
             .and_then(seal(fn_service(|io: IoBoxed| async move {
