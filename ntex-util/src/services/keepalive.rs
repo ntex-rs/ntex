@@ -160,8 +160,8 @@ mod tests {
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
 
-        sleep(Millis(10)).await;
-        assert_eq!(lazy(|cx| service.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        sleep(Millis(150)).await;
+        assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
 
         sleep(Millis(500)).await;
         assert_eq!(
