@@ -102,7 +102,7 @@ impl Future for Signals {
         {
             if self.signal.as_mut().poll(cx).is_ready() {
                 let handlers = SHANDLERS.with(|h| mem::take(&mut *h.borrow_mut()));
-                for mut sender in handlers {
+                for sender in handlers {
                     let _ = sender.send(Signal::Int);
                 }
             }

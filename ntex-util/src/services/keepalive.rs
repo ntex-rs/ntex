@@ -151,9 +151,11 @@ mod tests {
     #[ntex_macros::rt_test2]
     async fn test_ka() {
         let factory = KeepAlive::new(Millis(100), || TestErr);
+        assert!(format!("{:?}", factory).contains("KeepAlive"));
         let _ = factory.clone();
 
         let service = factory.pipeline(&()).await.unwrap();
+        assert!(format!("{:?}", service).contains("KeepAliveService"));
 
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
