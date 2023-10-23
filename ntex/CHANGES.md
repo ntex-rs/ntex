@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.7] - 2023-10-23
+
+* Fix rust tls client TLS_SERVER_ROOTS #232
+
 ## [0.7.6] - 2023-10-16
 
 * Upgrade ntex-h2 to 0.4
