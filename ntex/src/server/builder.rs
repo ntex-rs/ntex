@@ -1,6 +1,6 @@
 use std::{fmt, future::Future, io, marker, mem, net, pin::Pin, task::Context, task::Poll};
 
-use async_channel::{unbounded, Receiver};
+use async_channel::unbounded;
 use async_oneshot as oneshot;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -19,6 +19,8 @@ use super::{socket::Listener, Server, ServerCommand, ServerStatus, Token};
 
 const STOP_DELAY: Millis = Millis(300);
 
+type ServerStream = Pin<Box<dyn Stream<Item = ServerCommand>>>;
+
 /// Server builder
 pub struct ServerBuilder {
     threads: usize,
@@ -31,7 +33,7 @@ pub struct ServerBuilder {
     exit: bool,
     shutdown_timeout: Millis,
     no_signals: bool,
-    cmd: Receiver<ServerCommand>,
+    cmd: ServerStream,
     server: Server,
     notify: Vec<oneshot::Sender<()>>,
 }
@@ -49,7 +51,8 @@ impl ServerBuilder {
         let server = Server::new(tx);
 
         ServerBuilder {
-            threads: num_cpus::get(),
+            threads: std::thread::available_parallelism()
+                .map_or(2, std::num::NonZeroUsize::get),
             token: Token(0),
             workers: Vec::new(),
             services: Vec::new(),
@@ -59,7 +62,7 @@ impl ServerBuilder {
             exit: false,
             shutdown_timeout: Millis::from_secs(30),
             no_signals: false,
-            cmd: rx,
+            cmd: Box::pin(rx),
             notify: Vec::new(),
             server,
         }

@@ -15,6 +15,9 @@ use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
 use super::{counter::Counter, socket::Stream, Token};
 
+type ServerStopCommand = Pin<Box<dyn FutStream<Item = StopCommand>>>;
+type ServerWorkerCommand = Pin<Box<dyn FutStream<Item = WorkerCommand>>>;
+
 #[derive(Debug)]
 pub(super) struct WorkerCommand(Connection);
 
@@ -125,8 +128,8 @@ impl WorkerAvailability {
 /// Worker accepts Socket objects via unbounded channel and starts stream
 /// processing.
 pub(super) struct Worker {
-    rx: Receiver<WorkerCommand>,
-    rx2: Receiver<StopCommand>,
+    rx: ServerWorkerCommand,
+    rx2: ServerStopCommand,
     services: Vec<WorkerService>,
     availability: WorkerAvailability,
     conns: Counter,
@@ -197,8 +200,8 @@ impl Worker {
     ) -> Result<Worker, ()> {
         availability.set(false);
         let mut wrk = MAX_CONNS_COUNTER.with(move |conns| Worker {
-            rx,
-            rx2,
+            rx: Box::pin(rx),
+            rx2: Box::pin(rx2),
             availability,
             factories,
             shutdown_timeout,

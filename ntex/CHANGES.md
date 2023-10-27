@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.8] - 2023-11-xx
+
+* Drop num_cpu dep
+
 ## [0.7.7] - 2023-10-23
 
 * Fix rust tls client TLS_SERVER_ROOTS #232
