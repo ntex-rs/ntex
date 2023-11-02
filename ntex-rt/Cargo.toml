@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "0.4.9"
+version = "0.4.10"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -28,8 +28,8 @@ tokio = ["tok-io"]
 async-std = ["async_std/unstable"]
 
 [dependencies]
-async-oneshot = "0.5.0"
-async-channel = "1.8.0"
+async-oneshot = "0.5"
+async-channel = "2.0"
 futures-core = "0.3"
 log = "0.4"
 
