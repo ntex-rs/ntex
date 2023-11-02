@@ -855,8 +855,8 @@ impl Future for OnDisconnect {
 
 #[cfg(test)]
 mod tests {
-    use ntex_codec::BytesCodec;
     use ntex_bytes::Bytes;
+    use ntex_codec::BytesCodec;
 
     use super::*;
     use crate::testing::IoTest;
@@ -891,7 +891,11 @@ mod tests {
         let server = Io::new(server);
         assert!(server.eq(&server));
 
-        server.send(Bytes::from_static(b"GET /test HTTP/1"), &BytesCodec).await.ok().unwrap();
+        server
+            .send(Bytes::from_static(b"GET /test HTTP/1"), &BytesCodec)
+            .await
+            .ok()
+            .unwrap();
         let item = client.read_any();
         assert_eq!(item, "GET /test HTTP/1");
     }

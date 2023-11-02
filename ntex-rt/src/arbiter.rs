@@ -14,6 +14,9 @@ thread_local!(
     static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
 );
 
+type ServerCommandRx = Pin<Box<dyn Stream<Item = SystemCommand>>>;
+type ArbiterCommandRx = Pin<Box<dyn Stream<Item = ArbiterCommand>>>;
+
 pub(super) static COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) enum ArbiterCommand {
@@ -57,7 +60,13 @@ impl Arbiter {
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
-        (arb, ArbiterController { stop: None, rx })
+        (
+            arb,
+            ArbiterController {
+                stop: None,
+                rx: Box::pin(rx),
+            },
+        )
     }
 
     /// Returns the current thread's arbiter's address. If no Arbiter is present, then this
@@ -97,7 +106,7 @@ impl Arbiter {
                     // start arbiter controller
                     crate::spawn(ArbiterController {
                         stop: Some(stop),
-                        rx: arb_rx,
+                        rx: Box::pin(arb_rx),
                     });
                     ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
@@ -231,7 +240,7 @@ impl Arbiter {
 
 pub(crate) struct ArbiterController {
     stop: Option<oneshot::Sender<i32>>,
-    rx: Receiver<ArbiterCommand>,
+    rx: ArbiterCommandRx,
 }
 
 impl Drop for ArbiterController {
@@ -281,10 +290,9 @@ pub(super) enum SystemCommand {
     UnregisterArbiter(usize),
 }
 
-#[derive(Debug)]
 pub(super) struct SystemArbiter {
     stop: Option<oneshot::Sender<i32>>,
-    commands: Receiver<SystemCommand>,
+    commands: ServerCommandRx,
     arbiters: HashMap<usize, Arbiter>,
 }
 
@@ -294,10 +302,18 @@ impl SystemArbiter {
         commands: Receiver<SystemCommand>,
     ) -> Self {
         SystemArbiter {
-            commands,
+            commands: Box::pin(commands),
             stop: Some(stop),
             arbiters: HashMap::new(),
         }
+    }
+}
+
+impl fmt::Debug for SystemArbiter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SystemArbiter")
+            .field("arbiters", &self.arbiters)
+            .finish()
     }
 }
 

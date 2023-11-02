@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.10] - 2023-11-02
+
+* Upgrade async-channel to 2.0
+
 ## [0.4.9] - 2023-04-11
 
 * Chore upgrade glommio to 0.8
