@@ -53,7 +53,7 @@ impl ReadContext {
                         } else {
                             inner.insert_flags(Flags::RD_READY);
                         }
-                        log::trace!("new {} bytes available, wakeup dispatcher", nbytes,);
+                        log::trace!("new {} bytes available, wakeup dispatcher", nbytes);
                         inner.dispatch_task.wake();
                     } else if buf_full {
                         // read task is paused because of read back-pressure
@@ -134,16 +134,16 @@ impl WriteContext {
 
         // if write buffer is smaller than high watermark value, turn off back-pressure
         let mut flags = inner.flags.get();
-        let mut wake_dispatcher = false;
-        if flags.contains(Flags::WR_BACKPRESSURE)
+        if len == 0 {
+            if flags.intersects(Flags::WR_WAIT | Flags::WR_BACKPRESSURE) {
+                flags.remove(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
+                inner.dispatch_task.wake();
+            }
+        } else if flags.contains(Flags::WR_BACKPRESSURE)
             && len < inner.pool.get().write_params_high() << 1
         {
             flags.remove(Flags::WR_BACKPRESSURE);
-            wake_dispatcher = true;
-        }
-        if flags.contains(Flags::WR_WAIT) && len == 0 {
-            flags.remove(Flags::WR_WAIT);
-            wake_dispatcher = true;
+            inner.dispatch_task.wake();
         }
 
         match result {
@@ -153,10 +153,6 @@ impl WriteContext {
         }
 
         inner.flags.set(flags);
-        if wake_dispatcher {
-            inner.dispatch_task.wake();
-        }
-
         result
     }
 

@@ -375,7 +375,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Encode item, send to a peer
+    /// Encode item, send to the peer. Fully flush write buffer.
     pub async fn send<U>(
         &self,
         item: U::Item,
@@ -856,6 +856,7 @@ impl Future for OnDisconnect {
 #[cfg(test)]
 mod tests {
     use ntex_codec::BytesCodec;
+    use ntex_bytes::Bytes;
 
     use super::*;
     use crate::testing::IoTest;
@@ -879,6 +880,19 @@ mod tests {
         client.write("GET /test HTTP/1");
         server.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
+        assert_eq!(item, "GET /test HTTP/1");
+    }
+
+    #[ntex::test]
+    async fn test_send() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let server = Io::new(server);
+        assert!(server.eq(&server));
+
+        server.send(Bytes::from_static(b"GET /test HTTP/1"), &BytesCodec).await.ok().unwrap();
+        let item = client.read_any();
         assert_eq!(item, "GET /test HTTP/1");
     }
 }
