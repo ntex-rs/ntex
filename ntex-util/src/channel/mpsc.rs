@@ -1,7 +1,7 @@
 //! A multi-producer, single-consumer, futures-aware, FIFO queue.
 use std::{collections::VecDeque, fmt, pin::Pin, task::Context, task::Poll};
 
-use futures_core::Stream;
+use futures_core::{FusedStream, Stream};
 use futures_sink::Sink;
 
 use super::cell::{Cell, WeakCell};
@@ -206,6 +206,12 @@ impl<T> Stream for Receiver<T> {
     }
 }
 
+impl<T> FusedStream for Receiver<T> {
+    fn is_terminated(&self) -> bool {
+        self.is_closed()
+    }
+}
+
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
         let shared = self.shared.get_mut();
@@ -313,10 +319,12 @@ mod tests {
         let (tx, rx) = channel::<()>();
         assert!(!tx.is_closed());
         assert!(!rx.is_closed());
+        assert!(!rx.is_terminated());
 
         tx.close();
         assert!(tx.is_closed());
         assert!(rx.is_closed());
+        assert!(rx.is_terminated());
 
         let (tx, rx) = channel::<()>();
         rx.close();
@@ -325,7 +333,9 @@ mod tests {
         let (tx, rx) = channel::<()>();
         drop(tx);
         assert!(rx.is_closed());
+        assert!(rx.is_terminated());
         let _tx = rx.sender();
         assert!(!rx.is_closed());
+        assert!(!rx.is_terminated());
     }
 }
