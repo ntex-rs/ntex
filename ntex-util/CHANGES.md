@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.3] - 2023-11-02
+
+* Add FusedStream trait on mpsc::Receiver<T> #235
+
 ## [0.3.2] - 2023-09-11
 
 * Add missing fmt::Debug impls
