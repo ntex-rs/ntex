@@ -1,20 +1,19 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::io::{self, Read as IoRead, Write as IoWrite};
-use std::{any, cell::Cell, cell::RefCell, sync::Arc, task::Poll};
+use std::{any, cell::RefCell, sync::Arc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::{types, Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use ntex_util::{future::poll_fn, ready};
 use tls_rust::{ClientConfig, ClientConnection, ServerName};
 
-use crate::rustls::{IoInner, TlsFilter, Wrapper};
+use crate::rustls::{TlsFilter, Wrapper};
 
 use super::{PeerCert, PeerCertChain};
 
 #[derive(Debug)]
 /// An implementation of SSL streams
 pub(crate) struct TlsClientFilter {
-    inner: IoInner,
     session: RefCell<ClientConnection>,
 }
 
@@ -59,7 +58,7 @@ impl FilterLayer for TlsClientFilter {
 
     fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
         let mut session = self.session.borrow_mut();
-        let mut new_bytes = usize::from(self.inner.handshake.get());
+        let mut new_bytes = 0;
 
         // get processed buffer
         buf.with_src(|src| {
@@ -96,7 +95,7 @@ impl FilterLayer for TlsClientFilter {
         buf.with_src(|src| {
             if let Some(src) = src {
                 let mut session = self.session.borrow_mut();
-                let mut io = Wrapper(&self.inner, buf);
+                let mut io = Wrapper(buf);
 
                 loop {
                     if !src.is_empty() {
@@ -123,9 +122,6 @@ impl TlsClientFilter {
         let session = ClientConnection::new(cfg, domain)
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         let filter = TlsFilter::new_client(TlsClientFilter {
-            inner: IoInner {
-                handshake: Cell::new(true),
-            },
             session: RefCell::new(session),
         });
         let io = io.add_filter(filter);
@@ -134,7 +130,7 @@ impl TlsClientFilter {
         loop {
             let (result, wants_read, handshaking) = io.with_buf(|buf| {
                 let mut session = filter.client().session.borrow_mut();
-                let mut wrp = Wrapper(&filter.client().inner, buf);
+                let mut wrp = Wrapper(buf);
                 let mut result = (
                     session.complete_io(&mut wrp),
                     session.wants_read(),
@@ -152,17 +148,15 @@ impl TlsClientFilter {
 
             match result {
                 Ok(_) => {
-                    filter.client().inner.handshake.set(false);
                     return Ok(io);
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     if !handshaking {
-                        filter.client().inner.handshake.set(false);
                         return Ok(io);
                     }
                     poll_fn(|cx| {
                         let read_ready = if wants_read {
-                            match ready!(io.poll_read_ready(cx))? {
+                            match ready!(io.poll_force_read_ready(cx))? {
                                 Some(_) => Ok(true),
                                 None => Err(io::Error::new(
                                     io::ErrorKind::Other,

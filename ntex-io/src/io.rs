@@ -484,14 +484,17 @@ impl<F> Io<F> {
     /// `Poll::Ready(Ok(Some(()))))` if the io stream is ready for reading.
     /// `Poll::Ready(Ok(None))` if io stream is disconnected
     /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
-    pub fn poll_force_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
+    pub fn poll_force_read_ready(
+        &self,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<Option<()>>> {
         let ready = self.poll_read_ready(cx);
 
         if ready.is_pending() {
-            if self.0.0.remove_flags(Flags::RD_FORCE_READY) {
+            if self.0 .0.remove_flags(Flags::RD_FORCE_READY) {
                 Poll::Ready(Ok(Some(())))
             } else {
-                self.0.0.insert_flags(Flags::RD_FORCE_READY);
+                self.0 .0.insert_flags(Flags::RD_FORCE_READY);
                 Poll::Pending
             }
         } else {

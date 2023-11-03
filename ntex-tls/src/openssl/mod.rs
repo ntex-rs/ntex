@@ -275,13 +275,12 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
 
                 log::debug!("Accepting tls connection");
                 loop {
-                    let result = io
-                        .with_buf(|buf| {
-                            let filter = io.filter();
-                            filter.with_buffers(buf, || filter.inner.borrow_mut().accept())
-                        })?;
+                    let result = io.with_buf(|buf| {
+                        let filter = io.filter();
+                        filter.with_buffers(buf, || filter.inner.borrow_mut().accept())
+                    })?;
                     if handle_result(&io, result).await?.is_some() {
-                        break
+                        break;
                     }
                 }
 
@@ -326,13 +325,12 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
             let io = io.add_filter(filter);
 
             loop {
-                let result = io
-                    .with_buf(|buf| {
-                        let filter = io.filter();
-                        filter.with_buffers(buf, || filter.inner.borrow_mut().connect())
-                    })?;
+                let result = io.with_buf(|buf| {
+                    let filter = io.filter();
+                    filter.with_buffers(buf, || filter.inner.borrow_mut().connect())
+                })?;
                 if handle_result(&io, result).await?.is_some() {
-                    break
+                    break;
                 }
             }
 
@@ -341,7 +339,10 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
     }
 }
 
-async fn handle_result<T, F>(io: &Io<F>, result: Result<T, ssl::Error>) -> io::Result<Option<T>> {
+async fn handle_result<T, F>(
+    io: &Io<F>,
+    result: Result<T, ssl::Error>,
+) -> io::Result<Option<T>> {
     match result {
         Ok(v) => Ok(Some(v)),
         Err(e) => match e.code() {
