@@ -58,8 +58,8 @@ ntex-util = "0.3.3"
 ntex-bytes = "0.1.19"
 ntex-h2 = "0.4.3"
 ntex-rt = "0.4.10"
-ntex-io = "0.3.4"
-ntex-tls = "0.3.1"
+ntex-io = "0.3.5"
+ntex-tls = "0.3.2"
 ntex-tokio = { version = "0.3.0", optional = true }
 ntex-glommio = { version = "0.3.0", optional = true }
 ntex-async-std = { version = "0.3.0", optional = true }

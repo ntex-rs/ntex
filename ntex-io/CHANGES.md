@@ -1,6 +1,6 @@
 # Changes
 
-## [0.3.4] - 2023-11-03
+## [0.3.5] - 2023-11-03
 
 * Add Io::force_ready_ready() and Io::poll_force_ready_ready() methods
 

@@ -26,7 +26,7 @@ rustls = ["tls_rust"]
 
 [dependencies]
 ntex-bytes = "0.1.19"
-ntex-io = "0.3.4"
+ntex-io = "0.3.5"
 ntex-util = "0.3.3"
 ntex-service = "1.2.7"
 log = "0.4"
