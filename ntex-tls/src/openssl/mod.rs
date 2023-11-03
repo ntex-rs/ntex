@@ -1,10 +1,10 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::cell::{Cell, RefCell};
-use std::{any, cmp, error::Error, fmt, io, task::Context, task::Poll};
+use std::cell::RefCell;
+use std::{any, cmp, error::Error, fmt, io, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec};
 use ntex_io::{types, Filter, FilterFactory, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
-use ntex_util::{future::poll_fn, future::BoxFuture, ready, time, time::Millis};
+use ntex_util::{future::BoxFuture, time, time::Millis};
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
 
@@ -25,7 +25,6 @@ pub struct PeerCertChain(pub Vec<X509>);
 #[derive(Debug)]
 pub struct SslFilter {
     inner: RefCell<SslStream<IoInner>>,
-    handshake: Cell<bool>,
 }
 
 #[derive(Debug)]
@@ -147,7 +146,7 @@ impl FilterLayer for SslFilter {
         buf.with_write_buf(|b| {
             self.with_buffers(b, || {
                 buf.with_dst(|dst| {
-                    let mut new_bytes = usize::from(self.handshake.get());
+                    let mut new_bytes = 0;
                     loop {
                         buf.resize_buf(dst);
 
@@ -270,27 +269,21 @@ impl<F: Filter> FilterFactory<F> for SslAcceptor {
                     destination: None,
                 };
                 let filter = SslFilter {
-                    handshake: Cell::new(true),
                     inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
                 };
                 let io = io.add_filter(filter);
 
-                poll_fn(|cx| {
-                    let result = io
-                        .with_buf(|buf| {
-                            let filter = io.filter();
-                            filter.with_buffers(buf, || filter.inner.borrow_mut().accept())
-                        })
-                        .map_err(|err| {
-                            let err: Box<dyn Error> =
-                                io::Error::new(io::ErrorKind::Other, err).into();
-                            err
-                        })?;
-                    handle_result(result, &io, cx)
-                })
-                .await?;
+                log::debug!("Accepting tls connection");
+                loop {
+                    let result = io.with_buf(|buf| {
+                        let filter = io.filter();
+                        filter.with_buffers(buf, || filter.inner.borrow_mut().accept())
+                    })?;
+                    if handle_result(&io, result).await?.is_some() {
+                        break;
+                    }
+                }
 
-                io.filter().handshake.set(false);
                 Ok(io)
             })
             .await
@@ -327,55 +320,41 @@ impl<F: Filter> FilterFactory<F> for SslConnector {
                 destination: None,
             };
             let filter = SslFilter {
-                handshake: Cell::new(true),
                 inner: RefCell::new(ssl::SslStream::new(self.ssl, inner)?),
             };
             let io = io.add_filter(filter);
 
-            poll_fn(|cx| {
-                let result = io
-                    .with_buf(|buf| {
-                        let filter = io.filter();
-                        filter.with_buffers(buf, || filter.inner.borrow_mut().connect())
-                    })
-                    .map_err(|err| {
-                        let err: Box<dyn Error> =
-                            io::Error::new(io::ErrorKind::Other, err).into();
-                        err
-                    })?;
-                handle_result(result, &io, cx)
-            })
-            .await?;
+            loop {
+                let result = io.with_buf(|buf| {
+                    let filter = io.filter();
+                    filter.with_buffers(buf, || filter.inner.borrow_mut().connect())
+                })?;
+                if handle_result(&io, result).await?.is_some() {
+                    break;
+                }
+            }
 
-            io.filter().handshake.set(false);
             Ok(io)
         })
     }
 }
 
-fn handle_result<T, F>(
-    result: Result<T, ssl::Error>,
+async fn handle_result<T, F>(
     io: &Io<F>,
-    cx: &mut Context<'_>,
-) -> Poll<Result<T, Box<dyn Error>>> {
+    result: Result<T, ssl::Error>,
+) -> io::Result<Option<T>> {
     match result {
-        Ok(v) => Poll::Ready(Ok(v)),
+        Ok(v) => Ok(Some(v)),
         Err(e) => match e.code() {
             ssl::ErrorCode::WANT_READ => {
-                match ready!(io.poll_read_ready(cx)) {
-                    Ok(None) => Err::<_, Box<dyn Error>>(
-                        io::Error::new(io::ErrorKind::Other, "disconnected").into(),
-                    ),
-                    Err(err) => Err(err.into()),
-                    _ => Ok(()),
-                }?;
-                Poll::Pending
+                let res = io.force_read_ready().await;
+                match res? {
+                    None => Err(io::Error::new(io::ErrorKind::Other, "disconnected")),
+                    _ => Ok(None),
+                }
             }
-            ssl::ErrorCode::WANT_WRITE => {
-                let _ = io.poll_flush(cx, true)?;
-                Poll::Pending
-            }
-            _ => Poll::Ready(Err(Box::new(e))),
+            ssl::ErrorCode::WANT_WRITE => Ok(None),
+            _ => Err(io::Error::new(io::ErrorKind::Other, e)),
         },
     }
 }

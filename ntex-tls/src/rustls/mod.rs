@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::{any, cell::Cell, cmp, io, sync::Arc, task::Context, task::Poll};
+use std::{any, cmp, io, sync::Arc, task::Context, task::Poll};
 
 use ntex_io::{
     Filter, FilterFactory, FilterLayer, Io, Layer, ReadBuf, ReadStatus, WriteBuf,
@@ -222,16 +222,11 @@ impl<F: Filter> FilterFactory<F> for TlsConnectorConfigured {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct IoInner {
-    handshake: Cell<bool>,
-}
-
-pub(crate) struct Wrapper<'a, 'b>(&'a IoInner, &'a WriteBuf<'b>);
+pub(crate) struct Wrapper<'a, 'b>(&'a WriteBuf<'b>);
 
 impl<'a, 'b> io::Read for Wrapper<'a, 'b> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        self.1.with_read_buf(|buf| {
+        self.0.with_read_buf(|buf| {
             buf.with_src(|buf| {
                 if let Some(buf) = buf {
                     let len = cmp::min(buf.len(), dst.len());
@@ -248,7 +243,7 @@ impl<'a, 'b> io::Read for Wrapper<'a, 'b> {
 
 impl<'a, 'b> io::Write for Wrapper<'a, 'b> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.1.with_dst(|buf| buf.extend_from_slice(src));
+        self.0.with_dst(|buf| buf.extend_from_slice(src));
         Ok(src.len())
     }
 

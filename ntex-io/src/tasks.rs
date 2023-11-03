@@ -61,6 +61,10 @@ impl ReadContext {
                         // so we need to wake up read task to read more data
                         // otherwise read task would sleep forever
                         inner.read_task.wake();
+                    } else if inner.flags.get().contains(Flags::RD_FORCE_READY) {
+                        // in case of "force read" we must wake up dispatch task
+                        // if we read any data from source
+                        inner.dispatch_task.wake();
                     }
 
                     // while reading, filter wrote some data
