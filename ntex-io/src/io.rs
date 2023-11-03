@@ -31,6 +31,8 @@ bitflags::bitflags! {
         const RD_READY            = 0b0000_0000_0010_0000;
         /// read buffer is full
         const RD_BUF_FULL         = 0b0000_0000_0100_0000;
+        /// any new data is available
+        const RD_FORCE_READY      = 0b0000_0000_1000_0000;
 
         /// wait write completion
         const WR_WAIT             = 0b0000_0001_0000_0000;
@@ -78,10 +80,15 @@ impl IoState {
         self.flags.set(flags);
     }
 
-    pub(super) fn remove_flags(&self, f: Flags) {
+    pub(super) fn remove_flags(&self, f: Flags) -> bool {
         let mut flags = self.flags.get();
-        flags.remove(f);
-        self.flags.set(flags);
+        if flags.intersects(f) {
+            flags.remove(f);
+            self.flags.set(flags);
+            true
+        } else {
+            false
+        }
     }
 
     pub(super) fn notify_keepalive(&self) {
@@ -365,6 +372,13 @@ impl<F> Io<F> {
         poll_fn(|cx| self.poll_read_ready(cx)).await
     }
 
+    #[doc(hidden)]
+    #[inline]
+    /// Wait until read becomes ready.
+    pub async fn force_read_ready(&self) -> io::Result<Option<()>> {
+        poll_fn(|cx| self.poll_force_read_ready(cx)).await
+    }
+
     #[inline]
     /// Pause read task
     pub fn pause(&self) {
@@ -452,6 +466,36 @@ impl<F> Io<F> {
             } else {
                 Poll::Pending
             }
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Polls for read readiness.
+    ///
+    /// If the io stream is not currently ready for reading,
+    /// this method will store a clone of the Waker from the provided Context.
+    /// When the io stream becomes ready for reading, Waker::wake will be called on the waker.
+    ///
+    /// Return value
+    /// The function returns:
+    ///
+    /// `Poll::Pending` if the io stream is not ready for reading.
+    /// `Poll::Ready(Ok(Some(()))))` if the io stream is ready for reading.
+    /// `Poll::Ready(Ok(None))` if io stream is disconnected
+    /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
+    pub fn poll_force_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
+        let ready = self.poll_read_ready(cx);
+
+        if ready.is_pending() {
+            if self.0.0.remove_flags(Flags::RD_FORCE_READY) {
+                Poll::Ready(Ok(Some(())))
+            } else {
+                self.0.0.insert_flags(Flags::RD_FORCE_READY);
+                Poll::Pending
+            }
+        } else {
+            ready
         }
     }
 

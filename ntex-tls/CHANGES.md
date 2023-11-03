@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.2] - 2023-11-03
+
+* Improve implementation
+
 ## [0.3.1] - 2023-09-11
 
 * Add missing fmt::Debug impls
