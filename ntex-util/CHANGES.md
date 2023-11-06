@@ -1,6 +1,6 @@
 # Changes
 
-## [0.3.4]
+## [0.3.4] - 2023-11-06
 
 * Add UnwindSafe trait on mpsc::Receiver<T> #239
 
