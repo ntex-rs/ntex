@@ -3,19 +3,19 @@ use std::{cell::Cell, fmt, io, num::NonZeroUsize, sync::mpsc, sync::Arc, thread}
 
 use polling::{Event, Events, Poller};
 
-use crate::rt::System;
-use crate::time::{sleep, Millis};
+use crate::{rt::System, time::sleep, time::Millis, util::Either};
 
 use super::socket::{Listener, SocketAddr};
 use super::worker::{Connection, WorkerClient};
 use super::{Server, ServerStatus, Token};
 
+const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ERR_TIMEOUT: Duration = Duration::from_millis(500);
 const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
 
 #[derive(Debug)]
 pub(super) enum Command {
-    Stop,
+    Stop(mpsc::Sender<()>),
     Pause,
     Resume,
     Worker(WorkerClient),
@@ -219,16 +219,23 @@ impl Accept {
                 }
             }
 
-            if !self.process_cmd() {
-                break;
+            match self.process_cmd() {
+                Either::Left(_) => events.clear(),
+                Either::Right(rx) => {
+                    // cleanup
+                    for info in self.sockets.drain(..) {
+                        info.sock.remove_source()
+                    }
+
+                    if let Some(rx) = rx {
+                        thread::sleep(EXIT_TIMEOUT);
+                        let _ = rx.send(());
+                    }
+
+                    log::trace!("Accept loop has been stopped");
+                    break;
+                }
             }
-
-            events.clear();
-        }
-
-        // cleanup
-        for info in &self.sockets {
-            info.sock.remove_source()
         }
     }
 
@@ -293,18 +300,18 @@ impl Accept {
         }
     }
 
-    fn process_cmd(&mut self) -> bool {
+    fn process_cmd(&mut self) -> Either<(), Option<mpsc::Sender<()>>> {
         loop {
             match self.rx.try_recv() {
                 Ok(cmd) => match cmd {
-                    Command::Stop => {
+                    Command::Stop(rx) => {
                         log::trace!("Stopping accept loop");
                         for (key, info) in self.sockets.iter().enumerate() {
                             log::info!("Stopping socket listener on {}", info.addr);
                             self.remove_source(key);
                         }
                         self.update_status(ServerStatus::NotReady);
-                        return false;
+                        break Either::Right(Some(rx));
                     }
                     Command::Pause => {
                         log::trace!("Pausing accept loop");
@@ -335,19 +342,21 @@ impl Accept {
                         self.backpressure(false);
                     }
                 },
-                Err(err) => match err {
-                    mpsc::TryRecvError::Empty => break,
-                    mpsc::TryRecvError::Disconnected => {
-                        for (key, info) in self.sockets.iter().enumerate() {
-                            log::info!("Stopping socket listener on {}", info.addr);
-                            self.remove_source(key);
+                Err(err) => {
+                    break match err {
+                        mpsc::TryRecvError::Empty => Either::Left(()),
+                        mpsc::TryRecvError::Disconnected => {
+                            for (key, info) in self.sockets.iter().enumerate() {
+                                log::info!("Stopping socket listener on {}", info.addr);
+                                self.remove_source(key);
+                            }
+
+                            Either::Right(None)
                         }
-                        return false;
                     }
-                },
+                }
             }
         }
-        true
     }
 
     fn backpressure(&mut self, on: bool) {

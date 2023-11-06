@@ -169,9 +169,9 @@ impl fmt::Debug for IoState {
             .field("flags", &self.flags)
             .field("pool", &self.pool)
             .field("disconnect_timeout", &self.disconnect_timeout)
+            .field("keepalive", &self.keepalive)
             .field("error", &err)
             .field("buffer", &self.buffer)
-            .field("keepalive", &self.keepalive)
             .finish();
         self.error.set(err);
         res

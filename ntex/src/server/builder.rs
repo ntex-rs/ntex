@@ -415,7 +415,10 @@ impl ServerBuilder {
                 let exit = self.exit;
 
                 // stop accept thread
-                self.accept.send(Command::Stop);
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.accept.send(Command::Stop(tx));
+                let _ = rx.recv();
+
                 let notify = std::mem::take(&mut self.notify);
 
                 // stop workers
