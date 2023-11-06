@@ -1,6 +1,8 @@
 # Changes
 
-## [0.7.8] - 2023-11-xx
+## [0.7.8] - 2023-11-06
+
+* Stopping Server does not release resources #233
 
 * Drop num_cpu dep
 
