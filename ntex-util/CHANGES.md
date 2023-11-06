@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.4]
+
+* Add UnwindSafe trait on mpsc::Receiver<T> #239
+
 ## [0.3.3] - 2023-11-02
 
 * Add FusedStream trait on mpsc::Receiver<T> #235

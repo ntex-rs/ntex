@@ -1,5 +1,7 @@
 //! A multi-producer, single-consumer, futures-aware, FIFO queue.
-use std::{collections::VecDeque, fmt, pin::Pin, task::Context, task::Poll};
+use std::{
+    collections::VecDeque, fmt, panic::UnwindSafe, pin::Pin, task::Context, task::Poll,
+};
 
 use futures_core::{FusedStream, Stream};
 use futures_sink::Sink;
@@ -211,6 +213,8 @@ impl<T> FusedStream for Receiver<T> {
         self.is_closed()
     }
 }
+
+impl<T> UnwindSafe for Receiver<T> {}
 
 impl<T> Drop for Receiver<T> {
     fn drop(&mut self) {
