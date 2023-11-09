@@ -222,5 +222,6 @@ mod tests {
         assert!(
             format!("{:?}", T::KeepAliveTimeout).contains("DispatchItem::KeepAliveTimeout")
         );
+        assert!(format!("{:?}", T::ReadTimeout).contains("DispatchItem::ReadTimeout"));
     }
 }
