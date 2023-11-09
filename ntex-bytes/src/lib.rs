@@ -50,12 +50,7 @@
 //!
 //! [struct docs]: struct.Bytes.html
 
-#![deny(
-    warnings,
-//    missing_docs,
-//    missing_debug_implementations,
-    rust_2018_idioms
-)]
+#![deny(warnings, missing_debug_implementations, rust_2018_idioms)]
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
 
 pub mod buf;

@@ -19,7 +19,7 @@ pub struct PoolRef(&'static MemoryPool);
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct PoolId(u8);
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct BufParams {
     pub high: u32,
     pub low: u32,
