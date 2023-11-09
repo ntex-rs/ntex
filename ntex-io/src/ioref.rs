@@ -338,6 +338,11 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
+        client.write(b"test");
+        state.read_ready().await.unwrap();
+        let buf = state.decode(&BytesCodec).unwrap().unwrap();
+        assert_eq!(buf, Bytes::from_static(b"test"));
+
         client.write_error(io::Error::new(io::ErrorKind::Other, "err"));
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
@@ -442,13 +447,15 @@ mod tests {
         let write_order = Rc::new(RefCell::new(Vec::new()));
 
         let (client, server) = IoTest::create();
-        let io = Io::new(server).add_filter(Counter {
+        let counter = Counter {
             idx: 1,
             in_bytes: in_bytes.clone(),
             out_bytes: out_bytes.clone(),
             read_order: read_order.clone(),
             write_order: write_order.clone(),
-        });
+        };
+        format!("{:?}", counter);
+        let io = Io::new(server).add_filter(counter);
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
