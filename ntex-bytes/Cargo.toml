@@ -1,6 +1,6 @@
 [package]
 name = "ntex-bytes"
-version = "0.1.19"
+version = "0.1.20"
 license = "MIT"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Carl Lerche <me@carllerche.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
@@ -19,8 +19,8 @@ simd = ["simdutf8"]
 
 [dependencies]
 bitflags = "2.4"
-bytes = "1.0.0"
-serde = "1.0.0"
+bytes = "1"
+serde = "1"
 futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
 simdutf8 = { version = "0.1.4", optional = true }
 
