@@ -17,6 +17,9 @@ pub enum WsError<E> {
     /// Keep-alive error
     #[error("Keep-alive error")]
     KeepAlive,
+    /// Frame read timeout
+    #[error("Frame read timeout")]
+    ReadTimeout,
     /// Ws protocol level error
     #[error("Ws protocol level error")]
     Protocol(ProtocolError),

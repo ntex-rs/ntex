@@ -4,14 +4,14 @@ use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc
 
 use ntex_bytes::{PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::time::{now, Millis};
+use ntex_util::time::{now, Seconds};
 use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
 
 use crate::buf::Stack;
 use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::seal::Sealed;
 use crate::tasks::{ReadContext, WriteContext};
-use crate::{FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
+use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -45,9 +45,11 @@ bitflags::bitflags! {
         const DSP_STOP            = 0b0001_0000_0000_0000;
         /// keep-alive timeout occured
         const DSP_KEEPALIVE       = 0b0010_0000_0000_0000;
+        /// custom timeout occured
+        const DSP_TIMEOUT         = 0b0100_0000_0000_0000;
 
         /// keep-alive timeout started
-        const KEEPALIVE           = 0b0100_0000_0000_0000;
+        const KEEPALIVE           = 0b1000_0000_0000_0000;
     }
 }
 
@@ -60,7 +62,7 @@ pub struct IoRef(pub(super) Rc<IoState>);
 pub(crate) struct IoState {
     pub(super) flags: Cell<Flags>,
     pub(super) pool: Cell<PoolRef>,
-    pub(super) disconnect_timeout: Cell<Millis>,
+    pub(super) disconnect_timeout: Cell<Seconds>,
     pub(super) error: Cell<Option<io::Error>>,
     pub(super) read_task: LocalWaker,
     pub(super) write_task: LocalWaker,
@@ -91,12 +93,17 @@ impl IoState {
         }
     }
 
-    pub(super) fn notify_keepalive(&self) {
-        log::trace!("keep-alive timeout, notify dispatcher");
+    pub(super) fn notify_timeout(&self, tag: u8) {
         let mut flags = self.flags.get();
-        flags.remove(Flags::KEEPALIVE);
-        if !flags.contains(Flags::DSP_KEEPALIVE) {
-            flags.insert(Flags::DSP_KEEPALIVE);
+        if tag == 0 {
+            log::trace!("keep-alive timeout, notify dispatcher");
+            flags.remove(Flags::KEEPALIVE);
+            if !flags.contains(Flags::DSP_KEEPALIVE) {
+                flags.insert(Flags::DSP_KEEPALIVE);
+                self.dispatch_task.wake();
+            }
+        } else {
+            flags.insert(Flags::DSP_TIMEOUT);
             self.dispatch_task.wake();
         }
         self.flags.set(flags);
@@ -192,7 +199,7 @@ impl Io {
             pool: Cell::new(pool),
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
-            disconnect_timeout: Cell::new(Millis::ONE_SEC),
+            disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
@@ -230,7 +237,7 @@ impl<F> Io<F> {
 
     #[inline]
     /// Set io disconnect timeout in millis
-    pub fn set_disconnect_timeout(&self, timeout: Millis) {
+    pub fn set_disconnect_timeout(&self, timeout: Seconds) {
         self.0 .0.disconnect_timeout.set(timeout);
     }
 
@@ -248,7 +255,7 @@ impl<F> Io<F> {
                     | Flags::IO_STOPPING_FILTERS,
             ),
             error: Cell::new(None),
-            disconnect_timeout: Cell::new(Millis::ONE_SEC),
+            disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
@@ -345,10 +352,9 @@ impl<F> Io<F> {
         loop {
             return match poll_fn(|cx| self.poll_recv(codec, cx)).await {
                 Ok(item) => Ok(Some(item)),
-                Err(RecvError::KeepAlive) => Err(Either::Right(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Keep-alive",
-                ))),
+                Err(RecvError::KeepAlive) | Err(RecvError::Timeout) => Err(Either::Right(
+                    io::Error::new(io::ErrorKind::Other, "Keep-alive"),
+                )),
                 Err(RecvError::Stop) => Err(Either::Right(io::Error::new(
                     io::ErrorKind::Other,
                     "Dispatcher stopped",
@@ -515,36 +521,60 @@ impl<F> Io<F> {
     where
         U: Decoder,
     {
-        match self.decode(codec) {
-            Ok(Some(el)) => Poll::Ready(Ok(el)),
-            Ok(None) => {
-                let flags = self.flags();
-                if flags.contains(Flags::IO_STOPPED) {
-                    Poll::Ready(Err(RecvError::PeerGone(self.error())))
-                } else if flags.contains(Flags::DSP_STOP) {
-                    self.0 .0.remove_flags(Flags::DSP_STOP);
-                    Poll::Ready(Err(RecvError::Stop))
-                } else if flags.contains(Flags::DSP_KEEPALIVE) {
-                    self.0 .0.remove_flags(Flags::DSP_KEEPALIVE);
-                    Poll::Ready(Err(RecvError::KeepAlive))
-                } else if flags.contains(Flags::WR_BACKPRESSURE) {
-                    Poll::Ready(Err(RecvError::WriteBackpressure))
-                } else {
-                    match self.poll_read_ready(cx) {
-                        Poll::Pending | Poll::Ready(Ok(Some(()))) => {
-                            log::trace!("not enough data to decode next frame");
-                            Poll::Pending
-                        }
-                        Poll::Ready(Err(e)) => {
-                            Poll::Ready(Err(RecvError::PeerGone(Some(e))))
-                        }
-                        Poll::Ready(Ok(None)) => {
-                            Poll::Ready(Err(RecvError::PeerGone(None)))
-                        }
+        let decoded = self.poll_recv_decode(codec, cx)?;
+
+        if let Some(item) = decoded.item {
+            Poll::Ready(Ok(item))
+        } else {
+            Poll::Pending
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    /// Decode codec item from incoming bytes stream.
+    ///
+    /// Wake read task and request to read more data if data is not enough for decoding.
+    /// If error get returned this method does not register waker for later wake up action.
+    pub fn poll_recv_decode<U>(
+        &self,
+        codec: &U,
+        cx: &mut Context<'_>,
+    ) -> Result<Decoded<U::Item>, RecvError<U>>
+    where
+        U: Decoder,
+    {
+        let decoded = self
+            .decode_item(codec)
+            .map_err(|err| RecvError::Decoder(err))?;
+
+        if decoded.item.is_some() {
+            Ok(decoded)
+        } else {
+            let flags = self.flags();
+            if flags.contains(Flags::IO_STOPPED) {
+                Err(RecvError::PeerGone(self.error()))
+            } else if flags.contains(Flags::DSP_STOP) {
+                self.0 .0.remove_flags(Flags::DSP_STOP);
+                Err(RecvError::Stop)
+            } else if flags.contains(Flags::DSP_KEEPALIVE) {
+                self.0 .0.remove_flags(Flags::DSP_KEEPALIVE);
+                Err(RecvError::KeepAlive)
+            } else if flags.contains(Flags::DSP_TIMEOUT) {
+                self.0 .0.remove_flags(Flags::DSP_TIMEOUT);
+                Err(RecvError::Timeout)
+            } else if flags.contains(Flags::WR_BACKPRESSURE) {
+                Err(RecvError::WriteBackpressure)
+            } else {
+                match self.poll_read_ready(cx) {
+                    Poll::Pending | Poll::Ready(Ok(Some(()))) => {
+                        log::trace!("not enough data to decode next frame");
+                        Ok(decoded)
                     }
+                    Poll::Ready(Err(e)) => Err(RecvError::PeerGone(Some(e))),
+                    Poll::Ready(Ok(None)) => Err(RecvError::PeerGone(None)),
                 }
             }
-            Err(err) => Poll::Ready(Err(RecvError::Decoder(err))),
         }
     }
 
@@ -626,6 +656,9 @@ impl<F> Io<F> {
         } else if flags.contains(Flags::DSP_KEEPALIVE) {
             self.0 .0.remove_flags(Flags::DSP_KEEPALIVE);
             Poll::Ready(IoStatusUpdate::KeepAlive)
+        } else if flags.contains(Flags::DSP_TIMEOUT) {
+            self.0 .0.remove_flags(Flags::DSP_TIMEOUT);
+            Poll::Ready(IoStatusUpdate::Timeout)
         } else if flags.contains(Flags::WR_BACKPRESSURE) {
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
@@ -916,7 +949,7 @@ mod tests {
         let server = Io::new(server);
         assert!(server.eq(&server));
 
-        server.0 .0.notify_keepalive();
+        server.0 .0.notify_timeout(0);
         let err = server.recv(&BytesCodec).await.err().unwrap();
         assert!(format!("{:?}", err).contains("Keep-alive"));
 

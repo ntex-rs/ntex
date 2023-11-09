@@ -757,6 +757,7 @@ impl WsConnection<Sealed> {
                     DispatchItem::WBackPressureEnabled
                     | DispatchItem::WBackPressureDisabled => Ok(None),
                     DispatchItem::KeepAliveTimeout => Err(WsError::KeepAlive),
+                    DispatchItem::ReadTimeout => Err(WsError::ReadTimeout),
                     DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
                         Err(WsError::Protocol(e))
                     }

@@ -3,7 +3,7 @@ use std::{any, fmt, hash, io, time};
 use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 
-use super::{io::Flags, timer, types, Filter, IoRef, OnDisconnect, WriteBuf};
+use super::{io::Flags, timer, types, Decoded, Filter, IoRef, OnDisconnect, WriteBuf};
 
 impl IoRef {
     #[inline]
@@ -138,6 +138,25 @@ impl IoRef {
     }
 
     #[inline]
+    /// Attempts to decode a frame from the read buffer
+    pub fn decode_item<U>(
+        &self,
+        codec: &U,
+    ) -> Result<Decoded<<U as Decoder>::Item>, <U as Decoder>::Error>
+    where
+        U: Decoder,
+    {
+        self.0.buffer.with_read_destination(self, |buf| {
+            let len = buf.len();
+            codec.decode_vec(buf).map(|item| Decoded {
+                item,
+                remains: buf.len(),
+                consumed: len - buf.len(),
+            })
+        })
+    }
+
+    #[inline]
     /// Write bytes to a buffer and wake up write task
     pub fn write(&self, src: &[u8]) -> io::Result<()> {
         let flags = self.0.flags.get();
@@ -190,12 +209,12 @@ impl IoRef {
     /// Start keep-alive timer
     pub fn start_keepalive_timer(&self, timeout: time::Duration) {
         if self.flags().contains(Flags::KEEPALIVE) {
-            timer::unregister(self.0.keepalive.get(), self);
+            timer::unregister(self.0.keepalive.get(), self, 0);
         }
         if !timeout.is_zero() {
             log::debug!("start keep-alive timeout {:?}", timeout);
             self.0.insert_flags(Flags::KEEPALIVE);
-            self.0.keepalive.set(timer::register(timeout, self));
+            self.0.keepalive.set(timer::register(timeout, self, 0));
         } else {
             self.0.remove_flags(Flags::KEEPALIVE);
         }
@@ -206,8 +225,22 @@ impl IoRef {
     pub fn stop_keepalive_timer(&self) {
         if self.flags().contains(Flags::KEEPALIVE) {
             log::debug!("unregister keep-alive timeout");
-            timer::unregister(self.0.keepalive.get(), self)
+            timer::unregister(self.0.keepalive.get(), self, 0)
         }
+    }
+
+    #[inline]
+    /// Start custom timer
+    pub fn start_timer(&self, timeout: time::Duration) -> time::Instant {
+        log::debug!("start custom timeout: {:?}", timeout);
+        timer::register(timeout, self, 1)
+    }
+
+    #[inline]
+    /// Stop custom timer
+    pub fn stop_timer(&self, id: time::Instant) {
+        log::debug!("unregister custom timeout");
+        timer::unregister(id, self, 1)
     }
 
     #[inline]

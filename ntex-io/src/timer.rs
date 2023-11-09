@@ -1,45 +1,56 @@
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration, time::Instant};
+#![allow(clippy::mutable_key_type)]
+use std::collections::{BTreeMap, VecDeque};
+use std::{cell::RefCell, rc::Rc, time::Duration, time::Instant};
 
 use ntex_util::time::{now, sleep, Millis};
 use ntex_util::{spawn, HashSet};
 
 use crate::{io::IoState, IoRef};
 
+const CAP: usize = 32;
+
 thread_local! {
     static TIMER: Rc<RefCell<Inner>> = Rc::new(RefCell::new(
         Inner {
             running: false,
+            cache: VecDeque::with_capacity(CAP),
             notifications: BTreeMap::default(),
         }));
 }
 
 struct Inner {
     running: bool,
-    notifications: BTreeMap<Instant, HashSet<Rc<IoState>>>,
+    cache: VecDeque<HashSet<(u8, Rc<IoState>)>>,
+    notifications: BTreeMap<Instant, HashSet<(u8, Rc<IoState>)>>,
 }
 
 impl Inner {
-    fn unregister(&mut self, expire: Instant, io: &IoRef) {
+    fn unregister(&mut self, expire: Instant, io: &IoRef, tag: u8) {
         if let Some(states) = self.notifications.get_mut(&expire) {
-            states.remove(&io.0);
+            states.remove(&(tag, io.0.clone()));
             if states.is_empty() {
-                self.notifications.remove(&expire);
+                if let Some(items) = self.notifications.remove(&expire) {
+                    if self.cache.len() <= CAP {
+                        self.cache.push_back(items)
+                    }
+                }
             }
         }
     }
 }
 
-pub(crate) fn register(timeout: Duration, io: &IoRef) -> Instant {
+pub(crate) fn register(timeout: Duration, io: &IoRef, tag: u8) -> Instant {
     let expire = now() + timeout;
 
     TIMER.with(|timer| {
         let mut inner = timer.borrow_mut();
-
-        inner
-            .notifications
-            .entry(expire)
-            .or_default()
-            .insert(io.0.clone());
+        if let Some(notifications) = inner.notifications.get_mut(&expire) {
+            notifications.insert((tag, io.0.clone()));
+        } else {
+            let mut notifications = inner.cache.pop_front().unwrap_or_default();
+            notifications.insert((tag, io.0.clone()));
+            inner.notifications.insert(expire, notifications);
+        }
 
         if !inner.running {
             inner.running = true;
@@ -57,8 +68,12 @@ pub(crate) fn register(timeout: Duration, io: &IoRef) -> Instant {
                         while let Some(key) = i.notifications.keys().next() {
                             let key = *key;
                             if key <= now_time {
-                                for st in i.notifications.remove(&key).unwrap() {
-                                    st.notify_keepalive();
+                                let mut items = i.notifications.remove(&key).unwrap();
+                                for (tag, st) in items.drain() {
+                                    st.notify_timeout(tag);
+                                }
+                                if i.cache.len() <= CAP {
+                                    i.cache.push_back(items)
                                 }
                             } else {
                                 break;
@@ -88,8 +103,8 @@ impl Drop for TimerGuard {
     }
 }
 
-pub(crate) fn unregister(expire: Instant, io: &IoRef) {
+pub(crate) fn unregister(expire: Instant, io: &IoRef, tag: u8) {
     TIMER.with(|timer| {
-        timer.borrow_mut().unregister(expire, io);
+        timer.borrow_mut().unregister(expire, io, tag);
     })
 }

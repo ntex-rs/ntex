@@ -601,7 +601,7 @@ where
                     log::trace!("dispatcher is instructed to stop");
                     Poll::Ready(State::Stop)
                 }
-                Err(RecvError::KeepAlive) => {
+                Err(RecvError::KeepAlive) | Err(RecvError::Timeout) => {
                     // keep-alive timeout
                     if !self.flags.contains(Flags::STARTED) {
                         log::trace!("slow request timeout");
@@ -706,6 +706,7 @@ where
             Poll::Pending => false,
             Poll::Ready(
                 IoStatusUpdate::KeepAlive
+                | IoStatusUpdate::Timeout
                 | IoStatusUpdate::Stop
                 | IoStatusUpdate::PeerGone(_),
             ) => true,
@@ -755,6 +756,12 @@ fn _poll_request_payload<F>(
                                 payload.1.set_error(PayloadError::EncodingCorrupted);
                                 *slf_payload = None;
                                 io::Error::new(io::ErrorKind::Other, "Keep-alive").into()
+                            }
+                            RecvError::Timeout => {
+                                payload.1.set_error(PayloadError::EncodingCorrupted);
+                                *slf_payload = None;
+                                io::Error::new(io::ErrorKind::TimedOut, "Read timeout")
+                                    .into()
                             }
                             RecvError::Stop => {
                                 payload.1.set_error(PayloadError::EncodingCorrupted);

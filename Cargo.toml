@@ -35,3 +35,5 @@ ntex-util = { path = "ntex-util" }
 ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
+
+ntex-h2 = { path = "../dev/ntex-h2" }
