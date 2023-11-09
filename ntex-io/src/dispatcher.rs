@@ -596,7 +596,7 @@ where
                 self.read_timeout
                     .set(self.shared.io.start_timer(period.into()));
                 if !max.is_zero() {
-                    self.read_max_timeout.set(now() + max.into());
+                    self.read_max_timeout.set(now() + time::Duration::from(max));
                 }
             }
         }

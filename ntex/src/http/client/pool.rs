@@ -612,9 +612,8 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::{
-        http::Uri, io as nio, service::fn_service, testing::Io, time::sleep, util::lazy,
-    };
+    use crate::time::{sleep, Millis};
+    use crate::{http::Uri, io as nio, service::fn_service, testing::Io, util::lazy};
 
     #[crate::rt_test]
     async fn test_basics() {
@@ -630,7 +629,7 @@ mod tests {
                 }),
                 Duration::from_secs(10),
                 Duration::from_secs(10),
-                Millis::ZERO,
+                Seconds::ZERO,
                 1,
                 h2::Config::client(),
             )
