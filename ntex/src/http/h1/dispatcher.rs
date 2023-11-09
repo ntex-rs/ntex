@@ -110,7 +110,7 @@ where
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, X, U>>) -> Self {
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
-        io.set_disconnect_timeout(config.client_disconnect.into());
+        io.set_disconnect_timeout(config.client_disconnect);
 
         // slow-request timer
         let flags = if config.client_timeout.is_zero() {

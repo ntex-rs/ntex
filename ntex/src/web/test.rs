@@ -711,7 +711,7 @@ where
                     .lifetime(Seconds::ZERO)
                     .keep_alive(Seconds(30))
                     .timeout(Millis(30_000))
-                    .disconnect_timeout(Millis(5_000))
+                    .disconnect_timeout(Seconds(5))
                     .openssl(builder.build())
                     .finish()
             }

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.9] - 2023-11-10
+
+* Update ntex io
+
 ## [0.7.8] - 2023-11-06
 
 * Stopping Server does not release resources #233
