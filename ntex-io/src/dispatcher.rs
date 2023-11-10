@@ -19,21 +19,23 @@ pub struct DispatcherConfig(Rc<DispatcherConfigInner>);
 
 #[derive(Debug)]
 struct DispatcherConfigInner {
-    keepalive_timeout: Cell<Seconds>,
-    disconnect_timeout: Cell<Seconds>,
+    keepalive_timeout: Cell<time::Duration>,
+    disconnect_timeout: Cell<time::Duration>,
+    frame_read_enabled: Cell<bool>,
     frame_read_rate: Cell<u16>,
-    frame_read_timeout: Cell<Seconds>,
-    frame_read_max_timeout: Cell<Seconds>,
+    frame_read_timeout: Cell<time::Duration>,
+    frame_read_max_timeout: Cell<time::Duration>,
 }
 
 impl Default for DispatcherConfig {
     fn default() -> Self {
         DispatcherConfig(Rc::new(DispatcherConfigInner {
-            keepalive_timeout: Cell::new(Seconds(30)),
-            disconnect_timeout: Cell::new(Seconds(1)),
+            keepalive_timeout: Cell::new(Seconds(30).into()),
+            disconnect_timeout: Cell::new(Seconds(1).into()),
             frame_read_rate: Cell::new(0),
-            frame_read_timeout: Cell::new(Seconds::ZERO),
-            frame_read_max_timeout: Cell::new(Seconds::ZERO),
+            frame_read_enabled: Cell::new(false),
+            frame_read_timeout: Cell::new(Seconds::ZERO.into()),
+            frame_read_max_timeout: Cell::new(Seconds::ZERO.into()),
         }))
     }
 }
@@ -41,28 +43,27 @@ impl Default for DispatcherConfig {
 impl DispatcherConfig {
     #[inline]
     /// Get keep-alive timeout
-    pub fn keepalive_timeout(&self) -> Seconds {
+    pub fn keepalive_timeout(&self) -> time::Duration {
         self.0.keepalive_timeout.get()
     }
 
     #[inline]
     /// Get disconnect timeout
-    pub fn disconnect_timeout(&self) -> Seconds {
+    pub fn disconnect_timeout(&self) -> time::Duration {
         self.0.disconnect_timeout.get()
     }
 
     #[inline]
     /// Get frame read rate
-    pub fn frame_read_rate(&self) -> Option<(Seconds, Seconds, u16)> {
-        let to = self.0.frame_read_timeout.get();
-        if to.is_zero() {
-            None
-        } else {
+    pub fn frame_read_rate(&self) -> Option<(time::Duration, time::Duration, u16)> {
+        if self.0.frame_read_enabled.get() {
             Some((
-                to,
+                self.0.frame_read_timeout.get(),
                 self.0.frame_read_max_timeout.get(),
                 self.0.frame_read_rate.get(),
             ))
+        } else {
+            None
         }
     }
 
@@ -72,7 +73,7 @@ impl DispatcherConfig {
     ///
     /// By default keep-alive timeout is set to 30 seconds.
     pub fn set_keepalive_timeout(&self, timeout: Seconds) -> &Self {
-        self.0.keepalive_timeout.set(timeout);
+        self.0.keepalive_timeout.set(timeout.into());
         self
     }
 
@@ -85,7 +86,7 @@ impl DispatcherConfig {
     ///
     /// By default disconnect timeout is set to 1 seconds.
     pub fn set_disconnect_timeout(&self, timeout: Seconds) -> &Self {
-        self.0.disconnect_timeout.set(timeout);
+        self.0.disconnect_timeout.set(timeout.into());
         self
     }
 
@@ -101,8 +102,9 @@ impl DispatcherConfig {
         max_timeout: Seconds,
         rate: u16,
     ) -> &Self {
-        self.0.frame_read_timeout.set(timeout);
-        self.0.frame_read_max_timeout.set(max_timeout);
+        self.0.frame_read_enabled.set(!timeout.is_zero());
+        self.0.frame_read_timeout.set(timeout.into());
+        self.0.frame_read_max_timeout.set(max_timeout.into());
         self.0.frame_read_rate.set(rate);
         self
     }
@@ -205,7 +207,7 @@ where
         let io = IoBoxed::from(io);
 
         // register keepalive timer
-        io.start_timer(cfg.keepalive_timeout().into());
+        io.start_timer(cfg.keepalive_timeout());
 
         let pool = io.memory_pool().pool();
         let shared = Rc::new(DispatcherShared {
@@ -571,9 +573,7 @@ where
         } else {
             // no new data then start keep-alive timer
             if decoded.remains == 0 {
-                self.shared
-                    .io
-                    .start_timer(self.cfg.keepalive_timeout().into());
+                self.shared.io.start_timer(self.cfg.keepalive_timeout());
             } else if let Some((period, max, _)) = self.cfg.frame_read_rate() {
                 // we got new data but not enough to parse single frame
                 // start read timer
@@ -581,9 +581,9 @@ where
                 self.flags.set(flags);
 
                 self.read_bytes.set(decoded.remains as u32);
-                self.shared.io.start_timer(period.into());
+                self.shared.io.start_timer(period);
                 if !max.is_zero() {
-                    self.read_max_timeout.set(now() + time::Duration::from(max));
+                    self.read_max_timeout.set(now() + max);
                 }
             }
         }
