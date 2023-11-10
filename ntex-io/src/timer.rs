@@ -7,7 +7,8 @@ use ntex_util::{spawn, HashSet};
 
 use crate::{io::IoState, IoRef};
 
-const CAP: usize = 32;
+const CAP: usize = 64;
+const SEC: Duration = Duration::from_secs(1);
 
 thread_local! {
     static TIMER: Rc<RefCell<Inner>> = Rc::new(RefCell::new(
@@ -18,20 +19,27 @@ thread_local! {
         }));
 }
 
+type Notifications = BTreeMap<Instant, (HashSet<Rc<IoState>>, HashSet<Rc<IoState>>)>;
+
 struct Inner {
     running: bool,
-    cache: VecDeque<HashSet<(u8, Rc<IoState>)>>,
-    notifications: BTreeMap<Instant, HashSet<(u8, Rc<IoState>)>>,
+    cache: VecDeque<HashSet<Rc<IoState>>>,
+    notifications: Notifications,
 }
 
 impl Inner {
-    fn unregister(&mut self, expire: Instant, io: &IoRef, tag: u8) {
+    fn unregister(&mut self, expire: Instant, io: &IoRef, custom: bool) {
         if let Some(states) = self.notifications.get_mut(&expire) {
-            states.remove(&(tag, io.0.clone()));
-            if states.is_empty() {
+            if custom {
+                states.1.remove(&io.0);
+            } else {
+                states.0.remove(&io.0);
+            }
+            if states.0.is_empty() && states.1.is_empty() {
                 if let Some(items) = self.notifications.remove(&expire) {
                     if self.cache.len() <= CAP {
-                        self.cache.push_back(items)
+                        self.cache.push_back(items.0);
+                        self.cache.push_back(items.1);
                     }
                 }
             }
@@ -39,18 +47,30 @@ impl Inner {
     }
 }
 
-pub(crate) fn register(timeout: Duration, io: &IoRef, tag: u8) -> Instant {
-    let expire = now() + timeout;
-
+pub(crate) fn register(timeout: Duration, io: &IoRef, custom: bool) -> Instant {
     TIMER.with(|timer| {
         let mut inner = timer.borrow_mut();
-        if let Some(notifications) = inner.notifications.get_mut(&expire) {
-            notifications.insert((tag, io.0.clone()));
+
+        let expire = now() + timeout;
+
+        // search existing key
+        let expire = if let Some((expire, _)) =
+            inner.notifications.range(expire..expire + SEC).next()
+        {
+            *expire
         } else {
-            let mut notifications = inner.cache.pop_front().unwrap_or_default();
-            notifications.insert((tag, io.0.clone()));
-            inner.notifications.insert(expire, notifications);
-        }
+            let n0 = inner.cache.pop_front().unwrap_or_default();
+            let n1 = inner.cache.pop_front().unwrap_or_default();
+            inner.notifications.insert(expire, (n0, n1));
+            expire
+        };
+
+        let notifications = inner.notifications.get_mut(&expire).unwrap();
+        if custom {
+            notifications.1.insert(io.0.clone());
+        } else {
+            notifications.0.insert(io.0.clone());
+        };
 
         if !inner.running {
             inner.running = true;
@@ -69,11 +89,11 @@ pub(crate) fn register(timeout: Duration, io: &IoRef, tag: u8) -> Instant {
                             let key = *key;
                             if key <= now_time {
                                 let mut items = i.notifications.remove(&key).unwrap();
-                                for (tag, st) in items.drain() {
-                                    st.notify_timeout(tag);
-                                }
+                                items.0.drain().for_each(|st| st.notify_timeout(false));
+                                items.1.drain().for_each(|st| st.notify_timeout(true));
                                 if i.cache.len() <= CAP {
-                                    i.cache.push_back(items)
+                                    i.cache.push_back(items.0);
+                                    i.cache.push_back(items.1);
                                 }
                             } else {
                                 break;
@@ -90,21 +110,23 @@ pub(crate) fn register(timeout: Duration, io: &IoRef, tag: u8) -> Instant {
                 drop(guard);
             });
         }
-    });
 
-    expire
+        expire
+    })
 }
 
 struct TimerGuard(Rc<RefCell<Inner>>);
 
 impl Drop for TimerGuard {
     fn drop(&mut self) {
-        self.0.borrow_mut().running = false;
+        let mut inner = self.0.borrow_mut();
+        inner.running = false;
+        inner.notifications.clear();
     }
 }
 
-pub(crate) fn unregister(expire: Instant, io: &IoRef, tag: u8) {
+pub(crate) fn unregister(expire: Instant, io: &IoRef, custom: bool) {
     TIMER.with(|timer| {
-        timer.borrow_mut().unregister(expire, io, tag);
+        timer.borrow_mut().unregister(expire, io, custom);
     })
 }

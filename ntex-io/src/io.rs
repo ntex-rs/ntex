@@ -93,18 +93,18 @@ impl IoState {
         }
     }
 
-    pub(super) fn notify_timeout(&self, tag: u8) {
+    pub(super) fn notify_timeout(&self, custom: bool) {
         let mut flags = self.flags.get();
-        if tag == 0 {
+        if custom {
+            flags.insert(Flags::DSP_TIMEOUT);
+            self.dispatch_task.wake();
+        } else {
             log::trace!("keep-alive timeout, notify dispatcher");
             flags.remove(Flags::KEEPALIVE);
             if !flags.contains(Flags::DSP_KEEPALIVE) {
                 flags.insert(Flags::DSP_KEEPALIVE);
                 self.dispatch_task.wake();
             }
-        } else {
-            flags.insert(Flags::DSP_TIMEOUT);
-            self.dispatch_task.wake();
         }
         self.flags.set(flags);
     }
@@ -949,7 +949,7 @@ mod tests {
         let server = Io::new(server);
         assert!(server.eq(&server));
 
-        server.0 .0.notify_timeout(0);
+        server.0 .0.notify_timeout(false);
         let err = server.recv(&BytesCodec).await.err().unwrap();
         assert!(format!("{:?}", err).contains("Keep-alive"));
 

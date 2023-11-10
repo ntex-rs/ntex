@@ -209,12 +209,12 @@ impl IoRef {
     /// Start keep-alive timer
     pub fn start_keepalive_timer(&self, timeout: time::Duration) {
         if self.flags().contains(Flags::KEEPALIVE) {
-            timer::unregister(self.0.keepalive.get(), self, 0);
+            timer::unregister(self.0.keepalive.get(), self, false);
         }
         if !timeout.is_zero() {
             log::debug!("start keep-alive timeout {:?}", timeout);
             self.0.insert_flags(Flags::KEEPALIVE);
-            self.0.keepalive.set(timer::register(timeout, self, 0));
+            self.0.keepalive.set(timer::register(timeout, self, false));
         } else {
             self.0.remove_flags(Flags::KEEPALIVE);
         }
@@ -225,7 +225,7 @@ impl IoRef {
     pub fn stop_keepalive_timer(&self) {
         if self.flags().contains(Flags::KEEPALIVE) {
             log::debug!("unregister keep-alive timeout");
-            timer::unregister(self.0.keepalive.get(), self, 0)
+            timer::unregister(self.0.keepalive.get(), self, false)
         }
     }
 
@@ -233,14 +233,14 @@ impl IoRef {
     /// Start custom timer
     pub fn start_timer(&self, timeout: time::Duration) -> time::Instant {
         log::debug!("start custom timeout: {:?}", timeout);
-        timer::register(timeout, self, 1)
+        timer::register(timeout, self, true)
     }
 
     #[inline]
     /// Stop custom timer
     pub fn stop_timer(&self, id: time::Instant) {
         log::debug!("unregister custom timeout");
-        timer::unregister(id, self, 1)
+        timer::unregister(id, self, true)
     }
 
     #[inline]
