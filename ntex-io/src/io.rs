@@ -45,8 +45,6 @@ bitflags::bitflags! {
         const DSP_STOP            = 0b0001_0000_0000_0000;
         /// keep-alive timeout occured
         const DSP_KEEPALIVE       = 0b0010_0000_0000_0000;
-        /// custom timeout occured
-        const DSP_TIMEOUT         = 0b0100_0000_0000_0000;
 
         /// keep-alive timeout started
         const KEEPALIVE           = 0b1000_0000_0000_0000;
@@ -93,20 +91,16 @@ impl IoState {
         }
     }
 
-    pub(super) fn notify_timeout(&self, custom: bool) {
+    pub(super) fn notify_timeout(&self) {
+        log::trace!("keep-alive timeout, notify dispatcher");
+
         let mut flags = self.flags.get();
-        if custom {
-            flags.insert(Flags::DSP_TIMEOUT);
+        flags.remove(Flags::KEEPALIVE);
+        if !flags.contains(Flags::DSP_KEEPALIVE) {
+            flags.insert(Flags::DSP_KEEPALIVE);
+            self.flags.set(flags);
             self.dispatch_task.wake();
-        } else {
-            log::trace!("keep-alive timeout, notify dispatcher");
-            flags.remove(Flags::KEEPALIVE);
-            if !flags.contains(Flags::DSP_KEEPALIVE) {
-                flags.insert(Flags::DSP_KEEPALIVE);
-                self.dispatch_task.wake();
-            }
         }
-        self.flags.set(flags);
     }
 
     pub(super) fn notify_disconnect(&self) {
@@ -352,9 +346,10 @@ impl<F> Io<F> {
         loop {
             return match poll_fn(|cx| self.poll_recv(codec, cx)).await {
                 Ok(item) => Ok(Some(item)),
-                Err(RecvError::KeepAlive) | Err(RecvError::Timeout) => Err(Either::Right(
-                    io::Error::new(io::ErrorKind::Other, "Keep-alive"),
-                )),
+                Err(RecvError::KeepAlive) => Err(Either::Right(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Keep-alive",
+                ))),
                 Err(RecvError::Stop) => Err(Either::Right(io::Error::new(
                     io::ErrorKind::Other,
                     "Dispatcher stopped",
@@ -560,9 +555,6 @@ impl<F> Io<F> {
             } else if flags.contains(Flags::DSP_KEEPALIVE) {
                 self.0 .0.remove_flags(Flags::DSP_KEEPALIVE);
                 Err(RecvError::KeepAlive)
-            } else if flags.contains(Flags::DSP_TIMEOUT) {
-                self.0 .0.remove_flags(Flags::DSP_TIMEOUT);
-                Err(RecvError::Timeout)
             } else if flags.contains(Flags::WR_BACKPRESSURE) {
                 Err(RecvError::WriteBackpressure)
             } else {
@@ -656,9 +648,6 @@ impl<F> Io<F> {
         } else if flags.contains(Flags::DSP_KEEPALIVE) {
             self.0 .0.remove_flags(Flags::DSP_KEEPALIVE);
             Poll::Ready(IoStatusUpdate::KeepAlive)
-        } else if flags.contains(Flags::DSP_TIMEOUT) {
-            self.0 .0.remove_flags(Flags::DSP_TIMEOUT);
-            Poll::Ready(IoStatusUpdate::Timeout)
         } else if flags.contains(Flags::WR_BACKPRESSURE) {
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
@@ -949,7 +938,7 @@ mod tests {
         let server = Io::new(server);
         assert!(server.eq(&server));
 
-        server.0 .0.notify_timeout(false);
+        server.0 .0.notify_timeout();
         let err = server.recv(&BytesCodec).await.err().unwrap();
         assert!(format!("{:?}", err).contains("Keep-alive"));
 

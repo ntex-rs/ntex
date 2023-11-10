@@ -117,8 +117,6 @@ pub trait Handle {
 pub enum IoStatusUpdate {
     /// Keep-alive timeout occured
     KeepAlive,
-    /// Custom timeout occured
-    Timeout,
     /// Write backpressure is enabled
     WriteBackpressure,
     /// Stop io stream handling
@@ -132,8 +130,6 @@ pub enum IoStatusUpdate {
 pub enum RecvError<U: Decoder> {
     /// Keep-alive timeout occured
     KeepAlive,
-    /// Custom timeout occured
-    Timeout,
     /// Write backpressure is enabled
     WriteBackpressure,
     /// Stop io stream handling

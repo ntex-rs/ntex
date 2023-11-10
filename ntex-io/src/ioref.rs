@@ -206,15 +206,21 @@ impl IoRef {
     }
 
     #[inline]
-    /// Start keep-alive timer
-    pub fn start_keepalive_timer(&self, timeout: time::Duration) {
+    /// Keep-alive deadline
+    pub fn timer_deadline(&self) -> time::Instant {
+        self.0.keepalive.get()
+    }
+
+    #[inline]
+    /// Start timer
+    pub fn start_timer(&self, timeout: time::Duration) {
         if self.flags().contains(Flags::KEEPALIVE) {
-            timer::unregister(self.0.keepalive.get(), self, false);
+            timer::unregister(self.0.keepalive.get(), self);
         }
         if !timeout.is_zero() {
             log::debug!("start keep-alive timeout {:?}", timeout);
             self.0.insert_flags(Flags::KEEPALIVE);
-            self.0.keepalive.set(timer::register(timeout, self, false));
+            self.0.keepalive.set(timer::register(timeout, self));
         } else {
             self.0.remove_flags(Flags::KEEPALIVE);
         }
@@ -222,25 +228,23 @@ impl IoRef {
 
     #[inline]
     /// Stop keep-alive timer
-    pub fn stop_keepalive_timer(&self) {
+    pub fn stop_timer(&self) {
         if self.flags().contains(Flags::KEEPALIVE) {
-            log::debug!("unregister keep-alive timeout");
-            timer::unregister(self.0.keepalive.get(), self, false)
+            log::debug!("unregister keep-alive timer");
+            timer::unregister(self.0.keepalive.get(), self)
         }
     }
 
-    #[inline]
-    /// Start custom timer
-    pub fn start_timer(&self, timeout: time::Duration) -> time::Instant {
-        log::debug!("start custom timeout: {:?}", timeout);
-        timer::register(timeout, self, true)
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.6")]
+    /// Start keep-alive timer
+    pub fn start_keepalive_timer(&self, timeout: time::Duration) {
+        self.start_timer(timeout);
     }
-
     #[inline]
-    /// Stop custom timer
-    pub fn stop_timer(&self, id: time::Instant) {
-        log::debug!("unregister custom timeout");
-        timer::unregister(id, self, true)
+    /// Stop keep-alive timer
+    pub fn stop_keepalive_timer(&self) {
+        self.stop_timer()
     }
 
     #[inline]

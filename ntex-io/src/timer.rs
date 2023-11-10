@@ -19,27 +19,20 @@ thread_local! {
         }));
 }
 
-type Notifications = BTreeMap<Instant, (HashSet<Rc<IoState>>, HashSet<Rc<IoState>>)>;
-
 struct Inner {
     running: bool,
     cache: VecDeque<HashSet<Rc<IoState>>>,
-    notifications: Notifications,
+    notifications: BTreeMap<Instant, HashSet<Rc<IoState>>>,
 }
 
 impl Inner {
-    fn unregister(&mut self, expire: Instant, io: &IoRef, custom: bool) {
+    fn unregister(&mut self, expire: Instant, io: &IoRef) {
         if let Some(states) = self.notifications.get_mut(&expire) {
-            if custom {
-                states.1.remove(&io.0);
-            } else {
-                states.0.remove(&io.0);
-            }
-            if states.0.is_empty() && states.1.is_empty() {
+            states.remove(&io.0);
+            if states.is_empty() {
                 if let Some(items) = self.notifications.remove(&expire) {
                     if self.cache.len() <= CAP {
-                        self.cache.push_back(items.0);
-                        self.cache.push_back(items.1);
+                        self.cache.push_back(items);
                     }
                 }
             }
@@ -47,7 +40,7 @@ impl Inner {
     }
 }
 
-pub(crate) fn register(timeout: Duration, io: &IoRef, custom: bool) -> Instant {
+pub(crate) fn register(timeout: Duration, io: &IoRef) -> Instant {
     TIMER.with(|timer| {
         let mut inner = timer.borrow_mut();
 
@@ -59,18 +52,16 @@ pub(crate) fn register(timeout: Duration, io: &IoRef, custom: bool) -> Instant {
         {
             *expire
         } else {
-            let n0 = inner.cache.pop_front().unwrap_or_default();
-            let n1 = inner.cache.pop_front().unwrap_or_default();
-            inner.notifications.insert(expire, (n0, n1));
+            let items = inner.cache.pop_front().unwrap_or_default();
+            inner.notifications.insert(expire, items);
             expire
         };
 
-        let notifications = inner.notifications.get_mut(&expire).unwrap();
-        if custom {
-            notifications.1.insert(io.0.clone());
-        } else {
-            notifications.0.insert(io.0.clone());
-        };
+        inner
+            .notifications
+            .get_mut(&expire)
+            .unwrap()
+            .insert(io.0.clone());
 
         if !inner.running {
             inner.running = true;
@@ -89,11 +80,9 @@ pub(crate) fn register(timeout: Duration, io: &IoRef, custom: bool) -> Instant {
                             let key = *key;
                             if key <= now_time {
                                 let mut items = i.notifications.remove(&key).unwrap();
-                                items.0.drain().for_each(|st| st.notify_timeout(false));
-                                items.1.drain().for_each(|st| st.notify_timeout(true));
+                                items.drain().for_each(|st| st.notify_timeout());
                                 if i.cache.len() <= CAP {
-                                    i.cache.push_back(items.0);
-                                    i.cache.push_back(items.1);
+                                    i.cache.push_back(items);
                                 }
                             } else {
                                 break;
@@ -125,8 +114,8 @@ impl Drop for TimerGuard {
     }
 }
 
-pub(crate) fn unregister(expire: Instant, io: &IoRef, custom: bool) {
+pub(crate) fn unregister(expire: Instant, io: &IoRef) {
     TIMER.with(|timer| {
-        timer.borrow_mut().unregister(expire, io, custom);
+        timer.borrow_mut().unregister(expire, io);
     })
 }

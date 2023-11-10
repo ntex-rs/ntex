@@ -116,7 +116,7 @@ where
         let flags = if config.client_timeout.is_zero() {
             Flags::empty()
         } else {
-            io.start_keepalive_timer(config.client_timeout);
+            io.start_timer(config.client_timeout);
             Flags::KEEPALIVE_REG
         };
 
@@ -442,7 +442,7 @@ where
             if self.flags.contains(Flags::KEEPALIVE) {
                 self.flags.remove(Flags::KEEPALIVE);
                 self.flags.insert(Flags::KEEPALIVE_REG);
-                self.io.start_keepalive_timer(self.config.keep_alive);
+                self.io.start_timer(self.config.keep_alive);
             }
             State::ReadRequest
         }
@@ -601,7 +601,7 @@ where
                     log::trace!("dispatcher is instructed to stop");
                     Poll::Ready(State::Stop)
                 }
-                Err(RecvError::KeepAlive) | Err(RecvError::Timeout) => {
+                Err(RecvError::KeepAlive) => {
                     // keep-alive timeout
                     if !self.flags.contains(Flags::STARTED) {
                         log::trace!("slow request timeout");
@@ -706,7 +706,6 @@ where
             Poll::Pending => false,
             Poll::Ready(
                 IoStatusUpdate::KeepAlive
-                | IoStatusUpdate::Timeout
                 | IoStatusUpdate::Stop
                 | IoStatusUpdate::PeerGone(_),
             ) => true,
@@ -756,12 +755,6 @@ fn _poll_request_payload<F>(
                                 payload.1.set_error(PayloadError::EncodingCorrupted);
                                 *slf_payload = None;
                                 io::Error::new(io::ErrorKind::Other, "Keep-alive").into()
-                            }
-                            RecvError::Timeout => {
-                                payload.1.set_error(PayloadError::EncodingCorrupted);
-                                *slf_payload = None;
-                                io::Error::new(io::ErrorKind::TimedOut, "Read timeout")
-                                    .into()
                             }
                             RecvError::Stop => {
                                 payload.1.set_error(PayloadError::EncodingCorrupted);
