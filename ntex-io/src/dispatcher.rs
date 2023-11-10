@@ -4,12 +4,109 @@ use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll, time}
 use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Pipeline, Service};
-use ntex_util::time::Seconds;
+use ntex_util::time::{now, Seconds};
 use ntex_util::{future::Either, ready, spawn};
 
 use crate::{DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
 
+const ONE_SEC: time::Duration = time::Duration::from_secs(1);
+
 type Response<U> = <U as Encoder>::Item;
+
+#[derive(Clone, Debug)]
+/// Shared dispatcher configuration
+pub struct DispatcherConfig(Rc<DispatcherConfigInner>);
+
+#[derive(Debug)]
+struct DispatcherConfigInner {
+    keepalive_timeout: Cell<Seconds>,
+    disconnect_timeout: Cell<Seconds>,
+    frame_read_rate: Cell<u16>,
+    frame_read_timeout: Cell<Seconds>,
+    frame_read_max_timeout: Cell<Seconds>,
+}
+
+impl Default for DispatcherConfig {
+    fn default() -> Self {
+        DispatcherConfig(Rc::new(DispatcherConfigInner {
+            keepalive_timeout: Cell::new(Seconds(30)),
+            disconnect_timeout: Cell::new(Seconds(1)),
+            frame_read_rate: Cell::new(0),
+            frame_read_timeout: Cell::new(Seconds::ZERO),
+            frame_read_max_timeout: Cell::new(Seconds::ZERO),
+        }))
+    }
+}
+
+impl DispatcherConfig {
+    #[inline]
+    /// Get keep-alive timeout
+    pub fn keepalive_timeout(&self) -> Seconds {
+        self.0.keepalive_timeout.get()
+    }
+
+    #[inline]
+    /// Get disconnect timeout
+    pub fn disconnect_timeout(&self) -> Seconds {
+        self.0.disconnect_timeout.get()
+    }
+
+    #[inline]
+    /// Get frame read rate
+    pub fn frame_read_rate(&self) -> Option<(Seconds, Seconds, u16)> {
+        let to = self.0.frame_read_timeout.get();
+        if to.is_zero() {
+            None
+        } else {
+            Some((
+                to,
+                self.0.frame_read_max_timeout.get(),
+                self.0.frame_read_rate.get(),
+            ))
+        }
+    }
+
+    /// Set keep-alive timeout in seconds.
+    ///
+    /// To disable timeout set value to 0.
+    ///
+    /// By default keep-alive timeout is set to 30 seconds.
+    pub fn set_keepalive_timeout(&self, timeout: Seconds) -> &Self {
+        self.0.keepalive_timeout.set(timeout);
+        self
+    }
+
+    /// Set connection disconnect timeout.
+    ///
+    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
+    /// within this time, the connection get dropped.
+    ///
+    /// To disable timeout set value to 0.
+    ///
+    /// By default disconnect timeout is set to 1 seconds.
+    pub fn set_disconnect_timeout(&self, timeout: Seconds) -> &Self {
+        self.0.disconnect_timeout.set(timeout);
+        self
+    }
+
+    /// Set read rate parameters for single frame.
+    ///
+    /// Set max timeout for reading single frame. If the client sends data,
+    /// increase the timeout by 1 second for every.
+    ///
+    /// By default frame read rate is disabled.
+    pub fn set_frame_read_rate(
+        &self,
+        timeout: Seconds,
+        max_timeout: Seconds,
+        rate: u16,
+    ) -> &Self {
+        self.0.frame_read_timeout.set(timeout);
+        self.0.frame_read_max_timeout.set(max_timeout);
+        self.0.frame_read_rate.set(rate);
+        self
+    }
+}
 
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
@@ -27,8 +124,9 @@ pin_project_lite::pin_project! {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8  {
-        const READY_ERR  = 0b0001;
-        const IO_ERR     = 0b0010;
+        const READY_ERR    = 0b0001;
+        const IO_ERR       = 0b0010;
+        const TIMEOUT      = 0b0100;
     }
 }
 
@@ -38,11 +136,14 @@ where
     U: Encoder + Decoder,
 {
     st: Cell<DispatcherState>,
-    ka_timeout: Cell<time::Duration>,
     error: Cell<Option<S::Error>>,
     flags: Cell<Flags>,
     shared: Rc<DispatcherShared<S, U>>,
     pool: Pool,
+    cfg: DispatcherConfig,
+    read_timeout: Cell<time::Instant>,
+    read_max_timeout: Cell<time::Instant>,
+    read_bytes: Cell<u32>,
 }
 
 pub(crate) struct DispatcherShared<S, U>
@@ -92,16 +193,20 @@ where
     U: Decoder + Encoder,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Dispatcher<S, U>
+    pub fn with_config<Io, F>(
+        io: Io,
+        codec: U,
+        service: F,
+        cfg: &DispatcherConfig,
+    ) -> Dispatcher<S, U>
     where
         IoBoxed: From<Io>,
         F: IntoService<S, DispatchItem<U>>,
     {
         let io = IoBoxed::from(io);
-        let ka_timeout = Cell::new(Seconds(30).into());
 
         // register keepalive timer
-        io.start_keepalive_timer(ka_timeout.get());
+        io.start_keepalive_timer(cfg.keepalive_timeout().into());
 
         let pool = io.memory_pool().pool();
         let shared = Rc::new(DispatcherShared {
@@ -116,12 +221,26 @@ where
             inner: DispatcherInner {
                 pool,
                 shared,
-                ka_timeout,
+                cfg: cfg.clone(),
                 error: Cell::new(None),
                 flags: Cell::new(Flags::empty()),
+                read_timeout: Cell::new(now()),
+                read_max_timeout: Cell::new(now()),
+                read_bytes: Cell::new(0),
                 st: Cell::new(DispatcherState::Processing),
             },
         }
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.6", note = "Use Dispatcher::with_config() method")]
+    /// Construct new `Dispatcher` instance.
+    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Dispatcher<S, U>
+    where
+        IoBoxed: From<Io>,
+        F: IntoService<S, DispatchItem<U>>,
+    {
+        Self::with_config(io, codec, service, &DispatcherConfig::default())
     }
 }
 
@@ -130,21 +249,22 @@ where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
     U: Decoder + Encoder,
 {
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.6", note = "Use DispatcherConfig methods")]
     /// Set keep-alive timeout.
     ///
     /// To disable timeout set value to 0.
     ///
     /// By default keep-alive timeout is set to 30 seconds.
     pub fn keepalive_timeout(self, timeout: Seconds) -> Self {
-        let ka_timeout = time::Duration::from(timeout);
-
         // register keepalive timer
-        self.inner.shared.io.start_keepalive_timer(ka_timeout);
-        self.inner.ka_timeout.set(ka_timeout);
-
+        self.inner.shared.io.start_keepalive_timer(timeout.into());
+        self.inner.cfg.set_keepalive_timeout(timeout);
         self
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.6", note = "Use DispatcherConfig methods")]
     /// Set connection disconnect timeout in seconds.
     ///
     /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
@@ -154,7 +274,7 @@ where
     ///
     /// By default disconnect timeout is set to 1 seconds.
     pub fn disconnect_timeout(self, val: Seconds) -> Self {
-        self.inner.shared.io.set_disconnect_timeout(val.into());
+        self.inner.shared.io.set_disconnect_timeout(val);
         self
     }
 }
@@ -200,22 +320,30 @@ where
         loop {
             match slf.st.get() {
                 DispatcherState::Processing => {
-                    let item = match ready!(slf.poll_service(
-                        &this.inner.shared.service,
-                        cx,
-                        io
-                    )) {
+                    let srv = ready!(slf.poll_service(&this.inner.shared.service, cx, io));
+                    let item = match srv {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
-                            match ready!(io.poll_recv(&slf.shared.codec, cx)) {
-                                Ok(el) => {
-                                    slf.update_keepalive();
-                                    DispatchItem::Item(el)
+                            match io.poll_recv_decode(&slf.shared.codec, cx) {
+                                Ok(decoded) => {
+                                    if let Some(el) = decoded.item {
+                                        slf.update_keepalive();
+                                        slf.remove_timeout();
+                                        DispatchItem::Item(el)
+                                    } else {
+                                        slf.update_timeout(decoded.remains);
+                                        return Poll::Pending;
+                                    }
                                 }
                                 Err(RecvError::KeepAlive) => {
                                     log::trace!("keep-alive error, stopping dispatcher");
                                     slf.st.set(DispatcherState::Stop);
                                     DispatchItem::KeepAliveTimeout
+                                }
+                                Err(RecvError::Timeout) => {
+                                    log::trace!("timeout error, stopping dispatcher");
+                                    slf.st.set(DispatcherState::Stop);
+                                    DispatchItem::ReadTimeout
                                 }
                                 Err(RecvError::Stop) => {
                                     log::trace!("dispatcher is instructed to stop");
@@ -259,6 +387,8 @@ where
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
+                    slf.shared.io.stop_keepalive_timer();
+
                     let result =
                         ready!(slf.poll_service(&this.inner.shared.service, cx, io));
                     let item = match result {
@@ -277,6 +407,7 @@ where
                     // call service
                     let shared = slf.shared.clone();
                     shared.inflight.set(shared.inflight.get() + 1);
+                    slf.update_keepalive();
                     spawn(async move {
                         let result = shared.service.call(item).await;
                         shared.handle_result(result, &shared.io);
@@ -284,7 +415,7 @@ where
                 }
                 // drain service responses and shutdown io
                 DispatcherState::Stop => {
-                    slf.unregister_keepalive();
+                    slf.shared.io.stop_keepalive_timer();
 
                     // service may relay on poll_ready for response results
                     if !slf.flags.get().contains(Flags::READY_ERR) {
@@ -300,7 +431,8 @@ where
                         match ready!(slf.shared.io.poll_status_update(cx)) {
                             IoStatusUpdate::PeerGone(_)
                             | IoStatusUpdate::Stop
-                            | IoStatusUpdate::KeepAlive => {
+                            | IoStatusUpdate::KeepAlive
+                            | IoStatusUpdate::Timeout => {
                                 slf.insert_flags(Flags::IO_ERR);
                                 continue;
                             }
@@ -375,6 +507,11 @@ where
                         self.st.set(DispatcherState::Stop);
                         Poll::Ready(PollService::Item(DispatchItem::KeepAliveTimeout))
                     }
+                    IoStatusUpdate::Timeout => {
+                        log::trace!("read timeout, stopping dispatcher during pause");
+                        self.st.set(DispatcherState::Stop);
+                        Poll::Ready(PollService::Item(DispatchItem::ReadTimeout))
+                    }
                     IoStatusUpdate::Stop => {
                         log::trace!("dispatcher is instructed to stop during pause");
                         self.st.set(DispatcherState::Stop);
@@ -410,13 +547,59 @@ where
 
     /// update keep-alive timer
     fn update_keepalive(&self) {
-        self.shared.io.start_keepalive_timer(self.ka_timeout.get());
+        self.shared
+            .io
+            .start_keepalive_timer(self.cfg.keepalive_timeout().into());
     }
 
-    /// unregister keep-alive timer
-    fn unregister_keepalive(&self) {
-        self.shared.io.stop_keepalive_timer();
-        self.ka_timeout.set(time::Duration::ZERO);
+    fn remove_timeout(&self) {
+        let mut flags = self.flags.get();
+
+        if self.flags.get().contains(Flags::TIMEOUT) {
+            flags.remove(Flags::TIMEOUT);
+            self.flags.set(flags);
+            self.shared.io.stop_timer(self.read_timeout.get());
+        }
+    }
+
+    fn update_timeout(&self, remains: usize) {
+        if let Some((period, max, rate)) = self.cfg.frame_read_rate() {
+            let bytes = remains as u32;
+            let mut flags = self.flags.get();
+
+            if flags.contains(Flags::TIMEOUT) {
+                // update existing timeout
+                let delta = (bytes - self.read_bytes.get())
+                    .try_into()
+                    .unwrap_or(u16::MAX);
+
+                if delta >= rate {
+                    let n = now();
+                    let to = self.read_timeout.get();
+                    let next = to + ONE_SEC;
+                    let new_timeout = if n >= next { ONE_SEC } else { next - n };
+
+                    // max timeout
+                    if max.is_zero() || (n + new_timeout) <= self.read_max_timeout.get() {
+                        self.shared.io.stop_timer(to);
+                        self.read_bytes.set(bytes);
+                        self.read_timeout
+                            .set(self.shared.io.start_timer(new_timeout));
+                    }
+                }
+            } else if remains != 0 {
+                // we got new data but not enough to parse single frame
+                flags.insert(Flags::TIMEOUT);
+                self.flags.set(flags);
+
+                self.read_bytes.set(bytes);
+                self.read_timeout
+                    .set(self.shared.io.start_timer(period.into()));
+                if !max.is_zero() {
+                    self.read_max_timeout.set(now() + time::Duration::from(max));
+                }
+            }
+        }
     }
 }
 
@@ -424,9 +607,9 @@ where
 mod tests {
     use rand::Rng;
     use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
-    use std::{cell::RefCell, time::Duration};
+    use std::{cell::RefCell, io, time::Duration};
 
-    use ntex_bytes::{Bytes, PoolId, PoolRef};
+    use ntex_bytes::{Bytes, BytesMut, PoolId, PoolRef};
     use ntex_codec::BytesCodec;
     use ntex_service::ServiceCtx;
     use ntex_util::{future::Ready, time::sleep, time::Millis, time::Seconds};
@@ -455,6 +638,32 @@ mod tests {
         }
     }
 
+    #[derive(Copy, Clone)]
+    struct BCodec(usize);
+
+    impl Encoder for BCodec {
+        type Item = Bytes;
+        type Error = io::Error;
+
+        fn encode(&self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
+            dst.extend_from_slice(&item[..]);
+            Ok(())
+        }
+    }
+
+    impl Decoder for BCodec {
+        type Item = BytesMut;
+        type Error = io::Error;
+
+        fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+            if src.len() < self.0 {
+                Ok(None)
+            } else {
+                Ok(Some(src.split_to(self.0)))
+            }
+        }
+    }
+
     impl<S, U> Dispatcher<S, U>
     where
         S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
@@ -468,7 +677,9 @@ mod tests {
         ) -> (Self, State) {
             let state = Io::new(io);
             let pool = state.memory_pool().pool();
-            let ka_timeout = Cell::new(Seconds(1).into());
+            let cfg = DispatcherConfig::default()
+                .set_keepalive_timeout(Seconds(1))
+                .clone();
 
             let inner = State(state.get_ref());
             state.start_keepalive_timer(Duration::from_millis(500));
@@ -487,9 +698,12 @@ mod tests {
                         error: Cell::new(None),
                         flags: Cell::new(super::Flags::empty()),
                         st: Cell::new(DispatcherState::Processing),
+                        read_timeout: Cell::new(time::Instant::now()),
+                        read_max_timeout: Cell::new(time::Instant::now()),
+                        read_bytes: Cell::new(0),
                         pool,
                         shared,
-                        ka_timeout,
+                        cfg,
                     },
                 },
                 inner,
@@ -548,6 +762,7 @@ mod tests {
                 }
             }),
         );
+        #[allow(deprecated)]
         spawn(async move {
             let _ = disp.disconnect_timeout(Seconds(1)).await;
         });
@@ -747,7 +962,7 @@ mod tests {
                 }),
             ),
         );
-        let disp = disp.keepalive_timeout(Seconds::ZERO);
+        disp.inner.cfg.set_keepalive_timeout(Seconds::ZERO);
         let pool = PoolId::P10.pool_ref();
         pool.set_read_params(1024, 512);
         state.set_memory_pool(pool);
@@ -802,13 +1017,14 @@ mod tests {
                 }
             }),
         );
+        #[allow(deprecated)]
         spawn(async move {
             let _ = disp
                 .keepalive_timeout(Seconds::ZERO)
                 .keepalive_timeout(Seconds(1))
                 .await;
         });
-        state.0 .0.disconnect_timeout.set(Millis::ONE_SEC);
+        state.0 .0.disconnect_timeout.set(Seconds(1));
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
@@ -817,6 +1033,61 @@ mod tests {
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
         assert!(flags.contains(Flags::IO_STOPPING));
+        assert!(client.is_closed());
+        assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
+    }
+
+    #[ntex::test]
+    async fn test_read_timeout() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
+        let data2 = data.clone();
+
+        let (disp, state) = Dispatcher::debug(
+            server,
+            BCodec(8),
+            ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
+                let data = data2.clone();
+                async move {
+                    match msg {
+                        DispatchItem::Item(bytes) => {
+                            data.lock().unwrap().borrow_mut().push(0);
+                            return Ok::<_, ()>(Some(bytes.freeze()));
+                        }
+                        DispatchItem::ReadTimeout => {
+                            data.lock().unwrap().borrow_mut().push(1);
+                        }
+                        _ => (),
+                    }
+                    Ok(None)
+                }
+            }),
+        );
+        spawn(async move {
+            disp.inner
+                .cfg
+                .set_keepalive_timeout(Seconds::ZERO)
+                .set_frame_read_rate(Seconds(1), Seconds(2), 2);
+            let _ = disp.await;
+        });
+
+        client.write("12345678");
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"12345678"));
+
+        client.write("1");
+        sleep(Millis(500)).await;
+        assert!(!state.flags().contains(Flags::IO_STOPPING));
+        client.write("23");
+        sleep(Millis(500)).await;
+        assert!(!state.flags().contains(Flags::IO_STOPPING));
+        client.write("4");
+        sleep(Millis(1100)).await;
+
+        // write side must be closed, dispatcher should fail with keep-alive
+        assert!(state.flags().contains(Flags::IO_STOPPING));
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }

@@ -48,6 +48,9 @@ where
                 DispatchItem::KeepAliveTimeout => {
                     Either::Right(Ready::Err(WsError::KeepAlive))
                 }
+                DispatchItem::ReadTimeout => {
+                    Either::Right(Ready::Err(WsError::ReadTimeout))
+                }
                 DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
                     Either::Right(Ready::Err(WsError::Protocol(e)))
                 }
@@ -97,11 +100,12 @@ where
     // create ws service
     let srv = factory.into_factory().create(sink.clone()).await?;
 
+    let cfg = crate::io::DispatcherConfig::default();
+    cfg.set_keepalive_timeout(Seconds::ZERO);
+
     // start websockets service dispatcher
     rt::spawn(async move {
-        let res = crate::io::Dispatcher::new(io, codec, srv)
-            .keepalive_timeout(Seconds::ZERO)
-            .await;
+        let res = crate::io::Dispatcher::with_config(io, codec, srv, &cfg).await;
         log::trace!("Ws handler is terminated: {:?}", res);
     });
 

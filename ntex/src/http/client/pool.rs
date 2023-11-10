@@ -7,7 +7,7 @@ use ntex_h2::{self as h2};
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::service::{Pipeline, PipelineCall, Service, ServiceCtx};
-use crate::time::{now, Millis};
+use crate::time::{now, Seconds};
 use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker};
 
@@ -57,7 +57,7 @@ where
         connector: T,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
-        disconnect_timeout: Millis,
+        disconnect_timeout: Seconds,
         limit: usize,
         h2config: h2::Config,
     ) -> Self {
@@ -178,7 +178,7 @@ where
 pub(super) struct Inner {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout: Millis,
+    disconnect_timeout: Seconds,
     limit: usize,
     h2config: h2::Config,
     acquired: usize,
@@ -396,7 +396,7 @@ pin_project_lite::pin_project! {
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,
-        disconnect_timeout: Millis,
+        disconnect_timeout: Seconds,
         inner: Rc<RefCell<Inner>>,
     }
 }
@@ -612,9 +612,8 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::{
-        http::Uri, io as nio, service::fn_service, testing::Io, time::sleep, util::lazy,
-    };
+    use crate::time::{sleep, Millis};
+    use crate::{http::Uri, io as nio, service::fn_service, testing::Io, util::lazy};
 
     #[crate::rt_test]
     async fn test_basics() {
@@ -630,7 +629,7 @@ mod tests {
                 }),
                 Duration::from_secs(10),
                 Duration::from_secs(10),
-                Millis::ZERO,
+                Seconds::ZERO,
                 1,
                 h2::Config::client(),
             )

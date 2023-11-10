@@ -201,7 +201,7 @@ where
     X: 'static,
     U: 'static,
 {
-    io.set_disconnect_timeout(config.client_disconnect.into());
+    io.set_disconnect_timeout(config.client_disconnect);
     let ioref = io.get_ref();
 
     let _ = server::handle_one(

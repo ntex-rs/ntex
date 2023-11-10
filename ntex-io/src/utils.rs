@@ -5,6 +5,15 @@ use ntex_util::future::Ready;
 
 use crate::{Filter, FilterFactory, Io, IoBoxed, Layer};
 
+/// Decoded item from buffer
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct Decoded<T> {
+    pub item: Option<T>,
+    pub remains: usize,
+    pub consumed: usize,
+}
+
 /// Service that converts any Io<F> stream to IoBoxed stream
 pub fn seal<F, S, C>(
     srv: S,
@@ -176,6 +185,14 @@ mod tests {
             .unwrap();
 
         let _ = svc.call(Io::new(server)).await;
+
+        let (client, _) = IoTest::create();
+        let io = Io::new(client);
+        format!("{:?}", TestFilter);
+        let mut s = Stack::new();
+        s.add_layer();
+        let _ = s.read_buf(&io, 0, 0, |b| TestFilter.process_read_buf(b));
+        let _ = s.write_buf(&io, 0, |b| TestFilter.process_write_buf(b));
     }
 
     #[ntex::test]

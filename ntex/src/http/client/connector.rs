@@ -36,7 +36,7 @@ pub struct Connector {
     timeout: Millis,
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout: Millis,
+    disconnect_timeout: Seconds,
     limit: usize,
     h2config: h2::Config,
     connector: BoxedConnector,
@@ -62,7 +62,7 @@ impl Connector {
             timeout: Millis(1_000),
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
-            disconnect_timeout: Millis(3_000),
+            disconnect_timeout: Seconds(3),
             limit: 100,
             h2config: h2::Config::client(),
         };
@@ -171,7 +171,7 @@ impl Connector {
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 3 seconds.
-    pub fn disconnect_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
+    pub fn disconnect_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
         self.disconnect_timeout = timeout.into();
         self
     }
@@ -256,7 +256,7 @@ impl Connector {
 fn connector(
     connector: BoxedConnector,
     timeout: Millis,
-    disconnect_timeout: Millis,
+    disconnect_timeout: Seconds,
 ) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError> + fmt::Debug {
     TimeoutService::new(
         timeout,

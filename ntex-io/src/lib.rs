@@ -24,13 +24,13 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
 
 pub use self::buf::{ReadBuf, WriteBuf};
-pub use self::dispatcher::Dispatcher;
+pub use self::dispatcher::{Dispatcher, DispatcherConfig};
 pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{ReadContext, WriteContext};
-pub use self::utils::{filter, seal};
+pub use self::utils::{filter, seal, Decoded};
 
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -117,6 +117,8 @@ pub trait Handle {
 pub enum IoStatusUpdate {
     /// Keep-alive timeout occured
     KeepAlive,
+    /// Custom timeout occured
+    Timeout,
     /// Write backpressure is enabled
     WriteBackpressure,
     /// Stop io stream handling
@@ -130,6 +132,8 @@ pub enum IoStatusUpdate {
 pub enum RecvError<U: Decoder> {
     /// Keep-alive timeout occured
     KeepAlive,
+    /// Custom timeout occured
+    Timeout,
     /// Write backpressure is enabled
     WriteBackpressure,
     /// Stop io stream handling
@@ -149,6 +153,8 @@ pub enum DispatchItem<U: Encoder + Decoder> {
     WBackPressureDisabled,
     /// Keep alive timeout
     KeepAliveTimeout,
+    /// Frame read timeout
+    ReadTimeout,
     /// Decoder parse error
     DecoderError(<U as Decoder>::Error),
     /// Encoder parse error
@@ -175,6 +181,9 @@ where
             }
             DispatchItem::KeepAliveTimeout => {
                 write!(fmt, "DispatchItem::KeepAliveTimeout")
+            }
+            DispatchItem::ReadTimeout => {
+                write!(fmt, "DispatchItem::ReadTimeout")
             }
             DispatchItem::EncoderError(ref e) => {
                 write!(fmt, "DispatchItem::EncoderError({:?})", e)
@@ -213,5 +222,6 @@ mod tests {
         assert!(
             format!("{:?}", T::KeepAliveTimeout).contains("DispatchItem::KeepAliveTimeout")
         );
+        assert!(format!("{:?}", T::ReadTimeout).contains("DispatchItem::ReadTimeout"));
     }
 }
