@@ -170,10 +170,7 @@ impl Stream for PlStream {
                         }
                     }
                     Err(RecvError::KeepAlive) => {
-                        Err(io::Error::new(io::ErrorKind::Other, "Keep-alive").into())
-                    }
-                    Err(RecvError::Timeout) => {
-                        Err(io::Error::new(io::ErrorKind::TimedOut, "Read timeout").into())
+                        Err(io::Error::new(io::ErrorKind::TimedOut, "Keep-alive").into())
                     }
                     Err(RecvError::Stop) => {
                         Err(io::Error::new(io::ErrorKind::Other, "Dispatcher stopped")
