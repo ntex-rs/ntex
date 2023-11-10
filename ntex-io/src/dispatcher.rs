@@ -20,7 +20,7 @@ pub struct DispatcherConfig(Rc<DispatcherConfigInner>);
 #[derive(Debug)]
 struct DispatcherConfigInner {
     keepalive_timeout: Cell<time::Duration>,
-    disconnect_timeout: Cell<time::Duration>,
+    disconnect_timeout: Cell<Seconds>,
     frame_read_enabled: Cell<bool>,
     frame_read_rate: Cell<u16>,
     frame_read_timeout: Cell<time::Duration>,
@@ -49,7 +49,7 @@ impl DispatcherConfig {
 
     #[inline]
     /// Get disconnect timeout
-    pub fn disconnect_timeout(&self) -> time::Duration {
+    pub fn disconnect_timeout(&self) -> Seconds {
         self.0.disconnect_timeout.get()
     }
 
@@ -86,7 +86,7 @@ impl DispatcherConfig {
     ///
     /// By default disconnect timeout is set to 1 seconds.
     pub fn set_disconnect_timeout(&self, timeout: Seconds) -> &Self {
-        self.0.disconnect_timeout.set(timeout.into());
+        self.0.disconnect_timeout.set(timeout);
         self
     }
 
@@ -137,14 +137,14 @@ where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
-    st: Cell<DispatcherState>,
-    error: Cell<Option<S::Error>>,
-    flags: Cell<Flags>,
+    st: DispatcherState,
+    error: Option<S::Error>,
+    flags: Flags,
     shared: Rc<DispatcherShared<S, U>>,
     pool: Pool,
     cfg: DispatcherConfig,
-    read_bytes: Cell<u32>,
-    read_max_timeout: Cell<time::Instant>,
+    read_bytes: u32,
+    read_max_timeout: time::Instant,
 }
 
 pub(crate) struct DispatcherShared<S, U>
@@ -208,6 +208,7 @@ where
 
         // register keepalive timer
         io.start_timer(cfg.keepalive_timeout());
+        io.set_disconnect_timeout(cfg.disconnect_timeout());
 
         let pool = io.memory_pool().pool();
         let shared = Rc::new(DispatcherShared {
@@ -223,11 +224,11 @@ where
                 pool,
                 shared,
                 cfg: cfg.clone(),
-                error: Cell::new(None),
-                flags: Cell::new(Flags::empty()),
-                read_bytes: Cell::new(0),
-                read_max_timeout: Cell::new(now()),
-                st: Cell::new(DispatcherState::Processing),
+                error: None,
+                flags: Flags::empty(),
+                read_bytes: 0,
+                read_max_timeout: now(),
+                st: DispatcherState::Processing,
             },
         }
     }
@@ -306,25 +307,24 @@ where
 {
     type Output = Result<(), S::Error>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        let slf = &this.inner;
-        let io = &slf.shared.io;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.as_mut().project();
+        let slf = &mut this.inner;
 
         // handle memory pool pressure
         if slf.pool.poll_ready(cx).is_pending() {
-            io.pause();
+            slf.shared.io.pause();
             return Poll::Pending;
         }
 
         loop {
-            match slf.st.get() {
+            match slf.st {
                 DispatcherState::Processing => {
-                    let srv = ready!(slf.poll_service(&this.inner.shared.service, cx, io));
+                    let srv = ready!(slf.poll_service(cx));
                     let item = match srv {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
-                            match io.poll_recv_decode(&slf.shared.codec, cx) {
+                            match slf.shared.io.poll_recv_decode(&slf.shared.codec, cx) {
                                 Ok(decoded) => {
                                     slf.update_timer(&decoded);
                                     if let Some(el) = decoded.item {
@@ -335,8 +335,8 @@ where
                                 }
                                 Err(RecvError::KeepAlive) => {
                                     log::trace!("keep-alive error, stopping dispatcher");
-                                    slf.st.set(DispatcherState::Stop);
-                                    if slf.flags.get().contains(Flags::READ_TIMEOUT) {
+                                    slf.st = DispatcherState::Stop;
+                                    if slf.flags.contains(Flags::READ_TIMEOUT) {
                                         DispatchItem::ReadTimeout
                                     } else {
                                         DispatchItem::KeepAliveTimeout
@@ -344,12 +344,12 @@ where
                                 }
                                 Err(RecvError::Stop) => {
                                     log::trace!("dispatcher is instructed to stop");
-                                    slf.st.set(DispatcherState::Stop);
+                                    slf.st = DispatcherState::Stop;
                                     continue;
                                 }
                                 Err(RecvError::WriteBackpressure) => {
                                     // instruct write task to notify dispatcher when data is flushed
-                                    slf.st.set(DispatcherState::Backpressure);
+                                    slf.st = DispatcherState::Backpressure;
                                     DispatchItem::WBackPressureEnabled
                                 }
                                 Err(RecvError::Decoder(err)) => {
@@ -357,7 +357,7 @@ where
                                         "decoder error, stopping dispatcher: {:?}",
                                         err
                                     );
-                                    slf.st.set(DispatcherState::Stop);
+                                    slf.st = DispatcherState::Stop;
                                     DispatchItem::DecoderError(err)
                                 }
                                 Err(RecvError::PeerGone(err)) => {
@@ -365,7 +365,7 @@ where
                                         "peer is gone, stopping dispatcher: {:?}",
                                         err
                                     );
-                                    slf.st.set(DispatcherState::Stop);
+                                    slf.st = DispatcherState::Stop;
                                     DispatchItem::Disconnect(err)
                                 }
                             }
@@ -384,12 +384,10 @@ where
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
-                    let result =
-                        ready!(slf.poll_service(&this.inner.shared.service, cx, io));
-                    let item = match result {
+                    let item = match ready!(slf.poll_service(cx)) {
                         PollService::Ready => {
                             if slf.shared.io.poll_flush(cx, false).is_ready() {
-                                slf.st.set(DispatcherState::Processing);
+                                slf.st = DispatcherState::Processing;
                                 DispatchItem::WBackPressureDisabled
                             } else {
                                 return Poll::Pending;
@@ -412,38 +410,38 @@ where
                     slf.shared.io.stop_timer();
 
                     // service may relay on poll_ready for response results
-                    if !slf.flags.get().contains(Flags::READY_ERR) {
-                        let _ = this.inner.shared.service.poll_ready(cx);
+                    if !slf.flags.contains(Flags::READY_ERR) {
+                        let _ = slf.shared.service.poll_ready(cx);
                     }
 
                     if slf.shared.inflight.get() == 0 {
-                        if io.poll_shutdown(cx).is_ready() {
-                            slf.st.set(DispatcherState::Shutdown);
+                        if slf.shared.io.poll_shutdown(cx).is_ready() {
+                            slf.st = DispatcherState::Shutdown;
                             continue;
                         }
-                    } else if !slf.flags.get().contains(Flags::IO_ERR) {
+                    } else if !slf.flags.contains(Flags::IO_ERR) {
                         match ready!(slf.shared.io.poll_status_update(cx)) {
                             IoStatusUpdate::PeerGone(_)
                             | IoStatusUpdate::Stop
                             | IoStatusUpdate::KeepAlive => {
-                                slf.insert_flags(Flags::IO_ERR);
+                                slf.flags.insert(Flags::IO_ERR);
                                 continue;
                             }
                             IoStatusUpdate::WriteBackpressure => {
                                 if ready!(slf.shared.io.poll_flush(cx, true)).is_err() {
-                                    slf.insert_flags(Flags::IO_ERR);
+                                    slf.flags.insert(Flags::IO_ERR);
                                 }
                                 continue;
                             }
                         }
                     } else {
-                        io.poll_dispatch(cx);
+                        slf.shared.io.poll_dispatch(cx);
                     }
                     return Poll::Pending;
                 }
                 // shutdown service
                 DispatcherState::Shutdown => {
-                    return if this.inner.shared.service.poll_shutdown(cx).is_ready() {
+                    return if slf.shared.service.poll_shutdown(cx).is_ready() {
                         log::trace!("service shutdown is completed, stop");
 
                         Poll::Ready(if let Some(err) = slf.error.take() {
@@ -465,25 +463,20 @@ where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
-    fn poll_service(
-        &self,
-        srv: &Pipeline<S>,
-        cx: &mut Context<'_>,
-        io: &IoBoxed,
-    ) -> Poll<PollService<U>> {
-        match srv.poll_ready(cx) {
+    fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
+        match self.shared.service.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
                 // check for errors
                 Poll::Ready(if let Some(err) = self.shared.error.take() {
                     log::trace!("error occured, stopping dispatcher");
-                    self.st.set(DispatcherState::Stop);
+                    self.st = DispatcherState::Stop;
 
                     match err {
                         DispatcherError::Encoder(err) => {
                             PollService::Item(DispatchItem::EncoderError(err))
                         }
                         DispatcherError::Service(err) => {
-                            self.error.set(Some(err));
+                            self.error = Some(err);
                             PollService::Continue
                         }
                     }
@@ -494,11 +487,11 @@ where
             // pause io read task
             Poll::Pending => {
                 log::trace!("service is not ready, register dispatch task");
-                match ready!(io.poll_read_pause(cx)) {
+                match ready!(self.shared.io.poll_read_pause(cx)) {
                     IoStatusUpdate::KeepAlive => {
                         log::trace!("keep-alive error, stopping dispatcher during pause");
-                        self.st.set(DispatcherState::Stop);
-                        if self.flags.get().contains(Flags::READ_TIMEOUT) {
+                        self.st = DispatcherState::Stop;
+                        if self.flags.contains(Flags::READ_TIMEOUT) {
                             Poll::Ready(PollService::Item(DispatchItem::ReadTimeout))
                         } else {
                             Poll::Ready(PollService::Item(DispatchItem::KeepAliveTimeout))
@@ -506,7 +499,7 @@ where
                     }
                     IoStatusUpdate::Stop => {
                         log::trace!("dispatcher is instructed to stop during pause");
-                        self.st.set(DispatcherState::Stop);
+                        self.st = DispatcherState::Stop;
                         Poll::Ready(PollService::Continue)
                     }
                     IoStatusUpdate::PeerGone(err) => {
@@ -514,7 +507,7 @@ where
                             "peer is gone during pause, stopping dispatcher: {:?}",
                             err
                         );
-                        self.st.set(DispatcherState::Stop);
+                        self.st = DispatcherState::Stop;
                         Poll::Ready(PollService::Item(DispatchItem::Disconnect(err)))
                     }
                     IoStatusUpdate::WriteBackpressure => Poll::Pending,
@@ -523,39 +516,28 @@ where
             // handle service readiness error
             Poll::Ready(Err(err)) => {
                 log::trace!("service readiness check failed, stopping");
-                self.st.set(DispatcherState::Stop);
-                self.error.set(Some(err));
-                self.insert_flags(Flags::READY_ERR);
+                self.st = DispatcherState::Stop;
+                self.error = Some(err);
+                self.flags.insert(Flags::READY_ERR);
                 Poll::Ready(PollService::Continue)
             }
         }
     }
 
-    fn insert_flags(&self, f: Flags) {
-        let mut flags = self.flags.get();
-        flags.insert(f);
-        self.flags.set(flags)
-    }
-
-    fn update_timer(&self, decoded: &Decoded<<U as Decoder>::Item>) {
-        let mut flags = self.flags.get();
-
+    fn update_timer(&mut self, decoded: &Decoded<<U as Decoder>::Item>) {
         // we got parsed frame
         if decoded.item.is_some() {
             // remove all timers
-            if self.flags.get().contains(Flags::READ_TIMEOUT) {
-                flags.remove(Flags::READ_TIMEOUT);
-                self.flags.set(flags);
+            if self.flags.contains(Flags::READ_TIMEOUT) {
+                self.flags.remove(Flags::READ_TIMEOUT);
             }
             self.shared.io.stop_timer();
-        } else if self.flags.get().contains(Flags::READ_TIMEOUT) {
+        } else if self.flags.contains(Flags::READ_TIMEOUT) {
             // update read timer
             if let Some((_, max, rate)) = self.cfg.frame_read_rate() {
                 let bytes = decoded.remains as u32;
 
-                let delta = (bytes - self.read_bytes.get())
-                    .try_into()
-                    .unwrap_or(u16::MAX);
+                let delta = (bytes - self.read_bytes).try_into().unwrap_or(u16::MAX);
 
                 if delta >= rate {
                     let n = now();
@@ -563,9 +545,9 @@ where
                     let new_timeout = if n >= next { ONE_SEC } else { next - n };
 
                     // max timeout
-                    if max.is_zero() || (n + new_timeout) <= self.read_max_timeout.get() {
+                    if max.is_zero() || (n + new_timeout) <= self.read_max_timeout {
+                        self.read_bytes = bytes;
                         self.shared.io.stop_timer();
-                        self.read_bytes.set(bytes);
                         self.shared.io.start_timer(new_timeout);
                     }
                 }
@@ -577,13 +559,12 @@ where
             } else if let Some((period, max, _)) = self.cfg.frame_read_rate() {
                 // we got new data but not enough to parse single frame
                 // start read timer
-                flags.insert(Flags::READ_TIMEOUT);
-                self.flags.set(flags);
+                self.flags.insert(Flags::READ_TIMEOUT);
 
-                self.read_bytes.set(decoded.remains as u32);
+                self.read_bytes = decoded.remains as u32;
                 self.shared.io.start_timer(period);
                 if !max.is_zero() {
-                    self.read_max_timeout.set(now() + max);
+                    self.read_max_timeout = now() + max;
                 }
             }
         }
@@ -682,11 +663,11 @@ mod tests {
             (
                 Dispatcher {
                     inner: DispatcherInner {
-                        error: Cell::new(None),
-                        flags: Cell::new(super::Flags::empty()),
-                        st: Cell::new(DispatcherState::Processing),
-                        read_max_timeout: Cell::new(time::Instant::now()),
-                        read_bytes: Cell::new(0),
+                        error: None,
+                        flags: super::Flags::empty(),
+                        st: DispatcherState::Processing,
+                        read_max_timeout: time::Instant::now(),
+                        read_bytes: 0,
                         pool,
                         shared,
                         cfg,
