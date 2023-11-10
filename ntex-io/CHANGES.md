@@ -1,6 +1,8 @@
 # Changes
 
-## [0.3.6] - 2023-11-xx
+## [0.3.6] - 2023-11-11
+
+* Add support for frame read timeout
 
 * Add DispatcherConfig type
 
