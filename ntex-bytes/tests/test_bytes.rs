@@ -94,6 +94,16 @@ fn fmt() {
 }
 
 #[test]
+fn clone_mut() {
+    let buf1 = BytesMut::from("hello");
+
+    let mut buf2 = buf1.clone();
+    buf2[0] = b'x';
+
+    assert_eq!(buf1, "hello");
+}
+
+#[test]
 fn fmt_write() {
     use std::fmt::Write;
     let s = String::from_iter((0..10).map(|_| "abcdefg"));
