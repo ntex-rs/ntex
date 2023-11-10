@@ -1814,9 +1814,7 @@ impl fmt::Write for BytesMut {
 impl Clone for BytesMut {
     #[inline]
     fn clone(&self) -> BytesMut {
-        BytesMut {
-            inner: unsafe { self.inner.shallow_clone() },
-        }
+        BytesMut::from(&self[..])
     }
 }
 
