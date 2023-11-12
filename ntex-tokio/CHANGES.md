@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.1] - 2023-11-12
+
+* Optimize io read task
+
 ## [0.3.0] - 2023-06-22
 
 * Release v0.3.0

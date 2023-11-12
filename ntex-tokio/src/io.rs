@@ -54,9 +54,9 @@ impl Future for ReadTask {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_ref();
 
-        this.state.with_buf(|buf, hw, lw| {
-            match ready!(this.state.poll_ready(cx)) {
-                ReadStatus::Ready => {
+        match ready!(this.state.poll_ready(cx)) {
+            ReadStatus::Ready => {
+                this.state.with_buf(|buf, hw, lw| {
                     // read data from socket
                     let mut io = this.io.borrow_mut();
                     loop {
@@ -83,13 +83,13 @@ impl Future for ReadTask {
                             }
                         };
                     }
-                }
-                ReadStatus::Terminate => {
-                    log::trace!("read task is instructed to shutdown");
-                    Poll::Ready(Ok(()))
-                }
+                })
             }
-        })
+            ReadStatus::Terminate => {
+                log::trace!("read task is instructed to shutdown");
+                Poll::Ready(())
+            }
+        }
     }
 }
 
