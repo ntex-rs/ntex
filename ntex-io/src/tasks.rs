@@ -38,13 +38,13 @@ impl ReadContext {
 
         // handle buffer changes
         if nbytes > 0 {
-            let buf_full = nbytes >= hw;
             let filter = self.0.filter();
             let _ = filter
                 .process_read_buf(&self.0, &inner.buffer, 0, nbytes)
                 .and_then(|status| {
                     if status.nbytes > 0 {
-                        if buf_full || inner.buffer.read_destination_size() >= hw {
+                        // dest buffer has new data, wake up dispatcher
+                        if inner.buffer.read_destination_size() >= hw {
                             log::trace!(
                                 "io read buffer is too large {}, enable read back-pressure",
                                 total
@@ -52,19 +52,30 @@ impl ReadContext {
                             inner.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
                         } else {
                             inner.insert_flags(Flags::RD_READY);
+
+                            if nbytes >= hw {
+                                // read task is paused because of read back-pressure
+                                // but there is no new data in top most read buffer
+                                // so we need to wake up read task to read more data
+                                // otherwise read task would sleep forever
+                                inner.read_task.wake();
+                            }
                         }
                         log::trace!("new {} bytes available, wakeup dispatcher", nbytes);
                         inner.dispatch_task.wake();
-                    } else if buf_full {
-                        // read task is paused because of read back-pressure
-                        // but there is no new data in top most read buffer
-                        // so we need to wake up read task to read more data
-                        // otherwise read task would sleep forever
-                        inner.read_task.wake();
-                    } else if inner.flags.get().contains(Flags::RD_FORCE_READY) {
-                        // in case of "force read" we must wake up dispatch task
-                        // if we read any data from source
-                        inner.dispatch_task.wake();
+                    } else {
+                        if nbytes >= hw {
+                            // read task is paused because of read back-pressure
+                            // but there is no new data in top most read buffer
+                            // so we need to wake up read task to read more data
+                            // otherwise read task would sleep forever
+                            inner.read_task.wake();
+                        }
+                        if inner.flags.get().contains(Flags::RD_FORCE_READY) {
+                            // in case of "force read" we must wake up dispatch task
+                            // if we read any data from source
+                            inner.dispatch_task.wake();
+                        }
                     }
 
                     // while reading, filter wrote some data
@@ -78,8 +89,8 @@ impl ReadContext {
                 })
                 .map_err(|err| {
                     inner.dispatch_task.wake();
-                    inner.insert_flags(Flags::RD_READY);
                     inner.io_stopped(Some(err));
+                    inner.insert_flags(Flags::RD_READY);
                 });
         }
 

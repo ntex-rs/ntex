@@ -132,8 +132,8 @@ impl Future for WriteTask {
 
         match this.st {
             IoWriteState::Processing(ref mut delay) => {
-                match this.state.poll_ready(cx) {
-                    Poll::Ready(WriteStatus::Ready) => {
+                match ready!(this.state.poll_ready(cx)) {
+                    WriteStatus::Ready => {
                         if let Some(delay) = delay {
                             if delay.poll_elapsed(cx).is_ready() {
                                 this.state.close(Some(io::Error::new(
@@ -157,14 +157,14 @@ impl Future for WriteTask {
                             }
                         }
                     }
-                    Poll::Ready(WriteStatus::Timeout(time)) => {
+                    WriteStatus::Timeout(time) => {
                         log::trace!("initiate timeout delay for {:?}", time);
                         if delay.is_none() {
                             *delay = Some(sleep(time));
                         }
                         self.poll(cx)
                     }
-                    Poll::Ready(WriteStatus::Shutdown(time)) => {
+                    WriteStatus::Shutdown(time) => {
                         log::trace!("write task is instructed to shutdown");
 
                         let timeout = if let Some(delay) = delay.take() {
@@ -176,7 +176,7 @@ impl Future for WriteTask {
                         this.st = IoWriteState::Shutdown(timeout, Shutdown::None);
                         self.poll(cx)
                     }
-                    Poll::Ready(WriteStatus::Terminate) => {
+                    WriteStatus::Terminate => {
                         log::trace!("write task is instructed to terminate");
 
                         if !matches!(
@@ -191,7 +191,6 @@ impl Future for WriteTask {
                         this.state.close(None);
                         Poll::Ready(())
                     }
-                    Poll::Pending => Poll::Pending,
                 }
             }
             IoWriteState::Shutdown(ref mut delay, ref mut st) => {
