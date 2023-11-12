@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.3] - 2023-11-12
+
+* Attempt to fix #190
+
 ## [0.3.2] - 2023-11-03
 
 * Improve implementation

@@ -137,11 +137,8 @@ impl TlsClientFilter {
                     session.is_handshaking(),
                 );
 
-                while session.wants_write() {
+                if result.0.is_ok() && session.wants_write() {
                     result.0 = session.complete_io(&mut wrp);
-                    if result.0.is_err() {
-                        break;
-                    }
                 }
                 result
             })?;
