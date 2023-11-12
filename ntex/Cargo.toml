@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "0.7.9"
+version = "0.7.10"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -72,7 +72,7 @@ log = "0.4"
 nanorand = { version = "0.7", default-features = false, features = ["std", "wyrand"] }
 polling = "3.3"
 pin-project-lite = "0.2"
-regex = { version = "1.10.1", default-features = false, features = ["std"] }
+regex = { version = "1.10", default-features = false, features = ["std"] }
 sha-1 = "0.10"
 serde = { version = "1.0", features=["derive"] }
 socket2 = "0.5"
@@ -94,7 +94,7 @@ tls-openssl = { version="0.10", package = "openssl", optional = true }
 
 # rustls
 tls-rustls = { version = "0.21", package = "rustls", optional = true }
-webpki-roots = { version = "0.25.2", optional = true }
+webpki-roots = { version = "0.25", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }

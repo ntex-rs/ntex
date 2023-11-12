@@ -7,7 +7,7 @@ use crate::http::body::{Body, BodyStream};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::RequestHeadType;
-use crate::time::{sleep, Millis, Sleep};
+use crate::time::Millis;
 use crate::util::{BoxFuture, Bytes, Stream};
 
 #[cfg(feature = "compress")]
@@ -50,7 +50,6 @@ impl From<PrepForSendingError> for SendRequestError {
 pub enum SendClientRequest {
     Fut(
         BoxFuture<'static, Result<ClientResponse, SendRequestError>>,
-        Option<Sleep>,
         bool,
     ),
     Err(Option<SendRequestError>),
@@ -60,9 +59,8 @@ impl SendClientRequest {
     pub(crate) fn new(
         send: BoxFuture<'static, Result<ClientResponse, SendRequestError>>,
         response_decompress: bool,
-        timeout: Millis,
     ) -> SendClientRequest {
-        SendClientRequest::Fut(send, timeout.map(sleep), response_decompress)
+        SendClientRequest::Fut(send, response_decompress)
     }
 }
 
@@ -73,14 +71,7 @@ impl Future for SendClientRequest {
         let this = self.get_mut();
 
         match this {
-            SendClientRequest::Fut(send, delay, _response_decompress) => {
-                if delay.is_some() {
-                    match delay.as_ref().unwrap().poll_elapsed(cx) {
-                        Poll::Pending => (),
-                        _ => return Poll::Ready(Err(SendRequestError::Timeout)),
-                    }
-                }
-
+            SendClientRequest::Fut(send, _response_decompress) => {
                 let res = match Pin::new(send).poll(cx) {
                     Poll::Ready(res) => res,
                     Poll::Pending => return Poll::Pending,
@@ -143,10 +134,14 @@ impl RequestHeadType {
         }
         let body = body.into();
 
-        let fut =
-            Box::pin(async move { config.connector.send_request(self, body, addr).await });
+        let fut = Box::pin(async move {
+            config
+                .connector
+                .send_request(self, body, addr, timeout)
+                .await
+        });
 
-        SendClientRequest::new(fut, response_decompress, timeout)
+        SendClientRequest::new(fut, response_decompress)
     }
 
     pub(super) fn send_json<T: Serialize>(

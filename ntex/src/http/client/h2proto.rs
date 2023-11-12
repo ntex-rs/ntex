@@ -1,11 +1,13 @@
 use std::io;
 
-use ntex_h2::{self as h2, client::SimpleClient, frame};
+use ntex_h2::client::{RecvStream, SimpleClient};
+use ntex_h2::{self as h2, frame};
 
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::{h2::payload, payload::Payload, Method, Version};
+use crate::time::{timeout_checked, Millis};
 use crate::util::{poll_fn, ByteString, Bytes};
 
 use super::error::{ConnectError, SendRequestError};
@@ -14,6 +16,7 @@ pub(super) async fn send_request<B>(
     client: H2Client,
     head: RequestHeadType,
     body: B,
+    timeout: Millis,
 ) -> Result<(ResponseHead, Payload), SendRequestError>
 where
     B: MessageBody,
@@ -85,6 +88,15 @@ where
         });
     }
 
+    timeout_checked(timeout, get_response(rcv_stream))
+        .await
+        .map_err(|_| SendRequestError::Timeout)
+        .and_then(|res| res)
+}
+
+async fn get_response(
+    rcv_stream: RecvStream,
+) -> Result<(ResponseHead, Payload), SendRequestError> {
     let h2::Message { stream, kind } = rcv_stream
         .recv()
         .await
