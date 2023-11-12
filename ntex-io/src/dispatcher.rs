@@ -31,7 +31,7 @@ impl Default for DispatcherConfig {
     fn default() -> Self {
         DispatcherConfig(Rc::new(DispatcherConfigInner {
             keepalive_timeout: Cell::new(Seconds(30).into()),
-            disconnect_timeout: Cell::new(Seconds(1).into()),
+            disconnect_timeout: Cell::new(Seconds(1)),
             frame_read_rate: Cell::new(0),
             frame_read_enabled: Cell::new(false),
             frame_read_timeout: Cell::new(Seconds::ZERO.into()),
@@ -92,8 +92,9 @@ impl DispatcherConfig {
 
     /// Set read rate parameters for single frame.
     ///
-    /// Set max timeout for reading single frame. If the client sends data,
-    /// increase the timeout by 1 second for every.
+    /// Set max timeout for reading single frame. If the client
+    /// sends `rate` amount of data, increase the timeout by 1 second for every.
+    /// But no more than `max_timeout` timeout.
     ///
     /// By default frame read rate is disabled.
     pub fn set_frame_read_rate(
@@ -320,8 +321,7 @@ where
         loop {
             match slf.st {
                 DispatcherState::Processing => {
-                    let srv = ready!(slf.poll_service(cx));
-                    let item = match srv {
+                    let item = match ready!(slf.poll_service(cx)) {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
                             match slf.shared.io.poll_recv_decode(&slf.shared.codec, cx) {
@@ -386,11 +386,12 @@ where
                 DispatcherState::Backpressure => {
                     let item = match ready!(slf.poll_service(cx)) {
                         PollService::Ready => {
-                            if slf.shared.io.poll_flush(cx, false).is_ready() {
+                            if let Err(err) = ready!(slf.shared.io.poll_flush(cx, false)) {
+                                slf.st = DispatcherState::Stop;
+                                DispatchItem::Disconnect(Some(err))
+                            } else {
                                 slf.st = DispatcherState::Processing;
                                 DispatchItem::WBackPressureDisabled
-                            } else {
-                                return Poll::Pending;
                             }
                         }
                         PollService::Item(item) => item,

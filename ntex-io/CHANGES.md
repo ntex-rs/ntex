@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.7] - 2023-11-12
+
+* Handle io flush during write back-pressure
+
 ## [0.3.6] - 2023-11-11
 
 * Add support for frame read timeout
