@@ -7,6 +7,7 @@ use crate::http::header::{HeaderMap, HeaderValue, HOST};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::{Payload, PayloadStream};
 use crate::io::{IoBoxed, RecvError};
+use crate::time::{timeout_checked, Millis};
 use crate::util::{poll_fn, ready, BufMut, Bytes, BytesMut, Stream};
 
 use super::connection::{Connection, ConnectionType};
@@ -18,6 +19,7 @@ pub(super) async fn send_request<B>(
     mut head: RequestHeadType,
     body: B,
     created: Instant,
+    timeout: Millis,
     pool: Option<Acquired>,
 ) -> Result<(ResponseHead, Payload), SendRequestError>
 where
@@ -73,16 +75,23 @@ where
     log::trace!("reading http1 response");
 
     // read response and init read body
-    let head = if let Some(result) = io.recv(&codec).await? {
-        log::trace!(
-            "http1 response is received, type: {:?}, response: {:#?}",
-            codec.message_type(),
-            result
-        );
-        result
-    } else {
-        return Err(SendRequestError::from(ConnectError::Disconnected(None)));
+    let fut = async {
+        if let Some(result) = io.recv(&codec).await? {
+            log::trace!(
+                "http1 response is received, type: {:?}, response: {:#?}",
+                codec.message_type(),
+                result
+            );
+            Ok(result)
+        } else {
+            Err(SendRequestError::from(ConnectError::Disconnected(None)))
+        }
     };
+
+    let head = timeout_checked(timeout, fut)
+        .await
+        .map_err(|_| SendRequestError::Timeout)
+        .and_then(|res| res)?;
 
     match codec.message_type() {
         h1::MessageType::None => {

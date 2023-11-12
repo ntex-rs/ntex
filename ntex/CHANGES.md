@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.10] - 2023-11-12
+
+* Start http client timeout after sending body
+
 ## [0.7.9] - 2023-11-11
 
 * Update ntex io

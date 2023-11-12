@@ -4,6 +4,7 @@ use crate::http::body::MessageBody;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
 use crate::io::{types::HttpProtocol, IoBoxed};
+use crate::time::Millis;
 
 use super::{error::SendRequestError, h1proto, h2proto, pool::Acquired};
 
@@ -81,12 +82,23 @@ impl Connection {
         mut self,
         head: H,
         body: B,
+        timeout: Millis,
     ) -> Result<(ResponseHead, Payload), SendRequestError> {
         match self.io.take().unwrap() {
             ConnectionType::H1(io) => {
-                h1proto::send_request(io, head.into(), body, self.created, self.pool).await
+                h1proto::send_request(
+                    io,
+                    head.into(),
+                    body,
+                    self.created,
+                    timeout,
+                    self.pool,
+                )
+                .await
             }
-            ConnectionType::H2(io) => h2proto::send_request(io, head.into(), body).await,
+            ConnectionType::H2(io) => {
+                h2proto::send_request(io, head.into(), body, timeout).await
+            }
         }
     }
 }
