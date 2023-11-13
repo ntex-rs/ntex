@@ -206,7 +206,7 @@ impl IoRef {
     }
 
     #[inline]
-    /// Keep-alive deadline
+    /// current timer deadline
     pub fn timer_deadline(&self) -> time::Instant {
         self.0.keepalive.get()
     }
@@ -214,23 +214,23 @@ impl IoRef {
     #[inline]
     /// Start timer
     pub fn start_timer(&self, timeout: time::Duration) {
-        if self.flags().contains(Flags::KEEPALIVE) {
+        if self.flags().contains(Flags::TIMEOUT) {
             timer::unregister(self.0.keepalive.get(), self);
         }
         if !timeout.is_zero() {
-            log::debug!("start keep-alive timeout {:?}", timeout);
-            self.0.insert_flags(Flags::KEEPALIVE);
+            log::debug!("start timer {:?}", timeout);
+            self.0.insert_flags(Flags::TIMEOUT);
             self.0.keepalive.set(timer::register(timeout, self));
         } else {
-            self.0.remove_flags(Flags::KEEPALIVE);
+            self.0.remove_flags(Flags::TIMEOUT);
         }
     }
 
     #[inline]
-    /// Stop keep-alive timer
+    /// Stop timer
     pub fn stop_timer(&self) {
-        if self.flags().contains(Flags::KEEPALIVE) {
-            log::debug!("unregister keep-alive timer");
+        if self.flags().contains(Flags::TIMEOUT) {
+            log::debug!("unregister timer");
             timer::unregister(self.0.keepalive.get(), self)
         }
     }
