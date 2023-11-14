@@ -147,14 +147,25 @@ async fn test_chunked_payload() {
 
 #[ntex::test]
 async fn test_slow_request() {
+    const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\n";
+
     let srv = test_server(|| {
         HttpService::build()
-            .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
+            .headers_read_rate(Seconds(1), Seconds(2), 4)
             .finish(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n");
+    let _ = stream.write_all(DATA);
+    let mut data = String::new();
+    let _ = stream.read_to_string(&mut data);
+    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(&DATA[..5]);
+    sleep(Millis(1100)).await;
+    let _ = stream.write_all(&DATA[5..20]);
+
     let mut data = String::new();
     let _ = stream.read_to_string(&mut data);
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
