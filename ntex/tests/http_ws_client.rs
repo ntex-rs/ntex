@@ -3,7 +3,7 @@ use std::io;
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
-use ntex::io::{DispatchItem, Dispatcher, Io};
+use ntex::io::{DispatchItem, Dispatcher, DispatcherConfig, Io};
 use ntex::service::{fn_factory_with_config, fn_service};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
@@ -40,7 +40,13 @@ async fn test_simple() {
                         .unwrap();
 
                     // start websocket service
-                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service).await
+                    Dispatcher::with_config(
+                        io.seal(),
+                        ws::Codec::default(),
+                        ws_service,
+                        &Default::default(),
+                    )
+                    .await
                 }
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
@@ -90,7 +96,13 @@ async fn test_transport() {
                         .unwrap();
 
                     // start websocket service
-                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service).await
+                    Dispatcher::with_config(
+                        io.seal(),
+                        ws::Codec::default(),
+                        ws_service,
+                        &Default::default(),
+                    )
+                    .await
                 }
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
@@ -119,9 +131,15 @@ async fn test_keepalive_timeout() {
                         .unwrap();
 
                     // start websocket service
-                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service)
-                        .keepalive_timeout(Seconds::ZERO)
-                        .await
+                    let cfg = DispatcherConfig::default();
+                    cfg.set_keepalive_timeout(Seconds::ZERO);
+                    Dispatcher::with_config(
+                        io.seal(),
+                        ws::Codec::default(),
+                        ws_service,
+                        &cfg,
+                    )
+                    .await
                 }
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))

@@ -731,7 +731,9 @@ where
             // no new data then start keep-alive timer
             if remains == 0 {
                 if self.codec.keepalive() {
-                    self.io.start_timer(self.config.keep_alive);
+                    if self.config.keep_alive_enabled() {
+                        self.io.start_timer(self.config.keep_alive);
+                    }
                 } else {
                     self.io.close();
                     return Some(State::Stop);
@@ -1012,7 +1014,6 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline_with_payload() {
-        env_logger::init();
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();

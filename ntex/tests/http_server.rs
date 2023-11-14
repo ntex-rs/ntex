@@ -17,8 +17,8 @@ use ntex::{service::fn_service, util::Bytes, util::Ready, web::error};
 async fn test_h1() {
     let srv = test_server(|| {
         HttpService::build()
+            .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
             .keep_alive(KeepAlive::Disabled)
-            .client_timeout(Seconds(1))
             .disconnect_timeout(Seconds(1))
             .h1(|req: Request| {
                 assert!(req.peer_addr().is_some());
@@ -35,8 +35,8 @@ async fn test_h1_2() {
     let srv = test_server(|| {
         HttpService::build()
             .keep_alive(KeepAlive::Disabled)
-            .client_timeout(Seconds(1))
             .disconnect_timeout(Seconds(1))
+            .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
             .finish(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_11);
@@ -149,7 +149,7 @@ async fn test_chunked_payload() {
 async fn test_slow_request() {
     let srv = test_server(|| {
         HttpService::build()
-            .client_timeout(Seconds(1))
+            .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
             .finish(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
