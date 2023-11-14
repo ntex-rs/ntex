@@ -1,9 +1,12 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
+use std::{
+    cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc, time,
+};
 
 use crate::io::{Filter, Io, IoBoxed, IoRef, IoStatusUpdate, RecvError};
 use crate::service::{Pipeline, PipelineCall, Service};
+use crate::time::now;
 use crate::util::{ready, Bytes};
 
 use crate::http;
@@ -18,21 +21,22 @@ use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::payload::{Payload, PayloadSender, PayloadStatus};
 use super::{codec::Codec, Message};
 
+const ONE_SEC: time::Duration = time::Duration::from_secs(1);
+
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct Flags: u16 {
-        /// We parsed one complete request message
-        const STARTED              = 0b0000_0001;
-        /// Keep-alive is enabled on current connection
-        const KEEPALIVE            = 0b0000_0010;
-        /// Keep-alive is registered
-        const KEEPALIVE_REG        = 0b0000_0100;
+    pub struct Flags: u8 {
         /// Upgrade request
-        const UPGRADE              = 0b0000_1000;
+        const UPGRADE              = 0b0000_0001;
         /// Handling upgrade
-        const UPGRADE_HND          = 0b0001_0000;
+        const UPGRADE_HND          = 0b0000_0010;
         /// Stop after sending payload
-        const SENDPAYLOAD_AND_STOP = 0b0010_0000;
+        const SENDPAYLOAD_AND_STOP = 0b0000_0100;
+
+        /// Read headers timer is enabled
+        const READ_HDRS_TIMEOUT    = 0b0001_0000;
+        /// Read headers payload is enabled
+        const READ_PL_TIMEOUT      = 0b0010_0000;
     }
 }
 
@@ -54,8 +58,6 @@ enum State<B> {
     Call,
     #[error("State::ReadRequest")]
     ReadRequest,
-    #[error("State::ReadFirstRequest")]
-    ReadFirstRequest,
     #[error("State::ReadPayload")]
     ReadPayload,
     #[error("State::SendPayload")]
@@ -93,6 +95,8 @@ struct DispatcherInner<F, S, B, X, U> {
     config: Rc<DispatcherConfig<S, X, U>>,
     error: Option<DispatchError>,
     payload: Option<(PayloadDecoder, PayloadSender)>,
+    read_bytes: u32,
+    read_max_timeout: time::Instant,
     _t: marker::PhantomData<(S, B)>,
 }
 
@@ -113,16 +117,16 @@ where
         io.set_disconnect_timeout(config.client_disconnect);
 
         // slow-request timer
-        let flags = if config.client_timeout.is_zero() {
-            Flags::empty()
+        let flags = if let Some(cfg) = config.headers_read_rate() {
+            io.start_timer(cfg.timeout);
+            Flags::READ_HDRS_TIMEOUT
         } else {
-            io.start_timer(config.client_timeout);
-            Flags::KEEPALIVE_REG
+            Flags::empty()
         };
 
         Dispatcher {
             call: CallState::None,
-            st: State::ReadFirstRequest,
+            st: State::ReadRequest,
             inner: DispatcherInner {
                 io,
                 flags,
@@ -130,6 +134,8 @@ where
                 config,
                 error: None,
                 payload: None,
+                read_bytes: 0,
+                read_max_timeout: now(),
                 _t: marker::PhantomData,
             },
         }
@@ -307,7 +313,7 @@ where
                         *this.st = State::Stop;
                         this.inner.error = Some(e);
                     } else {
-                        *this.st = this.inner.switch_to_read_request();
+                        *this.st = State::ReadRequest;
                     }
                 }
                 // send response body
@@ -374,11 +380,6 @@ where
                         }
                     }
                 }
-                // read first request and call service
-                State::ReadFirstRequest => {
-                    *this.st = ready!(this.inner.read_request(cx, &mut this.call));
-                    this.inner.flags.insert(Flags::STARTED);
-                }
                 // stop io tasks and call upgrade service
                 State::Upgrade(ref mut req) => {
                     let io = this.inner.io.take();
@@ -401,7 +402,7 @@ where
                 }
                 // prepare to shutdown
                 State::Stop => {
-                    this.inner.unregister_keepalive();
+                    this.inner.io.stop_timer();
 
                     return if let Err(e) = ready!(this.inner.io.poll_shutdown(cx)) {
                         // get io error
@@ -432,29 +433,6 @@ where
     B: MessageBody,
     X: Service<Request>,
 {
-    fn switch_to_read_request(&mut self) -> State<B> {
-        // connection is not keep-alive, disconnect
-        if !self.flags.contains(Flags::KEEPALIVE) || !self.codec.keepalive_enabled() {
-            self.io.close();
-            State::Stop
-        } else {
-            // register keep-alive timer
-            if self.flags.contains(Flags::KEEPALIVE) {
-                self.flags.remove(Flags::KEEPALIVE);
-                self.flags.insert(Flags::KEEPALIVE_REG);
-                self.io.start_timer(self.config.keep_alive);
-            }
-            State::ReadRequest
-        }
-    }
-
-    fn unregister_keepalive(&mut self) {
-        if self.flags.contains(Flags::KEEPALIVE_REG) {
-            self.io.stop_keepalive_timer();
-            self.flags.remove(Flags::KEEPALIVE | Flags::KEEPALIVE_REG);
-        }
-    }
-
     fn handle_error<E>(&mut self, err: E, critical: bool) -> State<B>
     where
         E: ResponseError + 'static,
@@ -477,27 +455,28 @@ where
         }
     }
 
+    /// Handle normal requests
     fn service_call(&self, req: Request) -> CallState<S, X> {
-        // Handle normal requests
         CallState::Service {
             fut: self.config.service.call_nowait(req),
         }
     }
 
+    /// Handle filter fut
     fn service_filter(&self, req: Request, f: &Pipeline<OnRequest>) -> CallState<S, X> {
-        // Handle filter fut
         CallState::Filter {
             fut: f.call_nowait((req, self.io.get_ref())),
         }
     }
 
+    /// Handle normal requests with EXPECT: 100-Continue` header
     fn service_expect(&self, req: Request) -> CallState<S, X> {
-        // Handle normal requests with EXPECT: 100-Continue` header
         CallState::Expect {
             fut: self.config.expect.call_nowait(req),
         }
     }
 
+    /// Handle upgrade requests
     fn service_upgrade(&mut self, mut req: Request) -> CallState<S, X> {
         // Move io into request
         let io: IoBoxed = self.io.take().into();
@@ -505,7 +484,6 @@ where
             io.get_ref(),
             RefCell::new(Some(Box::new((io, self.codec.clone())))),
         )));
-        // Handle upgrade requests
         CallState::ServiceUpgrade {
             fut: self.config.service.call_nowait(req),
         }
@@ -519,18 +497,27 @@ where
         log::trace!("trying to read http message");
 
         loop {
-            let result = ready!(self.io.poll_recv(&self.codec, cx));
+            // let result = ready!(self.io.poll_recv(&self.codec, cx));
+            let result = match self.io.poll_recv_decode(&self.codec, cx) {
+                Ok(decoded) => {
+                    if let Some(st) =
+                        self.update_timer(decoded.item.is_some(), decoded.remains)
+                    {
+                        return Poll::Ready(st);
+                    }
+                    if let Some(item) = decoded.item {
+                        Ok(item)
+                    } else {
+                        return Poll::Pending;
+                    }
+                }
+                Err(err) => Err(err),
+            };
 
             // decode incoming bytes stream
             return match result {
                 Ok((mut req, pl)) => {
                     log::trace!("http message is received: {:?} and payload {:?}", req, pl);
-
-                    // keep-alive timer
-                    if self.flags.contains(Flags::KEEPALIVE_REG) {
-                        self.flags.remove(Flags::KEEPALIVE_REG);
-                        self.io.stop_keepalive_timer();
-                    }
 
                     // configure request payload
                     let upgrade = match pl {
@@ -602,12 +589,13 @@ where
                     Poll::Ready(State::Stop)
                 }
                 Err(RecvError::KeepAlive) => {
-                    // keep-alive timeout
-                    if !self.flags.contains(Flags::STARTED) {
+                    if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
                         log::trace!("slow request timeout");
                         let (req, body) = Response::RequestTimeout().finish().into_parts();
                         let _ = self.send_response(req, body.into_body());
                         self.error = Some(DispatchError::SlowRequestTimeout);
+                    } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+                        log::trace!("slow payload timeout");
                     } else {
                         log::trace!("keep-alive timeout, close connection");
                     }
@@ -638,8 +626,6 @@ where
             if result.is_err() {
                 State::Stop
             } else {
-                self.flags.set(Flags::KEEPALIVE, self.codec.keepalive());
-
                 match body.size() {
                     BodySize::None | BodySize::Empty => {
                         if self.error.is_some() {
@@ -647,7 +633,7 @@ where
                         } else if self.payload.is_some() {
                             State::ReadPayload
                         } else {
-                            self.switch_to_read_request()
+                            State::ReadRequest
                         }
                     }
                     _ => State::SendPayload { body },
@@ -681,7 +667,7 @@ where
                 } else if self.payload.is_some() {
                     Some(State::ReadPayload)
                 } else {
-                    Some(self.switch_to_read_request())
+                    Some(State::ReadRequest)
                 }
             }
             Some(Err(e)) => {
@@ -711,6 +697,61 @@ where
             ) => true,
             Poll::Ready(IoStatusUpdate::WriteBackpressure) => false,
         }
+    }
+
+    fn update_timer(&mut self, received: bool, remains: usize) -> Option<State<B>> {
+        // we got parsed frame
+        if received {
+            // remove all timers
+            self.flags
+                .remove(Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT);
+            self.io.stop_timer();
+        } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+            // update read timer
+            if let Some(ref cfg) = self.config.headers_read_rate {
+                let bytes = remains as u32;
+                let delta = (bytes - self.read_bytes).try_into().unwrap_or(u16::MAX);
+
+                if delta >= cfg.rate {
+                    let n = now();
+                    let next = self.io.timer_deadline() + ONE_SEC;
+                    let new_timeout = if n >= next { ONE_SEC } else { next - n };
+
+                    // max timeout
+                    if cfg.max_timeout.is_zero()
+                        || (n + new_timeout) <= self.read_max_timeout
+                    {
+                        self.read_bytes = bytes;
+                        self.io.stop_timer();
+                        self.io.start_timer(new_timeout);
+                    }
+                }
+            }
+        } else {
+            // no new data then start keep-alive timer
+            if remains == 0 {
+                if self.codec.keepalive() {
+                    if self.config.keep_alive_enabled() {
+                        self.io.start_timer(self.config.keep_alive);
+                    }
+                } else {
+                    self.io.close();
+                    return Some(State::Stop);
+                }
+            } else if let Some(ref cfg) = self.config.headers_read_rate {
+                // we got new data but not enough to parse single frame
+                // start read timer
+                self.flags.insert(Flags::READ_HDRS_TIMEOUT);
+
+                self.read_bytes = remains as u32;
+                self.io.start_timer(cfg.timeout);
+                if !cfg.max_timeout.is_zero() {
+                    self.read_max_timeout = now() + cfg.max_timeout;
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -973,7 +1014,6 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline_with_payload() {
-        env_logger::init();
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();

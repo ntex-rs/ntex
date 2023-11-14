@@ -51,9 +51,14 @@ impl Service<(Request, Io, h1::Codec)> for WsService {
             io.encode((res, body::BodySize::None).into(), &codec)
                 .unwrap();
 
-            Dispatcher::new(io.seal(), ws::Codec::new(), service)
-                .await
-                .map_err(|_| panic!())
+            Dispatcher::with_config(
+                io.seal(),
+                ws::Codec::new(),
+                service,
+                &Default::default(),
+            )
+            .await
+            .map_err(|_| panic!())
         };
 
         Box::pin(fut)

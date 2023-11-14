@@ -6,7 +6,7 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::{time::Millis, util::BoxFuture};
+use crate::util::BoxFuture;
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;
@@ -19,8 +19,6 @@ pub struct H1Service<F, S, B, X = ExpectHandler, U = UpgradeHandler<F>> {
     expect: X,
     upgrade: Option<U>,
     on_request: RefCell<Option<OnRequest>>,
-    #[allow(dead_code)]
-    handshake_timeout: Millis,
     _t: marker::PhantomData<(F, B)>,
 }
 
@@ -38,13 +36,12 @@ where
         service: U,
     ) -> Self {
         H1Service {
+            cfg,
             srv: service.into_factory(),
             expect: ExpectHandler,
             upgrade: None,
             on_request: RefCell::new(None),
-            handshake_timeout: cfg.0.ssl_handshake_timeout,
             _t: marker::PhantomData,
-            cfg,
         }
     }
 }
@@ -84,7 +81,7 @@ mod openssl {
             InitError = (),
         > {
             Acceptor::new(acceptor)
-                .timeout(self.handshake_timeout)
+                .timeout(self.cfg.ssl_handshake_timeout)
                 .chain()
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
@@ -130,7 +127,7 @@ mod rustls {
             InitError = (),
         > {
             Acceptor::from(config)
-                .timeout(self.handshake_timeout)
+                .timeout(self.cfg.ssl_handshake_timeout)
                 .chain()
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
@@ -160,7 +157,6 @@ where
             srv: self.srv,
             upgrade: self.upgrade,
             on_request: self.on_request,
-            handshake_timeout: self.handshake_timeout,
             _t: marker::PhantomData,
         }
     }
@@ -177,7 +173,6 @@ where
             srv: self.srv,
             expect: self.expect,
             on_request: self.on_request,
-            handshake_timeout: self.handshake_timeout,
             _t: marker::PhantomData,
         }
     }

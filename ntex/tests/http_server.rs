@@ -17,8 +17,8 @@ use ntex::{service::fn_service, util::Bytes, util::Ready, web::error};
 async fn test_h1() {
     let srv = test_server(|| {
         HttpService::build()
+            .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
             .keep_alive(KeepAlive::Disabled)
-            .client_timeout(Seconds(1))
             .disconnect_timeout(Seconds(1))
             .h1(|req: Request| {
                 assert!(req.peer_addr().is_some());
@@ -35,8 +35,8 @@ async fn test_h1_2() {
     let srv = test_server(|| {
         HttpService::build()
             .keep_alive(KeepAlive::Disabled)
-            .client_timeout(Seconds(1))
             .disconnect_timeout(Seconds(1))
+            .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
             .finish(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_11);
@@ -147,14 +147,25 @@ async fn test_chunked_payload() {
 
 #[ntex::test]
 async fn test_slow_request() {
+    const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\n";
+
     let srv = test_server(|| {
         HttpService::build()
-            .client_timeout(Seconds(1))
+            .headers_read_rate(Seconds(1), Seconds(2), 4)
             .finish(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
     });
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
-    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n");
+    let _ = stream.write_all(DATA);
+    let mut data = String::new();
+    let _ = stream.read_to_string(&mut data);
+    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(&DATA[..5]);
+    sleep(Millis(1100)).await;
+    let _ = stream.write_all(&DATA[5..20]);
+
     let mut data = String::new();
     let _ = stream.read_to_string(&mut data);
     assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));

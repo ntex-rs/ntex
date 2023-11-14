@@ -3,12 +3,11 @@ use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
 
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::time::{Millis, Seconds};
 use crate::util::BoxFuture;
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
-use super::config::{DispatcherConfig, KeepAlive, OnRequest, ServiceConfig};
+use super::config::{DispatcherConfig, OnRequest, ServiceConfig};
 use super::error::{DispatchError, ResponseError};
 use super::request::Request;
 use super::response::Response;
@@ -36,6 +35,12 @@ where
     pub fn build() -> HttpServiceBuilder<F, S> {
         HttpServiceBuilder::new()
     }
+
+    #[doc(hidden)]
+    /// Create builder for `HttpService` instance.
+    pub fn build_with_config(cfg: ServiceConfig) -> HttpServiceBuilder<F, S> {
+        HttpServiceBuilder::with_config(cfg)
+    }
 }
 
 impl<F, S, B> HttpService<F, S, B>
@@ -49,13 +54,7 @@ where
 {
     /// Create new `HttpService` instance.
     pub fn new<U: IntoServiceFactory<S, Request>>(service: U) -> Self {
-        let cfg = ServiceConfig::new(
-            KeepAlive::Timeout(Seconds(5)),
-            Millis(5_000),
-            Seconds::ONE,
-            Millis(5_000),
-            ntex_h2::Config::server(),
-        );
+        let cfg = ServiceConfig::default();
 
         HttpService {
             cfg,
@@ -175,7 +174,7 @@ mod openssl {
             InitError = (),
         > {
             Acceptor::new(acceptor)
-                .timeout(self.cfg.0.ssl_handshake_timeout)
+                .timeout(self.cfg.ssl_handshake_timeout)
                 .chain()
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
@@ -222,7 +221,7 @@ mod rustls {
             config.alpn_protocols = protos;
 
             Acceptor::from(config)
-                .timeout(self.cfg.0.ssl_handshake_timeout)
+                .timeout(self.cfg.ssl_handshake_timeout)
                 .chain()
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())

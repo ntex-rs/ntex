@@ -613,21 +613,21 @@ where
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h1(map_config(factory(), move |_| cfg.clone()))
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h2(map_config(factory(), move |_| cfg.clone()))
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .finish(map_config(factory(), move |_| cfg.clone()))
                     }),
                 },
@@ -637,7 +637,7 @@ where
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h1(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
@@ -645,7 +645,7 @@ where
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h2(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
@@ -653,7 +653,7 @@ where
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .finish(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
@@ -664,7 +664,7 @@ where
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h1(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
@@ -672,7 +672,7 @@ where
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h2(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
@@ -680,7 +680,7 @@ where
                         let cfg =
                             AppConfig::new(true, local_addr, format!("{}", local_addr));
                         HttpService::build()
-                            .client_timeout(ctimeout)
+                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .finish(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),

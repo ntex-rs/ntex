@@ -12,36 +12,34 @@ use crate::http::response::Response;
 use crate::http::service::HttpService;
 use crate::io::{Filter, Io, IoRef};
 use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
-use crate::time::{Millis, Seconds};
+use crate::time::Seconds;
 
 /// A http service builder
 ///
 /// This type can be used to construct an instance of `http service` through a
 /// builder-like pattern.
 pub struct HttpServiceBuilder<F, S, X = ExpectHandler, U = UpgradeHandler<F>> {
-    keep_alive: KeepAlive,
-    client_timeout: Millis,
-    client_disconnect: Seconds,
-    handshake_timeout: Millis,
+    config: ServiceConfig,
     expect: X,
     upgrade: Option<U>,
     on_request: Option<OnRequest>,
-    h2config: h2::Config,
     _t: PhantomData<(F, S)>,
 }
 
 impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
     /// Create instance of `ServiceConfigBuilder`
     pub fn new() -> Self {
+        HttpServiceBuilder::with_config(ServiceConfig::default())
+    }
+
+    #[doc(hidden)]
+    /// Create instance of `ServiceConfigBuilder`
+    pub fn with_config(config: ServiceConfig) -> Self {
         HttpServiceBuilder {
-            keep_alive: KeepAlive::Timeout(Seconds(5)),
-            client_timeout: Millis::from_secs(3),
-            client_disconnect: Seconds(3),
-            handshake_timeout: Millis::from_secs(5),
+            config,
             expect: ExpectHandler,
             upgrade: None,
             on_request: None,
-            h2config: h2::Config::server(),
             _t: PhantomData,
         }
     }
@@ -64,10 +62,11 @@ where
     ///
     /// By default keep alive is set to a 5 seconds.
     pub fn keep_alive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
-        self.keep_alive = val.into();
+        self.config.keepalive(val);
         self
     }
 
+    #[deprecated(since = "0.7.11", note = "Use .headers_read_rate() method")]
     /// Set server client timeout for first request.
     ///
     /// Defines a timeout for reading client request header. If a client does not transmit
@@ -78,8 +77,7 @@ where
     ///
     /// By default client timeout is set to 3 seconds.
     pub fn client_timeout(mut self, timeout: Seconds) -> Self {
-        self.client_timeout = timeout.into();
-        self.h2config.client_timeout(timeout);
+        self.config.client_timeout(timeout);
         self
     }
 
@@ -92,8 +90,7 @@ where
     ///
     /// By default disconnect timeout is set to 3 seconds.
     pub fn disconnect_timeout(mut self, timeout: Seconds) -> Self {
-        self.client_disconnect = timeout;
-        self.h2config.disconnect_timeout(timeout);
+        self.config.disconnect_timeout(timeout);
         self
     }
 
@@ -104,8 +101,41 @@ where
     ///
     /// By default handshake timeout is set to 5 seconds.
     pub fn ssl_handshake_timeout(mut self, timeout: Seconds) -> Self {
-        self.handshake_timeout = timeout.into();
-        self.h2config.handshake_timeout(timeout);
+        self.config.ssl_handshake_timeout(timeout);
+        self
+    }
+
+    /// Set read rate parameters for request headers.
+    ///
+    /// Set max timeout for reading request headers. If the client
+    /// sends `rate` amount of data, increase the timeout by 1 second for every.
+    /// But no more than `max_timeout` timeout.
+    ///
+    /// By default headers read rate is set to 1sec with max timeout 5sec.
+    pub fn headers_read_rate(
+        mut self,
+        timeout: Seconds,
+        max_timeout: Seconds,
+        rate: u16,
+    ) -> Self {
+        self.config.headers_read_rate(timeout, max_timeout, rate);
+        self
+    }
+
+    /// Set read rate parameters for request's payload.
+    ///
+    /// Set max timeout for reading payload. If the client
+    /// sends `rate` amount of data, increase the timeout by 1 second for every.
+    /// But no more than `max_timeout` timeout.
+    ///
+    /// By default payload read rate is disabled.
+    pub fn payload_read_rate(
+        mut self,
+        timeout: Seconds,
+        max_timeout: Seconds,
+        rate: u16,
+    ) -> Self {
+        self.config.payload_read_rate(timeout, max_timeout, rate);
         self
     }
 
@@ -115,7 +145,7 @@ where
     where
         O: FnOnce(&h2::Config) -> R,
     {
-        let _ = f(&self.h2config);
+        let _ = f(&self.config.h2config);
         self
     }
 
@@ -131,14 +161,10 @@ where
         X1::InitError: fmt::Debug,
     {
         HttpServiceBuilder {
-            keep_alive: self.keep_alive,
-            client_timeout: self.client_timeout,
-            client_disconnect: self.client_disconnect,
-            handshake_timeout: self.handshake_timeout,
+            config: self.config,
             expect: expect.into_factory(),
             upgrade: self.upgrade,
             on_request: self.on_request,
-            h2config: self.h2config,
             _t: PhantomData,
         }
     }
@@ -155,14 +181,10 @@ where
         U1::InitError: fmt::Debug,
     {
         HttpServiceBuilder {
-            keep_alive: self.keep_alive,
-            client_timeout: self.client_timeout,
-            client_disconnect: self.client_disconnect,
-            handshake_timeout: self.handshake_timeout,
+            config: self.config,
             expect: self.expect,
             upgrade: Some(upgrade.into_factory()),
             on_request: self.on_request,
-            h2config: self.h2config,
             _t: PhantomData,
         }
     }
@@ -188,14 +210,7 @@ where
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
     {
-        let cfg = ServiceConfig::new(
-            self.keep_alive,
-            self.client_timeout,
-            self.client_disconnect,
-            self.handshake_timeout,
-            self.h2config,
-        );
-        H1Service::with_config(cfg, service.into_factory())
+        H1Service::with_config(self.config, service.into_factory())
             .expect(self.expect)
             .upgrade(self.upgrade)
             .on_request(self.on_request)
@@ -210,15 +225,7 @@ where
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
     {
-        let cfg = ServiceConfig::new(
-            self.keep_alive,
-            self.client_timeout,
-            self.client_disconnect,
-            self.handshake_timeout,
-            self.h2config,
-        );
-
-        H2Service::with_config(cfg, service.into_factory())
+        H2Service::with_config(self.config, service.into_factory())
     }
 
     /// Finish service configuration and create `HttpService` instance.
@@ -230,14 +237,7 @@ where
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
     {
-        let cfg = ServiceConfig::new(
-            self.keep_alive,
-            self.client_timeout,
-            self.client_disconnect,
-            self.handshake_timeout,
-            self.h2config,
-        );
-        HttpService::with_config(cfg, service.into_factory())
+        HttpService::with_config(self.config, service.into_factory())
             .expect(self.expect)
             .upgrade(self.upgrade)
             .on_request(self.on_request)
