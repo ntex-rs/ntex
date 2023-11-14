@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.11] - 2023-11-xx
+
+* Refactor http/1 timeouts
+
 ## [0.7.10] - 2023-11-12
 
 * Start http client timeout after sending body

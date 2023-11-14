@@ -82,7 +82,7 @@ impl Codec {
             flags: Cell::new(flags),
             decoder: decoder::MessageDecoder::default(),
             version: Cell::new(Version::HTTP_11),
-            ctype: Cell::new(ConnectionType::Close),
+            ctype: Cell::new(ConnectionType::KeepAlive),
             encoder: encoder::MessageEncoder::default(),
         }
     }
@@ -97,12 +97,6 @@ impl Codec {
     /// Check if last response is keep-alive
     pub fn keepalive(&self) -> bool {
         self.ctype.get() == ConnectionType::KeepAlive
-    }
-
-    #[inline]
-    /// Check if keep-alive enabled on server level
-    pub fn keepalive_enabled(&self) -> bool {
-        self.flags.get().contains(Flags::KEEPALIVE_ENABLED)
     }
 
     pub(super) fn set_ctype(&self, ctype: ConnectionType) {
@@ -139,11 +133,14 @@ impl Decoder for Codec {
             flags.set(Flags::HEAD, head.method == Method::HEAD);
             self.flags.set(flags);
             self.version.set(head.version);
-            self.ctype.set(head.connection_type());
-            if self.ctype.get() == ConnectionType::KeepAlive
+
+            let ctype = head.connection_type();
+            if ctype == ConnectionType::KeepAlive
                 && !flags.contains(Flags::KEEPALIVE_ENABLED)
             {
                 self.ctype.set(ConnectionType::Close)
+            } else {
+                self.ctype.set(ctype)
             }
 
             if let PayloadType::Stream(_) = payload {
@@ -249,6 +246,6 @@ mod tests {
         );
         let _item = codec.decode(&mut buf).unwrap().unwrap();
         assert!(codec.upgrade());
-        assert!(!codec.keepalive_enabled());
+        assert!(!codec.keepalive());
     }
 }
