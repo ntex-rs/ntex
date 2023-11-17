@@ -632,7 +632,7 @@ impl<F> Io<F> {
     /// Wait for status updates
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let flags = self.flags();
-        if flags.contains(Flags::IO_STOPPED) {
+        if flags.contains(Flags::IO_STOPPED | Flags::IO_STOPPING) {
             Poll::Ready(IoStatusUpdate::PeerGone(self.error()))
         } else if flags.contains(Flags::DSP_STOP) {
             self.0 .0.remove_flags(Flags::DSP_STOP);
