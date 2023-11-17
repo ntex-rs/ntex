@@ -34,7 +34,10 @@ impl IoRef {
     #[inline]
     /// Check if io stream is closed
     pub fn is_closed(&self) -> bool {
-        self.0.flags.get().contains(Flags::IO_STOPPING)
+        self.0
+            .flags
+            .get()
+            .contains(Flags::IO_STOPPING | Flags::IO_STOPPED)
     }
 
     #[inline]

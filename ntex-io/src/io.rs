@@ -460,7 +460,6 @@ impl<F> Io<F> {
                     Poll::Pending
                 }
             } else if ready {
-                log::trace!("waking up io read task");
                 flags.remove(Flags::RD_READY);
                 self.0 .0.flags.set(flags);
                 Poll::Ready(Ok(Some(())))
@@ -560,7 +559,7 @@ impl<F> Io<F> {
             } else {
                 match self.poll_read_ready(cx) {
                     Poll::Pending | Poll::Ready(Ok(Some(()))) => {
-                        log::trace!("not enough data to decode next frame");
+                        log::debug!("not enough data to decode next frame");
                         Ok(decoded)
                     }
                     Poll::Ready(Err(e)) => Err(RecvError::PeerGone(Some(e))),
