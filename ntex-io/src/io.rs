@@ -280,13 +280,6 @@ impl<F> Io<F> {
         self.0.clone()
     }
 
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated]
-    pub fn remove_keepalive_timer(&self) {
-        self.stop_keepalive_timer()
-    }
-
     /// Get current io error
     fn error(&self) -> Option<io::Error> {
         self.0 .0.error.take()
@@ -930,12 +923,23 @@ mod tests {
     use crate::testing::IoTest;
 
     #[ntex::test]
-    async fn test_recv() {
+    async fn test_basics() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
         let server = Io::new(server);
         assert!(server.eq(&server));
+        assert!(server.0.eq(&server.0));
+
+        assert!(format!("{:?}", Flags::IO_STOPPED).contains("IO_STOPPED"));
+    }
+
+    #[ntex::test]
+    async fn test_recv() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let server = Io::new(server);
 
         server.0 .0.notify_timeout();
         let err = server.recv(&BytesCodec).await.err().unwrap();

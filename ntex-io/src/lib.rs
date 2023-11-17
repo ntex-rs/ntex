@@ -219,5 +219,8 @@ mod tests {
             format!("{:?}", T::KeepAliveTimeout).contains("DispatchItem::KeepAliveTimeout")
         );
         assert!(format!("{:?}", T::ReadTimeout).contains("DispatchItem::ReadTimeout"));
+
+        assert!(format!("{:?}", IoStatusUpdate::KeepAlive).contains("KeepAlive"));
+        assert!(format!("{:?}", RecvError::<BytesCodec>::KeepAlive).contains("KeepAlive"));
     }
 }
