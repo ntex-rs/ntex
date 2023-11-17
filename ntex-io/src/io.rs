@@ -932,6 +932,8 @@ mod tests {
         assert!(server.0.eq(&server.0));
 
         assert!(format!("{:?}", Flags::IO_STOPPED).contains("IO_STOPPED"));
+        assert!(Flags::IO_STOPPED == Flags::IO_STOPPED);
+        assert!(Flags::IO_STOPPED != Flags::IO_STOPPING);
     }
 
     #[ntex::test]
