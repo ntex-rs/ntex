@@ -280,13 +280,6 @@ impl<F> Io<F> {
         self.0.clone()
     }
 
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated]
-    pub fn remove_keepalive_timer(&self) {
-        self.stop_keepalive_timer()
-    }
-
     /// Get current io error
     fn error(&self) -> Option<io::Error> {
         self.0 .0.error.take()
@@ -460,7 +453,6 @@ impl<F> Io<F> {
                     Poll::Pending
                 }
             } else if ready {
-                log::trace!("waking up io read task");
                 flags.remove(Flags::RD_READY);
                 self.0 .0.flags.set(flags);
                 Poll::Ready(Ok(Some(())))
@@ -560,7 +552,7 @@ impl<F> Io<F> {
             } else {
                 match self.poll_read_ready(cx) {
                     Poll::Pending | Poll::Ready(Ok(Some(()))) => {
-                        log::trace!("not enough data to decode next frame");
+                        log::debug!("not enough data to decode next frame");
                         Ok(decoded)
                     }
                     Poll::Ready(Err(e)) => Err(RecvError::PeerGone(Some(e))),
@@ -640,7 +632,7 @@ impl<F> Io<F> {
     /// Wait for status updates
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let flags = self.flags();
-        if flags.contains(Flags::IO_STOPPED) {
+        if flags.contains(Flags::IO_STOPPED | Flags::IO_STOPPING) {
             Poll::Ready(IoStatusUpdate::PeerGone(self.error()))
         } else if flags.contains(Flags::DSP_STOP) {
             self.0 .0.remove_flags(Flags::DSP_STOP);
@@ -931,12 +923,25 @@ mod tests {
     use crate::testing::IoTest;
 
     #[ntex::test]
-    async fn test_recv() {
+    async fn test_basics() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
         let server = Io::new(server);
         assert!(server.eq(&server));
+        assert!(server.0.eq(&server.0));
+
+        assert!(format!("{:?}", Flags::IO_STOPPED).contains("IO_STOPPED"));
+        assert!(Flags::IO_STOPPED == Flags::IO_STOPPED);
+        assert!(Flags::IO_STOPPED != Flags::IO_STOPPING);
+    }
+
+    #[ntex::test]
+    async fn test_recv() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let server = Io::new(server);
 
         server.0 .0.notify_timeout();
         let err = server.recv(&BytesCodec).await.err().unwrap();

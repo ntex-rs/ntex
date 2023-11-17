@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.8] - 2023-11-17
+
+* Remove useless logs
+
 ## [0.3.7] - 2023-11-12
 
 * Handle io flush during write back-pressure
