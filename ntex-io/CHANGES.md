@@ -4,6 +4,8 @@
 
 * Remove slow frame timer if service is not ready
 
+* Do not process data in Dispatcher from read buffer after disconnect
+
 ## [0.3.8] - 2023-11-17
 
 * Remove useless logs
