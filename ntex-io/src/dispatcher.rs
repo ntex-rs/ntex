@@ -537,19 +537,25 @@ where
             // update read timer
             if let Some((_, max, rate)) = self.cfg.frame_read_rate() {
                 let bytes = decoded.remains as u32;
+                let delta = if bytes > self.read_bytes {
+                    (bytes - self.read_bytes).try_into().unwrap_or(u16::MAX)
+                } else {
+                    bytes.try_into().unwrap_or(u16::MAX)
+                };
 
-                let delta = (bytes - self.read_bytes).try_into().unwrap_or(u16::MAX);
-
+                // read rate higher than min rate
                 if delta >= rate {
                     let n = now();
                     let next = self.shared.io.timer_deadline() + ONE_SEC;
                     let new_timeout = if n >= next { ONE_SEC } else { next - n };
 
-                    // max timeout
+                    // extend timeout
                     if max.is_zero() || (n + new_timeout) <= self.read_max_timeout {
-                        self.read_bytes = bytes;
                         self.shared.io.stop_timer();
                         self.shared.io.start_timer(new_timeout);
+
+                        // store current buf size for future rate calculation
+                        self.read_bytes = bytes;
                     }
                 }
             }

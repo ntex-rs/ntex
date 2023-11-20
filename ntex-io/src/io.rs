@@ -552,7 +552,9 @@ impl<F> Io<F> {
             } else {
                 match self.poll_read_ready(cx) {
                     Poll::Pending | Poll::Ready(Ok(Some(()))) => {
-                        log::debug!("not enough data to decode next frame");
+                        if log::log_enabled!(log::Level::Debug) && decoded.remains != 0 {
+                            log::debug!("not enough data to decode next frame");
+                        }
                         Ok(decoded)
                     }
                     Poll::Ready(Err(e)) => Err(RecvError::PeerGone(Some(e))),

@@ -275,10 +275,6 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
     pub(super) fn headers_read_rate(&self) -> Option<&ReadRate> {
         self.headers_read_rate.as_ref()
     }
-
-    pub(super) fn payload_read_rate(&self) -> Option<&ReadRate> {
-        self.payload_read_rate.as_ref()
-    }
 }
 
 const DATE_VALUE_LENGTH_HDR: usize = 39;
