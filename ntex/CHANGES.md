@@ -1,8 +1,10 @@
 # Changes
 
-## [0.7.11] - 2023-11-xx
+## [0.7.11] - 2023-11-20
 
 * Refactor http/1 timeouts
+
+* Add http/1 payload read timeout
 
 ## [0.7.10] - 2023-11-12
 
