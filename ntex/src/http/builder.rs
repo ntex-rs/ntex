@@ -66,8 +66,7 @@ where
         self
     }
 
-    #[deprecated(since = "0.7.11", note = "Use .headers_read_rate() method")]
-    /// Set server client timeout for first request.
+    /// Set request headers read timeout.
     ///
     /// Defines a timeout for reading client request header. If a client does not transmit
     /// the entire set headers within this time, the request is terminated with

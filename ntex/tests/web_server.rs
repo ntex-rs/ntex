@@ -1174,7 +1174,7 @@ async fn test_web_server() {
                         .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
                 )
             })
-            .client_timeout(Seconds(1))
+            .headers_read_rate(Seconds(1), Seconds(5), 128)
             .disconnect_timeout(Seconds(1))
             .memory_pool(ntex_bytes::PoolId::P1)
             .listen(tcp)
