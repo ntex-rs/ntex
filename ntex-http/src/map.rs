@@ -45,7 +45,7 @@ impl Value {
         }
     }
 
-    fn append(&mut self, val: HeaderValue) {
+    pub(crate) fn append(&mut self, val: HeaderValue) {
         match self {
             Value::One(prev_val) => {
                 let prev_val = std::mem::replace(prev_val, val);

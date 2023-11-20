@@ -3,6 +3,7 @@
 
 pub mod error;
 mod map;
+mod serde;
 mod value;
 
 pub use self::error::Error;
