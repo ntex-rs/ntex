@@ -1,6 +1,6 @@
 # Changes
 
-## [0.1.11] - 2023-xx-xx
+## [0.1.11] - 2023-11-21
 
 * Implement serde::Serialize/Deserialize for HeaderMap
 

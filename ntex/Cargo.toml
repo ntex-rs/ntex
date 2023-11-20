@@ -50,7 +50,7 @@ async-std = ["ntex-rt/async-std", "ntex-async-std", "ntex-connect/async-std"]
 [dependencies]
 ntex-codec = "0.6.2"
 ntex-connect = "0.3.2"
-ntex-http = "0.1.10"
+ntex-http = "0.1.11"
 ntex-router = "0.5.2"
 ntex-service = "1.2.7"
 ntex-macros = "0.1.3"
