@@ -488,6 +488,13 @@ where
             // pause io read task
             Poll::Pending => {
                 log::trace!("service is not ready, register dispatch task");
+
+                // remove all timers
+                if self.flags.contains(Flags::READ_TIMEOUT) {
+                    self.flags.remove(Flags::READ_TIMEOUT);
+                    self.shared.io.stop_timer();
+                }
+
                 match ready!(self.shared.io.poll_read_pause(cx)) {
                     IoStatusUpdate::KeepAlive => {
                         log::trace!("keep-alive error, stopping dispatcher during pause");

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.9] - 2023-11-21
+
+* Remove slow frame timer if service is not ready
+
 ## [0.3.8] - 2023-11-17
 
 * Remove useless logs
