@@ -4,7 +4,6 @@ use std::task::{Context, Poll};
 use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, thread};
 
 use async_channel::{unbounded, Receiver, Sender};
-use async_oneshot as oneshot;
 use futures_core::stream::Stream;
 
 use crate::system::System;
@@ -97,7 +96,7 @@ impl Arbiter {
             .spawn(move || {
                 let arb = Arbiter::with_sender(arb_tx);
 
-                let (stop, stop_rx) = oneshot::oneshot();
+                let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
                 System::set_current(sys);
@@ -147,18 +146,16 @@ impl Arbiter {
     /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
     /// A future is created, and when resolved will contain the result of the function sent
     /// to the Arbiters thread.
-    pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, oneshot::Closed>>
+    pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, oneshot::RecvError>>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Sync + Send + 'static,
     {
-        let (mut tx, rx) = oneshot::oneshot();
+        let (tx, rx) = oneshot::channel();
         let _ = self
             .sender
             .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
-                if !tx.is_closed() {
-                    let _ = tx.send(f());
-                }
+                let _ = tx.send(f());
             })));
         rx
     }
@@ -265,7 +262,7 @@ impl Future for ArbiterController {
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Ready(Some(item)) => match item {
                     ArbiterCommand::Stop => {
-                        if let Some(mut stop) = self.stop.take() {
+                        if let Some(stop) = self.stop.take() {
                             let _ = stop.send(0);
                         };
                         return Poll::Ready(());
@@ -331,7 +328,7 @@ impl Future for SystemArbiter {
                             arb.stop();
                         }
                         // stop event loop
-                        if let Some(mut stop) = self.stop.take() {
+                        if let Some(stop) = self.stop.take() {
                             let _ = stop.send(code);
                         }
                     }

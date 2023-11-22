@@ -1,7 +1,6 @@
 use std::{fmt, future::Future, io, marker, mem, net, pin::Pin, task::Context, task::Poll};
 
 use async_channel::unbounded;
-use async_oneshot as oneshot;
 use log::{error, info};
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -366,11 +365,11 @@ impl ServerBuilder {
 
     fn handle_cmd(&mut self, item: ServerCommand) {
         match item {
-            ServerCommand::Pause(mut tx) => {
+            ServerCommand::Pause(tx) => {
                 self.accept.send(Command::Pause);
                 let _ = tx.send(());
             }
-            ServerCommand::Resume(mut tx) => {
+            ServerCommand::Resume(tx) => {
                 self.accept.send(Command::Resume);
                 let _ = tx.send(());
             }
@@ -431,10 +430,10 @@ impl ServerBuilder {
                     spawn(async move {
                         let _ = join_all(futs).await;
 
-                        if let Some(mut tx) = completion {
+                        if let Some(tx) = completion {
                             let _ = tx.send(());
                         }
-                        for mut tx in notify {
+                        for tx in notify {
                             let _ = tx.send(());
                         }
                         if exit {
@@ -454,10 +453,10 @@ impl ServerBuilder {
                             System::current().stop();
                         });
                     }
-                    if let Some(mut tx) = completion {
+                    if let Some(tx) = completion {
                         let _ = tx.send(());
                     }
-                    for mut tx in notify {
+                    for tx in notify {
                         let _ = tx.send(());
                     }
                 }

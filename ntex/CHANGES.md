@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.12] - 2023-11-22
+
+* Replace async-oneshot with oneshot
+
 ## [0.7.11] - 2023-11-20
 
 * Refactor http/1 timeouts

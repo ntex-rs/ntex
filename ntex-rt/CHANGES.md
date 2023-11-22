@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.11] - 2023-11-22
+
+* Replace async-oneshot with oneshot
+
 ## [0.4.10] - 2023-11-02
 
 * Upgrade async-channel to 2.0

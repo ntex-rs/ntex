@@ -1,6 +1,6 @@
 [package]
 name = "ntex-async-std"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "async-std intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -19,7 +19,7 @@ path = "src/lib.rs"
 ntex-bytes = "0.1.21"
 ntex-io = "0.3.6"
 ntex-util = "0.3.4"
-async-oneshot = "0.5.0"
 log = "0.4"
 pin-project-lite = "0.2"
 async-std = { version = "1", features = ["unstable"] }
+oneshot = { version = "0.1", default-features = false, features = ["async"] }

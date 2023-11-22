@@ -1,6 +1,6 @@
 [package]
 name = "ntex-glommio"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "glommio intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -16,12 +16,12 @@ name = "ntex_glommio"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "0.1.19"
-ntex-io = "0.3.0"
-ntex-util = "0.3.0"
-async-oneshot = "0.5.0"
+ntex-bytes = "0.1.21"
+ntex-io = "0.3.9"
+ntex-util = "0.3.4"
 futures-lite = "1.12"
 log = "0.4"
+oneshot = { version = "0.1", default-features = false, features = ["async"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 glommio = "0.8"
