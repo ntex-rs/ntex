@@ -1,7 +1,5 @@
 use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use async_oneshot as oneshot;
-
 thread_local! {
     static SRUN: RefCell<bool> = RefCell::new(false);
     static SHANDLERS: Rc<RefCell<Vec<oneshot::Sender<Signal>>>> = Default::default();
@@ -29,7 +27,7 @@ pub fn signal() -> Option<oneshot::Receiver<Signal>> {
         async_std::task::spawn_local(Signals::new());
     }
     SHANDLERS.with(|handlers| {
-        let (tx, rx) = oneshot::oneshot();
+        let (tx, rx) = oneshot::channel();
         handlers.borrow_mut().push(tx);
         Some(rx)
     })

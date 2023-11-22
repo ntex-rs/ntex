@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "0.4.10"
+version = "0.4.11"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -28,10 +28,10 @@ tokio = ["tok-io"]
 async-std = ["async_std/unstable"]
 
 [dependencies]
-async-oneshot = "0.5"
 async-channel = "2.0"
 futures-core = "0.3"
 log = "0.4"
+oneshot = "0.1"
 
 tok-io = { version = "1", package = "tokio", default-features = false, features = [
     "rt",

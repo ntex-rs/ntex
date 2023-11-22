@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.1] - 2023-11-22
+
+* Replace async-oneshot with oneshot
+
 ## [0.3.0] - 2023-06-22
 
 * Release v0.3.0

@@ -1,7 +1,6 @@
 use std::{cell::RefCell, future::Future, io, rc::Rc};
 
 use async_channel::unbounded;
-use async_oneshot as oneshot;
 
 use crate::arbiter::{Arbiter, ArbiterController, SystemArbiter};
 use crate::System;
@@ -45,7 +44,7 @@ impl Builder {
     ///
     /// This method panics if it can not create tokio runtime
     pub fn finish(self) -> SystemRunner {
-        let (stop_tx, stop) = oneshot::oneshot();
+        let (stop_tx, stop) = oneshot::channel();
         let (sys_sender, sys_receiver) = unbounded();
         let stop_on_panic = self.stop_on_panic;
 
