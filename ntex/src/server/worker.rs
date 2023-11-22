@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::{future::Future, pin::Pin, sync::Arc, task::Context, task::Poll};
 
 use async_channel::{unbounded, Receiver, Sender};
-use async_oneshot as oneshot;
 
 use crate::rt::{spawn, Arbiter};
 use crate::service::Pipeline;
@@ -91,7 +90,7 @@ impl WorkerClient {
     }
 
     pub(super) fn stop(&self, graceful: bool) -> oneshot::Receiver<bool> {
-        let (result, rx) = oneshot::oneshot();
+        let (result, rx) = oneshot::channel();
         let _ = self.tx2.try_send(StopCommand { graceful, result });
         rx
     }
@@ -227,7 +226,7 @@ impl Worker {
         let res: Result<Vec<_>, _> =
             match select(join_all(fut), stream_recv(&mut wrk.rx2)).await {
                 Either::Left(result) => result.into_iter().collect(),
-                Either::Right(Some(StopCommand { mut result, .. })) => {
+                Either::Right(Some(StopCommand { result, .. })) => {
                     trace!("Shutdown uninitialized worker");
                     wrk.shutdown(true);
                     let _ = result.send(false);
@@ -347,11 +346,7 @@ impl Future for Worker {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // `StopWorker` message handler
         let stop = Pin::new(&mut self.rx2).poll_next(cx);
-        if let Poll::Ready(Some(StopCommand {
-            graceful,
-            mut result,
-        })) = stop
-        {
+        if let Poll::Ready(Some(StopCommand { graceful, result })) = stop {
             self.availability.set(false);
             let num = num_connections();
             if num == 0 {
@@ -653,7 +648,7 @@ mod tests {
         // shutdown
         let g = MAX_CONNS_COUNTER.with(|conns| conns.get());
 
-        let (tx, rx) = oneshot::oneshot();
+        let (tx, rx) = oneshot::channel();
         tx2.try_send(StopCommand {
             graceful: true,
             result: tx,
@@ -697,7 +692,7 @@ mod tests {
         let _ = lazy(|cx| Pin::new(&mut worker).poll(cx)).await;
         assert!(avail.available());
 
-        let (tx, rx) = oneshot::oneshot();
+        let (tx, rx) = oneshot::channel();
         tx2.try_send(StopCommand {
             graceful: false,
             result: tx,

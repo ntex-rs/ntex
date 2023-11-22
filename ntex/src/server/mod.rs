@@ -2,7 +2,6 @@
 use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 
 use async_channel::Sender;
-use async_oneshot as oneshot;
 
 mod accept;
 mod builder;
@@ -101,7 +100,7 @@ impl Server {
     /// If socket contains some pending connection, they might be dropped.
     /// All opened connection remains active.
     pub fn pause(&self) -> impl Future<Output = ()> {
-        let (tx, rx) = oneshot::oneshot();
+        let (tx, rx) = oneshot::channel();
         let _ = self.0.try_send(ServerCommand::Pause(tx));
         async move {
             let _ = rx.await;
@@ -110,7 +109,7 @@ impl Server {
 
     /// Resume accepting incoming connections
     pub fn resume(&self) -> impl Future<Output = ()> {
-        let (tx, rx) = oneshot::oneshot();
+        let (tx, rx) = oneshot::channel();
         let _ = self.0.try_send(ServerCommand::Resume(tx));
         async move {
             let _ = rx.await;
@@ -121,7 +120,7 @@ impl Server {
     ///
     /// If server starts with `spawn()` method, then spawned thread get terminated.
     pub fn stop(&self, graceful: bool) -> impl Future<Output = ()> {
-        let (tx, rx) = oneshot::oneshot();
+        let (tx, rx) = oneshot::channel();
         let _ = self.0.try_send(ServerCommand::Stop {
             graceful,
             completion: Some(tx),
@@ -145,7 +144,7 @@ impl Future for Server {
         let this = self.get_mut();
 
         if this.1.is_none() {
-            let (tx, rx) = oneshot::oneshot();
+            let (tx, rx) = oneshot::channel();
             if this.0.try_send(ServerCommand::Notify(tx)).is_err() {
                 return Poll::Ready(Ok(()));
             }
