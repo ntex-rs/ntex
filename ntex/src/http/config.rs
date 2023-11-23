@@ -204,8 +204,8 @@ impl ServiceConfig {
 
     /// Set read rate parameters for request's payload.
     ///
-    /// Set time pariod for reading payload. Client must
-    /// sends `rate` amount of data per one time period.
+    /// Set read timeout, max timeout and rate for reading payload. If the client
+    /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
     /// But no more than `max_timeout` timeout.
     ///
     /// By default payload read rate is disabled.
