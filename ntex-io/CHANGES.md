@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.11] - 2023-11-25
+
+* Fix keep-alive timeout handling
+
 ## [0.3.10] - 2023-11-23
 
 * Refactor slow frame timeout handling
