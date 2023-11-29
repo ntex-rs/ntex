@@ -187,8 +187,8 @@ impl ServiceConfig {
 
     /// Set read rate parameters for request headers.
     ///
-    /// Set max timeout for reading request headers. If the client
-    /// sends `rate` amount of data, increase the timeout by 1 second for every.
+    /// Set read timeout, max timeout and rate for reading request headers. If the client
+    /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
     /// But no more than `max_timeout` timeout.
     ///
     /// By default headers read rate is set to 1sec with max timeout 5sec.

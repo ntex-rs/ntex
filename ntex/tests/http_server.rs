@@ -172,6 +172,29 @@ async fn test_slow_request() {
 }
 
 #[ntex::test]
+async fn test_slow_request2() {
+    env_logger::try_init();
+    const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\n";
+
+    let srv = test_server(|| {
+        HttpService::build()
+            .headers_read_rate(Seconds(1), Seconds(2), 4)
+            .finish(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let mut data = vec![0; 1024];
+    let _ = stream.read(&mut data);
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+
+    let _ = stream.write_all(DATA);
+    let mut data = String::new();
+    let _ = stream.read_to_string(&mut data);
+    assert!(data.starts_with("HTTP/1.1 408 Request Timeout"));
+}
+
+#[ntex::test]
 async fn test_http1_malformed_request() {
     let srv = test_server(|| {
         HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))

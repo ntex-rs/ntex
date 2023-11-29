@@ -584,9 +584,7 @@ where
 
             self.read_remains = decoded.remains as u32;
             self.read_remains_prev = 0;
-            if !max.is_zero() {
-                self.read_max_timeout = max;
-            }
+            self.read_max_timeout = max;
             self.shared.io.start_timer_secs(timeout);
         }
     }

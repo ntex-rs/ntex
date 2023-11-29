@@ -29,10 +29,12 @@ bitflags::bitflags! {
         /// Stop after sending payload
         const SENDPAYLOAD_AND_STOP = 0b0000_0100;
 
+        /// Keep-alive is enabled
+        const READ_KA_TIMEOUT    = 0b0001_0000;
         /// Read headers timer is enabled
-        const READ_HDRS_TIMEOUT    = 0b0001_0000;
+        const READ_HDRS_TIMEOUT    = 0b0010_0000;
         /// Read headers payload is enabled
-        const READ_PL_TIMEOUT      = 0b0010_0000;
+        const READ_PL_TIMEOUT      = 0b0100_0000;
     }
 }
 
@@ -114,11 +116,11 @@ where
         io.set_disconnect_timeout(config.client_disconnect);
 
         // slow-request timer
-        let flags = if let Some(cfg) = config.headers_read_rate() {
+        let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
             io.start_timer_secs(cfg.timeout);
-            Flags::READ_HDRS_TIMEOUT
+            (Flags::READ_HDRS_TIMEOUT, cfg.max_timeout)
         } else {
-            Flags::empty()
+            (Flags::empty(), Seconds::ZERO)
         };
 
         Dispatcher {
@@ -133,7 +135,7 @@ where
                 payload: None,
                 read_remains: 0,
                 read_consumed: 0,
-                read_max_timeout: Seconds::ZERO,
+                read_max_timeout: max_timeout,
                 _t: marker::PhantomData,
             },
         }
@@ -492,17 +494,15 @@ where
         cx: &mut Context<'_>,
         call_state: &mut std::pin::Pin<&mut CallState<S, X>>,
     ) -> Poll<State<B>> {
-        log::trace!("trying to read http message");
+        log::trace!("Trying to read http message");
 
         loop {
-            // let result = ready!(self.io.poll_recv(&self.codec, cx));
             let result = match self.io.poll_recv_decode(&self.codec, cx) {
                 Ok(decoded) => {
-                    if let Some(st) =
-                        self.update_request_timer(decoded.item.is_some(), decoded.remains)
-                    {
+                    if let Some(st) = self.update_hdrs_timer(&decoded) {
                         return Poll::Ready(st);
                     }
+
                     if let Some(item) = decoded.item {
                         Ok(item)
                     } else {
@@ -515,7 +515,7 @@ where
             // decode incoming bytes stream
             return match result {
                 Ok((mut req, pl)) => {
-                    log::trace!("http message is received: {:?} and payload {:?}", req, pl);
+                    log::trace!("Http message is received: {:?} and payload {:?}", req, pl);
 
                     // configure request payload
                     let upgrade = match pl {
@@ -541,7 +541,7 @@ where
 
                     if upgrade {
                         // Handle UPGRADE request
-                        log::trace!("prep io for upgrade handler");
+                        log::trace!("Prepare io for upgrade handler");
                         Poll::Ready(State::Upgrade(Some(req)))
                     } else {
                         if req.upgrade() {
@@ -563,7 +563,7 @@ where
                 }
                 Err(RecvError::WriteBackpressure) => {
                     if let Err(err) = ready!(self.io.poll_flush(cx, false)) {
-                        log::trace!("peer is gone with {:?}", err);
+                        log::trace!("Peer is gone with {:?}", err);
                         self.error = Some(DispatchError::PeerGone(Some(err)));
                         Poll::Ready(State::Stop)
                     } else {
@@ -572,30 +572,33 @@ where
                 }
                 Err(RecvError::Decoder(err)) => {
                     // Malformed requests, respond with 400
-                    log::trace!("malformed request: {:?}", err);
+                    log::trace!("Malformed request: {:?}", err);
                     let (res, body) = Response::BadRequest().finish().into_parts();
                     self.error = Some(DispatchError::Parse(err));
                     Poll::Ready(self.send_response(res, body.into_body()))
                 }
                 Err(RecvError::PeerGone(err)) => {
-                    log::trace!("peer is gone with {:?}", err);
+                    log::trace!("Peer is gone with {:?}", err);
                     self.error = Some(DispatchError::PeerGone(err));
                     Poll::Ready(State::Stop)
                 }
                 Err(RecvError::Stop) => {
-                    log::trace!("dispatcher is instructed to stop");
+                    log::trace!("Dispatcher is instructed to stop");
                     Poll::Ready(State::Stop)
                 }
                 Err(RecvError::KeepAlive) => {
                     if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-                        log::trace!("slow request timeout");
-                        let (req, body) = Response::RequestTimeout().finish().into_parts();
-                        let _ = self.send_response(req, body.into_body());
-                        self.error = Some(DispatchError::SlowRequestTimeout);
-                    } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-                        log::trace!("slow payload timeout");
+                        if let Err(err) = self.handle_timeout() {
+                            log::trace!("Slow request timeout");
+                            let (req, body) =
+                                Response::RequestTimeout().finish().into_parts();
+                            let _ = self.send_response(req, body.into_body());
+                            self.error = Some(err);
+                        } else {
+                            continue;
+                        }
                     } else {
-                        log::trace!("keep-alive timeout, close connection");
+                        log::trace!("Keep-alive timeout, close connection");
                     }
                     Poll::Ready(State::Stop)
                 }
@@ -604,7 +607,7 @@ where
     }
 
     fn send_response(&mut self, msg: Response<()>, body: ResponseBody<B>) -> State<B> {
-        trace!("sending response: {:?} body: {:?}", msg, body.size());
+        trace!("Sending response: {:?} body: {:?}", msg, body.size());
         // we dont need to process responses if socket is disconnected
         // but we still want to handle requests with app service
         // so we skip response processing for droppped connection
@@ -646,7 +649,7 @@ where
     ) -> Option<State<B>> {
         match item {
             Some(Ok(item)) => {
-                trace!("got response chunk: {:?}", item.len());
+                trace!("Got response chunk: {:?}", item.len());
                 match self.io.encode(Message::Chunk(Some(item)), &self.codec) {
                     Ok(_) => None,
                     Err(err) => {
@@ -656,7 +659,7 @@ where
                 }
             }
             None => {
-                trace!("response payload eof {:?}", self.flags);
+                trace!("Response payload eof {:?}", self.flags);
                 if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                     self.error = Some(DispatchError::Encode(err));
                     Some(State::Stop)
@@ -669,7 +672,7 @@ where
                 }
             }
             Some(Err(e)) => {
-                trace!("error during response body poll: {:?}", e);
+                trace!("Error during response body poll: {:?}", e);
                 self.error = Some(DispatchError::ResponsePayload(e));
                 Some(State::Stop)
             }
@@ -752,8 +755,8 @@ where
                                     }
                                 }
                                 RecvError::KeepAlive => {
-                                    if let Err(err) = self.handle_payload_timeout() {
-                                        DispatchError::from(err)
+                                    if let Err(err) = self.handle_timeout() {
+                                        err
                                     } else {
                                         continue;
                                     }
@@ -820,16 +823,34 @@ where
         }
     }
 
-    fn handle_payload_timeout(&mut self) -> Result<(), io::Error> {
-        // check payload read rate
-        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            if let Some(ref cfg) = self.config.payload_read_rate {
-                let total = (self.read_remains + self.read_consumed)
-                    .try_into()
-                    .unwrap_or(u16::MAX);
-                if total > cfg.rate {
-                    self.read_consumed = 0;
+    fn handle_timeout(&mut self) -> Result<(), DispatchError> {
+        // check read rate
+        if self
+            .flags
+            .intersects(Flags::READ_PL_TIMEOUT | Flags::READ_HDRS_TIMEOUT)
+        {
+            let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+                &self.config.headers_read_rate
+            } else {
+                &self.config.payload_read_rate
+            };
 
+            if let Some(ref cfg) = cfg {
+                let total = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+                    let total = (self.read_remains - self.read_consumed)
+                        .try_into()
+                        .unwrap_or(u16::MAX);
+                    self.read_remains = 0;
+                    total
+                } else {
+                    let total = (self.read_remains + self.read_consumed)
+                        .try_into()
+                        .unwrap_or(u16::MAX);
+                    self.read_consumed = 0;
+                    total
+                };
+
+                if total > cfg.rate {
                     // update max timeout
                     if !cfg.max_timeout.is_zero() {
                         self.read_max_timeout =
@@ -838,21 +859,71 @@ where
 
                     // start timer for next period
                     if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
-                        log::trace!("Payload read rate {:?}, extend timer", total);
+                        log::trace!("Bytes read rate {:?}, extend timer", total);
                         self.io.start_timer_secs(cfg.timeout);
                         return Ok(());
                     }
-                    log::trace!("Max payload timeout has been reached");
                 }
             }
         }
 
-        log::trace!("Timeout during payload reading");
-        self.set_payload_error(PayloadError::Io(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "Keep-alive",
-        )));
-        Err(io::Error::new(io::ErrorKind::TimedOut, "Keep-alive"))
+        log::trace!("Timeout during reading");
+        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+            self.set_payload_error(PayloadError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Keep-alive",
+            )));
+            Err(DispatchError::from(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Keep-alive",
+            )))
+        } else {
+            Err(DispatchError::SlowRequestTimeout)
+        }
+    }
+
+    fn update_hdrs_timer(
+        &mut self,
+        decoded: &Decoded<(Request, PayloadType)>,
+    ) -> Option<State<B>> {
+        // got parsed frame
+        if decoded.item.is_some() {
+            self.read_remains = 0;
+            self.io.stop_timer();
+            self.flags.remove(
+                Flags::READ_KA_TIMEOUT | Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT,
+            );
+        } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+            // received new data but not enough for parsing complete frame
+            self.read_remains = decoded.remains as u32;
+        } else if self.read_remains == 0 && decoded.remains == 0 {
+            // no new data, start keep-alive timer
+            if self.codec.keepalive() {
+                if !self.flags.contains(Flags::READ_KA_TIMEOUT) {
+                    log::debug!("Start keep-alive timer {:?}", self.config.keep_alive);
+                    self.flags.insert(Flags::READ_KA_TIMEOUT);
+                    if self.config.keep_alive_enabled() {
+                        self.io.start_timer_secs(self.config.keep_alive);
+                    }
+                }
+            } else {
+                self.io.close();
+                return Some(State::Stop);
+            }
+        } else if let Some(ref cfg) = self.config.headers_read_rate {
+            log::debug!("Start headers read timer {:?}", cfg.timeout);
+
+            // we got new data but not enough to parse single frame
+            // start read timer
+            self.flags.remove(Flags::READ_KA_TIMEOUT);
+            self.flags.insert(Flags::READ_HDRS_TIMEOUT);
+
+            self.read_consumed = 0;
+            self.read_remains = decoded.remains as u32;
+            self.read_max_timeout = cfg.max_timeout;
+            self.io.start_timer_secs(cfg.timeout);
+        }
+        None
     }
 
     fn update_payload_timer(&mut self, decoded: &Decoded<PayloadItem>) {
@@ -868,67 +939,6 @@ where
             self.read_max_timeout = cfg.max_timeout;
             self.io.start_timer_secs(cfg.timeout);
         }
-    }
-
-    fn update_request_timer(&mut self, received: bool, remains: usize) -> Option<State<B>> {
-        // we got parsed frame
-        if received {
-            // remove all timers
-            self.flags
-                .remove(Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT);
-            self.io.stop_timer();
-        } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            // update read timer
-            if let Some(ref cfg) = self.config.headers_read_rate {
-                let bytes = remains as u32;
-                let delta = if bytes > self.read_remains {
-                    (bytes - self.read_remains).try_into().unwrap_or(u16::MAX)
-                } else {
-                    bytes.try_into().unwrap_or(u16::MAX)
-                };
-
-                // read rate higher than min rate
-                if delta >= cfg.rate {
-                    let new_timeout = self.io.timer_handle().remains() + Seconds::ONE;
-
-                    // update max timeout
-                    if !cfg.max_timeout.is_zero() {
-                        self.read_max_timeout =
-                            Seconds(self.read_max_timeout.0.saturating_sub(cfg.timeout.0));
-                    }
-
-                    // start timer for next period
-                    if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
-                        self.io.start_timer_secs(new_timeout);
-
-                        // store current buf size for future rate calculation
-                        self.read_remains = bytes;
-                    }
-                }
-            }
-        } else {
-            // no new data then start keep-alive timer
-            if remains == 0 {
-                if self.codec.keepalive() {
-                    if self.config.keep_alive_enabled() {
-                        self.io.start_timer_secs(self.config.keep_alive);
-                    }
-                } else {
-                    self.io.close();
-                    return Some(State::Stop);
-                }
-            } else if let Some(ref cfg) = self.config.headers_read_rate {
-                // we got new data but not enough to parse single frame
-                // start read timer
-                self.flags.insert(Flags::READ_HDRS_TIMEOUT);
-
-                self.read_remains = 0;
-                self.read_max_timeout = cfg.max_timeout;
-                self.io.start_timer_secs(cfg.timeout);
-            }
-        }
-
-        None
     }
 }
 

@@ -38,7 +38,7 @@ impl IoRef {
         self.0
             .flags
             .get()
-            .contains(Flags::IO_STOPPING | Flags::IO_STOPPED)
+            .intersects(Flags::IO_STOPPING | Flags::IO_STOPPED)
     }
 
     #[inline]
@@ -239,7 +239,7 @@ impl IoRef {
         }
 
         if !timeout.is_zero() {
-            log::debug!("start timer {:?}s", timeout);
+            log::debug!("start timer {:?}", timeout);
             self.0.insert_flags(Flags::TIMEOUT);
             let hnd = timer::register(timeout, self);
             self.0.keepalive.set(hnd);
