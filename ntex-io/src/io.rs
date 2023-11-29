@@ -1,16 +1,16 @@
 use std::cell::Cell;
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc, time};
+use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 
 use ntex_bytes::{PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::time::{now, Seconds};
-use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
+use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Seconds};
 
 use crate::buf::Stack;
 use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::seal::Sealed;
 use crate::tasks::{ReadContext, WriteContext};
+use crate::timer::TimerHandle;
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
@@ -70,7 +70,7 @@ pub(crate) struct IoState {
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
-    pub(super) keepalive: Cell<time::Instant>,
+    pub(super) keepalive: Cell<TimerHandle>,
 }
 
 impl IoState {
@@ -201,7 +201,7 @@ impl Io {
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: Cell::new(None),
-            keepalive: Cell::new(now()),
+            keepalive: Cell::new(TimerHandle::default()),
         });
 
         let filter = Box::new(Base::new(IoRef(inner.clone())));
@@ -257,7 +257,7 @@ impl<F> Io<F> {
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: Cell::new(None),
-            keepalive: Cell::new(now()),
+            keepalive: Cell::new(TimerHandle::default()),
         });
 
         let state = mem::replace(&mut self.0, IoRef(inner));

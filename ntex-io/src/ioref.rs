@@ -2,6 +2,7 @@ use std::{any, fmt, hash, io, time};
 
 use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
+use ntex_util::time::Seconds;
 
 use super::{io::Flags, timer, types, Decoded, Filter, IoRef, OnDisconnect, WriteBuf};
 
@@ -211,23 +212,41 @@ impl IoRef {
     }
 
     #[inline]
+    /// current timer handle
+    pub fn timer_handle(&self) -> timer::TimerHandle {
+        self.0.keepalive.get()
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.12")]
+    #[inline]
     /// current timer deadline
     pub fn timer_deadline(&self) -> time::Instant {
-        self.0.keepalive.get()
+        self.0.keepalive.get().instant()
     }
 
     #[inline]
     /// Start timer
     pub fn start_timer(&self, timeout: time::Duration) {
+        self.start_timer_secs(Seconds(timeout.as_secs() as u16));
+    }
+
+    #[inline]
+    /// Start timer
+    pub fn start_timer_secs(&self, timeout: Seconds) -> timer::TimerHandle {
         if self.flags().contains(Flags::TIMEOUT) {
             timer::unregister(self.0.keepalive.get(), self);
         }
+
         if !timeout.is_zero() {
-            log::debug!("start timer {:?}", timeout);
+            log::debug!("start timer {:?}s", timeout);
             self.0.insert_flags(Flags::TIMEOUT);
-            self.0.keepalive.set(timer::register(timeout, self));
+            let hnd = timer::register(timeout, self);
+            self.0.keepalive.set(hnd);
+            hnd
         } else {
             self.0.remove_flags(Flags::TIMEOUT);
+            Default::default()
         }
     }
 

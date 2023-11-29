@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.13] - 2023-11-29
+
+* Refactor h1 timers
+
 ## [0.7.12] - 2023-11-22
 
 * Replace async-oneshot with oneshot

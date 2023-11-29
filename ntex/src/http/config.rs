@@ -1,4 +1,4 @@
-use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time, time::Duration};
+use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time};
 
 use ntex_h2::{self as h2};
 
@@ -43,7 +43,7 @@ impl From<Option<usize>> for KeepAlive {
 #[derive(Debug, Clone)]
 /// Http service configuration
 pub struct ServiceConfig {
-    pub(super) keep_alive: Millis,
+    pub(super) keep_alive: Seconds,
     pub(super) client_disconnect: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) ssl_handshake_timeout: Millis,
@@ -56,16 +56,16 @@ pub struct ServiceConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ReadRate {
     pub(super) rate: u16,
-    pub(super) timeout: time::Duration,
-    pub(super) max_timeout: time::Duration,
+    pub(super) timeout: Seconds,
+    pub(super) max_timeout: Seconds,
 }
 
 impl Default for ReadRate {
     fn default() -> Self {
         ReadRate {
             rate: 256,
-            timeout: time::Duration::from_secs(1),
-            max_timeout: time::Duration::from_secs(4),
+            timeout: Seconds(1),
+            max_timeout: Seconds(4),
         }
     }
 }
@@ -74,7 +74,7 @@ impl Default for ServiceConfig {
     fn default() -> Self {
         Self::new(
             KeepAlive::Timeout(Seconds(5)),
-            Millis(1_000),
+            Seconds::ONE,
             Seconds::ONE,
             Millis(5_000),
             h2::Config::server(),
@@ -86,17 +86,21 @@ impl ServiceConfig {
     /// Create instance of `ServiceConfig`
     pub fn new(
         keep_alive: KeepAlive,
-        client_timeout: Millis,
+        client_timeout: Seconds,
         client_disconnect: Seconds,
         ssl_handshake_timeout: Millis,
         h2config: h2::Config,
     ) -> ServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
-            KeepAlive::Timeout(val) => (Millis::from(val), true),
-            KeepAlive::Os => (Millis::ZERO, true),
-            KeepAlive::Disabled => (Millis::ZERO, false),
+            KeepAlive::Timeout(val) => (val, true),
+            KeepAlive::Os => (Seconds::ZERO, true),
+            KeepAlive::Disabled => (Seconds::ZERO, false),
         };
-        let keep_alive = if ka_enabled { keep_alive } else { Millis::ZERO };
+        let keep_alive = if ka_enabled {
+            keep_alive
+        } else {
+            Seconds::ZERO
+        };
 
         ServiceConfig {
             client_disconnect,
@@ -107,8 +111,8 @@ impl ServiceConfig {
             timer: DateService::new(),
             headers_read_rate: Some(ReadRate {
                 rate: 256,
-                timeout: client_timeout.into(),
-                max_timeout: (client_timeout + Millis(3_000)).into(),
+                timeout: client_timeout,
+                max_timeout: client_timeout + Seconds(3),
             }),
             payload_read_rate: None,
         }
@@ -118,8 +122,8 @@ impl ServiceConfig {
         if timeout.is_zero() {
             self.headers_read_rate = None;
         } else {
-            let mut rate = self.headers_read_rate.clone().unwrap_or_default();
-            rate.timeout = timeout.into();
+            let mut rate = self.headers_read_rate.unwrap_or_default();
+            rate.timeout = timeout;
             self.headers_read_rate = Some(rate);
         }
     }
@@ -129,11 +133,15 @@ impl ServiceConfig {
     /// By default keep alive is set to a 5 seconds.
     pub fn keepalive<W: Into<KeepAlive>>(&mut self, val: W) -> &mut Self {
         let (keep_alive, ka_enabled) = match val.into() {
-            KeepAlive::Timeout(val) => (Millis::from(val), true),
-            KeepAlive::Os => (Millis::ZERO, true),
-            KeepAlive::Disabled => (Millis::ZERO, false),
+            KeepAlive::Timeout(val) => (val, true),
+            KeepAlive::Os => (Seconds::ZERO, true),
+            KeepAlive::Disabled => (Seconds::ZERO, false),
         };
-        let keep_alive = if ka_enabled { keep_alive } else { Millis::ZERO };
+        let keep_alive = if ka_enabled {
+            keep_alive
+        } else {
+            Seconds::ZERO
+        };
 
         self.keep_alive = keep_alive;
         self.ka_enabled = ka_enabled;
@@ -146,7 +154,7 @@ impl ServiceConfig {
     ///
     /// By default keep-alive timeout is set to 30 seconds.
     pub fn keepalive_timeout(&mut self, timeout: Seconds) -> &mut Self {
-        self.keep_alive = timeout.into();
+        self.keep_alive = timeout;
         self.ka_enabled = !timeout.is_zero();
         self
     }
@@ -193,8 +201,8 @@ impl ServiceConfig {
         if !timeout.is_zero() {
             self.headers_read_rate = Some(ReadRate {
                 rate,
-                timeout: timeout.into(),
-                max_timeout: max_timeout.into(),
+                timeout,
+                max_timeout,
             });
         } else {
             self.headers_read_rate = None;
@@ -218,8 +226,8 @@ impl ServiceConfig {
         if !timeout.is_zero() {
             self.payload_read_rate = Some(ReadRate {
                 rate,
-                timeout: timeout.into(),
-                max_timeout: max_timeout.into(),
+                timeout,
+                max_timeout,
             });
         } else {
             self.payload_read_rate = None;
@@ -234,7 +242,7 @@ pub(super) struct DispatcherConfig<S, X, U> {
     pub(super) service: Pipeline<S>,
     pub(super) expect: Pipeline<X>,
     pub(super) upgrade: Option<Pipeline<U>>,
-    pub(super) keep_alive: Duration,
+    pub(super) keep_alive: Seconds,
     pub(super) client_disconnect: Seconds,
     pub(super) h2config: h2::Config,
     pub(super) ka_enabled: bool,
@@ -257,8 +265,8 @@ impl<S, X, U> DispatcherConfig<S, X, U> {
             expect: expect.into(),
             upgrade: upgrade.map(|v| v.into()),
             on_request: on_request.map(|v| v.into()),
-            keep_alive: Duration::from(cfg.keep_alive),
-            client_disconnect: cfg.client_disconnect.into(),
+            keep_alive: cfg.keep_alive,
+            client_disconnect: cfg.client_disconnect,
             ka_enabled: cfg.ka_enabled,
             headers_read_rate: cfg.headers_read_rate,
             payload_read_rate: cfg.payload_read_rate,

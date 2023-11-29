@@ -1,12 +1,10 @@
 //! Framed transport dispatcher
 use std::task::{Context, Poll};
-use std::{
-    cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc, time,
-};
+use std::{cell::RefCell, error::Error, future::Future, io, marker, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoBoxed, IoRef, IoStatusUpdate, RecvError};
 use crate::service::{Pipeline, PipelineCall, Service};
-use crate::time::now;
+use crate::time::Seconds;
 use crate::util::{ready, Bytes};
 
 use crate::http;
@@ -20,8 +18,6 @@ use crate::http::response::Response;
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::payload::{Payload, PayloadSender, PayloadStatus};
 use super::{codec::Codec, Message};
-
-const ONE_SEC: time::Duration = time::Duration::from_secs(1);
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -97,7 +93,7 @@ struct DispatcherInner<F, S, B, X, U> {
     payload: Option<(PayloadDecoder, PayloadSender)>,
     read_remains: u32,
     read_consumed: u32,
-    read_max_timeout: time::Instant,
+    read_max_timeout: Seconds,
     _t: marker::PhantomData<(S, B)>,
 }
 
@@ -119,7 +115,7 @@ where
 
         // slow-request timer
         let flags = if let Some(cfg) = config.headers_read_rate() {
-            io.start_timer(cfg.timeout);
+            io.start_timer_secs(cfg.timeout);
             Flags::READ_HDRS_TIMEOUT
         } else {
             Flags::empty()
@@ -137,7 +133,7 @@ where
                 payload: None,
                 read_remains: 0,
                 read_consumed: 0,
-                read_max_timeout: now(),
+                read_max_timeout: Seconds::ZERO,
                 _t: marker::PhantomData,
             },
         }
@@ -834,12 +830,16 @@ where
                 if total > cfg.rate {
                     self.read_consumed = 0;
 
+                    // update max timeout
+                    if !cfg.max_timeout.is_zero() {
+                        self.read_max_timeout =
+                            Seconds(self.read_max_timeout.0.saturating_sub(cfg.timeout.0));
+                    }
+
                     // start timer for next period
-                    if cfg.max_timeout.is_zero()
-                        || (!cfg.max_timeout.is_zero() && now() < self.read_max_timeout)
-                    {
+                    if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
                         log::trace!("Payload read rate {:?}, extend timer", total);
-                        self.io.start_timer(cfg.timeout);
+                        self.io.start_timer_secs(cfg.timeout);
                         return Ok(());
                     }
                     log::trace!("Max payload timeout has been reached");
@@ -865,10 +865,8 @@ where
 
             self.read_remains = decoded.remains as u32;
             self.read_consumed = decoded.consumed as u32;
-            self.io.start_timer(cfg.timeout);
-            if !cfg.max_timeout.is_zero() {
-                self.read_max_timeout = now() + cfg.max_timeout;
-            }
+            self.read_max_timeout = cfg.max_timeout;
+            self.io.start_timer_secs(cfg.timeout);
         }
     }
 
@@ -891,16 +889,17 @@ where
 
                 // read rate higher than min rate
                 if delta >= cfg.rate {
-                    let n = now();
-                    let next = self.io.timer_deadline() + ONE_SEC;
-                    let new_timeout = if n >= next { ONE_SEC } else { next - n };
+                    let new_timeout = self.io.timer_handle().remains() + Seconds::ONE;
 
-                    // max timeout
-                    if cfg.max_timeout.is_zero()
-                        || (n + new_timeout) <= self.read_max_timeout
-                    {
-                        self.io.stop_timer();
-                        self.io.start_timer(new_timeout);
+                    // update max timeout
+                    if !cfg.max_timeout.is_zero() {
+                        self.read_max_timeout =
+                            Seconds(self.read_max_timeout.0.saturating_sub(cfg.timeout.0));
+                    }
+
+                    // start timer for next period
+                    if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
+                        self.io.start_timer_secs(new_timeout);
 
                         // store current buf size for future rate calculation
                         self.read_remains = bytes;
@@ -912,7 +911,7 @@ where
             if remains == 0 {
                 if self.codec.keepalive() {
                     if self.config.keep_alive_enabled() {
-                        self.io.start_timer(self.config.keep_alive);
+                        self.io.start_timer_secs(self.config.keep_alive);
                     }
                 } else {
                     self.io.close();
@@ -924,10 +923,8 @@ where
                 self.flags.insert(Flags::READ_HDRS_TIMEOUT);
 
                 self.read_remains = 0;
-                self.io.start_timer(cfg.timeout);
-                if !cfg.max_timeout.is_zero() {
-                    self.read_max_timeout = now() + cfg.max_timeout;
-                }
+                self.read_max_timeout = cfg.max_timeout;
+                self.io.start_timer_secs(cfg.timeout);
             }
         }
 
@@ -968,7 +965,7 @@ mod tests {
     {
         let config = ServiceConfig::new(
             Seconds(5).into(),
-            Millis(1_000),
+            Seconds(1),
             Seconds::ZERO,
             Millis(5_000),
             Config::server(),
@@ -1021,7 +1018,7 @@ mod tests {
         let data2 = data.clone();
         let config = ServiceConfig::new(
             Seconds(5).into(),
-            Millis(1_000),
+            Seconds(1),
             Seconds::ZERO,
             Millis(5_000),
             Config::server(),
@@ -1432,7 +1429,7 @@ mod tests {
 
         let mut config = ServiceConfig::new(
             Seconds(5).into(),
-            Millis(1_000),
+            Seconds(1),
             Seconds::ZERO,
             Millis(5_000),
             Config::server(),
