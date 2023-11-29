@@ -104,9 +104,7 @@ impl IoRef {
     where
         U: Encoder,
     {
-        let flags = self.0.flags.get();
-
-        if !flags.contains(Flags::IO_STOPPING) {
+        if !self.is_closed() {
             self.with_write_buf(|buf| {
                 // make sure we've got room
                 self.memory_pool().resize_write_buf(buf);
@@ -114,14 +112,18 @@ impl IoRef {
                 // encode item and wake write task
                 codec.encode_vec(item, buf)
             })
+            // .with_write_buf() could return io::Error<Result<(), U::Error>>,
+            // in that case mark io as failed
             .map_or_else(
                 |err| {
+                    log::trace!("Got io error while encoding, error: {:?}", err);
                     self.0.io_stopped(Some(err));
                     Ok(())
                 },
                 |item| item,
             )
         } else {
+            log::trace!("Io is closed/closing, skip frame encoding");
             Ok(())
         }
     }
@@ -234,16 +236,21 @@ impl IoRef {
     pub fn stop_timer(&self) {
         if self.flags().contains(Flags::TIMEOUT) {
             log::debug!("unregister timer");
+            self.0.remove_flags(Flags::TIMEOUT);
             timer::unregister(self.0.keepalive.get(), self)
         }
     }
 
     #[doc(hidden)]
     #[deprecated(since = "0.3.6")]
+    #[inline]
     /// Start keep-alive timer
     pub fn start_keepalive_timer(&self, timeout: time::Duration) {
         self.start_timer(timeout);
     }
+
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.6")]
     #[inline]
     /// Stop keep-alive timer
     pub fn stop_keepalive_timer(&self) {

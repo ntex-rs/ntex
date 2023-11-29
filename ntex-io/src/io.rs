@@ -697,8 +697,9 @@ impl<F> ops::Deref for Io<F> {
 
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
-        self.stop_keepalive_timer();
-        if self.1.is_set() {
+        self.stop_timer();
+
+        if !self.0.flags().contains(Flags::IO_STOPPED) && self.1.is_set() {
             log::trace!(
                 "io is dropped, force stopping io streams {:?}",
                 self.0.flags()
