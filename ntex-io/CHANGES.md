@@ -1,5 +1,11 @@
 # Changes
 
+## [0.3.12] - 2023-11-29
+
+* Refactor io timers
+
+* Tune logging
+
 ## [0.3.11] - 2023-11-25
 
 * Fix keep-alive timeout handling

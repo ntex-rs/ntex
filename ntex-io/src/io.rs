@@ -1,16 +1,16 @@
 use std::cell::Cell;
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc, time};
+use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 
 use ntex_bytes::{PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::time::{now, Seconds};
-use ntex_util::{future::poll_fn, future::Either, task::LocalWaker};
+use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Seconds};
 
 use crate::buf::Stack;
 use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::seal::Sealed;
 use crate::tasks::{ReadContext, WriteContext};
+use crate::timer::TimerHandle;
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 bitflags::bitflags! {
@@ -70,7 +70,7 @@ pub(crate) struct IoState {
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
-    pub(super) keepalive: Cell<time::Instant>,
+    pub(super) keepalive: Cell<TimerHandle>,
 }
 
 impl IoState {
@@ -201,7 +201,7 @@ impl Io {
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: Cell::new(None),
-            keepalive: Cell::new(now()),
+            keepalive: Cell::new(TimerHandle::default()),
         });
 
         let filter = Box::new(Base::new(IoRef(inner.clone())));
@@ -257,7 +257,7 @@ impl<F> Io<F> {
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
             on_disconnect: Cell::new(None),
-            keepalive: Cell::new(now()),
+            keepalive: Cell::new(TimerHandle::default()),
         });
 
         let state = mem::replace(&mut self.0, IoRef(inner));
@@ -634,7 +634,7 @@ impl<F> Io<F> {
     /// Wait for status updates
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let flags = self.flags();
-        if flags.contains(Flags::IO_STOPPED | Flags::IO_STOPPING) {
+        if flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
             Poll::Ready(IoStatusUpdate::PeerGone(self.error()))
         } else if flags.contains(Flags::DSP_STOP) {
             self.0 .0.remove_flags(Flags::DSP_STOP);
@@ -697,8 +697,9 @@ impl<F> ops::Deref for Io<F> {
 
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
-        self.stop_keepalive_timer();
-        if self.1.is_set() {
+        self.stop_timer();
+
+        if !self.0.flags().contains(Flags::IO_STOPPED) && self.1.is_set() {
             log::trace!(
                 "io is dropped, force stopping io streams {:?}",
                 self.0.flags()

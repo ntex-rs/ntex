@@ -32,6 +32,7 @@ struct ReadRate {
 }
 
 impl Config {
+    #[allow(clippy::wrong_self_convention)]
     fn into_cfg(&self) -> http::ServiceConfig {
         let mut svc_cfg = http::ServiceConfig::default();
         svc_cfg.keepalive(self.keep_alive);
@@ -186,7 +187,7 @@ where
                 cfg.headers_read_rate = None;
             } else {
                 let mut rate = cfg.headers_read_rate.unwrap_or_default();
-                rate.timeout = timeout.into();
+                rate.timeout = timeout;
                 cfg.headers_read_rate = Some(rate);
             }
         }
@@ -258,8 +259,8 @@ where
         if !timeout.is_zero() {
             self.config.lock().unwrap().payload_read_rate = Some(ReadRate {
                 rate,
-                timeout: timeout.into(),
-                max_timeout: max_timeout.into(),
+                timeout,
+                max_timeout,
             });
         } else {
             self.config.lock().unwrap().payload_read_rate = None;

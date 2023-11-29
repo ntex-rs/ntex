@@ -4,8 +4,7 @@ use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll, time}
 use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Pipeline, Service};
-use ntex_util::time::{now, Seconds};
-use ntex_util::{future::Either, ready, spawn};
+use ntex_util::{future::Either, ready, spawn, time::Seconds};
 
 use crate::{Decoded, DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
 
@@ -17,31 +16,39 @@ pub struct DispatcherConfig(Rc<DispatcherConfigInner>);
 
 #[derive(Debug)]
 struct DispatcherConfigInner {
-    keepalive_timeout: Cell<time::Duration>,
+    keepalive_timeout: Cell<Seconds>,
     disconnect_timeout: Cell<Seconds>,
     frame_read_enabled: Cell<bool>,
     frame_read_rate: Cell<u16>,
-    frame_read_timeout: Cell<time::Duration>,
-    frame_read_max_timeout: Cell<time::Duration>,
+    frame_read_timeout: Cell<Seconds>,
+    frame_read_max_timeout: Cell<Seconds>,
 }
 
 impl Default for DispatcherConfig {
     fn default() -> Self {
         DispatcherConfig(Rc::new(DispatcherConfigInner {
-            keepalive_timeout: Cell::new(Seconds(30).into()),
+            keepalive_timeout: Cell::new(Seconds(30)),
             disconnect_timeout: Cell::new(Seconds(1)),
             frame_read_rate: Cell::new(0),
             frame_read_enabled: Cell::new(false),
-            frame_read_timeout: Cell::new(Seconds::ZERO.into()),
-            frame_read_max_timeout: Cell::new(Seconds::ZERO.into()),
+            frame_read_timeout: Cell::new(Seconds::ZERO),
+            frame_read_max_timeout: Cell::new(Seconds::ZERO),
         }))
     }
 }
 
 impl DispatcherConfig {
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.12")]
     #[inline]
     /// Get keep-alive timeout
     pub fn keepalive_timeout(&self) -> time::Duration {
+        self.0.keepalive_timeout.get().into()
+    }
+
+    #[inline]
+    /// Get keep-alive timeout
+    pub fn keepalive_timeout_secs(&self) -> Seconds {
         self.0.keepalive_timeout.get()
     }
 
@@ -51,9 +58,25 @@ impl DispatcherConfig {
         self.0.disconnect_timeout.get()
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.12")]
     #[inline]
     /// Get frame read rate
     pub fn frame_read_rate(&self) -> Option<(time::Duration, time::Duration, u16)> {
+        if self.0.frame_read_enabled.get() {
+            Some((
+                self.0.frame_read_timeout.get().into(),
+                self.0.frame_read_max_timeout.get().into(),
+                self.0.frame_read_rate.get(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    /// Get frame read rate
+    pub fn frame_read_rate_params(&self) -> Option<(Seconds, Seconds, u16)> {
         if self.0.frame_read_enabled.get() {
             Some((
                 self.0.frame_read_timeout.get(),
@@ -71,7 +94,7 @@ impl DispatcherConfig {
     ///
     /// By default keep-alive timeout is set to 30 seconds.
     pub fn set_keepalive_timeout(&self, timeout: Seconds) -> &Self {
-        self.0.keepalive_timeout.set(timeout.into());
+        self.0.keepalive_timeout.set(timeout);
         self
     }
 
@@ -102,8 +125,8 @@ impl DispatcherConfig {
         rate: u16,
     ) -> &Self {
         self.0.frame_read_enabled.set(!timeout.is_zero());
-        self.0.frame_read_timeout.set(timeout.into());
-        self.0.frame_read_max_timeout.set(max_timeout.into());
+        self.0.frame_read_timeout.set(timeout);
+        self.0.frame_read_max_timeout.set(max_timeout);
         self.0.frame_read_rate.set(rate);
         self
     }
@@ -145,7 +168,7 @@ where
     cfg: DispatcherConfig,
     read_remains: u32,
     read_remains_prev: u32,
-    read_max_timeout: time::Instant,
+    read_max_timeout: Seconds,
 }
 
 pub(crate) struct DispatcherShared<S, U>
@@ -226,7 +249,7 @@ where
                 flags: Flags::empty(),
                 read_remains: 0,
                 read_remains_prev: 0,
-                read_max_timeout: now(),
+                read_max_timeout: Seconds::ZERO,
                 st: DispatcherState::Processing,
             },
         }
@@ -541,14 +564,19 @@ where
         } else if self.read_remains == 0 && decoded.remains == 0 {
             // no new data, start keep-alive timer
             if !self.flags.contains(Flags::KA_TIMEOUT) {
-                log::debug!("Start keep-alive timer {:?}", self.cfg.keepalive_timeout());
+                log::debug!(
+                    "Start keep-alive timer {:?}",
+                    self.cfg.keepalive_timeout_secs()
+                );
                 self.flags.insert(Flags::KA_TIMEOUT);
-                self.shared.io.start_timer(self.cfg.keepalive_timeout());
+                self.shared
+                    .io
+                    .start_timer_secs(self.cfg.keepalive_timeout_secs());
             }
         } else if self.flags.contains(Flags::READ_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
-        } else if let Some((timeout, max, _)) = self.cfg.frame_read_rate() {
+        } else if let Some((timeout, max, _)) = self.cfg.frame_read_rate_params() {
             // we got new data but not enough to parse single frame
             // start read timer
             self.flags.remove(Flags::KA_TIMEOUT);
@@ -556,10 +584,8 @@ where
 
             self.read_remains = decoded.remains as u32;
             self.read_remains_prev = 0;
-            if !max.is_zero() {
-                self.read_max_timeout = now() + max;
-            }
-            self.shared.io.start_timer(timeout);
+            self.read_max_timeout = max;
+            self.shared.io.start_timer_secs(timeout);
         }
     }
 
@@ -568,7 +594,7 @@ where
 
         // check read timer
         if self.flags.contains(Flags::READ_TIMEOUT) {
-            if let Some((timeout, max, rate)) = self.cfg.frame_read_rate() {
+            if let Some((timeout, max, rate)) = self.cfg.frame_read_rate_params() {
                 let total = (self.read_remains - self.read_remains_prev)
                     .try_into()
                     .unwrap_or(u16::MAX);
@@ -578,9 +604,14 @@ where
                     self.read_remains_prev = self.read_remains;
                     self.read_remains = 0;
 
-                    if max.is_zero() || (!max.is_zero() && now() < self.read_max_timeout) {
+                    if !max.is_zero() {
+                        self.read_max_timeout =
+                            Seconds(self.read_max_timeout.0.saturating_sub(timeout.0));
+                    }
+
+                    if max.is_zero() || !self.read_max_timeout.is_zero() {
                         log::trace!("Frame read rate {:?}, extend timer", total);
-                        self.shared.io.start_timer(timeout);
+                        self.shared.io.start_timer_secs(timeout);
                         return Ok(());
                     }
                     log::trace!("Max payload timeout has been reached");
@@ -689,9 +720,9 @@ mod tests {
                         error: None,
                         flags: super::Flags::empty(),
                         st: DispatcherState::Processing,
-                        read_max_timeout: time::Instant::now(),
                         read_remains: 0,
                         read_remains_prev: 0,
+                        read_max_timeout: Seconds::ZERO,
                         pool,
                         shared,
                         cfg,
@@ -1030,7 +1061,6 @@ mod tests {
 
     #[ntex::test]
     async fn test_keepalive2() {
-        let _ = env_logger::try_init();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 

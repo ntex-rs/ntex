@@ -2,6 +2,7 @@ use std::{any, fmt, hash, io, time};
 
 use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
+use ntex_util::time::Seconds;
 
 use super::{io::Flags, timer, types, Decoded, Filter, IoRef, OnDisconnect, WriteBuf};
 
@@ -37,7 +38,7 @@ impl IoRef {
         self.0
             .flags
             .get()
-            .contains(Flags::IO_STOPPING | Flags::IO_STOPPED)
+            .intersects(Flags::IO_STOPPING | Flags::IO_STOPPED)
     }
 
     #[inline]
@@ -104,9 +105,7 @@ impl IoRef {
     where
         U: Encoder,
     {
-        let flags = self.0.flags.get();
-
-        if !flags.contains(Flags::IO_STOPPING) {
+        if !self.is_closed() {
             self.with_write_buf(|buf| {
                 // make sure we've got room
                 self.memory_pool().resize_write_buf(buf);
@@ -114,14 +113,18 @@ impl IoRef {
                 // encode item and wake write task
                 codec.encode_vec(item, buf)
             })
+            // .with_write_buf() could return io::Error<Result<(), U::Error>>,
+            // in that case mark io as failed
             .map_or_else(
                 |err| {
+                    log::trace!("Got io error while encoding, error: {:?}", err);
                     self.0.io_stopped(Some(err));
                     Ok(())
                 },
                 |item| item,
             )
         } else {
+            log::trace!("Io is closed/closing, skip frame encoding");
             Ok(())
         }
     }
@@ -209,23 +212,41 @@ impl IoRef {
     }
 
     #[inline]
+    /// current timer handle
+    pub fn timer_handle(&self) -> timer::TimerHandle {
+        self.0.keepalive.get()
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.12")]
+    #[inline]
     /// current timer deadline
     pub fn timer_deadline(&self) -> time::Instant {
-        self.0.keepalive.get()
+        self.0.keepalive.get().instant()
     }
 
     #[inline]
     /// Start timer
     pub fn start_timer(&self, timeout: time::Duration) {
+        self.start_timer_secs(Seconds(timeout.as_secs() as u16));
+    }
+
+    #[inline]
+    /// Start timer
+    pub fn start_timer_secs(&self, timeout: Seconds) -> timer::TimerHandle {
         if self.flags().contains(Flags::TIMEOUT) {
             timer::unregister(self.0.keepalive.get(), self);
         }
+
         if !timeout.is_zero() {
             log::debug!("start timer {:?}", timeout);
             self.0.insert_flags(Flags::TIMEOUT);
-            self.0.keepalive.set(timer::register(timeout, self));
+            let hnd = timer::register(timeout, self);
+            self.0.keepalive.set(hnd);
+            hnd
         } else {
             self.0.remove_flags(Flags::TIMEOUT);
+            Default::default()
         }
     }
 
@@ -234,16 +255,21 @@ impl IoRef {
     pub fn stop_timer(&self) {
         if self.flags().contains(Flags::TIMEOUT) {
             log::debug!("unregister timer");
+            self.0.remove_flags(Flags::TIMEOUT);
             timer::unregister(self.0.keepalive.get(), self)
         }
     }
 
     #[doc(hidden)]
     #[deprecated(since = "0.3.6")]
+    #[inline]
     /// Start keep-alive timer
     pub fn start_keepalive_timer(&self, timeout: time::Duration) {
         self.start_timer(timeout);
     }
+
+    #[doc(hidden)]
+    #[deprecated(since = "0.3.6")]
     #[inline]
     /// Stop keep-alive timer
     pub fn stop_keepalive_timer(&self) {

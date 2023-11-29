@@ -30,6 +30,7 @@ pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{ReadContext, WriteContext};
+pub use self::timer::TimerHandle;
 pub use self::utils::{filter, seal, Decoded};
 
 /// Status for read task
