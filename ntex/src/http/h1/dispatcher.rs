@@ -1413,7 +1413,6 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_payload_timeout() {
-        env_logger::init();
         let mark = Arc::new(AtomicUsize::new(0));
         let mark2 = mark.clone();
 

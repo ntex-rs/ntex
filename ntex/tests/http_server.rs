@@ -173,7 +173,6 @@ async fn test_slow_request() {
 
 #[ntex::test]
 async fn test_slow_request2() {
-    env_logger::try_init();
     const DATA: &[u8] = b"GET /test/tests/test HTTP/1.1\r\n";
 
     let srv = test_server(|| {
