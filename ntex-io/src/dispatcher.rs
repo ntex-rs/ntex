@@ -749,6 +749,10 @@ mod tests {
 
         client.close().await;
         assert!(client.is_server_dropped());
+
+        assert!(
+            format!("{:?}", super::Flags::NO_KA_TIMEOUT.clone()).contains("NO_KA_TIMEOUT")
+        );
     }
 
     #[ntex::test]
