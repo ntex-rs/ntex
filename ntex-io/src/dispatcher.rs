@@ -679,6 +679,7 @@ mod tests {
         ) -> (Self, State) {
             let state = Io::new(io);
             let pool = state.memory_pool().pool();
+            state.set_disconnect_timeout(cfg.disconnect_timeout());
 
             let flags = if cfg.keepalive_timeout_secs().is_zero() {
                 super::Flags::NO_KA_TIMEOUT
@@ -994,6 +995,8 @@ mod tests {
 
     #[ntex::test]
     async fn test_keepalive() {
+        let _ = env_logger::try_init();
+
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -1003,6 +1006,7 @@ mod tests {
 
         let cfg = DispatcherConfig::default()
             .set_disconnect_timeout(Seconds(1))
+            .set_keepalive_timeout(Seconds(1))
             .clone();
 
         let (disp, state) = Dispatcher::debug_cfg(
@@ -1043,8 +1047,6 @@ mod tests {
 
     #[ntex::test]
     async fn test_keepalive2() {
-        let _ = env_logger::try_init();
-
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
