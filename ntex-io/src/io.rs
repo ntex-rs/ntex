@@ -439,11 +439,6 @@ impl<F> Io<F> {
 
             let ready = flags.contains(Flags::RD_READY);
             if flags.intersects(Flags::RD_BUF_FULL | Flags::RD_PAUSED) {
-                if flags.intersects(Flags::RD_BUF_FULL) {
-                    log::trace!("read back-pressure is disabled, wake io task");
-                } else {
-                    log::trace!("read task is resumed, wake io task");
-                }
                 flags.remove(Flags::RD_READY | Flags::RD_BUF_FULL | Flags::RD_PAUSED);
                 self.0 .0.read_task.wake();
                 self.0 .0.flags.set(flags);
