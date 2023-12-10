@@ -234,18 +234,26 @@ impl IoRef {
     #[inline]
     /// Start timer
     pub fn start_timer_secs(&self, timeout: Seconds) -> timer::TimerHandle {
-        if self.flags().contains(Flags::TIMEOUT) {
-            timer::unregister(self.0.keepalive.get(), self);
-        }
-
         if !timeout.is_zero() {
-            log::debug!("start timer {:?}", timeout);
-            self.0.insert_flags(Flags::TIMEOUT);
-            let hnd = timer::register(timeout, self);
-            self.0.keepalive.set(hnd);
-            hnd
+            if self.flags().contains(Flags::TIMEOUT) {
+                let old_hnd = self.0.keepalive.get();
+                let hnd = timer::update(old_hnd, timeout, self);
+                if old_hnd != hnd {
+                    self.0.keepalive.set(hnd);
+                }
+                hnd
+            } else {
+                log::debug!("start timer {:?}", timeout);
+                self.0.insert_flags(Flags::TIMEOUT);
+                let hnd = timer::register(timeout, self);
+                self.0.keepalive.set(hnd);
+                hnd
+            }
         } else {
-            self.0.remove_flags(Flags::TIMEOUT);
+            if self.flags().contains(Flags::TIMEOUT) {
+                self.0.remove_flags(Flags::TIMEOUT);
+                timer::unregister(self.0.keepalive.get(), self);
+            }
             Default::default()
         }
     }
