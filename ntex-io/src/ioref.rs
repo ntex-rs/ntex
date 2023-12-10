@@ -239,6 +239,7 @@ impl IoRef {
                 let old_hnd = self.0.keepalive.get();
                 let hnd = timer::update(old_hnd, timeout, self);
                 if old_hnd != hnd {
+                    log::debug!("update timer {:?}", timeout);
                     self.0.keepalive.set(hnd);
                 }
                 hnd
