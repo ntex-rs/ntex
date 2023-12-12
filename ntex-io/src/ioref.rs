@@ -214,7 +214,7 @@ impl IoRef {
     #[inline]
     /// current timer handle
     pub fn timer_handle(&self) -> timer::TimerHandle {
-        self.0.keepalive.get()
+        self.0.timeout.get()
     }
 
     #[doc(hidden)]
@@ -222,7 +222,7 @@ impl IoRef {
     #[inline]
     /// current timer deadline
     pub fn timer_deadline(&self) -> time::Instant {
-        self.0.keepalive.get().instant()
+        self.0.timeout.get().instant()
     }
 
     #[inline]
@@ -234,37 +234,39 @@ impl IoRef {
     #[inline]
     /// Start timer
     pub fn start_timer_secs(&self, timeout: Seconds) -> timer::TimerHandle {
+        let cur_hnd = self.0.timeout.get();
+
         if !timeout.is_zero() {
-            if self.flags().contains(Flags::TIMEOUT) {
-                let old_hnd = self.0.keepalive.get();
-                let hnd = timer::update(old_hnd, timeout, self);
-                if old_hnd != hnd {
-                    self.0.keepalive.set(hnd);
+            if cur_hnd.is_set() {
+                let hnd = timer::update(cur_hnd, timeout, self);
+                if hnd != cur_hnd {
+                    log::debug!("update timer {:?}", timeout);
+                    self.0.timeout.set(hnd);
                 }
                 hnd
             } else {
                 log::debug!("start timer {:?}", timeout);
-                self.0.insert_flags(Flags::TIMEOUT);
                 let hnd = timer::register(timeout, self);
-                self.0.keepalive.set(hnd);
+                self.0.timeout.set(hnd);
                 hnd
             }
         } else {
-            if self.flags().contains(Flags::TIMEOUT) {
-                self.0.remove_flags(Flags::TIMEOUT);
-                timer::unregister(self.0.keepalive.get(), self);
+            if cur_hnd.is_set() {
+                timer::unregister(cur_hnd, self);
+                self.0.timeout.set(timer::TimerHandle::ZERO);
             }
-            Default::default()
+            timer::TimerHandle::ZERO
         }
     }
 
     #[inline]
     /// Stop timer
     pub fn stop_timer(&self) {
-        if self.flags().contains(Flags::TIMEOUT) {
+        let hnd = self.0.timeout.get();
+        if hnd.is_set() {
             log::debug!("unregister timer");
-            self.0.remove_flags(Flags::TIMEOUT);
-            timer::unregister(self.0.keepalive.get(), self)
+            self.0.timeout.set(timer::TimerHandle::ZERO);
+            timer::unregister(hnd, self)
         }
     }
 

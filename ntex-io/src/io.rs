@@ -45,9 +45,6 @@ bitflags::bitflags! {
         const DSP_STOP            = 0b0001_0000_0000_0000;
         /// timeout occured
         const DSP_TIMEOUT         = 0b0010_0000_0000_0000;
-
-        /// timer started
-        const TIMEOUT             = 0b1000_0000_0000_0000;
     }
 }
 
@@ -68,9 +65,9 @@ pub(crate) struct IoState {
     pub(super) buffer: Stack,
     pub(super) filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
+    pub(super) timeout: Cell<TimerHandle>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
-    pub(super) keepalive: Cell<TimerHandle>,
 }
 
 impl IoState {
@@ -95,7 +92,6 @@ impl IoState {
         log::trace!("timeout, notify dispatcher");
 
         let mut flags = self.flags.get();
-        flags.remove(Flags::TIMEOUT);
         if !flags.contains(Flags::DSP_TIMEOUT) {
             flags.insert(Flags::DSP_TIMEOUT);
             self.flags.set(flags);
@@ -170,7 +166,7 @@ impl fmt::Debug for IoState {
             .field("flags", &self.flags)
             .field("pool", &self.pool)
             .field("disconnect_timeout", &self.disconnect_timeout)
-            .field("keepalive", &self.keepalive)
+            .field("timeout", &self.timeout)
             .field("error", &err)
             .field("buffer", &self.buffer)
             .finish();
@@ -200,8 +196,8 @@ impl Io {
             buffer: Stack::new(),
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
+            timeout: Cell::new(TimerHandle::default()),
             on_disconnect: Cell::new(None),
-            keepalive: Cell::new(TimerHandle::default()),
         });
 
         let filter = Box::new(Base::new(IoRef(inner.clone())));
@@ -256,8 +252,8 @@ impl<F> Io<F> {
             buffer: Stack::new(),
             filter: Cell::new(NullFilter::get()),
             handle: Cell::new(None),
+            timeout: Cell::new(TimerHandle::default()),
             on_disconnect: Cell::new(None),
-            keepalive: Cell::new(TimerHandle::default()),
         });
 
         let state = mem::replace(&mut self.0, IoRef(inner));

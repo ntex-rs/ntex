@@ -307,6 +307,8 @@ where
 
         // handle memory pool pressure
         if slf.pool.poll_ready(cx).is_pending() {
+            slf.flags.remove(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT);
+            slf.shared.io.stop_timer();
             slf.shared.io.pause();
             return Poll::Pending;
         }
@@ -482,18 +484,14 @@ where
                 log::trace!("service is not ready, register dispatch task");
 
                 // remove all timers
-                self.flags.remove(Flags::READ_TIMEOUT);
+                self.flags.remove(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT);
                 self.shared.io.stop_timer();
 
                 match ready!(self.shared.io.poll_read_pause(cx)) {
                     IoStatusUpdate::KeepAlive => {
                         log::trace!("keep-alive error, stopping dispatcher during pause");
                         self.st = DispatcherState::Stop;
-                        if self.flags.contains(Flags::READ_TIMEOUT) {
-                            Poll::Ready(PollService::Item(DispatchItem::ReadTimeout))
-                        } else {
-                            Poll::Ready(PollService::Item(DispatchItem::KeepAliveTimeout))
-                        }
+                        Poll::Ready(PollService::Item(DispatchItem::KeepAliveTimeout))
                     }
                     IoStatusUpdate::Stop => {
                         log::trace!("dispatcher is instructed to stop during pause");
