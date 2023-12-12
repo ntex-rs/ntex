@@ -26,6 +26,12 @@ thread_local! {
 pub struct TimerHandle(u32);
 
 impl TimerHandle {
+    pub const ZERO: TimerHandle = TimerHandle(0);
+
+    pub fn is_set(&self) -> bool {
+        self.0 != 0
+    }
+
     pub fn remains(&self) -> Seconds {
         TIMER.with(|timer| {
             let cur = timer.current.get();
@@ -67,13 +73,6 @@ impl InnerMut {
     fn unregister(&mut self, hnd: TimerHandle, io: &IoRef) {
         if let Some(states) = self.notifications.get_mut(&hnd.0) {
             states.remove(&io.0);
-            if states.is_empty() {
-                if let Some(items) = self.notifications.remove(&hnd.0) {
-                    if self.cache.len() <= CAP {
-                        self.cache.push_back(items);
-                    }
-                }
-            }
         }
     }
 }
@@ -134,6 +133,7 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
                         // notify io dispatcher
                         let current = timer.current.get();
                         let mut inner = timer.storage.borrow_mut();
+                        println!("1 - ====================\n{:?}", inner.notifications);
                         while let Some(key) = inner.notifications.keys().next() {
                             let key = *key;
                             if key <= current {
@@ -146,6 +146,7 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
                                 break;
                             }
                         }
+                        println!("2 - ====================\n{:?}", inner.notifications);
 
                         // new tick
                         if inner.notifications.is_empty() {
