@@ -66,6 +66,7 @@ pub(crate) struct IoState {
     pub(super) filter: Cell<&'static dyn Filter>,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) timeout: Cell<TimerHandle>,
+    pub(super) tag: Cell<&'static str>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
 }
@@ -89,7 +90,7 @@ impl IoState {
     }
 
     pub(super) fn notify_timeout(&self) {
-        log::trace!("timeout, notify dispatcher");
+        log::trace!("{}Timeout, notify dispatcher", self.tag.get());
 
         let mut flags = self.flags.get();
         if !flags.contains(Flags::DSP_TIMEOUT) {
@@ -128,7 +129,11 @@ impl IoState {
             .get()
             .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
         {
-            log::trace!("initiate io shutdown {:?}", self.flags.get());
+            log::trace!(
+                "{}Initiate io shutdown {:?}",
+                self.tag.get(),
+                self.flags.get()
+            );
             self.insert_flags(Flags::IO_STOPPING_FILTERS);
             self.read_task.wake();
         }
@@ -198,6 +203,7 @@ impl Io {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             on_disconnect: Cell::new(None),
+            tag: Cell::new(""),
         });
 
         let filter = Box::new(Base::new(IoRef(inner.clone())));
@@ -254,6 +260,7 @@ impl<F> Io<F> {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             on_disconnect: Cell::new(None),
+            tag: Cell::new(""),
         });
 
         let state = mem::replace(&mut self.0, IoRef(inner));
@@ -544,7 +551,10 @@ impl<F> Io<F> {
                 match self.poll_read_ready(cx) {
                     Poll::Pending | Poll::Ready(Ok(Some(()))) => {
                         if log::log_enabled!(log::Level::Debug) && decoded.remains != 0 {
-                            log::debug!("not enough data to decode next frame");
+                            log::debug!(
+                                "{}Not enough data to decode next frame",
+                                self.tag()
+                            );
                         }
                         Ok(decoded)
                     }
@@ -692,7 +702,8 @@ impl<F> Drop for Io<F> {
 
         if !self.0.flags().contains(Flags::IO_STOPPED) && self.1.is_set() {
             log::trace!(
-                "io is dropped, force stopping io streams {:?}",
+                "{}Io is dropped, force stopping io streams {:?}",
+                self.tag(),
                 self.0.flags()
             );
 

@@ -3,7 +3,7 @@ use std::{net::SocketAddr, rc::Rc, task::Context, task::Poll};
 use log::error;
 
 use crate::service::{boxed, Service, ServiceCtx, ServiceFactory};
-use crate::util::{BoxFuture, Pool, PoolId};
+use crate::util::{BoxFuture, Pool, PoolId, PoolRef};
 use crate::{io::Io, time::Millis};
 
 use super::{counter::CounterGuard, socket::Stream, Config, Token};
@@ -27,6 +27,8 @@ pub(super) trait StreamServiceFactory: Send + Clone + 'static {
 pub(super) trait InternalServiceFactory: Send {
     fn name(&self, token: Token) -> &str;
 
+    fn set_tag(&mut self, token: Token, tag: &'static str);
+
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory>;
 
     fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>;
@@ -38,13 +40,17 @@ pub(super) type BoxedServerService =
 #[derive(Clone)]
 pub(super) struct StreamService<T> {
     service: Rc<T>,
+    tag: &'static str,
     pool: Pool,
+    pool_ref: PoolRef,
 }
 
 impl<T> StreamService<T> {
-    pub(crate) fn new(service: T, pid: PoolId) -> Self {
+    pub(crate) fn new(service: T, tag: &'static str, pid: PoolId) -> Self {
         StreamService {
+            tag,
             pool: pid.pool(),
+            pool_ref: pid.pool_ref(),
             service: Rc::new(service),
         }
     }
@@ -85,7 +91,8 @@ where
 
                     if let Ok(stream) = stream {
                         let stream: Io<_> = stream;
-                        stream.set_memory_pool(self.pool.pool_ref());
+                        stream.set_tag(self.tag);
+                        stream.set_memory_pool(self.pool_ref);
                         let _ = ctx.call(self.service.as_ref(), stream).await;
                         drop(guard);
                         Ok(())
@@ -101,6 +108,7 @@ where
 
 pub(super) struct Factory<F: StreamServiceFactory> {
     name: String,
+    tag: &'static str,
     inner: F,
     token: Token,
     addr: SocketAddr,
@@ -115,12 +123,14 @@ where
         token: Token,
         inner: F,
         addr: SocketAddr,
+        tag: &'static str,
     ) -> Box<dyn InternalServiceFactory> {
         Box::new(Self {
             name,
             token,
             inner,
             addr,
+            tag,
         })
     }
 }
@@ -133,17 +143,23 @@ where
         &self.name
     }
 
+    fn set_tag(&mut self, _: Token, tag: &'static str) {
+        self.tag = tag;
+    }
+
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory> {
         Box::new(Self {
             name: self.name.clone(),
             inner: self.inner.clone(),
             token: self.token,
             addr: self.addr,
+            tag: self.tag,
         })
     }
 
     fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
         let token = self.token;
+        let tag = self.tag;
         let cfg = Config::default();
         let pool = cfg.get_pool_id();
         let factory = self.inner.create(cfg);
@@ -151,7 +167,7 @@ where
         Box::pin(async move {
             match factory.create(()).await {
                 Ok(inner) => {
-                    let service = boxed::service(StreamService::new(inner, pool));
+                    let service = boxed::service(StreamService::new(inner, tag, pool));
                     Ok(vec![(token, service)])
                 }
                 Err(_) => Err(()),
@@ -163,6 +179,10 @@ where
 impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
     fn name(&self, token: Token) -> &str {
         self.as_ref().name(token)
+    }
+
+    fn set_tag(&mut self, token: Token, tag: &'static str) {
+        self.as_mut().set_tag(token, tag);
     }
 
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory> {

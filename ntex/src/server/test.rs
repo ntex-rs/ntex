@@ -55,6 +55,7 @@ where
         sys.run(|| {
             Server::build()
                 .listen("test", tcp, move |_| factory())?
+                .set_tag("test", "TEST: ")
                 .workers(1)
                 .disable_signals()
                 .run();

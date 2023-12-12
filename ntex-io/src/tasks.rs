@@ -46,7 +46,8 @@ impl ReadContext {
                         // dest buffer has new data, wake up dispatcher
                         if inner.buffer.read_destination_size() >= hw {
                             log::trace!(
-                                "io read buffer is too large {}, enable read back-pressure",
+                                "{}Io read buffer is too large {}, enable read back-pressure",
+                                self.0.tag(),
                                 total
                             );
                             inner.insert_flags(Flags::RD_READY | Flags::RD_BUF_FULL);
@@ -61,7 +62,7 @@ impl ReadContext {
                                 inner.read_task.wake();
                             }
                         }
-                        log::trace!("new {} bytes available, wakeup dispatcher", nbytes);
+                        log::trace!("{}New {} bytes available, wakeup dispatcher", self.0.tag(), nbytes);
                         inner.dispatch_task.wake();
                     } else {
                         if nbytes >= hw {
