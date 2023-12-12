@@ -133,7 +133,6 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
                         // notify io dispatcher
                         let current = timer.current.get();
                         let mut inner = timer.storage.borrow_mut();
-                        println!("1 - ====================\n{:?}", inner.notifications);
                         while let Some(key) = inner.notifications.keys().next() {
                             let key = *key;
                             if key <= current {
@@ -146,7 +145,6 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
                                 break;
                             }
                         }
-                        println!("2 - ====================\n{:?}", inner.notifications);
 
                         // new tick
                         if inner.notifications.is_empty() {
