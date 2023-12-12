@@ -64,19 +64,20 @@ impl<T: Address + 'static> Connector<T> {
         let connector = self.inner.clone();
 
         let io = conn.await?;
-        trace!("SSL Handshake start for: {:?}", host);
+        trace!("{}SSL Handshake start for: {:?}", io.tag(), host);
 
+        let tag = io.tag();
         let host = ServerName::try_from(host.as_str())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
         let connector = connector.server_name(host.clone());
 
         match connector.create(io).await {
             Ok(io) => {
-                trace!("TLS Handshake success: {:?}", &host);
+                trace!("{}TLS Handshake success: {:?}", tag, &host);
                 Ok(io)
             }
             Err(e) => {
-                trace!("TLS Handshake error: {:?}", e);
+                trace!("{}TLS Handshake error: {:?}", tag, e);
                 Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
             }
         }

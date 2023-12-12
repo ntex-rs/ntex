@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.3] - 2023-12-12
+
+* Add io tag support
+
 ## [0.3.2] - 2023-10-02
 
 * Add `Clone` impl for `Connect<T>` type

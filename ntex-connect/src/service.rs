@@ -12,6 +12,7 @@ use crate::{net::tcp_connect_in, Address, Connect, ConnectError, Resolver};
 pub struct Connector<T> {
     resolver: Resolver<T>,
     pool: PoolRef,
+    tag: &'static str,
 }
 
 impl<T> Connector<T> {
@@ -20,15 +21,24 @@ impl<T> Connector<T> {
         Connector {
             resolver: Resolver::new(),
             pool: PoolId::P0.pool_ref(),
+            tag: "",
         }
     }
 
-    /// Set memory pool.
+    /// Set memory pool
     ///
     /// Use specified memory pool for memory allocations. By default P0
     /// memory pool is used.
     pub fn memory_pool(mut self, id: PoolId) -> Self {
         self.pool = id.pool_ref();
+        self
+    }
+
+    /// Set io tag
+    ///
+    /// Set tag to opened io object.
+    pub fn tag(mut self, tag: &'static str) -> Self {
+        self.tag = tag;
         self
     }
 }
@@ -41,6 +51,7 @@ impl<T: Address> Connector<T> {
     {
         ConnectServiceResponse {
             state: ConnectState::Resolve(Box::pin(self.resolver.lookup(message.into()))),
+            tag: self.tag,
             pool: self.pool,
         }
         .await
@@ -57,6 +68,7 @@ impl<T> Clone for Connector<T> {
     fn clone(&self) -> Self {
         Connector {
             resolver: self.resolver.clone(),
+            tag: self.tag,
             pool: self.pool,
         }
     }
@@ -65,6 +77,7 @@ impl<T> Clone for Connector<T> {
 impl<T> fmt::Debug for Connector<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Connector")
+            .field("tagr", &self.tag)
             .field("resolver", &self.resolver)
             .field("memory_pool", &self.pool)
             .finish()
@@ -91,7 +104,11 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
 
     #[inline]
     fn call<'a>(&'a self, req: Connect<T>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        ConnectServiceResponse::new(Box::pin(self.resolver.lookup(req)))
+        ConnectServiceResponse {
+            state: ConnectState::Resolve(Box::pin(self.resolver.lookup(req))),
+            pool: PoolId::P0.pool_ref(),
+            tag: self.tag,
+        }
     }
 }
 
@@ -104,6 +121,7 @@ enum ConnectState<'f, T: Address> {
 pub struct ConnectServiceResponse<'f, T: Address> {
     state: ConnectState<'f, T>,
     pool: PoolRef,
+    tag: &'static str,
 }
 
 impl<'f, T: Address> ConnectServiceResponse<'f, T> {
@@ -111,6 +129,7 @@ impl<'f, T: Address> ConnectServiceResponse<'f, T> {
         Self {
             state: ConnectState::Resolve(fut),
             pool: PoolId::P0.pool_ref(),
+            tag: "",
         }
     }
 }
@@ -118,6 +137,7 @@ impl<'f, T: Address> ConnectServiceResponse<'f, T> {
 impl<'f, T: Address> fmt::Debug for ConnectServiceResponse<'f, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConnectServiceResponse")
+            .field("tag", &self.tag)
             .field("pool", &self.pool)
             .finish()
     }
@@ -136,7 +156,7 @@ impl<'f, T: Address> Future for ConnectServiceResponse<'f, T> {
 
                     if let Some(addr) = addr {
                         self.state = ConnectState::Connect(TcpConnectorResponse::new(
-                            req, port, addr, self.pool,
+                            req, port, addr, self.tag, self.pool,
                         ));
                         self.poll(cx)
                     } else if let Some(addr) = req.addr() {
@@ -144,11 +164,12 @@ impl<'f, T: Address> Future for ConnectServiceResponse<'f, T> {
                             req,
                             addr.port(),
                             Either::Left(addr),
+                            self.tag,
                             self.pool,
                         ));
                         self.poll(cx)
                     } else {
-                        error!("TCP connector: got unresolved address");
+                        error!("{}TCP connector: got unresolved address", self.tag);
                         Poll::Ready(Err(ConnectError::Unresolved))
                     }
                 }
@@ -165,6 +186,7 @@ struct TcpConnectorResponse<T> {
     addrs: Option<VecDeque<SocketAddr>>,
     #[allow(clippy::type_complexity)]
     stream: Option<BoxFuture<'static, Result<Io, io::Error>>>,
+    tag: &'static str,
     pool: PoolRef,
 }
 
@@ -173,10 +195,12 @@ impl<T: Address> TcpConnectorResponse<T> {
         req: T,
         port: u16,
         addr: Either<SocketAddr, VecDeque<SocketAddr>>,
+        tag: &'static str,
         pool: PoolRef,
     ) -> TcpConnectorResponse<T> {
         trace!(
-            "TCP connector - connecting to {:?} addr:{:?} port:{}",
+            "{}TCP connector - connecting to {:?} addr:{:?} port:{}",
+            tag,
             req.host(),
             addr,
             port
@@ -187,10 +211,12 @@ impl<T: Address> TcpConnectorResponse<T> {
                 req: Some(req),
                 addrs: None,
                 stream: Some(Box::pin(tcp_connect_in(addr, pool))),
+                tag,
                 pool,
                 port,
             },
             Either::Right(addrs) => TcpConnectorResponse {
+                tag,
                 port,
                 pool,
                 req: Some(req),
@@ -202,7 +228,8 @@ impl<T: Address> TcpConnectorResponse<T> {
 
     fn can_continue(&self, err: &io::Error) -> bool {
         trace!(
-            "TCP connector - failed to connect to {:?} port: {} err: {:?}",
+            "{}TCP connector - failed to connect to {:?} port: {} err: {:?}",
+            self.tag,
             self.req.as_ref().unwrap().host(),
             self.port,
             err
@@ -224,10 +251,12 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
                     Poll::Ready(Ok(sock)) => {
                         let req = this.req.take().unwrap();
                         trace!(
-                            "TCP connector - successfully connected to connecting to {:?} - {:?}",
+                            "{}TCP connector - successfully connected to connecting to {:?} - {:?}",
+                            this.tag,
                             req.host(),
                             sock.query::<types::PeerAddr>().get()
                         );
+                        sock.set_tag(this.tag);
                         return Poll::Ready(Ok(sock));
                     }
                     Poll::Pending => return Poll::Pending,

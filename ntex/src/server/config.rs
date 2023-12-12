@@ -46,7 +46,7 @@ pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
 
 #[derive(Debug)]
 pub(super) struct ServiceConfigInner {
-    pub(super) services: Vec<(String, net::TcpListener)>,
+    pub(super) services: Vec<(String, net::TcpListener, &'static str)>,
     pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration + Send>>,
     pub(super) threads: usize,
     pub(super) backlog: i32,
@@ -97,7 +97,18 @@ impl ServiceConfig {
                     _t: marker::PhantomData,
                 }));
             }
-            inner.services.push((name.as_ref().to_string(), lst));
+            inner.services.push((name.as_ref().to_string(), lst, ""));
+        }
+        self
+    }
+
+    /// Set io tag for configured service.
+    pub fn set_tag<N: AsRef<str>>(&self, name: N, tag: &'static str) -> &Self {
+        let mut inner = self.0.borrow_mut();
+        for svc in &mut inner.services {
+            if svc.0 == name.as_ref() {
+                svc.2 = tag;
+            }
         }
         self
     }
@@ -124,7 +135,7 @@ impl ServiceConfig {
 pub(super) struct ConfiguredService {
     rt: Box<dyn ServiceRuntimeConfiguration + Send>,
     names: HashMap<Token, (String, net::SocketAddr)>,
-    topics: HashMap<String, Token>,
+    topics: HashMap<String, (Token, &'static str)>,
     services: Vec<Token>,
 }
 
@@ -138,9 +149,15 @@ impl ConfiguredService {
         }
     }
 
-    pub(super) fn stream(&mut self, token: Token, name: String, addr: net::SocketAddr) {
+    pub(super) fn stream(
+        &mut self,
+        token: Token,
+        name: String,
+        addr: net::SocketAddr,
+        tag: &'static str,
+    ) {
         self.names.insert(token, (name.clone(), addr));
-        self.topics.insert(name, token);
+        self.topics.insert(name, (token, tag));
         self.services.push(token);
     }
 }
@@ -148,6 +165,14 @@ impl ConfiguredService {
 impl InternalServiceFactory for ConfiguredService {
     fn name(&self, token: Token) -> &str {
         &self.names[&token].0
+    }
+
+    fn set_tag(&mut self, token: Token, tag: &'static str) {
+        for item in self.topics.values_mut() {
+            if item.0 == token {
+                item.1 = tag;
+            }
+        }
     }
 
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory> {
@@ -199,6 +224,7 @@ impl InternalServiceFactory for ConfiguredService {
                                 error!("Service {:?} is not configured", name);
                                 Ready::<_, ()>::Ok(())
                             }),
+                            "UNKNOWN",
                             PoolId::P0,
                         )),
                     ));
@@ -261,7 +287,7 @@ fn not_configured() {
 pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 
 struct ServiceRuntimeInner {
-    names: HashMap<String, Token>,
+    names: HashMap<String, (Token, &'static str)>,
     services: HashMap<Token, BoxServiceFactory>,
     onstart: Vec<BoxFuture<'static, ()>>,
 }
@@ -278,7 +304,7 @@ impl fmt::Debug for ServiceRuntime {
 }
 
 impl ServiceRuntime {
-    fn new(names: HashMap<String, Token>) -> Self {
+    fn new(names: HashMap<String, (Token, &'static str)>) -> Self {
         ServiceRuntime(Rc::new(RefCell::new(ServiceRuntimeInner {
             names,
             services: HashMap::default(),
@@ -288,8 +314,8 @@ impl ServiceRuntime {
 
     fn validate(&self) {
         let inner = self.0.as_ref().borrow();
-        for (name, token) in &inner.names {
-            if !inner.services.contains_key(token) {
+        for (name, item) in &inner.names {
+            if !inner.services.contains_key(&item.0) {
                 error!("Service {:?} is not configured", name);
             }
         }
@@ -321,11 +347,13 @@ impl ServiceRuntime {
         T::InitError: fmt::Debug,
     {
         let mut inner = self.0.borrow_mut();
-        if let Some(token) = inner.names.get(name) {
+        if let Some((token, tag)) = inner.names.get(name) {
             let token = *token;
+            let tag = *tag;
             inner.services.insert(
                 token,
                 boxed::factory(ServiceFactory {
+                    tag,
                     pool,
                     inner: service.into_factory(),
                 }),
@@ -354,6 +382,7 @@ type BoxServiceFactory = service::boxed::BoxServiceFactory<
 
 struct ServiceFactory<T> {
     inner: T,
+    tag: &'static str,
     pool: PoolId,
 }
 
@@ -371,11 +400,12 @@ where
     type Future<'f> = BoxFuture<'f, Result<BoxedServerService, ()>> where Self: 'f;
 
     fn create(&self, _: ()) -> Self::Future<'_> {
+        let tag = self.tag;
         let pool = self.pool;
         let fut = self.inner.create(());
         Box::pin(async move {
             match fut.await {
-                Ok(s) => Ok(boxed::service(StreamService::new(s, pool))),
+                Ok(s) => Ok(boxed::service(StreamService::new(s, tag, pool))),
                 Err(e) => {
                     error!("Cannot construct service: {:?}", e);
                     Err(())

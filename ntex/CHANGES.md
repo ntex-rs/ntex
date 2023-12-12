@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.14] - 2023-12-12
+
+* Add io tag support for server
+
 ## [0.7.13] - 2023-11-29
 
 * Refactor h1 timers

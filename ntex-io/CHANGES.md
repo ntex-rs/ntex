@@ -2,6 +2,8 @@
 
 ## [0.3.15] - 2023-12-12
 
+* Add io tags for logging
+
 * Stop dispatcher timers on memory pool pause
 
 ## [0.3.14] - 2023-12-10

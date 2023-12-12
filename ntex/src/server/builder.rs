@@ -156,9 +156,9 @@ impl ServerBuilder {
 
         let mut cfg = cfg.0.borrow_mut();
         let mut srv = ConfiguredService::new(cfg.apply.take().unwrap());
-        for (name, lst) in mem::take(&mut cfg.services) {
+        for (name, lst, tag) in mem::take(&mut cfg.services) {
             let token = self.token.next();
-            srv.stream(token, name.clone(), lst.local_addr()?);
+            srv.stream(token, name.clone(), lst.local_addr()?, tag);
             self.sockets.push((token, name, Listener::from_tcp(lst)));
         }
         self.services.push(Box::new(srv));
@@ -184,9 +184,9 @@ impl ServerBuilder {
 
         let mut cfg = inner.borrow_mut();
         let mut srv = ConfiguredService::new(cfg.apply.take().unwrap());
-        for (name, lst) in mem::take(&mut cfg.services) {
+        for (name, lst, tag) in mem::take(&mut cfg.services) {
             let token = self.token.next();
-            srv.stream(token, name.clone(), lst.local_addr()?);
+            srv.stream(token, name.clone(), lst.local_addr()?, tag);
             self.sockets.push((token, name, Listener::from_tcp(lst)));
         }
         self.services.push(Box::new(srv));
@@ -234,6 +234,7 @@ impl ServerBuilder {
                 token,
                 factory.clone(),
                 lst.local_addr()?,
+                "",
             ));
             self.sockets
                 .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
@@ -287,6 +288,7 @@ impl ServerBuilder {
             token,
             factory,
             addr,
+            "",
         ));
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_uds(lst)));
@@ -310,10 +312,34 @@ impl ServerBuilder {
             token,
             factory,
             lst.local_addr()?,
+            "",
         ));
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
         Ok(self)
+    }
+
+    /// Add new service to the server.
+    pub fn set_tag<N: AsRef<str>>(mut self, name: N, tag: &'static str) -> Self {
+        let mut token = None;
+        for sock in &self.sockets {
+            if &sock.1 == name.as_ref() {
+                token = Some(sock.0);
+                break;
+            }
+        }
+
+        if let Some(token) = token {
+            for svc in &mut self.services {
+                if svc.name(token) == name.as_ref() {
+                    svc.set_tag(token, tag);
+                }
+            }
+        } else {
+            panic!("Cannot find service by name {:?}", name.as_ref());
+        }
+
+        self
     }
 
     /// Starts processing incoming connections and return server controller.
