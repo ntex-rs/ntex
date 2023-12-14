@@ -169,7 +169,7 @@ impl<'f, T: Address> Future for ConnectServiceResponse<'f, T> {
                         ));
                         self.poll(cx)
                     } else {
-                        error!("{}TCP connector: got unresolved address", self.tag);
+                        error!("{}: TCP connector: got unresolved address", self.tag);
                         Poll::Ready(Err(ConnectError::Unresolved))
                     }
                 }

@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.16] - 2023-12-14
+
+* Better io tags handling
+
 ## [0.3.15] - 2023-12-12
 
 * Add io tags for logging

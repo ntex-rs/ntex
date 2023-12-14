@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.4] - 2023-12-14
+
+* Better io tag handling
+
 ## [0.3.3] - 2023-12-12
 
 * Add io tag support

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-connect"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork connect utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -37,7 +37,7 @@ async-std = ["ntex-rt/async-std", "ntex-async-std"]
 ntex-service = "1.2.7"
 ntex-bytes = "0.1.21"
 ntex-http = "0.1.11"
-ntex-io = "0.3.15"
+ntex-io = "0.3.16"
 ntex-rt = "0.4.7"
 ntex-tls = "0.3.3"
 ntex-util = "0.3.4"
