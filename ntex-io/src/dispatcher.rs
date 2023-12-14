@@ -338,7 +338,7 @@ where
                                 }
                                 Err(RecvError::Stop) => {
                                     log::trace!(
-                                        "{}Dispatcher is instructed to stop",
+                                        "{}: Dispatcher is instructed to stop",
                                         slf.shared.io.tag()
                                     );
                                     slf.st = DispatcherState::Stop;
@@ -351,7 +351,7 @@ where
                                 }
                                 Err(RecvError::Decoder(err)) => {
                                     log::trace!(
-                                        "{}Decoder error, stopping dispatcher: {:?}",
+                                        "{}: Decoder error, stopping dispatcher: {:?}",
                                         slf.shared.io.tag(),
                                         err
                                     );
@@ -360,7 +360,7 @@ where
                                 }
                                 Err(RecvError::PeerGone(err)) => {
                                     log::trace!(
-                                        "{}Peer is gone, stopping dispatcher: {:?}",
+                                        "{}: Peer is gone, stopping dispatcher: {:?}",
                                         slf.shared.io.tag(),
                                         err
                                     );
@@ -443,7 +443,7 @@ where
                 DispatcherState::Shutdown => {
                     return if slf.shared.service.poll_shutdown(cx).is_ready() {
                         log::trace!(
-                            "{}Service shutdown is completed, stop",
+                            "{}: Service shutdown is completed, stop",
                             slf.shared.io.tag()
                         );
 
@@ -472,7 +472,7 @@ where
                 // check for errors
                 Poll::Ready(if let Some(err) = self.shared.error.take() {
                     log::trace!(
-                        "{}Error occured, stopping dispatcher",
+                        "{}: Error occured, stopping dispatcher",
                         self.shared.io.tag()
                     );
                     self.st = DispatcherState::Stop;
@@ -493,7 +493,7 @@ where
             // pause io read task
             Poll::Pending => {
                 log::trace!(
-                    "{}Service is not ready, register dispatch task",
+                    "{}: Service is not ready, register dispatch task",
                     self.shared.io.tag()
                 );
 
@@ -504,7 +504,7 @@ where
                 match ready!(self.shared.io.poll_read_pause(cx)) {
                     IoStatusUpdate::KeepAlive => {
                         log::trace!(
-                            "{}Keep-alive error, stopping dispatcher during pause",
+                            "{}: Keep-alive error, stopping dispatcher during pause",
                             self.shared.io.tag()
                         );
                         self.st = DispatcherState::Stop;
@@ -512,7 +512,7 @@ where
                     }
                     IoStatusUpdate::Stop => {
                         log::trace!(
-                            "{}Dispatcher is instructed to stop during pause",
+                            "{}: Dispatcher is instructed to stop during pause",
                             self.shared.io.tag()
                         );
                         self.st = DispatcherState::Stop;
@@ -520,7 +520,7 @@ where
                     }
                     IoStatusUpdate::PeerGone(err) => {
                         log::trace!(
-                            "{}Peer is gone during pause, stopping dispatcher: {:?}",
+                            "{}: Peer is gone during pause, stopping dispatcher: {:?}",
                             self.shared.io.tag(),
                             err
                         );
@@ -533,7 +533,7 @@ where
             // handle service readiness error
             Poll::Ready(Err(err)) => {
                 log::trace!(
-                    "{}Service readiness check failed, stopping",
+                    "{}: Service readiness check failed, stopping",
                     self.shared.io.tag()
                 );
                 self.st = DispatcherState::Stop;
@@ -558,7 +558,7 @@ where
                 && !self.flags.contains(Flags::KA_TIMEOUT)
             {
                 log::debug!(
-                    "{}Start keep-alive timer {:?}",
+                    "{}: Start keep-alive timer {:?}",
                     self.shared.io.tag(),
                     self.cfg.keepalive_timeout_secs()
                 );
@@ -599,7 +599,7 @@ where
 
                     if max.is_zero() || !self.read_max_timeout.is_zero() {
                         log::trace!(
-                            "{}Frame read rate {:?}, extend timer",
+                            "{}: Frame read rate {:?}, extend timer",
                             self.shared.io.tag(),
                             total
                         );
@@ -607,7 +607,7 @@ where
                         return Ok(());
                     }
                     log::trace!(
-                        "{}Max payload timeout has been reached",
+                        "{}: Max payload timeout has been reached",
                         self.shared.io.tag()
                     );
                 }
@@ -616,7 +616,7 @@ where
         }
 
         log::trace!(
-            "{}Keep-alive error, stopping dispatcher",
+            "{}: Keep-alive error, stopping dispatcher",
             self.shared.io.tag()
         );
         Err(DispatchItem::KeepAliveTimeout)

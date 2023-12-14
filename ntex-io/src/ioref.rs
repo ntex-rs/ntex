@@ -62,7 +62,7 @@ impl IoRef {
     /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
     /// without any graceful period.
     pub fn force_close(&self) {
-        log::trace!("{}Force close io stream object", self.tag());
+        log::trace!("{}: Force close io stream object", self.tag());
         self.0.insert_flags(
             Flags::DSP_STOP
                 | Flags::IO_STOPPED
@@ -84,7 +84,7 @@ impl IoRef {
             .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
         {
             log::trace!(
-                "{}Initiate io shutdown {:?}",
+                "{}: Initiate io shutdown {:?}",
                 self.tag(),
                 self.0.flags.get()
             );
@@ -122,7 +122,7 @@ impl IoRef {
             .map_or_else(
                 |err| {
                     log::trace!(
-                        "{}Got io error while encoding, error: {:?}",
+                        "{}: Got io error while encoding, error: {:?}",
                         self.tag(),
                         err
                     );
@@ -132,7 +132,7 @@ impl IoRef {
                 |item| item,
             )
         } else {
-            log::trace!("{}Io is closed/closing, skip frame encoding", self.tag());
+            log::trace!("{}: Io is closed/closing, skip frame encoding", self.tag());
             Ok(())
         }
     }
@@ -248,12 +248,12 @@ impl IoRef {
             if cur_hnd.is_set() {
                 let hnd = timer::update(cur_hnd, timeout, self);
                 if hnd != cur_hnd {
-                    log::debug!("{}Update timer {:?}", self.tag(), timeout);
+                    log::debug!("{}: Update timer {:?}", self.tag(), timeout);
                     self.0.timeout.set(hnd);
                 }
                 hnd
             } else {
-                log::debug!("{}Start timer {:?}", self.tag(), timeout);
+                log::debug!("{}: Start timer {:?}", self.tag(), timeout);
                 let hnd = timer::register(timeout, self);
                 self.0.timeout.set(hnd);
                 hnd
@@ -272,7 +272,7 @@ impl IoRef {
     pub fn stop_timer(&self) {
         let hnd = self.0.timeout.get();
         if hnd.is_set() {
-            log::debug!("{}Stop timer", self.tag());
+            log::debug!("{}: Stop timer", self.tag());
             self.0.timeout.set(timer::TimerHandle::ZERO);
             timer::unregister(hnd, self)
         }

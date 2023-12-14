@@ -250,7 +250,8 @@ where
                                 });
                                 if result.is_err() {
                                     log::error!(
-                                        "Expect handler returned error: {:?}",
+                                        "{}: Expect handler returned error: {:?}",
+                                        this.inner.io.tag(),
                                         result.err().unwrap()
                                     );
                                     *this.st = State::Stop;
@@ -385,7 +386,11 @@ where
                     let io = this.inner.io.take();
                     let req = req.take().unwrap();
 
-                    log::trace!("switching to upgrade service for {:?}", req);
+                    log::trace!(
+                        "{}: Switching to upgrade service for {:?}",
+                        this.inner.io.tag(),
+                        req
+                    );
 
                     // Handle UPGRADE request
                     let config = this.inner.config.clone();
@@ -494,7 +499,7 @@ where
         cx: &mut Context<'_>,
         call_state: &mut std::pin::Pin<&mut CallState<S, X>>,
     ) -> Poll<State<B>> {
-        log::trace!("Trying to read http message");
+        log::trace!("{}: Trying to read http message", self.io.tag());
 
         loop {
             let result = match self.io.poll_recv_decode(&self.codec, cx) {
@@ -515,7 +520,12 @@ where
             // decode incoming bytes stream
             return match result {
                 Ok((mut req, pl)) => {
-                    log::trace!("Http message is received: {:?} and payload {:?}", req, pl);
+                    log::trace!(
+                        "{}: Http message is received: {:?} and payload {:?}",
+                        self.io.tag(),
+                        req,
+                        pl
+                    );
 
                     // configure request payload
                     let upgrade = match pl {
@@ -541,7 +551,7 @@ where
 
                     if upgrade {
                         // Handle UPGRADE request
-                        log::trace!("Prepare io for upgrade handler");
+                        log::trace!("{}: Prepare io for upgrade handler", self.io.tag(),);
                         Poll::Ready(State::Upgrade(Some(req)))
                     } else {
                         if req.upgrade() {
@@ -563,7 +573,7 @@ where
                 }
                 Err(RecvError::WriteBackpressure) => {
                     if let Err(err) = ready!(self.io.poll_flush(cx, false)) {
-                        log::trace!("Peer is gone with {:?}", err);
+                        log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
                         self.error = Some(DispatchError::PeerGone(Some(err)));
                         Poll::Ready(State::Stop)
                     } else {
@@ -572,24 +582,24 @@ where
                 }
                 Err(RecvError::Decoder(err)) => {
                     // Malformed requests, respond with 400
-                    log::trace!("Malformed request: {:?}", err);
+                    log::trace!("{}: Malformed request: {:?}", self.io.tag(), err);
                     let (res, body) = Response::BadRequest().finish().into_parts();
                     self.error = Some(DispatchError::Parse(err));
                     Poll::Ready(self.send_response(res, body.into_body()))
                 }
                 Err(RecvError::PeerGone(err)) => {
-                    log::trace!("Peer is gone with {:?}", err);
+                    log::trace!("{}: Peer is gone with {:?}", self.io.tag(), err);
                     self.error = Some(DispatchError::PeerGone(err));
                     Poll::Ready(State::Stop)
                 }
                 Err(RecvError::Stop) => {
-                    log::trace!("Dispatcher is instructed to stop");
+                    log::trace!("{}: Dispatcher is instructed to stop", self.io.tag());
                     Poll::Ready(State::Stop)
                 }
                 Err(RecvError::KeepAlive) => {
                     if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
                         if let Err(err) = self.handle_timeout() {
-                            log::trace!("Slow request timeout");
+                            log::trace!("{}: Slow request timeout", self.io.tag());
                             let (req, body) =
                                 Response::RequestTimeout().finish().into_parts();
                             let _ = self.send_response(req, body.into_body());
@@ -598,7 +608,10 @@ where
                             continue;
                         }
                     } else {
-                        log::trace!("Keep-alive timeout, close connection");
+                        log::trace!(
+                            "{}: Keep-alive timeout, close connection",
+                            self.io.tag()
+                        );
                     }
                     Poll::Ready(State::Stop)
                 }
@@ -607,7 +620,12 @@ where
     }
 
     fn send_response(&mut self, msg: Response<()>, body: ResponseBody<B>) -> State<B> {
-        trace!("Sending response: {:?} body: {:?}", msg, body.size());
+        trace!(
+            "{}: Sending response: {:?} body: {:?}",
+            self.io.tag(),
+            msg,
+            body.size()
+        );
         // we dont need to process responses if socket is disconnected
         // but we still want to handle requests with app service
         // so we skip response processing for droppped connection
@@ -649,7 +667,7 @@ where
     ) -> Option<State<B>> {
         match item {
             Some(Ok(item)) => {
-                trace!("Got response chunk: {:?}", item.len());
+                trace!("{}: Got response chunk: {:?}", self.io.tag(), item.len());
                 match self.io.encode(Message::Chunk(Some(item)), &self.codec) {
                     Ok(_) => None,
                     Err(err) => {
@@ -659,7 +677,7 @@ where
                 }
             }
             None => {
-                trace!("Response payload eof {:?}", self.flags);
+                trace!("{}: Response payload eof {:?}", self.io.tag(), self.flags);
                 if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                     self.error = Some(DispatchError::Encode(err));
                     Some(State::Stop)
@@ -672,7 +690,11 @@ where
                 }
             }
             Some(Err(e)) => {
-                trace!("Error during response body poll: {:?}", e);
+                trace!(
+                    "{}: Error during response body poll: {:?}",
+                    self.io.tag(),
+                    e
+                );
                 self.error = Some(DispatchError::ResponsePayload(e));
                 Some(State::Stop)
             }
@@ -859,7 +881,11 @@ where
 
                     // start timer for next period
                     if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
-                        log::trace!("Bytes read rate {:?}, extend timer", total);
+                        log::trace!(
+                            "{}: Bytes read rate {:?}, extend timer",
+                            self.io.tag(),
+                            total
+                        );
                         self.io.start_timer_secs(cfg.timeout);
                         return Ok(());
                     }
@@ -900,7 +926,11 @@ where
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
                 if !self.flags.contains(Flags::READ_KA_TIMEOUT) {
-                    log::debug!("Start keep-alive timer {:?}", self.config.keep_alive);
+                    log::debug!(
+                        "{}: Start keep-alive timer {:?}",
+                        self.io.tag(),
+                        self.config.keep_alive
+                    );
                     self.flags.insert(Flags::READ_KA_TIMEOUT);
                     if self.config.keep_alive_enabled() {
                         self.io.start_timer_secs(self.config.keep_alive);
@@ -911,7 +941,11 @@ where
                 return Some(State::Stop);
             }
         } else if let Some(ref cfg) = self.config.headers_read_rate {
-            log::debug!("Start headers read timer {:?}", cfg.timeout);
+            log::debug!(
+                "{}: Start headers read timer {:?}",
+                self.io.tag(),
+                cfg.timeout
+            );
 
             // we got new data but not enough to parse single frame
             // start read timer

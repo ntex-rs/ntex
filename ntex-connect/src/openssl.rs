@@ -56,7 +56,7 @@ impl<T: Address> Connector<T> {
         let openssl = self.openssl.clone();
 
         let io = conn.await?;
-        trace!("{}SSL Handshake start for: {:?}", io.tag(), host);
+        trace!("{}: SSL Handshake start for: {:?}", io.tag(), host);
 
         match openssl.configure() {
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
@@ -67,11 +67,11 @@ impl<T: Address> Connector<T> {
                 let tag = io.tag();
                 match IoSslConnector::new(ssl).create(io).await {
                     Ok(io) => {
-                        trace!("{}SSL Handshake success: {:?}", tag, host);
+                        trace!("{}: SSL Handshake success: {:?}", tag, host);
                         Ok(io)
                     }
                     Err(e) => {
-                        trace!("{}SSL Handshake error: {:?}", tag, e);
+                        trace!("{}: SSL Handshake error: {:?}", tag, e);
                         Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
                     }
                 }
