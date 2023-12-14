@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.16] - 2023-12-15
+
+* Stop timer before handling UPGRADE h1 requests
+
 ## [0.7.15] - 2023-12-14
 
 * Better io tags handling
