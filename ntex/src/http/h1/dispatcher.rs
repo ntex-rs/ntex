@@ -383,8 +383,9 @@ where
                 }
                 // stop io tasks and call upgrade service
                 State::Upgrade(ref mut req) => {
-                    let io = this.inner.io.take();
                     let req = req.take().unwrap();
+                    let io = this.inner.io.take();
+                    io.stop_timer();
 
                     log::trace!(
                         "{}: Switching to upgrade service for {:?}",
@@ -485,6 +486,7 @@ where
     fn service_upgrade(&mut self, mut req: Request) -> CallState<S, X> {
         // Move io into request
         let io: IoBoxed = self.io.take().into();
+        self.io.stop_timer();
         req.head_mut().io = CurrentIo::Io(Rc::new((
             io.get_ref(),
             RefCell::new(Some(Box::new((io, self.codec.clone())))),
@@ -551,7 +553,7 @@ where
 
                     if upgrade {
                         // Handle UPGRADE request
-                        log::trace!("{}: Prepare io for upgrade handler", self.io.tag(),);
+                        log::trace!("{}: Prepare io for upgrade handler", self.io.tag());
                         Poll::Ready(State::Upgrade(Some(req)))
                     } else {
                         if req.upgrade() {

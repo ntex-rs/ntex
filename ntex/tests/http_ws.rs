@@ -5,6 +5,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
 use ntex::io::{DispatchItem, Dispatcher, Io};
 use ntex::service::{fn_factory, Service, ServiceCtx};
+use ntex::time::{sleep, Millis, Seconds};
 use ntex::util::{BoxFuture, ByteString, Bytes, Ready};
 use ntex::ws::{self, handshake, handshake_response};
 
@@ -51,11 +52,15 @@ impl Service<(Request, Io, h1::Codec)> for WsService {
             io.encode((res, body::BodySize::None).into(), &codec)
                 .unwrap();
 
+            let cfg = ntex_io::DispatcherConfig::default();
+            cfg.set_keepalive_timeout(Seconds(0));
+
             Dispatcher::with_config(
                 io.seal(),
                 ws::Codec::new(),
                 service,
-                &Default::default(),
+                //&Default::default(),
+                &cfg,
             )
             .await
             .map_err(|_| panic!())
@@ -90,6 +95,9 @@ async fn test_simple() {
         move || {
             let ws_service = ws_service.clone();
             HttpService::build()
+                .keep_alive(1)
+                .headers_read_rate(Seconds(1), Seconds::ZERO, 16)
+                .payload_read_rate(Seconds(1), Seconds::ZERO, 16)
                 .upgrade(fn_factory(move || {
                     Ready::Ok::<_, io::Error>(ws_service.clone())
                 }))
