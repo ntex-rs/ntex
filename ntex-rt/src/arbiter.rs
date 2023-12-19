@@ -84,6 +84,76 @@ impl Arbiter {
 
     /// Spawn new thread and run event loop in spawned thread.
     /// Returns address of newly created arbiter.
+    ///
+    /// This function allows for the glommio local executor to be configured with
+    /// a CPU placement policy, and is then passed to a config callback to allow
+    /// for full customization.
+    ///
+    /// ## Panics
+    /// This function has the same panic policy as `new`. If the creation of the
+    /// glommio executor fails for some reason, this will panic.
+    #[allow(dead_code)]
+    #[cfg(all(feature = "glommio", target_os = "linux"))]
+    pub fn new_with_placement(
+        placement: glomm_io::Placement,
+        cfg_callback: impl FnOnce(glomm_io::LocalExecutorBuilder) -> glomm_io::LocalExecutorBuilder
+            + Send
+            + 'static,
+    ) -> Arbiter {
+        let id = COUNT.fetch_add(1, Ordering::Relaxed);
+        let name = format!("ntex-rt:worker:{}", id);
+        let sys = System::current();
+        let (arb_tx, arb_rx) = unbounded();
+        let arb_tx2 = arb_tx.clone();
+
+        let handle = thread::Builder::new()
+            .name(name.clone())
+            .spawn(move || {
+                let arb = Arbiter::with_sender(arb_tx);
+
+                let (stop, stop_rx) = oneshot::channel();
+                STORAGE.with(|cell| cell.borrow_mut().clear());
+
+                System::set_current(sys);
+
+                crate::block_on_with_placement(
+                    async move {
+                        // start arbiter controller
+                        crate::spawn(ArbiterController {
+                            stop: Some(stop),
+                            rx: Box::pin(arb_rx),
+                        });
+                        ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
+
+                        // register arbiter
+                        let _ = System::current()
+                            .sys()
+                            .try_send(SystemCommand::RegisterArbiter(id, arb));
+
+                        // run loop
+                        let _ = stop_rx.await;
+                    },
+                    placement,
+                    cfg_callback,
+                );
+
+                // unregister arbiter
+                let _ = System::current()
+                    .sys()
+                    .try_send(SystemCommand::UnregisterArbiter(id));
+            })
+            .unwrap_or_else(|err| {
+                panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
+            });
+
+        Arbiter {
+            sender: arb_tx2,
+            thread_handle: Some(handle),
+        }
+    }
+
+    /// Spawn new thread and run event loop in spawned thread.
+    /// Returns address of newly created arbiter.
     pub fn new() -> Arbiter {
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
         let name = format!("ntex-rt:worker:{}", id);

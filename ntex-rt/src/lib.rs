@@ -54,7 +54,7 @@ mod glommio {
     use std::{pin::Pin, task::Context, task::Poll};
 
     use futures_channel::oneshot::Canceled;
-    use glomm_io::task;
+    use glomm_io::{task, LocalExecutorBuilder, Placement};
 
     pub type JoinError = Canceled;
 
@@ -62,6 +62,32 @@ mod glommio {
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
         let ex = glomm_io::LocalExecutor::default();
+        ex.run(async move {
+            let _ = fut.await;
+        })
+    }
+
+    /// Runs the provided future, blocking the current thread until the future
+    /// completes.
+    ///
+    /// This function allows for the glommio local executor to be configured with
+    /// a CPU placement policy, and is then passed to a config callback to allow
+    /// for full customization.
+    ///
+    /// ## Panics
+    /// This function has the same panic policy as `block_on`. If the creation of the
+    /// glommio executor fails for some reason, this will panic.
+    pub fn block_on_with_placement<
+        F: Future<Output = ()>,
+        C: FnOnce(LocalExecutorBuilder) -> LocalExecutorBuilder,
+    >(
+        fut: F,
+        placement: Placement,
+        cfg_callback: C,
+    ) {
+        let ex = cfg_callback(LocalExecutorBuilder::new(placement))
+            .make()
+            .expect("failed to build glommio executor");
         ex.run(async move {
             let _ = fut.await;
         })
