@@ -1187,6 +1187,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_read_timeout() {
+        let _ = env_logger::init();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 

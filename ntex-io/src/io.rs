@@ -702,7 +702,7 @@ impl<F> Drop for Io<F> {
     fn drop(&mut self) {
         self.stop_timer();
 
-        if !self.0.flags().contains(Flags::IO_STOPPED) && self.1.is_set() {
+        if !self.0.flags().contains(Flags::IO_STOPPED) {
             log::trace!(
                 "{}: Io is dropped, force stopping io streams {:?}",
                 self.tag(),
@@ -712,10 +712,12 @@ impl<F> Drop for Io<F> {
             self.force_close();
         }
 
-        // we must drop filter, it is unsafe
+        // filter must be dropped, it is unsafe
         // and wont be dropped without special attention
-        self.1.drop_filter();
-        self.0 .0.filter.set(NullFilter::get());
+        if self.1.is_set() {
+            self.1.drop_filter();
+            self.0 .0.filter.set(NullFilter::get());
+        }
     }
 }
 
