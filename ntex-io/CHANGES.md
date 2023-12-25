@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.17] - 2023-12-25
+
+* Fix filter leak during Io drop
+
 ## [0.3.16] - 2023-12-14
 
 * Better io tags handling

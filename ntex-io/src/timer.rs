@@ -128,10 +128,10 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
                 loop {
                     sleep(SEC).await;
                     let stop = TIMER.with(|timer| {
-                        timer.current.set(timer.current.get() + 1);
+                        let current = timer.current.get() + 1;
+                        timer.current.set(current);
 
                         // notify io dispatcher
-                        let current = timer.current.get();
                         let mut inner = timer.storage.borrow_mut();
                         while let Some(key) = inner.notifications.keys().next() {
                             let key = *key;

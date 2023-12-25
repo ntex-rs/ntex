@@ -711,7 +711,7 @@ mod tests {
             let state = Io::new(io);
             let pool = state.memory_pool().pool();
             state.set_disconnect_timeout(cfg.disconnect_timeout());
-            state.set_tag("DBG: ");
+            state.set_tag("DBG");
 
             let flags = if cfg.keepalive_timeout_secs().is_zero() {
                 super::Flags::empty()
@@ -1187,6 +1187,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_read_timeout() {
+        let _ = env_logger::init();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 

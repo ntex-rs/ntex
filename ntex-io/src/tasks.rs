@@ -62,7 +62,11 @@ impl ReadContext {
                                 inner.read_task.wake();
                             }
                         }
-                        log::trace!("{}: New {} bytes available, wakeup dispatcher", self.0.tag(), nbytes);
+                        log::trace!(
+                            "{}: New {} bytes available, wakeup dispatcher",
+                            self.0.tag(),
+                            nbytes
+                        );
                         inner.dispatch_task.wake();
                     } else {
                         if nbytes >= hw {
