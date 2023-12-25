@@ -710,9 +710,12 @@ impl<F> Drop for Io<F> {
             );
 
             self.force_close();
-            self.1.drop_filter();
-            self.0 .0.filter.set(NullFilter::get());
         }
+
+        // we must drop filter, it is unsafe
+        // and wont be dropped without special attention
+        self.1.drop_filter();
+        self.0 .0.filter.set(NullFilter::get());
     }
 }
 

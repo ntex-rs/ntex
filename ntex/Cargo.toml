@@ -58,7 +58,7 @@ ntex-util = "0.3.4"
 ntex-bytes = "0.1.21"
 ntex-h2 = "0.4.4"
 ntex-rt = "0.4.11"
-ntex-io = "0.3.16"
+ntex-io = "0.3.17"
 ntex-tls = "0.3.3"
 ntex-tokio = { version = "0.3.1", optional = true }
 ntex-glommio = { version = "0.3.1", optional = true }
