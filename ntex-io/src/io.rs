@@ -708,13 +708,12 @@ impl<F> Drop for Io<F> {
                 self.tag(),
                 self.0.flags()
             );
-
-            self.force_close();
         }
 
         // filter must be dropped, it is unsafe
         // and wont be dropped without special attention
         if self.1.is_set() {
+            self.force_close();
             self.1.drop_filter();
             self.0 .0.filter.set(NullFilter::get());
         }
