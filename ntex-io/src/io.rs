@@ -931,7 +931,10 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::testing::IoTest;
+    use crate::{testing::IoTest, FilterLayer, Io, ReadBuf, WriteBuf};
+
+    const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
+    const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
 
     #[ntex::test]
     async fn test_basics() {
@@ -962,10 +965,10 @@ mod tests {
         let err = server.recv(&BytesCodec).await.err().unwrap();
         assert!(format!("{:?}", err).contains("Dispatcher stopped"));
 
-        client.write("GET /test HTTP/1");
+        client.write(TEXT);
         server.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
-        assert_eq!(item, "GET /test HTTP/1");
+        assert_eq!(item, TEXT);
     }
 
     #[ntex::test]
@@ -977,11 +980,56 @@ mod tests {
         assert!(server.eq(&server));
 
         server
-            .send(Bytes::from_static(b"GET /test HTTP/1"), &BytesCodec)
+            .send(Bytes::from_static(BIN), &BytesCodec)
             .await
             .ok()
             .unwrap();
         let item = client.read_any();
-        assert_eq!(item, "GET /test HTTP/1");
+        assert_eq!(item, TEXT);
+    }
+
+    #[derive(Debug)]
+    struct DropFilter {
+        p: Rc<Cell<usize>>,
+    }
+
+    impl Drop for DropFilter {
+        fn drop(&mut self) {
+            self.p.set(self.p.get() + 1);
+        }
+    }
+
+    impl FilterLayer for DropFilter {
+        const BUFFERS: bool = false;
+        fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
+            Ok(buf.nbytes())
+        }
+        fn process_write_buf(&self, _: &WriteBuf<'_>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[ntex::test]
+    async fn drop_filter() {
+        let p = Rc::new(Cell::new(0));
+
+        let (client, server) = IoTest::create();
+        let f = DropFilter { p: p.clone() };
+        format!("{:?}", f);
+        let io = Io::new(server).add_filter(f);
+
+        client.remote_buffer_cap(1024);
+        client.write(TEXT);
+        let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(msg, Bytes::from_static(BIN));
+
+        io.send(Bytes::from_static(b"test"), &BytesCodec)
+            .await
+            .unwrap();
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, Bytes::from_static(b"test"));
+
+        drop(io);
+        assert_eq!(p.get(), 1);
     }
 }
