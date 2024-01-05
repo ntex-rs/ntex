@@ -99,13 +99,21 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
     TIMER.with(|timer| {
         // setup current delta
         if !timer.running.get() {
-            timer
-                .current
-                .set((now() - timer.base.get()).as_secs() as u32);
+            let current = (now() - timer.base.get()).as_secs() as u32;
+            timer.current.set(current);
+            log::debug!(
+                "{}: Timer driver does not run, current: {}",
+                io.tag(),
+                current
+            );
         }
 
         let hnd = {
-            let hnd = timer.current.get() + timeout.0 as u32;
+            let hnd = if timeout.0 <= 1 {
+                timer.current.get() + 2
+            } else {
+                timer.current.get() + timeout.0 as u32
+            };
             let mut inner = timer.storage.borrow_mut();
 
             // insert key
