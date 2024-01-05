@@ -70,23 +70,27 @@ pub struct Connect {
 ///      println!("Response: {:?}", res);
 /// }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Client(Rc<ClientConfig>);
 
 #[derive(Debug)]
-struct ClientConfig {
+pub(crate) struct ClientConfig {
     pub(self) connector: Box<dyn HttpConnect>,
     pub(self) headers: HeaderMap,
     pub(self) timeout: Millis,
+    pub(self) response_pl_limit: usize,
+    pub(self) response_pl_timeout: Millis,
 }
 
-impl Default for Client {
+impl Default for ClientConfig {
     fn default() -> Self {
-        Client(Rc::new(ClientConfig {
-            connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
+        ClientConfig {
             headers: HeaderMap::new(),
             timeout: Millis(5_000),
-        }))
+            response_pl_limit: 262_144,
+            response_pl_timeout: Millis(10_000),
+            connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
+        }
     }
 }
 

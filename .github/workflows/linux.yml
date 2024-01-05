@@ -67,5 +67,6 @@ jobs:
           cargo install cargo-cache --version 0.6.2 --no-default-features --features ci-autoclean
 
       - name: Clear the cargo caches
+        continue-on-error: true
         run: |
           cargo-cache

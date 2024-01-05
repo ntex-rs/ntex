@@ -64,8 +64,8 @@ impl Default for ReadRate {
     fn default() -> Self {
         ReadRate {
             rate: 256,
-            timeout: Seconds(1),
-            max_timeout: Seconds(4),
+            timeout: Seconds(5),
+            max_timeout: Seconds(15),
         }
     }
 }
@@ -112,7 +112,7 @@ impl ServiceConfig {
             headers_read_rate: Some(ReadRate {
                 rate: 256,
                 timeout: client_timeout,
-                max_timeout: client_timeout + Seconds(3),
+                max_timeout: client_timeout + Seconds(15),
             }),
             payload_read_rate: None,
         }

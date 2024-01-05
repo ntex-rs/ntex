@@ -1,6 +1,6 @@
 use std::cell::{Ref, RefMut};
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, marker::PhantomData, mem, pin::Pin};
+use std::{fmt, future::Future, marker::PhantomData, mem, pin::Pin, rc::Rc};
 
 use serde::de::DeserializeOwned;
 
@@ -13,12 +13,13 @@ use crate::http::{HeaderMap, HttpMessage, Payload, ResponseHead, StatusCode, Ver
 use crate::time::{Deadline, Millis};
 use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
-use super::error::JsonPayloadError;
+use super::{error::JsonPayloadError, ClientConfig};
 
 /// Client Response
 pub struct ClientResponse {
     pub(crate) head: ResponseHead,
     pub(crate) payload: Payload,
+    config: Rc<ClientConfig>,
 }
 
 impl HttpMessage for ClientResponse {
@@ -58,12 +59,20 @@ impl HttpMessage for ClientResponse {
 
 impl ClientResponse {
     /// Create new client response instance
-    pub(crate) fn new(head: ResponseHead, payload: Payload) -> Self {
-        ClientResponse { head, payload }
+    pub(crate) fn new(
+        head: ResponseHead,
+        payload: Payload,
+        config: Rc<ClientConfig>,
+    ) -> Self {
+        ClientResponse {
+            head,
+            payload,
+            config,
+        }
     }
 
-    pub(crate) fn with_empty_payload(head: ResponseHead) -> Self {
-        ClientResponse::new(head, Payload::None)
+    pub(crate) fn with_empty_payload(head: ResponseHead, config: Rc<ClientConfig>) -> Self {
+        ClientResponse::new(head, Payload::None, config)
     }
 
     #[inline]
@@ -193,7 +202,11 @@ impl MessageBody {
         MessageBody {
             length: len,
             err: None,
-            fut: Some(ReadBody::new(res.take_payload(), 262_144)),
+            fut: Some(ReadBody::new(
+                res.take_payload(),
+                res.config.response_pl_limit,
+                res.config.response_pl_timeout,
+            )),
         }
     }
 
@@ -236,7 +249,8 @@ impl Future for MessageBody {
         }
 
         if let Some(len) = this.length.take() {
-            if len > this.fut.as_ref().unwrap().limit {
+            let limit = this.fut.as_ref().unwrap().limit;
+            if limit > 0 && len > limit {
                 return Poll::Ready(Err(PayloadError::Overflow));
             }
         }
@@ -264,9 +278,9 @@ where
     U: DeserializeOwned,
 {
     /// Create `JsonBody` for request.
-    pub fn new(req: &mut ClientResponse) -> Self {
+    pub fn new(res: &mut ClientResponse) -> Self {
         // check content-type
-        let json = if let Ok(Some(mime)) = req.mime_type() {
+        let json = if let Ok(Some(mime)) = res.mime_type() {
             mime.subtype() == mime::JSON || mime.suffix() == Some(mime::JSON)
         } else {
             false
@@ -281,7 +295,7 @@ where
         }
 
         let mut len = None;
-        if let Some(l) = req.headers().get(&CONTENT_LENGTH) {
+        if let Some(l) = res.headers().get(&CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
                 if let Ok(l) = s.parse::<usize>() {
                     len = Some(l)
@@ -292,7 +306,11 @@ where
         JsonBody {
             length: len,
             err: None,
-            fut: Some(ReadBody::new(req.take_payload(), 65536)),
+            fut: Some(ReadBody::new(
+                res.take_payload(),
+                res.config.response_pl_limit,
+                res.config.response_pl_timeout,
+            )),
             _t: PhantomData,
         }
     }
@@ -331,7 +349,8 @@ where
         }
 
         if let Some(len) = self.length.take() {
-            if len > self.fut.as_ref().unwrap().limit {
+            let limit = self.fut.as_ref().unwrap().limit;
+            if limit > 0 && len > limit {
                 return Poll::Ready(Err(JsonPayloadError::Payload(PayloadError::Overflow)));
             }
         }
@@ -353,12 +372,12 @@ struct ReadBody {
 }
 
 impl ReadBody {
-    fn new(stream: Payload, limit: usize) -> Self {
+    fn new(stream: Payload, limit: usize, timeout: Millis) -> Self {
         Self {
             stream,
             limit,
             buf: BytesMut::with_capacity(std::cmp::min(limit, 32768)),
-            timeout: Deadline::new(Millis(10000)),
+            timeout: Deadline::new(timeout),
         }
     }
 }
@@ -372,7 +391,7 @@ impl Future for ReadBody {
         loop {
             return match Pin::new(&mut this.stream).poll_next(cx)? {
                 Poll::Ready(Some(chunk)) => {
-                    if (this.buf.len() + chunk.len()) > this.limit {
+                    if this.limit > 0 && (this.buf.len() + chunk.len()) > this.limit {
                         Poll::Ready(Err(PayloadError::Overflow))
                     } else {
                         this.buf.extend_from_slice(&chunk);

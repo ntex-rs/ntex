@@ -13,7 +13,7 @@ use nanorand::{Rng, WyRand};
 
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
-use crate::http::{body::BodySize, client::ClientResponse, error::HttpError, h1};
+use crate::http::{body::BodySize, client, client::ClientResponse, error::HttpError, h1};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
 use crate::io::{
     Base, DispatchItem, Dispatcher, DispatcherConfig, Filter, Io, Layer, Sealed,
@@ -35,6 +35,7 @@ pub struct WsClient<F, T> {
     timeout: Millis,
     extra_headers: RefCell<Option<HeaderMap>>,
     config: DispatcherConfig,
+    client_cfg: Rc<client::ClientConfig>,
     _t: marker::PhantomData<F>,
 }
 
@@ -243,7 +244,7 @@ where
         // response and ws io
         Ok(WsConnection::new(
             io,
-            ClientResponse::with_empty_payload(response),
+            ClientResponse::with_empty_payload(response, self.client_cfg.clone()),
             if server_mode {
                 ws::Codec::new().max_size(max_size)
             } else {
@@ -639,6 +640,7 @@ where
             timeout: inner.timeout,
             config: inner.config,
             extra_headers: RefCell::new(None),
+            client_cfg: Default::default(),
             _t: marker::PhantomData,
         })
     }

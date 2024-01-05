@@ -895,7 +895,7 @@ where
             }
         }
 
-        log::trace!("Timeout during reading");
+        log::trace!("{}: Timeout during reading", self.io.tag());
         if self.flags.contains(Flags::READ_PL_TIMEOUT) {
             self.set_payload_error(PayloadError::Io(io::Error::new(
                 io::ErrorKind::TimedOut,

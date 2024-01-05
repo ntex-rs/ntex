@@ -37,6 +37,8 @@ impl ClientBuilder {
             config: ClientConfig {
                 headers: HeaderMap::new(),
                 timeout: Millis(5_000),
+                response_pl_limit: 262_144,
+                response_pl_timeout: Millis(10_000),
                 connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
             },
         }
@@ -88,6 +90,22 @@ impl ClientBuilder {
     /// By default `Date` and `User-Agent` headers are set.
     pub fn no_default_headers(mut self) -> Self {
         self.default_headers = false;
+        self
+    }
+
+    /// Max size of response payload.
+    /// By default max size is 256Kb
+    pub fn response_payload_limit(mut self, limit: usize) -> Self {
+        self.config.response_pl_limit = limit;
+        self
+    }
+
+    /// Set response timeout.
+    ///
+    /// Response payload timeout is the total time before a payload must be received.
+    /// Default value is 10 seconds.
+    pub fn response_payload_timeout(mut self, timeout: Millis) -> Self {
+        self.config.response_pl_timeout = timeout;
         self
     }
 

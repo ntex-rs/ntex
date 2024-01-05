@@ -106,9 +106,9 @@ impl TestResponse {
         }
 
         if let Some(pl) = self.payload {
-            ClientResponse::new(head, pl)
+            ClientResponse::new(head, pl, Default::default())
         } else {
-            ClientResponse::new(head, h1::Payload::empty().into())
+            ClientResponse::new(head, h1::Payload::empty().into(), Default::default())
         }
     }
 }
@@ -118,8 +118,8 @@ mod tests {
     use super::*;
     use crate::http::header;
 
-    #[test]
-    fn test_basics() {
+    #[crate::rt_test]
+    async fn test_basics() {
         let res = {
             #[cfg(feature = "cookie")]
             {

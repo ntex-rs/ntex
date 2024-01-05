@@ -1,5 +1,9 @@
 # Changes
 
+## [0.7.17] - 2024-01-05
+
+* Allow to set default response payload limit and timeout
+
 ## [0.7.16] - 2023-12-15
 
 * Stop timer before handling UPGRADE h1 requests
