@@ -118,8 +118,8 @@ mod tests {
     use super::*;
     use crate::http::header;
 
-    #[test]
-    fn test_basics() {
+    #[crate::rt_test]
+    async fn test_basics() {
         let res = {
             #[cfg(feature = "cookie")]
             {

@@ -85,11 +85,11 @@ pub(crate) struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         ClientConfig {
-            connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
             headers: HeaderMap::new(),
             timeout: Millis(5_000),
             response_pl_limit: 262_144,
             response_pl_timeout: Millis(10_000),
+            connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
         }
     }
 }

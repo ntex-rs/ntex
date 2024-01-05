@@ -16,8 +16,7 @@ use crate::http::encoding::Decoder;
 use crate::http::Payload;
 
 use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
-use super::response::ClientResponse;
-use super::ClientConfig;
+use super::{ClientConfig, ClientResponse};
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum PrepForSendingError {
