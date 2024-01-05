@@ -136,8 +136,9 @@ impl RequestHeadType {
 
         let fut = Box::pin(async move {
             config
+                .clone()
                 .connector
-                .send_request(self, body, addr, timeout)
+                .send_request(self, body, addr, timeout, config)
                 .await
         });
 

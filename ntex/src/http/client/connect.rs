@@ -1,11 +1,11 @@
-use std::{fmt, net};
+use std::{fmt, net, rc::Rc};
 
 use crate::http::{body::Body, RequestHeadType};
 use crate::{service::Pipeline, service::Service, time::Millis, util::BoxFuture};
 
 use super::error::{ConnectError, SendRequestError};
 use super::response::ClientResponse;
-use super::{Connect as ClientConnect, Connection};
+use super::{ClientConfig, Connect as ClientConnect, Connection};
 
 pub(super) struct ConnectorWrapper<T>(pub(crate) Pipeline<T>);
 
@@ -27,6 +27,7 @@ pub(super) trait Connect: fmt::Debug {
         body: Body,
         addr: Option<net::SocketAddr>,
         timeout: Millis,
+        cfg: Rc<ClientConfig>,
     ) -> BoxFuture<'_, Result<ClientResponse, SendRequestError>>;
 }
 
@@ -40,6 +41,7 @@ where
         body: Body,
         addr: Option<net::SocketAddr>,
         timeout: Millis,
+        cfg: Rc<ClientConfig>,
     ) -> BoxFuture<'_, Result<ClientResponse, SendRequestError>> {
         Box::pin(async move {
             // connect to the host
@@ -54,7 +56,7 @@ where
             connection
                 .send_request(head, body, timeout)
                 .await
-                .map(|(head, payload)| ClientResponse::new(head, payload))
+                .map(|(head, payload)| ClientResponse::new(head, payload, cfg))
         })
     }
 }
