@@ -2,7 +2,7 @@ use std::{fmt, io, marker, net};
 
 use ntex_rt::spawn_blocking;
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::future::{BoxFuture, Either, Ready};
+use ntex_util::future::Either;
 
 use crate::{Address, Connect, ConnectError};
 
@@ -26,7 +26,7 @@ impl<T: Address> Resolver<T> {
             req.addr = Some(Either::Left(net::SocketAddr::new(ip, req.port())));
             Ok(req)
         } else {
-            trace!("DNS resolver: resolving host {:?}", req.host());
+            log::trace!("DNS resolver: resolving host {:?}", req.host());
 
             let host = if req.host().contains(':') {
                 req.host().to_string()
@@ -43,7 +43,7 @@ impl<T: Address> Resolver<T> {
                         ip
                     }));
 
-                    trace!(
+                    log::trace!(
                         "DNS resolver: host {:?} resolved to {:?}",
                         req.host(),
                         req.addrs()
@@ -56,7 +56,7 @@ impl<T: Address> Resolver<T> {
                     }
                 }
                 Ok(Err(e)) => {
-                    trace!(
+                    log::trace!(
                         "DNS resolver: failed to resolve host {:?} err: {}",
                         req.host(),
                         e
@@ -64,7 +64,7 @@ impl<T: Address> Resolver<T> {
                     Err(ConnectError::Resolver(e))
                 }
                 Err(e) => {
-                    trace!(
+                    log::trace!(
                         "DNS resolver: failed to resolve host {:?} err: {}",
                         req.host(),
                         e
@@ -102,22 +102,22 @@ impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Resolver<T> {
     type Error = ConnectError;
     type Service = Resolver<T>;
     type InitError = ();
-    type Future<'f> = Ready<Self::Service, Self::InitError>;
 
-    #[inline]
-    fn create(&self, _: C) -> Self::Future<'_> {
-        Ready::Ok(self.clone())
+    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+        Ok(self.clone())
     }
 }
 
 impl<T: Address> Service<Connect<T>> for Resolver<T> {
     type Response = Connect<T>;
     type Error = ConnectError;
-    type Future<'f> = BoxFuture<'f, Result<Connect<T>, Self::Error>>;
 
-    #[inline]
-    fn call<'a>(&'a self, req: Connect<T>, _: ServiceCtx<'a, Self>) -> Self::Future<'_> {
-        Box::pin(self.lookup(req))
+    async fn call(
+        &self,
+        req: Connect<T>,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Connect<T>, Self::Error> {
+        self.lookup(req).await
     }
 }
 

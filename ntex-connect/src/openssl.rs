@@ -7,7 +7,6 @@ use ntex_bytes::PoolId;
 use ntex_io::{FilterFactory, Io, Layer};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use ntex_tls::openssl::SslConnector as IoSslConnector;
-use ntex_util::future::{BoxFuture, Ready};
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
@@ -56,7 +55,7 @@ impl<T: Address> Connector<T> {
         let openssl = self.openssl.clone();
 
         let io = conn.await?;
-        trace!("{}: SSL Handshake start for: {:?}", io.tag(), host);
+        log::trace!("{}: SSL Handshake start for: {:?}", io.tag(), host);
 
         match openssl.configure() {
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
@@ -67,11 +66,11 @@ impl<T: Address> Connector<T> {
                 let tag = io.tag();
                 match IoSslConnector::new(ssl).create(io).await {
                     Ok(io) => {
-                        trace!("{}: SSL Handshake success: {:?}", tag, host);
+                        log::trace!("{}: SSL Handshake success: {:?}", tag, host);
                         Ok(io)
                     }
                     Err(e) => {
-                        trace!("{}: SSL Handshake error: {:?}", tag, e);
+                        log::trace!("{}: SSL Handshake error: {:?}", tag, e);
                         Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
                     }
                 }
@@ -103,22 +102,22 @@ impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
-    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f;
 
-    #[inline]
-    fn create(&self, _: C) -> Self::Future<'_> {
-        Ready::Ok(self.clone())
+    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+        Ok(self.clone())
     }
 }
 
 impl<T: Address> Service<Connect<T>> for Connector<T> {
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
-    type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
-    #[inline]
-    fn call<'a>(&'a self, req: Connect<T>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        Box::pin(self.connect(req))
+    async fn call(
+        &self,
+        req: Connect<T>,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        self.connect(req).await
     }
 }
 
