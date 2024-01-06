@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] - 2024-01-0x
+
+* Use "async fn" in trait for Service definition
+
 ## [0.3.4] - 2023-11-06
 
 * Add UnwindSafe trait on mpsc::Receiver<T> #239

@@ -1,5 +1,5 @@
 //! Utilities for tracking time.
-use std::{cmp, future::Future, pin::Pin, task, task::Poll};
+use std::{cmp, future::poll_fn, future::Future, pin::Pin, task, task::Poll};
 
 mod types;
 mod wheel;
@@ -312,7 +312,7 @@ impl Interval {
 
     #[inline]
     pub async fn tick(&self) {
-        crate::future::poll_fn(|cx| self.poll_tick(cx)).await;
+        poll_fn(|cx| self.poll_tick(cx)).await;
     }
 
     #[inline]

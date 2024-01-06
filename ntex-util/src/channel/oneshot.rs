@@ -1,8 +1,8 @@
 //! A one-shot, futures-aware channel.
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
+use std::{future::poll_fn, future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::{cell::Cell, Canceled};
-use crate::{future::poll_fn, task::LocalWaker};
+use crate::task::LocalWaker;
 
 /// Creates a new futures-aware, one-shot channel.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {

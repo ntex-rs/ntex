@@ -1,8 +1,8 @@
 use slab::Slab;
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
+use std::{future::poll_fn, future::Future, pin::Pin, task::Context, task::Poll};
 
 use super::cell::Cell;
-use crate::{future::poll_fn, task::LocalWaker};
+use crate::task::LocalWaker;
 
 /// Condition allows to notify multiple waiters at the same time
 #[derive(Clone, Debug)]

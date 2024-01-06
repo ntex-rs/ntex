@@ -1,5 +1,5 @@
 //! Utilities for futures
-use std::{future::Future, mem, pin::Pin, task::Context, task::Poll};
+use std::{future::poll_fn, future::Future, mem, pin::Pin, task::Context, task::Poll};
 
 pub use futures_core::{Stream, TryFuture};
 pub use futures_sink::Sink;
@@ -19,35 +19,6 @@ pub use self::select::select;
 /// An owned dynamically typed Future for use in cases where
 /// you can't statically type your result or need to add some indirection.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
-
-/// Creates a new future wrapping around a function returning [`Poll`].
-///
-/// Polling the returned future delegates to the wrapped function.
-pub fn poll_fn<T, F>(f: F) -> impl Future<Output = T>
-where
-    F: FnMut(&mut Context<'_>) -> Poll<T>,
-{
-    PollFn { f }
-}
-
-/// Future for the [`poll_fn`] function.
-#[must_use = "futures do nothing unless you `.await` or poll them"]
-struct PollFn<F> {
-    f: F,
-}
-
-impl<F> Unpin for PollFn<F> {}
-
-impl<T, F> Future for PollFn<F>
-where
-    F: FnMut(&mut Context<'_>) -> Poll<T>,
-{
-    type Output = T;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
-        (self.f)(cx)
-    }
-}
 
 /// Creates a future that resolves to the next item in the stream.
 pub async fn stream_recv<S>(stream: &mut S) -> Option<S::Item>

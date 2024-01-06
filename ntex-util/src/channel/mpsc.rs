@@ -1,13 +1,13 @@
 //! A multi-producer, single-consumer, futures-aware, FIFO queue.
-use std::{
-    collections::VecDeque, fmt, panic::UnwindSafe, pin::Pin, task::Context, task::Poll,
-};
+use std::collections::VecDeque;
+use std::future::poll_fn;
+use std::{fmt, panic::UnwindSafe, pin::Pin, task::Context, task::Poll};
 
 use futures_core::{FusedStream, Stream};
 use futures_sink::Sink;
 
 use super::cell::{Cell, WeakCell};
-use crate::{future::poll_fn, task::LocalWaker};
+use crate::task::LocalWaker;
 
 /// Creates a unbounded in-memory channel with buffered storage.
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
