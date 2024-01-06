@@ -1,5 +1,5 @@
 //! Framed transport dispatcher
-use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll, time};
+use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
@@ -38,17 +38,9 @@ impl Default for DispatcherConfig {
 }
 
 impl DispatcherConfig {
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.12")]
     #[inline]
     /// Get keep-alive timeout
-    pub fn keepalive_timeout(&self) -> time::Duration {
-        self.0.keepalive_timeout.get().into()
-    }
-
-    #[inline]
-    /// Get keep-alive timeout
-    pub fn keepalive_timeout_secs(&self) -> Seconds {
+    pub fn keepalive_timeout(&self) -> Seconds {
         self.0.keepalive_timeout.get()
     }
 
@@ -58,25 +50,9 @@ impl DispatcherConfig {
         self.0.disconnect_timeout.get()
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.12")]
     #[inline]
     /// Get frame read rate
-    pub fn frame_read_rate(&self) -> Option<(time::Duration, time::Duration, u16)> {
-        if self.0.frame_read_enabled.get() {
-            Some((
-                self.0.frame_read_timeout.get().into(),
-                self.0.frame_read_max_timeout.get().into(),
-                self.0.frame_read_rate.get(),
-            ))
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    /// Get frame read rate
-    pub fn frame_read_rate_params(&self) -> Option<(Seconds, Seconds, u16)> {
+    pub fn frame_read_rate(&self) -> Option<(Seconds, Seconds, u16)> {
         if self.0.frame_read_enabled.get() {
             Some((
                 self.0.frame_read_timeout.get(),
@@ -219,7 +195,7 @@ where
     U: Decoder + Encoder,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn with_config<Io, F>(
+    pub fn new<Io, F>(
         io: Io,
         codec: U,
         service: F,
@@ -232,7 +208,7 @@ where
         let io = IoBoxed::from(io);
         io.set_disconnect_timeout(cfg.disconnect_timeout());
 
-        let flags = if cfg.keepalive_timeout_secs().is_zero() {
+        let flags = if cfg.keepalive_timeout().is_zero() {
             Flags::empty()
         } else {
             Flags::KA_ENABLED
@@ -260,17 +236,6 @@ where
                 st: DispatcherState::Processing,
             },
         }
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.6", note = "Use Dispatcher::with_config() method")]
-    /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Dispatcher<S, U>
-    where
-        IoBoxed: From<Io>,
-        F: IntoService<S, DispatchItem<U>>,
-    {
-        Self::with_config(io, codec, service, &DispatcherConfig::default())
     }
 }
 
@@ -560,14 +525,12 @@ where
                 log::debug!(
                     "{}: Start keep-alive timer {:?}",
                     self.shared.io.tag(),
-                    self.cfg.keepalive_timeout_secs()
+                    self.cfg.keepalive_timeout()
                 );
                 self.flags.insert(Flags::KA_TIMEOUT);
-                self.shared
-                    .io
-                    .start_timer_secs(self.cfg.keepalive_timeout_secs());
+                self.shared.io.start_timer(self.cfg.keepalive_timeout());
             }
-        } else if let Some((timeout, max, _)) = self.cfg.frame_read_rate_params() {
+        } else if let Some((timeout, max, _)) = self.cfg.frame_read_rate() {
             // we got new data but not enough to parse single frame
             // start read timer
             self.flags.insert(Flags::READ_TIMEOUT);
@@ -575,14 +538,14 @@ where
             self.read_remains = decoded.remains as u32;
             self.read_remains_prev = 0;
             self.read_max_timeout = max;
-            self.shared.io.start_timer_secs(timeout);
+            self.shared.io.start_timer(timeout);
         }
     }
 
     fn handle_timeout(&mut self) -> Result<(), DispatchItem<U>> {
         // check read timer
         if self.flags.contains(Flags::READ_TIMEOUT) {
-            if let Some((timeout, max, rate)) = self.cfg.frame_read_rate_params() {
+            if let Some((timeout, max, rate)) = self.cfg.frame_read_rate() {
                 let total = (self.read_remains - self.read_remains_prev)
                     .try_into()
                     .unwrap_or(u16::MAX);
@@ -603,7 +566,7 @@ where
                             self.shared.io.tag(),
                             total
                         );
-                        self.shared.io.start_timer_secs(timeout);
+                        self.shared.io.start_timer(timeout);
                         return Ok(());
                     }
                     log::trace!(
@@ -627,12 +590,12 @@ where
 mod tests {
     use rand::Rng;
     use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
-    use std::{cell::RefCell, io, time::Duration};
+    use std::{cell::RefCell, io};
 
     use ntex_bytes::{Bytes, BytesMut, PoolId, PoolRef};
     use ntex_codec::BytesCodec;
     use ntex_service::ServiceCtx;
-    use ntex_util::{future::Ready, time::sleep, time::Millis, time::Seconds};
+    use ntex_util::{time::sleep, time::Millis, time::Seconds};
 
     use super::*;
     use crate::{io::Flags, testing::IoTest, Io, IoRef, IoStream};
@@ -713,14 +676,14 @@ mod tests {
             state.set_disconnect_timeout(cfg.disconnect_timeout());
             state.set_tag("DBG");
 
-            let flags = if cfg.keepalive_timeout_secs().is_zero() {
+            let flags = if cfg.keepalive_timeout().is_zero() {
                 super::Flags::empty()
             } else {
                 super::Flags::KA_ENABLED
             };
 
             let inner = State(state.get_ref());
-            state.start_timer(Duration::from_millis(500));
+            state.start_timer(Seconds::ONE);
 
             let shared = Rc::new(DispatcherShared {
                 codec,
@@ -870,19 +833,18 @@ mod tests {
         impl Service<DispatchItem<BytesCodec>> for Srv {
             type Response = Option<Response<BytesCodec>>;
             type Error = ();
-            type Future<'f> = Ready<Option<Response<BytesCodec>>, ()>;
 
             fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), ()>> {
                 self.0.set(self.0.get() + 1);
                 Poll::Ready(Err(()))
             }
 
-            fn call<'a>(
+            async fn call<'a>(
                 &'a self,
                 _: DispatchItem<BytesCodec>,
                 _: ServiceCtx<'a, Self>,
-            ) -> Self::Future<'a> {
-                Ready::Ok(None)
+            ) -> Result<Self::Response, Self::Error> {
+                Ok(None)
             }
         }
 

@@ -66,11 +66,9 @@ where
     type Error = T::Error;
     type Service = FilterService<T, F>;
     type InitError = ();
-    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f;
 
-    #[inline]
-    fn create(&self, _: ()) -> Self::Future<'_> {
-        Ready::Ok(FilterService {
+    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+        Ok(FilterService {
             filter: self.filter.clone(),
             _t: PhantomData,
         })
@@ -96,11 +94,14 @@ where
 {
     type Response = Io<Layer<T::Filter, F>>;
     type Error = T::Error;
-    type Future<'f> = T::Future where T: 'f, F: 'f;
 
     #[inline]
-    fn call<'a>(&'a self, req: Io<F>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        self.filter.clone().create(req)
+    async fn call(
+        &self,
+        req: Io<F>,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        self.filter.clone().create(req).await
     }
 }
 
@@ -204,11 +205,11 @@ mod tests {
         assert!(NullFilter.query(std::any::TypeId::of::<()>()).is_none());
         assert!(NullFilter.shutdown(&ioref, &stack, 0).unwrap().is_ready());
         assert_eq!(
-            ntex_util::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
+            std::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
             crate::ReadStatus::Terminate
         );
         assert_eq!(
-            ntex_util::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
+            std::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
             crate::WriteStatus::Terminate
         );
         assert!(NullFilter.process_write_buf(&ioref, &stack, 0).is_ok());

@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] - 2024-01-0x
+
+* Use "async fn" in trait for Service definition
+
 ## [0.3.17] - 2023-12-25
 
 * Fix filter leak during Io drop

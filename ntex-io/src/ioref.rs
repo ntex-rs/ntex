@@ -1,4 +1,4 @@
-use std::{any, fmt, hash, io, time};
+use std::{any, fmt, hash, io};
 
 use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
@@ -225,23 +225,9 @@ impl IoRef {
         self.0.timeout.get()
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.12")]
-    #[inline]
-    /// current timer deadline
-    pub fn timer_deadline(&self) -> time::Instant {
-        self.0.timeout.get().instant()
-    }
-
     #[inline]
     /// Start timer
-    pub fn start_timer(&self, timeout: time::Duration) {
-        self.start_timer_secs(Seconds(timeout.as_secs() as u16));
-    }
-
-    #[inline]
-    /// Start timer
-    pub fn start_timer_secs(&self, timeout: Seconds) -> timer::TimerHandle {
+    pub fn start_timer(&self, timeout: Seconds) -> timer::TimerHandle {
         let cur_hnd = self.0.timeout.get();
 
         if !timeout.is_zero() {
@@ -276,22 +262,6 @@ impl IoRef {
             self.0.timeout.set(timer::TimerHandle::ZERO);
             timer::unregister(hnd, self)
         }
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.6")]
-    #[inline]
-    /// Start keep-alive timer
-    pub fn start_keepalive_timer(&self, timeout: time::Duration) {
-        self.start_timer(timeout);
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "0.3.6")]
-    #[inline]
-    /// Stop keep-alive timer
-    pub fn stop_keepalive_timer(&self) {
-        self.stop_timer()
     }
 
     #[inline]
@@ -340,11 +310,11 @@ impl fmt::Debug for IoRef {
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::{future::Future, pin::Pin, rc::Rc, task::Poll};
+    use std::{future::poll_fn, future::Future, pin::Pin, rc::Rc, task::Poll};
 
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
-    use ntex_util::future::{lazy, poll_fn};
+    use ntex_util::future::lazy;
     use ntex_util::time::{sleep, Millis};
 
     use super::*;

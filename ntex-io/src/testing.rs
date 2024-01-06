@@ -1,10 +1,10 @@
 //! utilities and helpers for testing
+use std::future::{poll_fn, Future};
 use std::sync::{Arc, Mutex};
 use std::task::{ready, Context, Poll, Waker};
-use std::{any, cell::RefCell, cmp, fmt, future::Future, io, mem, net, pin::Pin, rc::Rc};
+use std::{any, cell::RefCell, cmp, fmt, io, mem, net, pin::Pin, rc::Rc};
 
 use ntex_bytes::{Buf, BufMut, Bytes, BytesVec};
-use ntex_util::future::poll_fn;
 use ntex_util::time::{sleep, Millis, Sleep};
 
 use crate::{types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus};
