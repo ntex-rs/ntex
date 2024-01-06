@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.0] - 2024-01-xx
+
+* Use "async fn" in trait for Service definition
+
 ## [1.2.7] - 2023-09-19
 
 * Use From<T::Error> for apply_fn util

@@ -3,12 +3,11 @@ use std::{fmt, future::Future, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::apply::{Apply, ApplyFactory};
-use crate::ctx::{ServiceCall, ServiceCtx};
+use crate::ctx::ServiceCtx;
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
 use crate::middleware::{ApplyMiddleware, Middleware};
-use crate::pipeline::CreatePipeline;
 use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
@@ -171,14 +170,17 @@ where
 impl<Svc: Service<Req>, Req> Service<Req> for ServiceChain<Svc, Req> {
     type Response = Svc::Response;
     type Error = Svc::Error;
-    type Future<'f> = ServiceCall<'f, Svc, Req> where Self: 'f, Req: 'f;
 
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        ctx.call(&self.service, req)
+    async fn call(
+        &self,
+        req: Req,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.service, req).await
     }
 }
 
@@ -308,11 +310,11 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
     }
 
     /// Create and return a new service value asynchronously and wrap into a container
-    pub fn pipeline(&self, cfg: C) -> CreatePipeline<'_, T, Req, C>
+    pub async fn pipeline(&self, cfg: C) -> Result<Pipeline<T::Service>, T::InitError>
     where
         Self: Sized,
     {
-        CreatePipeline::new(self.factory.create(cfg))
+        Ok(Pipeline::new(self.factory.create(cfg).await?))
     }
 }
 
@@ -344,10 +346,9 @@ impl<T: ServiceFactory<R, C>, R, C> ServiceFactory<R, C> for ServiceChainFactory
     type Error = T::Error;
     type Service = T::Service;
     type InitError = T::InitError;
-    type Future<'f> = T::Future<'f> where Self: 'f;
 
     #[inline]
-    fn create(&self, cfg: C) -> Self::Future<'_> {
-        self.factory.create(cfg)
+    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+        self.factory.create(cfg).await
     }
 }

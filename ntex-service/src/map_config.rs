@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{fmt, marker::PhantomData};
 
 use super::{IntoServiceFactory, ServiceFactory};
 
@@ -78,11 +78,9 @@ where
 
     type Service = A::Service;
     type InitError = A::InitError;
-    type Future<'f> = A::Future<'f> where Self: 'f;
 
-    fn create(&self, cfg: C) -> Self::Future<'_> {
-        let cfg = (self.f)(cfg);
-        self.a.create(cfg)
+    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+        self.a.create((self.f)(cfg)).await
     }
 }
 
@@ -108,37 +106,9 @@ where
 
     type Service = A::Service;
     type InitError = A::InitError;
-    type Future<'f> = UnitConfigFuture<'f, A, R, C> where Self: 'f, C: 'f;
 
-    fn create(&self, _: C) -> Self::Future<'_> {
-        UnitConfigFuture {
-            fut: self.factory.create(()),
-            _t: PhantomData,
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct UnitConfigFuture<'f, A, R, C>
-    where A: ServiceFactory<R>,
-          A: 'f,
-          C: 'f,
-    {
-        #[pin]
-        fut: A::Future<'f>,
-        _t: PhantomData<C>,
-    }
-}
-
-impl<'f, A, R, C> Future for UnitConfigFuture<'f, A, R, C>
-where
-    A: ServiceFactory<R>,
-{
-    type Output = Result<A::Service, A::InitError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.project().fut.poll(cx)
+    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+        self.factory.create(()).await
     }
 }
 
@@ -175,28 +145,4 @@ mod tests {
             .create(&10)
             .await;
     }
-
-    // #[ntex::test]
-    // async fn test_map_config_service() {
-    //     let item = Rc::new(Cell::new(10usize));
-    //     let item2 = item.clone();
-
-    //     let srv = map_config_service(
-    //         fn_factory_with_config(move |next: usize| {
-    //             let item = item2.clone();
-    //             async move {
-    //                 item.set(next);
-    //                 Ok::<_, ()>(fn_service(|id: usize| Ready::<_, ()>::Ok(id * 2)))
-    //             }
-    //         }),
-    //         fn_service(move |item: usize| Ready::<_, ()>::Ok(item + 1)),
-    //     )
-    //     .clone()
-    //     .create(10)
-    //     .await
-    //     .unwrap();
-
-    //     assert_eq!(srv.call(10usize).await.unwrap(), 20);
-    //     assert_eq!(item.get(), 11);
-    // }
 }

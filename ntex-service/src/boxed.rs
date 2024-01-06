@@ -87,7 +87,11 @@ where
         idx: usize,
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, Self::Response, Self::Error> {
-        Box::pin(ServiceCtx::<'a, S>::from_ref(idx, waiters).call_nowait(self, req))
+        Box::pin(async move {
+            ServiceCtx::<'a, S>::from_ref(idx, waiters)
+                .call_nowait(self, req)
+                .await
+        })
     }
 }
 
@@ -134,7 +138,6 @@ where
 {
     type Response = Res;
     type Error = Err;
-    type Future<'f> = BoxFuture<'f, Res, Err> where Self: 'f, Req: 'f;
 
     #[inline]
     fn poll_ready(&self, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -147,9 +150,9 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
+    async fn call(&self, req: Req, ctx: ServiceCtx<'_, Self>) -> Result<Res, Err> {
         let (idx, waiters) = ctx.inner();
-        self.0.call(req, idx, waiters)
+        self.0.call(req, idx, waiters).await
     }
 }
 
@@ -163,10 +166,9 @@ where
 
     type Service = BoxService<Req, Res, Err>;
     type InitError = InitErr;
-    type Future<'f> = BoxFuture<'f, Self::Service, InitErr> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create(&self, cfg: C) -> Self::Future<'_> {
-        self.0.create(cfg)
+    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+        self.0.create(cfg).await
     }
 }

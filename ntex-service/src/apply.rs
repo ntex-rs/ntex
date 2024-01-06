@@ -1,5 +1,5 @@
 #![allow(clippy::type_complexity)]
-use std::{fmt, future::Future, marker, pin::Pin, task, task::Poll};
+use std::{fmt, future::Future, marker};
 
 use super::ctx::ServiceCtx;
 use super::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
@@ -97,14 +97,17 @@ where
 {
     type Response = Out;
     type Error = Err;
-    type Future<'f> = R where Self: 'f, In: 'f, R: 'f;
 
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
     #[inline]
-    fn call<'a>(&'a self, req: In, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        (self.f)(req, self.service.clone())
+    async fn call(
+        &self,
+        req: In,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        (self.f)(req, self.service.clone()).await
     }
 }
 
@@ -183,58 +186,14 @@ where
 
     type Service = Apply<T::Service, Req, F, R, In, Out, Err>;
     type InitError = T::InitError;
-    type Future<'f> = ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err> where Self: 'f, Cfg: 'f;
 
     #[inline]
-    fn create(&self, cfg: Cfg) -> Self::Future<'_> {
-        ApplyFactoryResponse {
-            fut: self.service.create(cfg),
-            f: Some(self.f.clone()),
-            _t: marker::PhantomData,
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    pub struct ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
-    where
-        T: ServiceFactory<Req, Cfg>,
-        T: 'f,
-        F: Fn(In, Pipeline<T::Service>) -> R,
-        T::Service: 'f,
-        R: Future<Output = Result<Out, Err>>,
-        Cfg: 'f,
-        Err: From<T::Error>,
-    {
-        #[pin]
-        fut: T::Future<'f>,
-        f: Option<F>,
-        _t: marker::PhantomData<(In, Out)>,
-    }
-}
-
-impl<'f, T, Req, Cfg, F, R, In, Out, Err> Future
-    for ApplyFactoryResponse<'f, T, Req, Cfg, F, R, In, Out, Err>
-where
-    T: ServiceFactory<Req, Cfg>,
-    F: Fn(In, Pipeline<T::Service>) -> R,
-    R: Future<Output = Result<Out, Err>>,
-    Err: From<T::Error>,
-{
-    type Output = Result<Apply<T::Service, Req, F, R, In, Out, Err>, T::InitError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
-        if let Poll::Ready(svc) = this.fut.poll(cx)? {
-            Poll::Ready(Ok(Apply {
-                service: svc.into(),
-                f: this.f.take().unwrap(),
-                r: marker::PhantomData,
-            }))
-        } else {
-            Poll::Pending
-        }
+    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
+        self.service.create(cfg).await.map(|svc| Apply {
+            service: svc.into(),
+            f: self.f.clone(),
+            r: marker::PhantomData,
+        })
     }
 }
 
@@ -252,10 +211,9 @@ mod tests {
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
-        type Future<'f> = Ready<(), ()>;
 
-        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-            Ready::Ok(())
+        async fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Result<(), ()> {
+            Ok(())
         }
     }
 
