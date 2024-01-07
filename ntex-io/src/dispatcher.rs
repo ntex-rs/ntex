@@ -1030,7 +1030,7 @@ mod tests {
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
-        sleep(Millis(1500)).await;
+        sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
@@ -1080,7 +1080,7 @@ mod tests {
         client.write("12345678");
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"12345678"));
-        sleep(Millis(1250)).await;
+        sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
@@ -1149,7 +1149,6 @@ mod tests {
 
     #[ntex::test]
     async fn test_read_timeout() {
-        let _ = env_logger::init();
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
@@ -1189,13 +1188,13 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"12345678"));
 
         client.write("1");
-        sleep(Millis(500)).await;
+        sleep(Millis(1000)).await;
         assert!(!state.flags().contains(Flags::IO_STOPPING));
         client.write("23");
-        sleep(Millis(500)).await;
+        sleep(Millis(1000)).await;
         assert!(!state.flags().contains(Flags::IO_STOPPING));
         client.write("4");
-        sleep(Millis(1100)).await;
+        sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
         assert!(state.flags().contains(Flags::IO_STOPPING));

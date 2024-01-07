@@ -99,9 +99,13 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
     TIMER.with(|timer| {
         // setup current delta
         if !timer.running.get() {
-            timer
-                .current
-                .set((now() - timer.base.get()).as_secs() as u32);
+            let current = (now() - timer.base.get()).as_secs() as u32;
+            timer.current.set(current);
+            log::debug!(
+                "{}: Timer driver does not run, current: {}",
+                io.tag(),
+                current
+            );
         }
 
         let hnd = {
@@ -128,8 +132,8 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
                 loop {
                     sleep(SEC).await;
                     let stop = TIMER.with(|timer| {
-                        let current = timer.current.get() + 1;
-                        timer.current.set(current);
+                        let current = timer.current.get();
+                        timer.current.set(current + 1);
 
                         // notify io dispatcher
                         let mut inner = timer.storage.borrow_mut();
