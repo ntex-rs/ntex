@@ -27,4 +27,4 @@ simdutf8 = { version = "0.1.4", optional = true }
 [dev-dependencies]
 serde_test = "1.0"
 serde_json = "1.0"
-ntex = { version = "1.0.0", features = ["tokio"] }
+ntex = { version = "1.0.0-b.0", features = ["tokio"] }
