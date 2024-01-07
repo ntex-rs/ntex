@@ -1,4 +1,4 @@
-use std::io;
+use std::{future::poll_fn, io};
 
 use ntex_h2::client::{RecvStream, SimpleClient};
 use ntex_h2::{self as h2, frame};
@@ -8,7 +8,7 @@ use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::{h2::payload, payload::Payload, Method, Version};
 use crate::time::{timeout_checked, Millis};
-use crate::util::{poll_fn, ByteString, Bytes};
+use crate::util::{ByteString, Bytes};
 
 use super::error::{ConnectError, SendRequestError};
 

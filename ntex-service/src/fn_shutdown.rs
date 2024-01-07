@@ -1,5 +1,4 @@
-use std::task::{Context, Poll};
-use std::{cell::Cell, fmt, future::ready, future::Ready, marker::PhantomData};
+use std::{cell::Cell, fmt, marker::PhantomData, task::Context, task::Poll};
 
 use crate::{Service, ServiceCtx};
 
@@ -55,7 +54,6 @@ where
 {
     type Response = Req;
     type Error = Err;
-    type Future<'f> = Ready<Result<Req, Err>> where Self: 'f, Req: 'f;
 
     #[inline]
     fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
@@ -66,8 +64,8 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        ready(Ok(req))
+    async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Req, Err> {
+        Ok(req)
     }
 }
 

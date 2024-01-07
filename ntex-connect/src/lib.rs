@@ -1,9 +1,6 @@
 //! Tcp connector service
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
 
-#[macro_use]
-extern crate log;
-
 mod error;
 mod message;
 mod resolve;
@@ -29,8 +26,7 @@ where
     T: Address,
     Connect<T>: From<U>,
 {
-    service::ConnectServiceResponse::new(Box::pin(Resolver::new().lookup(message.into())))
-        .await
+    Connector::new().connect(message).await
 }
 
 #[allow(unused_imports)]

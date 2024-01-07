@@ -1,10 +1,11 @@
 //! Payload stream
+use std::collections::VecDeque;
 use std::task::{Context, Poll};
-use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc, rc::Weak};
+use std::{cell::RefCell, future::poll_fn, pin::Pin, rc::Rc, rc::Weak};
 
 use ntex_h2::{self as h2};
 
-use crate::util::{poll_fn, Bytes, Stream};
+use crate::util::{Bytes, Stream};
 use crate::{http::error::PayloadError, task::LocalWaker};
 
 /// Buffered stream of byte chunks

@@ -1,5 +1,5 @@
 use std::{cell::RefCell, io, task::Context, task::Poll};
-use std::{marker::PhantomData, mem, rc::Rc};
+use std::{future::poll_fn, marker::PhantomData, mem, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
@@ -11,7 +11,7 @@ use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
 use crate::io::{types, Filter, Io, IoBoxed, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::util::{poll_fn, BoxFuture, Bytes, BytesMut, Either, HashMap, Ready};
+use crate::util::{Bytes, BytesMut, HashMap};
 
 use super::payload::{Payload, PayloadSender};
 
@@ -71,10 +71,9 @@ mod openssl {
         > {
             Acceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
-                .chain()
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
-                .and_then(self.chain().map_err(SslError::Service))
+                .and_then(self.map_err(SslError::Service))
         }
     }
 }
@@ -110,10 +109,9 @@ mod rustls {
 
             Acceptor::from(config)
                 .timeout(self.cfg.ssl_handshake_timeout)
-                .chain()
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
-                .and_then(self.chain().map_err(SslError::Service))
+                .and_then(self.map_err(SslError::Service))
         }
     }
 }
@@ -130,20 +128,20 @@ where
     type Error = DispatchError;
     type InitError = S::InitError;
     type Service = H2ServiceHandler<F, S::Service, B>;
-    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
-        let fut = self.srv.create(());
-        let cfg = self.cfg.clone();
+    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+        let service = self.srv.create(()).await?;
+        let config = Rc::new(DispatcherConfig::new(
+            self.cfg.clone(),
+            service,
+            (),
+            None,
+            None,
+        ));
 
-        Box::pin(async move {
-            let service = fut.await?;
-            let config = Rc::new(DispatcherConfig::new(cfg, service, (), None, None));
-
-            Ok(H2ServiceHandler {
-                config,
-                _t: PhantomData,
-            })
+        Ok(H2ServiceHandler {
+            config,
+            _t: PhantomData,
         })
     }
 }
@@ -164,9 +162,7 @@ where
 {
     type Response = ();
     type Error = DispatchError;
-    type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
-    #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.config.service.poll_ready(cx).map_err(|e| {
             log::error!("Service readiness error: {:?}", e);
@@ -174,18 +170,21 @@ where
         })
     }
 
-    #[inline]
     fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
         self.config.service.poll_shutdown(cx)
     }
 
-    fn call<'a>(&'a self, io: Io<F>, _: ServiceCtx<'a, Self>) -> Self::Future<'_> {
+    async fn call(
+        &self,
+        io: Io<F>,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         log::trace!(
             "New http2 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
         );
 
-        Box::pin(handle(io.into(), self.config.clone()))
+        handle(io.into(), self.config.clone()).await
     }
 }
 
@@ -226,15 +225,14 @@ impl ControlService {
 impl Service<h2::ControlMessage<H2Error>> for ControlService {
     type Response = h2::ControlResult;
     type Error = ();
-    type Future<'f> = Ready<Self::Response, Self::Error>;
 
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         msg: h2::ControlMessage<H2Error>,
-        _: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         log::trace!("Control message: {:?}", msg);
-        Ready::Ok::<_, ()>(msg.ack())
+        Ok::<_, ()>(msg.ack())
     }
 }
 
@@ -273,12 +271,12 @@ where
 {
     type Response = ();
     type Error = H2Error;
-    type Future<'f> = Either<
-        BoxFuture<'f, Result<Self::Response, Self::Error>>,
-        Ready<Self::Response, Self::Error>,
-    >;
 
-    fn call<'a>(&'a self, msg: h2::Message, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
+    async fn call(
+        &self,
+        msg: h2::Message,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         let h2::Message { stream, kind } = msg;
         let (io, pseudo, headers, eof, payload) = match kind {
             h2::MessageKind::Headers {
@@ -303,7 +301,7 @@ where
                 } else {
                     log::error!("Payload stream does not exists for {:?}", stream.id());
                 };
-                return Either::Right(Ready::Ok(()));
+                return Ok(());
             }
             h2::MessageKind::Eof(item) => {
                 log::debug!("Got payload eof for {:?}: {:?}", stream.id(), item);
@@ -318,95 +316,93 @@ where
                         h2::StreamEof::Error(err) => sender.set_error(err.into()),
                     }
                 }
-                return Either::Right(Ready::Ok(()));
+                return Ok(());
             }
             h2::MessageKind::Disconnect(err) => {
                 log::debug!("Connection is disconnected {:?}", err);
                 if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     sender.set_error(io::Error::new(io::ErrorKind::Other, err).into());
                 }
-                return Either::Right(Ready::Ok(()));
+                return Ok(());
             }
         };
 
         let cfg = self.config.clone();
 
-        Either::Left(Box::pin(async move {
-            log::trace!(
-                "{:?} got request (eof: {}): {:#?}\nheaders: {:#?}",
-                stream.id(),
-                eof,
-                pseudo,
-                headers
-            );
-            let mut req = if let Some(pl) = payload {
-                Request::with_payload(crate::http::Payload::H2(pl))
-            } else {
-                Request::new()
-            };
+        log::trace!(
+            "{:?} got request (eof: {}): {:#?}\nheaders: {:#?}",
+            stream.id(),
+            eof,
+            pseudo,
+            headers
+        );
+        let mut req = if let Some(pl) = payload {
+            Request::with_payload(crate::http::Payload::H2(pl))
+        } else {
+            Request::new()
+        };
 
-            let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
-            let method = pseudo.method.ok_or(H2Error::MissingPseudo("Method"))?;
+        let path = pseudo.path.ok_or(H2Error::MissingPseudo("Path"))?;
+        let method = pseudo.method.ok_or(H2Error::MissingPseudo("Method"))?;
 
-            let head = req.head_mut();
-            head.uri = if let Some(ref authority) = pseudo.authority {
-                let scheme = pseudo.scheme.ok_or(H2Error::MissingPseudo("Scheme"))?;
-                Uri::try_from(format!("{}://{}{}", scheme, authority, path))?
-            } else {
-                Uri::try_from(path.as_str())?
-            };
-            let is_head_req = method == Method::HEAD;
-            head.version = Version::HTTP_2;
-            head.method = method;
-            head.headers = headers;
-            head.io = CurrentIo::Ref(io);
+        let head = req.head_mut();
+        head.uri = if let Some(ref authority) = pseudo.authority {
+            let scheme = pseudo.scheme.ok_or(H2Error::MissingPseudo("Scheme"))?;
+            Uri::try_from(format!("{}://{}{}", scheme, authority, path))?
+        } else {
+            Uri::try_from(path.as_str())?
+        };
+        let is_head_req = method == Method::HEAD;
+        head.version = Version::HTTP_2;
+        head.method = method;
+        head.headers = headers;
+        head.io = CurrentIo::Ref(io);
 
-            let (mut res, mut body) = match cfg.service.call(req).await {
-                Ok(res) => res.into().into_parts(),
-                Err(err) => {
-                    let (res, body) = Response::from(&err).into_parts();
-                    (res, body.into_body())
-                }
-            };
+        let (mut res, mut body) = match cfg.service.call(req).await {
+            Ok(res) => res.into().into_parts(),
+            Err(err) => {
+                let (res, body) = Response::from(&err).into_parts();
+                (res, body.into_body())
+            }
+        };
 
-            let head = res.head_mut();
-            let mut size = body.size();
-            prepare_response(&cfg.timer, head, &mut size);
+        let head = res.head_mut();
+        let mut size = body.size();
+        prepare_response(&cfg.timer, head, &mut size);
 
-            log::debug!("Received service response: {:?} payload: {:?}", head, size);
+        log::debug!("Received service response: {:?} payload: {:?}", head, size);
 
-            let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
-            if size.is_eof() || is_head_req {
-                stream.send_response(head.status, hdrs, true)?;
-            } else {
-                stream.send_response(head.status, hdrs, false)?;
+        let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
+        if size.is_eof() || is_head_req {
+            stream.send_response(head.status, hdrs, true)?;
+        } else {
+            stream.send_response(head.status, hdrs, false)?;
 
-                loop {
-                    match poll_fn(|cx| body.poll_next_chunk(cx)).await {
-                        None => {
-                            log::debug!("{:?} closing payload stream", stream.id());
-                            stream.send_payload(Bytes::new(), true).await?;
-                            break;
+            loop {
+                match poll_fn(|cx| body.poll_next_chunk(cx)).await {
+                    None => {
+                        log::debug!("{:?} closing payload stream", stream.id());
+                        stream.send_payload(Bytes::new(), true).await?;
+                        break;
+                    }
+                    Some(Ok(chunk)) => {
+                        log::debug!(
+                            "{:?} sending data chunk {:?} bytes",
+                            stream.id(),
+                            chunk.len()
+                        );
+                        if !chunk.is_empty() {
+                            stream.send_payload(chunk, false).await?;
                         }
-                        Some(Ok(chunk)) => {
-                            log::debug!(
-                                "{:?} sending data chunk {:?} bytes",
-                                stream.id(),
-                                chunk.len()
-                            );
-                            if !chunk.is_empty() {
-                                stream.send_payload(chunk, false).await?;
-                            }
-                        }
-                        Some(Err(e)) => {
-                            error!("Response payload stream error: {:?}", e);
-                            return Err(e.into());
-                        }
+                    }
+                    Some(Err(e)) => {
+                        error!("Response payload stream error: {:?}", e);
+                        return Err(e.into());
                     }
                 }
             }
-            Ok(())
-        }))
+        }
+        Ok(())
     }
 }
 

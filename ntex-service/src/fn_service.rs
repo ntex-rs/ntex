@@ -1,4 +1,4 @@
-use std::{fmt, future::ready, future::Future, future::Ready, marker::PhantomData};
+use std::{fmt, future::Future, marker::PhantomData};
 
 use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
@@ -133,11 +133,10 @@ where
 {
     type Response = Res;
     type Error = Err;
-    type Future<'f> = Fut where Self: 'f, Req: 'f;
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        (self.f)(req)
+    async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
+        (self.f)(req).await
     }
 }
 
@@ -207,11 +206,10 @@ where
 {
     type Response = Res;
     type Error = Err;
-    type Future<'f> = Fut where Self: 'f;
 
     #[inline]
-    fn call<'a>(&'a self, req: Req, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        (self.f)(req)
+    async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
+        (self.f)(req).await
     }
 }
 
@@ -226,14 +224,13 @@ where
 
     type Service = FnService<F, Req>;
     type InitError = ();
-    type Future<'f> = Ready<Result<Self::Service, Self::InitError>> where Self: 'f;
 
     #[inline]
-    fn create(&self, _: Cfg) -> Self::Future<'_> {
-        ready(Ok(FnService {
+    async fn create(&self, _: Cfg) -> Result<Self::Service, Self::InitError> {
+        Ok(FnService {
             f: self.f.clone(),
             _t: PhantomData,
-        }))
+        })
     }
 }
 
@@ -300,11 +297,10 @@ where
 
     type Service = Srv;
     type InitError = Err;
-    type Future<'f> = Fut where Self: 'f, Fut: 'f;
 
     #[inline]
-    fn create(&self, cfg: Cfg) -> Self::Future<'_> {
-        (self.f)(cfg)
+    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
+        (self.f)(cfg).await
     }
 }
 
@@ -341,11 +337,10 @@ where
     type Error = S::Error;
     type Service = S;
     type InitError = E;
-    type Future<'f> = R where Self: 'f, R: 'f;
 
     #[inline]
-    fn create(&self, _: C) -> Self::Future<'_> {
-        (self.f)()
+    async fn create(&self, _: C) -> Result<S, E> {
+        (self.f)().await
     }
 }
 

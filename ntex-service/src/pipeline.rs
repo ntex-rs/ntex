@@ -1,6 +1,7 @@
-use std::{cell::Cell, future, pin::Pin, rc::Rc, task, task::Context, task::Poll};
+use std::future::{poll_fn, Future};
+use std::{cell::Cell, pin::Pin, rc::Rc, task, task::Context, task::Poll};
 
-use crate::{ctx::ServiceCall, ctx::Waiters, Service, ServiceCtx, ServiceFactory};
+use crate::{ctx::Waiters, Service, ServiceCtx};
 
 #[derive(Debug)]
 /// Container for a service.
@@ -30,6 +31,15 @@ impl<S> Pipeline<S> {
     }
 
     #[inline]
+    /// Returns when the service is able to process requests.
+    pub async fn ready<R>(&self) -> Result<(), S::Error>
+    where
+        S: Service<R>,
+    {
+        poll_fn(move |cx| self.poll_ready(cx)).await
+    }
+
+    #[inline]
     /// Returns `Ready` when the service is able to process requests.
     pub fn poll_ready<R>(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>>
     where
@@ -55,26 +65,21 @@ impl<S> Pipeline<S> {
         self.svc.poll_shutdown(cx)
     }
 
-    #[deprecated(since = "1.2.3", note = "Use Pipeline::call() instead")]
-    #[doc(hidden)]
     #[inline]
     /// Wait for service readiness and then create future object
     /// that resolves to service result.
-    pub fn service_call<R>(&self, req: R) -> ServiceCall<'_, S, R>
+    pub async fn call<R>(&self, req: R) -> Result<S::Response, S::Error>
     where
         S: Service<R>,
     {
-        ServiceCall::call_pipeline(req, self)
-    }
+        // check service readiness
+        self.ready().await?;
 
-    #[inline]
-    /// Wait for service readiness and then create future object
-    /// that resolves to service result.
-    pub fn call<R>(&self, req: R) -> ServiceCall<'_, S, R>
-    where
-        S: Service<R>,
-    {
-        ServiceCall::call_pipeline(req, self)
+        // call service
+        self.svc
+            .as_ref()
+            .call(req, ServiceCtx::new(&self.waiters))
+            .await
     }
 
     #[inline]
@@ -130,6 +135,8 @@ impl<S> Clone for Pipeline<S> {
     }
 }
 
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
 pin_project_lite::pin_project! {
     #[must_use = "futures do nothing unless polled"]
     pub struct PipelineCall<S, R>
@@ -153,7 +160,7 @@ pin_project_lite::pin_project! {
         Req: 'static,
     {
         Ready { req: Option<Req> },
-        Call { #[pin] fut: S::Future<'static> },
+        Call { #[pin] fut: BoxFuture<'static, Result<S::Response, S::Error>> },
         Empty,
     }
 }
@@ -163,9 +170,10 @@ where
     S: Service<R> + 'static,
     R: 'static,
 {
-    fn new_call(pl: &Pipeline<S>, req: R) -> Self {
+    fn new_call<'a>(pl: &'a Pipeline<S>, req: R) -> Self {
         let ctx = ServiceCtx::new(&pl.waiters);
-        let svc_call = pl.get_ref().call(req, ctx);
+        let svc_call: BoxFuture<'a, Result<S::Response, S::Error>> =
+            Box::pin(pl.get_ref().call(req, ctx));
 
         // SAFETY: `svc_call` has same lifetime same as lifetime of `pl.svc`
         // Pipeline::svc is heap allocated(Rc<S>), we keep it alive until
@@ -176,7 +184,7 @@ where
     }
 }
 
-impl<S, R> future::Future for PipelineCall<S, R>
+impl<S, R> Future for PipelineCall<S, R>
 where
     S: Service<R>,
 {
@@ -202,41 +210,5 @@ where
                 panic!("future must not be polled after it returned `Poll::Ready`")
             }
         }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct CreatePipeline<'f, F, R, C>
-    where F: ServiceFactory<R, C>,
-          F: ?Sized,
-          F: 'f,
-          C: 'f,
-    {
-        #[pin]
-        fut: F::Future<'f>,
-    }
-}
-
-impl<'f, F, R, C> CreatePipeline<'f, F, R, C>
-where
-    F: ServiceFactory<R, C> + 'f,
-{
-    pub(crate) fn new(fut: F::Future<'f>) -> Self {
-        Self { fut }
-    }
-}
-
-impl<'f, F, R, C> future::Future for CreatePipeline<'f, F, R, C>
-where
-    F: ServiceFactory<R, C> + 'f,
-{
-    type Output = Result<Pipeline<F::Service>, F::InitError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Ready(Ok(Pipeline::new(std::task::ready!(self
-            .project()
-            .fut
-            .poll(cx))?)))
     }
 }

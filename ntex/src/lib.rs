@@ -39,7 +39,7 @@ pub mod ws;
 
 pub use self::service::{
     chain, chain_factory, fn_service, into_service, IntoService, IntoServiceFactory,
-    Middleware, Pipeline, Service, ServiceCall, ServiceCtx, ServiceFactory,
+    Middleware, Pipeline, Service, ServiceCtx, ServiceFactory,
 };
 
 pub use ntex_util::{channel, task};

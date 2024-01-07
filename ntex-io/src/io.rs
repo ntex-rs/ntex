@@ -1,10 +1,11 @@
 use std::cell::Cell;
+use std::future::{poll_fn, Future};
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
+use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 
 use ntex_bytes::{PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::{future::poll_fn, future::Either, task::LocalWaker, time::Seconds};
+use ntex_util::{future::Either, task::LocalWaker, time::Seconds};
 
 use crate::buf::Stack;
 use crate::filter::{Base, Filter, Layer, NullFilter};

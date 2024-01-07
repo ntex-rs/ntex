@@ -1,6 +1,5 @@
 use std::{fmt, mem, rc::Rc};
 
-use crate::util::{BoxFuture, Ready};
 use crate::{http::Method, service::Service, service::ServiceCtx, service::ServiceFactory};
 
 use super::error::ErrorRenderer;
@@ -66,10 +65,9 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
     type Error = Err::Container;
     type InitError = ();
     type Service = RouteService<Err>;
-    type Future<'f> = Ready<RouteService<Err>, ()>;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
-        Ok(self.service()).into()
+    async fn create(&self, _: ()) -> Result<RouteService<Err>, ()> {
+        Ok(self.service())
     }
 }
 
@@ -102,15 +100,13 @@ impl<Err: ErrorRenderer> fmt::Debug for RouteService<Err> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future<'f> = BoxFuture<'f, Result<Self::Response, Self::Error>>;
 
-    #[inline]
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         req: WebRequest<Err>,
-        _: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
-        self.handler.call(req)
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        self.handler.call(req).await
     }
 }
 

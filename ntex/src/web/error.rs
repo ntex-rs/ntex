@@ -84,10 +84,6 @@ pub enum StateExtractorError {
     NotConfigured,
 }
 
-#[deprecated]
-#[doc(hidden)]
-pub type DataExtractorError = StateExtractorError;
-
 /// Errors which can occur when attempting to generate resource uri.
 #[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum UrlGenerationError {

@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0-b.0] - 2024-01-07
+
+* Use "async fn" in trait for Service definition
+
 ## [0.7.17] - 2024-01-05
 
 * Allow to set default response payload limit and timeout

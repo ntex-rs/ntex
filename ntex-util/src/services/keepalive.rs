@@ -3,7 +3,6 @@ use std::{cell::Cell, convert::Infallible, fmt, marker, time::Duration, time::In
 
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
-use crate::future::Ready;
 use crate::time::{now, sleep, Millis, Sleep};
 
 /// KeepAlive service factory
@@ -60,13 +59,13 @@ where
 {
     type Response = R;
     type Error = E;
-    type InitError = Infallible;
+
     type Service = KeepAliveService<R, E, F>;
-    type Future<'f> = Ready<Self::Service, Self::InitError> where Self: 'f, C: 'f;
+    type InitError = Infallible;
 
     #[inline]
-    fn create(&self, _: C) -> Self::Future<'_> {
-        Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
+    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+        Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }
 
@@ -111,7 +110,6 @@ where
 {
     type Response = R;
     type Error = E;
-    type Future<'f> = Ready<R, E> where Self: 'f, R: 'f;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         match self.sleep.poll_elapsed(cx) {
@@ -132,9 +130,9 @@ where
         }
     }
 
-    fn call<'a>(&'a self, req: R, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
+    async fn call(&self, req: R, _: ServiceCtx<'_, Self>) -> Result<R, E> {
         self.expire.set(now());
-        Ready::Ok(req)
+        Ok(req)
     }
 }
 

@@ -4,7 +4,6 @@ use std::rc::Rc;
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::service::{Middleware, Service, ServiceCtx};
-use crate::util::BoxFuture;
 use crate::web::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -111,35 +110,31 @@ where
 {
     type Response = WebResponse;
     type Error = S::Error;
-    type Future<'f> =
-        BoxFuture<'f, Result<Self::Response, Self::Error>> where S: 'f, E: 'f;
 
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         req: WebRequest<E>,
-        ctx: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
-        Box::pin(async move {
-            let mut res = ctx.call(&self.service, req).await?;
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let mut res = ctx.call(&self.service, req).await?;
 
-            // set response headers
-            for (key, value) in self.inner.headers.iter() {
-                if !res.headers().contains_key(key) {
-                    res.headers_mut().insert(key.clone(), value.clone());
-                }
+        // set response headers
+        for (key, value) in self.inner.headers.iter() {
+            if !res.headers().contains_key(key) {
+                res.headers_mut().insert(key.clone(), value.clone());
             }
-            // default content-type
-            if self.inner.ct && !res.headers().contains_key(&CONTENT_TYPE) {
-                res.headers_mut().insert(
-                    CONTENT_TYPE,
-                    HeaderValue::from_static("application/octet-stream"),
-                );
-            }
-            Ok(res)
-        })
+        }
+        // default content-type
+        if self.inner.ct && !res.headers().contains_key(&CONTENT_TYPE) {
+            res.headers_mut().insert(
+                CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            );
+        }
+        Ok(res)
     }
 }
 

@@ -397,20 +397,17 @@ where
     type Error = ();
     type InitError = ();
     type Service = BoxedServerService;
-    type Future<'f> = BoxFuture<'f, Result<BoxedServerService, ()>> where Self: 'f;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
+    async fn create(&self, _: ()) -> Result<BoxedServerService, ()> {
         let tag = self.tag;
         let pool = self.pool;
-        let fut = self.inner.create(());
-        Box::pin(async move {
-            match fut.await {
-                Ok(s) => Ok(boxed::service(StreamService::new(s, tag, pool))),
-                Err(e) => {
-                    error!("Cannot construct service: {:?}", e);
-                    Err(())
-                }
+
+        match self.inner.create(()).await {
+            Ok(s) => Ok(boxed::service(StreamService::new(s, tag, pool))),
+            Err(e) => {
+                error!("Cannot construct service: {:?}", e);
+                Err(())
             }
-        })
+        }
     }
 }

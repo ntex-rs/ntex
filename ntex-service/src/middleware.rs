@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{fmt, marker::PhantomData, rc::Rc};
 
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
@@ -98,18 +98,18 @@ where
 }
 
 /// `Apply` middleware to a service factory.
-pub struct ApplyMiddleware<T, S, C>(Rc<(T, S)>, marker::PhantomData<C>);
+pub struct ApplyMiddleware<T, S, C>(Rc<(T, S)>, PhantomData<C>);
 
 impl<T, S, C> ApplyMiddleware<T, S, C> {
     /// Create new `ApplyMiddleware` service factory instance
     pub(crate) fn new(mw: T, svc: S) -> Self {
-        Self(Rc::new((mw, svc)), marker::PhantomData)
+        Self(Rc::new((mw, svc)), PhantomData)
     }
 }
 
 impl<T, S, C> Clone for ApplyMiddleware<T, S, C> {
     fn clone(&self) -> Self {
-        Self(self.0.clone(), marker::PhantomData)
+        Self(self.0.clone(), PhantomData)
     }
 }
 
@@ -137,46 +137,10 @@ where
 
     type Service = T::Service;
     type InitError = S::InitError;
-    type Future<'f> = ApplyMiddlewareFuture<'f, T, S, R, C> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create(&self, cfg: C) -> Self::Future<'_> {
-        ApplyMiddlewareFuture {
-            slf: self.0.clone(),
-            fut: self.0 .1.create(cfg),
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct ApplyMiddlewareFuture<'f, T, S, R, C>
-    where
-        S: ServiceFactory<R, C>,
-        S: 'f,
-        T: Middleware<S::Service>,
-        C: 'f,
-    {
-        slf: Rc<(T, S)>,
-        #[pin]
-        fut: S::Future<'f>,
-    }
-}
-
-impl<'f, T, S, R, C> Future for ApplyMiddlewareFuture<'f, T, S, R, C>
-where
-    S: ServiceFactory<R, C>,
-    T: Middleware<S::Service>,
-{
-    type Output = Result<T::Service, S::InitError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project();
-
-        match this.fut.poll(cx)? {
-            Poll::Ready(srv) => Poll::Ready(Ok(this.slf.0.create(srv))),
-            Poll::Pending => Poll::Pending,
-        }
+    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+        Ok(self.0 .0.create(self.0 .1.create(cfg).await?))
     }
 }
 
@@ -224,43 +188,46 @@ where
 #[allow(clippy::redundant_clone)]
 mod tests {
     use ntex_util::future::{lazy, Ready};
-    use std::marker;
+    use std::task::{Context, Poll};
 
     use super::*;
-    use crate::{fn_service, Pipeline, Service, ServiceCall, ServiceCtx, ServiceFactory};
+    use crate::{fn_service, Pipeline, Service, ServiceCtx, ServiceFactory};
 
     #[derive(Debug, Clone)]
-    struct Tr<R>(marker::PhantomData<R>);
+    struct Tr<R>(PhantomData<R>);
 
     impl<S, R> Middleware<S> for Tr<R> {
         type Service = Srv<S, R>;
 
         fn create(&self, service: S) -> Self::Service {
-            Srv(service, marker::PhantomData)
+            Srv(service, PhantomData)
         }
     }
 
     #[derive(Debug, Clone)]
-    struct Srv<S, R>(S, marker::PhantomData<R>);
+    struct Srv<S, R>(S, PhantomData<R>);
 
     impl<S: Service<R>, R> Service<R> for Srv<S, R> {
         type Response = S::Response;
         type Error = S::Error;
-        type Future<'f> = ServiceCall<'f, S, R> where Self: 'f, R: 'f;
 
         fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.poll_ready(cx)
         }
 
-        fn call<'a>(&'a self, req: R, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-            ctx.call(&self.0, req)
+        async fn call(
+            &self,
+            req: R,
+            ctx: ServiceCtx<'_, Self>,
+        ) -> Result<S::Response, S::Error> {
+            ctx.call(&self.0, req).await
         }
     }
 
     #[ntex::test]
     async fn middleware() {
         let factory = apply(
-            Rc::new(Tr(marker::PhantomData).clone()),
+            Rc::new(Tr(PhantomData).clone()),
             fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)),
         )
         .clone();
@@ -279,7 +246,7 @@ mod tests {
 
         let factory =
             crate::chain_factory(fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)))
-                .apply(Rc::new(Tr(marker::PhantomData).clone()))
+                .apply(Rc::new(Tr(PhantomData).clone()))
                 .clone();
 
         let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());

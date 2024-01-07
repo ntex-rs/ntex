@@ -1,9 +1,7 @@
-use std::task::{Context, Poll};
-use std::{cell, error, fmt, future, marker, pin::Pin, rc::Rc};
+use std::{cell, error, fmt, marker, rc::Rc, task::Context, task::Poll};
 
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::util::BoxFuture;
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
@@ -175,10 +173,9 @@ mod openssl {
         > {
             Acceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
-                .chain()
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
-                .and_then(self.chain().map_err(SslError::Service))
+                .and_then(self.map_err(SslError::Service))
         }
     }
 }
@@ -222,10 +219,9 @@ mod rustls {
 
             Acceptor::from(config)
                 .timeout(self.cfg.ssl_handshake_timeout)
-                .chain()
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
-                .and_then(self.chain().map_err(SslError::Service))
+                .and_then(self.map_err(SslError::Service))
         }
     }
 }
@@ -249,39 +245,36 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = HttpServiceHandler<F, S::Service, B, X::Service, U::Service>;
-    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
+    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
         let fut = self.srv.create(());
         let fut_ex = self.expect.create(());
         let fut_upg = self.upgrade.as_ref().map(|f| f.create(()));
         let on_request = self.on_request.borrow_mut().take();
         let cfg = self.cfg.clone();
 
-        Box::pin(async move {
-            let service = fut
-                .await
-                .map_err(|e| log::error!("Init http service error: {:?}", e))?;
+        let service = fut
+            .await
+            .map_err(|e| log::error!("Init http service error: {:?}", e))?;
 
-            let expect = fut_ex
-                .await
-                .map_err(|e| log::error!("Init http service error: {:?}", e))?;
+        let expect = fut_ex
+            .await
+            .map_err(|e| log::error!("Init http service error: {:?}", e))?;
 
-            let upgrade = if let Some(fut) = fut_upg {
-                Some(
-                    fut.await
-                        .map_err(|e| log::error!("Init http service error: {:?}", e))?,
-                )
-            } else {
-                None
-            };
+        let upgrade = if let Some(fut) = fut_upg {
+            Some(
+                fut.await
+                    .map_err(|e| log::error!("Init http service error: {:?}", e))?,
+            )
+        } else {
+            None
+        };
 
-            let config = DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
+        let config = DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
 
-            Ok(HttpServiceHandler {
-                config: Rc::new(config),
-                _t: marker::PhantomData,
-            })
+        Ok(HttpServiceHandler {
+            config: Rc::new(config),
+            _t: marker::PhantomData,
         })
     }
 }
@@ -306,7 +299,6 @@ where
 {
     type Response = ();
     type Error = DispatchError;
-    type Future<'f> = HttpServiceHandlerResponse<F, S, B, X, U>;
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let cfg = self.config.as_ref();
@@ -365,96 +357,20 @@ where
         }
     }
 
-    fn call<'a>(&'a self, io: Io<F>, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
+    async fn call(
+        &self,
+        io: Io<F>,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         log::trace!(
             "New http connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
         );
 
         if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
-            HttpServiceHandlerResponse {
-                state: ResponseState::H2 {
-                    fut: Box::pin(h2::handle(io.into(), self.config.clone())),
-                },
-            }
+            h2::handle(io.into(), self.config.clone()).await
         } else {
-            HttpServiceHandlerResponse {
-                state: ResponseState::H1 {
-                    fut: h1::Dispatcher::new(io, self.config.clone()),
-                },
-            }
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    pub struct HttpServiceHandlerResponse<F, S, B, X, U>
-    where
-        F: Filter,
-        S: Service<Request>,
-        S: 'static,
-        S::Error: ResponseError,
-        S::Response: Into<Response<B>>,
-        B: MessageBody,
-        X: Service<Request, Response = Request>,
-        X: 'static,
-        X::Error: ResponseError,
-        X::Error: 'static,
-        U: Service<(Request, Io<F>, h1::Codec), Response = ()>,
-        U: 'static,
-        U::Error: fmt::Display,
-        U::Error: error::Error,
-        U: 'static,
-    {
-        #[pin]
-        state: ResponseState<F, S, B, X, U>,
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[project = StateProject]
-    enum ResponseState<F, S, B, X, U>
-    where
-        F: Filter,
-        S: Service<Request>,
-        S: 'static,
-        S::Error: ResponseError,
-        B: MessageBody,
-        X: Service<Request, Response = Request>,
-        X: 'static,
-        X::Error: ResponseError,
-        X::Error: 'static,
-        U: Service<(Request, Io<F>, h1::Codec), Response = ()>,
-        U: 'static,
-        U::Error: fmt::Display,
-        U::Error: error::Error,
-        U: 'static,
-    {
-        H1 { #[pin] fut: h1::Dispatcher<F, S, B, X, U> },
-        H2 { fut: BoxFuture<'static, Result<(), DispatchError>> },
-    }
-}
-
-impl<F, S, B, X, U> future::Future for HttpServiceHandlerResponse<F, S, B, X, U>
-where
-    F: Filter,
-    S: Service<Request> + 'static,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>>,
-    B: MessageBody,
-    X: Service<Request, Response = Request> + 'static,
-    X::Error: ResponseError,
-    U: Service<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
-    U::Error: fmt::Display + error::Error,
-{
-    type Output = Result<(), DispatchError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project();
-
-        match this.state.project() {
-            StateProject::H1 { fut } => fut.poll(cx),
-            StateProject::H2 { ref mut fut } => Pin::new(fut).poll(cx),
+            h1::Dispatcher::new(io, self.config.clone()).await
         }
     }
 }

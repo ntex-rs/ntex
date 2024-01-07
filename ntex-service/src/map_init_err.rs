@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{fmt, marker::PhantomData};
 
 use super::ServiceFactory;
 
@@ -60,42 +60,10 @@ where
 
     type Service = A::Service;
     type InitError = E;
-    type Future<'f> = MapInitErrFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create(&self, cfg: C) -> Self::Future<'_> {
-        MapInitErrFuture {
-            f: self.f.clone(),
-            fut: self.a.create(cfg),
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct MapInitErrFuture<'f, A, R, C, F, E>
-    where
-        A: ServiceFactory<R, C>,
-        A: 'f,
-        F: Fn(A::InitError) -> E,
-        C: 'f,
-    {
-        f: F,
-        #[pin]
-        fut: A::Future<'f>,
-    }
-}
-
-impl<'f, A, R, C, F, E> Future for MapInitErrFuture<'f, A, R, C, F, E>
-where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E,
-{
-    type Output = Result<A::Service, E>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project();
-        this.fut.poll(cx).map_err(|e| (self.project().f)(e))
+    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+        self.a.create(cfg).await.map_err(|e| (self.f)(e))
     }
 }
 

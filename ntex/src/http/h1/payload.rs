@@ -205,8 +205,9 @@ impl Inner {
 
 #[cfg(test)]
 mod tests {
+    use std::future::poll_fn;
+
     use super::*;
-    use crate::util::poll_fn;
 
     #[crate::rt_test]
     async fn test_unread_data() {

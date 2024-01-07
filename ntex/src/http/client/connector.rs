@@ -3,9 +3,9 @@ use std::{fmt, task::Context, task::Poll, time::Duration};
 use ntex_h2::{self as h2};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::service::{apply_fn, boxed, Service, ServiceCall, ServiceCtx};
+use crate::service::{apply_fn, boxed, Service, ServiceCtx};
 use crate::time::{Millis, Seconds};
-use crate::util::{timeout::TimeoutError, timeout::TimeoutService, Either, Ready};
+use crate::util::{timeout::TimeoutError, timeout::TimeoutService};
 use crate::{http::Uri, io::IoBoxed};
 
 use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
@@ -54,7 +54,6 @@ impl Connector {
         let conn = Connector {
             connector: boxed::service(
                 TcpConnector::new()
-                    .chain()
                     .map(IoBoxed::from)
                     .map_err(ConnectError::from),
             ),
@@ -192,12 +191,8 @@ impl Connector {
         T: Service<TcpConnect<Uri>, Error = crate::connect::ConnectError> + 'static,
         IoBoxed: From<T::Response>,
     {
-        self.connector = boxed::service(
-            connector
-                .chain()
-                .map(IoBoxed::from)
-                .map_err(ConnectError::from),
-        );
+        self.connector =
+            boxed::service(connector.map(IoBoxed::from).map_err(ConnectError::from));
         self
     }
 
@@ -208,10 +203,7 @@ impl Connector {
         IoBoxed: From<T::Response>,
     {
         self.ssl_connector = Some(boxed::service(
-            connector
-                .chain()
-                .map(IoBoxed::from)
-                .map_err(ConnectError::from),
+            connector.map(IoBoxed::from).map_err(ConnectError::from),
         ));
         self
     }
@@ -265,7 +257,6 @@ fn connector(
                 async move { srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await },
             )
         })
-        .chain()
         .map(move |io: IoBoxed| {
             io.set_disconnect_timeout(disconnect_timeout);
             io
@@ -290,12 +281,7 @@ where
 {
     type Response = <ConnectionPool<T> as Service<Connect>>::Response;
     type Error = ConnectError;
-    type Future<'f> = Either<
-        ServiceCall<'f, ConnectionPool<T>, Connect>,
-        Ready<Self::Response, Self::Error>,
-    >;
 
-    #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let ready = self.tcp_pool.poll_ready(cx)?.is_ready();
         let ready = if let Some(ref ssl_pool) = self.ssl_pool {
@@ -310,7 +296,6 @@ where
         }
     }
 
-    #[inline]
     fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
         let tcp_ready = self.tcp_pool.poll_shutdown(cx).is_ready();
         let ssl_ready = self
@@ -325,16 +310,20 @@ where
         }
     }
 
-    fn call<'a>(&'a self, req: Connect, ctx: ServiceCtx<'a, Self>) -> Self::Future<'_> {
+    async fn call(
+        &self,
+        req: Connect,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         match req.uri.scheme_str() {
             Some("https") | Some("wss") => {
                 if let Some(ref conn) = self.ssl_pool {
-                    Either::Left(ctx.call(conn, req))
+                    ctx.call(conn, req).await
                 } else {
-                    Either::Right(Ready::Err(ConnectError::SslIsNotSupported))
+                    Err(ConnectError::SslIsNotSupported)
                 }
             }
-            _ => Either::Left(ctx.call(&self.tcp_pool, req)),
+            _ => ctx.call(&self.tcp_pool, req).await,
         }
     }
 }

@@ -1,6 +1,6 @@
-use std::{cell::UnsafeCell, fmt, future::Future, marker, pin::Pin, rc::Rc, task};
+use std::{cell::UnsafeCell, fmt, future::poll_fn, marker, rc::Rc, task, task::Poll};
 
-use crate::{Pipeline, Service};
+use crate::Service;
 
 pub struct ServiceCtx<'a, S: ?Sized> {
     idx: usize,
@@ -112,27 +112,51 @@ impl<'a, S> ServiceCtx<'a, S> {
         (self.idx, self.waiters)
     }
 
+    /// Returns when the service is able to process requests.
+    pub async fn ready<T, R>(&self, svc: &'a T) -> Result<(), T::Error>
+    where
+        T: Service<R>,
+    {
+        // check readiness and notify waiters
+        poll_fn(move |cx| match svc.poll_ready(cx)? {
+            Poll::Ready(()) => {
+                self.waiters.notify();
+                Poll::Ready(Ok(()))
+            }
+            Poll::Pending => {
+                self.waiters.register(self.idx, cx);
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
     #[inline]
     /// Wait for service readiness and then call service
-    pub fn call<T, R>(&self, svc: &'a T, req: R) -> ServiceCall<'a, T, R>
+    pub async fn call<T, R>(&self, svc: &'a T, req: R) -> Result<T::Response, T::Error>
     where
         T: Service<R>,
         R: 'a,
     {
-        ServiceCall {
-            state: ServiceCallState::Ready {
-                svc,
-                req: Some(req),
+        self.ready(svc).await?;
+        svc.call(
+            req,
+            ServiceCtx {
                 idx: self.idx,
                 waiters: self.waiters,
+                _t: marker::PhantomData,
             },
-        }
+        )
+        .await
     }
 
-    #[doc(hidden)]
     #[inline]
     /// Call service, do not check service readiness
-    pub fn call_nowait<T, R>(&self, svc: &'a T, req: R) -> T::Future<'a>
+    pub async fn call_nowait<T, R>(
+        &self,
+        svc: &'a T,
+        req: R,
+    ) -> Result<T::Response, T::Error>
     where
         T: Service<R>,
         R: 'a,
@@ -145,6 +169,7 @@ impl<'a, S> ServiceCtx<'a, S> {
                 _t: marker::PhantomData,
             },
         )
+        .await
     }
 }
 
@@ -166,201 +191,12 @@ impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
     }
 }
 
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct ServiceCall<'a, S, Req>
-    where
-        S: Service<Req>,
-        Req: 'a,
-    {
-        #[pin]
-        state: ServiceCallState<'a, S, Req>,
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[project = ServiceCallStateProject]
-    enum ServiceCallState<'a, S, Req>
-    where
-        S: Service<Req>,
-        Req: 'a,
-    {
-        Ready { req: Option<Req>,
-                svc: &'a S,
-                idx: usize,
-                waiters: &'a WaitersRef,
-        },
-        ReadyPl { req: Option<Req>,
-                  svc: &'a Pipeline<S>,
-                  pl: Pipeline<S>,
-        },
-        Call { #[pin] fut: S::Future<'a> },
-        Empty,
-    }
-}
-
-impl<'a, S, Req> ServiceCall<'a, S, Req>
-where
-    S: Service<Req>,
-    Req: 'a,
-{
-    pub(crate) fn call_pipeline(req: Req, svc: &'a Pipeline<S>) -> Self {
-        ServiceCall {
-            state: ServiceCallState::ReadyPl {
-                req: Some(req),
-                pl: svc.clone(),
-                svc,
-            },
-        }
-    }
-
-    pub fn advance_to_call(self) -> ServiceCallToCall<'a, S, Req> {
-        match self.state {
-            ServiceCallState::Ready { .. } | ServiceCallState::ReadyPl { .. } => {}
-            ServiceCallState::Call { .. } | ServiceCallState::Empty => {
-                panic!(
-                    "`ServiceCall::advance_to_call` must be called before `ServiceCall::poll`"
-                )
-            }
-        }
-        ServiceCallToCall { state: self.state }
-    }
-}
-
-impl<'a, S, Req> Future for ServiceCall<'a, S, Req>
-where
-    S: Service<Req>,
-{
-    type Output = Result<S::Response, S::Error>;
-
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Self::Output> {
-        let mut this = self.as_mut().project();
-
-        match this.state.as_mut().project() {
-            ServiceCallStateProject::Ready {
-                req,
-                svc,
-                idx,
-                waiters,
-            } => match svc.poll_ready(cx)? {
-                task::Poll::Ready(()) => {
-                    waiters.notify();
-
-                    let fut = svc.call(
-                        req.take().unwrap(),
-                        ServiceCtx {
-                            waiters,
-                            idx: *idx,
-                            _t: marker::PhantomData,
-                        },
-                    );
-                    this.state.set(ServiceCallState::Call { fut });
-                    self.poll(cx)
-                }
-                task::Poll::Pending => {
-                    waiters.register(*idx, cx);
-                    task::Poll::Pending
-                }
-            },
-            ServiceCallStateProject::ReadyPl { req, svc, pl } => {
-                task::ready!(pl.poll_ready(cx))?;
-
-                let ctx = ServiceCtx::new(&svc.waiters);
-                let svc_call = svc.get_ref().call(req.take().unwrap(), ctx);
-
-                // SAFETY: `svc_call` has same lifetime same as lifetime of `pl.svc`
-                // Pipeline::svc is heap allocated(Rc<S>), we keep it alive until
-                // `svc_call` get resolved to result
-                let fut = unsafe { std::mem::transmute(svc_call) };
-
-                this.state.set(ServiceCallState::Call { fut });
-                self.poll(cx)
-            }
-            ServiceCallStateProject::Call { fut, .. } => fut.poll(cx).map(|r| {
-                this.state.set(ServiceCallState::Empty);
-                r
-            }),
-            ServiceCallStateProject::Empty => {
-                panic!("future must not be polled after it returned `Poll::Ready`")
-            }
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct ServiceCallToCall<'a, S, Req>
-    where
-        S: Service<Req>,
-        Req: 'a,
-    {
-        #[pin]
-        state: ServiceCallState<'a, S, Req>,
-    }
-}
-
-impl<'a, S, Req> Future for ServiceCallToCall<'a, S, Req>
-where
-    S: Service<Req>,
-{
-    type Output = Result<S::Future<'a>, S::Error>;
-
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Self::Output> {
-        let mut this = self.as_mut().project();
-
-        match this.state.as_mut().project() {
-            ServiceCallStateProject::Ready {
-                req,
-                svc,
-                idx,
-                waiters,
-            } => match svc.poll_ready(cx)? {
-                task::Poll::Ready(()) => {
-                    waiters.notify();
-
-                    let fut = svc.call(
-                        req.take().unwrap(),
-                        ServiceCtx {
-                            waiters,
-                            idx: *idx,
-                            _t: marker::PhantomData,
-                        },
-                    );
-                    this.state.set(ServiceCallState::Empty);
-                    task::Poll::Ready(Ok(fut))
-                }
-                task::Poll::Pending => {
-                    waiters.register(*idx, cx);
-                    task::Poll::Pending
-                }
-            },
-            ServiceCallStateProject::ReadyPl { req, svc, pl } => {
-                task::ready!(pl.poll_ready(cx))?;
-
-                let ctx = ServiceCtx::new(&svc.waiters);
-                task::Poll::Ready(Ok(svc.get_ref().call(req.take().unwrap(), ctx)))
-            }
-            ServiceCallStateProject::Call { .. } => {
-                unreachable!("`ServiceCallToCall` can only be constructed in `Ready` state")
-            }
-            ServiceCallStateProject::Empty => {
-                panic!("future must not be polled after it returned `Poll::Ready`")
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use ntex_util::future::{lazy, poll_fn, Ready};
+    use ntex_util::future::lazy;
     use ntex_util::{channel::condition, time};
-    use std::{cell::Cell, cell::RefCell, rc::Rc, task::Context, task::Poll};
+    use std::task::{Context, Poll};
+    use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc};
 
     use super::*;
     use crate::Pipeline;
@@ -370,20 +206,19 @@ mod tests {
     impl Service<&'static str> for Srv {
         type Response = &'static str;
         type Error = ();
-        type Future<'f> = Ready<Self::Response, ()>;
 
         fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
             self.1.poll_ready(cx).map(|_| Ok(()))
         }
 
-        fn call<'a>(
-            &'a self,
+        async fn call(
+            &self,
             req: &'static str,
-            ctx: ServiceCtx<'a, Self>,
-        ) -> Self::Future<'a> {
+            ctx: ServiceCtx<'_, Self>,
+        ) -> Result<Self::Response, Self::Error> {
             let _ = ctx.clone();
-            Ready::Ok(req)
+            Ok(req)
         }
     }
 
@@ -451,32 +286,32 @@ mod tests {
         assert_eq!(&*data.borrow(), &["srv2", "srv1"]);
     }
 
-    #[ntex::test]
-    async fn test_advance_to_call() {
-        let cnt = Rc::new(Cell::new(0));
-        let con = condition::Condition::new();
-        let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
+    // #[ntex::test]
+    // async fn test_advance_to_call() {
+    //     let cnt = Rc::new(Cell::new(0));
+    //     let con = condition::Condition::new();
+    //     let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
 
-        let mut fut = srv.call("test").advance_to_call();
-        let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
-        con.notify();
+    //     let mut fut = srv.call("test").advance_to_call();
+    //     let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
+    //     con.notify();
 
-        let res = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
-        assert!(res.is_ready());
-    }
+    //     let res = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
+    //     assert!(res.is_ready());
+    // }
 
-    #[ntex::test]
-    #[should_panic]
-    async fn test_advance_to_call_panic() {
-        let cnt = Rc::new(Cell::new(0));
-        let con = condition::Condition::new();
-        let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
+    // #[ntex::test]
+    // #[should_panic]
+    // async fn test_advance_to_call_panic() {
+    //     let cnt = Rc::new(Cell::new(0));
+    //     let con = condition::Condition::new();
+    //     let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
 
-        let mut fut = srv.call("test");
-        let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
-        con.notify();
+    //     let mut fut = srv.call("test");
+    //     let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
+    //     con.notify();
 
-        let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
-        let _f = fut.advance_to_call();
-    }
+    //     let _ = lazy(|cx| Pin::new(&mut fut).poll(cx)).await;
+    //     let _f = fut.advance_to_call();
+    // }
 }

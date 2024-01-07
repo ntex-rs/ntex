@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests to 1.
-use std::{cell::Cell, future::Future, pin::Pin, task::Context, task::Poll};
+use std::{cell::Cell, task::Context, task::Poll};
 
-use ntex_service::{IntoService, Middleware, Service, ServiceCall, ServiceCtx};
+use ntex_service::{IntoService, Middleware, Service, ServiceCtx};
 
 use crate::task::LocalWaker;
 
@@ -49,7 +49,6 @@ where
 {
     type Response = T::Response;
     type Error = T::Error;
-    type Future<'f> = OneRequestServiceResponse<'f, T, R> where Self: 'f, R: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -64,40 +63,20 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
+    async fn call(
+        &self,
+        req: R,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         self.ready.set(false);
 
-        OneRequestServiceResponse {
-            fut: ctx.call(&self.service, req),
-            service: self,
-        }
+        let result = ctx.call(&self.service, req).await;
+        self.ready.set(true);
+        self.waker.wake();
+        result
     }
 
     ntex_service::forward_poll_shutdown!(service);
-}
-
-pin_project_lite::pin_project! {
-    #[doc(hidden)]
-    pub struct OneRequestServiceResponse<'f, T: Service<R>, R>
-    where T: 'f, R: 'f
-    {
-        #[pin]
-        fut: ServiceCall<'f, T, R>,
-        service: &'f OneRequestService<T>,
-    }
-}
-
-impl<'f, T: Service<R>, R> Future for OneRequestServiceResponse<'f, T, R> {
-    type Output = Result<T::Response, T::Error>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let result = self.as_mut().project().fut.poll(cx);
-        if result.is_ready() {
-            self.service.ready.set(true);
-            self.service.waker.wake();
-        }
-        result
-    }
 }
 
 #[cfg(test)]
@@ -106,20 +85,17 @@ mod tests {
     use std::{cell::RefCell, task::Poll, time::Duration};
 
     use super::*;
-    use crate::{channel::oneshot, future::lazy, future::BoxFuture};
+    use crate::{channel::oneshot, future::lazy};
 
     struct SleepService(oneshot::Receiver<()>);
 
     impl Service<()> for SleepService {
         type Response = ();
         type Error = ();
-        type Future<'f> = BoxFuture<'f, Result<(), ()>>;
 
-        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-            Box::pin(async move {
-                let _ = self.0.recv().await;
-                Ok::<_, ()>(())
-            })
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+            let _ = self.0.recv().await;
+            Ok::<_, ()>(())
         }
     }
 

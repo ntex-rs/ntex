@@ -515,7 +515,7 @@ mod tests {
     use crate::io::Io;
     use crate::server::service::Factory;
     use crate::service::{Service, ServiceCtx, ServiceFactory};
-    use crate::util::{lazy, Ready};
+    use crate::util::lazy;
 
     #[derive(Clone, Copy, Debug)]
     enum St {
@@ -535,12 +535,11 @@ mod tests {
         type Error = ();
         type Service = Srv;
         type InitError = ();
-        type Future<'f> = Ready<Srv, ()>;
 
-        fn create(&self, _: ()) -> Self::Future<'_> {
+        async fn create(&self, _: ()) -> Result<Srv, ()> {
             let mut cnt = self.counter.lock().unwrap();
             *cnt += 1;
-            Ready::Ok(Srv {
+            Ok(Srv {
                 st: self.st.clone(),
             })
         }
@@ -553,7 +552,6 @@ mod tests {
     impl Service<Io> for Srv {
         type Response = ();
         type Error = ();
-        type Future<'f> = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             let st: St = { *self.st.lock().unwrap() };
@@ -574,8 +572,8 @@ mod tests {
             }
         }
 
-        fn call<'a>(&'a self, _: Io, _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-            Ready::Ok(())
+        async fn call(&self, _: Io, _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+            Ok(())
         }
     }
 

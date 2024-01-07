@@ -1,14 +1,13 @@
 //! Request logging middleware
-use std::task::{ready, Context, Poll};
-use std::{env, error::Error, future::Future};
-use std::{fmt, fmt::Display, marker::PhantomData, pin::Pin, rc::Rc, time};
+use std::task::{Context, Poll};
+use std::{env, error::Error, fmt, fmt::Display, rc::Rc, time};
 
 use regex::Regex;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
-use crate::service::{Middleware, Service, ServiceCall, ServiceCtx};
-use crate::util::{Bytes, Either, HashSet};
+use crate::service::{Middleware, Service, ServiceCtx};
+use crate::util::{Bytes, HashSet};
 use crate::web::{HttpResponse, WebRequest, WebResponse};
 
 /// `Middleware` for logging request and response info to the terminal.
@@ -139,19 +138,17 @@ where
 {
     type Response = WebResponse;
     type Error = S::Error;
-    type Future<'f> = Either<LoggerResponse<'f, S, E>, ServiceCall<'f, S, WebRequest<E>>> where S: 'f, E: 'f;
 
     crate::forward_poll_ready!(service);
     crate::forward_poll_shutdown!(service);
 
-    #[inline]
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         req: WebRequest<E>,
-        ctx: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         if self.inner.exclude.contains(req.path()) {
-            Either::Right(ctx.call(&self.service, req))
+            ctx.call(&self.service, req).await
         } else {
             let time = time::SystemTime::now();
             let mut format = self.inner.format.clone();
@@ -159,56 +156,21 @@ where
             for unit in &mut format.0 {
                 unit.render_request(time, &req);
             }
-            Either::Left(LoggerResponse {
-                time,
-                format: Some(format),
-                fut: ctx.call(&self.service, req),
-                _t: PhantomData,
-            })
-        }
-    }
-}
 
-pin_project_lite::pin_project! {
-    #[doc(hidden)]
-    pub struct LoggerResponse<'f, S: Service<WebRequest<E>>, E>
-    where S: 'f, E: 'f
-    {
-        #[pin]
-        fut: ServiceCall<'f, S, WebRequest<E>>,
-        time: time::SystemTime,
-        format: Option<Format>,
-        _t: PhantomData<E>
-    }
-}
-
-impl<'f, S, E> Future for LoggerResponse<'f, S, E>
-where
-    S: Service<WebRequest<E>, Response = WebResponse>,
-{
-    type Output = Result<WebResponse, S::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
-        let res = ready!(this.fut.poll(cx)?);
-        if let Some(ref mut format) = this.format {
+            let res = ctx.call(&self.service, req).await?;
             for unit in &mut format.0 {
                 unit.render_response(res.response());
             }
-        }
 
-        let time = *this.time;
-        let format = this.format.take();
-
-        Poll::Ready(Ok(res.map_body(move |_, body| {
-            ResponseBody::Other(Body::from_message(StreamLog {
-                body,
-                time,
-                format,
-                size: 0,
+            Ok(res.map_body(move |_, body| {
+                ResponseBody::Other(Body::from_message(StreamLog {
+                    body,
+                    time,
+                    format: Some(format),
+                    size: 0,
+                }))
             }))
-        })))
+        }
     }
 }
 

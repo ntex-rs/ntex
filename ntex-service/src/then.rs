@@ -1,6 +1,6 @@
-use std::{future::Future, pin::Pin, task::Context, task::Poll};
+use std::{task::Context, task::Poll};
 
-use super::{Service, ServiceCall, ServiceCtx, ServiceFactory};
+use super::{Service, ServiceCtx, ServiceFactory};
 
 #[derive(Debug, Clone)]
 /// Service for the `then` combinator, chaining a computation onto the end of
@@ -26,7 +26,6 @@ where
 {
     type Response = B::Response;
     type Error = B::Error;
-    type Future<'f> = ThenServiceResponse<'f, A, B, R> where Self: 'f, R: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -48,74 +47,12 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        ThenServiceResponse {
-            slf: self,
-            state: State::A {
-                fut: ctx.call(&self.svc1, req),
-                ctx,
-            },
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct ThenServiceResponse<'f, A, B, R>
-    where
-        A: Service<R>,
-        B: Service<Result<A::Response, A::Error>>,
-    {
-        slf: &'f Then<A, B>,
-        #[pin]
-        state: State<'f, A, B, R>,
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[project = StateProject]
-    enum State<'f, A, B, R>
-    where
-        A: Service<R>,
-        A: 'f,
-        A::Response: 'f,
-        B: Service<Result<A::Response, A::Error>>,
-        B: 'f,
-        R: 'f,
-    {
-        A { #[pin] fut: ServiceCall<'f, A, R>, ctx: ServiceCtx<'f, Then<A, B>> },
-        B { #[pin] fut: ServiceCall<'f, B, Result<A::Response, A::Error>> },
-        Empty,
-    }
-}
-
-impl<'a, A, B, R> Future for ThenServiceResponse<'a, A, B, R>
-where
-    A: Service<R>,
-    B: Service<Result<A::Response, A::Error>>,
-{
-    type Output = Result<B::Response, B::Error>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
-
-        match this.state.as_mut().project() {
-            StateProject::A { fut, ctx } => match fut.poll(cx) {
-                Poll::Ready(res) => {
-                    let fut = ctx.call(&this.slf.svc2, res);
-                    this.state.set(State::B { fut });
-                    self.poll(cx)
-                }
-                Poll::Pending => Poll::Pending,
-            },
-            StateProject::B { fut } => fut.poll(cx).map(|r| {
-                this.state.set(State::Empty);
-                r
-            }),
-            StateProject::Empty => {
-                panic!("future must not be polled after it returned `Poll::Ready`")
-            }
-        }
+    async fn call(
+        &self,
+        req: R,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
     }
 }
 
@@ -149,73 +86,12 @@ where
 
     type Service = Then<A::Service, B::Service>;
     type InitError = A::InitError;
-    type Future<'f> = ThenFactoryResponse<'f, A, B, R, C> where Self: 'f, C: 'f;
 
-    fn create(&self, cfg: C) -> Self::Future<'_> {
-        ThenFactoryResponse {
-            fut_a: self.svc1.create(cfg.clone()),
-            fut_b: self.svc2.create(cfg),
-            a: None,
-            b: None,
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct ThenFactoryResponse<'f, A, B, R, C>
-    where
-        A: ServiceFactory<R, C>,
-        B: ServiceFactory<Result<A::Response, A::Error>, C,
-           Error = A::Error,
-           InitError = A::InitError,
-        >,
-        A: 'f,
-        B: 'f,
-        C: 'f,
-    {
-        #[pin]
-        fut_b: B::Future<'f>,
-        #[pin]
-        fut_a: A::Future<'f>,
-        a: Option<A::Service>,
-        b: Option<B::Service>,
-    }
-}
-
-impl<'f, A, B, R, C> Future for ThenFactoryResponse<'f, A, B, R, C>
-where
-    A: ServiceFactory<R, C>,
-    B: ServiceFactory<
-        Result<A::Response, A::Error>,
-        C,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
-{
-    type Output = Result<Then<A::Service, B::Service>, A::InitError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
-        if this.a.is_none() {
-            if let Poll::Ready(service) = this.fut_a.poll(cx)? {
-                *this.a = Some(service);
-            }
-        }
-        if this.b.is_none() {
-            if let Poll::Ready(service) = this.fut_b.poll(cx)? {
-                *this.b = Some(service);
-            }
-        }
-        if this.a.is_some() && this.b.is_some() {
-            Poll::Ready(Ok(Then::new(
-                this.a.take().unwrap(),
-                this.b.take().unwrap(),
-            )))
-        } else {
-            Poll::Pending
-        }
+    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+        Ok(Then {
+            svc1: self.svc1.create(cfg.clone()).await?,
+            svc2: self.svc2.create(cfg).await?,
+        })
     }
 }
 
@@ -232,21 +108,20 @@ mod tests {
     impl Service<Result<&'static str, &'static str>> for Srv1 {
         type Response = &'static str;
         type Error = ();
-        type Future<'f> = Ready<Self::Response, Self::Error>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
             Poll::Ready(Ok(()))
         }
 
-        fn call<'a>(
-            &'a self,
+        async fn call(
+            &self,
             req: Result<&'static str, &'static str>,
-            _: ServiceCtx<'a, Self>,
-        ) -> Self::Future<'a> {
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<&'static str, ()> {
             match req {
-                Ok(msg) => Ready::Ok(msg),
-                Err(_) => Ready::Err(()),
+                Ok(msg) => Ok(msg),
+                Err(_) => Err(()),
             }
         }
     }
@@ -257,21 +132,20 @@ mod tests {
     impl Service<Result<&'static str, ()>> for Srv2 {
         type Response = (&'static str, &'static str);
         type Error = ();
-        type Future<'f> = Ready<Self::Response, ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.0.set(self.0.get() + 1);
             Poll::Ready(Ok(()))
         }
 
-        fn call<'a>(
-            &'a self,
+        async fn call(
+            &self,
             req: Result<&'static str, ()>,
-            _: ServiceCtx<'a, Self>,
-        ) -> Self::Future<'a> {
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<Self::Response, ()> {
             match req {
-                Ok(msg) => Ready::Ok((msg, "ok")),
-                Err(()) => Ready::Ok(("srv2", "err")),
+                Ok(msg) => Ok((msg, "ok")),
+                Err(()) => Ok(("srv2", "err")),
             }
         }
     }

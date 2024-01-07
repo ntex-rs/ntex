@@ -1,6 +1,6 @@
-use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{fmt, marker::PhantomData, task::Context, task::Poll};
 
-use super::{Service, ServiceCall, ServiceCtx, ServiceFactory};
+use super::{Service, ServiceCtx, ServiceFactory};
 
 /// Service for the `map_err` combinator, changing the type of a service's
 /// error.
@@ -61,7 +61,6 @@ where
 {
     type Response = A::Response;
     type Error = E;
-    type Future<'f> = MapErrFuture<'f, A, R, F, E> where A: 'f, R: 'f, F: 'f, E: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -69,42 +68,15 @@ where
     }
 
     #[inline]
-    fn call<'a>(&'a self, req: R, ctx: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-        MapErrFuture {
-            slf: self,
-            fut: ctx.call(&self.service, req),
-        }
+    async fn call(
+        &self,
+        req: R,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.service, req).await.map_err(|e| (self.f)(e))
     }
 
     crate::forward_poll_shutdown!(service);
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct MapErrFuture<'f, A, R, F, E>
-    where
-        A: Service<R>,
-        A: 'f,
-        R: 'f,
-        F: Fn(A::Error) -> E,
-    {
-        slf: &'f MapErr<A, F, E>,
-        #[pin]
-        fut: ServiceCall<'f, A, R>,
-    }
-}
-
-impl<'f, A, R, F, E> Future for MapErrFuture<'f, A, R, F, E>
-where
-    A: Service<R> + 'f,
-    F: Fn(A::Error) -> E,
-{
-    type Output = Result<A::Response, E>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut().project();
-        this.fut.poll(cx).map_err(|e| (self.project().slf.f)(e))
-    }
 }
 
 /// Factory for the `map_err` combinator, changing the type of a new
@@ -173,46 +145,14 @@ where
 
     type Service = MapErr<A::Service, F, E>;
     type InitError = A::InitError;
-    type Future<'f> = MapErrFactoryFuture<'f, A, R, C, F, E> where Self: 'f, C: 'f;
 
     #[inline]
-    fn create(&self, cfg: C) -> Self::Future<'_> {
-        MapErrFactoryFuture {
+    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+        self.a.create(cfg).await.map(|service| MapErr {
+            service,
             f: self.f.clone(),
-            fut: self.a.create(cfg),
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct MapErrFactoryFuture<'f, A, R, C, F, E>
-    where
-        A: ServiceFactory<R, C>,
-        A: 'f,
-        F: Fn(A::Error) -> E,
-        C: 'f,
-    {
-        f: F,
-        #[pin]
-        fut: A::Future<'f>,
-    }
-}
-
-impl<'f, A, R, C, F, E> Future for MapErrFactoryFuture<'f, A, R, C, F, E>
-where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::Error) -> E + Clone,
-{
-    type Output = Result<MapErr<A::Service, F, E>, A::InitError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        if let Poll::Ready(svc) = this.fut.poll(cx)? {
-            Poll::Ready(Ok(MapErr::new(svc, this.f.clone())))
-        } else {
-            Poll::Pending
-        }
+            _t: PhantomData,
+        })
     }
 }
 
@@ -229,7 +169,6 @@ mod tests {
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
-        type Future<'f> = Ready<(), ()>;
 
         fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             if self.0 {
@@ -239,8 +178,8 @@ mod tests {
             }
         }
 
-        fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Self::Future<'a> {
-            Ready::Err(())
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+            Err(())
         }
     }
 
