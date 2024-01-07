@@ -1497,7 +1497,7 @@ mod tests {
         for _ in 1..8 {
             let random_bytes: Vec<u8> = (0..256).map(|_| rand::random::<u8>()).collect();
             client.write(random_bytes);
-            sleep(Millis(350)).await;
+            sleep(Millis(750)).await;
         }
         assert!(mark.load(Ordering::Relaxed) == 1536);
     }

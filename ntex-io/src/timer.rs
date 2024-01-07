@@ -109,11 +109,7 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
         }
 
         let hnd = {
-            let hnd = if timeout.0 <= 1 {
-                timer.current.get() + 2
-            } else {
-                timer.current.get() + timeout.0 as u32
-            };
+            let hnd = timer.current.get() + timeout.0 as u32;
             let mut inner = timer.storage.borrow_mut();
 
             // insert key
@@ -136,8 +132,8 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
                 loop {
                     sleep(SEC).await;
                     let stop = TIMER.with(|timer| {
-                        let current = timer.current.get() + 1;
-                        timer.current.set(current);
+                        let current = timer.current.get();
+                        timer.current.set(current + 1);
 
                         // notify io dispatcher
                         let mut inner = timer.storage.borrow_mut();

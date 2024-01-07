@@ -4,6 +4,8 @@
 
 * Use "async fn" in trait for Service definition
 
+* Min timeout more than 1sec
+
 ## [0.3.17] - 2023-12-25
 
 * Fix filter leak during Io drop
