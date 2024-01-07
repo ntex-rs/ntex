@@ -1,7 +1,7 @@
-use std::{fmt, mem, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::poll_fn, mem, pin::Pin, task::Context, task::Poll};
 
 use super::{error::PayloadError, h1, h2};
-use crate::util::{poll_fn, Bytes, Stream};
+use crate::util::{Bytes, Stream};
 
 /// Type represent boxed payload
 pub type PayloadStream = Pin<Box<dyn Stream<Item = Result<Bytes, PayloadError>>>>;

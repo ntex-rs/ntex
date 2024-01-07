@@ -543,10 +543,10 @@ where
 #[cfg(test)]
 mod tests {
     use futures_util::stream;
-    use std::io;
+    use std::{future::poll_fn, io};
 
     use super::*;
-    use crate::util::{poll_fn, Ready};
+    use crate::util::Ready;
 
     impl Body {
         pub(crate) fn get_ref(&self) -> &[u8] {

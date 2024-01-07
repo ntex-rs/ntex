@@ -5,8 +5,8 @@ use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
 use ntex::io::{DispatchItem, Dispatcher, Io};
 use ntex::service::{fn_factory, Service, ServiceCtx};
-use ntex::time::{sleep, Millis, Seconds};
-use ntex::util::{BoxFuture, ByteString, Bytes, Ready};
+use ntex::time::Seconds;
+use ntex::util::{ByteString, Bytes, Ready};
 use ntex::ws::{self, handshake, handshake_response};
 
 struct WsService(Arc<Mutex<Cell<bool>>>);
@@ -34,39 +34,28 @@ impl Clone for WsService {
 impl Service<(Request, Io, h1::Codec)> for WsService {
     type Response = ();
     type Error = io::Error;
-    type Future<'f> = BoxFuture<'f, Result<(), io::Error>>;
 
     fn poll_ready(&self, _ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.set_polled();
         Poll::Ready(Ok(()))
     }
 
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         (req, io, codec): (Request, Io, h1::Codec),
-        _: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
-        let fut = async move {
-            let res = handshake(req.head()).unwrap().message_body(());
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<(), io::Error> {
+        let res = handshake(req.head()).unwrap().message_body(());
 
-            io.encode((res, body::BodySize::None).into(), &codec)
-                .unwrap();
+        io.encode((res, body::BodySize::None).into(), &codec)
+            .unwrap();
 
-            let cfg = ntex_io::DispatcherConfig::default();
-            cfg.set_keepalive_timeout(Seconds(0));
+        let cfg = ntex_io::DispatcherConfig::default();
+        cfg.set_keepalive_timeout(Seconds(0));
 
-            Dispatcher::with_config(
-                io.seal(),
-                ws::Codec::new(),
-                service,
-                //&Default::default(),
-                &cfg,
-            )
+        Dispatcher::new(io.seal(), ws::Codec::new(), service, &cfg)
             .await
             .map_err(|_| panic!())
-        };
-
-        Box::pin(fut)
     }
 }
 

@@ -757,7 +757,7 @@ impl WsConnection<Sealed> {
         U: IntoService<T, ws::Frame>,
     {
         let service = apply_fn(
-            service.into_chain().map_err(WsError::Service),
+            service.into_service().map_err(WsError::Service),
             |req, svc| async move {
                 match req {
                     DispatchItem::<ws::Codec>::Item(item) => svc.call(item).await,
@@ -773,7 +773,7 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::with_config(self.io, self.codec, service, &self.config).await
+        Dispatcher::new(self.io, self.codec, service, &self.config).await
     }
 }
 

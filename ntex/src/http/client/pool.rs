@@ -8,7 +8,7 @@ use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::service::{Pipeline, PipelineCall, Service, ServiceCtx};
 use crate::time::{now, Seconds};
-use crate::util::{ready, BoxFuture, ByteString, HashMap, HashSet};
+use crate::util::{ready, ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
@@ -116,61 +116,62 @@ where
 {
     type Response = Connection;
     type Error = ConnectError;
-    type Future<'f> = BoxFuture<'f, Result<Connection, ConnectError>>;
 
     crate::forward_poll_ready!(connector);
     crate::forward_poll_shutdown!(connector);
 
-    fn call<'a>(&'a self, req: Connect, _: ServiceCtx<'a, Self>) -> Self::Future<'_> {
+    async fn call(
+        &self,
+        req: Connect,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Connection, ConnectError> {
         trace!("Get connection for {:?}", req.uri);
         let inner = self.inner.clone();
         let waiters = self.waiters.clone();
 
-        Box::pin(async move {
-            let key = if let Some(authority) = req.uri.authority() {
-                authority.clone().into()
-            } else {
-                return Err(ConnectError::Unresolved);
-            };
+        let key = if let Some(authority) = req.uri.authority() {
+            authority.clone().into()
+        } else {
+            return Err(ConnectError::Unresolved);
+        };
 
-            // acquire connection
-            let result = inner.borrow_mut().acquire(&key);
-            match result {
-                // use existing connection
-                Acquire::Acquired(io, created) => {
-                    trace!("Use existing {:?} connection for {:?}", io, req.uri);
-                    Ok(Connection::new(
-                        io,
-                        created,
-                        Some(Acquired::new(key, inner)),
-                    ))
-                }
-                // open new tcp connection
-                Acquire::Available => {
-                    trace!("Connecting to {:?}", req.uri);
-                    let uri = req.uri.clone();
-                    let (tx, rx) = waiters.borrow_mut().pool.channel();
-                    OpenConnection::spawn(key, tx, uri, inner, &self.connector, req);
+        // acquire connection
+        let result = inner.borrow_mut().acquire(&key);
+        match result {
+            // use existing connection
+            Acquire::Acquired(io, created) => {
+                trace!("Use existing {:?} connection for {:?}", io, req.uri);
+                Ok(Connection::new(
+                    io,
+                    created,
+                    Some(Acquired::new(key, inner)),
+                ))
+            }
+            // open new tcp connection
+            Acquire::Available => {
+                trace!("Connecting to {:?}", req.uri);
+                let uri = req.uri.clone();
+                let (tx, rx) = waiters.borrow_mut().pool.channel();
+                OpenConnection::spawn(key, tx, uri, inner, &self.connector, req);
 
-                    match rx.await {
-                        Err(_) => Err(ConnectError::Disconnected(None)),
-                        Ok(res) => res,
-                    }
-                }
-                // pool is full, wait
-                Acquire::NotAvailable => {
-                    trace!(
-                        "Pool is full, waiting for available connections for {:?}",
-                        req.uri
-                    );
-                    let rx = waiters.borrow_mut().wait_for(req);
-                    match rx.await {
-                        Err(_) => Err(ConnectError::Disconnected(None)),
-                        Ok(res) => res,
-                    }
+                match rx.await {
+                    Err(_) => Err(ConnectError::Disconnected(None)),
+                    Ok(res) => res,
                 }
             }
-        })
+            // pool is full, wait
+            Acquire::NotAvailable => {
+                trace!(
+                    "Pool is full, waiting for available connections for {:?}",
+                    req.uri
+                );
+                let rx = waiters.borrow_mut().wait_for(req);
+                match rx.await {
+                    Err(_) => Err(ConnectError::Disconnected(None)),
+                    Ok(res) => res,
+                }
+            }
+        }
     }
 }
 
@@ -659,8 +660,8 @@ mod tests {
         assert!(pool.get_ref().inner.borrow().connecting.is_empty());
 
         // pool is full, waiting
-        let mut fut = pool.call(req.clone());
-        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+        let mut fut = std::pin::pin!(pool.call(req.clone()));
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
         assert_eq!(pool.get_ref().waiters.borrow().waiters.len(), 1);
 
         // release connection and push it to next waiter
@@ -676,8 +677,8 @@ mod tests {
         assert_eq!(store.borrow().len(), 2);
         assert_eq!(pool.get_ref().inner.borrow().acquired, 1);
         assert!(pool.get_ref().inner.borrow().connecting.is_empty());
-        let mut fut = pool.call(req.clone());
-        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+        let mut fut = std::pin::pin!(pool.call(req.clone()));
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
         assert_eq!(pool.get_ref().waiters.borrow().waiters.len(), 1);
 
         // release and close
@@ -692,7 +693,7 @@ mod tests {
         assert_eq!(pool.get_ref().inner.borrow().acquired, 1);
 
         // drop waiter, no interest in connection
-        let mut fut = pool.call(req.clone());
+        let mut fut = Box::pin(pool.call(req.clone()));
         assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
         drop(fut);
         sleep(Millis(50)).await;
@@ -704,8 +705,8 @@ mod tests {
             uri: Uri::try_from("http://localhost2/test").unwrap(),
             addr: None,
         };
-        let mut fut = pool.call(req.clone());
-        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+        let mut fut = std::pin::pin!(pool.call(req.clone()));
+        assert!(lazy(|cx| fut.as_mut().poll(cx)).await.is_pending());
         assert_eq!(pool.get_ref().waiters.borrow().waiters.len(), 1);
         conn.release(false);
         assert_eq!(pool.get_ref().inner.borrow().acquired, 0);

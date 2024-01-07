@@ -839,10 +839,10 @@ mod tests {
                 Poll::Ready(Err(()))
             }
 
-            async fn call<'a>(
-                &'a self,
+            async fn call(
+                &self,
                 _: DispatchItem<BytesCodec>,
-                _: ServiceCtx<'a, Self>,
+                _: ServiceCtx<'_, Self>,
             ) -> Result<Self::Response, Self::Error> {
                 Ok(None)
             }

@@ -20,5 +20,5 @@ pin-project-lite = "0.2.6"
 slab = "0.4"
 
 [dev-dependencies]
-ntex = { version = "0.7.0", features = ["tokio"] }
-ntex-util = "0.3.0"
+ntex = { version = "1.0", features = ["tokio"] }
+ntex-util = "1.0.0"

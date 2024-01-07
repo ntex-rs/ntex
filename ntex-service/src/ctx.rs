@@ -212,10 +212,10 @@ mod tests {
             self.1.poll_ready(cx).map(|_| Ok(()))
         }
 
-        async fn call<'a>(
-            &'a self,
+        async fn call(
+            &self,
             req: &'static str,
-            ctx: ServiceCtx<'a, Self>,
+            ctx: ServiceCtx<'_, Self>,
         ) -> Result<Self::Response, Self::Error> {
             let _ = ctx.clone();
             Ok(req)

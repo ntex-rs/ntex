@@ -114,10 +114,10 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        async fn call<'a>(
-            &'a self,
+        async fn call(
+            &self,
             req: Result<&'static str, &'static str>,
-            _: ServiceCtx<'a, Self>,
+            _: ServiceCtx<'_, Self>,
         ) -> Result<&'static str, ()> {
             match req {
                 Ok(msg) => Ok(msg),
@@ -138,10 +138,10 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        async fn call<'a>(
-            &'a self,
+        async fn call(
+            &self,
             req: Result<&'static str, ()>,
-            _: ServiceCtx<'a, Self>,
+            _: ServiceCtx<'_, Self>,
         ) -> Result<Self::Response, ()> {
             match req {
                 Ok(msg) => Ok((msg, "ok")),

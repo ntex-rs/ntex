@@ -5,7 +5,7 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{body::BodySize, h1, StatusCode};
 use crate::service::{
-    apply_fn, fn_factory_with_config, IntoServiceFactory, ServiceFactory,
+    apply_fn, chain_factory, fn_factory_with_config, IntoServiceFactory, ServiceFactory,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
@@ -19,7 +19,7 @@ where
     F: IntoServiceFactory<T, Frame, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
-    let inner_factory = Rc::new(factory.chain().map_err(WsError::Service));
+    let inner_factory = Rc::new(chain_factory(factory).map_err(WsError::Service));
 
     let factory = fn_factory_with_config(move |sink: WsSink| {
         let factory = inner_factory.clone();
@@ -105,7 +105,7 @@ where
 
     // start websockets service dispatcher
     rt::spawn(async move {
-        let res = crate::io::Dispatcher::with_config(io, codec, srv, &cfg).await;
+        let res = crate::io::Dispatcher::new(io, codec, srv, &cfg).await;
         log::trace!("Ws handler is terminated: {:?}", res);
     });
 

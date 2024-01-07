@@ -215,10 +215,10 @@ mod tests {
             self.0.poll_ready(cx)
         }
 
-        async fn call<'a>(
-            &'a self,
+        async fn call(
+            &self,
             req: R,
-            ctx: ServiceCtx<'a, Self>,
+            ctx: ServiceCtx<'_, Self>,
         ) -> Result<S::Response, S::Error> {
             ctx.call(&self.0, req).await
         }

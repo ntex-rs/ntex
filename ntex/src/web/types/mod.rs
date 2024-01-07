@@ -13,7 +13,3 @@ pub use self::path::Path;
 pub use self::payload::{Payload, PayloadConfig};
 pub use self::query::Query;
 pub use self::state::State;
-
-#[deprecated]
-#[doc(hidden)]
-pub type Data<T> = State<T>;

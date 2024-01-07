@@ -6,7 +6,6 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::util::BoxFuture;
 
 use super::codec::Codec;
 use super::dispatcher::Dispatcher;
@@ -82,10 +81,9 @@ mod openssl {
         > {
             Acceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
-                .chain()
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
-                .and_then(self.chain().map_err(SslError::Service))
+                .and_then(self.map_err(SslError::Service))
         }
     }
 }
@@ -128,10 +126,9 @@ mod rustls {
         > {
             Acceptor::from(config)
                 .timeout(self.cfg.ssl_handshake_timeout)
-                .chain()
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
-                .and_then(self.chain().map_err(SslError::Service))
+                .and_then(self.map_err(SslError::Service))
         }
     }
 }
@@ -205,39 +202,36 @@ where
     type Error = DispatchError;
     type InitError = ();
     type Service = H1ServiceHandler<F, S::Service, B, X::Service, U::Service>;
-    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
+    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
         let fut = self.srv.create(());
         let fut_ex = self.expect.create(());
         let fut_upg = self.upgrade.as_ref().map(|f| f.create(()));
         let on_request = self.on_request.borrow_mut().take();
         let cfg = self.cfg.clone();
 
-        Box::pin(async move {
-            let service = fut
-                .await
-                .map_err(|e| log::error!("Init http service error: {:?}", e))?;
-            let expect = fut_ex
-                .await
-                .map_err(|e| log::error!("Init http service error: {:?}", e))?;
-            let upgrade = if let Some(fut) = fut_upg {
-                Some(
-                    fut.await
-                        .map_err(|e| log::error!("Init http service error: {:?}", e))?,
-                )
-            } else {
-                None
-            };
+        let service = fut
+            .await
+            .map_err(|e| log::error!("Init http service error: {:?}", e))?;
+        let expect = fut_ex
+            .await
+            .map_err(|e| log::error!("Init http service error: {:?}", e))?;
+        let upgrade = if let Some(fut) = fut_upg {
+            Some(
+                fut.await
+                    .map_err(|e| log::error!("Init http service error: {:?}", e))?,
+            )
+        } else {
+            None
+        };
 
-            let config = Rc::new(DispatcherConfig::new(
-                cfg, service, expect, upgrade, on_request,
-            ));
+        let config = Rc::new(DispatcherConfig::new(
+            cfg, service, expect, upgrade, on_request,
+        ));
 
-            Ok(H1ServiceHandler {
-                config,
-                _t: marker::PhantomData,
-            })
+        Ok(H1ServiceHandler {
+            config,
+            _t: marker::PhantomData,
         })
     }
 }
@@ -262,7 +256,6 @@ where
 {
     type Response = ();
     type Error = DispatchError;
-    type Future<'f> = Dispatcher<F, S, B, X, U>;
 
     fn poll_ready(
         &self,
@@ -324,12 +317,12 @@ where
         }
     }
 
-    fn call<'a>(&'a self, io: Io<F>, _: ServiceCtx<'a, Self>) -> Self::Future<'_> {
+    async fn call(&self, io: Io<F>, _: ServiceCtx<'_, Self>) -> Result<(), DispatchError> {
         log::trace!(
             "New http1 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
         );
 
-        Dispatcher::new(io, self.config.clone())
+        Dispatcher::new(io, self.config.clone()).await
     }
 }

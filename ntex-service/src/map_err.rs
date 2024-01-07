@@ -178,7 +178,7 @@ mod tests {
             }
         }
 
-        async fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Result<(), ()> {
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Err(())
         }
     }

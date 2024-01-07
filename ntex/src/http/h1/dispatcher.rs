@@ -117,7 +117,7 @@ where
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
-            io.start_timer_secs(cfg.timeout);
+            io.start_timer(cfg.timeout);
             (Flags::READ_HDRS_TIMEOUT, cfg.max_timeout)
         } else {
             (Flags::empty(), Seconds::ZERO)
@@ -888,7 +888,7 @@ where
                             self.io.tag(),
                             total
                         );
-                        self.io.start_timer_secs(cfg.timeout);
+                        self.io.start_timer(cfg.timeout);
                         return Ok(());
                     }
                 }
@@ -935,7 +935,7 @@ where
                     );
                     self.flags.insert(Flags::READ_KA_TIMEOUT);
                     if self.config.keep_alive_enabled() {
-                        self.io.start_timer_secs(self.config.keep_alive);
+                        self.io.start_timer(self.config.keep_alive);
                     }
                 }
             } else {
@@ -957,7 +957,7 @@ where
             self.read_consumed = 0;
             self.read_remains = decoded.remains as u32;
             self.read_max_timeout = cfg.max_timeout;
-            self.io.start_timer_secs(cfg.timeout);
+            self.io.start_timer(cfg.timeout);
         }
         None
     }
@@ -973,7 +973,7 @@ where
             self.read_remains = decoded.remains as u32;
             self.read_consumed = decoded.consumed as u32;
             self.read_max_timeout = cfg.max_timeout;
-            self.io.start_timer_secs(cfg.timeout);
+            self.io.start_timer(cfg.timeout);
         }
     }
 }
@@ -981,7 +981,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{cell::Cell, io, sync::Arc};
+    use std::{cell::Cell, future::poll_fn, io, sync::Arc};
 
     use ntex_h2::Config;
     use rand::Rng;
@@ -992,7 +992,7 @@ mod tests {
     use crate::http::{body, Request, ResponseHead, StatusCode};
     use crate::io::{self as nio, Base};
     use crate::service::{boxed, fn_service, IntoService};
-    use crate::util::{lazy, poll_fn, stream_recv, Bytes, BytesMut};
+    use crate::util::{lazy, stream_recv, Bytes, BytesMut};
     use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis, time::Seconds};
 
     const BUFFER_SIZE: usize = 32_768;
@@ -1274,9 +1274,7 @@ mod tests {
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         sleep(Millis(50)).await;
-        crate::util::poll_fn(|cx| Pin::new(&mut h1).poll(cx))
-            .await
-            .unwrap();
+        poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.unwrap();
         assert!(h1.inner.io.is_closed());
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);

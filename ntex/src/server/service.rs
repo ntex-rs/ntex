@@ -62,7 +62,6 @@ where
 {
     type Response = ();
     type Error = ();
-    type Future<'f> = BoxFuture<'f, Result<(), ()>> where T: 'f;
 
     crate::forward_poll_shutdown!(service);
 
@@ -77,32 +76,30 @@ where
         }
     }
 
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         (guard, req): (Option<CounterGuard>, ServerMessage),
-        ctx: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
-        Box::pin(async move {
-            match req {
-                ServerMessage::Connect(stream) => {
-                    let stream = stream.try_into().map_err(|e| {
-                        error!("Cannot convert to an async io stream: {}", e);
-                    });
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), ()> {
+        match req {
+            ServerMessage::Connect(stream) => {
+                let stream = stream.try_into().map_err(|e| {
+                    error!("Cannot convert to an async io stream: {}", e);
+                });
 
-                    if let Ok(stream) = stream {
-                        let stream: Io<_> = stream;
-                        stream.set_tag(self.tag);
-                        stream.set_memory_pool(self.pool_ref);
-                        let _ = ctx.call(self.service.as_ref(), stream).await;
-                        drop(guard);
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
+                if let Ok(stream) = stream {
+                    let stream: Io<_> = stream;
+                    stream.set_tag(self.tag);
+                    stream.set_memory_pool(self.pool_ref);
+                    let _ = ctx.call(self.service.as_ref(), stream).await;
+                    drop(guard);
+                    Ok(())
+                } else {
+                    Err(())
                 }
-                _ => Ok(()),
             }
-        })
+            _ => Ok(()),
+        }
     }
 }
 

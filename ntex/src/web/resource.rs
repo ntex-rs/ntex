@@ -4,11 +4,11 @@ use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
-use crate::service::{chain_factory, ServiceCtx};
+use crate::service::{chain, chain_factory, ServiceCtx};
 use crate::service::{
-    Identity, IntoServiceFactory, Middleware, Service, ServiceCall, ServiceFactory, Stack,
+    Identity, IntoServiceFactory, Middleware, Service, ServiceFactory, Stack,
 };
-use crate::util::{BoxFuture, Either, Extensions, Ready};
+use crate::util::Extensions;
 
 use super::dev::{insert_slash, WebServiceConfig, WebServiceFactory};
 use super::extract::FromRequest;
@@ -24,8 +24,6 @@ type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
 type ResourcePipeline<F, Err> =
     ServiceChain<AndThen<F, ResourceRouter<Err>>, WebRequest<Err>>;
-type BoxResponse<'a, Err: ErrorRenderer> =
-    ServiceCall<'a, HttpService<Err>, WebRequest<Err>>;
 
 /// *Resource* is an entry in resources table which corresponds to requested URL.
 ///
@@ -302,7 +300,7 @@ where
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            f.chain()
+            chain_factory(f.into_factory())
                 .map_init_err(|e| log::error!("Cannot construct default service: {:?}", e)),
         )))));
 
@@ -420,14 +418,11 @@ where
     type Error = Err::Container;
     type Service = M::Service;
     type InitError = ();
-    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
-        Box::pin(async move {
-            let filter = self.filter.create(()).await?;
-            let routing = self.routing.create(()).await?;
-            Ok(self.middleware.create(filter.chain().and_then(routing)))
-        })
+    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+        let filter = self.filter.create(()).await?;
+        let routing = self.routing.create(()).await?;
+        Ok(self.middleware.create(chain(filter).and_then(routing)))
     }
 }
 
@@ -442,26 +437,20 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFacto
     type Error = Err::Container;
     type InitError = ();
     type Service = ResourceRouter<Err>;
-    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
-        Box::pin(async move {
-            let default = if let Some(ref default) = self.default {
-                Some(default.create(()).await?)
-            } else {
-                None
-            };
-            Ok(ResourceRouter {
-                default,
-                state: self.state.clone(),
-                routes: self.routes.iter().map(|route| route.service()).collect(),
-            })
+    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+        let default = if let Some(ref default) = self.default {
+            Some(default.create(()).await?)
+        } else {
+            None
+        };
+        Ok(ResourceRouter {
+            default,
+            state: self.state.clone(),
+            routes: self.routes.iter().map(|route| route.service()).collect(),
         })
     }
 }
-
-type BoxResourceRouterResponse<'a, Err: ErrorRenderer> =
-    ServiceCall<'a, RouteService<Err>, WebRequest<Err>>;
 
 pub struct ResourceRouter<Err: ErrorRenderer> {
     state: Option<AppState>,
@@ -472,31 +461,27 @@ pub struct ResourceRouter<Err: ErrorRenderer> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future<'f> = Either<
-        BoxResourceRouterResponse<'f, Err>,
-        Either<Ready<WebResponse, Err::Container>, BoxResponse<'f, Err>>,
-    >;
 
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         mut req: WebRequest<Err>,
-        ctx: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         for route in self.routes.iter() {
             if route.check(&mut req) {
                 if let Some(ref state) = self.state {
                     req.set_state_container(state.clone());
                 }
-                return Either::Left(ctx.call(route, req));
+                return ctx.call(route, req).await;
             }
         }
         if let Some(ref default) = self.default {
-            Either::Right(Either::Right(ctx.call(default, req)))
+            ctx.call(default, req).await
         } else {
-            Either::Right(Either::Left(Ready::Ok(WebResponse::new(
+            Ok(WebResponse::new(
                 Response::MethodNotAllowed().finish(),
                 req.into_parts().0,
-            ))))
+            ))
         }
     }
 }

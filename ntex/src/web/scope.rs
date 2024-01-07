@@ -1,15 +1,11 @@
-use std::{
-    cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll,
-};
+use std::{cell::RefCell, fmt, rc::Rc, task::Context, task::Poll};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{chain_factory, dev::ServiceChainFactory, IntoServiceFactory};
-use crate::service::{
-    Identity, Middleware, Service, ServiceCall, ServiceCtx, ServiceFactory, Stack,
-};
-use crate::util::{BoxFuture, Either, Extensions, Ready};
+use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory, Stack};
+use crate::util::Extensions;
 
 use super::app::Filter;
 use super::config::ServiceConfig;
@@ -28,8 +24,6 @@ type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
-type BoxResponse<'a, Err: ErrorRenderer> =
-    ServiceCall<'a, HttpService<Err>, WebRequest<Err>>;
 
 /// Resources scope.
 ///
@@ -288,7 +282,7 @@ where
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            f.chain()
+            chain_factory(f.into_factory())
                 .map_init_err(|e| log::error!("Cannot construct default service: {:?}", e)),
         )))));
 
@@ -468,15 +462,12 @@ where
     type Error = Err::Container;
     type Service = M::Service;
     type InitError = ();
-    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
-        Box::pin(async move {
-            Ok(self.middleware.create(ScopeService {
-                filter: self.filter.create(()).await?,
-                routing: self.routing.create(()).await?,
-            }))
-        })
+    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+        Ok(self.middleware.create(ScopeService {
+            filter: self.filter.create(()).await?,
+            routing: self.routing.create(()).await?,
+        }))
     }
 }
 
@@ -492,7 +483,6 @@ where
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future<'f> = ScopeServiceResponse<'f, F, Err> where F: 'f;
 
     #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -505,55 +495,13 @@ where
         }
     }
 
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         req: WebRequest<Err>,
-        ctx: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
-        ScopeServiceResponse {
-            filter: ctx.call(&self.filter, req),
-            routing: &self.routing,
-            endpoint: None,
-            ctx,
-        }
-    }
-}
-
-pin_project_lite::pin_project! {
-    pub struct ScopeServiceResponse<'f, F: Service<WebRequest<Err>>, Err: ErrorRenderer>
-    where F: 'f
-    {
-        #[pin]
-        filter: ServiceCall<'f, F, WebRequest<Err>>,
-        routing: &'f ScopeRouter<Err>,
-        ctx: ServiceCtx<'f, ScopeService<F, Err>>,
-        endpoint: Option<ServiceCall<'f, ScopeRouter<Err>, WebRequest<Err>>>,
-    }
-}
-
-impl<'f, F, Err> Future for ScopeServiceResponse<'f, F, Err>
-where
-    F: Service<WebRequest<Err>, Response = WebRequest<Err>, Error = Err::Container>,
-    Err: ErrorRenderer,
-{
-    type Output = Result<WebResponse, Err::Container>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
-
-        loop {
-            if let Some(fut) = this.endpoint.as_mut() {
-                return Pin::new(fut).poll(cx);
-            }
-
-            let res = if let Poll::Ready(res) = this.filter.poll(cx) {
-                res?
-            } else {
-                return Poll::Pending;
-            };
-            *this.endpoint = Some(this.ctx.call(this.routing, res));
-            this = self.as_mut().project();
-        }
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let req = ctx.call(&self.filter, req).await?;
+        ctx.call(&self.routing, req).await
     }
 }
 
@@ -569,31 +517,28 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<
     type Error = Err::Container;
     type InitError = ();
     type Service = ScopeRouter<Err>;
-    type Future<'f> = BoxFuture<'f, Result<Self::Service, Self::InitError>>;
 
-    fn create(&self, _: ()) -> Self::Future<'_> {
-        Box::pin(async move {
-            // create http services
-            let mut router = Router::build();
-            if self.case_insensitive {
-                router.case_insensitive();
-            }
-            for (path, factory, guards) in &mut self.services.iter() {
-                let service = factory.create(()).await?;
-                router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
-            }
+    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+        // create http services
+        let mut router = Router::build();
+        if self.case_insensitive {
+            router.case_insensitive();
+        }
+        for (path, factory, guards) in &mut self.services.iter() {
+            let service = factory.create(()).await?;
+            router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
+        }
 
-            let default = if let Some(ref default) = self.default {
-                Some(default.create(()).await?)
-            } else {
-                None
-            };
+        let default = if let Some(ref default) = self.default {
+            Some(default.create(()).await?)
+        } else {
+            None
+        };
 
-            Ok(ScopeRouter {
-                default,
-                router: router.finish(),
-                state: self.state.clone(),
-            })
+        Ok(ScopeRouter {
+            default,
+            router: router.finish(),
+            state: self.state.clone(),
         })
     }
 }
@@ -607,13 +552,12 @@ struct ScopeRouter<Err: ErrorRenderer> {
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
     type Response = WebResponse;
     type Error = Err::Container;
-    type Future<'f> = Either<BoxResponse<'f, Err>, Ready<Self::Response, Self::Error>>;
 
-    fn call<'a>(
-        &'a self,
+    async fn call(
+        &self,
         mut req: WebRequest<Err>,
-        ctx: ServiceCtx<'a, Self>,
-    ) -> Self::Future<'a> {
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
@@ -629,15 +573,12 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
             if let Some(ref state) = self.state {
                 req.set_state_container(state.clone());
             }
-            Either::Left(ctx.call(srv, req))
+            ctx.call(srv, req).await
         } else if let Some(ref default) = self.default {
-            Either::Left(ctx.call(default, req))
+            ctx.call(default, req).await
         } else {
             let req = req.into_parts().0;
-            Either::Right(Ready::Ok(WebResponse::new(
-                Response::NotFound().finish(),
-                req,
-            )))
+            Ok(WebResponse::new(Response::NotFound().finish(), req))
         }
     }
 }

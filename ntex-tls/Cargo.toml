@@ -39,7 +39,7 @@ tls_openssl = { version = "0.10", package = "openssl", optional = true }
 tls_rust = { version = "0.21", package = "rustls", optional = true }
 
 [dev-dependencies]
-ntex = { version = "0.7", features = ["openssl", "rustls", "tokio"] }
+ntex = { version = "1.0", features = ["openssl", "rustls", "tokio"] }
 env_logger = "0.10"
 rustls-pemfile = "1.0"
 webpki-roots = "0.25"

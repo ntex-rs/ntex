@@ -40,7 +40,7 @@ async fn test_simple() {
                         .unwrap();
 
                     // start websocket service
-                    Dispatcher::with_config(
+                    Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
                         ws_service,
@@ -96,7 +96,7 @@ async fn test_transport() {
                         .unwrap();
 
                     // start websocket service
-                    Dispatcher::with_config(
+                    Dispatcher::new(
                         io.seal(),
                         ws::Codec::default(),
                         ws_service,
@@ -133,13 +133,7 @@ async fn test_keepalive_timeout() {
                     // start websocket service
                     let cfg = DispatcherConfig::default();
                     cfg.set_keepalive_timeout(Seconds::ZERO);
-                    Dispatcher::with_config(
-                        io.seal(),
-                        ws::Codec::default(),
-                        ws_service,
-                        &cfg,
-                    )
-                    .await
+                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service, &cfg).await
                 }
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))

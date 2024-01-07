@@ -253,7 +253,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        async fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Result<usize, ()> {
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
             Ok(1)
         }
     }
@@ -273,7 +273,7 @@ mod tests {
             Poll::Ready(())
         }
 
-        async fn call<'a>(&'a self, _: (), _: ServiceCtx<'a, Self>) -> Result<usize, ()> {
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
             Ok(2)
         }
     }

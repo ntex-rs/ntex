@@ -323,7 +323,7 @@ impl ServerBuilder {
     pub fn set_tag<N: AsRef<str>>(mut self, name: N, tag: &'static str) -> Self {
         let mut token = None;
         for sock in &self.sockets {
-            if &sock.1 == name.as_ref() {
+            if sock.1 == name.as_ref() {
                 token = Some(sock.0);
                 break;
             }

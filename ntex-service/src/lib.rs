@@ -69,7 +69,7 @@ pub use self::pipeline::{Pipeline, PipelineCall};
 ///     type Response = u64;
 ///     type Error = Infallible;
 ///
-///     async fn call<'a>(&'a self, req: u8, _: ServiceCtx<'a, Self>) -> Result<Self::Response, Self::Error> {
+///     async fn call(&self, req: u8, _: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
 ///         Ok(req as u64)
 ///     }
 /// }
