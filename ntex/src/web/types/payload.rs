@@ -220,13 +220,13 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
 
         if encoding == UTF_8 {
             Ok(str::from_utf8(body.as_ref())
-               .map_err(|_| PayloadError::Decoding)?
-               .to_owned())
+                .map_err(|_| PayloadError::Decoding)?
+                .to_owned())
         } else {
             Ok(encoding
-               .decode_without_bom_handling_and_without_replacement(&body)
-               .map(|s| s.into_owned())
-               .ok_or(PayloadError::Decoding)?)
+                .decode_without_bom_handling_and_without_replacement(&body)
+                .map(|s| s.into_owned())
+                .ok_or(PayloadError::Decoding)?)
         }
     }
 }
