@@ -1,10 +1,10 @@
 use std::{marker::PhantomData, ops::Deref};
 
+use crate::http::Payload;
 use crate::web::error::{ErrorRenderer, StateExtractorError};
 use crate::web::extract::FromRequest;
 use crate::web::httprequest::HttpRequest;
 use crate::web::service::AppState;
-use crate::{http::Payload, util::Ready};
 
 /// Application state.
 ///
@@ -78,19 +78,18 @@ impl<T> Clone for State<T> {
 
 impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
     type Error = StateExtractorError;
-    type Future = Ready<Self, Self::Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+    async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
         if req.0.app_state.contains::<T>() {
-            Ready::Ok(Self(req.0.app_state.clone(), PhantomData))
+            Ok(Self(req.0.app_state.clone(), PhantomData))
         } else {
             log::debug!(
                 "Failed to construct App-level State extractor. \
                  Request path: {:?}",
                 req.path()
             );
-            Ready::Err(StateExtractorError::NotConfigured)
+            Err(StateExtractorError::NotConfigured)
         }
     }
 }

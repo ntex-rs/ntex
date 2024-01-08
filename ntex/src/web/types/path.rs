@@ -5,7 +5,7 @@ use serde::de;
 
 use crate::web::error::{ErrorRenderer, PathError};
 use crate::web::{FromRequest, HttpRequest};
-use crate::{http::Payload, router::PathDeserializer, util::Ready};
+use crate::{http::Payload, router::PathDeserializer};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 /// Extract typed information from the request's path.
@@ -154,22 +154,18 @@ where
     T: de::DeserializeOwned,
 {
     type Error = PathError;
-    type Future = Ready<Self, Self::Error>;
 
-    #[inline]
-    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        Ready::from(
-            de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
-                .map(|inner| Path { inner })
-                .map_err(move |e| {
-                    log::debug!(
-                        "Failed during Path extractor deserialization. \
-                         Request path: {:?}",
-                        req.path()
-                    );
-                    PathError::from(e)
-                }),
-        )
+    async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
+        de::Deserialize::deserialize(PathDeserializer::new(req.match_info()))
+            .map(|inner| Path { inner })
+            .map_err(move |e| {
+                log::debug!(
+                    "Failed during Path extractor deserialization. \
+                     Request path: {:?}",
+                    req.path()
+                );
+                PathError::from(e)
+            })
     }
 }
 

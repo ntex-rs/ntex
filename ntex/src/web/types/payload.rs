@@ -5,7 +5,7 @@ use encoding_rs::UTF_8;
 use mime::Mime;
 
 use crate::http::{error, header, HttpMessage};
-use crate::util::{stream_recv, BoxFuture, Bytes, BytesMut, Either, Ready, Stream};
+use crate::util::{stream_recv, BoxFuture, Bytes, BytesMut, Stream};
 use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::{FromRequest, HttpRequest};
 
@@ -107,11 +107,13 @@ impl Stream for Payload {
 /// ```
 impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
     type Error = Err::Container;
-    type Future = Ready<Payload, Self::Error>;
 
     #[inline]
-    fn from_request(_: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
-        Ready::Ok(Payload(payload.take()))
+    async fn from_request(
+        _: &HttpRequest,
+        payload: &mut crate::http::Payload,
+    ) -> Result<Payload, Self::Error> {
+        Ok(Payload(payload.take()))
     }
 }
 
@@ -141,11 +143,11 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
 /// ```
 impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
     type Error = PayloadError;
-    type Future =
-        Either<BoxFuture<'static, Result<Bytes, Self::Error>>, Ready<Bytes, Self::Error>>;
 
-    #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
+    async fn from_request(
+        req: &HttpRequest,
+        payload: &mut crate::http::Payload,
+    ) -> Result<Bytes, Self::Error> {
         let tmp;
         let cfg = if let Some(cfg) = req.app_state::<PayloadConfig>() {
             cfg
@@ -155,11 +157,11 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
         };
 
         if let Err(e) = cfg.check_mimetype(req) {
-            return Either::Right(Ready::Err(e));
+            Err(e)
+        } else {
+            let limit = cfg.limit;
+            HttpMessageBody::new(req, payload).limit(limit).await
         }
-
-        let limit = cfg.limit;
-        Either::Left(Box::pin(HttpMessageBody::new(req, payload).limit(limit)))
     }
 }
 
@@ -192,11 +194,11 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 /// ```
 impl<Err: ErrorRenderer> FromRequest<Err> for String {
     type Error = PayloadError;
-    type Future =
-        Either<BoxFuture<'static, Result<String, Self::Error>>, Ready<String, Self::Error>>;
 
-    #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut crate::http::Payload) -> Self::Future {
+    async fn from_request(
+        req: &HttpRequest,
+        payload: &mut crate::http::Payload,
+    ) -> Result<String, Self::Error> {
         let tmp;
         let cfg = if let Some(cfg) = req.app_state::<PayloadConfig>() {
             cfg
@@ -207,31 +209,27 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
 
         // check content-type
         if let Err(e) = cfg.check_mimetype(req) {
-            return Either::Right(Ready::Err(e));
+            return Err(e);
         }
 
         // check charset
         let encoding = match req.encoding() {
             Ok(enc) => enc,
-            Err(e) => return Either::Right(Ready::Err(PayloadError::from(e))),
+            Err(e) => return Err(PayloadError::from(e)),
         };
         let limit = cfg.limit;
-        let fut = HttpMessageBody::new(req, payload).limit(limit);
+        let body = HttpMessageBody::new(req, payload).limit(limit).await?;
 
-        Either::Left(Box::pin(async move {
-            let body = fut.await?;
-
-            if encoding == UTF_8 {
-                Ok(str::from_utf8(body.as_ref())
-                    .map_err(|_| PayloadError::Decoding)?
-                    .to_owned())
-            } else {
-                Ok(encoding
-                    .decode_without_bom_handling_and_without_replacement(&body)
-                    .map(|s| s.into_owned())
-                    .ok_or(PayloadError::Decoding)?)
-            }
-        }))
+        if encoding == UTF_8 {
+            Ok(str::from_utf8(body.as_ref())
+                .map_err(|_| PayloadError::Decoding)?
+                .to_owned())
+        } else {
+            Ok(encoding
+                .decode_without_bom_handling_and_without_replacement(&body)
+                .map(|s| s.into_owned())
+                .ok_or(PayloadError::Decoding)?)
+        }
     }
 }
 /// Payload configuration for request's payload.
