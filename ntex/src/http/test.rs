@@ -117,8 +117,11 @@ impl TestRequest {
 
     #[cfg(feature = "cookie")]
     /// Set cookie for this request
-    pub fn cookie(&mut self, cookie: Cookie<'_>) -> &mut Self {
-        parts(&mut self.0).cookies.add(cookie.into_owned());
+    pub fn cookie<C>(&mut self, cookie: C) -> &mut Self
+    where
+        C: Into<Cookie<'static>>,
+    {
+        parts(&mut self.0).cookies.add(cookie.into());
         self
     }
 

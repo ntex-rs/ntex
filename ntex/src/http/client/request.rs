@@ -299,13 +299,16 @@ impl ClientRequest {
     ///     println!("Response: {:?}", resp);
     /// }
     /// ```
-    pub fn cookie(mut self, cookie: Cookie<'_>) -> Self {
+    pub fn cookie<C>(mut self, cookie: C) -> Self
+    where
+        C: Into<Cookie<'static>>,
+    {
         if self.cookies.is_none() {
             let mut jar = CookieJar::new();
-            jar.add(cookie.into_owned());
+            jar.add(cookie.into());
             self.cookies = Some(jar)
         } else {
-            self.cookies.as_mut().unwrap().add(cookie.into_owned());
+            self.cookies.as_mut().unwrap().add(cookie.into());
         }
         self
     }

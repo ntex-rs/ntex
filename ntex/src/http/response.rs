@@ -112,9 +112,13 @@ impl<B> Response<B> {
     #[cfg(feature = "cookie")]
     /// Add a cookie to this response
     #[inline]
-    pub fn add_cookie(&mut self, cookie: &Cookie<'_>) -> Result<(), HttpError> {
+    pub fn add_cookie<'a, C>(&mut self, cookie: C) -> Result<(), HttpError>
+    where
+        C: Into<Cookie<'a>>,
+    {
         let h = &mut self.head.headers;
-        HeaderValue::from_str(&cookie.to_string())
+        let c = cookie.into();
+        HeaderValue::try_from(c.to_string())
             .map(|c| {
                 h.append(header::SET_COOKIE, c);
             })
@@ -453,13 +457,16 @@ impl ResponseBuilder {
     ///         .finish()
     /// }
     /// ```
-    pub fn cookie(&mut self, cookie: Cookie<'_>) -> &mut Self {
+    pub fn cookie<C>(&mut self, cookie: C) -> &mut Self
+    where
+        C: Into<Cookie<'static>>,
+    {
         if self.cookies.is_none() {
             let mut jar = CookieJar::new();
-            jar.add(cookie.into_owned());
+            jar.add(cookie.into());
             self.cookies = Some(jar)
         } else {
-            self.cookies.as_mut().unwrap().add(cookie.into_owned());
+            self.cookies.as_mut().unwrap().add(cookie.into());
         }
         self
     }
@@ -835,12 +842,11 @@ mod tests {
 
         let resp = Response::Ok()
             .cookie(
-                coo_kie::Cookie::build("name", "value")
+                coo_kie::Cookie::build(("name", "value"))
                     .domain("www.rust-lang.org")
                     .path("/test")
                     .http_only(true)
-                    .max_age(time::Duration::days(1))
-                    .finish(),
+                    .max_age(time::Duration::days(1)),
             )
             .del_cookie(&cookies[0])
             .finish();
@@ -865,11 +871,11 @@ mod tests {
             .cookie(coo_kie::Cookie::new("original", "val100"))
             .finish();
 
-        r.add_cookie(&coo_kie::Cookie::new("cookie2", "val200"))
+        r.add_cookie(coo_kie::Cookie::new("cookie2", "val200"))
             .unwrap();
-        r.add_cookie(&coo_kie::Cookie::new("cookie2", "val250"))
+        r.add_cookie(coo_kie::Cookie::new("cookie2", "val250"))
             .unwrap();
-        r.add_cookie(&coo_kie::Cookie::new("cookie3", "val300"))
+        r.add_cookie(coo_kie::Cookie::new("cookie3", "val300"))
             .unwrap();
 
         assert_eq!(r.cookies().count(), 4);
@@ -1037,7 +1043,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         #[cfg(feature = "cookie")]
-        resp.add_cookie(&coo_kie::Cookie::new("cookie1", "val100"))
+        resp.add_cookie(coo_kie::Cookie::new("cookie1", "val100"))
             .unwrap();
         let (resp, _) = resp.into_parts();
 
