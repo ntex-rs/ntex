@@ -208,9 +208,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
         };
 
         // check content-type
-        if let Err(e) = cfg.check_mimetype(req) {
-            return Err(e);
-        }
+        cfg.check_mimetype(req)?;
 
         // check charset
         let encoding = match req.encoding() {
@@ -232,6 +230,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
         }
     }
 }
+
 /// Payload configuration for request's payload.
 #[derive(Clone, Debug)]
 pub struct PayloadConfig {

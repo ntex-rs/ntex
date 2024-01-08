@@ -730,13 +730,12 @@ async fn test_client_deflate_encoding_large_random() {
 async fn test_client_cookie_handling() {
     use std::io::{Error as IoError, ErrorKind};
 
-    let cookie1 = Cookie::build("cookie1", "value1").finish();
-    let cookie2 = Cookie::build("cookie2", "value2")
+    let cookie1 = Cookie::build(("cookie1", "value1"));
+    let cookie2 = Cookie::build(("cookie2", "value2"))
         .domain("www.example.org")
         .path("/")
         .secure(true)
-        .http_only(true)
-        .finish();
+        .http_only(true);
     // Q: are all these clones really necessary? A: Yes, possibly
     let cookie1b = cookie1.clone();
     let cookie2b = cookie2.clone();

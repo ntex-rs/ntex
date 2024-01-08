@@ -1021,20 +1021,14 @@ async fn test_server_cookies() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").to(|| async {
             HttpResponse::Ok()
-                .cookie(
-                    coo_kie::CookieBuilder::new("first", "first_value")
-                        .http_only(true)
-                        .finish(),
-                )
+                .cookie(coo_kie::Cookie::build(("first", "first_value")).http_only(true))
                 .cookie(coo_kie::Cookie::new("second", "first_value"))
                 .cookie(coo_kie::Cookie::new("second", "second_value"))
                 .finish()
         }))
     });
 
-    let first_cookie = coo_kie::CookieBuilder::new("first", "first_value")
-        .http_only(true)
-        .finish();
+    let first_cookie = coo_kie::Cookie::build(("first", "first_value")).http_only(true);
     let second_cookie = coo_kie::Cookie::new("second", "second_value");
 
     let response = srv.get("/").send().await.unwrap();

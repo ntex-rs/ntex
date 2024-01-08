@@ -64,8 +64,11 @@ impl TestResponse {
 
     #[cfg(feature = "cookie")]
     /// Set cookie for this response
-    pub fn cookie(mut self, cookie: Cookie<'_>) -> Self {
-        self.cookies.add(cookie.into_owned());
+    pub fn cookie<C>(mut self, cookie: C) -> Self
+    where
+        C: Into<Cookie<'static>>,
+    {
+        self.cookies.add(cookie.into());
         self
     }
 
@@ -126,7 +129,7 @@ mod tests {
                 TestResponse::default()
                     .version(Version::HTTP_2)
                     .header(header::DATE, "data")
-                    .cookie(coo_kie::Cookie::build("name", "value").finish())
+                    .cookie(coo_kie::Cookie::build(("name", "value")))
                     .finish()
             }
             #[cfg(not(feature = "cookie"))]

@@ -87,7 +87,7 @@ percent-encoding = "2.3"
 serde_json = "1.0"
 serde_urlencoded = "0.7"
 url-pkg = { version = "2.4", package = "url", optional = true }
-coo-kie = { version = "0.17", package = "cookie", optional = true }
+coo-kie = { version = "0.18", package = "cookie", optional = true }
 
 # openssl
 tls-openssl = { version="0.10", package = "openssl", optional = true }

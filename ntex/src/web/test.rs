@@ -391,7 +391,10 @@ impl TestRequest {
 
     #[cfg(feature = "cookie")]
     /// Set cookie for this request
-    pub fn cookie(mut self, cookie: Cookie<'_>) -> Self {
+    pub fn cookie<C>(mut self, cookie: C) -> Self
+    where
+        C: Into<Cookie<'static>>,
+    {
         self.req.cookie(cookie);
         self
     }
@@ -1216,12 +1219,11 @@ mod tests {
     fn test_response_cookies() {
         let req = TestRequest::default()
             .cookie(
-                coo_kie::Cookie::build("name", "value")
+                coo_kie::Cookie::build(("name", "value"))
                     .domain("www.rust-lang.org")
                     .path("/test")
                     .http_only(true)
-                    .max_age(::time::Duration::days(1))
-                    .finish(),
+                    .max_age(::time::Duration::days(1)),
             )
             .to_http_request();
 

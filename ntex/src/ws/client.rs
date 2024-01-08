@@ -339,13 +339,16 @@ where
 
     #[cfg(feature = "cookie")]
     /// Set a cookie
-    pub fn cookie(&mut self, cookie: Cookie<'_>) -> &mut Self {
+    pub fn cookie<C>(&mut self, cookie: C) -> &mut Self
+    where
+        C: Into<Cookie<'static>>,
+    {
         if self.cookies.is_none() {
             let mut jar = CookieJar::new();
-            jar.add(cookie.into_owned());
+            jar.add(cookie.into());
             self.cookies = Some(jar)
         } else {
-            self.cookies.as_mut().unwrap().add(cookie.into_owned());
+            self.cookies.as_mut().unwrap().add(cookie.into());
         }
         self
     }
@@ -944,7 +947,7 @@ mod tests {
             .protocols(["v1", "v2"])
             .set_header_if_none(header::CONTENT_TYPE, "json")
             .set_header_if_none(header::CONTENT_TYPE, "text")
-            .cookie(Cookie::build("cookie1", "value1").finish())
+            .cookie(Cookie::build(("cookie1", "value1")))
             .take();
         assert_eq!(
             builder.origin.as_ref().unwrap().to_str().unwrap(),
