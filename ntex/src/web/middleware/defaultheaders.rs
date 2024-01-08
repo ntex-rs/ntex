@@ -106,7 +106,6 @@ pub struct DefaultHeadersMiddleware<S> {
 impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S>
 where
     S: Service<WebRequest<E>, Response = WebResponse>,
-    E: 'static,
 {
     type Response = WebResponse;
     type Error = S::Error;

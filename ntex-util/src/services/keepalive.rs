@@ -53,7 +53,7 @@ impl<R, E, F> fmt::Debug for KeepAlive<R, E, F> {
     }
 }
 
-impl<R, E, F, C: 'static> ServiceFactory<R, C> for KeepAlive<R, E, F>
+impl<R, E, F, C> ServiceFactory<R, C> for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {

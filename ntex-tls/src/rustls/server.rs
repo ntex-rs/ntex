@@ -7,14 +7,13 @@ use ntex_io::{types, Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use ntex_util::{ready, time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
-use crate::rustls::{TlsFilter, Wrapper};
 use crate::Servername;
 
-use super::{PeerCert, PeerCertChain};
+use super::{PeerCert, PeerCertChain, Wrapper};
 
 #[derive(Debug)]
 /// An implementation of SSL streams
-pub(crate) struct TlsServerFilter {
+pub struct TlsServerFilter {
     session: RefCell<ServerConnection>,
 }
 
@@ -121,23 +120,23 @@ impl FilterLayer for TlsServerFilter {
 }
 
 impl TlsServerFilter {
-    pub(crate) async fn create<F: Filter>(
+    pub async fn create<F: Filter>(
         io: Io<F>,
         cfg: Arc<ServerConfig>,
         timeout: Millis,
-    ) -> Result<Io<Layer<TlsFilter, F>>, io::Error> {
+    ) -> Result<Io<Layer<TlsServerFilter, F>>, io::Error> {
         time::timeout(timeout, async {
             let session = ServerConnection::new(cfg)
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-            let filter = TlsFilter::new_server(TlsServerFilter {
+            let filter = TlsServerFilter {
                 session: RefCell::new(session),
-            });
+            };
             let io = io.add_filter(filter);
 
             let filter = io.filter();
             loop {
                 let (result, wants_read, handshaking) = io.with_buf(|buf| {
-                    let mut session = filter.server().session.borrow_mut();
+                    let mut session = filter.session.borrow_mut();
                     let mut wrp = Wrapper(buf);
                     let mut result = (
                         session.complete_io(&mut wrp),

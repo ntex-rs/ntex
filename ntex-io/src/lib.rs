@@ -2,8 +2,7 @@
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
 
 use std::{
-    any::Any, any::TypeId, fmt, future::Future, io as sio, io::Error as IoError,
-    task::Context, task::Poll,
+    any::Any, any::TypeId, fmt, io as sio, io::Error as IoError, task::Context, task::Poll,
 };
 
 pub mod testing;
@@ -31,7 +30,7 @@ pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{ReadContext, WriteContext};
 pub use self::timer::TimerHandle;
-pub use self::utils::{filter, seal, Decoded};
+pub use self::utils::{seal, Decoded};
 
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -90,19 +89,6 @@ pub trait FilterLayer: fmt::Debug + 'static {
     fn shutdown(&self, buf: &WriteBuf<'_>) -> sio::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
-}
-
-/// Creates new `Filter` values.
-pub trait FilterFactory<F>: Sized {
-    /// The `Filter` value created by this factory
-    type Filter: FilterLayer;
-    /// Errors produced while building a filter.
-    type Error: fmt::Debug;
-    /// The future of the `FilterFactory` instance.
-    type Future: Future<Output = Result<Io<Layer<Self::Filter, F>>, Self::Error>>;
-
-    /// Create and return a new filter value asynchronously.
-    fn create(self, st: Io<F>) -> Self::Future;
 }
 
 pub trait IoStream {

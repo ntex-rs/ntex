@@ -538,7 +538,7 @@ where
     pub fn rustls(
         &mut self,
         config: std::sync::Arc<rustls::ClientConfig>,
-    ) -> WsClientBuilder<Layer<rustls::TlsFilter>, rustls::Connector<Uri>> {
+    ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::Connector<Uri>> {
         self.connector(rustls::Connector::from(config))
     }
 

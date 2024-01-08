@@ -1,25 +1,24 @@
-use std::{fmt, io};
+use std::{fmt, io, sync::Arc};
 
-pub use ntex_tls::rustls::TlsFilter;
+pub use ntex_tls::rustls::TlsClientFilter;
 pub use tls_rustls::{ClientConfig, ServerName};
 
 use ntex_bytes::PoolId;
-use ntex_io::{FilterFactory, Io, Layer};
+use ntex_io::{Io, Layer};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
-use ntex_tls::rustls::TlsConnector;
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
 /// Rustls connector factory
 pub struct Connector<T> {
     connector: Pipeline<BaseConnector<T>>,
-    inner: TlsConnector,
+    config: Arc<ClientConfig>,
 }
 
-impl<T: Address> From<std::sync::Arc<ClientConfig>> for Connector<T> {
-    fn from(cfg: std::sync::Arc<ClientConfig>) -> Self {
+impl<T: Address> From<Arc<ClientConfig>> for Connector<T> {
+    fn from(config: Arc<ClientConfig>) -> Self {
         Connector {
-            inner: TlsConnector::new(cfg),
+            config,
             connector: BaseConnector::default().into(),
         }
     }
@@ -28,7 +27,7 @@ impl<T: Address> From<std::sync::Arc<ClientConfig>> for Connector<T> {
 impl<T: Address> Connector<T> {
     pub fn new(config: ClientConfig) -> Self {
         Connector {
-            inner: TlsConnector::new(std::sync::Arc::new(config)),
+            config: Arc::new(config),
             connector: BaseConnector::default().into(),
         }
     }
@@ -46,38 +45,39 @@ impl<T: Address> Connector<T> {
             .into();
         Self {
             connector,
-            inner: self.inner,
+            config: self.config,
         }
     }
 }
 
-impl<T: Address + 'static> Connector<T> {
+impl<T: Address> Connector<T> {
     /// Resolve and connect to remote host
-    pub async fn connect<U>(&self, message: U) -> Result<Io<Layer<TlsFilter>>, ConnectError>
+    pub async fn connect<U>(
+        &self,
+        message: U,
+    ) -> Result<Io<Layer<TlsClientFilter>>, ConnectError>
     where
         Connect<T>: From<U>,
     {
         let req = Connect::from(message);
         let host = req.host().split(':').next().unwrap().to_owned();
-        let conn = self.connector.call(req);
-        let connector = self.inner.clone();
+        let io = self.connector.call(req).await?;
 
-        let io = conn.await?;
         log::trace!("{}: SSL Handshake start for: {:?}", io.tag(), host);
 
         let tag = io.tag();
+        let config = self.config.clone();
         let host = ServerName::try_from(host.as_str())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
-        let connector = connector.server_name(host.clone());
 
-        match connector.create(io).await {
+        match TlsClientFilter::create(io, config, host.clone()).await {
             Ok(io) => {
                 log::trace!("{}: TLS Handshake success: {:?}", tag, &host);
                 Ok(io)
             }
             Err(e) => {
                 log::trace!("{}: TLS Handshake error: {:?}", tag, e);
-                Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
+                Err(e.into())
             }
         }
     }
@@ -86,7 +86,7 @@ impl<T: Address + 'static> Connector<T> {
 impl<T> Clone for Connector<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            config: self.config.clone(),
             connector: self.connector.clone(),
         }
     }
@@ -100,8 +100,8 @@ impl<T> fmt::Debug for Connector<T> {
     }
 }
 
-impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
-    type Response = Io<Layer<TlsFilter>>;
+impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
+    type Response = Io<Layer<TlsClientFilter>>;
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
@@ -112,7 +112,7 @@ impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
 }
 
 impl<T: Address> Service<Connect<T>> for Connector<T> {
-    type Response = Io<Layer<TlsFilter>>;
+    type Response = Io<Layer<TlsClientFilter>>;
     type Error = ConnectError;
 
     async fn call(
