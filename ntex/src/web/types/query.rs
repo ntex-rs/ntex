@@ -3,9 +3,9 @@ use std::{fmt, ops};
 
 use serde::de;
 
+use crate::http::Payload;
 use crate::web::error::{ErrorRenderer, QueryPayloadError};
 use crate::web::{FromRequest, HttpRequest};
-use crate::{http::Payload, util::Ready};
 
 /// Extract typed information from the request's query.
 ///
@@ -128,12 +128,11 @@ where
     Err: ErrorRenderer,
 {
     type Error = QueryPayloadError;
-    type Future = Ready<Self, Self::Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+    async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
         serde_urlencoded::from_str::<T>(req.query_string())
-            .map(|val| Ready::Ok(Query(val)))
+            .map(|val| Ok(Query(val)))
             .unwrap_or_else(move |e| {
                 let e = QueryPayloadError::Deserialize(e);
 
@@ -142,7 +141,7 @@ where
                      Request path: {:?}",
                     req.path()
                 );
-                Ready::Err(e)
+                Err(e)
             })
     }
 }

@@ -5,7 +5,7 @@ use crate::http::{
 };
 use crate::io::{types, IoRef};
 use crate::router::Path;
-use crate::util::{Extensions, Ready};
+use crate::util::Extensions;
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
@@ -280,11 +280,10 @@ impl Drop for HttpRequest {
 /// ```
 impl<Err: ErrorRenderer> FromRequest<Err> for HttpRequest {
     type Error = Err::Container;
-    type Future = Ready<Self, Self::Error>;
 
     #[inline]
-    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        Ok(req.clone()).into()
+    async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
+        Ok(req.clone())
     }
 }
 

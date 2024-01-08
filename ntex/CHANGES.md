@@ -2,6 +2,8 @@
 
 ## [1.0.0-b.1] - 2024-01-08
 
+* web: Refactor FromRequest trait, use async fn
+
 * Refactor io tls filters
 
 ## [1.0.0-b.0] - 2024-01-07

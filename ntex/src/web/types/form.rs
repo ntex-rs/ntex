@@ -101,22 +101,20 @@ where
     Err: ErrorRenderer,
 {
     type Error = UrlencodedError;
-    type Future = BoxFuture<'static, Result<Self, Self::Error>>;
 
-    #[inline]
-    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+    async fn from_request(
+        req: &HttpRequest,
+        payload: &mut Payload,
+    ) -> Result<Self, Self::Error> {
         let limit = req
             .app_state::<FormConfig>()
             .map(|c| c.limit)
             .unwrap_or(16384);
 
-        let fut = UrlEncoded::new(req, payload).limit(limit);
-        Box::pin(async move {
-            match fut.await {
-                Err(e) => Err(e),
-                Ok(item) => Ok(Form(item)),
-            }
-        })
+        match UrlEncoded::new(req, payload).limit(limit).await {
+            Err(e) => Err(e),
+            Ok(item) => Ok(Form(item)),
+        }
     }
 }
 
