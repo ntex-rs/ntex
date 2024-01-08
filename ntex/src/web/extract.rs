@@ -26,7 +26,7 @@ pub trait FromRequest<Err>: Sized {
 /// ## Example
 ///
 /// ```rust
-/// use ntex::{http, util::Ready};
+/// use ntex::http;
 /// use ntex::web::{self, error, App, HttpRequest, FromRequest, DefaultError};
 /// use rand;
 ///
@@ -37,13 +37,12 @@ pub trait FromRequest<Err>: Sized {
 ///
 /// impl<Err> FromRequest<Err> for Thing {
 ///     type Error = error::Error;
-///     type Future = Ready<Self, Self::Error>;
 ///
-///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
+///     async fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Result<Self, Self::Error> {
 ///         if rand::random() {
-///             Ready::Ok(Thing { name: "thingy".into() })
+///             Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Ready::Err(error::ErrorBadRequest("no luck").into())
+///             Err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///     }
 /// }
@@ -94,7 +93,7 @@ where
 /// ## Example
 ///
 /// ```rust
-/// use ntex::{http, util::Ready};
+/// use ntex::http;
 /// use ntex::web::{self, error, App, HttpRequest, FromRequest};
 /// use rand;
 ///
@@ -105,13 +104,12 @@ where
 ///
 /// impl<Err> FromRequest<Err> for Thing {
 ///     type Error = error::Error;
-///     type Future = Ready<Thing, Self::Error>;
 ///
-///     fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Self::Future {
+///     async fn from_request(req: &HttpRequest, payload: &mut http::Payload) -> Result<Thing, Self::Error> {
 ///         if rand::random() {
-///             Ready::Ok(Thing { name: "thingy".into() })
+///             Ok(Thing { name: "thingy".into() })
 ///         } else {
-///             Ready::Err(error::ErrorBadRequest("no luck").into())
+///             Err(error::ErrorBadRequest("no luck").into())
 ///         }
 ///     }
 /// }
