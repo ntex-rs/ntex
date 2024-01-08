@@ -44,8 +44,8 @@ where
 
 #[cfg(feature = "openssl")]
 mod openssl {
-    use ntex_tls::openssl::{Acceptor, SslFilter};
-    use tls_openssl::ssl::SslAcceptor;
+    use ntex_tls::openssl::{SslAcceptor, SslFilter};
+    use tls_openssl::ssl;
 
     use crate::{io::Layer, server::SslError};
 
@@ -62,14 +62,14 @@ mod openssl {
         /// Create ssl based service
         pub fn openssl(
             self,
-            acceptor: SslAcceptor,
+            acceptor: ssl::SslAcceptor,
         ) -> impl ServiceFactory<
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = S::InitError,
         > {
-            Acceptor::new(acceptor)
+            SslAcceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
@@ -80,13 +80,13 @@ mod openssl {
 
 #[cfg(feature = "rustls")]
 mod rustls {
-    use ntex_tls::rustls::{Acceptor, TlsFilter};
+    use ntex_tls::rustls::{TlsAcceptor, TlsServerFilter};
     use tls_rustls::ServerConfig;
 
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B> H2Service<Layer<TlsFilter, F>, S, B>
+    impl<F, S, B> H2Service<Layer<TlsServerFilter, F>, S, B>
     where
         F: Filter,
         S: ServiceFactory<Request> + 'static,
@@ -107,7 +107,7 @@ mod rustls {
             let protos = vec!["h2".to_string().into()];
             config.alpn_protocols = protos;
 
-            Acceptor::from(config)
+            TlsAcceptor::from(config)
                 .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())

@@ -84,7 +84,7 @@ async fn test_openssl_string() {
             assert!(res.is_ok());
             Ok(io)
         }))
-        .and_then(openssl::Acceptor::new(ssl_acceptor()))
+        .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
         .and_then(fn_service(|io: Io<_>| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
@@ -127,7 +127,7 @@ async fn test_openssl_read_before_error() {
             assert!(res.is_ok());
             Ok(io)
         }))
-        .and_then(openssl::Acceptor::new(ssl_acceptor()))
+        .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
         .and_then(fn_service(|io: Io<_>| async move {
             io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
                 .await
@@ -168,7 +168,7 @@ async fn test_rustls_string() {
             assert!(res.is_ok());
             Ok(io)
         }))
-        .and_then(rustls::Acceptor::new(tls_acceptor()))
+        .and_then(rustls::TlsAcceptor::new(tls_acceptor()))
         .and_then(fn_service(|io: Io<_>| async move {
             assert!(io.query::<PeerCert>().as_ref().is_none());
             assert!(io.query::<PeerCertChain>().as_ref().is_none());

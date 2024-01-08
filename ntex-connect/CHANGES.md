@@ -1,5 +1,11 @@
 # Changes
 
+## [1.0.0-b.1] - 2024-01-08
+
+* Refactor io tls filters
+
+* Remove unnecessary 'static
+
 ## [1.0.0-b.0] - 2024-01-07
 
 * Use "async fn" in trait for Service definition

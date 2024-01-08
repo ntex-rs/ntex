@@ -4,9 +4,9 @@ pub use ntex_tls::openssl::SslFilter;
 pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 
 use ntex_bytes::PoolId;
-use ntex_io::{FilterFactory, Io, Layer};
+use ntex_io::{Io, Layer};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
-use ntex_tls::openssl::SslConnector as IoSslConnector;
+use ntex_tls::openssl::connect as connect_io;
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
@@ -64,7 +64,7 @@ impl<T: Address> Connector<T> {
                     .into_ssl(&host)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
                 let tag = io.tag();
-                match IoSslConnector::new(ssl).create(io).await {
+                match connect_io(io, ssl).await {
                     Ok(io) => {
                         log::trace!("{}: SSL Handshake success: {:?}", tag, host);
                         Ok(io)
@@ -97,7 +97,7 @@ impl<T> fmt::Debug for Connector<T> {
     }
 }
 
-impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Connector<T> {
+impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
     type Service = Connector<T>;

@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0-b.1] - 2024-01-08
+
+* Remove FilterFactory trait and related utils
+
 ## [1.0.0-b.0] - 2024-01-07
 
 * Use "async fn" in trait for Service definition

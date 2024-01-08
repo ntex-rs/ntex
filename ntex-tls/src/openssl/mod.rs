@@ -1,17 +1,15 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::cell::RefCell;
-use std::{any, cmp, error::Error, fmt, io, task::Poll};
+use std::{any, cell::RefCell, cmp, error::Error, io, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec};
-use ntex_io::{types, Filter, FilterFactory, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
-use ntex_util::{future::BoxFuture, time, time::Millis};
+use ntex_io::{types, Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
 
 use crate::{PskIdentity, Servername};
 
 mod accept;
-pub use self::accept::{Acceptor, AcceptorService};
+pub use self::accept::{SslAcceptor, SslAcceptorService};
 
 /// Connection's peer cert
 #[derive(Debug)]
@@ -211,132 +209,31 @@ impl FilterLayer for SslFilter {
     }
 }
 
-pub struct SslAcceptor {
-    acceptor: ssl::SslAcceptor,
-    timeout: Millis,
-}
-
-impl SslAcceptor {
-    /// Create openssl acceptor filter factory
-    pub fn new(acceptor: ssl::SslAcceptor) -> Self {
-        SslAcceptor {
-            acceptor,
-            timeout: Millis(5_000),
-        }
-    }
-
-    /// Set handshake timeout.
-    ///
-    /// Default is set to 5 seconds.
-    pub fn timeout<U: Into<Millis>>(&mut self, timeout: U) -> &mut Self {
-        self.timeout = timeout.into();
-        self
-    }
-}
-
-impl Clone for SslAcceptor {
-    fn clone(&self) -> Self {
-        Self {
-            acceptor: self.acceptor.clone(),
-            timeout: self.timeout,
-        }
-    }
-}
-
-impl fmt::Debug for SslAcceptor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SslAcceptor")
-            .field("timeout", &self.timeout)
-            .finish()
-    }
-}
-
-impl<F: Filter> FilterFactory<F> for SslAcceptor {
-    type Filter = SslFilter;
-
-    type Error = Box<dyn Error>;
-    type Future = BoxFuture<'static, Result<Io<Layer<Self::Filter, F>>, Self::Error>>;
-
-    fn create(self, io: Io<F>) -> Self::Future {
-        let timeout = self.timeout;
-        let ctx_result = ssl::Ssl::new(self.acceptor.context());
-
-        Box::pin(async move {
-            time::timeout(timeout, async {
-                let ssl = ctx_result.map_err(map_to_ioerr)?;
-                let inner = IoInner {
-                    source: None,
-                    destination: None,
-                };
-                let filter = SslFilter {
-                    inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
-                };
-                let io = io.add_filter(filter);
-
-                log::debug!("Accepting tls connection");
-                loop {
-                    let result = io.with_buf(|buf| {
-                        let filter = io.filter();
-                        filter.with_buffers(buf, || filter.inner.borrow_mut().accept())
-                    })?;
-                    if handle_result(&io, result).await?.is_some() {
-                        break;
-                    }
-                }
-
-                Ok(io)
-            })
-            .await
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::TimedOut, "ssl handshake timeout").into()
-            })
-            .and_then(|item| item)
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct SslConnector {
+/// Create openssl connector filter factory
+pub async fn connect<F: Filter>(
+    io: Io<F>,
     ssl: ssl::Ssl,
-}
+) -> Result<Io<Layer<SslFilter, F>>, io::Error> {
+    let inner = IoInner {
+        source: None,
+        destination: None,
+    };
+    let filter = SslFilter {
+        inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
+    };
+    let io = io.add_filter(filter);
 
-impl SslConnector {
-    /// Create openssl connector filter factory
-    pub fn new(ssl: ssl::Ssl) -> Self {
-        SslConnector { ssl }
+    loop {
+        let result = io.with_buf(|buf| {
+            let filter = io.filter();
+            filter.with_buffers(buf, || filter.inner.borrow_mut().connect())
+        })?;
+        if handle_result(&io, result).await?.is_some() {
+            break;
+        }
     }
-}
 
-impl<F: Filter> FilterFactory<F> for SslConnector {
-    type Filter = SslFilter;
-
-    type Error = Box<dyn Error>;
-    type Future = BoxFuture<'static, Result<Io<Layer<Self::Filter, F>>, Self::Error>>;
-
-    fn create(self, io: Io<F>) -> Self::Future {
-        Box::pin(async move {
-            let inner = IoInner {
-                source: None,
-                destination: None,
-            };
-            let filter = SslFilter {
-                inner: RefCell::new(ssl::SslStream::new(self.ssl, inner)?),
-            };
-            let io = io.add_filter(filter);
-
-            loop {
-                let result = io.with_buf(|buf| {
-                    let filter = io.filter();
-                    filter.with_buffers(buf, || filter.inner.borrow_mut().connect())
-                })?;
-                if handle_result(&io, result).await?.is_some() {
-                    break;
-                }
-            }
-
-            Ok(io)
-        })
-    }
+    Ok(io)
 }
 
 async fn handle_result<T, F>(
