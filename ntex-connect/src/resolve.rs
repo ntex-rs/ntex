@@ -97,7 +97,7 @@ impl<T> fmt::Debug for Resolver<T> {
     }
 }
 
-impl<T: Address, C: 'static> ServiceFactory<Connect<T>, C> for Resolver<T> {
+impl<T: Address, C> ServiceFactory<Connect<T>, C> for Resolver<T> {
     type Response = Connect<T>;
     type Error = ConnectError;
     type Service = Resolver<T>;

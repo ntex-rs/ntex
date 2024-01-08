@@ -21,7 +21,7 @@ pub struct Encoder<B> {
     fut: Option<JoinHandle<Result<ContentEncoder, io::Error>>>,
 }
 
-impl<B: MessageBody + 'static> Encoder<B> {
+impl<B: MessageBody> Encoder<B> {
     pub fn response(
         encoding: ContentEncoding,
         head: &mut ResponseHead,

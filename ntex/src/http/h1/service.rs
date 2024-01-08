@@ -47,8 +47,8 @@ where
 
 #[cfg(feature = "openssl")]
 mod openssl {
-    use ntex_tls::openssl::{Acceptor, SslFilter};
-    use tls_openssl::ssl::SslAcceptor;
+    use ntex_tls::openssl::{SslAcceptor, SslFilter};
+    use tls_openssl::ssl;
 
     use super::*;
     use crate::{io::Layer, server::SslError};
@@ -72,14 +72,14 @@ mod openssl {
         /// Create openssl based service
         pub fn openssl(
             self,
-            acceptor: SslAcceptor,
+            acceptor: ssl::SslAcceptor,
         ) -> impl ServiceFactory<
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
         > {
-            Acceptor::new(acceptor)
+            SslAcceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
@@ -92,13 +92,13 @@ mod openssl {
 mod rustls {
     use std::fmt;
 
-    use ntex_tls::rustls::{Acceptor, TlsFilter};
+    use ntex_tls::rustls::{TlsAcceptor, TlsServerFilter};
     use tls_rustls::ServerConfig;
 
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B, X, U> H1Service<Layer<TlsFilter, F>, S, B, X, U>
+    impl<F, S, B, X, U> H1Service<Layer<TlsServerFilter, F>, S, B, X, U>
     where
         F: Filter,
         S: ServiceFactory<Request> + 'static,
@@ -109,7 +109,7 @@ mod rustls {
         X: ServiceFactory<Request, Response = Request> + 'static,
         X::Error: ResponseError,
         X::InitError: fmt::Debug,
-        U: ServiceFactory<(Request, Io<Layer<TlsFilter, F>>, Codec), Response = ()>
+        U: ServiceFactory<(Request, Io<Layer<TlsServerFilter, F>>, Codec), Response = ()>
             + 'static,
         U::Error: fmt::Display + Error,
         U::InitError: fmt::Debug,
@@ -124,7 +124,7 @@ mod rustls {
             Error = SslError<DispatchError>,
             InitError = (),
         > {
-            Acceptor::from(config)
+            TlsAcceptor::from(config)
                 .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
