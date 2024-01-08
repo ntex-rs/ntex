@@ -8,7 +8,7 @@ homepage = "https://ntex.rs"
 repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-openssl/"
 categories = ["network-programming", "asynchronous"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [lib]

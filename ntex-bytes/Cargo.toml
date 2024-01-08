@@ -1,7 +1,6 @@
 [package]
 name = "ntex-bytes"
 version = "0.1.21"
-license = "MIT"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Carl Lerche <me@carllerche.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
@@ -10,6 +9,7 @@ readme = "README.md"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [features]
 default = []

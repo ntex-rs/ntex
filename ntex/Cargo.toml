@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ntex/"
 categories = ["network-programming", "asynchronous",
               "web-programming::http-server",
               "web-programming::websocket"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [package.metadata.docs.rs]
