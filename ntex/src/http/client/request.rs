@@ -286,12 +286,11 @@ impl ClientRequest {
     /// async fn main() {
     ///     let resp = Client::new().get("https://www.rust-lang.org")
     ///         .cookie(
-    ///             cookie::Cookie::build("name", "value")
+    ///             cookie::Cookie::build(("name", "value"))
     ///                 .domain("www.rust-lang.org")
     ///                 .path("/")
     ///                 .secure(true)
     ///                 .http_only(true)
-    ///                 .finish(),
     ///          )
     ///          .send()
     ///          .await;

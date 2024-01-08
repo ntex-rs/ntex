@@ -447,12 +447,11 @@ impl ResponseBuilder {
     /// fn index(req: Request) -> Response {
     ///     Response::Ok()
     ///         .cookie(
-    ///             cookie::Cookie::build("name", "value")
+    ///             cookie::Cookie::build(("name", "value"))
     ///                 .domain("www.rust-lang.org")
     ///                 .path("/")
     ///                 .secure(true)
     ///                 .http_only(true)
-    ///                 .finish(),
     ///         )
     ///         .finish()
     /// }
