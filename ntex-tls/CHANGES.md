@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] - 2024-01-09
+
+* Release
+
 ## [1.0.0-b.1] - 2024-01-08
 
 * Refactor io tls filters

@@ -49,7 +49,7 @@ async-std = ["ntex-rt/async-std", "ntex-async-std", "ntex-connect/async-std"]
 
 [dependencies]
 ntex-codec = "0.6.2"
-ntex-connect = "1.0.0-b.1"
+ntex-connect = "1.0.0"
 ntex-http = "0.1.11"
 ntex-router = "0.5.2"
 ntex-service = "2.0.0"
@@ -59,7 +59,7 @@ ntex-bytes = "0.1.21"
 ntex-h2 = "0.5.0-b.0"
 ntex-rt = "0.4.11"
 ntex-io = "1.0.0"
-ntex-tls = "1.0.0-b.1"
+ntex-tls = "1.0.0"
 ntex-tokio = { version = "0.4.0", optional = true }
 ntex-glommio = { version = "0.4.0", optional = true }
 ntex-async-std = { version = "0.4.0", optional = true }

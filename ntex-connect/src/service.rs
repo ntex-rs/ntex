@@ -50,7 +50,10 @@ impl<T: Address> Connector<T> {
         Connect<T>: From<U>,
     {
         // resolve first
-        let address = self.resolver.lookup(message.into()).await?;
+        let address = self
+            .resolver
+            .lookup_with_tag(message.into(), self.tag)
+            .await?;
 
         let port = address.port();
         let Connect { req, addr, .. } = address;
@@ -92,7 +95,7 @@ impl<T> Clone for Connector<T> {
 impl<T> fmt::Debug for Connector<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Connector")
-            .field("tagr", &self.tag)
+            .field("tag", &self.tag)
             .field("resolver", &self.resolver)
             .field("memory_pool", &self.pool)
             .finish()

@@ -19,14 +19,24 @@ impl<T> Resolver<T> {
 
 impl<T: Address> Resolver<T> {
     /// Lookup ip addresses for provided host
-    pub async fn lookup(&self, mut req: Connect<T>) -> Result<Connect<T>, ConnectError> {
+    pub async fn lookup(&self, req: Connect<T>) -> Result<Connect<T>, ConnectError> {
+        self.lookup_with_tag(req, "TCP-CLIENT").await
+    }
+
+    #[doc(hidden)]
+    /// Lookup ip addresses for provided host
+    pub async fn lookup_with_tag(
+        &self,
+        mut req: Connect<T>,
+        tag: &'static str,
+    ) -> Result<Connect<T>, ConnectError> {
         if req.addr.is_some() || req.req.addr().is_some() {
             Ok(req)
         } else if let Ok(ip) = req.host().parse() {
             req.addr = Some(Either::Left(net::SocketAddr::new(ip, req.port())));
             Ok(req)
         } else {
-            log::trace!("DNS resolver: resolving host {:?}", req.host());
+            log::trace!("{}: DNS Resolver - resolving host {:?}", tag, req.host());
 
             let host = if req.host().contains(':') {
                 req.host().to_string()
@@ -44,7 +54,8 @@ impl<T: Address> Resolver<T> {
                     }));
 
                     log::trace!(
-                        "DNS resolver: host {:?} resolved to {:?}",
+                        "{}: DNS Resolver - host {:?} resolved to {:?}",
+                        tag,
                         req.host(),
                         req.addrs()
                     );
@@ -57,7 +68,8 @@ impl<T: Address> Resolver<T> {
                 }
                 Ok(Err(e)) => {
                     log::trace!(
-                        "DNS resolver: failed to resolve host {:?} err: {}",
+                        "{}: DNS Resolver - failed to resolve host {:?} err: {}",
+                        tag,
                         req.host(),
                         e
                     );
@@ -65,7 +77,8 @@ impl<T: Address> Resolver<T> {
                 }
                 Err(e) => {
                     log::trace!(
-                        "DNS resolver: failed to resolve host {:?} err: {}",
+                        "{}: DNS Resolver - failed to resolve host {:?} err: {}",
+                        tag,
                         req.host(),
                         e
                     );
