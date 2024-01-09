@@ -27,23 +27,21 @@ where
 ///     timeout: Duration,
 /// }
 ///
-/// impl<S> Service for Timeout<S>
+/// impl<S, R> Service<R> for Timeout<S>
 /// where
-///     S: Service,
+///     S: Service<R>,
 /// {
-///     type Request = S::Request;
 ///     type Response = S::Response;
 ///     type Error = TimeoutError<S::Error>;
-///     type Future = TimeoutResponse<S>;
 ///
 ///     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-///         ready!(self.service.poll_ready(cx)).map_err(TimeoutError::Service)
+///         self.service.poll_ready(cx).map_err(TimeoutError::Service)
 ///     }
 ///
-///     fn call(&self, req: S::Request) -> Self::Future {
-///         TimeoutServiceResponse {
-///             fut: self.service.call(req),
-///             sleep: Delay::new(clock::now() + self.timeout),
+///     async fn call(&self, req: S::Request) -> Result<Self::Response, Self::Error> {
+///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
+///             Either::Left(_) => Err(TimeoutError::Timeout),
+///             Either::Right(res) => res.map_err(TimeoutError::Service),
 ///         }
 ///     }
 /// }
@@ -65,8 +63,6 @@ where
 /// }
 ///
 /// impl<S> Middleware<S> for TimeoutMiddleware<E>
-/// where
-///     S: Service,
 /// {
 ///     type Service = Timeout<S>;
 ///

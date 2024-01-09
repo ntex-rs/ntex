@@ -155,11 +155,11 @@ pub mod dev {
     #[inline(always)]
     pub fn __assert_handler<Err, Fun, Fut>(
         f: Fun,
-    ) -> impl for<'r> Handler<(), Err, Future<'r> = Fut, Output = Fut::Output>
+    ) -> impl Handler<(), Err, Output = Fut::Output>
     where
         Err: super::ErrorRenderer,
         Fun: Fn() -> Fut + 'static,
-        Fut: std::future::Future + 'static,
+        Fut: std::future::Future,
         Fut::Output: super::Responder<Err>,
     {
         f
@@ -170,12 +170,12 @@ pub mod dev {
         #[inline(always)]
         pub fn $name<Err, Fun, Fut, $($T,)+>(
             f: Fun,
-        ) -> impl for<'r> Handler<($($T,)+), Err, Future<'r> = Fut, Output = Fut::Output>
+        ) -> impl Handler<($($T,)+), Err, Output = Fut::Output>
         where
             Err: $crate::web::ErrorRenderer,
             Fun: Fn($($T,)+) -> Fut + 'static,
             Fut: std::future::Future + 'static,
-            Fut::Output: $crate::web::Responder<Err>,
+            Fut::Output: super::Responder<Err>,
         $($T: $crate::web::FromRequest<Err>),+,
         {
             f

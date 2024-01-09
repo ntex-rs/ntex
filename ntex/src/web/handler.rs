@@ -14,11 +14,8 @@ where
     Err: ErrorRenderer,
 {
     type Output: Responder<Err>;
-    type Future<'f>: Future<Output = Self::Output>
-    where
-        Self: 'f;
 
-    fn call(&self, param: T) -> Self::Future<'_>;
+    fn call(&self, param: T) -> impl Future<Output = Self::Output>;
 }
 
 impl<F, R, Err> Handler<(), Err> for F
@@ -28,11 +25,10 @@ where
     R::Output: Responder<Err>,
     Err: ErrorRenderer,
 {
-    type Future<'f> = R where Self: 'f;
     type Output = R::Output;
 
-    fn call(&self, _: ()) -> R {
-        (self)()
+    async fn call(&self, _: ()) -> R::Output {
+        (self)().await
     }
 }
 
@@ -96,11 +92,10 @@ macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
           Res::Output: Responder<Err>,
           Err: ErrorRenderer,
     {
-        type Future<'f> = Res where Self: 'f;
         type Output = Res::Output;
 
-        fn call(&self, param: ($($T,)+)) -> Res {
-            (self)($(param.$n,)+)
+        async fn call(&self, param: ($($T,)+)) -> Self::Output {
+            (self)($(param.$n,)+).await
         }
     }
 });
