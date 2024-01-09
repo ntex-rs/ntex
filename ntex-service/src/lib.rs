@@ -69,7 +69,7 @@ pub use self::pipeline::{Pipeline, PipelineCall};
 ///     type Response = u64;
 ///     type Error = Infallible;
 ///
-///     async fn call(&self, req: u8, _: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
+///     async fn call(&self, req: u8, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
 ///         Ok(req as u64)
 ///     }
 /// }
@@ -82,7 +82,7 @@ pub use self::pipeline::{Pipeline, PipelineCall};
 /// async fn my_service(req: u8) -> Result<u64, Infallible>;
 /// ```
 ///
-/// Service cannot be called directly, it must be wrapped to an instance of [`Container`] or
+/// Service cannot be called directly, it must be wrapped to an instance of [`Pipeline``] or
 /// by using `ctx` argument of the call method in case of chanined services.
 ///
 pub trait Service<Req> {

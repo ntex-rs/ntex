@@ -252,10 +252,8 @@ fn connector(
 ) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError> + fmt::Debug {
     TimeoutService::new(
         timeout,
-        apply_fn(connector, |msg: Connect, srv| {
-            Box::pin(
-                async move { srv.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await },
-            )
+        apply_fn(connector, |msg: Connect, svc| async move {
+            svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
         })
         .map(move |io: IoBoxed| {
             io.set_disconnect_timeout(disconnect_timeout);

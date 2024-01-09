@@ -217,7 +217,7 @@ mod tests {
         }
     }
 
-    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq)]
     struct Err;
 
     impl From<()> for Err {
@@ -296,6 +296,8 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         format!("{:?}", new_srv);
+
+        assert!(Err == Err::from(()));
     }
 
     #[ntex::test]
