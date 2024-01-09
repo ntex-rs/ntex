@@ -204,6 +204,6 @@ where
             panic!("future must not be polled after it returned `Poll::Ready`")
         };
         slf.state = PipelineCallState::new_call(&slf.pipeline, req);
-        return slf.poll(cx);
+        slf.poll(cx)
     }
 }
