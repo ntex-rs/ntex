@@ -3,9 +3,7 @@ use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 use crate::ctx::{ServiceCtx, WaitersRef};
 
 pub type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
-
 pub struct BoxService<Req, Res, Err>(Box<dyn ServiceObj<Req, Response = Res, Error = Err>>);
-
 pub struct BoxServiceFactory<Cfg, Req, Res, Err, InitErr>(
     Box<dyn ServiceFactoryObj<Req, Cfg, Response = Res, Error = Err, InitError = InitErr>>,
 );
@@ -70,12 +68,10 @@ where
     type Response = S::Response;
     type Error = S::Error;
 
-    #[inline]
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         crate::Service::poll_ready(self, cx)
     }
 
-    #[inline]
     fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
         crate::Service::poll_shutdown(self, cx)
     }

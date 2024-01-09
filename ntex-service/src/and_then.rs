@@ -165,7 +165,7 @@ mod tests {
     #[ntex::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = chain(Srv1(cnt.clone())).and_then(Srv2(cnt)).pipeline();
+        let srv = chain(Srv1(cnt.clone())).and_then(Srv2(cnt)).into_pipeline();
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));

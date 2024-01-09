@@ -28,7 +28,7 @@ tokio = ["tok-io"]
 async-std = ["async_std/unstable"]
 
 [dependencies]
-async-channel = "2.0"
+async-channel = "2.1"
 futures-core = "0.3"
 log = "0.4"
 oneshot = "0.1"

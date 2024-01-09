@@ -235,7 +235,7 @@ mod tests {
             })
             .clone(),
         )
-        .pipeline();
+        .into_pipeline();
 
         assert_eq!(
             lazy(|cx| srv.poll_ready(cx)).await,
@@ -257,7 +257,7 @@ mod tests {
                 Ok((req, ()))
             })
             .clone()
-            .pipeline();
+            .into_pipeline();
 
         assert_eq!(
             lazy(|cx| srv.poll_ready(cx)).await,

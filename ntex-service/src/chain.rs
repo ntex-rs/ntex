@@ -11,7 +11,7 @@ use crate::middleware::{ApplyMiddleware, Middleware};
 use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
-/// Constructs new pipeline with one service in pipeline chain.
+/// Constructs new chain with one service.
 pub fn chain<Svc, Req, F>(service: F) -> ServiceChain<Svc, Req>
 where
     Svc: Service<Req>,
@@ -23,7 +23,7 @@ where
     }
 }
 
-/// Constructs new pipeline factory with one service factory.
+/// Constructs new chain factory with one service factory.
 pub fn chain_factory<T, R, C, F>(factory: F) -> ServiceChainFactory<T, R, C>
 where
     T: ServiceFactory<R, C>,
@@ -35,7 +35,7 @@ where
     }
 }
 
-/// Pipeline builder - pipeline allows to compose multiple service into one service.
+/// Chain builder - chain allows to compose multiple service into one service.
 pub struct ServiceChain<Svc, Req> {
     service: Svc,
     _t: PhantomData<Req>,
@@ -139,7 +139,7 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     }
 
     /// Create service pipeline
-    pub fn pipeline(self) -> Pipeline<Svc> {
+    pub fn into_pipeline(self) -> Pipeline<Svc> {
         Pipeline::new(self.service)
     }
 }
@@ -239,11 +239,11 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
         }
     }
 
-    /// Create `NewService` to chain on a computation for when a call to the
+    /// Create chain factory to chain on a computation for when a call to the
     /// service finished, passing the result of the call to the next
     /// service `U`.
     ///
-    /// Note that this function consumes the receiving pipeline and returns a
+    /// Note that this function consumes the receiving factory and returns a
     /// wrapped version of it.
     pub fn then<F, U>(self, factory: F) -> ServiceChainFactory<ThenFactory<T, U>, Req, C>
     where
@@ -279,7 +279,7 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
         }
     }
 
-    /// Map this service's error to a different error, returning a new service.
+    /// Map this service's error to a different error.
     pub fn map_err<F, E>(
         self,
         f: F,
@@ -294,7 +294,7 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
         }
     }
 
-    /// Map this factory's init error to a different error, returning a new service.
+    /// Map this factory's init error to a different error, returning a new factory.
     pub fn map_init_err<F, E>(
         self,
         f: F,
