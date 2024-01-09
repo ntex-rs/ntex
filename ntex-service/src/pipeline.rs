@@ -137,37 +137,35 @@ impl<S> Clone for Pipeline<S> {
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-pin_project_lite::pin_project! {
-    #[must_use = "futures do nothing unless polled"]
-    pub struct PipelineCall<S, R>
-    where
-        S: Service<R>,
-        S: 'static,
-        R: 'static,
-    {
-        #[pin]
-        state: PipelineCallState<S, R>,
-        pipeline: Pipeline<S>,
-    }
+#[allow(missing_debug_implementations)]
+#[must_use = "futures do nothing unless polled"]
+pub struct PipelineCall<S, R>
+where
+    S: Service<R>,
+    R: 'static,
+{
+    state: PipelineCallState<S, R>,
+    pipeline: Pipeline<S>,
 }
 
-pin_project_lite::pin_project! {
-    #[project = PipelineCallStateProject]
-    enum PipelineCallState<S, Req>
-    where
-        S: Service<Req>,
-        S: 'static,
-        Req: 'static,
-    {
-        Ready { req: Option<Req> },
-        Call { #[pin] fut: BoxFuture<'static, Result<S::Response, S::Error>> },
-        Empty,
-    }
+impl<S: Service<R>, R> Unpin for PipelineCall<S, R> {}
+
+enum PipelineCallState<S, Req>
+where
+    S: Service<Req>,
+    Req: 'static,
+{
+    Ready {
+        req: Option<Req>,
+    },
+    Call {
+        fut: BoxFuture<'static, Result<S::Response, S::Error>>,
+    },
 }
 
 impl<S, R> PipelineCallState<S, R>
 where
-    S: Service<R> + 'static,
+    S: Service<R>,
     R: 'static,
 {
     fn new_call<'a>(pl: &'a Pipeline<S>, req: R) -> Self {
@@ -176,7 +174,7 @@ where
             Box::pin(pl.get_ref().call(req, ctx));
 
         // SAFETY: `svc_call` has same lifetime same as lifetime of `pl.svc`
-        // Pipeline::svc is heap allocated(Rc<S>), we keep it alive until
+        // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
         // `svc_call` get resolved to result
         let fut = unsafe { std::mem::transmute(svc_call) };
 
@@ -192,23 +190,20 @@ where
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
+        let mut slf = self.as_mut();
 
-        match this.state.as_mut().project() {
-            PipelineCallStateProject::Ready { req } => {
-                task::ready!(this.pipeline.poll_ready(cx))?;
-
-                let st = PipelineCallState::new_call(this.pipeline, req.take().unwrap());
-                this.state.set(st);
-                self.poll(cx)
-            }
-            PipelineCallStateProject::Call { fut, .. } => fut.poll(cx).map(|r| {
-                this.state.set(PipelineCallState::Empty);
-                r
-            }),
-            PipelineCallStateProject::Empty => {
-                panic!("future must not be polled after it returned `Poll::Ready`")
-            }
+        if let PipelineCallState::Call { ref mut fut, .. } = slf.state {
+            return Pin::new(fut).poll(cx);
         }
+
+        task::ready!(slf.pipeline.poll_ready(cx))?;
+
+        let req = if let PipelineCallState::Ready { ref mut req } = slf.state {
+            req.take().unwrap()
+        } else {
+            panic!("future must not be polled after it returned `Poll::Ready`")
+        };
+        slf.state = PipelineCallState::new_call(&slf.pipeline, req);
+        return slf.poll(cx);
     }
 }
