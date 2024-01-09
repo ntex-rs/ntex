@@ -20,7 +20,7 @@ http = "0.2"
 log = "0.4"
 fxhash = "0.2.1"
 itoa = "1.0.4"
-ntex-bytes = "0.1.19"
+ntex-bytes = "0.1.21"
 serde = "1"
 
 [dev-dependencies]

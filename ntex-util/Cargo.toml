@@ -28,7 +28,7 @@ futures-sink = { version = "0.3", default-features = false, features = ["alloc"]
 pin-project-lite = "0.2.9"
 
 [dev-dependencies]
-ntex = { version = "1.0.0-b.1", features = ["tokio"] }
+ntex = { version = "1.0.0", features = ["tokio"] }
 ntex-bytes = "0.1.21"
 ntex-macros = "0.1.3"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
