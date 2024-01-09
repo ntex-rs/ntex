@@ -14,6 +14,12 @@ impl ReadContext {
     }
 
     #[inline]
+    /// Io tag
+    pub fn tag(&self) -> &'static str {
+        self.0.tag()
+    }
+
+    #[inline]
     /// Check readiness for read operations
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.0.filter().poll_read_ready(cx)
@@ -125,6 +131,12 @@ pub struct WriteContext(IoRef);
 impl WriteContext {
     pub(crate) fn new(io: &IoRef) -> Self {
         Self(io.clone())
+    }
+
+    #[inline]
+    /// Io tag
+    pub fn tag(&self) -> &'static str {
+        self.0.tag()
     }
 
     #[inline]

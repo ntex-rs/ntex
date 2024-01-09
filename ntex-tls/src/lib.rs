@@ -3,10 +3,6 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[doc(hidden)]
-#[deprecated]
-pub mod types;
-
 #[cfg(feature = "openssl")]
 pub mod openssl;
 
