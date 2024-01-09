@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] - 2024-01-09
+
+* web: Use async fn for Responder and Handler traits
+
 ## [1.0.0-b.1] - 2024-01-08
 
 * web: Refactor FromRequest trait, use async fn

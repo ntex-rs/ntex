@@ -9,8 +9,7 @@ use crate::http::header::CONTENT_LENGTH;
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::util::{stream_recv, BoxFuture, BytesMut};
 use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError, WebResponseError};
-use crate::web::responder::{Ready, Responder};
-use crate::web::{FromRequest, HttpRequest};
+use crate::web::{FromRequest, HttpRequest, Responder};
 
 /// Json helper
 ///
@@ -112,18 +111,15 @@ impl<T: Serialize, Err: ErrorRenderer> Responder<Err> for Json<T>
 where
     Err::Container: From<JsonError>,
 {
-    type Future = Ready<Response>;
-
-    fn respond_to(self, req: &HttpRequest) -> Self::Future {
+    async fn respond_to(self, req: &HttpRequest) -> Response {
         let body = match serde_json::to_string(&self.0) {
             Ok(body) => body,
-            Err(e) => return e.error_response(req).into(),
+            Err(e) => return e.error_response(req),
         };
 
         Response::build(StatusCode::OK)
             .content_type("application/json")
             .body(body)
-            .into()
     }
 }
 
