@@ -470,12 +470,14 @@ fn fns_defined_for_bytes() {
 
     assert!(bytes > "g");
     assert!(bytes > b"g");
+    assert!(bytes > [b'g']);
     assert!(bytes > "g".to_string());
     assert!(bytes > "g".as_bytes().to_vec());
     assert!(bytes > Bytes::from("g"));
     assert!("g" > bytes);
     assert!("g".to_string() > bytes);
     assert!("g".as_bytes().to_vec() > bytes);
+    assert!([b'g'] > bytes);
     assert!(Bytes::from(&"g"[..]) < bytes);
 
     assert_eq!(bytes, "hello world");
@@ -487,6 +489,10 @@ fn fns_defined_for_bytes() {
     assert_eq!(bytes, BytesMut::copy_from_slice(b"hello world"));
     assert_eq!(&bytes[..], b"hello world");
     assert_eq!(bytes.as_ref(), b"hello world");
+    assert_eq!(
+        bytes,
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd']
+    );
     assert_eq!("hello world", bytes);
     assert_eq!("hello world".as_bytes().to_vec(), bytes);
     assert_eq!("hello world".to_string(), bytes);
@@ -541,6 +547,11 @@ fn fns_defined_for_bytes_mut() {
     assert_eq!(Borrow::<[u8]>::borrow(&bytes), b"hello world");
     assert_eq!(BorrowMut::<[u8]>::borrow_mut(&mut bytes), b"hello world");
 
+    let bytes = BytesMut::from([
+        b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd',
+    ]);
+    assert_eq!(Borrow::<[u8]>::borrow(&bytes), b"hello world");
+
     assert_eq!(bytes, "hello world");
     assert_eq!(bytes, "hello world".as_bytes().to_vec());
     assert_eq!(bytes, "hello world".to_string());
@@ -548,11 +559,19 @@ fn fns_defined_for_bytes_mut() {
     assert_eq!(bytes, &"hello world"[..]);
     assert_eq!(bytes, Bytes::copy_from_slice(b"hello world"));
     assert_eq!(bytes, BytesVec::copy_from_slice(b"hello world"));
+    assert_eq!(
+        bytes,
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd']
+    );
     assert_eq!("hello world", bytes);
     assert_eq!("hello world".as_bytes().to_vec(), bytes);
     assert_eq!("hello world".to_string(), bytes);
     assert_eq!(b"hello world", bytes);
     assert_eq!(&"hello world"[..], bytes);
+    assert_eq!(
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'],
+        bytes
+    );
 
     // Iterator
     let v: Vec<u8> = (&bytes).iter().cloned().collect();
@@ -618,10 +637,18 @@ fn fns_defined_for_bytes_vec() {
     assert_eq!(bytes, Bytes::copy_from_slice(b"hello world"));
     assert_eq!(bytes, BytesMut::copy_from_slice(b"hello world"));
     assert_eq!(&bytes[..], b"hello world");
+    assert_eq!(
+        bytes,
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd']
+    );
     assert_eq!("hello world", bytes);
     assert_eq!("hello world".as_bytes().to_vec(), bytes);
     assert_eq!("hello world".to_string(), bytes);
     assert_eq!(b"hello world", bytes);
+    assert_eq!(
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'],
+        bytes
+    );
 
     // Iterator
     let v: Vec<u8> = bytes.iter().cloned().collect();
