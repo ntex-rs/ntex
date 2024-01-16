@@ -1747,6 +1747,12 @@ impl<'a> From<&'a [u8]> for BytesMut {
     }
 }
 
+impl<const N: usize> From<[u8; N]> for BytesMut {
+    fn from(src: [u8; N]) -> BytesMut {
+        BytesMut::copy_from_slice_in(src, PoolId::DEFAULT.pool_ref())
+    }
+}
+
 impl<'a, const N: usize> From<&'a [u8; N]> for BytesMut {
     fn from(src: &'a [u8; N]) -> BytesMut {
         BytesMut::copy_from_slice_in(src, PoolId::DEFAULT.pool_ref())
@@ -3720,6 +3726,12 @@ impl<const N: usize> PartialEq<BytesMut> for [u8; N] {
     }
 }
 
+impl<'a, const N: usize> PartialEq<BytesMut> for &'a [u8; N] {
+    fn eq(&self, other: &BytesMut) -> bool {
+        *other == *self
+    }
+}
+
 impl PartialEq<str> for BytesMut {
     fn eq(&self, other: &str) -> bool {
         &**self == other.as_bytes()
@@ -3808,6 +3820,12 @@ impl PartialEq<Bytes> for [u8] {
 }
 
 impl<const N: usize> PartialEq<Bytes> for [u8; N] {
+    fn eq(&self, other: &Bytes) -> bool {
+        *other == *self
+    }
+}
+
+impl<'a, const N: usize> PartialEq<Bytes> for &'a [u8; N] {
     fn eq(&self, other: &Bytes) -> bool {
         *other == *self
     }
@@ -4000,6 +4018,12 @@ impl PartialEq<BytesVec> for [u8] {
 }
 
 impl<const N: usize> PartialEq<BytesVec> for [u8; N] {
+    fn eq(&self, other: &BytesVec) -> bool {
+        *other == *self
+    }
+}
+
+impl<'a, const N: usize> PartialEq<BytesVec> for &'a [u8; N] {
     fn eq(&self, other: &BytesVec) -> bool {
         *other == *self
     }
