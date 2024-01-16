@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.22] (2024-01-16)
+
+* Use const generics for helper traits (From, PartialEq, PartialOrd)
+
 ## [0.1.21] (2023-11-1)
 
 * Data race in BytesMut #243

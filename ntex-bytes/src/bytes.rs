@@ -24,12 +24,12 @@ use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};
 /// let mut mem = Bytes::from(&b"Hello world"[..]);
 /// let a = mem.slice(0..5);
 ///
-/// assert_eq!(&a[..], b"Hello");
+/// assert_eq!(a, b"Hello");
 ///
 /// let b = mem.split_to(6);
 ///
-/// assert_eq!(&mem[..], b"world");
-/// assert_eq!(&b[..], b"Hello ");
+/// assert_eq!(mem, b"world");
+/// assert_eq!(b, b"Hello ");
 /// ```
 ///
 /// # Memory layout
@@ -135,7 +135,7 @@ pub struct Bytes {
 /// buf.put_u8(b'e');
 /// buf.put("llo");
 ///
-/// assert_eq!(&buf[..], b"hello");
+/// assert_eq!(buf, b"hello");
 ///
 /// // Freeze the buffer so that it can be shared
 /// let a = buf.freeze();
@@ -143,8 +143,8 @@ pub struct Bytes {
 /// // This does not allocate, instead `b` points to the same memory.
 /// let b = a.clone();
 ///
-/// assert_eq!(&a[..], b"hello");
-/// assert_eq!(&b[..], b"hello");
+/// assert_eq!(a, b"hello");
+/// assert_eq!(b, b"hello");
 /// ```
 pub struct BytesMut {
     inner: Inner,
@@ -189,8 +189,8 @@ pub struct BytesMut {
 /// // This does not allocate, instead `b` points to the same memory.
 /// let b = a.clone();
 ///
-/// assert_eq!(&a[..], b"hello");
-/// assert_eq!(&b[..], b"hello");
+/// assert_eq!(a, b"hello");
+/// assert_eq!(b, b"hello");
 /// ```
 pub struct BytesVec {
     inner: InnerVec,
@@ -536,7 +536,7 @@ impl Bytes {
     /// ```
     /// use ntex_bytes::Bytes;
     ///
-    /// let a = Bytes::from(&b"hello world"[..]);
+    /// let a = Bytes::from(b"hello world");
     /// let b = a.slice(2..5);
     ///
     /// assert_eq!(&b[..], b"llo");
@@ -601,7 +601,7 @@ impl Bytes {
     /// let as_slice = bytes.as_ref();
     /// let subset = &as_slice[2..6];
     /// let subslice = bytes.slice_ref(&subset);
-    /// assert_eq!(&subslice[..], b"2345");
+    /// assert_eq!(subslice, b"2345");
     /// ```
     ///
     /// # Panics
@@ -639,8 +639,8 @@ impl Bytes {
     /// let mut a = Bytes::from(&b"hello world"[..]);
     /// let b = a.split_off(5);
     ///
-    /// assert_eq!(&a[..], b"hello");
-    /// assert_eq!(&b[..], b" world");
+    /// assert_eq!(a, b"hello");
+    /// assert_eq!(b, b" world");
     /// ```
     ///
     /// # Panics
@@ -678,8 +678,8 @@ impl Bytes {
     /// let mut a = Bytes::from(&b"hello world"[..]);
     /// let b = a.split_to(5);
     ///
-    /// assert_eq!(&a[..], b" world");
-    /// assert_eq!(&b[..], b"hello");
+    /// assert_eq!(a, b" world");
+    /// assert_eq!(b, b"hello");
     /// ```
     ///
     /// # Panics
@@ -957,6 +957,12 @@ impl From<&'static str> for Bytes {
     }
 }
 
+impl<'a, const N: usize> From<&'a [u8; N]> for Bytes {
+    fn from(src: &'a [u8; N]) -> Bytes {
+        Bytes::copy_from_slice(src)
+    }
+}
+
 impl FromIterator<u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
         BytesMut::from_iter(into_iter).freeze()
@@ -1218,17 +1224,17 @@ impl BytesMut {
     /// let b2 = b1.clone();
     ///
     /// let th = thread::spawn(move || {
-    ///     assert_eq!(&b1[..], b"hello world");
+    ///     assert_eq!(b1, b"hello world");
     /// });
     ///
-    /// assert_eq!(&b2[..], b"hello world");
+    /// assert_eq!(b2, b"hello world");
     /// th.join().unwrap();
     /// ```
     #[inline]
     pub fn freeze(self) -> Bytes {
         if self.inner.len() <= INLINE_CAP {
             Bytes {
-                inner: self.inner.to_inline(),
+                inner: Inner::from_slice_inline(self.inner.as_ref()),
             }
         } else {
             Bytes { inner: self.inner }
@@ -1733,13 +1739,23 @@ impl From<String> for BytesMut {
 
 impl<'a> From<&'a [u8]> for BytesMut {
     fn from(src: &'a [u8]) -> BytesMut {
-        let len = src.len();
-
-        if len == 0 {
+        if src.is_empty() {
             BytesMut::new()
         } else {
             BytesMut::copy_from_slice_in(src, PoolId::DEFAULT.pool_ref())
         }
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for BytesMut {
+    fn from(src: [u8; N]) -> BytesMut {
+        BytesMut::copy_from_slice_in(src, PoolId::DEFAULT.pool_ref())
+    }
+}
+
+impl<'a, const N: usize> From<&'a [u8; N]> for BytesMut {
+    fn from(src: &'a [u8; N]) -> BytesMut {
+        BytesMut::copy_from_slice_in(src, PoolId::DEFAULT.pool_ref())
     }
 }
 
@@ -2052,10 +2068,10 @@ impl BytesVec {
     /// let b2 = b1.clone();
     ///
     /// let th = thread::spawn(move || {
-    ///     assert_eq!(&b1[..], b"hello world");
+    ///     assert_eq!(b1, b"hello world");
     /// });
     ///
-    /// assert_eq!(&b2[..], b"hello world");
+    /// assert_eq!(b2, b"hello world");
     /// th.join().unwrap();
     /// ```
     #[inline]
@@ -3150,22 +3166,6 @@ impl Inner {
     }
 
     #[inline]
-    fn to_inline(&self) -> Inner {
-        unsafe {
-            let mut inner = Inner {
-                arc: NonNull::new_unchecked(KIND_INLINE as *mut Shared),
-                ptr: ptr::null_mut(),
-                cap: 0,
-                len: 0,
-            };
-            let len = self.len();
-            inner.as_raw()[..len].copy_from_slice(self.as_ref());
-            inner.set_inline_len(len);
-            inner
-        }
-    }
-
-    #[inline]
     fn inline_len(&self) -> usize {
         // This is undefind behavior due to a data race, but experimental
         // evidence shows that it works in practice (discussion:
@@ -3708,7 +3708,25 @@ impl PartialEq<[u8]> for BytesMut {
     }
 }
 
+impl<const N: usize> PartialEq<[u8; N]> for BytesMut {
+    fn eq(&self, other: &[u8; N]) -> bool {
+        &**self == other
+    }
+}
+
 impl PartialEq<BytesMut> for [u8] {
+    fn eq(&self, other: &BytesMut) -> bool {
+        *other == *self
+    }
+}
+
+impl<const N: usize> PartialEq<BytesMut> for [u8; N] {
+    fn eq(&self, other: &BytesMut) -> bool {
+        *other == *self
+    }
+}
+
+impl<'a, const N: usize> PartialEq<BytesMut> for &'a [u8; N] {
     fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
@@ -3777,9 +3795,21 @@ impl PartialEq<[u8]> for Bytes {
     }
 }
 
+impl<const N: usize> PartialEq<[u8; N]> for Bytes {
+    fn eq(&self, other: &[u8; N]) -> bool {
+        self.inner.as_ref() == other.as_ref()
+    }
+}
+
 impl PartialOrd<[u8]> for Bytes {
     fn partial_cmp(&self, other: &[u8]) -> Option<cmp::Ordering> {
         self.inner.as_ref().partial_cmp(other)
+    }
+}
+
+impl<const N: usize> PartialOrd<[u8; N]> for Bytes {
+    fn partial_cmp(&self, other: &[u8; N]) -> Option<cmp::Ordering> {
+        self.inner.as_ref().partial_cmp(other.as_ref())
     }
 }
 
@@ -3789,7 +3819,25 @@ impl PartialEq<Bytes> for [u8] {
     }
 }
 
+impl<const N: usize> PartialEq<Bytes> for [u8; N] {
+    fn eq(&self, other: &Bytes) -> bool {
+        *other == *self
+    }
+}
+
+impl<'a, const N: usize> PartialEq<Bytes> for &'a [u8; N] {
+    fn eq(&self, other: &Bytes) -> bool {
+        *other == *self
+    }
+}
+
 impl PartialOrd<Bytes> for [u8] {
+    fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
+        other.partial_cmp(self)
+    }
+}
+
+impl<const N: usize> PartialOrd<Bytes> for [u8; N] {
     fn partial_cmp(&self, other: &Bytes) -> Option<cmp::Ordering> {
         other.partial_cmp(self)
     }
@@ -3957,7 +4005,25 @@ impl PartialEq<[u8]> for BytesVec {
     }
 }
 
+impl<const N: usize> PartialEq<[u8; N]> for BytesVec {
+    fn eq(&self, other: &[u8; N]) -> bool {
+        &**self == other
+    }
+}
+
 impl PartialEq<BytesVec> for [u8] {
+    fn eq(&self, other: &BytesVec) -> bool {
+        *other == *self
+    }
+}
+
+impl<const N: usize> PartialEq<BytesVec> for [u8; N] {
+    fn eq(&self, other: &BytesVec) -> bool {
+        *other == *self
+    }
+}
+
+impl<'a, const N: usize> PartialEq<BytesVec> for &'a [u8; N] {
     fn eq(&self, other: &BytesVec) -> bool {
         *other == *self
     }
