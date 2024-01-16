@@ -11,7 +11,7 @@ A utility library for working with bytes. This is fork of bytes crate (https://g
 
 ## Usage
 
-To use `bytes`, first add this to your `Cargo.toml`:
+To use `ntex-bytes`, first add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -35,10 +35,7 @@ ntex-bytes = { version = "0.1", features = ["serde"] }
 
 ## License
 
-This project is licensed under the [MIT license](LICENSE).
-
-### Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in `ntex-bytes` by you, shall be licensed as MIT, without any additional
-terms or conditions.
+* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or
+  [http://www.apache.org/licenses/LICENSE-2.0])
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  [http://opensource.org/licenses/MIT])

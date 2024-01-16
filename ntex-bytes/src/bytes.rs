@@ -2588,10 +2588,11 @@ impl InnerVec {
     #[inline]
     fn from_slice(cap: usize, src: &[u8], pool: PoolRef) -> InnerVec {
         // vec must be aligned to SharedVec instead of u8
-        let mut vec_cap = (cap / SHARED_VEC_SIZE) + 1;
-        if cap % SHARED_VEC_SIZE != 0 {
-            vec_cap += 1;
-        }
+        let vec_cap = if cap % SHARED_VEC_SIZE != 0 {
+            (cap / SHARED_VEC_SIZE) + 2
+        } else {
+            (cap / SHARED_VEC_SIZE) + 1
+        };
         let mut vec = Vec::<SharedVec>::with_capacity(vec_cap);
         unsafe {
             // Store data in vec
@@ -2974,38 +2975,33 @@ impl Inner {
             vec_cap += 1;
         }
         let mut vec = Vec::<SharedVec>::with_capacity(vec_cap);
-        unsafe {
-            // Store data in vec
-            let len = src.len();
-            let full_cap = vec.capacity() * SHARED_VEC_SIZE;
-            let cap = full_cap - SHARED_VEC_SIZE;
-            let shared_ptr = vec.as_mut_ptr();
-            mem::forget(vec);
-            pool.acquire(full_cap);
 
+        // Store data in vec
+        let len = src.len();
+        let full_cap = vec.capacity() * SHARED_VEC_SIZE;
+        let cap = full_cap - SHARED_VEC_SIZE;
+        vec.push(SharedVec {
+            pool,
+            cap: full_cap,
+            ref_count: AtomicUsize::new(1),
+            len: 0,
+            offset: 0,
+        });
+        pool.acquire(full_cap);
+
+        let shared_ptr = vec.as_mut_ptr();
+        mem::forget(vec);
+
+        let (ptr, arc) = unsafe {
             let ptr = shared_ptr.add(1) as *mut u8;
             ptr::copy_nonoverlapping(src.as_ptr(), ptr, src.len());
-            ptr::write(
-                shared_ptr,
-                SharedVec {
-                    pool,
-                    cap: full_cap,
-                    ref_count: AtomicUsize::new(1),
-                    len: 0,
-                    offset: 0,
-                },
-            );
+            let arc =
+                NonNull::new_unchecked((shared_ptr as usize ^ KIND_VEC) as *mut Shared);
+            (ptr, arc)
+        };
 
-            // Create new arc, so atomic operations can be avoided.
-            Inner {
-                len,
-                cap,
-                ptr,
-                arc: NonNull::new_unchecked(
-                    (shared_ptr as usize ^ KIND_VEC) as *mut Shared,
-                ),
-            }
-        }
+        // Create new arc, so atomic operations can be avoided.
+        Inner { len, cap, ptr, arc }
     }
 
     #[inline]
@@ -3069,7 +3065,7 @@ impl Inner {
     fn as_ref(&self) -> &[u8] {
         unsafe {
             if self.is_inline() {
-                slice::from_raw_parts(self.inline_ptr(), self.inline_len())
+                slice::from_raw_parts(self.inline_ptr_ro(), self.inline_len())
             } else {
                 slice::from_raw_parts(self.ptr, self.len)
             }
@@ -3143,8 +3139,14 @@ impl Inner {
 
     /// Pointer to the start of the inline buffer
     #[inline]
-    unsafe fn inline_ptr(&self) -> *mut u8 {
-        (self as *const Inner as *mut Inner as *mut u8).offset(INLINE_DATA_OFFSET)
+    unsafe fn inline_ptr(&mut self) -> *mut u8 {
+        (self as *mut Inner as *mut u8).offset(INLINE_DATA_OFFSET)
+    }
+
+    /// Pointer to the start of the inline buffer
+    #[inline]
+    unsafe fn inline_ptr_ro(&self) -> *const u8 {
+        (self as *const Inner as *const u8).offset(INLINE_DATA_OFFSET)
     }
 
     #[inline]
@@ -3660,11 +3662,11 @@ fn release_shared_vec(ptr: *mut SharedVec) {
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
         atomic::fence(Acquire);
 
-        // Drop the data
+        // Drop vec
         let cap = (*ptr).cap;
         (*ptr).pool.release(cap);
-        ptr::drop_in_place(ptr);
-        Vec::<u8>::from_raw_parts(ptr as *mut u8, 0, cap);
+
+        Vec::<SharedVec>::from_raw_parts(ptr, 1, cap / SHARED_VEC_SIZE);
     }
 }
 
