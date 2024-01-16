@@ -1,6 +1,6 @@
 #![deny(warnings, rust_2018_idioms)]
 
-use ntex_bytes::Buf;
+use ntex_bytes::{Buf, Bytes, BytesMut};
 
 #[test]
 fn test_fresh_cursor_vec() {
@@ -18,6 +18,43 @@ fn test_fresh_cursor_vec() {
 
     assert_eq!(buf.remaining(), 0);
     assert_eq!(buf.chunk(), b"");
+}
+
+#[test]
+fn test_bytes() {
+    let mut buf = Bytes::from(b"hello");
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 5);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"hello");
+
+    bytes::buf::Buf::advance(&mut buf, 2);
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 3);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"llo");
+
+    bytes::buf::Buf::advance(&mut buf, 3);
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 0);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"");
+}
+
+#[test]
+fn test_bytes_mut() {
+    let mut buf = BytesMut::from(b"hello");
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 5);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"hello");
+
+    assert_eq!(bytes::buf::BufMut::remaining_mut(&mut buf), 27);
+    bytes::buf::Buf::advance(&mut buf, 2);
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 3);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"llo");
+
+    bytes::buf::Buf::advance(&mut buf, 3);
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 0);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"");
 }
 
 #[test]

@@ -207,8 +207,14 @@ fn index() {
 fn slice() {
     let a = Bytes::from(&b"hello world"[..]);
 
+    let b = a.slice(..);
+    assert_eq!(b, b"hello world");
+
     let b = a.slice(3..5);
     assert_eq!(b, b"lo"[..]);
+
+    let b = a.slice(3..=5);
+    assert_eq!(b, b"lo "[..]);
 
     let b = a.slice(0..0);
     assert_eq!(b, b""[..]);
@@ -471,6 +477,7 @@ fn fns_defined_for_bytes() {
     assert!(bytes > "g");
     assert!(bytes > b"g");
     assert!(bytes > [b'g']);
+    assert!(bytes > &[b'g'][..]);
     assert!(bytes > "g".to_string());
     assert!(bytes > "g".as_bytes().to_vec());
     assert!(bytes > Bytes::from("g"));
@@ -489,15 +496,19 @@ fn fns_defined_for_bytes() {
     assert_eq!(bytes, BytesMut::copy_from_slice(b"hello world"));
     assert_eq!(&bytes[..], b"hello world");
     assert_eq!(bytes.as_ref(), b"hello world");
-    assert_eq!(
-        bytes,
-        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd']
-    );
     assert_eq!("hello world", bytes);
     assert_eq!("hello world".as_bytes().to_vec(), bytes);
     assert_eq!("hello world".to_string(), bytes);
     assert_eq!(b"hello world", bytes);
     assert_eq!(&"hello world"[..], bytes);
+    assert_eq!(
+        bytes,
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd']
+    );
+    assert_eq!(
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'],
+        bytes,
+    );
 
     let mut bytes = BytesMut::with_capacity(64);
     bytes.put(LONG);
@@ -870,7 +881,6 @@ fn advance_vec() {
     assert_eq!(a, b"d zomg wat wat"[..]);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn advance_past_len() {
@@ -878,7 +888,6 @@ fn advance_past_len() {
     a.advance(20);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn advance_past_len_vec() {
