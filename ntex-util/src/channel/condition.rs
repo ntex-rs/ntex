@@ -145,10 +145,14 @@ mod tests {
 
         let waiter2 = waiter.clone();
         assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);
+        assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Pending);
         assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Pending);
 
         drop(cond);
         assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);
         assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Pending);
     }
 }
