@@ -210,11 +210,20 @@ mod tests {
     fn test_basics() {
         let msg = Message::new();
         let mut req = Request::from(msg);
+        assert!(req.io().is_none());
+
         req.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text/plain"),
         );
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
+
+        req.extensions_mut()
+            .insert(header::HeaderValue::from_static("text/plain"));
+        assert_eq!(
+            req.extensions().get::<header::HeaderValue>().unwrap(),
+            header::HeaderValue::from_static("text/plain")
+        );
 
         req.head_mut().headers_mut().insert(
             header::CONTENT_LENGTH,
