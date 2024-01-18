@@ -216,11 +216,25 @@ mod tests {
         );
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
 
+        req.head_mut().headers_mut().insert(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("100"),
+        );
+        assert!(req.headers().contains_key(header::CONTENT_LENGTH));
+
+        req.head_mut().no_chunking(true);
+        assert!(!req.head().chunked());
+        req.head_mut().no_chunking(false);
+        assert!(req.head().chunked());
+
         *req.uri_mut() = Uri::try_from("/index.html?q=1").unwrap();
         assert_eq!(req.uri().path(), "/index.html");
         assert_eq!(req.uri().query(), Some("q=1"));
 
         let s = format!("{:?}", req);
         assert!(s.contains("Request HTTP/1.1 GET:/index.html"));
+
+        let s = format!("{:?}", req.head());
+        assert!(s.contains("RequestHead { uri:"));
     }
 }
