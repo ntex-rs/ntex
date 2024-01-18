@@ -87,6 +87,15 @@ where
     }
 }
 
+impl<F> fmt::Debug for FnGuard<F>
+where
+    F: Fn(&RequestHead) -> bool,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Guard::fmt(self, f)
+    }
+}
+
 impl<F> Guard for F
 where
     F: Fn(&RequestHead) -> bool,
@@ -421,6 +430,8 @@ mod tests {
 
         let pred = Header("content-type", "other");
         assert!(!pred.check(req.head()));
+
+        assert!(format!("{:?}", pred).contains("Header"));
     }
 
     #[test]
@@ -480,6 +491,8 @@ mod tests {
 
         let pred = Host("localhost");
         assert!(!pred.check(req.head()));
+
+        assert!(format!("{:?}", pred).contains("Host"));
     }
 
     #[test]
@@ -558,6 +571,7 @@ mod tests {
             .to_http_request();
         assert!(Trace().check(r.head()));
         assert!(!Trace().check(req.head()));
+        assert!(format!("{:?}", Trace()).contains("MethodGuard(TRACE)"));
     }
 
     #[test]
@@ -568,12 +582,15 @@ mod tests {
 
         assert!(Not(Get()).check(r.head()));
         assert!(!Not(Trace()).check(r.head()));
+        assert!(format!("{:?}", Not(Get())).contains("NotGuard"));
 
         assert!(All(Trace()).and(Trace()).check(r.head()));
         assert!(!All(Get()).and(Trace()).check(r.head()));
+        assert!(format!("{:?}", All(Get())).contains("AllGuard"));
 
         assert!(Any(Get()).or(Trace()).check(r.head()));
         assert!(!Any(Get()).or(Get()).check(r.head()));
+        assert!(format!("{:?}", Any(Get())).contains("AnyGuard"));
     }
 
     #[test]
@@ -583,6 +600,8 @@ mod tests {
 
         let g = fn_guard(|req| req.headers().contains_key("content-type"));
         assert!(g.check(req.head()));
+        let g = FnGuard(|req| req.headers().contains_key("content-type"));
+        assert!(format!("{:?}", g).contains("FnGuard"));
 
         let g = |req: &RequestHead| req.headers().contains_key("content-type");
         assert!(g.check(req.head()));
