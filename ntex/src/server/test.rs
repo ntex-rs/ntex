@@ -106,6 +106,11 @@ impl TestServer {
         self.addr
     }
 
+    pub fn set_addr(mut self, addr: net::SocketAddr) -> Self {
+        self.addr = addr;
+        self
+    }
+
     /// Connect to server, return Io
     pub async fn connect(&self) -> io::Result<Io> {
         tcp_connect(self.addr).await

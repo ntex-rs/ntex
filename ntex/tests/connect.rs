@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
 use ntex::io::{types::PeerAddr, Io};
 use ntex::service::{chain_factory, fn_service, Pipeline, ServiceFactory};
-use ntex::{server::test_server, time, util::Bytes};
+use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
 
 #[cfg(feature = "openssl")]
 fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
@@ -78,21 +78,29 @@ async fn test_openssl_string() {
         x509::X509,
     };
 
-    let srv = test_server(|| {
-        chain_factory(fn_service(|io: Io<_>| async move {
-            let res = io.read_ready().await;
-            assert!(res.is_ok());
-            Ok(io)
-        }))
-        .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
-        .and_then(fn_service(|io: Io<_>| async move {
-            io.send(Bytes::from_static(b"test"), &BytesCodec)
-                .await
-                .unwrap();
-            assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
-            Ok::<_, Box<dyn std::error::Error>>(())
-        }))
-    });
+    let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let local_addr = tcp.local_addr().unwrap();
+
+    let tcp = Some(tcp);
+    let srv = build_test_server(move |srv| {
+        srv.listen("test", tcp.unwrap(), |_| {
+            chain_factory(fn_service(|io: Io<_>| async move {
+                let res = io.read_ready().await;
+                assert!(res.is_ok());
+                Ok(io)
+            }))
+            .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
+            .and_then(fn_service(|io: Io<_>| async move {
+                io.send(Bytes::from_static(b"test"), &BytesCodec)
+                    .await
+                    .unwrap();
+                assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
+                Ok::<_, Box<dyn std::error::Error>>(())
+            }))
+        })
+        .unwrap()
+    })
+    .set_addr(local_addr);
 
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
