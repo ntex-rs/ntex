@@ -284,6 +284,7 @@ mod tests {
         let addrs = connect.addrs().clone();
         assert_eq!(format!("{:?}", addrs), "[]");
         assert!(connect.addrs().next().is_none());
+        assert!(format!("{:?}", connect.clone()).contains("Connect"));
 
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         connect = connect.set_addrs(vec![addr]);
