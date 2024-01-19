@@ -55,7 +55,7 @@ where
         sys.run(|| {
             Server::build()
                 .listen("test", tcp, move |_| factory())?
-                .set_tag("test", "TEST: ")
+                .set_tag("test", "TEST-SERVER")
                 .workers(1)
                 .disable_signals()
                 .run();
@@ -104,6 +104,11 @@ impl TestServer {
     /// Test server socket addr
     pub fn addr(&self) -> net::SocketAddr {
         self.addr
+    }
+
+    pub fn set_addr(mut self, addr: net::SocketAddr) -> Self {
+        self.addr = addr;
+        self
     }
 
     /// Connect to server, return Io

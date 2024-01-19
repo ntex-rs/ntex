@@ -819,6 +819,8 @@ mod tests {
             .finish();
         let dbg = format!("{:?}", resp);
         assert!(dbg.contains("Response"));
+        let dbg = format!("{:?}", resp.head());
+        assert!(dbg.contains("ResponseHead"));
 
         let mut resp = Response::Ok();
         resp.header(COOKIE, HeaderValue::from_static("cookie1=value1; "));

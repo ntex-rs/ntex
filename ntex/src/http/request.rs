@@ -210,11 +210,31 @@ mod tests {
     fn test_basics() {
         let msg = Message::new();
         let mut req = Request::from(msg);
+        assert!(req.io().is_none());
+
         req.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text/plain"),
         );
         assert!(req.headers().contains_key(header::CONTENT_TYPE));
+
+        req.extensions_mut()
+            .insert(header::HeaderValue::from_static("text/plain"));
+        assert_eq!(
+            req.extensions().get::<header::HeaderValue>().unwrap(),
+            header::HeaderValue::from_static("text/plain")
+        );
+
+        req.head_mut().headers_mut().insert(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("100"),
+        );
+        assert!(req.headers().contains_key(header::CONTENT_LENGTH));
+
+        req.head_mut().no_chunking(true);
+        assert!(!req.head().chunked());
+        req.head_mut().no_chunking(false);
+        assert!(req.head().chunked());
 
         *req.uri_mut() = Uri::try_from("/index.html?q=1").unwrap();
         assert_eq!(req.uri().path(), "/index.html");
@@ -222,5 +242,8 @@ mod tests {
 
         let s = format!("{:?}", req);
         assert!(s.contains("Request HTTP/1.1 GET:/index.html"));
+
+        let s = format!("{:?}", req.head());
+        assert!(s.contains("RequestHead { uri:"));
     }
 }

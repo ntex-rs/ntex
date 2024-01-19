@@ -232,11 +232,12 @@ mod tests {
             ntex_service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let srv = Connector::default().memory_pool(PoolId::P5);
+        let srv = Connector::default().tag("T").memory_pool(PoolId::P5);
         let result = srv.connect("").await;
         assert!(result.is_err());
         let result = srv.connect("localhost:99999").await;
         assert!(result.is_err());
+        assert!(format!("{:?}", srv).contains("Connector"));
 
         let srv = Connector::default();
         let result = srv.connect(format!("{}", server.addr())).await;

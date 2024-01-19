@@ -140,5 +140,6 @@ mod tests {
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
+        assert!(format!("{:?}", srv).contains("Connector"));
     }
 }
