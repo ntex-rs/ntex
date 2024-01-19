@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.1] - 2024-01-19
+
+* Allow to lock readiness for Condition
+
 ## [1.0.0] - 2024-01-09
 
 * Release
