@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.23] (2024-01-19)
+
+* Revert changes to release shared_vec
+
 ## [0.1.22] (2024-01-16)
 
 * Use const generics for helper traits (From, PartialEq, PartialOrd)

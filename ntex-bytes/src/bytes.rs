@@ -3662,11 +3662,11 @@ fn release_shared_vec(ptr: *mut SharedVec) {
         // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
         atomic::fence(Acquire);
 
-        // Drop vec
+        // Drop the data
         let cap = (*ptr).cap;
         (*ptr).pool.release(cap);
-
-        Vec::<SharedVec>::from_raw_parts(ptr, 1, cap / SHARED_VEC_SIZE);
+        ptr::drop_in_place(ptr);
+        Vec::<u8>::from_raw_parts(ptr as *mut u8, 0, cap);
     }
 }
 
