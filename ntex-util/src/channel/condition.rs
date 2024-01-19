@@ -23,7 +23,10 @@ impl Default for Condition {
 impl Condition {
     /// Coonstruct new condition instance
     pub fn new() -> Condition {
-        Condition(Cell::new(Inner { data: Slab::new(), ready: false }))
+        Condition(Cell::new(Inner {
+            data: Slab::new(),
+            ready: false,
+        }))
     }
 
     /// Get condition waiter
