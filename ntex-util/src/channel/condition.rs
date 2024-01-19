@@ -11,6 +11,7 @@ pub struct Condition(Cell<Inner>);
 #[derive(Debug)]
 struct Inner {
     data: Slab<Option<LocalWaker>>,
+    ready: bool,
 }
 
 impl Default for Condition {
@@ -22,7 +23,7 @@ impl Default for Condition {
 impl Condition {
     /// Coonstruct new condition instance
     pub fn new() -> Condition {
-        Condition(Cell::new(Inner { data: Slab::new() }))
+        Condition(Cell::new(Inner { data: Slab::new(), ready: false }))
     }
 
     /// Get condition waiter
@@ -42,6 +43,15 @@ impl Condition {
                 waker.wake();
             }
         }
+    }
+
+    #[doc(hidden)]
+    /// Notify all waiters.
+    ///
+    /// All subsequent waiter readiness checks always returns `ready`
+    pub fn notify_and_lock_readiness(&self) {
+        self.0.get_mut().ready = true;
+        self.notify();
     }
 }
 
@@ -66,7 +76,9 @@ impl Waiter {
 
     /// Returns readiness state of the condition.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let inner = unsafe { self.inner.get_mut().data.get_unchecked_mut(self.token) };
+        let parent = self.inner.get_mut();
+
+        let inner = unsafe { parent.data.get_unchecked_mut(self.token) };
         if inner.is_none() {
             let waker = LocalWaker::default();
             waker.register(cx.waker());
@@ -74,7 +86,11 @@ impl Waiter {
         } else if !inner.as_mut().unwrap().register(cx.waker()) {
             return Poll::Ready(());
         }
-        Poll::Pending
+        if parent.ready {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
     }
 }
 
@@ -156,5 +172,20 @@ mod tests {
         assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);
         assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Ready(()));
         assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Pending);
+    }
+
+    #[ntex_macros::rt_test2]
+    async fn test_condition_notify_ready() {
+        let cond = Condition::default().clone();
+        let waiter = cond.wait();
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Pending);
+
+        cond.notify_and_lock_readiness();
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Ready(()));
+        assert_eq!(lazy(|cx| waiter.poll_ready(cx)).await, Poll::Ready(()));
+
+        let waiter2 = cond.wait();
+        assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Ready(()));
     }
 }
