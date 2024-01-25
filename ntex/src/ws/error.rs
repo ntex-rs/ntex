@@ -3,7 +3,7 @@ use std::io;
 
 use thiserror::Error;
 
-use crate::http::error::{HttpError, ParseError, ResponseError};
+use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
 use crate::http::{header::HeaderValue, header::ALLOW, Response, StatusCode};
 use crate::{connect::ConnectError, util::Either};
 
@@ -76,9 +76,12 @@ pub enum WsClientBuilderError {
 /// Websocket client error
 #[derive(Error, Debug)]
 pub enum WsClientError {
+    /// Invalid request
+    #[error("Invalid request")]
+    InvalidRequest(#[from] EncodeError),
     /// Invalid response
     #[error("Invalid response")]
-    InvalidResponse(#[from] ParseError),
+    InvalidResponse(#[from] DecodeError),
     /// Invalid response status
     #[error("Invalid response status")]
     InvalidResponseStatus(StatusCode),
@@ -111,8 +114,8 @@ pub enum WsClientError {
     Disconnected(Option<io::Error>),
 }
 
-impl From<Either<ParseError, io::Error>> for WsClientError {
-    fn from(err: Either<ParseError, io::Error>) -> Self {
+impl From<Either<DecodeError, io::Error>> for WsClientError {
+    fn from(err: Either<DecodeError, io::Error>) -> Self {
         match err {
             Either::Left(err) => WsClientError::InvalidResponse(err),
             Either::Right(err) => WsClientError::Disconnected(Some(err)),
@@ -120,9 +123,12 @@ impl From<Either<ParseError, io::Error>> for WsClientError {
     }
 }
 
-impl From<Either<io::Error, io::Error>> for WsClientError {
-    fn from(err: Either<io::Error, io::Error>) -> Self {
-        WsClientError::Disconnected(Some(err.into_inner()))
+impl From<Either<EncodeError, io::Error>> for WsClientError {
+    fn from(err: Either<EncodeError, io::Error>) -> Self {
+        match err {
+            Either::Left(err) => WsClientError::InvalidRequest(err),
+            Either::Right(err) => WsClientError::Disconnected(Some(err)),
+        }
     }
 }
 

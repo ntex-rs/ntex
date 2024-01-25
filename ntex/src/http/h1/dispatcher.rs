@@ -10,7 +10,7 @@ use crate::util::{ready, Bytes};
 use crate::http;
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::config::{DispatcherConfig, OnRequest};
-use crate::http::error::{DispatchError, ParseError, PayloadError, ResponseError};
+use crate::http::error::{DecodeError, DispatchError, PayloadError, ResponseError};
 use crate::http::message::{ConnectionType, CurrentIo};
 use crate::http::request::Request;
 use crate::http::response::Response;
@@ -586,7 +586,7 @@ where
                     // Malformed requests, respond with 400
                     log::trace!("{}: Malformed request: {:?}", self.io.tag(), err);
                     let (res, body) = Response::BadRequest().finish().into_parts();
-                    self.error = Some(DispatchError::Parse(err));
+                    self.error = Some(DispatchError::Decode(err));
                     Poll::Ready(self.send_response(res, body.into_body()))
                 }
                 Err(RecvError::PeerGone(err)) => {
@@ -798,12 +798,12 @@ where
                                     if let Some(err) = err {
                                         DispatchError::PeerGone(Some(err))
                                     } else {
-                                        ParseError::Incomplete.into()
+                                        DecodeError::Incomplete.into()
                                     }
                                 }
                                 RecvError::Decoder(e) => {
                                     self.set_payload_error(PayloadError::EncodingCorrupted);
-                                    DispatchError::Parse(e)
+                                    DispatchError::Decode(e)
                                 }
                             };
                             return Poll::Ready(Err(err));

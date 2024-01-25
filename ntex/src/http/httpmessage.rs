@@ -8,7 +8,7 @@ use ntex_http::header;
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
 
-use super::error::{ContentTypeError, ParseError};
+use super::error::{ContentTypeError, DecodeError};
 use super::header::HeaderMap;
 use crate::util::Extensions;
 
@@ -74,12 +74,12 @@ pub trait HttpMessage: Sized {
     }
 
     /// Check if request has chunked transfer encoding
-    fn chunked(&self) -> Result<bool, ParseError> {
+    fn chunked(&self) -> Result<bool, DecodeError> {
         if let Some(encodings) = self.message_headers().get(header::TRANSFER_ENCODING) {
             if let Ok(s) = encodings.to_str() {
                 Ok(s.to_lowercase().contains("chunked"))
             } else {
-                Err(ParseError::Header)
+                Err(DecodeError::Header)
             }
         } else {
             Ok(false)
