@@ -8,7 +8,6 @@ pub use serde_json::error::Error as JsonError;
 #[cfg(feature = "url")]
 pub use url_pkg::ParseError as UrlParseError;
 
-use super::{HttpRequest, HttpResponse};
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
 use crate::http::{error, header, StatusCode};
@@ -16,6 +15,8 @@ use crate::util::{BytesMut, Either};
 
 pub use super::error_default::{DefaultError, Error};
 pub use crate::http::error::BlockingError;
+
+use super::{HttpRequest, HttpResponse};
 
 pub trait ErrorRenderer: Sized + 'static {
     type Container: ErrorContainer;
@@ -76,6 +77,11 @@ where
         }
     }
 }
+
+/// Errors which can occur when attempting to work with `State` extractor
+#[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
+#[error("{0}")]
+pub struct AppFactoryError(pub &'static str);
 
 /// Errors which can occur when attempting to work with `State` extractor
 #[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]

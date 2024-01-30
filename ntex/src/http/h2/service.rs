@@ -131,13 +131,7 @@ where
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
         let service = self.srv.create(()).await?;
-        let config = Rc::new(DispatcherConfig::new(
-            self.cfg.clone(),
-            service,
-            (),
-            None,
-            None,
-        ));
+        let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, ()));
 
         Ok(H2ServiceHandler {
             config,
@@ -148,7 +142,7 @@ where
 
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<F, S: Service<Request>, B> {
-    config: Rc<DispatcherConfig<S, (), ()>>,
+    config: Rc<DispatcherConfig<S, ()>>,
     _t: PhantomData<(F, B)>,
 }
 
@@ -188,17 +182,16 @@ where
     }
 }
 
-pub(in crate::http) async fn handle<S, B, X, U>(
+pub(in crate::http) async fn handle<S, B, C>(
     io: IoBoxed,
-    config: Rc<DispatcherConfig<S, X, U>>,
+    config: Rc<DispatcherConfig<S, C>>,
 ) -> Result<(), DispatchError>
 where
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: 'static,
-    U: 'static,
+    C: 'static,
 {
     io.set_disconnect_timeout(config.client_disconnect);
     let ioref = io.get_ref();
@@ -236,21 +229,21 @@ impl Service<h2::ControlMessage<H2Error>> for ControlService {
     }
 }
 
-struct PublishService<S: Service<Request>, B, X, U> {
+struct PublishService<S: Service<Request>, B, C> {
     io: IoRef,
-    config: Rc<DispatcherConfig<S, X, U>>,
+    config: Rc<DispatcherConfig<S, C>>,
     streams: RefCell<HashMap<StreamId, PayloadSender>>,
     _t: PhantomData<B>,
 }
 
-impl<S, B, X, U> PublishService<S, B, X, U>
+impl<S, B, C> PublishService<S, B, C>
 where
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
-    fn new(io: IoRef, config: Rc<DispatcherConfig<S, X, U>>) -> Self {
+    fn new(io: IoRef, config: Rc<DispatcherConfig<S, C>>) -> Self {
         Self {
             io,
             config,
@@ -260,14 +253,13 @@ where
     }
 }
 
-impl<S, B, X, U> Service<h2::Message> for PublishService<S, B, X, U>
+impl<S, B, C> Service<h2::Message> for PublishService<S, B, C>
 where
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: 'static,
-    U: 'static,
+    C: 'static,
 {
     type Response = ();
     type Error = H2Error;

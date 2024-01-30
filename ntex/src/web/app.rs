@@ -16,7 +16,7 @@ use super::resource::Resource;
 use super::response::WebResponse;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::{DefaultError, ErrorRenderer};
+use super::{error::AppFactoryError, DefaultError, ErrorRenderer};
 
 type HttpNewService<Err: ErrorRenderer> =
     BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
@@ -352,12 +352,13 @@ where
             WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
-            InitError = (),
         >,
         U: IntoServiceFactory<S, WebRequest<Err>>,
     {
         App {
-            filter: self.filter.and_then(filter.into_factory()),
+            filter: self
+                .filter
+                .and_then(filter.into_factory().map_init_err(|_| ())),
             middleware: self.middleware,
             state_factories: self.state_factories,
             services: self.services,
@@ -454,7 +455,7 @@ where
         Request,
         Response = WebResponse,
         Error = Err::Container,
-        InitError = (),
+        InitError = AppFactoryError,
     > {
         IntoServiceFactory::<AppFactory<M, F, Err>, Request>::into_factory(self)
     }
@@ -484,7 +485,7 @@ where
         Request,
         Response = WebResponse,
         Error = Err::Container,
-        InitError = (),
+        InitError = AppFactoryError,
     >
     where
         M::Service: 'static,

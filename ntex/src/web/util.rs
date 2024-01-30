@@ -1,5 +1,5 @@
 //! Essentials helper functions and types for application registration.
-use std::fmt;
+use std::error;
 
 use ntex_router::IntoPattern;
 
@@ -286,7 +286,7 @@ where
     I: IntoServiceFactory<S, Request, AppConfig>,
     S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
+    S::InitError: error::Error,
     S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
 {

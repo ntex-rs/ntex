@@ -1,4 +1,4 @@
-use std::{fmt, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
+use std::{error::Error, io, marker::PhantomData, net, sync::Arc, sync::Mutex};
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
@@ -71,7 +71,7 @@ where
     I: IntoServiceFactory<S, Request, AppConfig>,
     S: ServiceFactory<Request, AppConfig>,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
+    S::InitError: Error,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
@@ -88,7 +88,7 @@ where
     I: IntoServiceFactory<S, Request, AppConfig>,
     S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
+    S::InitError: Error,
     S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
 {
@@ -569,7 +569,7 @@ where
     I: IntoServiceFactory<S, Request, AppConfig>,
     S: ServiceFactory<Request, AppConfig>,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
+    S::InitError: Error,
     S::Response: Into<Response<B>>,
     S::Service: 'static,
     B: MessageBody,

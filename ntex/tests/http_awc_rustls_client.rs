@@ -10,7 +10,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::HttpService;
 use ntex::service::{chain_factory, map_config, ServiceFactory};
 use ntex::util::Ready;
-use ntex::web::{self, dev::AppConfig, App, HttpResponse};
+use ntex::web::{self, dev, dev::AppConfig, App, HttpResponse};
 
 fn ssl_acceptor() -> SslAcceptor {
     // load ssl keys
@@ -62,10 +62,10 @@ async fn test_connection_reuse_h2() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        chain_factory(move |io| {
+        chain_factory(dev::map_app_err(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
-        })
+        }))
         .and_then(
             HttpService::build()
                 .h2(map_config(

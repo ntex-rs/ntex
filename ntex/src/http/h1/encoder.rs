@@ -256,7 +256,7 @@ impl MessageType for RequestHeadType {
                 Version::HTTP_09 => "HTTP/0.9",
                 Version::HTTP_10 => "HTTP/1.0",
                 Version::HTTP_11 => "HTTP/1.1",
-                _ => return Err(EncodeError::UnsupportedVersion(head.version.clone())),
+                _ => return Err(EncodeError::UnsupportedVersion(head.version)),
             }
         )
         .map_err(|e| EncodeError::Internal(Box::new(e)))

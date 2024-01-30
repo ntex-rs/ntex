@@ -157,19 +157,20 @@ where
         log::trace!("Open ws connection to {:?} addr: {:?}", head.uri, self.addr);
 
         let io = self.connector.call(msg).await?;
+        let tag = io.tag();
 
         // create Framed and send request
         let codec = h1::ClientCodec::default();
 
         // send request and read response
         let fut = async {
-            log::trace!("Sending ws handshake http message");
+            log::trace!("{}: Sending ws handshake http message", tag);
             io.send(
                 (RequestHeadType::Rc(head, Some(headers)), BodySize::None).into(),
                 &codec,
             )
             .await?;
-            log::trace!("Waiting for ws handshake response");
+            log::trace!("{}: Waiting for ws handshake response", tag);
             io.recv(&codec)
                 .await?
                 .ok_or(WsClientError::Disconnected(None))
@@ -184,7 +185,7 @@ where
         } else {
             fut.await?
         };
-        log::trace!("Ws handshake response is received {:?}", response);
+        log::trace!("{}: Ws handshake response is received {:?}", tag, response);
 
         // verify response
         if response.status != StatusCode::SWITCHING_PROTOCOLS {
@@ -202,7 +203,7 @@ where
             false
         };
         if !has_hdr {
-            log::trace!("Invalid upgrade header");
+            log::trace!("{}: Invalid upgrade header", tag);
             return Err(WsClientError::InvalidUpgradeHeader);
         }
 
@@ -210,15 +211,15 @@ where
         if let Some(conn) = response.headers.get(&header::CONNECTION) {
             if let Ok(s) = conn.to_str() {
                 if !s.to_ascii_lowercase().contains("upgrade") {
-                    log::trace!("Invalid connection header: {}", s);
+                    log::trace!("{}: Invalid connection header: {}", tag, s);
                     return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
                 }
             } else {
-                log::trace!("Invalid connection header: {:?}", conn);
+                log::trace!("{}: Invalid connection header: {:?}", tag, conn);
                 return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
             }
         } else {
-            log::trace!("Missing connection header");
+            log::trace!("{}: Missing connection header", tag);
             return Err(WsClientError::MissingConnectionHeader);
         }
 
@@ -226,7 +227,8 @@ where
             let encoded = ws::hash_key(key.as_ref());
             if hdr_key.as_bytes() != encoded.as_bytes() {
                 log::trace!(
-                    "Invalid challenge response: expected: {} received: {:?}",
+                    "{}: Invalid challenge response: expected: {} received: {:?}",
+                    tag,
                     encoded,
                     key
                 );
@@ -236,10 +238,10 @@ where
                 ));
             }
         } else {
-            log::trace!("Missing SEC-WEBSOCKET-ACCEPT header");
+            log::trace!("{}: Missing SEC-WEBSOCKET-ACCEPT header", tag);
             return Err(WsClientError::MissingWebSocketAcceptHeader);
         };
-        log::trace!("Ws handshake response verification is completed");
+        log::trace!("{}: Ws handshake response verification is completed", tag);
 
         // response and ws io
         Ok(WsConnection::new(
@@ -295,7 +297,7 @@ impl WsClientBuilder<Base, ()> {
             inner: Some(Inner {
                 head,
                 config,
-                connector: Connector::<Uri>::default(),
+                connector: Connector::<Uri>::default().tag("WS-CLIENT"),
                 addr: None,
                 max_size: 65_536,
                 server_mode: false,
@@ -563,7 +565,6 @@ where
             return Err(WsClientBuilderError::Http(e));
         }
 
-        // #[allow(unused_mut)]
         let mut inner = self.inner.take().expect("cannot reuse WsClient builder");
 
         // validate uri

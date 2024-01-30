@@ -171,7 +171,7 @@ impl Request {
         self.head.extensions_mut()
     }
 
-    #[allow(dead_code)]
+    // #[allow(dead_code)]
     /// Split request into request head and payload
     pub(crate) fn into_parts(self) -> (Message<RequestHead>, Payload) {
         (self.head, self.payload)

@@ -164,61 +164,11 @@ impl From<Either<PayloadError, io::Error>> for PayloadError {
 pub enum DispatchError {
     /// Service error
     #[error("Service error")]
-    Service(Box<dyn ResponseError>),
+    Service(Box<dyn super::ResponseError>),
 
-    /// Upgrade service error
-    #[error("Upgrade service error: {0}")]
-    Upgrade(Box<dyn std::error::Error>),
-
-    /// Peer is disconnected, error indicates that peer is disconnected because of it
-    #[error("Disconnected: {0:?}")]
-    PeerGone(Option<io::Error>),
-
-    /// Http request decode error.
-    #[error("Decode error: {0}")]
-    Decode(#[from] DecodeError),
-
-    /// Http response encoding error.
-    #[error("Encode error: {0}")]
-    Encode(#[from] EncodeError),
-
-    /// Http/2 error
-    #[error("{0}")]
-    H2(#[from] H2Error),
-
-    /// The first request did not complete within the specified timeout.
-    #[error("The first request did not complete within the specified timeout")]
-    SlowRequestTimeout,
-
-    /// Disconnect timeout. Makes sense for ssl streams.
-    #[error("Connection shutdown timeout")]
-    DisconnectTimeout,
-
-    /// Payload is not consumed
-    #[error("Task is completed but request's payload is not consumed")]
-    PayloadIsNotConsumed,
-
-    /// Malformed request
-    #[error("Malformed request")]
-    MalformedRequest,
-
-    /// Response body processing error
-    #[error("Response body processing error: {0}")]
-    ResponsePayload(Box<dyn std::error::Error>),
-
-    /// Internal error
-    #[error("Internal error")]
-    InternalError,
-
-    /// Unknown error
-    #[error("Unknown error")]
-    Unknown,
-}
-
-impl From<io::Error> for DispatchError {
-    fn from(err: io::Error) -> Self {
-        DispatchError::PeerGone(Some(err))
-    }
+    /// Control service error
+    #[error("Control service error: {0}")]
+    Control(Box<dyn std::error::Error>),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -344,7 +294,7 @@ mod tests {
         from!(httparse::Error::NewLine => DecodeError::Header);
         from!(httparse::Error::Status => DecodeError::Status);
         from!(httparse::Error::Token => DecodeError::Header);
-        from!(httparse::Error::TooManyHeaders => DecodeError::TooLarge);
+        from!(httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
         from!(httparse::Error::Version => DecodeError::Version);
     }
 }

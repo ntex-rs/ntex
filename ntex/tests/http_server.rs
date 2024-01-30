@@ -5,13 +5,15 @@ use futures_util::future::{self, FutureExt};
 use futures_util::stream::{once, StreamExt};
 use regex::Regex;
 
+use ntex::http::h1::Control;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
 use ntex::http::{
     body, HttpService, KeepAlive, Method, Request, Response, StatusCode, Version,
 };
+use ntex::service::fn_service;
 use ntex::time::{sleep, timeout, Millis, Seconds};
-use ntex::{service::fn_service, util::Bytes, util::Ready, web::error};
+use ntex::{util::Bytes, util::Ready, web::error};
 
 #[ntex::test]
 async fn test_h1() {
@@ -56,16 +58,21 @@ async fn test_h1_2() {
 async fn test_expect_continue() {
     let srv = test_server(|| {
         HttpService::build()
-            .expect(fn_service(|req: Request| async move {
+            .control(fn_service(|req: Control<_, _>| async move {
                 sleep(Millis(20)).await;
-                if req.head().uri.query() == Some("yes=") {
-                    Ok(req)
+                let ack = if let Control::Expect(exc) = req {
+                    if exc.get_ref().head().uri.query() == Some("yes=") {
+                        exc.ack()
+                    } else {
+                        exc.fail(error::InternalError::default(
+                            "error",
+                            StatusCode::PRECONDITION_FAILED,
+                        ))
+                    }
                 } else {
-                    Err(error::InternalError::default(
-                        "error",
-                        StatusCode::PRECONDITION_FAILED,
-                    ))
-                }
+                    req.ack()
+                };
+                Ok::<_, std::convert::Infallible>(ack)
             }))
             .keep_alive(KeepAlive::Disabled)
             .h1(fn_service(|mut req: Request| async move {

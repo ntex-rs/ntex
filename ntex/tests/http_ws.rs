@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
 use ntex::io::{DispatchItem, Dispatcher, Io};
-use ntex::service::{fn_factory, Service, ServiceCtx};
+use ntex::service::{Pipeline, Service, ServiceCtx};
 use ntex::time::Seconds;
 use ntex::util::{ByteString, Bytes, Ready};
 use ntex::ws::{self, handshake, handshake_response};
@@ -82,14 +82,22 @@ async fn test_simple() {
     let mut srv = test::server({
         let ws_service = ws_service.clone();
         move || {
-            let ws_service = ws_service.clone();
+            let ws_service = Pipeline::new(ws_service.clone());
             HttpService::build()
                 .keep_alive(1)
                 .headers_read_rate(Seconds(1), Seconds::ZERO, 16)
                 .payload_read_rate(Seconds(1), Seconds::ZERO, 16)
-                .upgrade(fn_factory(move || {
-                    Ready::Ok::<_, io::Error>(ws_service.clone())
-                }))
+                .control(move |req: h1::Control<_, _>| {
+                    let ack = if let h1::Control::Upgrade(upg) = req {
+                        let ws_service = ws_service.clone();
+                        upg.handle(|req, io, codec| async move {
+                            ws_service.call((req, io, codec)).await
+                        })
+                    } else {
+                        req.ack()
+                    };
+                    async move { Ok::<_, io::Error>(ack) }
+                })
                 .h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
         }
     });
@@ -249,27 +257,32 @@ async fn test_simple() {
 async fn test_transport() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {
-                async move {
-                    let res = handshake_response(req.head()).finish();
+            .control(move |req: h1::Control<_, _>| {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    upg.handle(|req, io, codec| async move {
+                        let res = handshake_response(req.head()).finish();
 
-                    // send handshake respone
-                    io.encode(
-                        h1::Message::Item((res.drop_body(), body::BodySize::None)),
-                        &codec,
-                    )
-                    .unwrap();
+                        // send handshake respone
+                        io.encode(
+                            h1::Message::Item((res.drop_body(), body::BodySize::None)),
+                            &codec,
+                        )
+                        .unwrap();
 
-                    let io = ws::WsTransport::create(io, ws::Codec::default());
+                        let io = ws::WsTransport::create(io, ws::Codec::default());
 
-                    // start websocket service
-                    while let Some(item) =
-                        io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
-                    {
-                        io.send(item.freeze(), &BytesCodec).await.unwrap()
-                    }
-                    Ok::<_, io::Error>(())
-                }
+                        // start websocket service
+                        while let Some(item) =
+                            io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
+                        {
+                            io.send(item.freeze(), &BytesCodec).await.unwrap()
+                        }
+                        Ok::<_, io::Error>(())
+                    })
+                } else {
+                    req.ack()
+                };
+                async move { Ok::<_, io::Error>(ack) }
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
     });

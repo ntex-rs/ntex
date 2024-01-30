@@ -8,8 +8,8 @@ use tls_openssl::ssl::{
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Version};
-use ntex::service::{chain_factory, map_config, ServiceFactory};
-use ntex::web::{self, dev::AppConfig, App, HttpResponse};
+use ntex::service::{chain_factory, map_config};
+use ntex::web::{self, dev::map_app_err, dev::AppConfig, App, HttpResponse};
 use ntex::{time::Seconds, util::Ready};
 
 fn ssl_acceptor() -> SslAcceptor {
@@ -40,10 +40,10 @@ async fn test_connection_reuse_h2() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        chain_factory(move |io| {
+        chain_factory(map_app_err(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
-        })
+        }))
         .and_then(
             HttpService::build()
                 .h2(map_config(
@@ -52,8 +52,7 @@ async fn test_connection_reuse_h2() {
                     ),
                     |_| AppConfig::default(),
                 ))
-                .openssl(ssl_acceptor())
-                .map_err(|_| ()),
+                .openssl(ssl_acceptor()), //.map_err(|_| ()),
         )
     });
 

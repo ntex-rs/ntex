@@ -84,19 +84,25 @@ async fn test_openssl_string() {
     let tcp = Some(tcp);
     let srv = build_test_server(move |srv| {
         srv.listen("test", tcp.unwrap(), |_| {
-            chain_factory(fn_service(|io: Io<_>| async move {
-                let res = io.read_ready().await;
-                assert!(res.is_ok());
-                Ok(io)
-            }))
+            chain_factory(
+                fn_service(|io: Io<_>| async move {
+                    let res = io.read_ready().await;
+                    assert!(res.is_ok());
+                    Ok(io)
+                })
+                .map_init_err(|_| ()),
+            )
             .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
-            .and_then(fn_service(|io: Io<_>| async move {
-                io.send(Bytes::from_static(b"test"), &BytesCodec)
-                    .await
-                    .unwrap();
-                assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
-                Ok::<_, Box<dyn std::error::Error>>(())
-            }))
+            .and_then(
+                fn_service(|io: Io<_>| async move {
+                    io.send(Bytes::from_static(b"test"), &BytesCodec)
+                        .await
+                        .unwrap();
+                    assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
+                    Ok::<_, Box<dyn std::error::Error>>(())
+                })
+                .map_init_err(|_| ()),
+            )
         })
         .unwrap()
     })
@@ -130,19 +136,25 @@ async fn test_openssl_read_before_error() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let srv = test_server(|| {
-        chain_factory(fn_service(|io: Io<_>| async move {
-            let res = io.read_ready().await;
-            assert!(res.is_ok());
-            Ok(io)
-        }))
+        chain_factory(
+            fn_service(|io: Io<_>| async move {
+                let res = io.read_ready().await;
+                assert!(res.is_ok());
+                Ok(io)
+            })
+            .map_init_err(|_| ()),
+        )
         .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
-        .and_then(fn_service(|io: Io<_>| async move {
-            io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
-                .await
-                .unwrap();
-            time::sleep(time::Millis(100)).await;
-            Ok::<_, Box<dyn std::error::Error>>(())
-        }))
+        .and_then(
+            fn_service(|io: Io<_>| async move {
+                io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
+                    .await
+                    .unwrap();
+                time::sleep(time::Millis(100)).await;
+                Ok::<_, Box<dyn std::error::Error>>(())
+            })
+            .map_init_err(|_| ()),
+        )
     });
 
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
@@ -171,21 +183,27 @@ async fn test_rustls_string() {
     use tls_rustls::{Certificate, ClientConfig};
 
     let srv = test_server(|| {
-        chain_factory(fn_service(|io: Io<_>| async move {
-            let res = io.read_ready().await;
-            assert!(res.is_ok());
-            Ok(io)
-        }))
+        chain_factory(
+            fn_service(|io: Io<_>| async move {
+                let res = io.read_ready().await;
+                assert!(res.is_ok());
+                Ok(io)
+            })
+            .map_init_err(|_| ()),
+        )
         .and_then(rustls::TlsAcceptor::new(tls_acceptor()))
-        .and_then(fn_service(|io: Io<_>| async move {
-            assert!(io.query::<PeerCert>().as_ref().is_none());
-            assert!(io.query::<PeerCertChain>().as_ref().is_none());
-            io.send(Bytes::from_static(b"test"), &BytesCodec)
-                .await
-                .unwrap();
-            assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
-            Ok::<_, std::io::Error>(())
-        }))
+        .and_then(
+            fn_service(|io: Io<_>| async move {
+                assert!(io.query::<PeerCert>().as_ref().is_none());
+                assert!(io.query::<PeerCertChain>().as_ref().is_none());
+                io.send(Bytes::from_static(b"test"), &BytesCodec)
+                    .await
+                    .unwrap();
+                assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
+                Ok::<_, std::io::Error>(())
+            })
+            .map_init_err(|_| ()),
+        )
     });
 
     let config = ClientConfig::builder()

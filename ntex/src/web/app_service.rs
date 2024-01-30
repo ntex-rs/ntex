@@ -1,4 +1,4 @@
-use std::{cell::RefCell, marker::PhantomData, rc::Rc, task::Context, task::Poll};
+use std::{cell::RefCell, marker, rc::Rc, task::Context, task::Poll};
 
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
@@ -8,7 +8,7 @@ use crate::service::{fn_service, Middleware, Service, ServiceCtx, ServiceFactory
 use crate::util::{BoxFuture, Extensions};
 
 use super::config::AppConfig;
-use super::error::ErrorRenderer;
+use super::error::{AppFactoryError, ErrorRenderer};
 use super::guard::Guard;
 use super::httprequest::{HttpRequest, HttpRequestPool};
 use super::request::WebRequest;
@@ -59,7 +59,7 @@ where
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type InitError = ();
+    type InitError = AppFactoryError;
     type Service = AppFactoryService<T::Service, Err>;
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
@@ -81,7 +81,7 @@ where
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type InitError = ();
+    type InitError = AppFactoryError;
     type Service = AppFactoryService<T::Service, Err>;
 
     async fn create(&self, config: AppConfig) -> Result<Self::Service, Self::InitError> {
@@ -89,11 +89,12 @@ where
 
         // update resource default service
         let default = self.default.clone().unwrap_or_else(|| {
-            Rc::new(boxed::factory(fn_service(
-                |req: WebRequest<Err>| async move {
+            Rc::new(boxed::factory(
+                fn_service(|req: WebRequest<Err>| async move {
                     Ok(req.into_response(Response::NotFound().finish()))
-                },
-            )))
+                })
+                .map_init_err(|_| ()),
+            ))
         });
 
         let filter_fut = self.filter.create(());
@@ -109,7 +110,9 @@ where
 
         // app state factories
         for fut in state_factories.iter() {
-            extensions = fut(extensions).await?;
+            extensions = fut(extensions)
+                .await
+                .map_err(|_| AppFactoryError("Cannot initialize state factories"))?
         }
         let state = AppState::new(extensions, None, config.clone());
 
@@ -143,19 +146,29 @@ where
 
         // create http services
         for (path, factory, guards) in &mut services.iter() {
-            let service = factory.create(()).await?;
+            let service = factory
+                .create(())
+                .await
+                .map_err(|_| AppFactoryError("Cannot construct app servicer"))?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
         let routing = AppRouting {
             router: router.finish(),
-            default: Some(default.create(()).await?),
+            default: Some(
+                default
+                    .create(())
+                    .await
+                    .map_err(|_| AppFactoryError("Cannot initialize state factories"))?,
+            ),
         };
 
         // main service
         let service = AppService {
             routing,
-            filter: filter_fut.await?,
+            filter: filter_fut
+                .await
+                .map_err(|_| AppFactoryError("Cannot construct app filter"))?,
         };
 
         Ok(AppFactoryService {
@@ -163,7 +176,7 @@ where
             state,
             service: middleware.create(service),
             pool: HttpRequestPool::create(),
-            _t: PhantomData,
+            _t: marker::PhantomData,
         })
     }
 }
@@ -178,7 +191,7 @@ where
     rmap: Rc<ResourceMap>,
     state: AppState,
     pool: &'static HttpRequestPool,
-    _t: PhantomData<Err>,
+    _t: marker::PhantomData<Err>,
 }
 
 impl<T, Err> Service<Request> for AppFactoryService<T, Err>

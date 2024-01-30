@@ -252,12 +252,13 @@ where
             WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
-            InitError = (),
         >,
         F: IntoServiceFactory<U, WebRequest<Err>>,
     {
         Resource {
-            filter: self.filter.and_then(filter.into_factory()),
+            filter: self
+                .filter
+                .and_then(filter.into_factory().map_init_err(|_| ())),
             middleware: self.middleware,
             rdef: self.rdef,
             name: self.name,

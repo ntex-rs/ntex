@@ -246,16 +246,12 @@ impl WebServiceAdapter {
     pub fn finish<T, F, Err>(self, service: F) -> impl WebServiceFactory<Err>
     where
         F: IntoServiceFactory<T, WebRequest<Err>>,
-        T: ServiceFactory<
-                WebRequest<Err>,
-                Response = WebResponse,
-                Error = Err::Container,
-                InitError = (),
-            > + 'static,
+        T: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
+            + 'static,
         Err: ErrorRenderer,
     {
         WebServiceImpl {
-            srv: service.into_factory(),
+            srv: service.into_factory().map_init_err(|_| ()),
             rdef: self.rdef,
             name: self.name,
             guards: self.guards,
@@ -393,6 +389,7 @@ tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(
 mod tests {
     use super::*;
     use crate::http::{Method, StatusCode};
+    use crate::service::fn_service;
     use crate::web::test::{init_service, TestRequest};
     use crate::web::{self, guard, App, DefaultError, HttpResponse};
 

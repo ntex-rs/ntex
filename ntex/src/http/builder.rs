@@ -3,30 +3,25 @@ use std::{error::Error, fmt, marker::PhantomData};
 use ntex_h2::{self as h2};
 
 use crate::http::body::MessageBody;
-use crate::http::config::{KeepAlive, OnRequest, ServiceConfig};
+use crate::http::config::{KeepAlive, ServiceConfig};
 use crate::http::error::ResponseError;
-use crate::http::h1::{Codec, ExpectHandler, H1Service, UpgradeHandler};
+use crate::http::h1::{self, DefaultControlService, H1Service};
 use crate::http::h2::H2Service;
-use crate::http::request::Request;
-use crate::http::response::Response;
-use crate::http::service::HttpService;
-use crate::io::{Filter, Io, IoRef};
-use crate::service::{boxed, IntoService, IntoServiceFactory, Service, ServiceFactory};
-use crate::time::Seconds;
+use crate::http::{request::Request, response::Response, service::HttpService};
+use crate::service::{IntoServiceFactory, ServiceFactory};
+use crate::{io::Filter, time::Seconds};
 
 /// A http service builder
 ///
 /// This type can be used to construct an instance of `http service` through a
 /// builder-like pattern.
-pub struct HttpServiceBuilder<F, S, X = ExpectHandler, U = UpgradeHandler<F>> {
+pub struct HttpServiceBuilder<F, S, C = DefaultControlService> {
     config: ServiceConfig,
-    expect: X,
-    upgrade: Option<U>,
-    on_request: Option<OnRequest>,
+    control: C,
     _t: PhantomData<(F, S)>,
 }
 
-impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
+impl<F, S> HttpServiceBuilder<F, S, DefaultControlService> {
     /// Create instance of `ServiceConfigBuilder`
     pub fn new() -> Self {
         HttpServiceBuilder::with_config(ServiceConfig::default())
@@ -37,26 +32,21 @@ impl<F, S> HttpServiceBuilder<F, S, ExpectHandler, UpgradeHandler<F>> {
     pub fn with_config(config: ServiceConfig) -> Self {
         HttpServiceBuilder {
             config,
-            expect: ExpectHandler,
-            upgrade: None,
-            on_request: None,
+            control: DefaultControlService,
             _t: PhantomData,
         }
     }
 }
 
-impl<F, S, X, U> HttpServiceBuilder<F, S, X, U>
+impl<F, S, C> HttpServiceBuilder<F, S, C>
 where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    X: ServiceFactory<Request, Response = Request> + 'static,
-    X::Error: ResponseError,
-    X::InitError: fmt::Debug,
-    U: ServiceFactory<(Request, Io<F>, Codec), Response = ()> + 'static,
-    U::Error: fmt::Display + Error,
-    U::InitError: fmt::Debug,
+    C: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+    C::Error: Error,
+    C::InitError: Error,
 {
     /// Set server keep-alive setting.
     ///
@@ -148,60 +138,23 @@ where
         self
     }
 
-    /// Provide service for `EXPECT: 100-Continue` support.
-    ///
-    /// Service get called with request that contains `EXPECT` header.
-    /// Service must return request in case of success, in that case
-    /// request will be forwarded to main service.
-    pub fn expect<XF, X1>(self, expect: XF) -> HttpServiceBuilder<F, S, X1, U>
+    /// Provide control service.
+    pub fn control<CF, C1>(self, control: CF) -> HttpServiceBuilder<F, S, C1>
     where
-        XF: IntoServiceFactory<X1, Request>,
-        X1: ServiceFactory<Request, Response = Request>,
-        X1::InitError: fmt::Debug,
+        CF: IntoServiceFactory<C1, h1::Control<F, S::Error>>,
+        C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+        C1::Error: Error,
+        C1::InitError: Error,
     {
         HttpServiceBuilder {
             config: self.config,
-            expect: expect.into_factory(),
-            upgrade: self.upgrade,
-            on_request: self.on_request,
+            control: control.into_factory(),
             _t: PhantomData,
         }
-    }
-
-    /// Provide service for custom `Connection: UPGRADE` support.
-    ///
-    /// If service is provided then normal requests handling get halted
-    /// and this service get called with original request and framed object.
-    pub fn upgrade<UF, U1>(self, upgrade: UF) -> HttpServiceBuilder<F, S, X, U1>
-    where
-        UF: IntoServiceFactory<U1, (Request, Io<F>, Codec)>,
-        U1: ServiceFactory<(Request, Io<F>, Codec), Response = ()>,
-        U1::Error: fmt::Display + Error,
-        U1::InitError: fmt::Debug,
-    {
-        HttpServiceBuilder {
-            config: self.config,
-            expect: self.expect,
-            upgrade: Some(upgrade.into_factory()),
-            on_request: self.on_request,
-            _t: PhantomData,
-        }
-    }
-
-    /// Set req request callback.
-    ///
-    /// It get called once per request.
-    pub fn on_request<R, FR>(mut self, f: FR) -> Self
-    where
-        FR: IntoService<R, (Request, IoRef)>,
-        R: Service<(Request, IoRef), Response = Request, Error = Response> + 'static,
-    {
-        self.on_request = Some(boxed::service(f.into_service()));
-        self
     }
 
     /// Finish service configuration and create *http service* for HTTP/1 protocol.
-    pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, X, U>
+    pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, C>
     where
         B: MessageBody,
         SF: IntoServiceFactory<S, Request>,
@@ -209,10 +162,7 @@ where
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
     {
-        H1Service::with_config(self.config, service.into_factory())
-            .expect(self.expect)
-            .upgrade(self.upgrade)
-            .on_request(self.on_request)
+        H1Service::with_config(self.config, service.into_factory()).control(self.control)
     }
 
     /// Finish service configuration and create *http service* for HTTP/2 protocol.
@@ -228,7 +178,7 @@ where
     }
 
     /// Finish service configuration and create `HttpService` instance.
-    pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, X, U>
+    pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, C>
     where
         B: MessageBody + 'static,
         SF: IntoServiceFactory<S, Request>,
@@ -236,9 +186,6 @@ where
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
     {
-        HttpService::with_config(self.config, service.into_factory())
-            .expect(self.expect)
-            .upgrade(self.upgrade)
-            .on_request(self.on_request)
+        HttpService::with_config(self.config, service.into_factory()).control(self.control)
     }
 }

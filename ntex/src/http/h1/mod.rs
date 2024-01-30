@@ -4,22 +4,21 @@ use crate::util::{Bytes, BytesMut};
 mod client;
 mod codec;
 mod decoder;
+mod default;
 mod dispatcher;
 mod encoder;
-mod expect;
 mod payload;
 mod service;
-mod upgrade;
 
 pub mod control;
 
 pub use self::client::{ClientCodec, ClientPayloadCodec};
 pub use self::codec::Codec;
+pub use self::control::{Control, ControlAck};
 pub use self::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-pub use self::expect::ExpectHandler;
+pub use self::default::DefaultControlService;
 pub use self::payload::Payload;
 pub use self::service::{H1Service, H1ServiceHandler};
-pub use self::upgrade::UpgradeHandler;
 
 pub(super) use self::dispatcher::Dispatcher;
 
@@ -67,7 +66,7 @@ pub enum ProtocolError {
 
     /// Http response encoding error.
     #[error("Encode error: {0}")]
-    Encode(std::io::Error),
+    Encode(#[from] super::error::EncodeError),
 
     /// Request did not complete within the specified timeout
     #[error("Request did not complete within the specified timeout")]
@@ -77,27 +76,29 @@ pub enum ProtocolError {
     #[error("Payload did not complete within the specified timeout")]
     SlowPayloadTimeout,
 
-    /// Disconnect timeout. Makes sense for ssl streams.
-    #[error("Connection shutdown timeout")]
-    DisconnectTimeout,
-
     /// Payload is not consumed
     #[error("Task is completed but request's payload is not consumed")]
     PayloadIsNotConsumed,
 
-    /// Malformed request
-    #[error("Malformed request")]
-    MalformedRequest,
-
     /// Response body processing error
     #[error("Response body processing error: {0}")]
     ResponsePayload(Box<dyn std::error::Error>),
+}
 
-    /// Internal error
-    #[error("Internal error")]
-    InternalError,
+impl super::ResponseError for ProtocolError {
+    fn error_response(&self) -> super::Response {
+        match self {
+            ProtocolError::Decode(_) => super::Response::BadRequest().into(),
 
-    /// Unknown error
-    #[error("Unknown error")]
-    Unknown,
+            ProtocolError::SlowRequestTimeout | ProtocolError::SlowPayloadTimeout => {
+                super::Response::RequestTimeout().into()
+            }
+
+            ProtocolError::Encode(_)
+            | ProtocolError::PayloadIsNotConsumed
+            | ProtocolError::ResponsePayload(_) => {
+                super::Response::InternalServerError().into()
+            }
+        }
+    }
 }
