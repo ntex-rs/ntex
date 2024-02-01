@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.24] (2024-02-01)
+
+* Add `checked` api
+
 ## [0.1.23] (2024-01-19)
 
 * Revert changes to release shared_vec

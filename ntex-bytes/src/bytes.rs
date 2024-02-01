@@ -549,6 +549,14 @@ impl Bytes {
     /// Requires that `begin <= end` and `end <= self.len()`, otherwise slicing
     /// will panic.
     pub fn slice(&self, range: impl RangeBounds<usize>) -> Bytes {
+        self.slice_checked(range)
+            .expect("Requires that `begin <= end` and `end <= self.len()`")
+    }
+
+    /// Returns a slice of self for the provided range.
+    ///
+    /// Does nothing if `begin <= end` or `end <= self.len()`
+    pub fn slice_checked(&self, range: impl RangeBounds<usize>) -> Option<Bytes> {
         use std::ops::Bound;
 
         let len = self.len();
@@ -565,21 +573,21 @@ impl Bytes {
             Bound::Unbounded => len,
         };
 
-        assert!(begin <= end);
-        assert!(end <= len);
-
-        if end - begin <= INLINE_CAP {
-            Bytes {
-                inner: Inner::from_slice_inline(&self[begin..end]),
+        if begin <= end && end <= len {
+            if end - begin <= INLINE_CAP {
+                Some(Bytes {
+                    inner: Inner::from_slice_inline(&self[begin..end]),
+                })
+            } else {
+                let mut ret = self.clone();
+                unsafe {
+                    ret.inner.set_end(end);
+                    ret.inner.set_start(begin);
+                }
+                Some(ret)
             }
         } else {
-            let mut ret = self.clone();
-
-            unsafe {
-                ret.inner.set_end(end);
-                ret.inner.set_start(begin);
-            }
-            ret
+            None
         }
     }
 
@@ -609,18 +617,24 @@ impl Bytes {
     /// Requires that the given `sub` slice is in fact contained within the
     /// `Bytes` buffer; otherwise this function will panic.
     pub fn slice_ref(&self, subset: &[u8]) -> Bytes {
+        self.slice_ref_checked(subset)
+            .expect("Given `sub` slice is not contained within the `Bytes` buffer")
+    }
+
+    /// Returns a slice of self that is equivalent to the given `subset`.
+    pub fn slice_ref_checked(&self, subset: &[u8]) -> Option<Bytes> {
         let bytes_p = self.as_ptr() as usize;
         let bytes_len = self.len();
 
         let sub_p = subset.as_ptr() as usize;
         let sub_len = subset.len();
 
-        assert!(sub_p >= bytes_p);
-        assert!(sub_p + sub_len <= bytes_p + bytes_len);
-
-        let sub_offset = sub_p - bytes_p;
-
-        self.slice(sub_offset..(sub_offset + sub_len))
+        if sub_p >= bytes_p && sub_p + sub_len <= bytes_p + bytes_len {
+            let sub_offset = sub_p - bytes_p;
+            Some(self.slice(sub_offset..(sub_offset + sub_len)))
+        } else {
+            None
+        }
     }
 
     /// Splits the bytes into two at the given index.
@@ -645,20 +659,28 @@ impl Bytes {
     ///
     /// # Panics
     ///
-    /// Panics if `at > len`.
+    /// Panics if `at > self.len()`.
     pub fn split_off(&mut self, at: usize) -> Bytes {
-        assert!(at <= self.len());
+        self.split_off_checked(at)
+            .expect("at value must be <= self.len()`")
+    }
 
-        if at == self.len() {
-            return Bytes::new();
-        }
-
-        if at == 0 {
-            mem::replace(self, Bytes::new())
-        } else {
-            Bytes {
-                inner: self.inner.split_off(at, true),
+    /// Splits the bytes into two at the given index.
+    ///
+    /// Does nothing if `at > self.len()`
+    pub fn split_off_checked(&mut self, at: usize) -> Option<Bytes> {
+        if at <= self.len() {
+            if at == self.len() {
+                Some(Bytes::new())
+            } else if at == 0 {
+                Some(mem::replace(self, Bytes::new()))
+            } else {
+                Some(Bytes {
+                    inner: self.inner.split_off(at, true),
+                })
             }
+        } else {
+            None
         }
     }
 
@@ -686,18 +708,26 @@ impl Bytes {
     ///
     /// Panics if `at > len`.
     pub fn split_to(&mut self, at: usize) -> Bytes {
-        assert!(at <= self.len());
+        self.split_to_checked(at)
+            .expect("at value must be <= self.len()`")
+    }
 
-        if at == self.len() {
-            return mem::replace(self, Bytes::new());
-        }
-
-        if at == 0 {
-            Bytes::new()
-        } else {
-            Bytes {
-                inner: self.inner.split_to(at, true),
+    /// Splits the bytes into two at the given index.
+    ///
+    /// Does nothing if `at > len`.
+    pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
+        if at <= self.len() {
+            if at == self.len() {
+                Some(mem::replace(self, Bytes::new()))
+            } else if at == 0 {
+                Some(Bytes::new())
+            } else {
+                Some(Bytes {
+                    inner: self.inner.split_to(at, true),
+                })
             }
+        } else {
+            None
         }
     }
 
@@ -1299,8 +1329,7 @@ impl BytesMut {
     /// assert_eq!(other, b"hello world"[..]);
     /// ```
     pub fn split(&mut self) -> BytesMut {
-        let len = self.len();
-        self.split_to(len)
+        self.split_to(self.len())
     }
 
     /// Splits the buffer into two at the given index.
@@ -1330,10 +1359,20 @@ impl BytesMut {
     ///
     /// Panics if `at > len`.
     pub fn split_to(&mut self, at: usize) -> BytesMut {
-        assert!(at <= self.len());
+        self.split_to_checked(at)
+            .expect("at value must be <= self.len()`")
+    }
 
-        BytesMut {
-            inner: self.inner.split_to(at, false),
+    /// Splits the bytes into two at the given index.
+    ///
+    /// Does nothing if `at > len`.
+    pub fn split_to_checked(&mut self, at: usize) -> Option<BytesMut> {
+        if at <= self.len() {
+            Some(BytesMut {
+                inner: self.inner.split_to(at, false),
+            })
+        } else {
+            None
         }
     }
 
@@ -2136,10 +2175,20 @@ impl BytesVec {
     ///
     /// Panics if `at > len`.
     pub fn split_to(&mut self, at: usize) -> BytesMut {
-        assert!(at <= self.len());
+        self.split_to_checked(at)
+            .expect("at value must be <= self.len()`")
+    }
 
-        BytesMut {
-            inner: self.inner.split_to(at, false),
+    /// Splits the bytes into two at the given index.
+    ///
+    /// Does nothing if `at > len`.
+    pub fn split_to_checked(&mut self, at: usize) -> Option<BytesMut> {
+        if at <= self.len() {
+            Some(BytesMut {
+                inner: self.inner.split_to(at, false),
+            })
+        } else {
+            None
         }
     }
 
