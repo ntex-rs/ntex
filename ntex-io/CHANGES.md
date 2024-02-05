@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.1] - 2024-02-05
+
+* Add IoBoxed::take() method
+
 ## [1.0.0] - 2024-01-09
 
 * Release

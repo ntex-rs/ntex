@@ -1017,7 +1017,7 @@ mod tests {
         let (client, server) = IoTest::create();
         let f = DropFilter { p: p.clone() };
         format!("{:?}", f);
-        let io = Io::new(server).add_filter(f);
+        let mut io = Io::new(server).add_filter(f);
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
@@ -1030,7 +1030,14 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
+        let io2 = io.take();
+        let mut io3: crate::IoBoxed = io2.into();
+        let io4 = io3.take();
+
         drop(io);
+        drop(io3);
+        drop(io4);
+
         assert_eq!(p.get(), 1);
     }
 }
