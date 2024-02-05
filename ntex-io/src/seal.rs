@@ -15,6 +15,16 @@ impl fmt::Debug for Sealed {
 /// Boxed `Io` object with erased filter type
 pub struct IoBoxed(Io<Sealed>);
 
+impl IoBoxed {
+    #[inline]
+    /// Clone current io object.
+    ///
+    /// Current io object becomes closed.
+    pub fn take(&mut self) -> Self {
+        IoBoxed(self.0.take())
+    }
+}
+
 impl From<Io<Sealed>> for IoBoxed {
     fn from(io: Io<Sealed>) -> Self {
         Self(io)
