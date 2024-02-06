@@ -1,7 +1,7 @@
 use std::{fs::File, io, io::BufReader, sync::Arc};
 
 use ntex::service::{chain_factory, fn_service};
-use ntex::{codec, io::Io, server, util::Either};
+use ntex::{codec, io::Io, server, util::Either, ServiceFactory};
 use ntex_tls::rustls::TlsAcceptor;
 use rustls_pemfile::{certs, rsa_private_keys};
 use tls_rust::{Certificate, PrivateKey, ServerConfig};
@@ -34,8 +34,8 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", move |_| {
-            chain_factory(TlsAcceptor::new(tls_config.clone())).and_then(fn_service(
-                |io: Io<_>| async move {
+            chain_factory(TlsAcceptor::new(tls_config.clone())).and_then(
+                fn_service(|io: Io<_>| async move {
                     println!("New client is connected");
 
                     io.send(
@@ -62,8 +62,9 @@ async fn main() -> io::Result<()> {
                     }
                     println!("Client is disconnected");
                     Ok(())
-                },
-            ))
+                })
+                .map_init_err(|_| ()),
+            )
         })?
         .workers(1)
         .run()
