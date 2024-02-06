@@ -199,7 +199,7 @@ where
                         }
                     }
                     Poll::Ready(Err(err)) => {
-                        log::error!("Control plain error: {}", err);
+                        log::error!("{}: Control plain error: {}", inner.io.tag(), err);
                         return Poll::Ready(Err(Box::new(err)));
                     }
                     Poll::Pending => ready!(inner.poll_request(cx)),
@@ -440,8 +440,9 @@ where
     ) -> State<F, C, S, B> {
         let io = if let Some(io) = io {
             io
-        } else if let Some(mut item) = res.head().take_io() {
-            item.0.take()
+        } else if let Some((io, codec)) = res.head().io.take() {
+            self.codec = codec;
+            io
         } else {
             log::trace!("Handler service consumed io, stop");
             return self.stop();
@@ -527,11 +528,10 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Option<State<F, C, S, B>>> {
         if let Err(err) = ready!(self._poll_request_payload::<F>(None, cx)) {
-            let st = match err {
+            Poll::Ready(Some(match err {
                 Either::Left(e) => self.ctl_proto_err(e),
                 Either::Right(e) => self.ctl_peer_gone(e),
-            };
-            Poll::Ready(Some(st))
+            }))
         } else {
             Poll::Ready(None)
         }
@@ -928,7 +928,7 @@ mod tests {
                     Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
                 }),
                 fn_service(move |req: Control<_, _>| {
-                    if let Control::Request(_) = req {
+                    if let Control::NewRequest(_) = req {
                         data2.set(true);
                     }
                     async move { Ok::<_, std::convert::Infallible>(req.ack()) }

@@ -1,10 +1,10 @@
 # Changes
 
-## [1.1.0] - 2024-02-06
+## [1.1.0] - 2024-02-07
 
 * http: Add http/1 control service
 
-* http: Expose http/2 control service
+* http: Add http/2 control service
 
 ## [1.0.0] - 2024-01-09
 

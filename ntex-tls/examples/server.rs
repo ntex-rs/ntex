@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::service::{chain_factory, fn_service};
-use ntex::{codec, io::Io, server, util::Either, ServiceFactory};
+use ntex::{codec, io::Io, server, util::Either};
 use ntex_tls::openssl::{PeerCert, PeerCertChain, SslAcceptor};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 
@@ -27,8 +27,8 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", move |_| {
-            chain_factory(SslAcceptor::new(acceptor.clone())).and_then(
-                fn_service(|io: Io<_>| async move {
+            chain_factory(SslAcceptor::new(acceptor.clone())).and_then(fn_service(
+                |io: Io<_>| async move {
                     println!("New client is connected");
                     if let Some(cert) = io.query::<PeerCert>().as_ref() {
                         println!("Peer cert: {:?}", cert.0);
@@ -53,9 +53,8 @@ async fn main() -> io::Result<()> {
                     }
                     println!("Client is disconnected");
                     Ok(())
-                })
-                .map_init_err(|_| ()),
-            )
+                },
+            ))
         })?
         .workers(1)
         .run()

@@ -1,5 +1,5 @@
 use std::{cell::RefCell, io, task::Context, task::Poll};
-use std::{error::Error, future::poll_fn, marker, mem, rc::Rc};
+use std::{error::Error, fmt, future::poll_fn, marker, mem, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
@@ -59,13 +59,13 @@ mod openssl {
         F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
-        S::InitError: Error,
+        S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
         C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
             + 'static,
         C::Error: Error,
-        C::InitError: Error,
+        C::InitError: fmt::Debug,
     {
         /// Create ssl based service
         pub fn openssl(
@@ -75,7 +75,7 @@ mod openssl {
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
-            InitError = Box<dyn Error>,
+            InitError = (),
         > {
             SslAcceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
@@ -99,13 +99,13 @@ mod rustls {
         F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
-        S::InitError: Error,
+        S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
         C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
             + 'static,
         C::Error: Error,
-        C::InitError: Error,
+        C::InitError: fmt::Debug,
     {
         /// Create openssl based service
         pub fn rustls(
@@ -115,7 +115,7 @@ mod rustls {
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
-            InitError = Box<dyn Error>,
+            InitError = (),
         > {
             let protos = vec!["h2".to_string().into()];
             config.alpn_protocols = protos;
@@ -135,18 +135,18 @@ where
     S: ServiceFactory<Request> + 'static,
     S::Response: Into<Response<B>>,
     S::Error: ResponseError,
-    S::InitError: Error,
+    S::InitError: fmt::Debug,
     B: MessageBody,
     C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
     C::Error: Error,
-    C::InitError: Error,
+    C::InitError: fmt::Debug,
 {
     /// Provide http/2 control service
     pub fn control<CT>(self, ctl: CT) -> H2Service<F, S, B, CT>
     where
         CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
         CT::Error: Error,
-        CT::InitError: Error,
+        CT::InitError: fmt::Debug,
     {
         H2Service {
             ctl: Rc::new(ctl),
@@ -162,20 +162,24 @@ where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
-    S::InitError: Error,
+    S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
     C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
     C::Error: Error,
-    C::InitError: Error,
+    C::InitError: fmt::Debug,
 {
     type Response = ();
     type Error = DispatchError;
-    type InitError = Box<dyn Error>;
+    type InitError = ();
     type Service = H2ServiceHandler<F, S::Service, B, C>;
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
-        let service = self.srv.create(()).await?;
+        let service = self
+            .srv
+            .create(())
+            .await
+            .map_err(|e| log::error!("Cannot construct publish service: {:?}", e))?;
         let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, ()));
 
         Ok(H2ServiceHandler {
@@ -202,7 +206,7 @@ where
     B: MessageBody,
     C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
     C::Error: Error,
-    C::InitError: Error,
+    C::InitError: fmt::Debug,
 {
     type Response = ();
     type Error = DispatchError;
@@ -227,11 +231,11 @@ where
             "New http2 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
         );
-        let control = self
-            .control
-            .create(())
-            .await
-            .map_err(|e| DispatchError::Control(e.into()))?;
+        let control = self.control.create(()).await.map_err(|e| {
+            DispatchError::Control(
+                format!("Cannot construct control service: {:?}", e).into(),
+            )
+        })?;
 
         handle(io.into(), control, self.config.clone()).await
     }

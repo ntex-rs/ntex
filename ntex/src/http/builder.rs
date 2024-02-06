@@ -1,4 +1,4 @@
-use std::{error::Error, marker::PhantomData};
+use std::{error::Error, fmt, marker::PhantomData};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, ServiceConfig};
@@ -48,13 +48,13 @@ where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
-    S::InitError: Error,
+    S::InitError: fmt::Debug,
     C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
     C1::Error: Error,
-    C1::InitError: Error,
+    C1::InitError: fmt::Debug,
     C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
     C2::Error: Error,
-    C2::InitError: Error,
+    C2::InitError: fmt::Debug,
 {
     /// Set server keep-alive setting.
     ///
@@ -151,7 +151,7 @@ where
         CF: IntoServiceFactory<CT, h1::Control<F, S::Error>>,
         CT: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
         CT::Error: Error,
-        CT::InitError: Error,
+        CT::InitError: fmt::Debug,
     {
         HttpServiceBuilder {
             config: self.config,
@@ -167,7 +167,7 @@ where
         B: MessageBody,
         SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError,
-        S::InitError: Error,
+        S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
     {
         H1Service::with_config(self.config, service.into_factory()).control(self.h1_control)
@@ -179,7 +179,7 @@ where
         CF: IntoServiceFactory<CT, h2::ControlMessage<H2Error>>,
         CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
         CT::Error: Error,
-        CT::InitError: Error,
+        CT::InitError: fmt::Debug,
     {
         HttpServiceBuilder {
             config: self.config,
@@ -195,7 +195,7 @@ where
         B: MessageBody + 'static,
         SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError + 'static,
-        S::InitError: Error,
+        S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
     {
         H2Service::with_config(self.config, service.into_factory()).control(self.h2_control)
@@ -207,7 +207,7 @@ where
         B: MessageBody + 'static,
         SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError + 'static,
-        S::InitError: Error,
+        S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
     {
         HttpService::with_config(self.config, service.into_factory())

@@ -1,12 +1,14 @@
-use std::{cell::RefCell, future::Future, io, rc::Rc};
+use std::{future::Future, io};
 
 use crate::http::message::CurrentIo;
 use crate::http::{body::Body, h1::Codec, Request, Response, ResponseError};
-use crate::io::{Filter, Io, IoBoxed};
+use crate::io::{Filter, Io, IoBoxed, IoRef};
 
 pub enum Control<F, Err> {
+    /// New connection
+    NewConnection(Connection),
     /// New request is loaded
-    Request(NewRequest),
+    NewRequest(NewRequest),
     /// Handle `Connection: UPGRADE`
     Upgrade(Upgrade<F>),
     /// Handle `EXPECT` header
@@ -69,7 +71,11 @@ impl<F, Err> Control<F, Err> {
     }
 
     pub(super) fn new_req(req: Request) -> Self {
-        Control::Request(NewRequest(req))
+        Control::NewRequest(NewRequest(req))
+    }
+
+    pub(super) fn con(io: IoRef) -> Self {
+        Control::NewConnection(Connection { io })
     }
 
     pub(super) fn upgrade(req: Request, io: Io<F>, codec: Codec) -> Self {
@@ -96,13 +102,45 @@ impl<F, Err> Control<F, Err> {
         Err: ResponseError,
     {
         match self {
-            Control::Request(msg) => msg.ack(),
+            Control::NewConnection(msg) => msg.ack(),
+            Control::NewRequest(msg) => msg.ack(),
             Control::Upgrade(msg) => msg.ack(),
             Control::Expect(msg) => msg.ack(),
             Control::Closed(msg) => msg.ack(),
             Control::Error(msg) => msg.ack(),
             Control::ProtocolError(msg) => msg.ack(),
             Control::PeerGone(msg) => msg.ack(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Connection {
+    io: IoRef,
+}
+
+impl Connection {
+    #[inline]
+    /// Returns reference to Io
+    pub fn io(&self) -> &IoRef {
+        &self.io
+    }
+
+    #[inline]
+    /// Ack and continue handling process
+    pub fn ack(self) -> ControlAck {
+        ControlAck {
+            result: ControlResult::Stop,
+            flags: ControlFlags::empty(),
+        }
+    }
+
+    #[inline]
+    /// Drop connection
+    pub fn disconnect(self) -> ControlAck {
+        ControlAck {
+            result: ControlResult::Stop,
+            flags: ControlFlags::DISCONNECT,
         }
     }
 }
@@ -195,10 +233,7 @@ impl<F: Filter> Upgrade<F> {
         // Move io into request
         let io: IoBoxed = self.io.into();
         io.stop_timer();
-        self.req.head_mut().io = CurrentIo::Io(Rc::new((
-            io.get_ref(),
-            RefCell::new(Some(Box::new((io, self.codec)))),
-        )));
+        self.req.head_mut().io = CurrentIo::new(io, self.codec);
 
         ControlAck {
             result: ControlResult::PublishUpgrade(self.req),

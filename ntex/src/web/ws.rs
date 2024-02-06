@@ -20,7 +20,6 @@ where
     Err: From<T::InitError> + From<HandshakeError>,
 {
     let inner_factory = Rc::new(chain_factory(factory).map_err(WsError::Service));
-    println!("0 ---------------------");
 
     let factory = fn_factory_with_config(move |sink: WsSink| {
         let factory = inner_factory.clone();
@@ -28,7 +27,6 @@ where
         async move {
             let srv = factory.create(sink.clone()).await?;
             let sink = sink.clone();
-            println!("1 ---------------------");
 
             Ok::<_, T::InitError>(apply_fn(srv, move |req, srv| match req {
                 DispatchItem::<ws::Codec>::Item(item) => {
@@ -78,7 +76,6 @@ where
     F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
-    println!("2 ---------------------");
     log::trace!("Start ws handshake verification for {:?}", req.path());
 
     // ws handshake

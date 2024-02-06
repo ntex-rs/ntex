@@ -14,7 +14,7 @@ use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{header, HttpMessage, HttpService, Method};
 use ntex::service::{chain_factory, map_config};
-use ntex::web::dev::{map_box_err, AppConfig};
+use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
 use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
 use ntex::{time::sleep, time::Millis, time::Seconds, util::Bytes, util::Ready};
@@ -208,10 +208,10 @@ async fn test_connection_reuse() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        chain_factory(map_box_err(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
-        }))
+        })
         .and_then(HttpService::new(map_config(
             App::new().service(
                 web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
@@ -243,10 +243,10 @@ async fn test_connection_force_close() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        chain_factory(map_box_err(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
-        }))
+        })
         .and_then(HttpService::new(map_config(
             App::new().service(
                 web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
@@ -279,10 +279,10 @@ async fn test_connection_server_close() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        chain_factory(map_box_err(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
-        }))
+        })
         .and_then(HttpService::new(map_config(
             App::new().service(web::resource("/").route(web::to(|| async {
                 HttpResponse::Ok().force_close().finish()
@@ -314,10 +314,10 @@ async fn test_connection_wait_queue() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        chain_factory(map_box_err(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
-        }))
+        })
         .and_then(HttpService::new(map_config(
             App::new().service(
                 web::resource("/")
@@ -360,10 +360,10 @@ async fn test_connection_wait_queue_force_close() {
 
     let srv = test_server(move || {
         let num2 = num2.clone();
-        chain_factory(map_box_err(move |io| {
+        chain_factory(move |io| {
             num2.fetch_add(1, Ordering::Relaxed);
             Ready::Ok(io)
-        }))
+        })
         .and_then(HttpService::new(map_config(
             App::new().service(web::resource("/").route(web::to(|| async {
                 HttpResponse::Ok().force_close().body(STR)

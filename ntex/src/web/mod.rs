@@ -126,47 +126,12 @@ pub mod dev {
     //! traits by adding a glob import to the top of ntex::web heavy modules:
 
     pub use crate::web::config::AppConfig;
-    pub use crate::web::error::AppFactoryError;
     pub use crate::web::info::ConnectionInfo;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::route::IntoRoutes;
     pub use crate::web::service::{WebServiceAdapter, WebServiceConfig, WebServiceFactory};
 
-    use crate::service::{IntoServiceFactory, ServiceFactory};
     use crate::web::Handler;
-
-    pub fn map_app_err<F, S, R>(
-        svc: F,
-    ) -> impl ServiceFactory<
-        R,
-        Response = S::Response,
-        Error = S::Error,
-        InitError = AppFactoryError,
-        Service = S::Service,
-    >
-    where
-        F: IntoServiceFactory<S, R>,
-        S: ServiceFactory<R, InitError = std::convert::Infallible>,
-    {
-        svc.into_factory().map_init_err(|_| AppFactoryError(""))
-    }
-
-    pub fn map_box_err<F, S, R>(
-        svc: F,
-    ) -> impl ServiceFactory<
-        R,
-        Response = S::Response,
-        Error = S::Error,
-        InitError = Box<dyn std::error::Error>,
-        Service = S::Service,
-    >
-    where
-        F: IntoServiceFactory<S, R>,
-        S: ServiceFactory<R, InitError = std::convert::Infallible>,
-    {
-        svc.into_factory()
-            .map_init_err(|_| AppFactoryError("").into())
-    }
 
     pub(crate) fn insert_slash(mut patterns: Vec<String>) -> Vec<String> {
         for path in &mut patterns {

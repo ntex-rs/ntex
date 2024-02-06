@@ -8,7 +8,7 @@ use crate::service::{fn_service, Middleware, Service, ServiceCtx, ServiceFactory
 use crate::util::{BoxFuture, Extensions};
 
 use super::config::AppConfig;
-use super::error::{AppFactoryError, ErrorRenderer};
+use super::error::ErrorRenderer;
 use super::guard::Guard;
 use super::httprequest::{HttpRequest, HttpRequestPool};
 use super::request::WebRequest;
@@ -59,7 +59,7 @@ where
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type InitError = AppFactoryError;
+    type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
@@ -81,7 +81,7 @@ where
 {
     type Response = WebResponse;
     type Error = Err::Container;
-    type InitError = AppFactoryError;
+    type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
 
     async fn create(&self, config: AppConfig) -> Result<Self::Service, Self::InitError> {
@@ -112,7 +112,7 @@ where
         for fut in state_factories.iter() {
             extensions = fut(extensions)
                 .await
-                .map_err(|_| AppFactoryError("Cannot initialize state factories"))?
+                .map_err(|_| log::error!("Cannot initialize state factories"))?
         }
         let state = AppState::new(extensions, None, config.clone());
 
@@ -149,7 +149,7 @@ where
             let service = factory
                 .create(())
                 .await
-                .map_err(|_| AppFactoryError("Cannot construct app servicer"))?;
+                .map_err(|_| log::error!("Cannot construct app servicer"))?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
@@ -159,7 +159,7 @@ where
                 default
                     .create(())
                     .await
-                    .map_err(|_| AppFactoryError("Cannot initialize state factories"))?,
+                    .map_err(|_| log::error!("Cannot initialize state factories"))?,
             ),
         };
 
@@ -168,7 +168,7 @@ where
             routing,
             filter: filter_fut
                 .await
-                .map_err(|_| AppFactoryError("Cannot construct app filter"))?,
+                .map_err(|_| log::error!("Cannot construct app filter"))?,
         };
 
         Ok(AppFactoryService {

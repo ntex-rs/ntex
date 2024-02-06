@@ -80,11 +80,6 @@ where
 
 /// Errors which can occur when attempting to work with `State` extractor
 #[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
-#[error("{0}")]
-pub struct AppFactoryError(pub &'static str);
-
-/// Errors which can occur when attempting to work with `State` extractor
-#[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum StateExtractorError {
     #[error("App state is not configured, to configure use App::state()")]
     NotConfigured,

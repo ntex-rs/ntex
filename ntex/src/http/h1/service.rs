@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, io, marker, rc::Rc, task::Context, task::Poll};
+use std::{error::Error, fmt, marker, rc::Rc, task::Context, task::Poll};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, ServiceConfig};
@@ -60,7 +60,7 @@ mod openssl {
         C: ServiceFactory<Control<Layer<SslFilter, F>, S::Error>, Response = ControlAck>
             + 'static,
         C::Error: Error,
-        C::InitError: Error,
+        C::InitError: fmt::Debug,
     {
         /// Create openssl based service
         pub fn openssl(
@@ -70,7 +70,7 @@ mod openssl {
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
-            InitError = Box<dyn Error>,
+            InitError = (),
         > {
             SslAcceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
@@ -104,7 +104,7 @@ mod rustls {
                 Response = ControlAck,
             > + 'static,
         C::Error: Error,
-        C::InitError: Error,
+        C::InitError: fmt::Debug,
     {
         /// Create rustls based service
         pub fn rustls(
@@ -114,7 +114,7 @@ mod rustls {
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
-            InitError = Box<dyn Error>,
+            InitError = (),
         > {
             TlsAcceptor::from(config)
                 .timeout(self.cfg.ssl_handshake_timeout)
@@ -135,14 +135,14 @@ where
     B: MessageBody,
     C: ServiceFactory<Control<F, S::Error>, Response = ControlAck>,
     C::Error: Error,
-    C::InitError: Error,
+    C::InitError: fmt::Debug,
 {
     /// Provide http/1 control service
     pub fn control<C1>(self, ctl: C1) -> H1Service<F, S, B, C1>
     where
         C1: ServiceFactory<Control<F, S::Error>, Response = ControlAck>,
         C1::Error: Error,
-        C1::InitError: Error,
+        C1::InitError: fmt::Debug,
     {
         H1Service {
             ctl,
@@ -156,29 +156,31 @@ where
 impl<F, S, B, C> ServiceFactory<Io<F>> for H1Service<F, S, B, C>
 where
     F: Filter,
-    C: ServiceFactory<Control<F, S::Error>, Response = ControlAck> + 'static,
-    C::Error: Error,
-    C::InitError: Error,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
     B: MessageBody,
+    C: ServiceFactory<Control<F, S::Error>, Response = ControlAck> + 'static,
+    C::Error: Error,
+    C::InitError: fmt::Debug,
 {
     type Response = ();
     type Error = DispatchError;
-    type InitError = Box<dyn Error>;
+    type InitError = ();
     type Service = H1ServiceHandler<F, S::Service, B, C::Service>;
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
-        let service = self.srv.create(()).await.map_err(|e| {
-            log::error!("Init http service error: {:?}", e);
-            Box::new(io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))
-        })?;
-        let control = self.ctl.create(()).await.map_err(|e| {
-            log::error!("Init http service error: {:?}", e);
-            Box::new(e)
-        })?;
+        let service = self
+            .srv
+            .create(())
+            .await
+            .map_err(|e| log::error!("Cannot construct publish service: {:?}", e))?;
+        let control = self
+            .ctl
+            .create(())
+            .await
+            .map_err(|e| log::error!("Cannot construct control service: {:?}", e))?;
 
         let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, control));
 
@@ -253,8 +255,19 @@ where
             io.query::<types::PeerAddr>().get()
         );
 
-        Dispatcher::new(io, self.config.clone())
+        let ack = self
+            .config
+            .control
+            .call_nowait(Control::con(io.get_ref()))
             .await
-            .map_err(DispatchError::Control)
+            .map_err(|e| DispatchError::Control(e.into()))?;
+
+        if ack.flags.contains(super::control::ControlFlags::DISCONNECT) {
+            Ok(())
+        } else {
+            Dispatcher::new(io, self.config.clone())
+                .await
+                .map_err(DispatchError::Control)
+        }
     }
 }

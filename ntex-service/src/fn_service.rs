@@ -223,7 +223,7 @@ where
     type Error = Err;
 
     type Service = FnService<F, Req>;
-    type InitError = std::convert::Infallible;
+    type InitError = ();
 
     #[inline]
     async fn create(&self, _: Cfg) -> Result<Self::Service, Self::InitError> {

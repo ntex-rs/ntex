@@ -1,5 +1,5 @@
 //! Various helpers for ntex applications to use during testing.
-use std::{error, fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
+use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
@@ -545,7 +545,7 @@ where
     I: IntoServiceFactory<S, Request, AppConfig>,
     S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
-    S::InitError: error::Error,
+    S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
@@ -583,7 +583,7 @@ where
     I: IntoServiceFactory<S, Request, AppConfig>,
     S: ServiceFactory<Request, AppConfig> + 'static,
     S::Error: ResponseError,
-    S::InitError: error::Error,
+    S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {

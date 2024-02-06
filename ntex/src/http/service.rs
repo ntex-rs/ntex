@@ -1,4 +1,4 @@
-use std::{error, fmt, io, marker, rc::Rc, task::Context, task::Poll};
+use std::{error, fmt, marker, rc::Rc, task::Context, task::Poll};
 
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
@@ -93,17 +93,17 @@ where
     B: MessageBody,
     C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
     C1::Error: error::Error,
-    C1::InitError: error::Error,
+    C1::InitError: fmt::Debug,
     C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
     C2::Error: error::Error,
-    C2::InitError: error::Error,
+    C2::InitError: fmt::Debug,
 {
     /// Provide http/1 control service.
     pub fn h1_control<CT>(self, control: CT) -> HttpService<F, S, B, CT, C2>
     where
         CT: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
         CT::Error: error::Error,
-        CT::InitError: error::Error,
+        CT::InitError: fmt::Debug,
     {
         HttpService {
             h1_control: control,
@@ -119,7 +119,7 @@ where
     where
         CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
         CT::Error: error::Error,
-        CT::InitError: error::Error,
+        CT::InitError: fmt::Debug,
     {
         HttpService {
             h1_control: self.h1_control,
@@ -152,11 +152,11 @@ mod openssl {
                 Response = h1::ControlAck,
             > + 'static,
         C1::Error: error::Error,
-        C1::InitError: error::Error,
+        C1::InitError: fmt::Debug,
         C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
             + 'static,
         C2::Error: error::Error,
-        C2::InitError: error::Error,
+        C2::InitError: fmt::Debug,
     {
         /// Create openssl based service
         pub fn openssl(
@@ -166,7 +166,7 @@ mod openssl {
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
-            InitError = Box<dyn error::Error>,
+            InitError = (),
         > {
             SslAcceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
@@ -198,11 +198,11 @@ mod rustls {
                 Response = h1::ControlAck,
             > + 'static,
         C1::Error: error::Error,
-        C1::InitError: error::Error,
+        C1::InitError: fmt::Debug,
         C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
             + 'static,
         C2::Error: error::Error,
-        C2::InitError: error::Error,
+        C2::InitError: fmt::Debug,
     {
         /// Create openssl based service
         pub fn rustls(
@@ -212,7 +212,7 @@ mod rustls {
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
-            InitError = Box<dyn error::Error>,
+            InitError = (),
         > {
             let protos = vec!["h2".to_string().into(), "http/1.1".to_string().into()];
             config.alpn_protocols = protos;
@@ -236,26 +236,27 @@ where
     B: MessageBody,
     C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
     C1::Error: error::Error,
-    C1::InitError: error::Error,
+    C1::InitError: fmt::Debug,
     C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
     C2::Error: error::Error,
-    C2::InitError: error::Error,
+    C2::InitError: fmt::Debug,
 {
     type Response = ();
     type Error = DispatchError;
-    type InitError = Box<dyn error::Error>;
+    type InitError = ();
     type Service = HttpServiceHandler<F, S::Service, B, C1::Service, C2>;
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
-        let service = self.srv.create(()).await.map_err(|e| {
-            log::error!("Init http service error: {:?}", e);
-            Box::new(io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))
-        })?;
-
-        let control = self.h1_control.create(()).await.map_err(|e| {
-            log::error!("Init http service error: {:?}", e);
-            Box::new(e)
-        })?;
+        let service = self
+            .srv
+            .create(())
+            .await
+            .map_err(|e| log::error!("Cannot construct publish service: {:?}", e))?;
+        let control = self
+            .h1_control
+            .create(())
+            .await
+            .map_err(|e| log::error!("Cannot construct control service: {:?}", e))?;
 
         let config = DispatcherConfig::new(self.cfg.clone(), service, control);
 
@@ -285,7 +286,7 @@ where
     C1::Error: error::Error,
     C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
     C2::Error: error::Error,
-    C2::InitError: error::Error,
+    C2::InitError: fmt::Debug,
 {
     type Response = ();
     type Error = DispatchError;
@@ -340,11 +341,11 @@ where
         );
 
         if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
-            let control = self
-                .h2_control
-                .create(())
-                .await
-                .map_err(|e| DispatchError::Control(e.into()))?;
+            let control = self.h2_control.create(()).await.map_err(|e| {
+                DispatchError::Control(
+                    format!("Cannot construct control service: {:?}", e).into(),
+                )
+            })?;
             h2::handle(io.into(), control, self.config.clone()).await
         } else {
             h1::Dispatcher::new(io, self.config.clone())
