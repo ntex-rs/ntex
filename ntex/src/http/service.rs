@@ -6,16 +6,23 @@ use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
 use super::config::{DispatcherConfig, ServiceConfig};
-use super::error::{DispatchError, ResponseError};
+use super::error::{DispatchError, H2Error, ResponseError};
 use super::request::Request;
 use super::response::Response;
 use super::{h1, h2};
 
 /// `ServiceFactory` HTTP1.1/HTTP2 transport implementation
-pub struct HttpService<F, S, B, C = h1::DefaultControlService> {
+pub struct HttpService<
+    F,
+    S,
+    B,
+    C1 = h1::DefaultControlService,
+    C2 = h2::DefaultControlService,
+> {
     srv: S,
     cfg: ServiceConfig,
-    control: C,
+    h1_control: C1,
+    h2_control: Rc<C2>,
     _t: marker::PhantomData<(F, B)>,
 }
 
@@ -55,7 +62,8 @@ where
         HttpService {
             cfg,
             srv: service.into_factory(),
-            control: h1::DefaultControlService,
+            h1_control: h1::DefaultControlService,
+            h2_control: Rc::new(h2::DefaultControlService),
             _t: marker::PhantomData,
         }
     }
@@ -68,13 +76,14 @@ where
         HttpService {
             cfg,
             srv: service.into_factory(),
-            control: h1::DefaultControlService,
+            h1_control: h1::DefaultControlService,
+            h2_control: Rc::new(h2::DefaultControlService),
             _t: marker::PhantomData,
         }
     }
 }
 
-impl<F, S, B, C> HttpService<F, S, B, C>
+impl<F, S, B, C1, C2> HttpService<F, S, B, C1, C2>
 where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
@@ -82,16 +91,39 @@ where
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
+    C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+    C1::Error: error::Error,
+    C1::InitError: error::Error,
+    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+    C2::Error: error::Error,
+    C2::InitError: error::Error,
 {
     /// Provide http/1 control service.
-    pub fn control<C1>(self, control: C1) -> HttpService<F, S, B, C1>
+    pub fn h1_control<CT>(self, control: CT) -> HttpService<F, S, B, CT, C2>
     where
-        C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
-        C1::Error: error::Error,
-        C1::InitError: error::Error,
+        CT: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+        CT::Error: error::Error,
+        CT::InitError: error::Error,
     {
         HttpService {
-            control,
+            h1_control: control,
+            h2_control: self.h2_control,
+            cfg: self.cfg,
+            srv: self.srv,
+            _t: marker::PhantomData,
+        }
+    }
+
+    /// Provide http/1 control service.
+    pub fn h2_control<CT>(self, control: CT) -> HttpService<F, S, B, C1, CT>
+    where
+        CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+        CT::Error: error::Error,
+        CT::InitError: error::Error,
+    {
+        HttpService {
+            h1_control: self.h1_control,
+            h2_control: Rc::new(control),
             cfg: self.cfg,
             srv: self.srv,
             _t: marker::PhantomData,
@@ -107,7 +139,7 @@ mod openssl {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B, C> HttpService<Layer<SslFilter, F>, S, B, C>
+    impl<F, S, B, C1, C2> HttpService<Layer<SslFilter, F>, S, B, C1, C2>
     where
         F: Filter,
         S: ServiceFactory<Request> + 'static,
@@ -115,12 +147,16 @@ mod openssl {
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<
+        C1: ServiceFactory<
                 h1::Control<Layer<SslFilter, F>, S::Error>,
                 Response = h1::ControlAck,
             > + 'static,
-        C::Error: error::Error,
-        C::InitError: error::Error,
+        C1::Error: error::Error,
+        C1::InitError: error::Error,
+        C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
+            + 'static,
+        C2::Error: error::Error,
+        C2::InitError: error::Error,
     {
         /// Create openssl based service
         pub fn openssl(
@@ -149,7 +185,7 @@ mod rustls {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B, C> HttpService<Layer<TlsServerFilter, F>, S, B, C>
+    impl<F, S, B, C1, C2> HttpService<Layer<TlsServerFilter, F>, S, B, C1, C2>
     where
         F: Filter,
         S: ServiceFactory<Request> + 'static,
@@ -157,12 +193,16 @@ mod rustls {
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<
+        C1: ServiceFactory<
                 h1::Control<Layer<TlsServerFilter, F>, S::Error>,
                 Response = h1::ControlAck,
             > + 'static,
-        C::Error: error::Error,
-        C::InitError: error::Error,
+        C1::Error: error::Error,
+        C1::InitError: error::Error,
+        C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
+            + 'static,
+        C2::Error: error::Error,
+        C2::InitError: error::Error,
     {
         /// Create openssl based service
         pub fn rustls(
@@ -186,7 +226,7 @@ mod rustls {
     }
 }
 
-impl<F, S, B, C> ServiceFactory<Io<F>> for HttpService<F, S, B, C>
+impl<F, S, B, C1, C2> ServiceFactory<Io<F>> for HttpService<F, S, B, C1, C2>
 where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
@@ -194,14 +234,17 @@ where
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
-    C::Error: error::Error,
-    C::InitError: error::Error,
+    C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
+    C1::Error: error::Error,
+    C1::InitError: error::Error,
+    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C2::Error: error::Error,
+    C2::InitError: error::Error,
 {
     type Response = ();
     type Error = DispatchError;
     type InitError = Box<dyn error::Error>;
-    type Service = HttpServiceHandler<F, S::Service, B, C::Service>;
+    type Service = HttpServiceHandler<F, S::Service, B, C1::Service, C2>;
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
         let service = self.srv.create(()).await.map_err(|e| {
@@ -209,7 +252,7 @@ where
             Box::new(io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))
         })?;
 
-        let control = self.control.create(()).await.map_err(|e| {
+        let control = self.h1_control.create(()).await.map_err(|e| {
             log::error!("Init http service error: {:?}", e);
             Box::new(e)
         })?;
@@ -218,26 +261,31 @@ where
 
         Ok(HttpServiceHandler {
             config: Rc::new(config),
+            h2_control: self.h2_control.clone(),
             _t: marker::PhantomData,
         })
     }
 }
 
 /// `Service` implementation for http transport
-pub struct HttpServiceHandler<F, S, B, C> {
-    config: Rc<DispatcherConfig<S, C>>,
+pub struct HttpServiceHandler<F, S, B, C1, C2> {
+    config: Rc<DispatcherConfig<S, C1>>,
+    h2_control: Rc<C2>,
     _t: marker::PhantomData<(F, B)>,
 }
 
-impl<F, S, B, C> Service<Io<F>> for HttpServiceHandler<F, S, B, C>
+impl<F, S, B, C1, C2> Service<Io<F>> for HttpServiceHandler<F, S, B, C1, C2>
 where
     F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: Service<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
-    C::Error: error::Error,
+    C1: Service<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
+    C1::Error: error::Error,
+    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C2::Error: error::Error,
+    C2::InitError: error::Error,
 {
     type Response = ();
     type Error = DispatchError;
@@ -292,7 +340,12 @@ where
         );
 
         if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
-            h2::handle(io.into(), self.config.clone()).await
+            let control = self
+                .h2_control
+                .create(())
+                .await
+                .map_err(|e| DispatchError::Control(e.into()))?;
+            h2::handle(io.into(), control, self.config.clone()).await
         } else {
             h1::Dispatcher::new(io, self.config.clone())
                 .await

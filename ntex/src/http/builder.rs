@@ -1,12 +1,10 @@
-use std::{error::Error, fmt, marker::PhantomData};
-
-use ntex_h2::{self as h2};
+use std::{error::Error, marker::PhantomData};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{KeepAlive, ServiceConfig};
-use crate::http::error::ResponseError;
-use crate::http::h1::{self, DefaultControlService, H1Service};
-use crate::http::h2::H2Service;
+use crate::http::error::{H2Error, ResponseError};
+use crate::http::h1::{self, H1Service};
+use crate::http::h2::{self, H2Service};
 use crate::http::{request::Request, response::Response, service::HttpService};
 use crate::service::{IntoServiceFactory, ServiceFactory};
 use crate::{io::Filter, time::Seconds};
@@ -15,13 +13,19 @@ use crate::{io::Filter, time::Seconds};
 ///
 /// This type can be used to construct an instance of `http service` through a
 /// builder-like pattern.
-pub struct HttpServiceBuilder<F, S, C = DefaultControlService> {
+pub struct HttpServiceBuilder<
+    F,
+    S,
+    C1 = h1::DefaultControlService,
+    C2 = h2::DefaultControlService,
+> {
     config: ServiceConfig,
-    control: C,
+    h1_control: C1,
+    h2_control: C2,
     _t: PhantomData<(F, S)>,
 }
 
-impl<F, S> HttpServiceBuilder<F, S, DefaultControlService> {
+impl<F, S> HttpServiceBuilder<F, S, h1::DefaultControlService, h2::DefaultControlService> {
     /// Create instance of `ServiceConfigBuilder`
     pub fn new() -> Self {
         HttpServiceBuilder::with_config(ServiceConfig::default())
@@ -32,21 +36,25 @@ impl<F, S> HttpServiceBuilder<F, S, DefaultControlService> {
     pub fn with_config(config: ServiceConfig) -> Self {
         HttpServiceBuilder {
             config,
-            control: DefaultControlService,
+            h1_control: h1::DefaultControlService,
+            h2_control: h2::DefaultControlService,
             _t: PhantomData,
         }
     }
 }
 
-impl<F, S, C> HttpServiceBuilder<F, S, C>
+impl<F, S, C1, C2> HttpServiceBuilder<F, S, C1, C2>
 where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    C: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
-    C::Error: Error,
-    C::InitError: Error,
+    S::InitError: Error,
+    C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+    C1::Error: Error,
+    C1::InitError: Error,
+    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+    C2::Error: Error,
+    C2::InitError: Error,
 {
     /// Set server keep-alive setting.
     ///
@@ -128,9 +136,8 @@ where
         self
     }
 
-    #[doc(hidden)]
     /// Configure http2 connection settings
-    pub fn configure_http2<O, R>(self, f: O) -> Self
+    pub fn h2_configure<O, R>(self, f: O) -> Self
     where
         O: FnOnce(&h2::Config) -> R,
     {
@@ -138,54 +145,73 @@ where
         self
     }
 
-    /// Provide control service.
-    pub fn control<CF, C1>(self, control: CF) -> HttpServiceBuilder<F, S, C1>
+    /// Provide control service for http/1.
+    pub fn control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, CT, C2>
     where
-        CF: IntoServiceFactory<C1, h1::Control<F, S::Error>>,
-        C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
-        C1::Error: Error,
-        C1::InitError: Error,
+        CF: IntoServiceFactory<CT, h1::Control<F, S::Error>>,
+        CT: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+        CT::Error: Error,
+        CT::InitError: Error,
     {
         HttpServiceBuilder {
             config: self.config,
-            control: control.into_factory(),
+            h2_control: self.h2_control,
+            h1_control: control.into_factory(),
             _t: PhantomData,
         }
     }
 
     /// Finish service configuration and create *http service* for HTTP/1 protocol.
-    pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, C>
+    pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, C1>
     where
         B: MessageBody,
         SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError,
-        S::InitError: fmt::Debug,
+        S::InitError: Error,
         S::Response: Into<Response<B>>,
     {
-        H1Service::with_config(self.config, service.into_factory()).control(self.control)
+        H1Service::with_config(self.config, service.into_factory()).control(self.h1_control)
+    }
+
+    /// Provide control service for http/2 protocol.
+    pub fn h2_control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, C1, CT>
+    where
+        CF: IntoServiceFactory<CT, h2::ControlMessage<H2Error>>,
+        CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+        CT::Error: Error,
+        CT::InitError: Error,
+    {
+        HttpServiceBuilder {
+            config: self.config,
+            h1_control: self.h1_control,
+            h2_control: control.into_factory(),
+            _t: PhantomData,
+        }
     }
 
     /// Finish service configuration and create *http service* for HTTP/2 protocol.
-    pub fn h2<B, SF>(self, service: SF) -> H2Service<F, S, B>
+    pub fn h2<B, SF>(self, service: SF) -> H2Service<F, S, B, C2>
     where
         B: MessageBody + 'static,
         SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError + 'static,
-        S::InitError: fmt::Debug,
+        S::InitError: Error,
         S::Response: Into<Response<B>> + 'static,
     {
-        H2Service::with_config(self.config, service.into_factory())
+        H2Service::with_config(self.config, service.into_factory()).control(self.h2_control)
     }
 
     /// Finish service configuration and create `HttpService` instance.
-    pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, C>
+    pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, C1, C2>
     where
         B: MessageBody + 'static,
         SF: IntoServiceFactory<S, Request>,
         S::Error: ResponseError + 'static,
-        S::InitError: fmt::Debug,
+        S::InitError: Error,
         S::Response: Into<Response<B>> + 'static,
     {
-        HttpService::with_config(self.config, service.into_factory()).control(self.control)
+        HttpService::with_config(self.config, service.into_factory())
+            .h1_control(self.h1_control)
+            .h2_control(self.h2_control)
     }
 }

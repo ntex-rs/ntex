@@ -7,7 +7,7 @@ use crate::service::{Service, ServiceCtx, ServiceFactory};
 use super::control::{Control, ControlAck};
 
 #[derive(Default)]
-/// Default publish service
+/// Default control service
 pub struct DefaultControlService;
 
 impl<F, Err> ServiceFactory<Control<F, Err>> for DefaultControlService

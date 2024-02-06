@@ -1,5 +1,5 @@
 use std::{cell::RefCell, io, task::Context, task::Poll};
-use std::{future::poll_fn, marker::PhantomData, mem, rc::Rc};
+use std::{error::Error, future::poll_fn, marker, mem, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
@@ -14,15 +14,17 @@ use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 use crate::util::{Bytes, BytesMut, HashMap};
 
 use super::payload::{Payload, PayloadSender};
+use super::DefaultControlService;
 
 /// `ServiceFactory` implementation for HTTP2 transport
-pub struct H2Service<F, S, B> {
+pub struct H2Service<F, S, B, C> {
     srv: S,
+    ctl: Rc<C>,
     cfg: ServiceConfig,
-    _t: PhantomData<(F, B)>,
+    _t: marker::PhantomData<(F, B)>,
 }
 
-impl<F, S, B> H2Service<F, S, B>
+impl<F, S, B> H2Service<F, S, B, DefaultControlService>
 where
     S: ServiceFactory<Request>,
     S::Error: ResponseError,
@@ -37,7 +39,8 @@ where
         H2Service {
             cfg,
             srv: service.into_factory(),
-            _t: PhantomData,
+            ctl: Rc::new(DefaultControlService),
+            _t: marker::PhantomData,
         }
     }
 }
@@ -51,13 +54,18 @@ mod openssl {
 
     use super::*;
 
-    impl<F, S, B> H2Service<Layer<SslFilter, F>, S, B>
+    impl<F, S, B, C> H2Service<Layer<SslFilter, F>, S, B, C>
     where
         F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
+        S::InitError: Error,
         S::Response: Into<Response<B>>,
         B: MessageBody,
+        C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
+            + 'static,
+        C::Error: Error,
+        C::InitError: Error,
     {
         /// Create ssl based service
         pub fn openssl(
@@ -67,7 +75,7 @@ mod openssl {
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
-            InitError = S::InitError,
+            InitError = Box<dyn Error>,
         > {
             SslAcceptor::new(acceptor)
                 .timeout(self.cfg.ssl_handshake_timeout)
@@ -86,13 +94,18 @@ mod rustls {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B> H2Service<Layer<TlsServerFilter, F>, S, B>
+    impl<F, S, B, C> H2Service<Layer<TlsServerFilter, F>, S, B, C>
     where
         F: Filter,
         S: ServiceFactory<Request> + 'static,
         S::Error: ResponseError,
+        S::InitError: Error,
         S::Response: Into<Response<B>>,
         B: MessageBody,
+        C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
+            + 'static,
+        C::Error: Error,
+        C::InitError: Error,
     {
         /// Create openssl based service
         pub fn rustls(
@@ -102,7 +115,7 @@ mod rustls {
             Io<F>,
             Response = (),
             Error = SslError<DispatchError>,
-            InitError = S::InitError,
+            InitError = Box<dyn Error>,
         > {
             let protos = vec!["h2".to_string().into()];
             config.alpn_protocols = protos;
@@ -116,18 +129,50 @@ mod rustls {
     }
 }
 
-impl<F, S, B> ServiceFactory<Io<F>> for H2Service<F, S, B>
+impl<F, S, B, C> H2Service<F, S, B, C>
+where
+    F: Filter,
+    S: ServiceFactory<Request> + 'static,
+    S::Response: Into<Response<B>>,
+    S::Error: ResponseError,
+    S::InitError: Error,
+    B: MessageBody,
+    C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+    C::Error: Error,
+    C::InitError: Error,
+{
+    /// Provide http/2 control service
+    pub fn control<CT>(self, ctl: CT) -> H2Service<F, S, B, CT>
+    where
+        CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+        CT::Error: Error,
+        CT::InitError: Error,
+    {
+        H2Service {
+            ctl: Rc::new(ctl),
+            cfg: self.cfg,
+            srv: self.srv,
+            _t: marker::PhantomData,
+        }
+    }
+}
+
+impl<F, S, B, C> ServiceFactory<Io<F>> for H2Service<F, S, B, C>
 where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
     S::Error: ResponseError,
+    S::InitError: Error,
     S::Response: Into<Response<B>>,
     B: MessageBody,
+    C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C::Error: Error,
+    C::InitError: Error,
 {
     type Response = ();
     type Error = DispatchError;
-    type InitError = S::InitError;
-    type Service = H2ServiceHandler<F, S::Service, B>;
+    type InitError = Box<dyn Error>;
+    type Service = H2ServiceHandler<F, S::Service, B, C>;
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
         let service = self.srv.create(()).await?;
@@ -135,24 +180,29 @@ where
 
         Ok(H2ServiceHandler {
             config,
-            _t: PhantomData,
+            control: self.ctl.clone(),
+            _t: marker::PhantomData,
         })
     }
 }
 
 /// `Service` implementation for http/2 transport
-pub struct H2ServiceHandler<F, S: Service<Request>, B> {
+pub struct H2ServiceHandler<F, S: Service<Request>, B, C> {
     config: Rc<DispatcherConfig<S, ()>>,
-    _t: PhantomData<(F, B)>,
+    control: Rc<C>,
+    _t: marker::PhantomData<(F, B)>,
 }
 
-impl<F, S, B> Service<Io<F>> for H2ServiceHandler<F, S, B>
+impl<F, S, B, C> Service<Io<F>> for H2ServiceHandler<F, S, B, C>
 where
     F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
+    C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C::Error: Error,
+    C::InitError: Error,
 {
     type Response = ();
     type Error = DispatchError;
@@ -177,21 +227,28 @@ where
             "New http2 connection, peer address {:?}",
             io.query::<types::PeerAddr>().get()
         );
+        let control = self
+            .control
+            .create(())
+            .await
+            .map_err(|e| DispatchError::Control(e.into()))?;
 
-        handle(io.into(), self.config.clone()).await
+        handle(io.into(), control, self.config.clone()).await
     }
 }
 
-pub(in crate::http) async fn handle<S, B, C>(
+pub(in crate::http) async fn handle<S, B, C1: 'static, C2>(
     io: IoBoxed,
-    config: Rc<DispatcherConfig<S, C>>,
+    control: C2,
+    config: Rc<DispatcherConfig<S, C1>>,
 ) -> Result<(), DispatchError>
 where
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: 'static,
+    C2: Service<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C2::Error: Error,
 {
     io.set_disconnect_timeout(config.client_disconnect);
     let ioref = io.get_ref();
@@ -199,7 +256,7 @@ where
     let _ = server::handle_one(
         io,
         config.h2config.clone(),
-        ControlService::new(),
+        control,
         PublishService::new(ioref, config),
     )
     .await;
@@ -207,33 +264,11 @@ where
     Ok(())
 }
 
-struct ControlService {}
-
-impl ControlService {
-    fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Service<h2::ControlMessage<H2Error>> for ControlService {
-    type Response = h2::ControlResult;
-    type Error = ();
-
-    async fn call(
-        &self,
-        msg: h2::ControlMessage<H2Error>,
-        _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        log::trace!("Control message: {:?}", msg);
-        Ok::<_, ()>(msg.ack())
-    }
-}
-
 struct PublishService<S: Service<Request>, B, C> {
     io: IoRef,
     config: Rc<DispatcherConfig<S, C>>,
     streams: RefCell<HashMap<StreamId, PayloadSender>>,
-    _t: PhantomData<B>,
+    _t: marker::PhantomData<B>,
 }
 
 impl<S, B, C> PublishService<S, B, C>
@@ -248,7 +283,7 @@ where
             io,
             config,
             streams: RefCell::new(HashMap::default()),
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
