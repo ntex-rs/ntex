@@ -16,10 +16,10 @@ name = "ntex_glommio"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "0.1.21"
+ntex-bytes = "0.1.24"
 ntex-io = "1.0.0"
 ntex-util = "1.0.0"
-futures-lite = "1.12"
+futures-lite = "2.2"
 log = "0.4"
 oneshot = { version = "0.1", default-features = false, features = ["async"] }
 
