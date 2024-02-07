@@ -1,5 +1,5 @@
 use std::future::{poll_fn, Future};
-use std::{cell::Cell, pin::Pin, rc::Rc, task, task::Context, task::Poll};
+use std::{cell::Cell, fmt, pin::Pin, rc::Rc, task, task::Context, task::Poll};
 
 use crate::{ctx::Waiters, Service, ServiceCtx};
 
@@ -205,5 +205,14 @@ where
         };
         slf.state = PipelineCallState::new_call(&slf.pipeline, req);
         slf.poll(cx)
+    }
+}
+
+impl<S, R> fmt::Debug for PipelineCall<S, R>
+where
+    S: Service<R>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PipelineCall").finish()
     }
 }
