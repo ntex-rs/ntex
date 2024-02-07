@@ -19,5 +19,5 @@ path = "src/lib.rs"
 slab = "0.4"
 
 [dev-dependencies]
-ntex = { version = "1.0.0", features = ["tokio"] }
-ntex-util = "1.0.0"
+ntex = { version = "1", features = ["tokio"] }
+ntex-util = "1"
