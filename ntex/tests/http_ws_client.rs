@@ -31,7 +31,7 @@ async fn ws_service(
 async fn test_simple() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .control(|req: h1::Control<_, _>| async move {
+            .h1_control(|req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -95,7 +95,7 @@ async fn test_simple() {
 async fn test_transport() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .control(|req: h1::Control<_, _>| async move {
+            .h1_control(|req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -138,7 +138,7 @@ async fn test_transport() {
 async fn test_keepalive_timeout() {
     let srv = test_server(|| {
         HttpService::build()
-            .control(|req: h1::Control<_, _>| async move {
+            .h1_control(|req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();

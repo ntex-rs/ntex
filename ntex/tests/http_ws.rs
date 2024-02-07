@@ -87,7 +87,7 @@ async fn test_simple() {
                 .keep_alive(1)
                 .headers_read_rate(Seconds(1), Seconds::ZERO, 16)
                 .payload_read_rate(Seconds(1), Seconds::ZERO, 16)
-                .control(move |req: h1::Control<_, _>| {
+                .h1_control(move |req: h1::Control<_, _>| {
                     let ack = if let h1::Control::Upgrade(upg) = req {
                         let ws_service = ws_service.clone();
                         upg.handle(|req, io, codec| async move {
@@ -257,7 +257,7 @@ async fn test_simple() {
 async fn test_transport() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .control(move |req: h1::Control<_, _>| {
+            .h1_control(move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();

@@ -483,7 +483,7 @@ async fn test_ssl_handshake_timeout() {
 async fn test_ws_transport() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .control(|req: h1::Control<_, _>| async move {
+            .h1_control(|req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();

@@ -136,17 +136,8 @@ where
         self
     }
 
-    /// Configure http2 connection settings
-    pub fn h2_configure<O, R>(self, f: O) -> Self
-    where
-        O: FnOnce(&h2::Config) -> R,
-    {
-        let _ = f(&self.config.h2config);
-        self
-    }
-
     /// Provide control service for http/1.
-    pub fn control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, CT, C2>
+    pub fn h1_control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, CT, C2>
     where
         CF: IntoServiceFactory<CT, h1::Control<F, S::Error>>,
         CT: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
@@ -187,6 +178,15 @@ where
             h2_control: control.into_factory(),
             _t: PhantomData,
         }
+    }
+
+    /// Configure http2 connection settings
+    pub fn h2_configure<O, R>(self, f: O) -> Self
+    where
+        O: FnOnce(&h2::Config) -> R,
+    {
+        let _ = f(&self.config.h2config);
+        self
     }
 
     /// Finish service configuration and create *http service* for HTTP/2 protocol.

@@ -58,7 +58,7 @@ async fn test_h1_2() {
 async fn test_expect_continue() {
     let srv = test_server(|| {
         HttpService::build()
-            .control(fn_service(|req: Control<_, _>| async move {
+            .h1_control(fn_service(|req: Control<_, _>| async move {
                 sleep(Millis(20)).await;
                 let ack = if let Control::Expect(exc) = req {
                     if exc.get_ref().head().uri.query() == Some("yes=") {

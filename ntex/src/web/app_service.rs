@@ -112,7 +112,7 @@ where
         for fut in state_factories.iter() {
             extensions = fut(extensions)
                 .await
-                .map_err(|_| log::error!("Cannot initialize state factories"))?
+                .map_err(|_| log::error!("Cannot initialize state factory"))?
         }
         let state = AppState::new(extensions, None, config.clone());
 
@@ -149,7 +149,7 @@ where
             let service = factory
                 .create(())
                 .await
-                .map_err(|_| log::error!("Cannot construct app servicer"))?;
+                .map_err(|_| log::error!("Cannot construct app service"))?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
@@ -159,7 +159,7 @@ where
                 default
                     .create(())
                     .await
-                    .map_err(|_| log::error!("Cannot initialize state factories"))?,
+                    .map_err(|_| log::error!("Cannot construct default service"))?,
             ),
         };
 
