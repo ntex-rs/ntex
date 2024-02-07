@@ -255,19 +255,8 @@ where
             io.query::<types::PeerAddr>().get()
         );
 
-        let ack = self
-            .config
-            .control
-            .call_nowait(Control::con(io.get_ref()))
+        Dispatcher::new(io, self.config.clone())
             .await
-            .map_err(|e| DispatchError::Control(e.into()))?;
-
-        if ack.flags.contains(super::control::ControlFlags::DISCONNECT) {
-            Ok(())
-        } else {
-            Dispatcher::new(io, self.config.clone())
-                .await
-                .map_err(DispatchError::Control)
-        }
+            .map_err(DispatchError::Control)
     }
 }

@@ -2,11 +2,9 @@ use std::{future::Future, io};
 
 use crate::http::message::CurrentIo;
 use crate::http::{body::Body, h1::Codec, Request, Response, ResponseError};
-use crate::io::{Filter, Io, IoBoxed, IoRef};
+use crate::io::{Filter, Io, IoBoxed};
 
 pub enum Control<F, Err> {
-    /// New connection
-    NewConnection(Connection),
     /// New request is loaded
     NewRequest(NewRequest),
     /// Handle `Connection: UPGRADE`
@@ -74,10 +72,6 @@ impl<F, Err> Control<F, Err> {
         Control::NewRequest(NewRequest(req))
     }
 
-    pub(super) fn con(io: IoRef) -> Self {
-        Control::NewConnection(Connection { io })
-    }
-
     pub(super) fn upgrade(req: Request, io: Io<F>, codec: Codec) -> Self {
         Control::Upgrade(Upgrade { req, io, codec })
     }
@@ -102,7 +96,6 @@ impl<F, Err> Control<F, Err> {
         Err: ResponseError,
     {
         match self {
-            Control::NewConnection(msg) => msg.ack(),
             Control::NewRequest(msg) => msg.ack(),
             Control::Upgrade(msg) => msg.ack(),
             Control::Expect(msg) => msg.ack(),
@@ -110,37 +103,6 @@ impl<F, Err> Control<F, Err> {
             Control::Error(msg) => msg.ack(),
             Control::ProtocolError(msg) => msg.ack(),
             Control::PeerGone(msg) => msg.ack(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Connection {
-    io: IoRef,
-}
-
-impl Connection {
-    #[inline]
-    /// Returns reference to Io
-    pub fn io(&self) -> &IoRef {
-        &self.io
-    }
-
-    #[inline]
-    /// Ack and continue handling process
-    pub fn ack(self) -> ControlAck {
-        ControlAck {
-            result: ControlResult::Stop,
-            flags: ControlFlags::empty(),
-        }
-    }
-
-    #[inline]
-    /// Drop connection
-    pub fn disconnect(self) -> ControlAck {
-        ControlAck {
-            result: ControlResult::Stop,
-            flags: ControlFlags::DISCONNECT,
         }
     }
 }
