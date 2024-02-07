@@ -70,6 +70,15 @@ impl ResponseBody<Body> {
     }
 }
 
+impl From<ResponseBody<Body>> for Body {
+    fn from(b: ResponseBody<Body>) -> Self {
+        match b {
+            ResponseBody::Body(b) => b,
+            ResponseBody::Other(b) => b,
+        }
+    }
+}
+
 impl<B> From<Body> for ResponseBody<B> {
     fn from(b: Body) -> Self {
         ResponseBody::Other(b)

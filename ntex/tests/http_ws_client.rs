@@ -2,8 +2,8 @@ use std::io;
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
-use ntex::http::{body::BodySize, h1, HttpService, Request, Response};
-use ntex::io::{DispatchItem, Dispatcher, DispatcherConfig, Io};
+use ntex::http::{body::BodySize, h1, HttpService, Response};
+use ntex::io::{DispatchItem, Dispatcher, DispatcherConfig};
 use ntex::service::{fn_factory_with_config, fn_service};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
@@ -31,23 +31,31 @@ async fn ws_service(
 async fn test_simple() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {
-                async move {
-                    let res = handshake_response(req.head()).finish();
+            .h1_control(|req: h1::Control<_, _>| async move {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    upg.handle(|req, io, codec| async move {
+                        let res = handshake_response(req.head()).finish();
 
-                    // send handshake respone
-                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        // send handshake respone
+                        io.encode(
+                            h1::Message::Item((res.drop_body(), BodySize::None)),
+                            &codec,
+                        )
                         .unwrap();
 
-                    // start websocket service
-                    Dispatcher::new(
-                        io.seal(),
-                        ws::Codec::default(),
-                        ws_service,
-                        &Default::default(),
-                    )
-                    .await
-                }
+                        // start websocket service
+                        Dispatcher::new(
+                            io.seal(),
+                            ws::Codec::default(),
+                            ws_service,
+                            &Default::default(),
+                        )
+                        .await
+                    })
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
     });
@@ -87,23 +95,31 @@ async fn test_simple() {
 async fn test_transport() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {
-                async move {
-                    let res = handshake_response(req.head()).finish();
+            .h1_control(|req: h1::Control<_, _>| async move {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    upg.handle(|req, io, codec| async move {
+                        let res = handshake_response(req.head()).finish();
 
-                    // send handshake respone
-                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        // send handshake respone
+                        io.encode(
+                            h1::Message::Item((res.drop_body(), BodySize::None)),
+                            &codec,
+                        )
                         .unwrap();
 
-                    // start websocket service
-                    Dispatcher::new(
-                        io.seal(),
-                        ws::Codec::default(),
-                        ws_service,
-                        &Default::default(),
-                    )
-                    .await
-                }
+                        // start websocket service
+                        Dispatcher::new(
+                            io.seal(),
+                            ws::Codec::default(),
+                            ws_service,
+                            &Default::default(),
+                        )
+                        .await
+                    })
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
     });
@@ -122,19 +138,28 @@ async fn test_transport() {
 async fn test_keepalive_timeout() {
     let srv = test_server(|| {
         HttpService::build()
-            .upgrade(|(req, io, codec): (Request, Io, h1::Codec)| {
-                async move {
-                    let res = handshake_response(req.head()).finish();
+            .h1_control(|req: h1::Control<_, _>| async move {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    upg.handle(|req, io, codec| async move {
+                        let res = handshake_response(req.head()).finish();
 
-                    // send handshake respone
-                    io.encode(h1::Message::Item((res.drop_body(), BodySize::None)), &codec)
+                        // send handshake respone
+                        io.encode(
+                            h1::Message::Item((res.drop_body(), BodySize::None)),
+                            &codec,
+                        )
                         .unwrap();
 
-                    // start websocket service
-                    let cfg = DispatcherConfig::default();
-                    cfg.set_keepalive_timeout(Seconds::ZERO);
-                    Dispatcher::new(io.seal(), ws::Codec::default(), ws_service, &cfg).await
-                }
+                        // start websocket service
+                        let cfg = DispatcherConfig::default();
+                        cfg.set_keepalive_timeout(Seconds::ZERO);
+                        Dispatcher::new(io.seal(), ws::Codec::default(), ws_service, &cfg)
+                            .await
+                    })
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
     });

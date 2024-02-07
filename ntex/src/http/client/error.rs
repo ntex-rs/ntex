@@ -7,7 +7,7 @@ use thiserror::Error;
 #[cfg(feature = "openssl")]
 use crate::connect::openssl::{HandshakeError, SslError};
 
-use crate::http::error::{HttpError, ParseError, PayloadError};
+use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::util::Either;
 
 /// A set of errors that can occur during parsing json payloads
@@ -142,9 +142,12 @@ pub enum SendRequestError {
     /// Error sending request
     #[error("Error sending request: {0}")]
     Send(#[from] io::Error),
+    /// Error encoding request
+    #[error("Error during request encoding: {0}")]
+    Request(#[from] EncodeError),
     /// Error parsing response
     #[error("Error during response parsing: {0}")]
-    Response(#[from] ParseError),
+    Response(#[from] DecodeError),
     /// Http error
     #[error("{0}")]
     Http(#[from] HttpError),
@@ -162,17 +165,17 @@ pub enum SendRequestError {
     Error(#[from] Box<dyn Error>),
 }
 
-impl From<Either<io::Error, io::Error>> for SendRequestError {
-    fn from(err: Either<io::Error, io::Error>) -> Self {
+impl From<Either<EncodeError, io::Error>> for SendRequestError {
+    fn from(err: Either<EncodeError, io::Error>) -> Self {
         match err {
-            Either::Left(err) => SendRequestError::Send(err),
+            Either::Left(err) => SendRequestError::Request(err),
             Either::Right(err) => SendRequestError::Send(err),
         }
     }
 }
 
-impl From<Either<ParseError, io::Error>> for SendRequestError {
-    fn from(err: Either<ParseError, io::Error>) -> Self {
+impl From<Either<DecodeError, io::Error>> for SendRequestError {
+    fn from(err: Either<DecodeError, io::Error>) -> Self {
         match err {
             Either::Left(err) => SendRequestError::Response(err),
             Either::Right(err) => SendRequestError::Send(err),

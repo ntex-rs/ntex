@@ -57,9 +57,24 @@ impl ResponseError for io::Error {}
 /// `InternalServerError` for `JsonError`
 impl ResponseError for serde_json::error::Error {}
 
+/// A set of errors that can occur during HTTP streams encoding
+#[derive(thiserror::Error, Debug)]
+pub enum EncodeError {
+    /// An invalid `HttpVersion`, such as `HTP/1.1`
+    #[error("Unsupported HTTP version specified")]
+    UnsupportedVersion(super::Version),
+
+    #[error("Unexpected end of bytes stream")]
+    UnexpectedEof,
+
+    /// Internal error
+    #[error("Internal error")]
+    Internal(Box<dyn error::Error>),
+}
+
 /// A set of errors that can occur during parsing HTTP streams
 #[derive(thiserror::Error, Debug)]
-pub enum ParseError {
+pub enum DecodeError {
     /// An invalid `Method`, such as `GE.T`.
     #[error("Invalid Method specified")]
     Method,
@@ -74,17 +89,13 @@ pub enum ParseError {
     Header,
     /// A message head is too large to be reasonable.
     #[error("Message head is too large")]
-    TooLarge,
+    TooLarge(usize),
     /// A message reached EOF, but is not complete.
     #[error("Message is incomplete")]
     Incomplete,
     /// An invalid `Status`, such as `1337 ELITE`.
     #[error("Invalid Status provided")]
     Status,
-    /// A timeout occurred waiting for an IO event.
-    #[allow(dead_code)]
-    #[error("Timeout during parse")]
-    Timeout,
     /// An `InvalidInput` occurred while trying to parse incoming stream.
     #[error("`InvalidInput` occurred while trying to parse incoming stream: {0}")]
     InvalidInput(&'static str),
@@ -93,22 +104,22 @@ pub enum ParseError {
     Utf8(#[from] Utf8Error),
 }
 
-impl From<FromUtf8Error> for ParseError {
-    fn from(err: FromUtf8Error) -> ParseError {
-        ParseError::Utf8(err.utf8_error())
+impl From<FromUtf8Error> for DecodeError {
+    fn from(err: FromUtf8Error) -> DecodeError {
+        DecodeError::Utf8(err.utf8_error())
     }
 }
 
-impl From<httparse::Error> for ParseError {
-    fn from(err: httparse::Error) -> ParseError {
+impl From<httparse::Error> for DecodeError {
+    fn from(err: httparse::Error) -> DecodeError {
         match err {
             httparse::Error::HeaderName
             | httparse::Error::HeaderValue
             | httparse::Error::NewLine
-            | httparse::Error::Token => ParseError::Header,
-            httparse::Error::Status => ParseError::Status,
-            httparse::Error::TooManyHeaders => ParseError::TooLarge,
-            httparse::Error::Version => ParseError::Version,
+            | httparse::Error::Token => DecodeError::Header,
+            httparse::Error::Status => DecodeError::Status,
+            httparse::Error::TooManyHeaders => DecodeError::TooLarge(0),
+            httparse::Error::Version => DecodeError::Version,
         }
     }
 }
@@ -131,9 +142,9 @@ pub enum PayloadError {
     /// Http2 payload error
     #[error("{0}")]
     Http2Payload(#[from] h2::StreamError),
-    /// Parse error
-    #[error("Parse error: {0}")]
-    Parse(#[from] ParseError),
+    /// Decode error
+    #[error("Decode error: {0}")]
+    Decode(#[from] DecodeError),
     /// Io error
     #[error("{0}")]
     Io(#[from] io::Error),
@@ -153,61 +164,11 @@ impl From<Either<PayloadError, io::Error>> for PayloadError {
 pub enum DispatchError {
     /// Service error
     #[error("Service error")]
-    Service(Box<dyn ResponseError>),
+    Service(Box<dyn super::ResponseError>),
 
-    /// Upgrade service error
-    #[error("Upgrade service error: {0}")]
-    Upgrade(Box<dyn std::error::Error>),
-
-    /// Peer is disconnected, error indicates that peer is disconnected because of it
-    #[error("Disconnected: {0:?}")]
-    PeerGone(Option<io::Error>),
-
-    /// Http request parse error.
-    #[error("Parse error: {0}")]
-    Parse(#[from] ParseError),
-
-    /// Http response encoding error.
-    #[error("Encode error: {0}")]
-    Encode(io::Error),
-
-    /// Http/2 error
-    #[error("{0}")]
-    H2(#[from] H2Error),
-
-    /// The first request did not complete within the specified timeout.
-    #[error("The first request did not complete within the specified timeout")]
-    SlowRequestTimeout,
-
-    /// Disconnect timeout. Makes sense for ssl streams.
-    #[error("Connection shutdown timeout")]
-    DisconnectTimeout,
-
-    /// Payload is not consumed
-    #[error("Task is completed but request's payload is not consumed")]
-    PayloadIsNotConsumed,
-
-    /// Malformed request
-    #[error("Malformed request")]
-    MalformedRequest,
-
-    /// Response body processing error
-    #[error("Response body processing error: {0}")]
-    ResponsePayload(Box<dyn std::error::Error>),
-
-    /// Internal error
-    #[error("Internal error")]
-    InternalError,
-
-    /// Unknown error
-    #[error("Unknown error")]
-    Unknown,
-}
-
-impl From<io::Error> for DispatchError {
-    fn from(err: io::Error) -> Self {
-        DispatchError::PeerGone(Some(err))
-    }
+    /// Control service error
+    #[error("Control service error: {0}")]
+    Control(Box<dyn std::error::Error>),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -296,15 +257,16 @@ mod tests {
 
     #[test]
     fn test_payload_error() {
-        let err: PayloadError = io::Error::new(io::ErrorKind::Other, "ParseError").into();
-        assert!(format!("{}", err).contains("ParseError"));
+        let err: PayloadError = io::Error::new(io::ErrorKind::Other, "DecodeError").into();
+        assert!(format!("{}", err).contains("DecodeError"));
 
         let err: PayloadError = BlockingError::Canceled.into();
         assert!(format!("{}", err).contains("Operation is canceled"));
 
         let err: PayloadError =
-            BlockingError::Error(io::Error::new(io::ErrorKind::Other, "ParseError")).into();
-        assert!(format!("{}", err).contains("ParseError"));
+            BlockingError::Error(io::Error::new(io::ErrorKind::Other, "DecodeError"))
+                .into();
+        assert!(format!("{}", err).contains("DecodeError"));
 
         let err = PayloadError::Incomplete(None);
         assert_eq!(
@@ -315,7 +277,7 @@ mod tests {
 
     macro_rules! from {
         ($from:expr => $error:pat) => {
-            match ParseError::from($from) {
+            match DecodeError::from($from) {
                 e @ $error => {
                     assert!(format!("{}", e).len() >= 5);
                 }
@@ -326,13 +288,13 @@ mod tests {
 
     #[test]
     fn test_from() {
-        from!(httparse::Error::HeaderName => ParseError::Header);
-        from!(httparse::Error::HeaderName => ParseError::Header);
-        from!(httparse::Error::HeaderValue => ParseError::Header);
-        from!(httparse::Error::NewLine => ParseError::Header);
-        from!(httparse::Error::Status => ParseError::Status);
-        from!(httparse::Error::Token => ParseError::Header);
-        from!(httparse::Error::TooManyHeaders => ParseError::TooLarge);
-        from!(httparse::Error::Version => ParseError::Version);
+        from!(httparse::Error::HeaderName => DecodeError::Header);
+        from!(httparse::Error::HeaderName => DecodeError::Header);
+        from!(httparse::Error::HeaderValue => DecodeError::Header);
+        from!(httparse::Error::NewLine => DecodeError::Header);
+        from!(httparse::Error::Status => DecodeError::Status);
+        from!(httparse::Error::Token => DecodeError::Header);
+        from!(httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
+        from!(httparse::Error::Version => DecodeError::Version);
     }
 }

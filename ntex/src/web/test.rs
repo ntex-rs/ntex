@@ -73,7 +73,7 @@ pub async fn init_service<R, S, E>(
 where
     R: IntoServiceFactory<S, Request, AppConfig>,
     S: ServiceFactory<Request, AppConfig, Response = WebResponse, Error = E>,
-    S::InitError: std::fmt::Debug,
+    S::InitError: fmt::Debug,
 {
     let srv = app.into_factory();
     srv.pipeline(AppConfig::default()).await.unwrap()

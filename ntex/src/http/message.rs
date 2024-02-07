@@ -40,16 +40,27 @@ pub(crate) trait Head: Default + 'static {
 #[derive(Clone, Debug)]
 pub(crate) enum CurrentIo {
     Ref(IoRef),
-    Io(Rc<(IoRef, RefCell<Option<Box<(IoBoxed, Codec)>>>)>),
+    Io(Rc<(IoRef, RefCell<Option<(IoBoxed, Codec)>>)>),
     None,
 }
 
 impl CurrentIo {
+    pub(crate) fn new(io: IoBoxed, codec: Codec) -> Self {
+        CurrentIo::Io(Rc::new((io.get_ref(), RefCell::new(Some((io, codec))))))
+    }
+
     pub(crate) fn as_ref(&self) -> Option<&IoRef> {
         match self {
             CurrentIo::Ref(ref io) => Some(io),
             CurrentIo::Io(ref io) => Some(&io.0),
             CurrentIo::None => None,
+        }
+    }
+
+    pub(crate) fn take(&self) -> Option<(IoBoxed, Codec)> {
+        match self {
+            CurrentIo::Io(ref inner) => inner.1.borrow_mut().take(),
+            _ => None,
         }
     }
 }
@@ -197,11 +208,8 @@ impl RequestHead {
     /// Take io and codec for current request
     ///
     /// This objects are set only for upgrade requests
-    pub fn take_io(&self) -> Option<Box<(IoBoxed, Codec)>> {
-        match self.io {
-            CurrentIo::Io(ref inner) => inner.1.borrow_mut().take(),
-            _ => None,
-        }
+    pub fn take_io(&self) -> Option<(IoBoxed, Codec)> {
+        self.io.take()
     }
 }
 
@@ -365,13 +373,6 @@ impl ResponseHead {
 
     pub(crate) fn set_io(&mut self, head: &RequestHead) {
         self.io = head.io.clone();
-    }
-
-    pub(crate) fn take_io(&self) -> Option<Box<(IoBoxed, Codec)>> {
-        match self.io {
-            CurrentIo::Io(ref inner) => inner.1.borrow_mut().take(),
-            _ => None,
-        }
     }
 }
 

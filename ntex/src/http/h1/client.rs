@@ -1,11 +1,11 @@
-use std::{cell::Cell, cell::RefCell, io};
+use std::{cell::Cell, cell::RefCell};
 
 use bitflags::bitflags;
 
 use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
 use crate::http::config::DateService;
-use crate::http::error::{ParseError, PayloadError};
+use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::message::{ConnectionType, RequestHeadType, ResponseHead};
 use crate::http::{Method, Version};
 use crate::util::{Bytes, BytesMut};
@@ -117,7 +117,7 @@ impl ClientPayloadCodec {
 
 impl Decoder for ClientCodec {
     type Item = ResponseHead;
-    type Error = ParseError;
+    type Error = DecodeError;
 
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         debug_assert!(
@@ -191,7 +191,7 @@ impl Decoder for ClientPayloadCodec {
 
 impl Encoder for ClientCodec {
     type Item = Message<(RequestHeadType, BodySize)>;
-    type Error = io::Error;
+    type Error = EncodeError;
 
     fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {

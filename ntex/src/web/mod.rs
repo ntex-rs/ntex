@@ -125,12 +125,13 @@ pub mod dev {
     //! The purpose of this module is to alleviate imports of many common
     //! traits by adding a glob import to the top of ntex::web heavy modules:
 
-    use super::Handler;
     pub use crate::web::config::AppConfig;
     pub use crate::web::info::ConnectionInfo;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::route::IntoRoutes;
     pub use crate::web::service::{WebServiceAdapter, WebServiceConfig, WebServiceFactory};
+
+    use crate::web::Handler;
 
     pub(crate) fn insert_slash(mut patterns: Vec<String>) -> Vec<String> {
         for path in &mut patterns {

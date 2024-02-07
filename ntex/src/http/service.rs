@@ -1,23 +1,28 @@
-use std::{cell, error, fmt, marker, rc::Rc, task::Context, task::Poll};
+use std::{error, fmt, marker, rc::Rc, task::Context, task::Poll};
 
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
-use super::config::{DispatcherConfig, OnRequest, ServiceConfig};
-use super::error::{DispatchError, ResponseError};
+use super::config::{DispatcherConfig, ServiceConfig};
+use super::error::{DispatchError, H2Error, ResponseError};
 use super::request::Request;
 use super::response::Response;
 use super::{h1, h2};
 
 /// `ServiceFactory` HTTP1.1/HTTP2 transport implementation
-pub struct HttpService<F, S, B, X = h1::ExpectHandler, U = h1::UpgradeHandler<F>> {
+pub struct HttpService<
+    F,
+    S,
+    B,
+    C1 = h1::DefaultControlService,
+    C2 = h2::DefaultControlService,
+> {
     srv: S,
     cfg: ServiceConfig,
-    expect: X,
-    upgrade: Option<U>,
-    on_request: cell::RefCell<Option<OnRequest>>,
+    h1_control: C1,
+    h2_control: Rc<C2>,
     _t: marker::PhantomData<(F, B)>,
 }
 
@@ -57,9 +62,8 @@ where
         HttpService {
             cfg,
             srv: service.into_factory(),
-            expect: h1::ExpectHandler,
-            upgrade: None,
-            on_request: cell::RefCell::new(None),
+            h1_control: h1::DefaultControlService,
+            h2_control: Rc::new(h2::DefaultControlService),
             _t: marker::PhantomData,
         }
     }
@@ -72,15 +76,14 @@ where
         HttpService {
             cfg,
             srv: service.into_factory(),
-            expect: h1::ExpectHandler,
-            upgrade: None,
-            on_request: cell::RefCell::new(None),
+            h1_control: h1::DefaultControlService,
+            h2_control: Rc::new(h2::DefaultControlService),
             _t: marker::PhantomData,
         }
     }
 }
 
-impl<F, S, B, X, U> HttpService<F, S, B, X, U>
+impl<F, S, B, C1, C2> HttpService<F, S, B, C1, C2>
 where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
@@ -88,52 +91,43 @@ where
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
+    C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+    C1::Error: error::Error,
+    C1::InitError: fmt::Debug,
+    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+    C2::Error: error::Error,
+    C2::InitError: fmt::Debug,
 {
-    /// Provide service for `EXPECT: 100-Continue` support.
-    ///
-    /// Service get called with request that contains `EXPECT` header.
-    /// Service must return request in case of success, in that case
-    /// request will be forwarded to main service.
-    pub fn expect<X1>(self, expect: X1) -> HttpService<F, S, B, X1, U>
+    /// Provide http/1 control service.
+    pub fn h1_control<CT>(self, control: CT) -> HttpService<F, S, B, CT, C2>
     where
-        X1: ServiceFactory<Request, Response = Request>,
-        X1::Error: ResponseError,
-        X1::InitError: fmt::Debug,
+        CT: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+        CT::Error: error::Error,
+        CT::InitError: fmt::Debug,
     {
         HttpService {
-            expect,
+            h1_control: control,
+            h2_control: self.h2_control,
             cfg: self.cfg,
             srv: self.srv,
-            upgrade: self.upgrade,
-            on_request: self.on_request,
             _t: marker::PhantomData,
         }
     }
 
-    /// Provide service for custom `Connection: UPGRADE` support.
-    ///
-    /// If service is provided then normal requests handling get halted
-    /// and this service get called with original request and framed object.
-    pub fn upgrade<U1>(self, upgrade: Option<U1>) -> HttpService<F, S, B, X, U1>
+    /// Provide http/1 control service.
+    pub fn h2_control<CT>(self, control: CT) -> HttpService<F, S, B, C1, CT>
     where
-        U1: ServiceFactory<(Request, Io<F>, h1::Codec), Response = ()>,
-        U1::Error: fmt::Display + error::Error,
-        U1::InitError: fmt::Debug,
+        CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+        CT::Error: error::Error,
+        CT::InitError: fmt::Debug,
     {
         HttpService {
-            upgrade,
+            h1_control: self.h1_control,
+            h2_control: Rc::new(control),
             cfg: self.cfg,
             srv: self.srv,
-            expect: self.expect,
-            on_request: self.on_request,
             _t: marker::PhantomData,
         }
-    }
-
-    /// Set on request callback.
-    pub(crate) fn on_request(self, f: Option<OnRequest>) -> Self {
-        *self.on_request.borrow_mut() = f;
-        self
     }
 }
 
@@ -145,7 +139,7 @@ mod openssl {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B, X, U> HttpService<Layer<SslFilter, F>, S, B, X, U>
+    impl<F, S, B, C1, C2> HttpService<Layer<SslFilter, F>, S, B, C1, C2>
     where
         F: Filter,
         S: ServiceFactory<Request> + 'static,
@@ -153,13 +147,16 @@ mod openssl {
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        X: ServiceFactory<Request, Response = Request> + 'static,
-        X::Error: ResponseError,
-        X::InitError: fmt::Debug,
-        U: ServiceFactory<(Request, Io<Layer<SslFilter, F>>, h1::Codec), Response = ()>
+        C1: ServiceFactory<
+                h1::Control<Layer<SslFilter, F>, S::Error>,
+                Response = h1::ControlAck,
+            > + 'static,
+        C1::Error: error::Error,
+        C1::InitError: fmt::Debug,
+        C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
             + 'static,
-        U::Error: fmt::Display + error::Error,
-        U::InitError: fmt::Debug,
+        C2::Error: error::Error,
+        C2::InitError: fmt::Debug,
     {
         /// Create openssl based service
         pub fn openssl(
@@ -188,7 +185,7 @@ mod rustls {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B, X, U> HttpService<Layer<TlsServerFilter, F>, S, B, X, U>
+    impl<F, S, B, C1, C2> HttpService<Layer<TlsServerFilter, F>, S, B, C1, C2>
     where
         F: Filter,
         S: ServiceFactory<Request> + 'static,
@@ -196,15 +193,16 @@ mod rustls {
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        X: ServiceFactory<Request, Response = Request> + 'static,
-        X::Error: ResponseError,
-        X::InitError: fmt::Debug,
-        U: ServiceFactory<
-                (Request, Io<Layer<TlsServerFilter, F>>, h1::Codec),
-                Response = (),
+        C1: ServiceFactory<
+                h1::Control<Layer<TlsServerFilter, F>, S::Error>,
+                Response = h1::ControlAck,
             > + 'static,
-        U::Error: fmt::Display + error::Error,
-        U::InitError: fmt::Debug,
+        C1::Error: error::Error,
+        C1::InitError: fmt::Debug,
+        C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
+            + 'static,
+        C2::Error: error::Error,
+        C2::InitError: fmt::Debug,
     {
         /// Create openssl based service
         pub fn rustls(
@@ -228,7 +226,7 @@ mod rustls {
     }
 }
 
-impl<F, S, B, X, U> ServiceFactory<Io<F>> for HttpService<F, S, B, X, U>
+impl<F, S, B, C1, C2> ServiceFactory<Io<F>> for HttpService<F, S, B, C1, C2>
 where
     F: Filter,
     S: ServiceFactory<Request> + 'static,
@@ -236,68 +234,59 @@ where
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: ServiceFactory<Request, Response = Request> + 'static,
-    X::Error: ResponseError,
-    X::InitError: fmt::Debug,
-    U: ServiceFactory<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
-    U::Error: fmt::Display + error::Error,
-    U::InitError: fmt::Debug,
+    C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
+    C1::Error: error::Error,
+    C1::InitError: fmt::Debug,
+    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C2::Error: error::Error,
+    C2::InitError: fmt::Debug,
 {
     type Response = ();
     type Error = DispatchError;
     type InitError = ();
-    type Service = HttpServiceHandler<F, S::Service, B, X::Service, U::Service>;
+    type Service = HttpServiceHandler<F, S::Service, B, C1::Service, C2>;
 
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
-        let fut = self.srv.create(());
-        let fut_ex = self.expect.create(());
-        let fut_upg = self.upgrade.as_ref().map(|f| f.create(()));
-        let on_request = self.on_request.borrow_mut().take();
-        let cfg = self.cfg.clone();
-
-        let service = fut
+        let service = self
+            .srv
+            .create(())
             .await
-            .map_err(|e| log::error!("Init http service error: {:?}", e))?;
-
-        let expect = fut_ex
+            .map_err(|e| log::error!("Cannot construct publish service: {:?}", e))?;
+        let control = self
+            .h1_control
+            .create(())
             .await
-            .map_err(|e| log::error!("Init http service error: {:?}", e))?;
+            .map_err(|e| log::error!("Cannot construct control service: {:?}", e))?;
 
-        let upgrade = if let Some(fut) = fut_upg {
-            Some(
-                fut.await
-                    .map_err(|e| log::error!("Init http service error: {:?}", e))?,
-            )
-        } else {
-            None
-        };
-
-        let config = DispatcherConfig::new(cfg, service, expect, upgrade, on_request);
+        let config = DispatcherConfig::new(self.cfg.clone(), service, control);
 
         Ok(HttpServiceHandler {
             config: Rc::new(config),
+            h2_control: self.h2_control.clone(),
             _t: marker::PhantomData,
         })
     }
 }
 
 /// `Service` implementation for http transport
-pub struct HttpServiceHandler<F, S, B, X, U> {
-    config: Rc<DispatcherConfig<S, X, U>>,
+pub struct HttpServiceHandler<F, S, B, C1, C2> {
+    config: Rc<DispatcherConfig<S, C1>>,
+    h2_control: Rc<C2>,
     _t: marker::PhantomData<(F, B)>,
 }
 
-impl<F, S, B, X, U> Service<Io<F>> for HttpServiceHandler<F, S, B, X, U>
+impl<F, S, B, C1, C2> Service<Io<F>> for HttpServiceHandler<F, S, B, C1, C2>
 where
     F: Filter,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    X: Service<Request, Response = Request> + 'static,
-    X::Error: ResponseError,
-    U: Service<(Request, Io<F>, h1::Codec), Response = ()> + 'static,
-    U::Error: fmt::Display + error::Error,
+    C1: Service<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
+    C1::Error: error::Error,
+    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C2::Error: error::Error,
+    C2::InitError: fmt::Debug,
 {
     type Response = ();
     type Error = DispatchError;
@@ -305,8 +294,8 @@ where
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let cfg = self.config.as_ref();
 
-        let ready = cfg
-            .expect
+        let ready1 = cfg
+            .service
             .poll_ready(cx)
             .map_err(|e| {
                 log::error!("Http service readiness error: {:?}", e);
@@ -314,29 +303,16 @@ where
             })?
             .is_ready();
 
-        let ready = cfg
-            .service
+        let ready2 = cfg
+            .control
             .poll_ready(cx)
             .map_err(|e| {
-                log::error!("Http service readiness error: {:?}", e);
-                DispatchError::Service(Box::new(e))
+                log::error!("Http control service readiness error: {:?}", e);
+                DispatchError::Control(Box::new(e))
             })?
-            .is_ready()
-            && ready;
+            .is_ready();
 
-        let ready = if let Some(ref upg) = cfg.upgrade {
-            upg.poll_ready(cx)
-                .map_err(|e| {
-                    log::error!("Http service readiness error: {:?}", e);
-                    DispatchError::Upgrade(Box::new(e))
-                })?
-                .is_ready()
-                && ready
-        } else {
-            ready
-        };
-
-        if ready {
+        if ready1 && ready2 {
             Poll::Ready(Ok(()))
         } else {
             Poll::Pending
@@ -344,15 +320,10 @@ where
     }
 
     fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let ready = self.config.expect.poll_shutdown(cx).is_ready();
-        let ready = self.config.service.poll_shutdown(cx).is_ready() && ready;
-        let ready = if let Some(ref upg) = self.config.upgrade {
-            upg.poll_shutdown(cx).is_ready() && ready
-        } else {
-            ready
-        };
+        let ready1 = self.config.control.poll_shutdown(cx).is_ready();
+        let ready2 = self.config.service.poll_shutdown(cx).is_ready();
 
-        if ready {
+        if ready1 && ready2 {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -370,9 +341,16 @@ where
         );
 
         if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
-            h2::handle(io.into(), self.config.clone()).await
+            let control = self.h2_control.create(()).await.map_err(|e| {
+                DispatchError::Control(
+                    format!("Cannot construct control service: {:?}", e).into(),
+                )
+            })?;
+            h2::handle(io.into(), control, self.config.clone()).await
         } else {
-            h1::Dispatcher::new(io, self.config.clone()).await
+            h1::Dispatcher::new(io, self.config.clone())
+                .await
+                .map_err(DispatchError::Control)
         }
     }
 }

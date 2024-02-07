@@ -8,7 +8,7 @@ use tls_openssl::ssl::{
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Version};
-use ntex::service::{chain_factory, map_config, ServiceFactory};
+use ntex::service::{chain_factory, map_config};
 use ntex::web::{self, dev::AppConfig, App, HttpResponse};
 use ntex::{time::Seconds, util::Ready};
 
@@ -52,8 +52,7 @@ async fn test_connection_reuse_h2() {
                     ),
                     |_| AppConfig::default(),
                 ))
-                .openssl(ssl_acceptor())
-                .map_err(|_| ()),
+                .openssl(ssl_acceptor()), //.map_err(|_| ()),
         )
     });
 

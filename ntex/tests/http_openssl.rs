@@ -12,7 +12,7 @@ use ntex::http::{body, h1, HttpService, Method, Request, Response, StatusCode, V
 use ntex::service::{fn_service, ServiceFactory};
 use ntex::time::{sleep, timeout, Millis, Seconds};
 use ntex::util::{Bytes, BytesMut, Ready};
-use ntex::{io::Io, web::error::InternalError, ws, ws::handshake_response};
+use ntex::{web::error::InternalError, ws, ws::handshake_response};
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -483,26 +483,32 @@ async fn test_ssl_handshake_timeout() {
 async fn test_ws_transport() {
     let mut srv = test_server(|| {
         HttpService::build()
-            .upgrade(|(req, io, codec): (Request, Io<_>, h1::Codec)| {
-                async move {
-                    let res = handshake_response(req.head()).finish();
+            .h1_control(|req: h1::Control<_, _>| async move {
+                let ack = if let h1::Control::Upgrade(upg) = req {
+                    upg.handle(|req, io, codec| async move {
+                        let res = handshake_response(req.head()).finish();
 
-                    // send handshake respone
-                    io.encode(
-                        h1::Message::Item((res.drop_body(), body::BodySize::None)),
-                        &codec,
-                    )
-                    .unwrap();
+                        // send handshake respone
+                        io.encode(
+                            h1::Message::Item((res.drop_body(), body::BodySize::None)),
+                            &codec,
+                        )
+                        .unwrap();
 
-                    // start websocket service
-                    let io = ws::WsTransport::create(io, ws::Codec::default());
-                    while let Some(item) =
-                        io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
-                    {
-                        io.send(item.freeze(), &BytesCodec).await.unwrap()
-                    }
-                    Ok::<_, io::Error>(())
-                }
+                        // start websocket service
+                        let io = ws::WsTransport::create(io, ws::Codec::default());
+                        while let Some(item) =
+                            io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
+                        {
+                            io.send(item.freeze(), &BytesCodec).await.unwrap()
+                        }
+
+                        Ok::<_, io::Error>(())
+                    })
+                } else {
+                    req.ack()
+                };
+                Ok::<_, io::Error>(ack)
             })
             .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
             .openssl(ssl_acceptor())
