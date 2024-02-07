@@ -89,6 +89,12 @@ where
     A: error::Error,
     B: error::Error,
 {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Either::Left(a) => a.source(),
+            Either::Right(b) => b.source(),
+        }
+    }
 }
 
 impl<A, B> fmt::Display for Either<A, B>
