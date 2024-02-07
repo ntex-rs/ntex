@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.1] - 2024-02-07
+
+* Add fmt::Debug impl for PipelineCall
+
 ## [2.0.0] - 2024-01-09
 
 * Release
