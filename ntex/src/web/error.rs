@@ -681,7 +681,6 @@ mod tests {
     use super::*;
     use crate::http::client::error::{ConnectError, SendRequestError};
     use crate::web::test::TestRequest;
-    use crate::web::DefaultError;
 
     #[test]
     fn test_into_error() {

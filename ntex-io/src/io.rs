@@ -932,7 +932,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{testing::IoTest, FilterLayer, Io, ReadBuf, WriteBuf};
+    use crate::{testing::IoTest, ReadBuf, WriteBuf};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";

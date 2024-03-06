@@ -81,9 +81,9 @@ async fn test_openssl_string() {
     let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let local_addr = tcp.local_addr().unwrap();
 
-    let tcp = Some(tcp);
+    let mut tcp = Some(tcp);
     let srv = build_test_server(move |srv| {
-        srv.listen("test", tcp.unwrap(), |_| {
+        srv.listen("test", tcp.take().unwrap(), |_| {
             chain_factory(
                 fn_service(|io: Io<_>| async move {
                     let res = io.read_ready().await;

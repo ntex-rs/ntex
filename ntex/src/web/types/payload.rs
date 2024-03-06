@@ -405,8 +405,6 @@ impl Future for HttpMessageBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::header;
-    use crate::util::Bytes;
     use crate::web::test::{from_request, TestRequest};
 
     #[crate::rt_test]

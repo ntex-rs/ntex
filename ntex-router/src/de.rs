@@ -491,11 +491,10 @@ impl<'de> de::VariantAccess<'de> for UnitVariant {
 
 #[cfg(test)]
 mod tests {
-    use serde::de;
     use serde_derive::Deserialize;
 
     use super::*;
-    use crate::path::{Path, PathItem};
+    use crate::path::PathItem;
 
     #[derive(Deserialize)]
     struct MyStruct {

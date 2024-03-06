@@ -140,10 +140,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::header::CONTENT_TYPE;
     use crate::service::{IntoService, Pipeline};
     use crate::util::lazy;
-    use crate::web::request::WebRequest;
     use crate::web::test::{ok_service, TestRequest};
     use crate::web::{DefaultError, Error, HttpResponse};
 

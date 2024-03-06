@@ -282,8 +282,8 @@ pub async fn respond_to<T: Responder<DefaultError>>(
 ///     }
 /// }
 ///
-/// #[test]
-/// fn test_index() {
+/// #[ntex::test]
+/// async fn test_index() {
 ///     let req = test::TestRequest::with_header("content-type", "text/plain")
 ///         .to_http_request();
 ///
@@ -972,9 +972,8 @@ mod tests {
     use std::convert::Infallible;
 
     use super::*;
-    use crate::http::header;
-    use crate::http::HttpMessage;
-    use crate::web::{self, App, HttpResponse};
+    use crate::http::{header, HttpMessage};
+    use crate::web::{self, App};
 
     #[crate::rt_test]
     async fn test_basics() {

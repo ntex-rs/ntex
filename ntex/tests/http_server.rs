@@ -103,7 +103,7 @@ async fn test_expect_continue() {
 
 #[ntex::test]
 async fn test_chunked_payload() {
-    let chunk_sizes = vec![32768, 32, 32768];
+    let chunk_sizes = [32768, 32, 32768];
     let total_size: usize = chunk_sizes.iter().sum();
 
     let srv = test_server(|| {

@@ -754,6 +754,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_borrows_for_generic_args)]
     fn test_static_tail() {
         let re = ResourceDef::new("/*".to_string());
         let tree = Tree::new(&re, 1);

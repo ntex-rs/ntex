@@ -238,8 +238,7 @@ impl From<BlockingError<io::Error>> for PayloadError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ntex_http::{Error as HttpError, StatusCode};
-    use std::io;
+    use ntex_http::Error as HttpError;
 
     #[test]
     fn test_into_response() {

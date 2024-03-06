@@ -740,9 +740,8 @@ fn uninit_array<T, const LEN: usize>() -> [mem::MaybeUninit<T>; LEN] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::header::{HeaderName, SET_COOKIE};
-    use crate::http::{HttpMessage, Method, Version};
-    use crate::util::{Bytes, BytesMut};
+    use crate::http::header::SET_COOKIE;
+    use crate::http::HttpMessage;
 
     impl PayloadType {
         fn unwrap(self) -> PayloadDecoder {

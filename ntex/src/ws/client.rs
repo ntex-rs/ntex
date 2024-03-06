@@ -905,6 +905,7 @@ mod tests {
     }
 
     #[crate::rt_test]
+    #[allow(clippy::let_underscore_future)]
     async fn bearer_auth() {
         let client = WsClient::build("http://localhost")
             .bearer_auth("someS3cr3tAutht0k3n")

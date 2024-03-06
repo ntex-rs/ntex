@@ -287,8 +287,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{apply, fn_factory, Pipeline, Service, ServiceFactory};
-    use std::{rc::Rc, task::Context, task::Poll, time::Duration};
+    use ntex_service::{apply, fn_factory, Pipeline, ServiceFactory};
+    use std::{rc::Rc, time::Duration};
 
     use super::*;
     use crate::future::lazy;

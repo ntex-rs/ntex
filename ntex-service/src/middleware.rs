@@ -187,7 +187,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::*;
-    use crate::{fn_service, Pipeline, Service, ServiceCtx, ServiceFactory};
+    use crate::{fn_service, Pipeline, ServiceCtx};
 
     #[derive(Debug, Clone)]
     struct Tr<R>(PhantomData<R>);

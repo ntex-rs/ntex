@@ -371,7 +371,7 @@ mod utf8 {
 
 #[cfg(test)]
 mod test {
-    use std::borrow::{Borrow, Cow, ToOwned};
+    use std::borrow::{Borrow, Cow};
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 

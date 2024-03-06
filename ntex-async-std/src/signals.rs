@@ -1,7 +1,7 @@
 use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 thread_local! {
-    static SRUN: RefCell<bool> = RefCell::new(false);
+    static SRUN: RefCell<bool> = const { RefCell::new(false) };
     static SHANDLERS: Rc<RefCell<Vec<oneshot::Sender<Signal>>>> = Default::default();
 }
 

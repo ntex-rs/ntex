@@ -339,6 +339,7 @@ impl crate::Stream for Interval {
 }
 
 #[cfg(test)]
+#[allow(clippy::let_underscore_future)]
 mod tests {
     use futures_util::StreamExt;
     use std::time;

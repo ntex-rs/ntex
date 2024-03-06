@@ -1,4 +1,5 @@
 //! utilities and helpers for testing
+#![allow(clippy::let_underscore_future)]
 use std::future::{poll_fn, Future};
 use std::sync::{Arc, Mutex};
 use std::task::{ready, Context, Poll, Waker};
@@ -355,11 +356,11 @@ impl IoStream for IoTest {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(self);
 
-        ntex_util::spawn(ReadTask {
+        let _ = ntex_util::spawn(ReadTask {
             io: io.clone(),
             state: read,
         });
-        ntex_util::spawn(WriteTask {
+        let _ = ntex_util::spawn(WriteTask {
             io: io.clone(),
             state: write,
             st: IoWriteState::Processing(None),

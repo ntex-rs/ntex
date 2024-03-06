@@ -597,10 +597,7 @@ mod tests {
     use crate::service::fn_service;
     use crate::util::{Bytes, Ready};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
-    use crate::web::{
-        self, middleware::DefaultHeaders, DefaultError, HttpRequest, HttpResponse,
-        WebRequest,
-    };
+    use crate::web::{self, middleware::DefaultHeaders, HttpRequest, HttpResponse};
 
     #[crate::rt_test]
     async fn test_default_resource() {

@@ -126,11 +126,9 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use tls_rustls::{OwnedTrustAnchor, RootCertStore};
 
     use super::*;
-    use ntex_service::ServiceFactory;
     use ntex_util::future::lazy;
 
     #[ntex::test]

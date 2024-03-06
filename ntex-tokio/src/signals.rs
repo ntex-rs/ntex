@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 use tokio::task::spawn_local;
 
 thread_local! {
-    static SRUN: RefCell<bool> = RefCell::new(false);
+    static SRUN: RefCell<bool> = const { RefCell::new(false) };
     static SHANDLERS: Rc<RefCell<Vec<oneshot::Sender<Signal>>>> = Default::default();
 }
 

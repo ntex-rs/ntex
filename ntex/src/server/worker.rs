@@ -1,16 +1,16 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::{fmt, future::Future, pin::Pin, sync::Arc, task::Context, task::Poll};
 use std::sync::mpsc;
+use std::{fmt, future::Future, pin::Pin, sync::Arc, task::Context, task::Poll};
 
 use async_channel::{unbounded, Receiver, Sender};
 
 use crate::rt::{spawn, Arbiter};
 use crate::service::Pipeline;
-use ntex_util::time::Millis;
 use crate::time::{sleep, Sleep};
 use crate::util::{
     join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
 };
+use ntex_util::time::Millis;
 
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
 use super::{counter::Counter, Token};
@@ -378,7 +378,8 @@ enum WorkerState<T> {
 }
 
 impl<T> Future for Worker<T>
-where T: 'static + Send
+where
+    T: 'static + Send,
 {
     type Output = ();
 
@@ -548,7 +549,7 @@ where T: 'static + Send
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     use super::*;
     use crate::io::Io;
@@ -625,8 +626,10 @@ mod tests {
         let (sync_tx, _sync_rx) = std::sync::mpsc::channel();
         let poll = Arc::new(polling::Poller::new().unwrap());
         let waker = poll.clone();
-        let avail =
-            WorkerAvailability::new(Box::new(AcceptNotify::new(waker.clone(), sync_tx.clone())));
+        let avail = WorkerAvailability::new(Box::new(AcceptNotify::new(
+            waker.clone(),
+            sync_tx.clone(),
+        )));
 
         let st = Arc::new(Mutex::new(St::Pending));
         let counter = Arc::new(Mutex::new(0));
@@ -703,7 +706,8 @@ mod tests {
         // force shutdown
         let (_tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
-        let avail = WorkerAvailability::new(Box::new(AcceptNotify::new(waker, sync_tx.clone())));
+        let avail =
+            WorkerAvailability::new(Box::new(AcceptNotify::new(waker, sync_tx.clone())));
         let f = SrvFactory {
             st: st.clone(),
             counter: counter.clone(),

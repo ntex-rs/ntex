@@ -579,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::needless_borrow)]
+    #[allow(clippy::needless_borrow, clippy::needless_borrows_for_generic_args)]
     fn test_basics() {
         let m = HeaderMap::default();
         assert!(m.is_empty());

@@ -161,7 +161,7 @@ mod tests {
     use ntex_util::future::{lazy, Ready};
 
     use super::*;
-    use crate::{fn_factory, Pipeline, Service, ServiceCtx, ServiceFactory};
+    use crate::{fn_factory, Pipeline};
 
     #[derive(Debug, Clone)]
     struct Srv(bool);
