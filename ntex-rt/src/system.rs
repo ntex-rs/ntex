@@ -16,7 +16,7 @@ pub struct System {
 }
 
 thread_local!(
-    static CURRENT: RefCell<Option<System>> = RefCell::new(None);
+    static CURRENT: RefCell<Option<System>> = const { RefCell::new(None) };
 );
 
 impl System {

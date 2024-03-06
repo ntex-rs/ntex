@@ -9,7 +9,7 @@ use futures_core::stream::Stream;
 use crate::system::System;
 
 thread_local!(
-    static ADDR: RefCell<Option<Arbiter>> = RefCell::new(None);
+    static ADDR: RefCell<Option<Arbiter>> = const { RefCell::new(None) };
     static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
 );
 

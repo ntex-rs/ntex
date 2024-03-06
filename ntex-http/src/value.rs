@@ -85,6 +85,7 @@ impl HeaderValue {
         let mut i = 0;
         while i < bytes.len() {
             if !is_visible_ascii(bytes[i]) {
+                #[allow(clippy::out_of_bounds_indexing)]
                 ([] as [u8; 0])[0]; // Invalid header value
             }
             i += 1;

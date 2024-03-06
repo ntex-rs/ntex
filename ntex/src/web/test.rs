@@ -282,7 +282,7 @@ pub async fn respond_to<T: Responder<DefaultError>>(
 ///     }
 /// }
 ///
-/// #[test]
+/// #[ntex::test]
 /// fn test_index() {
 ///     let req = test::TestRequest::with_header("content-type", "text/plain")
 ///         .to_http_request();
