@@ -9,6 +9,7 @@ use crate::time::{sleep, Millis, Sleep};
 use crate::util::{
     join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
 };
+use ntex_util::time::Millis;
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
@@ -509,7 +510,7 @@ impl Future for Worker {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     use super::*;
     use crate::io::Io;

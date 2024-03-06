@@ -417,7 +417,7 @@ impl<'a> fmt::Display for FormatDisplay<'a> {
 mod tests {
     use super::*;
     use crate::http::{header, StatusCode};
-    use crate::service::{IntoService, Middleware, Pipeline};
+    use crate::service::{IntoService, Pipeline};
     use crate::util::lazy;
     use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};

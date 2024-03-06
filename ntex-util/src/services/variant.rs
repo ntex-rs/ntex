@@ -232,8 +232,7 @@ variant_impl_and!(VariantFactory7, VariantFactory8, V8, V8R, v8, (V2, V3, V4, V5
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{fn_factory, Service, ServiceFactory};
-    use std::task::{Context, Poll};
+    use ntex_service::fn_factory;
 
     use super::*;
     use crate::future::lazy;

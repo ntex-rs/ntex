@@ -1,3 +1,4 @@
+#![allow(clippy::op_ref, clippy::let_underscore_future)]
 use std::{borrow::Borrow, borrow::BorrowMut, task::Poll};
 
 use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef};

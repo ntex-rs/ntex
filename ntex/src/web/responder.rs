@@ -307,10 +307,10 @@ where
 pub(crate) mod tests {
     use super::*;
     use crate::http::body::{Body, ResponseBody};
-    use crate::http::header::{HeaderValue, CONTENT_TYPE};
-    use crate::http::{Response as HttpResponse, StatusCode};
+    use crate::http::header::CONTENT_TYPE;
+    use crate::http::Response as HttpResponse;
+    use crate::web;
     use crate::web::test::{init_service, TestRequest};
-    use crate::{util::Bytes, util::BytesMut, web};
 
     fn responder<T: Responder<DefaultError>>(responder: T) -> impl Responder<DefaultError> {
         responder

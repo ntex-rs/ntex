@@ -388,8 +388,9 @@ where
 }
 
 pin_project_lite::pin_project! {
-    struct OpenConnection<T: Service<Connect>>
-    where T: 'static
+    struct OpenConnection<T>
+    where T: Service<Connect>,
+          T: 'static
     {
         key: Key,
         #[pin]
@@ -610,11 +611,9 @@ impl Drop for Acquired {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
-
     use super::*;
     use crate::time::{sleep, Millis};
-    use crate::{http::Uri, io as nio, service::fn_service, testing::Io, util::lazy};
+    use crate::{io as nio, service::fn_service, testing::Io, util::lazy};
 
     #[crate::rt_test]
     async fn test_basics() {

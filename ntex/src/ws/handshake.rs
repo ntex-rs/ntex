@@ -83,7 +83,7 @@ pub fn handshake_response(req: &RequestHead) -> ResponseBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{error::ResponseError, header, test::TestRequest, Method};
+    use crate::http::{error::ResponseError, test::TestRequest};
 
     #[test]
     fn test_handshake() {

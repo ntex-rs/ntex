@@ -72,7 +72,7 @@ where
 #[cfg(test)]
 mod tests {
     use ntex_util::future::lazy;
-    use std::{rc::Rc, task::Poll};
+    use std::rc::Rc;
 
     use crate::{chain, fn_service, Pipeline};
 

@@ -127,7 +127,8 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
         if !timer.running.get() {
             timer.running.set(true);
 
-            spawn(async move {
+            #[allow(clippy::let_underscore_future)]
+            let _ = spawn(async move {
                 let guard = TimerGuard;
                 loop {
                     sleep(SEC).await;

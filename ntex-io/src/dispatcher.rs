@@ -1,4 +1,5 @@
 //! Framed transport dispatcher
+#![allow(clippy::let_underscore_future)]
 use std::{cell::Cell, future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use ntex_bytes::Pool;
@@ -341,7 +342,7 @@ where
                     // call service
                     let shared = slf.shared.clone();
                     shared.inflight.set(shared.inflight.get() + 1);
-                    spawn(async move {
+                    let _ = spawn(async move {
                         let result = shared.service.call(item).await;
                         shared.handle_result(result, &shared.io);
                     });
@@ -365,7 +366,7 @@ where
                     // call service
                     let shared = slf.shared.clone();
                     shared.inflight.set(shared.inflight.get() + 1);
-                    spawn(async move {
+                    let _ = spawn(async move {
                         let result = shared.service.call(item).await;
                         shared.handle_result(result, &shared.io);
                     });
@@ -595,7 +596,7 @@ mod tests {
     use ntex_bytes::{Bytes, BytesMut, PoolId, PoolRef};
     use ntex_codec::BytesCodec;
     use ntex_service::ServiceCtx;
-    use ntex_util::{time::sleep, time::Millis, time::Seconds};
+    use ntex_util::{time::sleep, time::Millis};
 
     use super::*;
     use crate::{io::Flags, testing::IoTest, Io, IoRef, IoStream};

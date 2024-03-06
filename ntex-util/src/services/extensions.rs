@@ -1,4 +1,4 @@
-use std::{any::Any, any::TypeId, fmt, iter::Extend};
+use std::{any::Any, any::TypeId, fmt};
 
 #[derive(Default)]
 /// A type map of request extensions.

@@ -193,10 +193,10 @@ impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use ntex_util::future::lazy;
-    use ntex_util::{channel::condition, time};
-    use std::task::{Context, Poll};
-    use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc};
+    use std::task::Context;
+    use std::{cell::Cell, cell::RefCell};
+
+    use ntex_util::{channel::condition, future::lazy, time};
 
     use super::*;
     use crate::Pipeline;
@@ -218,6 +218,7 @@ mod tests {
             ctx: ServiceCtx<'_, Self>,
         ) -> Result<Self::Response, Self::Error> {
             format!("{:?}", ctx);
+            #[allow(clippy::clone_on_copy)]
             let _ = ctx.clone();
             Ok(req)
         }

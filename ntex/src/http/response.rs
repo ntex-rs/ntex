@@ -808,8 +808,7 @@ impl From<BytesMut> for Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::body::Body;
-    use crate::http::header::{HeaderValue, CONTENT_TYPE, COOKIE};
+    use crate::http::header::{CONTENT_TYPE, COOKIE};
 
     #[test]
     fn test_debug() {

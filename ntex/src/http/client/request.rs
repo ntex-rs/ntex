@@ -583,6 +583,7 @@ mod tests {
     }
 
     #[crate::rt_test]
+    #[allow(clippy::let_underscore_future)]
     async fn test_basics() {
         let mut req = Client::new()
             .put("/")

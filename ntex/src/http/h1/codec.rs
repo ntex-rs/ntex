@@ -197,8 +197,8 @@ impl Encoder for Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{h1::PayloadItem, HttpMessage, Method};
-    use crate::util::{Bytes, BytesMut};
+    use crate::http::{h1::PayloadItem, HttpMessage};
+    use crate::util::Bytes;
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
