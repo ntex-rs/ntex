@@ -1,3 +1,4 @@
+#![allow(clippy::let_underscore_future)]
 use std::{cell::RefCell, future::Future, io, rc::Rc};
 
 use async_channel::unbounded;
@@ -159,8 +160,8 @@ where
     let result = Rc::new(RefCell::new(None));
     let result_inner = result.clone();
     crate::block_on(Box::pin(async move {
-        crate::spawn(arb);
-        crate::spawn(arb_controller);
+        let _ = crate::spawn(arb);
+        let _ = crate::spawn(arb_controller);
         if let Err(e) = f() {
             *result_inner.borrow_mut() = Some(Err(e));
         } else {

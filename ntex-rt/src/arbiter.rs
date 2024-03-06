@@ -1,3 +1,4 @@
+#![allow(clippy::let_underscore_future)]
 use std::any::{Any, TypeId};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
@@ -103,7 +104,7 @@ impl Arbiter {
 
                 crate::block_on(async move {
                     // start arbiter controller
-                    crate::spawn(ArbiterController {
+                    let _ = crate::spawn(ArbiterController {
                         stop: Some(stop),
                         rx: Box::pin(arb_rx),
                     });
@@ -268,7 +269,7 @@ impl Future for ArbiterController {
                         return Poll::Ready(());
                     }
                     ArbiterCommand::Execute(fut) => {
-                        crate::spawn(fut);
+                        let _ = crate::spawn(fut);
                     }
                     ArbiterCommand::ExecuteFn(f) => {
                         f.call_box();
