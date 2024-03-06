@@ -119,7 +119,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{fn_service, ServiceFactory};
+    use crate::fn_service;
 
     #[ntex::test]
     async fn test_map_config() {

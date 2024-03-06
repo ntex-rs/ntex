@@ -185,7 +185,9 @@ impl InternalServiceFactory<Stream> for ConfiguredService {
         })
     }
 
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<Stream>)>, ()>> {
+    fn create(
+        &self,
+    ) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<Stream>)>, ()>> {
         // configure services
         let rt = ServiceRuntime::new(self.topics.clone());
         let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
@@ -387,7 +389,8 @@ struct ServiceFactory<T> {
     pool: PoolId,
 }
 
-impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage<Stream>)> for ServiceFactory<T>
+impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage<Stream>)>
+    for ServiceFactory<T>
 where
     T: service::ServiceFactory<Io>,
     T::Service: 'static,

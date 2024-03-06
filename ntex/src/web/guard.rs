@@ -414,7 +414,6 @@ impl Guard for HostGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{header, Method};
     use crate::web::test::TestRequest;
 
     #[test]

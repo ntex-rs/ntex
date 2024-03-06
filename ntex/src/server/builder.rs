@@ -13,8 +13,8 @@ use super::config::{
     Config, ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime,
 };
 use super::service::{Factory, InternalServiceFactory};
-use super::worker::{self, WorkerManagerCmd, Worker, WorkerAvailability, WorkerClient};
-use super::{socket::Listener, Server, ServerCommand, ServerStatus, Token, socket};
+use super::worker::{self, Worker, WorkerAvailability, WorkerClient, WorkerManagerCmd};
+use super::{socket, socket::Listener, Server, ServerCommand, ServerStatus, Token};
 
 const STOP_DELAY: Millis = Millis(300);
 
@@ -381,7 +381,11 @@ impl ServerBuilder {
         }
     }
 
-    fn start_worker(&self, idx: usize, notify: AcceptNotify) -> WorkerClient<socket::Stream> {
+    fn start_worker(
+        &self,
+        idx: usize,
+        notify: AcceptNotify,
+    ) -> WorkerClient<socket::Stream> {
         let avail = WorkerAvailability::new(Box::new(notify));
         let services: Vec<Box<dyn InternalServiceFactory<socket::Stream>>> =
             self.services.iter().map(|v| v.clone_factory()).collect();

@@ -333,7 +333,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::http::header::{HeaderValue, CONTENT_TYPE};
+    use crate::http::header::HeaderValue;
     use crate::util::Bytes;
     use crate::web::test::{from_request, respond_to, TestRequest};
 

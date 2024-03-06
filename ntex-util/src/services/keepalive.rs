@@ -138,8 +138,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::ServiceFactory;
-
     use super::*;
     use crate::future::lazy;
 

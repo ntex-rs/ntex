@@ -124,7 +124,6 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ntex_service::ServiceFactory;
 
     #[ntex::test]
     async fn test_openssl_connect() {

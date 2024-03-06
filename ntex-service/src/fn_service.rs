@@ -389,7 +389,7 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{Pipeline, ServiceFactory};
+    use crate::Pipeline;
 
     #[ntex::test]
     async fn test_fn_service() {

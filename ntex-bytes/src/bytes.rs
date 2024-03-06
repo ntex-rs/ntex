@@ -4179,7 +4179,11 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::len_zero)]
+    #[allow(
+        clippy::len_zero,
+        clippy::nonminimal_bool,
+        clippy::unnecessary_fallible_conversions
+    )]
     fn bytes() {
         let mut b = Bytes::from(LONG.to_vec());
         b.clear();
@@ -4226,6 +4230,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unnecessary_fallible_conversions)]
     fn bytes_vec() {
         let bv = BytesVec::copy_from_slice(LONG);
         // SharedVec size is 32

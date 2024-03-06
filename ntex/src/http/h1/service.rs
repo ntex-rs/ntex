@@ -83,8 +83,6 @@ mod openssl {
 
 #[cfg(feature = "rustls")]
 mod rustls {
-    use std::fmt;
-
     use ntex_tls::rustls::{TlsAcceptor, TlsServerFilter};
     use tls_rustls::ServerConfig;
 

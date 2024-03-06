@@ -252,8 +252,7 @@ impl<T> SendError<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{future::lazy, future::stream_recv, Stream};
-    use futures_sink::Sink;
+    use crate::{future::lazy, future::stream_recv};
 
     #[ntex_macros::rt_test2]
     async fn test_mpsc() {

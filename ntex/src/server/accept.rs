@@ -6,7 +6,7 @@ use polling::{Event, Events, Poller};
 use crate::{rt::System, time::sleep, time::Millis, util::Either};
 
 use super::socket::{Listener, SocketAddr, Stream};
-use super::worker::{WorkerMessage, WorkerClient, WorkerManagerCmd, WorkerManagerNotifier};
+use super::worker::{WorkerClient, WorkerManagerCmd, WorkerManagerNotifier, WorkerMessage};
 use super::{Server, ServerStatus, Token};
 
 const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
@@ -26,7 +26,10 @@ struct ServerSocketInfo {
 pub(super) struct AcceptNotify(Arc<Poller>, mpsc::Sender<WorkerManagerCmd<Stream>>);
 
 impl AcceptNotify {
-    pub(super) fn new(waker: Arc<Poller>, tx: mpsc::Sender<WorkerManagerCmd<Stream>>) -> Self {
+    pub(super) fn new(
+        waker: Arc<Poller>,
+        tx: mpsc::Sender<WorkerManagerCmd<Stream>>,
+    ) -> Self {
         AcceptNotify(waker, tx)
     }
 }
@@ -44,7 +47,11 @@ impl WorkerManagerNotifier<Stream> for AcceptNotify {
 
 pub(super) struct AcceptLoop {
     notify: AcceptNotify,
-    inner: Option<(mpsc::Receiver<WorkerManagerCmd<Stream>>, Arc<Poller>, Server)>,
+    inner: Option<(
+        mpsc::Receiver<WorkerManagerCmd<Stream>>,
+        Arc<Poller>,
+        Server,
+    )>,
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 

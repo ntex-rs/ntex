@@ -1,3 +1,4 @@
+#![allow(clippy::let_underscore_future)]
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::{io, io::Read, net, sync::mpsc, sync::Arc, thread, time};
 

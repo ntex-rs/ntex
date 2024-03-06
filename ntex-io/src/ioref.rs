@@ -119,18 +119,15 @@ impl IoRef {
             })
             // .with_write_buf() could return io::Error<Result<(), U::Error>>,
             // in that case mark io as failed
-            .map_or_else(
-                |err| {
-                    log::trace!(
-                        "{}: Got io error while encoding, error: {:?}",
-                        self.tag(),
-                        err
-                    );
-                    self.0.io_stopped(Some(err));
-                    Ok(())
-                },
-                |item| item,
-            )
+            .unwrap_or_else(|err| {
+                log::trace!(
+                    "{}: Got io error while encoding, error: {:?}",
+                    self.tag(),
+                    err
+                );
+                self.0.io_stopped(Some(err));
+                Ok(())
+            })
         } else {
             log::trace!("{}: Io is closed/closing, skip frame encoding", self.tag());
             Ok(())
@@ -318,7 +315,7 @@ mod tests {
     use ntex_util::time::{sleep, Millis};
 
     use super::*;
-    use crate::{testing::IoTest, FilterLayer, Io, ReadBuf, WriteBuf};
+    use crate::{testing::IoTest, FilterLayer, Io, ReadBuf};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";

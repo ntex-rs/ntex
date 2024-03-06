@@ -1,4 +1,5 @@
 #![deny(warnings, rust_2018_idioms)]
+#![allow(clippy::unnecessary_mut_passed)]
 
 use ntex_bytes::{Buf, Bytes, BytesMut};
 

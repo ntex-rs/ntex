@@ -90,8 +90,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{apply, fn_factory, Pipeline, Service, ServiceCtx, ServiceFactory};
-    use std::{cell::RefCell, task::Poll, time::Duration};
+    use ntex_service::{apply, fn_factory, Pipeline, ServiceFactory};
+    use std::{cell::RefCell, time::Duration};
 
     use super::*;
     use crate::{channel::oneshot, future::lazy};

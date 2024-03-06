@@ -147,9 +147,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fmt, time::Duration};
+    use std::time::Duration;
 
-    use ntex_service::{apply, fn_factory, Pipeline, Service, ServiceFactory};
+    use ntex_service::{apply, fn_factory, Pipeline, ServiceFactory};
 
     use super::*;
     use crate::future::lazy;

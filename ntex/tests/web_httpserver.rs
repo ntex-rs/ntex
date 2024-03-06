@@ -1,3 +1,4 @@
+#![allow(clippy::let_underscore_future)]
 use std::{sync::mpsc, thread, time::Duration};
 
 #[cfg(feature = "openssl")]

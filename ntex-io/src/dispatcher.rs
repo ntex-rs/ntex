@@ -595,7 +595,7 @@ mod tests {
     use ntex_bytes::{Bytes, BytesMut, PoolId, PoolRef};
     use ntex_codec::BytesCodec;
     use ntex_service::ServiceCtx;
-    use ntex_util::{time::sleep, time::Millis, time::Seconds};
+    use ntex_util::{time::sleep, time::Millis};
 
     use super::*;
     use crate::{io::Flags, testing::IoTest, Io, IoRef, IoStream};

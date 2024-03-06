@@ -838,19 +838,19 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{cell::Cell, future::poll_fn, future::Future, io, sync::Arc};
+    use std::{cell::Cell, future::poll_fn, future::Future, sync::Arc};
 
     use ntex_h2::Config;
     use rand::Rng;
 
     use super::*;
-    use crate::http::config::{DispatcherConfig, ServiceConfig};
+    use crate::http::config::ServiceConfig;
     use crate::http::h1::{ClientCodec, DefaultControlService};
-    use crate::http::{body, Request, ResponseHead, StatusCode};
+    use crate::http::{body, ResponseHead, StatusCode};
     use crate::io::{self as nio, Base};
     use crate::service::{fn_service, IntoService};
     use crate::util::{lazy, stream_recv, Bytes, BytesMut};
-    use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis, time::Seconds};
+    use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis};
 
     const BUFFER_SIZE: usize = 32_768;
 

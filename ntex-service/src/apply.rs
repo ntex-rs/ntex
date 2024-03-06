@@ -203,7 +203,7 @@ mod tests {
     use std::task::Poll;
 
     use super::*;
-    use crate::{chain, chain_factory, Service, ServiceCtx};
+    use crate::{chain, chain_factory};
 
     #[derive(Clone, Debug)]
     struct Srv;

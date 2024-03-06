@@ -31,7 +31,8 @@ pub trait InternalServiceFactory<T>: Send {
 
     fn clone_factory(&self) -> Box<dyn InternalServiceFactory<T>>;
 
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<T>)>, ()>>;
+    fn create(&self)
+        -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<T>)>, ()>>;
 }
 
 pub type BoxedServerService<T> =
@@ -154,7 +155,9 @@ where
         })
     }
 
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<Stream>)>, ()>> {
+    fn create(
+        &self,
+    ) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<Stream>)>, ()>> {
         let token = self.token;
         let tag = self.tag;
         let cfg = Config::default();
@@ -186,7 +189,9 @@ impl<T> InternalServiceFactory<T> for Box<dyn InternalServiceFactory<T>> {
         self.as_ref().clone_factory()
     }
 
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<T>)>, ()>> {
+    fn create(
+        &self,
+    ) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<T>)>, ()>> {
         self.as_ref().create()
     }
 }
