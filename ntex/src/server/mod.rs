@@ -6,11 +6,11 @@ use async_channel::Sender;
 mod accept;
 mod builder;
 mod config;
-mod counter;
-mod service;
+pub mod counter;
+pub mod service;
 mod socket;
 mod test;
-mod worker;
+pub mod worker;
 
 #[cfg(feature = "openssl")]
 pub use ntex_tls::openssl;
@@ -36,10 +36,10 @@ pub enum ServerStatus {
 
 /// Socket id token
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct Token(usize);
+pub struct Token(pub usize);
 
 impl Token {
-    pub(self) fn next(&mut self) -> Token {
+    pub fn next(&mut self) -> Token {
         let token = Token(self.0);
         self.0 += 1;
         token
@@ -51,7 +51,7 @@ pub fn build() -> ServerBuilder {
     ServerBuilder::default()
 }
 
-/// Ssl error combinded with service error.
+/// Ssl error combined with service error.
 #[derive(Debug)]
 pub enum SslError<E> {
     Ssl(Box<dyn std::error::Error>),
@@ -59,7 +59,7 @@ pub enum SslError<E> {
 }
 
 #[derive(Debug)]
-enum ServerCommand {
+pub enum ServerCommand {
     WorkerFaulted(usize),
     Pause(oneshot::Sender<()>),
     Resume(oneshot::Sender<()>),
@@ -78,7 +78,7 @@ enum ServerCommand {
 pub struct Server(Sender<ServerCommand>, Option<oneshot::Receiver<()>>);
 
 impl Server {
-    fn new(tx: Sender<ServerCommand>) -> Self {
+    pub fn new(tx: Sender<ServerCommand>) -> Self {
         Server(tx, None)
     }
 
@@ -87,11 +87,11 @@ impl Server {
         ServerBuilder::default()
     }
 
-    fn signal(&self, sig: crate::rt::Signal) {
+    pub fn signal(&self, sig: crate::rt::Signal) {
         let _ = self.0.try_send(ServerCommand::Signal(sig));
     }
 
-    fn worker_faulted(&self, idx: usize) {
+    pub fn worker_faulted(&self, idx: usize) {
         let _ = self.0.try_send(ServerCommand::WorkerFaulted(idx));
     }
 

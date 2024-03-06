@@ -8,13 +8,13 @@ use crate::rt::{spawn, Signal, System};
 use crate::time::{sleep, Millis};
 use crate::{io::Io, service::ServiceFactory, util::join_all, util::Stream};
 
-use super::accept::{AcceptLoop, AcceptNotify, Command};
+use super::accept::{AcceptLoop, AcceptNotify};
 use super::config::{
     Config, ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime,
 };
 use super::service::{Factory, InternalServiceFactory};
-use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use super::{socket::Listener, Server, ServerCommand, ServerStatus, Token};
+use super::worker::{self, WorkerManagerCmd, Worker, WorkerAvailability, WorkerClient};
+use super::{socket::Listener, Server, ServerCommand, ServerStatus, Token, socket};
 
 const STOP_DELAY: Millis = Millis(300);
 
@@ -25,8 +25,8 @@ pub struct ServerBuilder {
     threads: usize,
     token: Token,
     backlog: i32,
-    workers: Vec<(usize, WorkerClient)>,
-    services: Vec<Box<dyn InternalServiceFactory>>,
+    workers: Vec<(usize, WorkerClient<socket::Stream>)>,
+    services: Vec<Box<dyn InternalServiceFactory<socket::Stream>>>,
     sockets: Vec<(Token, String, Listener)>,
     accept: AcceptLoop,
     exit: bool,
@@ -381,9 +381,9 @@ impl ServerBuilder {
         }
     }
 
-    fn start_worker(&self, idx: usize, notify: AcceptNotify) -> WorkerClient {
-        let avail = WorkerAvailability::new(notify);
-        let services: Vec<Box<dyn InternalServiceFactory>> =
+    fn start_worker(&self, idx: usize, notify: AcceptNotify) -> WorkerClient<socket::Stream> {
+        let avail = WorkerAvailability::new(Box::new(notify));
+        let services: Vec<Box<dyn InternalServiceFactory<socket::Stream>>> =
             self.services.iter().map(|v| v.clone_factory()).collect();
 
         Worker::start(idx, services, avail, self.shutdown_timeout)
@@ -392,11 +392,11 @@ impl ServerBuilder {
     fn handle_cmd(&mut self, item: ServerCommand) {
         match item {
             ServerCommand::Pause(tx) => {
-                self.accept.send(Command::Pause);
+                self.accept.send(WorkerManagerCmd::Pause);
                 let _ = tx.send(());
             }
             ServerCommand::Resume(tx) => {
-                self.accept.send(Command::Resume);
+                self.accept.send(WorkerManagerCmd::Resume);
                 let _ = tx.send(());
             }
             ServerCommand::Signal(sig) => {
@@ -441,7 +441,7 @@ impl ServerBuilder {
 
                 // stop accept thread
                 let (tx, rx) = std::sync::mpsc::channel();
-                self.accept.send(Command::Stop(tx));
+                self.accept.send(WorkerManagerCmd::Stop(tx));
                 let _ = rx.recv();
 
                 let notify = std::mem::take(&mut self.notify);
@@ -513,7 +513,7 @@ impl ServerBuilder {
 
                     let worker = self.start_worker(new_idx, self.accept.notify());
                     self.workers.push((new_idx, worker.clone()));
-                    self.accept.send(Command::Worker(worker));
+                    self.accept.send(WorkerManagerCmd::Worker(worker));
                 }
             }
         }
