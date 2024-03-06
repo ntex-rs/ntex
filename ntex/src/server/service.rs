@@ -9,10 +9,10 @@ use crate::{io::Io, time::Millis};
 use super::{counter::CounterGuard, socket::Stream, Config, Token};
 
 /// Server message
-pub(super) enum ServerMessage {
-    /// New stream
-    Connect(Stream),
-    /// Gracefull shutdown in millis
+pub enum ServerMessage<T> {
+    /// New content received
+    New(T),
+    /// Graceful shutdown in millis
     Shutdown(Millis),
     /// Force shutdown
     ForceShutdown,
@@ -24,18 +24,18 @@ pub(super) trait StreamServiceFactory: Send + Clone + 'static {
     fn create(&self, _: Config) -> Self::Factory;
 }
 
-pub(super) trait InternalServiceFactory: Send {
+pub trait InternalServiceFactory<T>: Send {
     fn name(&self, token: Token) -> &str;
 
     fn set_tag(&mut self, token: Token, tag: &'static str);
 
-    fn clone_factory(&self) -> Box<dyn InternalServiceFactory>;
+    fn clone_factory(&self) -> Box<dyn InternalServiceFactory<T>>;
 
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>;
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<T>)>, ()>>;
 }
 
-pub(super) type BoxedServerService =
-    boxed::BoxService<(Option<CounterGuard>, ServerMessage), (), ()>;
+pub type BoxedServerService<T> =
+    boxed::BoxService<(Option<CounterGuard>, ServerMessage<T>), (), ()>;
 
 #[derive(Clone)]
 pub(super) struct StreamService<T> {
@@ -56,7 +56,7 @@ impl<T> StreamService<T> {
     }
 }
 
-impl<T> Service<(Option<CounterGuard>, ServerMessage)> for StreamService<T>
+impl<T> Service<(Option<CounterGuard>, ServerMessage<Stream>)> for StreamService<T>
 where
     T: Service<Io>,
 {
@@ -78,11 +78,11 @@ where
 
     async fn call(
         &self,
-        (guard, req): (Option<CounterGuard>, ServerMessage),
+        (guard, req): (Option<CounterGuard>, ServerMessage<Stream>),
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<(), ()> {
         match req {
-            ServerMessage::Connect(stream) => {
+            ServerMessage::New(stream) => {
                 let stream = stream.try_into().map_err(|e| {
                     error!("Cannot convert to an async io stream: {}", e);
                 });
@@ -121,7 +121,7 @@ where
         inner: F,
         addr: SocketAddr,
         tag: &'static str,
-    ) -> Box<dyn InternalServiceFactory> {
+    ) -> Box<dyn InternalServiceFactory<Stream>> {
         Box::new(Self {
             name,
             token,
@@ -132,7 +132,7 @@ where
     }
 }
 
-impl<F> InternalServiceFactory for Factory<F>
+impl<F> InternalServiceFactory<Stream> for Factory<F>
 where
     F: StreamServiceFactory,
 {
@@ -144,7 +144,7 @@ where
         self.tag = tag;
     }
 
-    fn clone_factory(&self) -> Box<dyn InternalServiceFactory> {
+    fn clone_factory(&self) -> Box<dyn InternalServiceFactory<Stream>> {
         Box::new(Self {
             name: self.name.clone(),
             inner: self.inner.clone(),
@@ -154,7 +154,7 @@ where
         })
     }
 
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<Stream>)>, ()>> {
         let token = self.token;
         let tag = self.tag;
         let cfg = Config::default();
@@ -173,7 +173,7 @@ where
     }
 }
 
-impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
+impl<T> InternalServiceFactory<T> for Box<dyn InternalServiceFactory<T>> {
     fn name(&self, token: Token) -> &str {
         self.as_ref().name(token)
     }
@@ -182,11 +182,11 @@ impl InternalServiceFactory for Box<dyn InternalServiceFactory> {
         self.as_mut().set_tag(token, tag);
     }
 
-    fn clone_factory(&self) -> Box<dyn InternalServiceFactory> {
+    fn clone_factory(&self) -> Box<dyn InternalServiceFactory<T>> {
         self.as_ref().clone_factory()
     }
 
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<T>)>, ()>> {
         self.as_ref().create()
     }
 }

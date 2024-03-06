@@ -1,24 +1,25 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::{future::Future, pin::Pin, sync::Arc, task::Context, task::Poll};
+use std::{fmt, future::Future, pin::Pin, sync::Arc, task::Context, task::Poll};
+use std::sync::mpsc;
 
 use async_channel::{unbounded, Receiver, Sender};
 
 use crate::rt::{spawn, Arbiter};
 use crate::service::Pipeline;
-use crate::time::{sleep, Millis, Sleep};
+use ntex_util::time::Millis;
+use crate::time::{sleep, Sleep};
 use crate::util::{
     join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
 };
 
-use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
-use super::{counter::Counter, socket::Stream, Token};
+use super::{counter::Counter, Token};
 
 type ServerStopCommand = Pin<Box<dyn FutStream<Item = StopCommand>>>;
-type ServerWorkerCommand = Pin<Box<dyn FutStream<Item = WorkerCommand>>>;
+type ServerWorkerCommand<T> = Pin<Box<dyn FutStream<Item = WorkerCommand<T>>>>;
 
 #[derive(Debug)]
-pub(super) struct WorkerCommand(Connection);
+pub(super) struct WorkerCommand<T>(WorkerMessage<T>);
 
 #[derive(Debug)]
 /// Stop worker message. Returns `true` on successful shutdown
@@ -29,9 +30,9 @@ pub(super) struct StopCommand {
 }
 
 #[derive(Debug)]
-pub(super) struct Connection {
-    pub(super) io: Stream,
-    pub(super) token: Token,
+pub struct WorkerMessage<T> {
+    pub content: T,
+    pub token: Token,
 }
 
 const STOP_TIMEOUT: Millis = Millis::ONE_SEC;
@@ -56,20 +57,31 @@ thread_local! {
         Counter::new(MAX_CONNS.load(Ordering::Relaxed));
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct WorkerClient {
-    pub(super) idx: usize,
-    tx1: Sender<WorkerCommand>,
+#[derive(Debug)]
+pub struct WorkerClient<T> {
+    pub idx: usize,
+    tx1: Sender<WorkerCommand<T>>,
     tx2: Sender<StopCommand>,
-    avail: WorkerAvailability,
+    avail: WorkerAvailability<T>,
 }
 
-impl WorkerClient {
+impl<T> Clone for WorkerClient<T> {
+    fn clone(&self) -> Self {
+        WorkerClient {
+            idx: self.idx,
+            tx1: self.tx1.clone(),
+            tx2: self.tx2.clone(),
+            avail: self.avail.clone(),
+        }
+    }
+}
+
+impl<T> WorkerClient<T> {
     pub(super) fn new(
         idx: usize,
-        tx1: Sender<WorkerCommand>,
+        tx1: Sender<WorkerCommand<T>>,
         tx2: Sender<StopCommand>,
-        avail: WorkerAvailability,
+        avail: WorkerAvailability<T>,
     ) -> Self {
         WorkerClient {
             idx,
@@ -79,45 +91,70 @@ impl WorkerClient {
         }
     }
 
-    pub(super) fn send(&self, msg: Connection) -> Result<(), Connection> {
+    pub fn send(&self, msg: WorkerMessage<T>) -> Result<(), WorkerMessage<T>> {
         self.tx1
             .try_send(WorkerCommand(msg))
             .map_err(|msg| msg.into_inner().0)
     }
 
-    pub(super) fn available(&self) -> bool {
+    pub fn available(&self) -> bool {
         self.avail.available()
     }
 
-    pub(super) fn stop(&self, graceful: bool) -> oneshot::Receiver<bool> {
+    pub fn stop(&self, graceful: bool) -> oneshot::Receiver<bool> {
         let (result, rx) = oneshot::channel();
         let _ = self.tx2.try_send(StopCommand { graceful, result });
         rx
     }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct WorkerAvailability {
-    notify: AcceptNotify,
+#[derive(Debug)]
+pub struct WorkerAvailability<T> {
+    notify: Box<dyn WorkerManagerNotifier<T>>,
     available: Arc<AtomicBool>,
 }
 
-impl WorkerAvailability {
-    pub(super) fn new(notify: AcceptNotify) -> Self {
+impl<T> Clone for WorkerAvailability<T> {
+    fn clone(&self) -> Self {
+        WorkerAvailability {
+            notify: self.notify.clone_box(),
+            available: self.available.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum WorkerManagerCmd<T> {
+    Stop(mpsc::Sender<()>),
+    Pause,
+    Resume,
+    Worker(WorkerClient<T>),
+    Timer,
+    WorkerAvailable,
+}
+
+pub trait WorkerManagerNotifier<T>: Send + Sync + fmt::Debug {
+    fn send(&self, cmd: WorkerManagerCmd<T>);
+
+    fn clone_box(&self) -> Box<dyn WorkerManagerNotifier<T>>;
+}
+
+impl<T> WorkerAvailability<T> {
+    pub fn new(notify: Box<dyn WorkerManagerNotifier<T>>) -> Self {
         WorkerAvailability {
             notify,
             available: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub(super) fn available(&self) -> bool {
+    pub fn available(&self) -> bool {
         self.available.load(Ordering::Acquire)
     }
 
-    pub(super) fn set(&self, val: bool) {
+    pub fn set(&self, val: bool) {
         let old = self.available.swap(val, Ordering::Release);
         if !old && val {
-            self.notify.send(Command::WorkerAvailable)
+            self.notify.send(WorkerManagerCmd::WorkerAvailable)
         }
     }
 }
@@ -126,25 +163,25 @@ impl WorkerAvailability {
 ///
 /// Worker accepts Socket objects via unbounded channel and starts stream
 /// processing.
-pub(super) struct Worker {
-    rx: ServerWorkerCommand,
+pub struct Worker<T> {
+    rx: ServerWorkerCommand<T>,
     rx2: ServerStopCommand,
-    services: Vec<WorkerService>,
-    availability: WorkerAvailability,
+    services: Vec<WorkerService<T>>,
+    availability: WorkerAvailability<T>,
     conns: Counter,
-    factories: Vec<Box<dyn InternalServiceFactory>>,
-    state: WorkerState,
+    factories: Vec<Box<dyn InternalServiceFactory<T>>>,
+    state: WorkerState<T>,
     shutdown_timeout: Millis,
 }
 
-struct WorkerService {
+struct WorkerService<T> {
     factory: usize,
     status: WorkerServiceStatus,
-    service: Pipeline<BoxedServerService>,
+    service: Pipeline<BoxedServerService<T>>,
 }
 
-impl WorkerService {
-    fn created(&mut self, service: BoxedServerService) {
+impl<T> WorkerService<T> {
+    fn created(&mut self, service: BoxedServerService<T>) {
         self.service = Pipeline::new(service);
         self.status = WorkerServiceStatus::Unavailable;
     }
@@ -160,13 +197,13 @@ enum WorkerServiceStatus {
     Stopped,
 }
 
-impl Worker {
-    pub(super) fn start(
+impl<T: 'static + Send> Worker<T> {
+    pub fn start(
         idx: usize,
-        factories: Vec<Box<dyn InternalServiceFactory>>,
-        availability: WorkerAvailability,
+        factories: Vec<Box<dyn InternalServiceFactory<T>>>,
+        availability: WorkerAvailability<T>,
         shutdown_timeout: Millis,
-    ) -> WorkerClient {
+    ) -> WorkerClient<T> {
         let (tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
         let avail = availability.clone();
@@ -191,12 +228,12 @@ impl Worker {
     }
 
     async fn create(
-        rx: Receiver<WorkerCommand>,
+        rx: Receiver<WorkerCommand<T>>,
         rx2: Receiver<StopCommand>,
-        factories: Vec<Box<dyn InternalServiceFactory>>,
-        availability: WorkerAvailability,
+        factories: Vec<Box<dyn InternalServiceFactory<T>>>,
+        availability: WorkerAvailability<T>,
         shutdown_timeout: Millis,
-    ) -> Result<Worker, ()> {
+    ) -> Result<Worker<T>, ()> {
         availability.set(false);
         let mut wrk = MAX_CONNS_COUNTER.with(move |conns| Worker {
             rx: Box::pin(rx),
@@ -329,18 +366,20 @@ impl Worker {
     }
 }
 
-enum WorkerState {
+enum WorkerState<T> {
     Available,
     Unavailable,
     Restarting(
         usize,
         Token,
-        BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>>,
+        BoxFuture<'static, Result<Vec<(Token, BoxedServerService<T>)>, ()>>,
     ),
     Shutdown(Sleep, Sleep, Option<oneshot::Sender<bool>>),
 }
 
-impl Future for Worker {
+impl<T> Future for Worker<T>
+where T: 'static + Send
+{
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -482,19 +521,19 @@ impl Future for Worker {
 
                     let next = ready!(Pin::new(&mut self.rx).poll_next(cx));
                     if let Some(WorkerCommand(msg)) = next {
-                        // handle incoming io stream
+                        // handle incoming message
                         let guard = self.conns.get();
                         let srv = &self.services[msg.token.0];
 
                         if log::log_enabled!(log::Level::Trace) {
                             trace!(
-                                "Got socket for service: {:?}",
+                                "Got message for service: {:?}",
                                 self.factories[srv.factory].name(msg.token)
                             );
                         }
                         let fut = srv
                             .service
-                            .call_static((Some(guard), ServerMessage::Connect(msg.io)));
+                            .call_static((Some(guard), ServerMessage::New(msg.content)));
                         spawn(async move {
                             let _ = fut.await;
                         });
@@ -513,6 +552,7 @@ mod tests {
 
     use super::*;
     use crate::io::Io;
+    use crate::server::accept::AcceptNotify;
     use crate::server::service::Factory;
     use crate::service::{Service, ServiceCtx, ServiceFactory};
     use crate::util::lazy;
@@ -586,7 +626,7 @@ mod tests {
         let poll = Arc::new(polling::Poller::new().unwrap());
         let waker = poll.clone();
         let avail =
-            WorkerAvailability::new(AcceptNotify::new(waker.clone(), sync_tx.clone()));
+            WorkerAvailability::new(Box::new(AcceptNotify::new(waker.clone(), sync_tx.clone())));
 
         let st = Arc::new(Mutex::new(St::Pending));
         let counter = Arc::new(Mutex::new(0));
@@ -663,7 +703,7 @@ mod tests {
         // force shutdown
         let (_tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
-        let avail = WorkerAvailability::new(AcceptNotify::new(waker, sync_tx.clone()));
+        let avail = WorkerAvailability::new(Box::new(AcceptNotify::new(waker, sync_tx.clone())));
         let f = SrvFactory {
             st: st.clone(),
             counter: counter.clone(),

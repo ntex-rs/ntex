@@ -44,7 +44,7 @@ impl Counter {
     }
 }
 
-pub(super) struct CounterGuard(Rc<CounterInner>);
+pub struct CounterGuard(Rc<CounterInner>);
 
 impl CounterGuard {
     fn new(inner: Rc<CounterInner>) -> Self {

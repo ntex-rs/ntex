@@ -3,6 +3,7 @@ use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, 
 use log::error;
 
 use crate::io::Io;
+use crate::server::socket::Stream;
 use crate::service::{self, boxed, ServiceFactory as NServiceFactory};
 use crate::util::{BoxFuture, HashMap, PoolId, Ready};
 
@@ -162,7 +163,7 @@ impl ConfiguredService {
     }
 }
 
-impl InternalServiceFactory for ConfiguredService {
+impl InternalServiceFactory<Stream> for ConfiguredService {
     fn name(&self, token: Token) -> &str {
         &self.names[&token].0
     }
@@ -175,7 +176,7 @@ impl InternalServiceFactory for ConfiguredService {
         }
     }
 
-    fn clone_factory(&self) -> Box<dyn InternalServiceFactory> {
+    fn clone_factory(&self) -> Box<dyn InternalServiceFactory<Stream>> {
         Box::new(Self {
             rt: self.rt.clone(),
             names: self.names.clone(),
@@ -184,7 +185,7 @@ impl InternalServiceFactory for ConfiguredService {
         })
     }
 
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService<Stream>)>, ()>> {
         // configure services
         let rt = ServiceRuntime::new(self.topics.clone());
         let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
@@ -374,7 +375,7 @@ impl ServiceRuntime {
 
 type BoxServiceFactory = service::boxed::BoxServiceFactory<
     (),
-    (Option<CounterGuard>, ServerMessage),
+    (Option<CounterGuard>, ServerMessage<Stream>),
     (),
     (),
     (),
@@ -386,7 +387,7 @@ struct ServiceFactory<T> {
     pool: PoolId,
 }
 
-impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage)> for ServiceFactory<T>
+impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage<Stream>)> for ServiceFactory<T>
 where
     T: service::ServiceFactory<Io>,
     T::Service: 'static,
@@ -396,9 +397,9 @@ where
     type Response = ();
     type Error = ();
     type InitError = ();
-    type Service = BoxedServerService;
+    type Service = BoxedServerService<Stream>;
 
-    async fn create(&self, _: ()) -> Result<BoxedServerService, ()> {
+    async fn create(&self, _: ()) -> Result<BoxedServerService<Stream>, ()> {
         let tag = self.tag;
         let pool = self.pool;
 

@@ -5,23 +5,13 @@ use polling::{Event, Events, Poller};
 
 use crate::{rt::System, time::sleep, time::Millis, util::Either};
 
-use super::socket::{Listener, SocketAddr};
-use super::worker::{Connection, WorkerClient};
+use super::socket::{Listener, SocketAddr, Stream};
+use super::worker::{WorkerMessage, WorkerClient, WorkerManagerCmd, WorkerManagerNotifier};
 use super::{Server, ServerStatus, Token};
 
 const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ERR_TIMEOUT: Duration = Duration::from_millis(500);
 const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
-
-#[derive(Debug)]
-pub(super) enum Command {
-    Stop(mpsc::Sender<()>),
-    Pause,
-    Resume,
-    Worker(WorkerClient),
-    Timer,
-    WorkerAvailable,
-}
 
 #[derive(Debug)]
 struct ServerSocketInfo {
@@ -33,22 +23,28 @@ struct ServerSocketInfo {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct AcceptNotify(Arc<Poller>, mpsc::Sender<Command>);
+pub(super) struct AcceptNotify(Arc<Poller>, mpsc::Sender<WorkerManagerCmd<Stream>>);
 
 impl AcceptNotify {
-    pub(super) fn new(waker: Arc<Poller>, tx: mpsc::Sender<Command>) -> Self {
+    pub(super) fn new(waker: Arc<Poller>, tx: mpsc::Sender<WorkerManagerCmd<Stream>>) -> Self {
         AcceptNotify(waker, tx)
     }
+}
 
-    pub(super) fn send(&self, cmd: Command) {
+impl WorkerManagerNotifier<Stream> for AcceptNotify {
+    fn send(&self, cmd: WorkerManagerCmd<Stream>) {
         let _ = self.1.send(cmd);
         let _ = self.0.notify();
+    }
+
+    fn clone_box(&self) -> Box<dyn WorkerManagerNotifier<Stream>> {
+        Box::new(self.clone())
     }
 }
 
 pub(super) struct AcceptLoop {
     notify: AcceptNotify,
-    inner: Option<(mpsc::Receiver<Command>, Arc<Poller>, Server)>,
+    inner: Option<(mpsc::Receiver<WorkerManagerCmd<Stream>>, Arc<Poller>, Server)>,
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
@@ -57,7 +53,7 @@ impl AcceptLoop {
         // Create a poller instance
         let poll = Arc::new(
             Poller::new()
-                .map_err(|e| panic!("Cannot create Polller {}", e))
+                .map_err(|e| panic!("Cannot create Poller {}", e))
                 .unwrap(),
         );
 
@@ -71,7 +67,7 @@ impl AcceptLoop {
         }
     }
 
-    pub(super) fn send(&self, msg: Command) {
+    pub(super) fn send(&self, msg: WorkerManagerCmd<Stream>) {
         self.notify.send(msg)
     }
 
@@ -89,7 +85,7 @@ impl AcceptLoop {
     pub(super) fn start(
         &mut self,
         socks: Vec<(Token, Listener)>,
-        workers: Vec<WorkerClient>,
+        workers: Vec<WorkerClient<Stream>>,
     ) {
         let (rx, poll, srv) = self
             .inner
@@ -121,9 +117,9 @@ impl fmt::Debug for AcceptLoop {
 
 struct Accept {
     poller: Arc<Poller>,
-    rx: mpsc::Receiver<Command>,
+    rx: mpsc::Receiver<WorkerManagerCmd<Stream>>,
     sockets: Vec<ServerSocketInfo>,
-    workers: Vec<WorkerClient>,
+    workers: Vec<WorkerClient<Stream>>,
     srv: Server,
     notify: AcceptNotify,
     next: usize,
@@ -133,11 +129,11 @@ struct Accept {
 
 impl Accept {
     fn start(
-        rx: mpsc::Receiver<Command>,
+        rx: mpsc::Receiver<WorkerManagerCmd<Stream>>,
         poller: Arc<Poller>,
         socks: Vec<(Token, Listener)>,
         srv: Server,
-        workers: Vec<WorkerClient>,
+        workers: Vec<WorkerClient<Stream>>,
         notify: AcceptNotify,
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) {
@@ -153,10 +149,10 @@ impl Accept {
     }
 
     fn new(
-        rx: mpsc::Receiver<Command>,
+        rx: mpsc::Receiver<WorkerManagerCmd<Stream>>,
         poller: Arc<Poller>,
         socks: Vec<(Token, Listener)>,
-        workers: Vec<WorkerClient>,
+        workers: Vec<WorkerClient<Stream>>,
         srv: Server,
         notify: AcceptNotify,
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
@@ -261,7 +257,7 @@ impl Accept {
                 let notify = self.notify.clone();
                 System::current().arbiter().spawn(Box::pin(async move {
                     sleep(ERR_SLEEP_TIMEOUT).await;
-                    notify.send(Command::Timer);
+                    notify.send(WorkerManagerCmd::Timer);
                 }));
             } else {
                 info.registered.set(true);
@@ -304,7 +300,7 @@ impl Accept {
         loop {
             match self.rx.try_recv() {
                 Ok(cmd) => match cmd {
-                    Command::Stop(rx) => {
+                    WorkerManagerCmd::Stop(rx) => {
                         log::trace!("Stopping accept loop");
                         for (key, info) in self.sockets.iter().enumerate() {
                             log::info!("Stopping socket listener on {}", info.addr);
@@ -313,7 +309,7 @@ impl Accept {
                         self.update_status(ServerStatus::NotReady);
                         break Either::Right(Some(rx));
                     }
-                    Command::Pause => {
+                    WorkerManagerCmd::Pause => {
                         log::trace!("Pausing accept loop");
                         for (key, info) in self.sockets.iter().enumerate() {
                             log::info!("Stopping socket listener on {}", info.addr);
@@ -321,7 +317,7 @@ impl Accept {
                         }
                         self.update_status(ServerStatus::NotReady);
                     }
-                    Command::Resume => {
+                    WorkerManagerCmd::Resume => {
                         log::trace!("Resuming accept loop");
                         for (key, info) in self.sockets.iter().enumerate() {
                             log::info!("Resuming socket listener on {}", info.addr);
@@ -329,15 +325,15 @@ impl Accept {
                         }
                         self.update_status(ServerStatus::Ready);
                     }
-                    Command::Worker(worker) => {
+                    WorkerManagerCmd::Worker(worker) => {
                         log::trace!("Adding new worker to accept loop");
                         self.backpressure(false);
                         self.workers.push(worker);
                     }
-                    Command::Timer => {
+                    WorkerManagerCmd::Timer => {
                         self.process_timer();
                     }
-                    Command::WorkerAvailable => {
+                    WorkerManagerCmd::WorkerAvailable => {
                         log::trace!("Worker is available");
                         self.backpressure(false);
                     }
@@ -393,10 +389,10 @@ impl Accept {
         }
     }
 
-    fn accept_one(&mut self, mut msg: Connection) {
+    fn accept_one(&mut self, mut msg: WorkerMessage<Stream>) {
         log::trace!(
             "Accepting connection: {:?} bp: {}",
-            msg.io,
+            msg.content,
             self.backpressure
         );
 
@@ -463,8 +459,8 @@ impl Accept {
         loop {
             let msg = if let Some(info) = self.sockets.get_mut(token) {
                 match info.sock.accept() {
-                    Ok(Some(io)) => Connection {
-                        io,
+                    Ok(Some(io)) => WorkerMessage {
+                        content: io,
                         token: info.token,
                     },
                     Ok(None) => return true,
@@ -479,7 +475,7 @@ impl Accept {
                         let notify = self.notify.clone();
                         System::current().arbiter().spawn(Box::pin(async move {
                             sleep(ERR_SLEEP_TIMEOUT).await;
-                            notify.send(Command::Timer);
+                            notify.send(WorkerManagerCmd::Timer);
                         }));
                         return false;
                     }
