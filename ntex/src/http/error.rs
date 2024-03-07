@@ -69,7 +69,7 @@ pub enum EncodeError {
 
     /// Internal error
     #[error("Internal error")]
-    Internal(Box<dyn error::Error>),
+    Internal(Box<dyn error::Error + Send + Sync>),
 }
 
 /// A set of errors that can occur during parsing HTTP streams
