@@ -1,5 +1,9 @@
 # Changes
 
+## [1.1.1] - 2024-03-07
+
+* http: Make EncodeError Send + Sync
+
 ## [1.1.0] - 2024-02-07
 
 * http: Add http/1 control service
