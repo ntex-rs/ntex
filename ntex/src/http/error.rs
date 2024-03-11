@@ -68,8 +68,8 @@ pub enum EncodeError {
     UnexpectedEof,
 
     /// Internal error
-    #[error("Internal error")]
-    Internal(Box<dyn error::Error + Send + Sync>),
+    #[error("Formater error {0}")]
+    Fmt(io::Error),
 }
 
 /// A set of errors that can occur during parsing HTTP streams
