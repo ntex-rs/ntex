@@ -259,7 +259,7 @@ impl MessageType for RequestHeadType {
                 _ => return Err(EncodeError::UnsupportedVersion(head.version)),
             }
         )
-        .map_err(|e| EncodeError::Internal(Box::new(e)))
+        .map_err(EncodeError::Fmt)
     }
 }
 
@@ -391,7 +391,7 @@ impl TransferEncoding {
                     true
                 } else {
                     writeln!(helpers::Writer(buf), "{:X}\r", msg.len())
-                        .map_err(|e| EncodeError::Internal(Box::new(e)))?;
+                        .map_err(EncodeError::Fmt)?;
 
                     buf.reserve(msg.len() + 2);
                     buf.extend_from_slice(msg);

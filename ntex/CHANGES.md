@@ -1,8 +1,8 @@
 # Changes
 
-## [1.1.1] - 2024-03-07
+## [1.1.1] - 2024-03-11
 
-* http: Make EncodeError Send + Sync
+* http: Replace EncodeError::Internal with Fmt error
 
 ## [1.1.0] - 2024-02-07
 
