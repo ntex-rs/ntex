@@ -6,6 +6,7 @@ pub mod future;
 pub mod services;
 pub mod task;
 pub mod time;
+pub mod worker;
 
 pub use futures_core::{ready, Stream};
 pub use futures_sink::Sink;

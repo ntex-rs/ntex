@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "1.0.1"
+version = "1.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -16,8 +16,11 @@ name = "ntex_util"
 path = "src/lib.rs"
 
 [dependencies]
+ntex-bytes = "0.1"
 ntex-service = "2.0"
 ntex-rt = "0.4"
+
+async-channel = "2.1"
 bitflags = "2.4"
 fxhash = "0.2.1"
 log = "0.4"
@@ -25,6 +28,7 @@ slab = "0.4"
 futures-timer = "3.0"
 futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
 futures-sink = { version = "0.3", default-features = false, features = ["alloc"] }
+oneshot = { version = "0.1", default-features = false, features = ["async"] }
 pin-project-lite = "0.2"
 
 [dev-dependencies]
