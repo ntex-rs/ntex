@@ -62,8 +62,7 @@ mod openssl {
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
-            + 'static,
+        C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
     {
@@ -102,8 +101,7 @@ mod rustls {
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
-            + 'static,
+        C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
     {
@@ -137,14 +135,14 @@ where
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     B: MessageBody,
-    C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
     /// Provide http/2 control service
     pub fn control<CT>(self, ctl: CT) -> H2Service<F, S, B, CT>
     where
-        CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+        CT: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {
@@ -165,7 +163,7 @@ where
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -204,7 +202,7 @@ where
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -251,7 +249,7 @@ where
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C2: Service<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C2: Service<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
     C2::Error: Error,
 {
     io.set_disconnect_timeout(config.client_disconnect);
