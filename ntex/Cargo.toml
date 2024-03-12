@@ -65,7 +65,7 @@ ntex-glommio = { version = "0.4.0", optional = true }
 ntex-async-std = { version = "0.4.0", optional = true }
 
 async-channel = "2.1"
-base64 = "0.21"
+base64 = "0.22"
 bitflags = "2.4"
 log = "0.4"
 oneshot = { version = "0.1", default-features = false, features = ["async"] }

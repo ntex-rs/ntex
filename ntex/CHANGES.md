@@ -1,5 +1,9 @@
 # Changes
 
+## [1.1.2] - 2024-03-12
+
+* Update ntex-h2
+
 ## [1.1.1] - 2024-03-11
 
 * http: Replace EncodeError::Internal with Fmt error
