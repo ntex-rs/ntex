@@ -52,7 +52,7 @@ where
     C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
     C1::Error: Error,
     C1::InitError: fmt::Debug,
-    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+    C2: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
     C2::Error: Error,
     C2::InitError: fmt::Debug,
 {
@@ -167,8 +167,8 @@ where
     /// Provide control service for http/2 protocol.
     pub fn h2_control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, C1, CT>
     where
-        CF: IntoServiceFactory<CT, h2::ControlMessage<H2Error>>,
-        CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+        CF: IntoServiceFactory<CT, h2::Control<H2Error>>,
+        CT: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {

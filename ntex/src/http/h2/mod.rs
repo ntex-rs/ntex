@@ -3,7 +3,10 @@ mod default;
 pub(super) mod payload;
 mod service;
 
-pub use ntex_h2::{Config, ControlMessage, ControlResult};
+pub use ntex_h2::{Config, Control, ControlAck};
+
+#[doc(hidden)]
+pub use ntex_h2::{ControlMessage, ControlResult};
 
 pub use self::default::DefaultControlService;
 pub use self::payload::Payload;

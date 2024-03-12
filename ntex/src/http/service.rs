@@ -94,7 +94,7 @@ where
     C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
     C1::Error: error::Error,
     C1::InitError: fmt::Debug,
-    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+    C2: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
     C2::Error: error::Error,
     C2::InitError: fmt::Debug,
 {
@@ -117,7 +117,7 @@ where
     /// Provide http/1 control service.
     pub fn h2_control<CT>(self, control: CT) -> HttpService<F, S, B, C1, CT>
     where
-        CT: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>,
+        CT: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
         CT::Error: error::Error,
         CT::InitError: fmt::Debug,
     {
@@ -153,8 +153,7 @@ mod openssl {
             > + 'static,
         C1::Error: error::Error,
         C1::InitError: fmt::Debug,
-        C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
-            + 'static,
+        C2: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
         C2::Error: error::Error,
         C2::InitError: fmt::Debug,
     {
@@ -199,8 +198,7 @@ mod rustls {
             > + 'static,
         C1::Error: error::Error,
         C1::InitError: fmt::Debug,
-        C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult>
-            + 'static,
+        C2: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
         C2::Error: error::Error,
         C2::InitError: fmt::Debug,
     {
@@ -237,7 +235,7 @@ where
     C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
     C1::Error: error::Error,
     C1::InitError: fmt::Debug,
-    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C2: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
     C2::Error: error::Error,
     C2::InitError: fmt::Debug,
 {
@@ -284,7 +282,7 @@ where
     B: MessageBody,
     C1: Service<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
     C1::Error: error::Error,
-    C2: ServiceFactory<h2::ControlMessage<H2Error>, Response = h2::ControlResult> + 'static,
+    C2: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
     C2::Error: error::Error,
     C2::InitError: fmt::Debug,
 {
