@@ -333,7 +333,7 @@ where
             ResourceDef::new(self.rdef.clone())
         };
         if let Some(ref name) = self.name {
-            *rdef.name_mut() = name.clone();
+            rdef.name_mut().clone_from(name);
         }
 
         let state = self.state.take().map(|state| {

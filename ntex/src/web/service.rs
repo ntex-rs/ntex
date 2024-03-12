@@ -289,7 +289,7 @@ where
             ResourceDef::new(self.rdef)
         };
         if let Some(ref name) = self.name {
-            *rdef.name_mut() = name.clone();
+            rdef.name_mut().clone_from(name);
         }
         config.register_service(rdef, guards, self.srv, None)
     }

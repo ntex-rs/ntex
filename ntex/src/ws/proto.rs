@@ -216,8 +216,8 @@ pub fn hash_key(key: &[u8]) -> String {
 }
 
 #[cfg(test)]
+#[allow(unused_imports, unused_variables, dead_code)]
 mod test {
-    #![allow(unused_imports, unused_variables, dead_code)]
     use super::*;
 
     macro_rules! opcode_into {
