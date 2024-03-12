@@ -9,7 +9,6 @@ use crate::time::{sleep, Millis, Sleep};
 use crate::util::{
     join_all, ready, select, stream_recv, BoxFuture, Either, Stream as FutStream,
 };
-use ntex_util::time::Millis;
 
 use super::accept::{AcceptNotify, Command};
 use super::service::{BoxedServerService, InternalServiceFactory, ServerMessage};
