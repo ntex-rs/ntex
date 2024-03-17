@@ -1,16 +1,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{ready, Context, Poll};
-use std::{future::poll_fn, future::Future, pin::Pin, sync::Arc};
+use std::{cmp, future::poll_fn, future::Future, hash, pin::Pin, sync::Arc};
 
+use async_broadcast::{self as bus, broadcast};
 use async_channel::{unbounded, Receiver, Sender};
 
 use ntex_rt::{spawn, Arbiter};
 use ntex_service::{Pipeline, ServiceFactory};
+use ntex_util::future::{select, stream_recv, Either, Stream};
+use ntex_util::time::{sleep, timeout_checked, Millis};
 
-use crate::future::{select, stream_recv, Either, Stream};
-use crate::time::{sleep, timeout_checked, Millis};
-
-use super::{WorkerMessage, WorkerServiceFactory};
+use crate::{ServerConfiguration, WorkerId, WorkerMessage};
 
 const STOP_TIMEOUT: Millis = Millis::ONE_SEC;
 
@@ -21,26 +21,67 @@ struct Shutdown {
     result: oneshot::Sender<bool>,
 }
 
+#[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+/// Worker status
+pub enum WorkerStatus {
+    Available,
+    #[default]
+    Unavailable,
+    Failed,
+}
+
 #[derive(Debug)]
-/// Service worker
+/// Server worker
 ///
 /// Worker accepts message via unbounded channel and starts processing.
 pub struct Worker<T> {
+    id: WorkerId,
     tx1: Sender<T>,
     tx2: Sender<Shutdown>,
     avail: WorkerAvailability,
+    failed: Arc<AtomicBool>,
+}
+
+impl<T> cmp::Ord for Worker<T> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+impl<T> cmp::PartialOrd for Worker<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.id.cmp(&other.id))
+    }
+}
+
+impl<T> hash::Hash for Worker<T> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl<T> Eq for Worker<T> {}
+
+impl<T> PartialEq for Worker<T> {
+    fn eq(&self, other: &Worker<T>) -> bool {
+        self.id == other.id
+    }
 }
 
 #[derive(Debug)]
 #[must_use = "Future do nothing unless polled"]
-pub struct WorkerStopResult(oneshot::Receiver<bool>);
+/// Stop worker process
+///
+/// Stop future resolves when worker completes processing
+/// incoming items and stop arbiter
+pub struct WorkerStop(oneshot::Receiver<bool>);
 
 impl<T> Worker<T> {
     /// Start worker.
-    pub fn start<F>(factory: F) -> Worker<T>
+    pub fn start<F>(id: WorkerId, cfg: F) -> Worker<T>
     where
         T: Send + 'static,
-        F: WorkerServiceFactory<T>,
+        F: ServerConfiguration<Item = T>,
     {
         let (tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
@@ -48,7 +89,9 @@ impl<T> Worker<T> {
 
         Arbiter::default().exec_fn(move || {
             let _ = spawn(async move {
-                match create(rx1, rx2, factory.create(), avail_tx).await {
+                let svc_factory = cfg.factory().await;
+
+                match create(rx1, rx2, svc_factory, avail_tx).await {
                     Ok((svc, wrk)) => {
                         run_worker(svc, wrk).await;
                     }
@@ -60,7 +103,18 @@ impl<T> Worker<T> {
             });
         });
 
-        Worker { tx1, tx2, avail }
+        Worker {
+            id,
+            tx1,
+            tx2,
+            avail,
+            failed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Worker id.
+    pub fn id(&self) -> WorkerId {
+        self.id
     }
 
     /// Send message to the worker.
@@ -71,22 +125,53 @@ impl<T> Worker<T> {
         self.tx1.try_send(msg).map_err(|msg| msg.into_inner())
     }
 
-    /// Check worker availability.
-    pub fn available(&self) -> bool {
-        self.avail.available()
+    /// Check worker status.
+    pub fn status(&self) -> WorkerStatus {
+        if self.failed.load(Ordering::Acquire) {
+            WorkerStatus::Failed
+        } else if self.avail.available() {
+            WorkerStatus::Available
+        } else {
+            WorkerStatus::Unavailable
+        }
+    }
+
+    /// Wait for worker status updates
+    pub async fn wait_for_status(&mut self) -> WorkerStatus {
+        if self.failed.load(Ordering::Acquire) {
+            WorkerStatus::Failed
+        } else {
+            // cleanup updates
+            while self.avail.notify.try_recv().is_ok() {}
+
+            let _ = self.avail.notify.recv_direct().await;
+            self.status()
+        }
     }
 
     /// Stop worker.
     ///
     /// If timeout value is zero, force shutdown worker
-    pub fn stop(&self, timeout: Millis) -> WorkerStopResult {
+    pub fn stop(&self, timeout: Millis) -> WorkerStop {
         let (result, rx) = oneshot::channel();
         let _ = self.tx2.try_send(Shutdown { timeout, result });
-        WorkerStopResult(rx)
+        WorkerStop(rx)
     }
 }
 
-impl Future for WorkerStopResult {
+impl<T> Clone for Worker<T> {
+    fn clone(&self) -> Self {
+        Worker {
+            id: self.id,
+            tx1: self.tx1.clone(),
+            tx2: self.tx2.clone(),
+            avail: self.avail.clone(),
+            failed: self.failed.clone(),
+        }
+    }
+}
+
+impl Future for WorkerStop {
     type Output = bool;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -97,21 +182,22 @@ impl Future for WorkerStopResult {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct WorkerAvailability {
-    notify: Receiver<()>,
+    notify: bus::Receiver<()>,
     available: Arc<AtomicBool>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct WorkerAvailabilityTx {
-    notify: Sender<()>,
+    notify: bus::Sender<()>,
     available: Arc<AtomicBool>,
 }
 
 impl WorkerAvailability {
     fn create() -> (Self, WorkerAvailabilityTx) {
-        let (tx, rx) = unbounded();
+        let (mut tx, rx) = broadcast(16);
+        tx.set_overflow(true);
 
         let avail = WorkerAvailability {
             notify: rx,
@@ -133,7 +219,7 @@ impl WorkerAvailabilityTx {
     fn set(&self, val: bool) {
         let old = self.available.swap(val, Ordering::Release);
         if !old && val {
-            let _ = self.notify.send(());
+            let _ = self.notify.try_broadcast(());
         }
     }
 }
@@ -188,11 +274,11 @@ where
                 poll_fn(|cx| svc.poll_shutdown(cx)).await;
 
                 Arbiter::current().stop();
-                return
+                return;
             }
             Either::Right(None) => {
                 Arbiter::current().stop();
-                return
+                return;
             }
         }
 
@@ -203,12 +289,10 @@ where
                     svc = Pipeline::new(service);
                     break;
                 }
-                Either::Left(Err(_)) => {
-                    sleep(STOP_TIMEOUT).await
-                }
+                Either::Left(Err(_)) => sleep(STOP_TIMEOUT).await,
                 Either::Right(_) => {
                     Arbiter::current().stop();
-                    return
+                    return;
                 }
             }
         }

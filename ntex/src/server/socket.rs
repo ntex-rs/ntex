@@ -1,6 +1,12 @@
 use std::{fmt, io, net};
 
-use crate::{io::Io, rt};
+use crate::{io::Io, rt, server::Token};
+
+#[derive(Debug)]
+pub struct Connection {
+    pub(crate) io: Stream,
+    pub(crate) token: Token,
+}
 
 pub(crate) enum Listener {
     Tcp(net::TcpListener),

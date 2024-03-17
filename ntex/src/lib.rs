@@ -32,10 +32,10 @@ pub(crate) use ntex_macros::rt_test2 as rt_test;
 
 pub use ntex_service::{forward_poll_ready, forward_poll_shutdown};
 
-pub mod http;
+//pub mod http;
 pub mod server;
-pub mod web;
-pub mod ws;
+//pub mod web;
+//pub mod ws;
 
 pub use self::service::{
     chain, chain_factory, fn_service, into_service, IntoService, IntoServiceFactory,

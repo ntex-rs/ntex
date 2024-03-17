@@ -9,6 +9,7 @@ members = [
   "ntex-http",
   "ntex-router",
   "ntex-rt",
+  "ntex-server",
   "ntex-service",
   "ntex-tls",
   "ntex-macros",
@@ -27,6 +28,7 @@ ntex-io = { path = "ntex-io" }
 ntex-http = { path = "ntex-http" }
 ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
+ntex-server = { path = "ntex-server" }
 ntex-service = { path = "ntex-service" }
 ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }

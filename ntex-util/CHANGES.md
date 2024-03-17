@@ -1,5 +1,9 @@
 # Changes
 
+## [1.1.0] - 2024-03-xx
+
+* Added server worker's management utils
+
 ## [1.0.1] - 2024-01-19
 
 * Allow to lock readiness for Condition

@@ -48,15 +48,13 @@ pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
 pub(super) struct ServiceConfigInner {
     pub(super) services: Vec<(String, net::TcpListener, &'static str)>,
     pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration + Send>>,
-    pub(super) threads: usize,
     pub(super) backlog: i32,
     applied: bool,
 }
 
 impl ServiceConfig {
-    pub(super) fn new(threads: usize, backlog: i32) -> Self {
+    pub(super) fn new(backlog: i32) -> Self {
         ServiceConfig(Rc::new(RefCell::new(ServiceConfigInner {
-            threads,
             backlog,
             services: Vec::new(),
             applied: false,
