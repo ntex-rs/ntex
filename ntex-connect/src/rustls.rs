@@ -1,7 +1,7 @@
 use std::{fmt, io, sync::Arc};
 
 pub use ntex_tls::rustls::TlsClientFilter;
-pub use tls_rustls::{ClientConfig, ServerName};
+pub use tls_rustls::{ClientConfig, pki_types::ServerName};
 
 use ntex_bytes::PoolId;
 use ntex_io::{Io, Layer};
@@ -67,7 +67,7 @@ impl<T: Address> Connector<T> {
 
         let tag = io.tag();
         let config = self.config.clone();
-        let host = ServerName::try_from(host.as_str())
+        let host = ServerName::try_from(host)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
         match TlsClientFilter::create(io, config, host.clone()).await {
