@@ -1,7 +1,7 @@
 use std::{fmt, io, sync::Arc};
 
 pub use ntex_tls::rustls::TlsClientFilter;
-pub use tls_rustls::{ClientConfig, pki_types::ServerName};
+pub use tls_rustls::{pki_types::ServerName, ClientConfig};
 
 use ntex_bytes::PoolId;
 use ntex_io::{Io, Layer};

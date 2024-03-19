@@ -84,7 +84,8 @@ impl Connector {
             use tls_rustls::RootCertStore;
 
             let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-            let cert_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let cert_store =
+                RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let mut config = ClientConfig::builder()
                 .with_root_certificates(cert_store)
                 .with_no_client_auth();
