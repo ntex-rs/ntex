@@ -5,7 +5,7 @@ use std::{any, cell::RefCell, future::poll_fn, sync::Arc, task::Poll};
 use ntex_bytes::BufMut;
 use ntex_io::{types, Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use ntex_util::ready;
-use tls_rust::{ClientConfig, ClientConnection, ServerName};
+use tls_rust::{ClientConfig, ClientConnection, pki_types::ServerName};
 
 use super::{PeerCert, PeerCertChain, Wrapper};
 
@@ -33,7 +33,7 @@ impl FilterLayer for TlsClientFilter {
                 types::HttpProtocol::Http1
             };
             Some(Box::new(proto))
-        } else if id == any::TypeId::of::<PeerCert>() {
+        } else if id == any::TypeId::of::<PeerCert<'_>>() {
             if let Some(cert_chain) = self.session.borrow().peer_certificates() {
                 if let Some(cert) = cert_chain.first() {
                     Some(Box::new(PeerCert(cert.to_owned())))
@@ -43,7 +43,7 @@ impl FilterLayer for TlsClientFilter {
             } else {
                 None
             }
-        } else if id == any::TypeId::of::<PeerCertChain>() {
+        } else if id == any::TypeId::of::<PeerCertChain<'_>>() {
             if let Some(cert_chain) = self.session.borrow().peer_certificates() {
                 Some(Box::new(PeerCertChain(cert_chain.to_vec())))
             } else {
@@ -115,7 +115,7 @@ impl TlsClientFilter {
     pub async fn create<F: Filter>(
         io: Io<F>,
         cfg: Arc<ClientConfig>,
-        domain: ServerName,
+        domain: ServerName<'static>,
     ) -> Result<Io<Layer<TlsClientFilter, F>>, io::Error> {
         let session = ClientConnection::new(cfg, domain)
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
