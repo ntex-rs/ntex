@@ -1,6 +1,6 @@
 [package]
 name = "ntex-connect"
-version = "1.0.0"
+version = "1.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork connect utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]

@@ -81,19 +81,11 @@ impl Connector {
         }
         #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
         {
-            use tls_rustls::{OwnedTrustAnchor, RootCertStore};
+            use tls_rustls::RootCertStore;
 
             let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-            let mut cert_store = RootCertStore::empty();
-            cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-                OwnedTrustAnchor::from_subject_spki_name_constraints(
-                    ta.subject,
-                    ta.spki,
-                    ta.name_constraints,
-                )
-            }));
+            let cert_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             let mut config = ClientConfig::builder()
-                .with_safe_defaults()
                 .with_root_certificates(cert_store)
                 .with_no_client_auth();
             config.alpn_protocols = protos;
