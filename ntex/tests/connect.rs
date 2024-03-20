@@ -26,21 +26,14 @@ use tls_rustls::ServerConfig;
 
 #[cfg(feature = "rustls")]
 fn tls_acceptor() -> Arc<ServerConfig> {
-    use rustls_pemfile::{certs, pkcs8_private_keys};
     use std::fs::File;
     use std::io::BufReader;
-    use tls_rustls::{Certificate, PrivateKey};
 
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file)
-        .unwrap()
-        .iter()
-        .map(|c| Certificate(c.to_vec()))
-        .collect();
-    let key = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+    let key = rustls_pemfile::private_key(key_file).unwrap().unwrap();
     let config = ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert_chain, key)
         .unwrap();
@@ -48,22 +41,43 @@ fn tls_acceptor() -> Arc<ServerConfig> {
 }
 
 mod danger {
-    use std::time::SystemTime;
-    use tls_rustls::{Certificate, ServerName};
+    use tls_rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
+    #[derive(Debug)]
     pub struct NoCertificateVerification {}
 
-    impl tls_rustls::client::ServerCertVerifier for NoCertificateVerification {
+    impl tls_rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
         fn verify_server_cert(
             &self,
-            _end_entity: &Certificate,
-            _intermediates: &[Certificate],
-            _server_name: &ServerName,
-            _scts: &mut dyn Iterator<Item = &[u8]>,
-            _ocsp_response: &[u8],
-            _now: SystemTime,
-        ) -> Result<tls_rustls::client::ServerCertVerified, tls_rustls::Error> {
-            Ok(tls_rustls::client::ServerCertVerified::assertion())
+            _end_entity: &CertificateDer<'_>,
+            _certs: &[CertificateDer<'_>],
+            _hostname: &ServerName<'_>,
+            _ocsp: &[u8],
+            _now: UnixTime,
+        ) -> Result<tls_rustls::client::danger::ServerCertVerified, tls_rustls::Error> {
+            Ok(tls_rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &tls_rustls::DigitallySignedStruct,
+        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
+            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &tls_rustls::DigitallySignedStruct,
+        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
+            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<tls_rustls::SignatureScheme> {
+            vec![]
         }
     }
 }
@@ -177,10 +191,9 @@ async fn test_openssl_read_before_error() {
 async fn test_rustls_string() {
     use ntex::{io::types::HttpProtocol, server::rustls};
     use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain};
-    use rustls_pemfile::certs;
     use std::fs::File;
     use std::io::BufReader;
-    use tls_rustls::{Certificate, ClientConfig};
+    use tls_rustls::ClientConfig;
 
     let srv = test_server(|| {
         chain_factory(
@@ -207,7 +220,7 @@ async fn test_rustls_string() {
     });
 
     let config = ClientConfig::builder()
-        .with_safe_defaults()
+        .dangerous()
         .with_custom_certificate_verifier(Arc::new(danger::NoCertificateVerification {}))
         .with_no_client_auth();
 
@@ -220,11 +233,7 @@ async fn test_rustls_string() {
         HttpProtocol::Http1
     );
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
-    let cert_chain: Vec<Certificate> = certs(cert_file)
-        .unwrap()
-        .iter()
-        .map(|c| Certificate(c.to_vec()))
-        .collect();
+    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
     assert_eq!(
         io.query::<PeerCert>().as_ref().unwrap().0,
         *cert_chain.first().unwrap()

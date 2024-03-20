@@ -147,8 +147,7 @@ async fn test_rustls() {
     use std::{fs::File, io::BufReader};
 
     use ntex::web::HttpRequest;
-    use rustls_pemfile::{certs, pkcs8_private_keys};
-    use tls_rustls::{Certificate, PrivateKey, ServerConfig as RustlsServerConfig};
+    use tls_rustls::ServerConfig as RustlsServerConfig;
 
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
@@ -159,14 +158,9 @@ async fn test_rustls() {
         // load ssl keys
         let cert_file = &mut BufReader::new(File::open("./tests/cert.pem").unwrap());
         let key_file = &mut BufReader::new(File::open("./tests/key.pem").unwrap());
-        let cert_chain = certs(cert_file)
-            .unwrap()
-            .iter()
-            .map(|c| Certificate(c.to_vec()))
-            .collect();
-        let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+        let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
+        let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
         let config = RustlsServerConfig::builder()
-            .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(cert_chain, keys)
             .unwrap();

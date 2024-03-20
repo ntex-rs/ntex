@@ -3,8 +3,7 @@ use std::{fs::File, io, io::BufReader, sync::Arc};
 use ntex::service::{chain_factory, fn_service};
 use ntex::{codec, io::Io, server, util::Either};
 use ntex_tls::rustls::TlsAcceptor;
-use rustls_pemfile::{certs, rsa_private_keys};
-use tls_rust::{Certificate, PrivateKey, ServerConfig};
+use tls_rust::ServerConfig;
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -17,15 +16,10 @@ async fn main() -> io::Result<()> {
     let cert_file =
         &mut BufReader::new(File::open("../ntex-tls/examples/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("../ntex-tls/examples/key.pem").unwrap());
-    let keys = PrivateKey(rsa_private_keys(key_file).unwrap().remove(0));
-    let cert_chain = certs(cert_file)
-        .unwrap()
-        .iter()
-        .map(|c| Certificate(c.to_vec()))
-        .collect();
+    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
+    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
     let tls_config = Arc::new(
         ServerConfig::builder()
-            .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(cert_chain, keys)
             .unwrap(),
