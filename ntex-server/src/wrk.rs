@@ -89,9 +89,9 @@ impl<T> Worker<T> {
 
         Arbiter::default().exec_fn(move || {
             let _ = spawn(async move {
-                let svc_factory = cfg.factory().await;
+                let factory = cfg.create().await;
 
-                match create(rx1, rx2, svc_factory, avail_tx).await {
+                match create(rx1, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {
                         run_worker(svc, wrk).await;
                     }

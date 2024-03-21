@@ -1,27 +1,24 @@
-use std::{fmt, future::Future, io, marker, mem, net};
+use std::{fmt, future::Future, io, net};
 
-use ntex_server::WorkerPool;
+use ntex_server::{Server, WorkerPool};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::{io::Io, service::ServiceFactory, time::Millis};
 
 use super::accept::AcceptLoop;
-use super::config::{
-    Config, ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime,
-};
-use super::service::{Factory, InternalServiceFactory};
+use super::config::{Config, ServiceConfig};
+use super::service::{Factory, OnWorkerStart, OnWorkerStartWrapper, StreamServer};
 use super::{socket::Listener, ServerStatus, Token};
 
 const STOP_DELAY: Millis = Millis(300);
-
-struct StreamServer {}
 
 /// Server builder
 pub struct ServerBuilder {
     token: Token,
     backlog: i32,
-    services: Vec<Box<dyn InternalServiceFactory>>,
+    services: Vec<Factory>,
     sockets: Vec<(Token, String, Listener)>,
+    on_worker_start: Vec<Box<dyn OnWorkerStart + Send>>,
     accept: AcceptLoop,
     pool: WorkerPool,
 }
@@ -39,6 +36,7 @@ impl ServerBuilder {
             token: Token(0),
             services: Vec::new(),
             sockets: Vec::new(),
+            on_worker_start: Vec::new(),
             accept: AcceptLoop::new(),
             backlog: 2048,
             pool: WorkerPool::new(),
@@ -128,18 +126,14 @@ impl ServerBuilder {
     where
         F: Fn(&mut ServiceConfig) -> io::Result<()>,
     {
-        let mut cfg = ServiceConfig::new(self.backlog);
+        let mut cfg = ServiceConfig::new(self.token, self.backlog);
 
         f(&mut cfg)?;
 
-        let mut cfg = cfg.0.borrow_mut();
-        let mut srv = ConfiguredService::new(cfg.apply.take().unwrap());
-        for (name, lst, tag) in mem::take(&mut cfg.services) {
-            let token = self.token.next();
-            srv.stream(token, name.clone(), lst.local_addr()?, tag);
-            self.sockets.push((token, name, Listener::from_tcp(lst)));
-        }
-        self.services.push(Box::new(srv));
+        let (token, sockets, factory) = cfg.into_factory();
+        self.token = token;
+        self.sockets.extend(sockets);
+        self.services.push(factory);
 
         Ok(self)
     }
@@ -154,19 +148,15 @@ impl ServerBuilder {
         F: Fn(ServiceConfig) -> R,
         R: Future<Output = io::Result<()>>,
     {
-        let cfg = ServiceConfig::new(self.backlog);
+        let cfg = ServiceConfig::new(self.token, self.backlog);
         let inner = cfg.0.clone();
 
-        f(cfg).await?;
+        f(cfg.clone()).await?;
 
-        let mut cfg = inner.borrow_mut();
-        let mut srv = ConfiguredService::new(cfg.apply.take().unwrap());
-        for (name, lst, tag) in mem::take(&mut cfg.services) {
-            let token = self.token.next();
-            srv.stream(token, name.clone(), lst.local_addr()?, tag);
-            self.sockets.push((token, name, Listener::from_tcp(lst)));
-        }
-        self.services.push(Box::new(srv));
+        let (token, sockets, factory) = cfg.into_factory();
+        self.token = token;
+        self.sockets.extend(sockets);
+        self.services.push(factory);
 
         Ok(self)
     }
@@ -177,44 +167,35 @@ impl ServerBuilder {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F, R, E>(mut self, f: F) -> Self
     where
-        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+        F: Fn() -> R + Send + Clone + 'static,
         R: Future<Output = Result<(), E>> + 'static,
         E: fmt::Display + 'static,
     {
-        self.services
-            .push(Box::new(ConfiguredService::new(Box::new(ConfigWrapper {
-                f,
-                _t: marker::PhantomData,
-            }))));
+        self.on_worker_start.push(OnWorkerStartWrapper::create(f));
         self
     }
 
     /// Add new service to the server.
-    pub fn bind<F, U, N: AsRef<str>, R>(
-        mut self,
-        name: N,
-        addr: U,
-        factory: F,
-    ) -> io::Result<Self>
+    pub fn bind<F, U, N, R>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
         U: net::ToSocketAddrs,
+        N: AsRef<str>,
         F: Fn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Io>,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
+        let mut tokens = Vec::new();
         for lst in sockets {
             let token = self.token.next();
-            self.services.push(Factory::create(
-                name.as_ref().to_string(),
-                token,
-                factory.clone(),
-                lst.local_addr()?,
-                "",
-            ));
             self.sockets
                 .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
+            tokens.push((token, ""));
         }
+
+        self.services
+            .push(Factory::new(name.as_ref().to_string(), tokens, factory));
+
         Ok(self)
     }
 
@@ -256,15 +237,11 @@ impl ServerBuilder {
         F: Fn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Io>,
     {
-        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        self.services.push(Factory::create(
+        self.services.push(Factory::new(
             name.as_ref().to_string(),
-            token,
+            vec![(token, "")],
             factory,
-            addr,
-            "",
         ));
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_uds(lst)));
@@ -283,12 +260,10 @@ impl ServerBuilder {
         R: ServiceFactory<Io>,
     {
         let token = self.token.next();
-        self.services.push(Factory::create(
+        self.services.push(Factory::new(
             name.as_ref().to_string(),
-            token,
+            vec![(token, "")],
             factory,
-            lst.local_addr()?,
-            "",
         ));
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
@@ -307,7 +282,7 @@ impl ServerBuilder {
 
         if let Some(token) = token {
             for svc in &mut self.services {
-                if svc.name(token) == name.as_ref() {
+                if svc.name() == name.as_ref() {
                     svc.set_tag(token, tag);
                 }
             }
@@ -317,55 +292,47 @@ impl ServerBuilder {
 
         self
     }
+
+    /// Starts processing incoming connections and return server controller.
+    pub fn run(mut self) -> Server<StreamServer> {
+        if self.sockets.is_empty() {
+            panic!("Server should have at least one bound socket");
+        } else {
+            // info!("Starting {} workers", self.workers);
+
+            // start workers
+            // let mut workers = Vec::new();
+            // for idx in 0..self.threads {
+            //     let worker = self.start_worker(idx, self.accept.notify());
+            //     workers.push(worker.clone());
+            //     self.workers.push((idx, worker));
+            // }
+
+            // // start accept thread
+            // for sock in &self.sockets {
+            //     info!("Starting \"{}\" service on {}", sock.1, sock.2);
+            // }
+            // self.accept.start(
+            //     mem::take(&mut self.sockets)
+            //         .into_iter()
+            //         .map(|t| (t.0, t.2))
+            //         .collect(),
+            //     workers,
+            // );
+
+            // handle signals
+            // if !self.no_signals {
+            // spawn(signals(self.server.clone()));
+            // }
+
+            // start http server
+            // crate::rt::spawn(self.server.clone());
+
+            // self.server
+            todo!()
+        }
+    }
 }
-
-//     /// Starts processing incoming connections and return server controller.
-//     pub fn run(mut self) -> Server {
-//         if self.sockets.is_empty() {
-//             panic!("Server should have at least one bound socket");
-//         } else {
-//             info!("Starting {} workers", self.threads);
-
-//             // start workers
-//             let mut workers = Vec::new();
-//             for idx in 0..self.threads {
-//                 let worker = self.start_worker(idx, self.accept.notify());
-//                 workers.push(worker.clone());
-//                 self.workers.push((idx, worker));
-//             }
-
-//             // start accept thread
-//             for sock in &self.sockets {
-//                 info!("Starting \"{}\" service on {}", sock.1, sock.2);
-//             }
-//             self.accept.start(
-//                 mem::take(&mut self.sockets)
-//                     .into_iter()
-//                     .map(|t| (t.0, t.2))
-//                     .collect(),
-//                 workers,
-//             );
-
-//             // handle signals
-//             if !self.no_signals {
-//                 spawn(signals(self.server.clone()));
-//             }
-
-//             // start http server actor
-//             let server = self.server.clone();
-//             spawn(self);
-//             server
-//         }
-//     }
-
-//     fn start_worker(&self, idx: usize, notify: AcceptNotify) -> WorkerClient {
-//         let avail = WorkerAvailability::new(notify);
-//         let services: Vec<Box<dyn InternalServiceFactory>> =
-//             self.services.iter().map(|v| v.clone_factory()).collect();
-
-//         Worker::start(idx, services, avail, self.shutdown_timeout)
-//     }
-// }
 
 // impl Future for ServerBuilder {
 //     type Output = ();

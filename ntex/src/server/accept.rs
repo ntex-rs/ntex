@@ -70,10 +70,6 @@ impl AcceptLoop {
         }
     }
 
-    pub(super) fn send(&self, msg: AcceptorCommand) {
-        self.notify.send(msg)
-    }
-
     pub(super) fn notify(&self) -> AcceptNotify {
         self.notify.clone()
     }
@@ -90,7 +86,6 @@ impl AcceptLoop {
             .inner
             .take()
             .expect("AcceptLoop cannot be used multiple times");
-        //let status_handler = self.status_handler.take();
 
         Accept::start(
             rx,

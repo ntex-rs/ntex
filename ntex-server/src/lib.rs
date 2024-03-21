@@ -4,8 +4,8 @@
 use ntex_service::ServiceFactory;
 use ntex_util::time::Millis;
 
-mod pool;
 mod manager;
+mod pool;
 mod server;
 mod wrk;
 
@@ -44,7 +44,7 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     type Factory: ServiceFactory<WorkerMessage<Self::Item>> + 'static;
 
     /// Create service factory for handling `WorkerMessage<T>` messages.
-    async fn factory(&self) -> Self::Factory;
+    async fn create(&self) -> Self::Factory;
 
     /// Server is paused.
     fn paused(&self) {}

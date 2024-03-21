@@ -1,15 +1,11 @@
-use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, rc::Rc};
-
-use log::error;
+use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, net, rc::Rc};
 
 use crate::io::Io;
-use crate::service::{self, boxed, ServiceFactory as NServiceFactory};
+use crate::service::{self, boxed};
 use crate::util::{BoxFuture, HashMap, PoolId, Ready};
 
-use super::service::{
-    BoxedServerService, InternalServiceFactory, ServerMessage, StreamService,
-};
-use super::{builder::bind_addr, counter::CounterGuard, Token};
+use super::service::{Factory, ServerMessage, StreamService};
+use super::{builder::bind_addr, socket::Listener, Token};
 
 #[derive(Clone, Debug)]
 pub struct Config(Rc<InnerServiceConfig>);
@@ -41,30 +37,26 @@ impl Config {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
 
-#[derive(Debug)]
 pub(super) struct ServiceConfigInner {
-    pub(super) services: Vec<(String, net::TcpListener, &'static str)>,
-    pub(super) apply: Option<Box<dyn ServiceRuntimeConfiguration + Send>>,
-    pub(super) backlog: i32,
-    applied: bool,
+    token: Token,
+    apply: Box<dyn OnWorkerStart + Send>,
+    sockets: Vec<(Token, String, Listener, &'static str)>,
+    backlog: i32,
 }
 
 impl ServiceConfig {
-    pub(super) fn new(backlog: i32) -> Self {
+    pub(super) fn new(token: Token, backlog: i32) -> Self {
         ServiceConfig(Rc::new(RefCell::new(ServiceConfigInner {
+            token,
             backlog,
-            services: Vec::new(),
-            applied: false,
-            apply: Some(Box::new(ConfigWrapper {
-                f: |_| {
-                    not_configured();
-                    Ready::Ok::<_, &'static str>(())
-                },
-                _t: marker::PhantomData,
-            })),
+            sockets: Vec::new(),
+            apply: OnWorkerStartWrapper::create(|_| {
+                not_configured();
+                Ready::Ok::<_, &str>(())
+            }),
         })))
     }
 
@@ -84,28 +76,22 @@ impl ServiceConfig {
 
     /// Add new service to the server.
     pub fn listen<N: AsRef<str>>(&self, name: N, lst: net::TcpListener) -> &Self {
-        {
-            let mut inner = self.0.borrow_mut();
-            if !inner.applied {
-                inner.apply = Some(Box::new(ConfigWrapper {
-                    f: |_| {
-                        not_configured();
-                        Ready::Ok::<_, &'static str>(())
-                    },
-                    _t: marker::PhantomData,
-                }));
-            }
-            inner.services.push((name.as_ref().to_string(), lst, ""));
-        }
+        let inner = self.0.borrow_mut();
+        inner.sockets.push((
+            inner.token.next(),
+            name.as_ref().to_string(),
+            Listener::Tcp(lst),
+            "",
+        ));
         self
     }
 
     /// Set io tag for configured service.
     pub fn set_tag<N: AsRef<str>>(&self, name: N, tag: &'static str) -> &Self {
         let mut inner = self.0.borrow_mut();
-        for svc in &mut inner.services {
-            if svc.0 == name.as_ref() {
-                svc.2 = tag;
+        for svc in &mut inner.sockets {
+            if svc.1 == name.as_ref() {
+                svc.3 = tag;
             }
         }
         self
@@ -115,171 +101,103 @@ impl ServiceConfig {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
-    pub fn on_worker_start<F, R, E>(&self, f: F) -> io::Result<()>
+    pub fn on_worker_start<F, R, E>(&self, f: F) -> &Self
     where
         F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
         R: Future<Output = Result<(), E>> + 'static,
-        E: fmt::Display + 'static,
+        E: fmt::Display,
     {
-        self.0.borrow_mut().applied = true;
-        self.0.borrow_mut().apply = Some(Box::new(ConfigWrapper {
-            f,
-            _t: marker::PhantomData,
-        }));
-        Ok(())
+        self.0.borrow_mut().apply = OnWorkerStartWrapper::create(f);
+        self
+    }
+
+    pub(super) fn into_factory(self) -> (Token, Vec<(Token, String, Listener)>, Factory) {
+        todo!()
     }
 }
 
-pub(super) struct ConfiguredService {
-    rt: Box<dyn ServiceRuntimeConfiguration + Send>,
-    names: HashMap<Token, (String, net::SocketAddr)>,
-    topics: HashMap<String, (Token, &'static str)>,
-    services: Vec<Token>,
-}
+// pub(super) struct ConfiguredService {
+//     rt: Box<dyn ServiceRuntimeConfiguration + Send>,
+//     names: HashMap<Token, (String, net::SocketAddr)>,
+//     topics: HashMap<String, (Token, &'static str)>,
+//     services: Vec<Token>,
+// }
 
-impl ConfiguredService {
-    pub(super) fn new(rt: Box<dyn ServiceRuntimeConfiguration + Send>) -> Self {
-        ConfiguredService {
-            rt,
-            names: HashMap::default(),
-            topics: HashMap::default(),
-            services: Vec::new(),
-        }
-    }
+// impl ConfiguredService {
+//     pub(super) fn new(rt: Box<dyn ServiceRuntimeConfiguration + Send>) -> Self {
+//         ConfiguredService {
+//             rt,
+//             names: HashMap::default(),
+//             topics: HashMap::default(),
+//             services: Vec::new(),
+//         }
+//     }
 
-    pub(super) fn stream(
-        &mut self,
-        token: Token,
-        name: String,
-        addr: net::SocketAddr,
-        tag: &'static str,
-    ) {
-        self.names.insert(token, (name.clone(), addr));
-        self.topics.insert(name, (token, tag));
-        self.services.push(token);
-    }
-}
+//     pub(super) fn stream(
+//         &mut self,
+//         token: Token,
+//         name: String,
+//         addr: net::SocketAddr,
+//         tag: &'static str,
+//     ) {
+//         self.names.insert(token, (name.clone(), addr));
+//         self.topics.insert(name, (token, tag));
+//         self.services.push(token);
+//     }
+// }
 
-impl InternalServiceFactory for ConfiguredService {
-    fn name(&self, token: Token) -> &str {
-        &self.names[&token].0
-    }
+// fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
+//     // configure services
+//     let rt = ServiceRuntime::new(self.topics.clone());
+//     let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
+//     let mut names = self.names.clone();
+//     let tokens = self.services.clone();
 
-    fn set_tag(&mut self, token: Token, tag: &'static str) {
-        for item in self.topics.values_mut() {
-            if item.0 == token {
-                item.1 = tag;
-            }
-        }
-    }
+//     // construct services
+//     Box::pin(async move {
+//         cfg_fut.await?;
+//         rt.validate();
 
-    fn clone_factory(&self) -> Box<dyn InternalServiceFactory> {
-        Box::new(Self {
-            rt: self.rt.clone(),
-            names: self.names.clone(),
-            topics: self.topics.clone(),
-            services: self.services.clone(),
-        })
-    }
-
-    fn create(&self) -> BoxFuture<'static, Result<Vec<(Token, BoxedServerService)>, ()>> {
-        // configure services
-        let rt = ServiceRuntime::new(self.topics.clone());
-        let cfg_fut = self.rt.configure(ServiceRuntime(rt.0.clone()));
-        let mut names = self.names.clone();
-        let tokens = self.services.clone();
-
-        // construct services
-        Box::pin(async move {
-            cfg_fut.await?;
-            rt.validate();
-
-            let mut services = mem::take(&mut rt.0.borrow_mut().services);
-            // TODO: Proper error handling here
-            let onstart = mem::take(&mut rt.0.borrow_mut().onstart);
-            for f in onstart.into_iter() {
-                f.await;
-            }
-            let mut res = vec![];
-            for token in tokens {
-                if let Some(srv) = services.remove(&token) {
-                    let newserv = srv.create(());
-                    match newserv.await {
-                        Ok(serv) => {
-                            res.push((token, serv));
-                        }
-                        Err(_) => {
-                            error!("Cannot construct service");
-                            return Err(());
-                        }
-                    }
-                } else {
-                    let name = names.remove(&token).unwrap().0;
-                    res.push((
-                        token,
-                        boxed::service(StreamService::new(
-                            service::fn_service(move |_: Io| {
-                                error!("Service {:?} is not configured", name);
-                                Ready::<_, ()>::Ok(())
-                            }),
-                            "UNKNOWN",
-                            PoolId::P0,
-                        )),
-                    ));
-                };
-            }
-            Ok(res)
-        })
-    }
-}
-
-pub(super) trait ServiceRuntimeConfiguration: fmt::Debug {
-    fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send>;
-
-    fn configure(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>>;
-}
-
-pub(super) struct ConfigWrapper<F, R, E> {
-    pub(super) f: F,
-    pub(super) _t: marker::PhantomData<(R, E)>,
-}
-
-// SAFETY: we dont store R or E in ConfigWrapper
-unsafe impl<F: Send, R, E> Send for ConfigWrapper<F, R, E> {}
-
-impl<F, R, E> fmt::Debug for ConfigWrapper<F, R, E> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ConfigWrapper")
-            .field("f", &std::any::type_name::<F>())
-            .finish()
-    }
-}
-
-impl<F, R, E> ServiceRuntimeConfiguration for ConfigWrapper<F, R, E>
-where
-    F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
-    R: Future<Output = Result<(), E>> + 'static,
-    E: fmt::Display + 'static,
-{
-    fn clone(&self) -> Box<dyn ServiceRuntimeConfiguration + Send> {
-        Box::new(ConfigWrapper {
-            f: self.f.clone(),
-            _t: marker::PhantomData,
-        })
-    }
-
-    fn configure(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>> {
-        let f = self.f.clone();
-        Box::pin(async move {
-            (f)(rt).await.map_err(|e| {
-                error!("Cannot configure service: {}", e);
-            })
-        })
-    }
-}
+//         let mut services = mem::take(&mut rt.0.borrow_mut().services);
+//         // TODO: Proper error handling here
+//         let onstart = mem::take(&mut rt.0.borrow_mut().onstart);
+//         for f in onstart.into_iter() {
+//             f.await;
+//         }
+//         let mut res = vec![];
+//         for token in tokens {
+//             if let Some(srv) = services.remove(&token) {
+//                 let newserv = srv.create(());
+//                 match newserv.await {
+//                     Ok(serv) => {
+//                         res.push((token, serv));
+//                     }
+//                     Err(_) => {
+//                         log::error!("Cannot construct service");
+//                         return Err(());
+//                     }
+//                 }
+//             } else {
+//                 let name = names.remove(&token).unwrap().0;
+//                 res.push((
+//                     token,
+//                     boxed::service(StreamService::new(
+//                         service::fn_service(move |_: Io| {
+//                             log::error!("Service {:?} is not configured", name);
+//                             Ready::<_, ()>::Ok(())
+//                         }),
+//                         "UNKNOWN",
+//                         PoolId::P0,
+//                     )),
+//                 ));
+//             };
+//         }
+//         Ok(res)
+//     })
+// }
 
 fn not_configured() {
-    error!("Service is not configured");
+    log::error!("Service is not configured");
 }
 
 pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
@@ -287,7 +205,6 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 struct ServiceRuntimeInner {
     names: HashMap<String, (Token, &'static str)>,
     services: HashMap<Token, BoxServiceFactory>,
-    onstart: Vec<BoxFuture<'static, ()>>,
 }
 
 impl fmt::Debug for ServiceRuntime {
@@ -296,7 +213,6 @@ impl fmt::Debug for ServiceRuntime {
         f.debug_struct("ServiceRuntimer")
             .field("names", &inner.names)
             .field("services", &inner.services)
-            .field("onstart", &inner.onstart.len())
             .finish()
     }
 }
@@ -306,7 +222,6 @@ impl ServiceRuntime {
         ServiceRuntime(Rc::new(RefCell::new(ServiceRuntimeInner {
             names,
             services: HashMap::default(),
-            onstart: Vec::new(),
         })))
     }
 
@@ -314,7 +229,7 @@ impl ServiceRuntime {
         let inner = self.0.as_ref().borrow();
         for (name, item) in &inner.names {
             if !inner.services.contains_key(&item.0) {
-                error!("Service {:?} is not configured", name);
+                log::error!("Service {:?} is not configured", name);
             }
         }
     }
@@ -360,23 +275,9 @@ impl ServiceRuntime {
             panic!("Unknown service: {:?}", name);
         }
     }
-
-    /// Execute future before services initialization.
-    pub fn on_start<F>(&self, fut: F)
-    where
-        F: Future<Output = ()> + 'static,
-    {
-        self.0.borrow_mut().onstart.push(Box::pin(fut))
-    }
 }
 
-type BoxServiceFactory = service::boxed::BoxServiceFactory<
-    (),
-    (Option<CounterGuard>, ServerMessage),
-    (),
-    (),
-    (),
->;
+type BoxServiceFactory = service::boxed::BoxServiceFactory<(), ServerMessage, (), (), ()>;
 
 struct ServiceFactory<T> {
     inner: T,
@@ -384,7 +285,7 @@ struct ServiceFactory<T> {
     pool: PoolId,
 }
 
-impl<T> service::ServiceFactory<(Option<CounterGuard>, ServerMessage)> for ServiceFactory<T>
+impl<T> service::ServiceFactory<ServerMessage> for ServiceFactory<T>
 where
     T: service::ServiceFactory<Io>,
     T::Service: 'static,
@@ -403,9 +304,59 @@ where
         match self.inner.create(()).await {
             Ok(s) => Ok(boxed::service(StreamService::new(s, tag, pool))),
             Err(e) => {
-                error!("Cannot construct service: {:?}", e);
+                log::error!("Cannot construct service: {:?}", e);
                 Err(())
             }
         }
+    }
+}
+
+trait OnWorkerStart {
+    fn clone(&self) -> Box<dyn OnWorkerStart + Send>;
+
+    fn run(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>>;
+}
+
+struct OnWorkerStartWrapper<F, R, E> {
+    pub(super) f: F,
+    pub(super) _t: marker::PhantomData<(R, E)>,
+}
+
+unsafe impl<F, R, E> Send for OnWorkerStartWrapper<F, R, E> where F: Send {}
+
+impl<F, R, E> OnWorkerStartWrapper<F, R, E>
+where
+    F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+    R: Future<Output = Result<(), E>> + 'static,
+    E: fmt::Display,
+{
+    pub(super) fn create(f: F) -> Box<dyn OnWorkerStart + Send> {
+        Box::new(Self {
+            f,
+            _t: marker::PhantomData,
+        })
+    }
+}
+
+impl<F, R, E> OnWorkerStart for OnWorkerStartWrapper<F, R, E>
+where
+    F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+    R: Future<Output = Result<(), E>> + 'static,
+    E: fmt::Display,
+{
+    fn clone(&self) -> Box<dyn OnWorkerStart + Send> {
+        Box::new(Self {
+            f: self.f.clone(),
+            _t: marker::PhantomData,
+        })
+    }
+
+    fn run(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>> {
+        let f = self.f.clone();
+        Box::pin(async move {
+            (f)(rt).await.map_err(|e| {
+                log::error!("On worker start callback failed: {}", e);
+            })
+        })
     }
 }
