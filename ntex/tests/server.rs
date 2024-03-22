@@ -190,8 +190,6 @@ fn test_on_worker_start() {
 #[test]
 #[cfg(feature = "tokio")]
 fn test_configure_async() {
-    env_logger::init();
-
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
     let addr3 = TestServer::unused_addr();
@@ -203,41 +201,51 @@ fn test_configure_async() {
         let num = num2.clone();
         let num2 = num2.clone();
         let sys = ntex::rt::System::new("test");
-        sys.block_on(async move {
-            let srv = build()
-                .disable_signals()
-                .configure_async(move |cfg| {
-                    let num = num.clone();
-                    let lst = net::TcpListener::bind(addr3).unwrap();
-                    cfg.bind("addr1", addr1)
-                        .unwrap()
-                        .bind("addr2", addr2)
-                        .unwrap()
-                        .listen("addr3", lst)
-                        .on_worker_start(move |rt| {
-                            let num = num.clone();
-                            async move {
-                                rt.service("addr1", fn_service(|_| Ready::Ok::<_, ()>(())));
-                                rt.service("addr3", fn_service(|_| Ready::Ok::<_, ()>(())));
-                                let _ = num.fetch_add(1, Relaxed);
-                                Ok::<_, io::Error>(())
-                            }
-                        });
-                    Ready::Ok::<_, io::Error>(())
-                })
-                .await
-                .unwrap()
-                .on_worker_start(move || {
-                    let _ = num2.fetch_add(1, Relaxed);
-                    Ready::Ok::<_, io::Error>(())
-                })
-                .workers(1)
-                .run();
-            let _ = tx.send((srv, ntex::rt::System::current()));
+        let _ = sys.run(move || {
+            ntex_rt::spawn(async move {
+                let srv = build()
+                    .disable_signals()
+                    .configure_async(move |cfg| {
+                        let num = num.clone();
+                        let lst = net::TcpListener::bind(addr3).unwrap();
+                        cfg.bind("addr1", addr1)
+                            .unwrap()
+                            .bind("addr2", addr2)
+                            .unwrap()
+                            .listen("addr3", lst)
+                            .on_worker_start(move |rt| {
+                                let num = num.clone();
+                                async move {
+                                    rt.service(
+                                        "addr1",
+                                        fn_service(|_| Ready::Ok::<_, ()>(())),
+                                    );
+                                    rt.service(
+                                        "addr3",
+                                        fn_service(|_| Ready::Ok::<_, ()>(())),
+                                    );
+                                    let _ = num.fetch_add(1, Relaxed);
+                                    Ok::<_, io::Error>(())
+                                }
+                            });
+                        Ready::Ok::<_, io::Error>(())
+                    })
+                    .await
+                    .unwrap()
+                    .on_worker_start(move || {
+                        let _ = num2.fetch_add(1, Relaxed);
+                        Ready::Ok::<_, io::Error>(())
+                    })
+                    .workers(1)
+                    .run();
+                let _ = tx.send((srv.clone(), ntex::rt::System::current()));
+                let _ = srv.await;
+            });
             Ok::<_, io::Error>(())
-        })
+        });
     });
     let (_, sys) = rx.recv().unwrap();
+
     thread::sleep(time::Duration::from_millis(500));
 
     assert!(net::TcpStream::connect(addr1).is_ok());

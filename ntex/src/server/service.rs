@@ -66,6 +66,11 @@ impl ServerConfiguration for StreamServer {
     }
 
     /// Server is stopped
+    fn terminate(&self) {
+        self.notify.send(AcceptorCommand::Terminate);
+    }
+
+    /// Server is stopped
     async fn stop(&self) {
         let (tx, rx) = oneshot::channel();
         self.notify.send(AcceptorCommand::Stop(tx));

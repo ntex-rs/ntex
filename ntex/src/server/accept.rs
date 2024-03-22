@@ -16,6 +16,7 @@ const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
 #[derive(Debug)]
 pub enum AcceptorCommand {
     Stop(oneshot::Sender<()>),
+    Terminate,
     Pause,
     Resume,
     Timer,
@@ -292,6 +293,11 @@ impl Accept {
                             self.backpressure(true);
                         }
                         break Either::Right(Some(rx));
+                    }
+                    AcceptorCommand::Terminate => {
+                        log::trace!("Stopping accept loop");
+                        self.backpressure(true);
+                        break Either::Right(None);
                     }
                     AcceptorCommand::Pause => {
                         if !self.backpressure {

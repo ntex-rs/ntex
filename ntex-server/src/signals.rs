@@ -29,7 +29,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
         .spawn(move || {
             let sigs = vec![SIGHUP, SIGINT, SIGTERM, SIGQUIT];
 
-            let mut signals = match SignalsInfo::<WithOrigin>::new(&sigs) {
+            let mut signals = match SignalsInfo::<WithOrigin>::new(sigs) {
                 Ok(signals) => signals,
                 Err(e) => {
                     log::error!("Cannot initialize signals handler: {}", e);

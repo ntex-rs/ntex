@@ -10,6 +10,7 @@ use crate::signals::Signal;
 use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
 
 const STOP_DELAY: Millis = Millis(500);
+const RESTART_DELAY: Millis = Millis(250);
 
 #[derive(Clone)]
 pub(crate) struct ServerManager<F: ServerConfiguration>(Rc<Inner<F>>);
@@ -136,6 +137,7 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>) {
                 WorkerStatus::Unavailable => mgr.unavailable(wrk.clone()),
                 WorkerStatus::Failed => {
                     mgr.unavailable(wrk.clone());
+                    sleep(RESTART_DELAY).await;
                     if !mgr.stopping() {
                         wrk = Worker::start(mgr.next_id(), mgr.factory());
                     } else {
@@ -177,15 +179,19 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                         break;
                     }
                     Err(i) => {
-                        log::trace!("Worker failed while processing item");
+                        if !self.mgr.0.stopping.get() {
+                            log::trace!("Worker failed while processing item");
+                        }
                         item = i;
                         self.workers.remove(self.next);
                     }
                 }
             } else {
-                log::error!("No workers");
-                self.backlog.push_back(item);
-                self.mgr.pause();
+                if !self.mgr.0.stopping.get() {
+                    log::error!("No workers");
+                    self.backlog.push_back(item);
+                    self.mgr.pause();
+                }
                 break;
             }
         }
@@ -211,7 +217,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             }
         }
         // handle backlog
-        if !self.backlog.is_empty() && self.workers.is_empty() {
+        if !self.backlog.is_empty() && !self.workers.is_empty() {
             while let Some(item) = self.backlog.pop_front() {
                 // handle worker failure
                 if let Err(item) = self.workers[0].send(item) {
@@ -266,10 +272,20 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 }
 
+struct DropHandle<F: ServerConfiguration>(ServerManager<F>);
+
+impl<T: ServerConfiguration> Drop for DropHandle<T> {
+    fn drop(&mut self) {
+        self.0 .0.stopping.set(true);
+        self.0 .0.factory.terminate();
+    }
+}
+
 async fn handle_cmd<F: ServerConfiguration>(
     mgr: ServerManager<F>,
     rx: Receiver<ServerCommand<F::Item>>,
 ) {
+    let _drop_hnd = DropHandle(mgr.clone());
     let mut state = HandleCmdState::new(mgr);
 
     loop {

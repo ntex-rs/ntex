@@ -89,7 +89,11 @@ impl<T> Worker<T> {
 
         Arbiter::default().exec_fn(move || {
             let _ = spawn(async move {
+                log::info!("Starting worker {:?}", id);
+
+                log::debug!("Creating server instance in {:?} worker", id);
                 let factory = cfg.create().await;
+                log::debug!("Server instance has been created in {:?} worker", id);
 
                 match create(id, rx1, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {
@@ -307,8 +311,6 @@ where
     T: Send + 'static,
     F: ServiceFactory<WorkerMessage<T>> + 'static,
 {
-    log::info!("Starting worker {:?}", id);
-
     availability.set(false);
     let factory = factory?;
 

@@ -54,5 +54,8 @@ pub trait ServerConfiguration: Send + Clone + 'static {
     fn resumed(&self) {}
 
     /// Server is stopped
+    fn terminate(&self) {}
+
+    /// Server is stopped
     async fn stop(&self) {}
 }

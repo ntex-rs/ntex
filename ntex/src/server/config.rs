@@ -79,7 +79,7 @@ impl ServiceConfig {
             name: name.as_ref().to_string(),
             sockets: sockets
                 .into_iter()
-                .map(|lst| (inner.token.next(), Listener::Tcp(lst), ""))
+                .map(|lst| (inner.token.next(), Listener::from_tcp(lst), ""))
                 .collect(),
         };
         inner.sockets.push(socket);
@@ -92,7 +92,7 @@ impl ServiceConfig {
         let mut inner = self.0.borrow_mut();
         let socket = Socket {
             name: name.as_ref().to_string(),
-            sockets: vec![(inner.token.next(), Listener::Tcp(lst), "")],
+            sockets: vec![(inner.token.next(), Listener::from_tcp(lst), "")],
         };
         inner.sockets.push(socket);
 

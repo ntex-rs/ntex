@@ -1,7 +1,7 @@
 #![allow(clippy::let_underscore_future)]
 use std::any::{Any, TypeId};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, thread};
 
 use async_channel::{unbounded, Receiver, Sender};
@@ -320,10 +320,17 @@ impl Future for SystemArbiter {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
-            match Pin::new(&mut self.commands).poll_next(cx) {
-                Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Ready(Some(cmd)) => match cmd {
+            let cmd = ready!(Pin::new(&mut self.commands).poll_next(cx));
+            log::debug!("Received system command: {:?}", cmd);
+            match cmd {
+                None => {
+                    log::debug!("System stopped");
+                    return Poll::Ready(());
+                }
+                Some(cmd) => match cmd {
                     SystemCommand::Exit(code) => {
+                        log::debug!("Stopping system with {} code", code);
+
                         // stop arbiters
                         for arb in self.arbiters.values() {
                             arb.stop();
@@ -340,7 +347,6 @@ impl Future for SystemArbiter {
                         self.arbiters.remove(&name);
                     }
                 },
-                Poll::Pending => return Poll::Pending,
             }
         }
     }
