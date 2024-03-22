@@ -125,7 +125,7 @@ where
         req: Connect,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Connection, ConnectError> {
-        trace!("Get connection for {:?}", req.uri);
+        log::trace!("Get connection for {:?}", req.uri);
         let inner = self.inner.clone();
         let waiters = self.waiters.clone();
 
@@ -140,7 +140,7 @@ where
         match result {
             // use existing connection
             Acquire::Acquired(io, created) => {
-                trace!("Use existing {:?} connection for {:?}", io, req.uri);
+                log::trace!("Use existing {:?} connection for {:?}", io, req.uri);
                 Ok(Connection::new(
                     io,
                     created,
@@ -149,7 +149,7 @@ where
             }
             // open new tcp connection
             Acquire::Available => {
-                trace!("Connecting to {:?}", req.uri);
+                log::trace!("Connecting to {:?}", req.uri);
                 let uri = req.uri.clone();
                 let (tx, rx) = waiters.borrow_mut().pool.channel();
                 OpenConnection::spawn(key, tx, uri, inner, &self.connector, req);
@@ -161,7 +161,7 @@ where
             }
             // pool is full, wait
             Acquire::NotAvailable => {
-                trace!(
+                log::trace!(
                     "Pool is full, waiting for available connections for {:?}",
                     req.uri
                 );
@@ -217,7 +217,7 @@ impl Waiters {
                 let (req, tx) = waiters.front().unwrap();
                 // check if waiter is still alive
                 if tx.is_canceled() {
-                    trace!("Waiter for {:?} is gone, remove waiter", req.uri);
+                    log::trace!("Waiter for {:?} is gone, remove waiter", req.uri);
                     waiters.pop_front();
                     continue;
                 };
@@ -338,7 +338,7 @@ where
             while let Some((req, tx)) = waiters.front() {
                 // is waiter still alive
                 if tx.is_canceled() {
-                    trace!("Waiter for {:?} is gone, cleanup", req.uri);
+                    log::trace!("Waiter for {:?} is gone, cleanup", req.uri);
                     cleanup = true;
                     waiters.pop_front();
                     continue;
@@ -348,7 +348,7 @@ where
                 match result {
                     Acquire::NotAvailable => break,
                     Acquire::Acquired(io, created) => {
-                        trace!(
+                        log::trace!(
                             "Use existing {:?} connection for {:?}, wake up waiter",
                             io,
                             req.uri
@@ -362,7 +362,7 @@ where
                         )));
                     }
                     Acquire::Available => {
-                        trace!("Connecting to {:?} and wake up waiter", req.uri);
+                        log::trace!("Connecting to {:?} and wake up waiter", req.uri);
                         cleanup = true;
                         let (connect, tx) = waiters.pop_front().unwrap();
                         let uri = connect.uri.clone();
@@ -446,7 +446,7 @@ where
         // open tcp connection
         match ready!(this.fut.poll(cx)) {
             Err(err) => {
-                trace!(
+                log::trace!(
                     "Failed to open client connection for {:?} with error {:?}",
                     &this.key.authority,
                     err

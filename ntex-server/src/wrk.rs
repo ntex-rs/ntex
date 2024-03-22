@@ -91,15 +91,15 @@ impl<T> Worker<T> {
             let _ = spawn(async move {
                 let factory = cfg.create().await;
 
-                match create(rx1, rx2, factory, avail_tx).await {
+                match create(id, rx1, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {
                         run_worker(svc, wrk).await;
                     }
                     Err(e) => {
                         log::error!("Cannot start worker: {:?}", e);
-                        Arbiter::current().stop();
                     }
                 }
+                Arbiter::current().stop();
             });
         });
 
@@ -144,7 +144,9 @@ impl<T> Worker<T> {
             // cleanup updates
             while self.avail.notify.try_recv().is_ok() {}
 
-            let _ = self.avail.notify.recv_direct().await;
+            if self.avail.notify.recv_direct().await.is_err() {
+                self.failed.store(true, Ordering::Release);
+            }
             self.status()
         }
     }
@@ -228,6 +230,7 @@ impl WorkerAvailabilityTx {
 ///
 /// Worker accepts message via unbounded channel and starts processing.
 struct WorkerSt<T, F: ServiceFactory<WorkerMessage<T>>> {
+    id: WorkerId,
     rx: Pin<Box<dyn Stream<Item = T>>>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     factory: F,
@@ -273,13 +276,10 @@ where
                 };
                 poll_fn(|cx| svc.poll_shutdown(cx)).await;
 
-                Arbiter::current().stop();
+                log::info!("Stopping worker {:?}", wrk.id);
                 return;
             }
-            Either::Right(None) => {
-                Arbiter::current().stop();
-                return;
-            }
+            Either::Right(None) => return,
         }
 
         loop {
@@ -290,26 +290,27 @@ where
                     break;
                 }
                 Either::Left(Err(_)) => sleep(STOP_TIMEOUT).await,
-                Either::Right(_) => {
-                    Arbiter::current().stop();
-                    return;
-                }
+                Either::Right(_) => return,
             }
         }
     }
 }
 
 async fn create<T, F>(
+    id: WorkerId,
     rx: Receiver<T>,
     stop: Receiver<Shutdown>,
-    factory: F,
+    factory: Result<F, ()>,
     availability: WorkerAvailabilityTx,
 ) -> Result<(Pipeline<F::Service>, WorkerSt<T, F>), ()>
 where
     T: Send + 'static,
     F: ServiceFactory<WorkerMessage<T>> + 'static,
 {
+    log::info!("Starting worker {:?}", id);
+
     availability.set(false);
+    let factory = factory?;
 
     let rx = Box::pin(rx);
     let mut stop = Box::pin(stop);
@@ -329,6 +330,7 @@ where
     Ok((
         svc,
         WorkerSt {
+            id,
             factory,
             availability,
             rx: Box::pin(rx),

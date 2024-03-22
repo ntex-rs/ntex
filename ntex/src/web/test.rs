@@ -608,7 +608,7 @@ where
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
-            let builder = Server::build().workers(1).disable_signals();
+            let builder = crate::server::build().workers(1).disable_signals();
 
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {

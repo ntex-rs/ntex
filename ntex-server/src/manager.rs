@@ -6,6 +6,7 @@ use ntex_rt::System;
 use ntex_util::{future::join_all, time::sleep, time::Millis};
 
 use crate::server::ServerShared;
+use crate::signals::Signal;
 use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
 
 const STOP_DELAY: Millis = Millis(500);
@@ -18,6 +19,7 @@ pub(crate) enum ServerCommand<T> {
     Item(T),
     Pause(oneshot::Sender<()>),
     Resume(oneshot::Sender<()>),
+    Signal(Signal),
     Stop {
         graceful: bool,
         completion: Option<oneshot::Sender<()>>,
@@ -48,6 +50,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
 
         let (tx, rx) = unbounded();
 
+        let no_signals = cfg.no_signals;
         let shared = Arc::new(ServerShared {
             paused: AtomicBool::new(true),
         });
@@ -69,13 +72,14 @@ impl<F: ServerConfiguration> ServerManager<F> {
             start_worker(mgr.clone());
         }
 
-        // handle signals
-        //if !self.no_signals {
-        //spawn(signals(mgr.clone()));
-        //}
+        let srv = Server::new(tx, shared);
 
-        // start server
-        Server::new(tx, shared)
+        // handle signals
+        if !no_signals {
+            crate::signals::start(srv.clone());
+        }
+
+        srv
     }
 
     pub(crate) fn factory(&self) -> F {
@@ -292,37 +296,29 @@ async fn handle_cmd<F: ServerConfiguration>(
             } => {
                 state.stop(graceful, completion).await;
                 return;
-            } // ServerCommand::Signal(sig) => {
-              //             // Signals support
-              //             // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop ntex system
-              //             match sig {
-              //                 Signal::Int => {
-              //                     log::info!("SIGINT received, exiting");
-              //                     self.exit = true;
-              //                     self.handle_cmd(ServerCommand::Stop {
-              //                         graceful: false,
-              //                         completion: None,
-              //                     })
-              //                 }
-              //                 Signal::Term => {
-              //                     log::info!("SIGTERM received, stopping");
-              //                     self.exit = true;
-              //                     self.handle_cmd(ServerCommand::Stop {
-              //                         graceful: true,
-              //                         completion: None,
-              //                     })
-              //                 }
-              //                 Signal::Quit => {
-              //                     log::info!("SIGQUIT received, exiting");
-              //                     self.exit = true;
-              //                     self.handle_cmd(ServerCommand::Stop {
-              //                         graceful: false,
-              //                         completion: None,
-              //                     })
-              //                 }
-              //                 _ => (),
-              //             }
-              //}
+            }
+            ServerCommand::Signal(sig) => {
+                // Signals support
+                // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop ntex system
+                match sig {
+                    Signal::Int => {
+                        log::info!("SIGINT received, exiting");
+                        state.stop(false, None).await;
+                        return;
+                    }
+                    Signal::Term => {
+                        log::info!("SIGTERM received, stopping");
+                        state.stop(true, None).await;
+                        return;
+                    }
+                    Signal::Quit => {
+                        log::info!("SIGQUIT received, exiting");
+                        state.stop(false, None).await;
+                        return;
+                    }
+                    _ => (),
+                }
+            }
         }
     }
 }

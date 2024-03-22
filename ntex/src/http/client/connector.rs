@@ -73,7 +73,7 @@ impl Connector {
             let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
-                .map_err(|e| error!("Cannot set ALPN protocol: {:?}", e));
+                .map_err(|e| log::error!("Cannot set ALPN protocol: {:?}", e));
 
             ssl.set_verify(tls_openssl::ssl::SslVerifyMode::NONE);
 

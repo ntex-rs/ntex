@@ -21,7 +21,7 @@ pub(super) async fn send_request<B>(
 where
     B: MessageBody,
 {
-    trace!("Sending client request: {:?} {:?}", head, body.size());
+    log::trace!("Sending client request: {:?} {:?}", head, body.size());
     let length = body.size();
     let eof = if head.as_ref().method == Method::HEAD {
         true

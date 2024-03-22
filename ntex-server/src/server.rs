@@ -4,7 +4,7 @@ use std::{future::Future, io, pin::Pin};
 
 use async_channel::Sender;
 
-use crate::manager::ServerCommand;
+use crate::{manager::ServerCommand, signals::Signal};
 
 #[derive(Debug)]
 pub(crate) struct ServerShared {
@@ -26,6 +26,10 @@ impl<T> Server<T> {
             shared,
             stop: None,
         }
+    }
+
+    pub(crate) fn signal(&self, sig: Signal) {
+        let _ = self.cmd.try_send(ServerCommand::Signal(sig));
     }
 
     /// Send item to worker pool

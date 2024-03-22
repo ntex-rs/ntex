@@ -8,7 +8,7 @@ pub struct Connection {
     pub(crate) token: Token,
 }
 
-pub(crate) enum Listener {
+pub enum Listener {
     Tcp(net::TcpListener),
     #[cfg(unix)]
     Uds(std::os::unix::net::UnixListener),

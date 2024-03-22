@@ -7,7 +7,6 @@ use polling::{Event, Events, Poller};
 use crate::{rt::System, time::sleep, time::Millis, util::Either};
 
 use super::socket::{Connection, Listener, SocketAddr};
-// use super::worker::WorkerClient;
 use super::{Server, ServerStatus, Token};
 
 const EXIT_TIMEOUT: Duration = Duration::from_millis(100);
@@ -15,8 +14,8 @@ const ERR_TIMEOUT: Duration = Duration::from_millis(500);
 const ERR_SLEEP_TIMEOUT: Millis = Millis(525);
 
 #[derive(Debug)]
-enum AcceptorCommand {
-    Stop(mpsc::Sender<()>),
+pub enum AcceptorCommand {
+    Stop(oneshot::Sender<()>),
     Pause,
     Resume,
     Timer,
@@ -32,26 +31,28 @@ struct ServerSocketInfo {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct AcceptNotify(Arc<Poller>, mpsc::Sender<AcceptorCommand>);
+pub struct AcceptNotify(Arc<Poller>, mpsc::Sender<AcceptorCommand>);
 
 impl AcceptNotify {
-    pub(super) fn new(waker: Arc<Poller>, tx: mpsc::Sender<AcceptorCommand>) -> Self {
+    fn new(waker: Arc<Poller>, tx: mpsc::Sender<AcceptorCommand>) -> Self {
         AcceptNotify(waker, tx)
     }
 
-    pub(super) fn send(&self, cmd: AcceptorCommand) {
+    pub fn send(&self, cmd: AcceptorCommand) {
         let _ = self.1.send(cmd);
         let _ = self.0.notify();
     }
 }
 
-pub(super) struct AcceptLoop {
+/// Streamin io accept loop
+pub struct AcceptLoop {
     notify: AcceptNotify,
     inner: Option<(mpsc::Receiver<AcceptorCommand>, Arc<Poller>)>,
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
 }
 
 impl AcceptLoop {
+    /// Create accept loop
     pub fn new() -> AcceptLoop {
         // Create a poller instance
         let poll = Arc::new(
@@ -70,18 +71,20 @@ impl AcceptLoop {
         }
     }
 
-    pub(super) fn notify(&self) -> AcceptNotify {
+    /// Get notification api for the loop
+    pub fn notify(&self) -> AcceptNotify {
         self.notify.clone()
     }
 
-    pub(super) fn set_status_handler<F>(&mut self, f: F)
+    pub fn set_status_handler<F>(&mut self, f: F)
     where
         F: FnMut(ServerStatus) + Send + 'static,
     {
         self.status_handler = Some(Box::new(f));
     }
 
-    pub(super) fn start(&mut self, socks: Vec<(Token, Listener)>, srv: Server) {
+    /// Start accept loop
+    pub fn start(mut self, socks: Vec<(Token, Listener)>, srv: Server) {
         let (rx, poll) = self
             .inner
             .take()
@@ -165,7 +168,7 @@ impl Accept {
             notify,
             srv,
             status_handler,
-            backpressure: false,
+            backpressure: true,
             backlog: VecDeque::new(),
         }
     }
@@ -178,12 +181,6 @@ impl Accept {
 
     fn poll(&mut self) {
         log::trace!("Starting server accept loop");
-
-        // Add all sources
-        for (idx, info) in self.sockets.iter().enumerate() {
-            log::info!("Starting socket listener on {}", info.addr);
-            self.add_source(idx);
-        }
 
         // Create storage for events
         let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
@@ -285,34 +282,28 @@ impl Accept {
         }
     }
 
-    fn process_cmd(&mut self) -> Either<(), Option<mpsc::Sender<()>>> {
+    fn process_cmd(&mut self) -> Either<(), Option<oneshot::Sender<()>>> {
         loop {
             match self.rx.try_recv() {
                 Ok(cmd) => match cmd {
                     AcceptorCommand::Stop(rx) => {
-                        log::trace!("Stopping accept loop");
-                        for (key, info) in self.sockets.iter().enumerate() {
-                            log::info!("Stopping socket listener on {}", info.addr);
-                            self.remove_source(key);
+                        if !self.backpressure {
+                            log::trace!("Stopping accept loop");
+                            self.backpressure(true);
                         }
-                        self.update_status(ServerStatus::NotReady);
                         break Either::Right(Some(rx));
                     }
                     AcceptorCommand::Pause => {
-                        log::trace!("Pausing accept loop");
-                        for (key, info) in self.sockets.iter().enumerate() {
-                            log::info!("Stopping socket listener on {}", info.addr);
-                            self.remove_source(key);
+                        if !self.backpressure {
+                            log::trace!("Pausing accept loop");
+                            self.backpressure(true);
                         }
-                        self.update_status(ServerStatus::NotReady);
                     }
                     AcceptorCommand::Resume => {
-                        log::trace!("Resuming accept loop");
-                        for (key, info) in self.sockets.iter().enumerate() {
-                            log::info!("Resuming socket listener on {}", info.addr);
-                            self.add_source(key);
+                        if self.backpressure {
+                            log::trace!("Resuming accept loop");
+                            self.backpressure(false);
                         }
-                        self.update_status(ServerStatus::Ready);
                     }
                     AcceptorCommand::Timer => {
                         self.process_timer();
@@ -322,11 +313,7 @@ impl Accept {
                     break match err {
                         mpsc::TryRecvError::Empty => Either::Left(()),
                         mpsc::TryRecvError::Disconnected => {
-                            for (key, info) in self.sockets.iter().enumerate() {
-                                log::info!("Stopping socket listener on {}", info.addr);
-                                self.remove_source(key);
-                            }
-
+                            self.backpressure(true);
                             Either::Right(None)
                         }
                     }
@@ -372,7 +359,7 @@ impl Accept {
                 // disable err timeout
                 let info = &mut self.sockets[key];
                 if info.timeout.take().is_none() {
-                    log::trace!("Enabling back-pressure for {}", info.addr);
+                    log::info!("Stopping socket listener on {}", info.addr);
                     self.remove_source(key);
                 }
             }
@@ -392,9 +379,8 @@ impl Accept {
                             log::trace!("Server is unavailable");
                             self.backlog.push_back(msg);
                             self.backpressure(true);
+                            return false;
                         }
-
-                        return false;
                     }
                     Ok(None) => return true,
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return true,

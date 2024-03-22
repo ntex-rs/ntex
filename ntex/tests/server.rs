@@ -4,7 +4,7 @@ use std::{io, io::Read, net, sync::mpsc, sync::Arc, thread, time};
 
 use ntex::codec::BytesCodec;
 use ntex::io::Io;
-use ntex::server::{Server, TestServer};
+use ntex::server::{build, TestServer};
 use ntex::service::fn_service;
 use ntex::util::{Bytes, Ready};
 
@@ -16,7 +16,7 @@ fn test_bind() {
     let h = thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
         sys.run(move || {
-            let srv = Server::build()
+            let srv = build()
                 .workers(1)
                 .disable_signals()
                 .bind("test", addr, move |_| {
@@ -44,8 +44,8 @@ async fn test_listen() {
     let h = thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
         let lst = net::TcpListener::bind(addr).unwrap();
-        sys.run(move || {
-            let srv = Server::build()
+        let _ = sys.run(move || {
+            let srv = build()
                 .disable_signals()
                 .workers(1)
                 .listen("test", lst, move |_| fn_service(|_| Ready::Ok::<_, ()>(())))
@@ -53,7 +53,7 @@ async fn test_listen() {
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())
-        })
+        });
     });
     let (srv, sys) = rx.recv().unwrap();
 
@@ -74,7 +74,7 @@ async fn test_run() {
     let h = thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
         sys.run(move || {
-            let srv = Server::build()
+            let srv = build()
                 .backlog(100)
                 .disable_signals()
                 .bind("test", addr, move |_| {
@@ -144,7 +144,7 @@ fn test_on_worker_start() {
         let num2 = num2.clone();
         let sys = ntex::rt::System::new("test");
         sys.run(move || {
-            let srv = Server::build()
+            let srv = build()
                 .disable_signals()
                 .configure(move |cfg| {
                     let num = num.clone();
@@ -162,12 +162,11 @@ fn test_on_worker_start() {
                                 let _ = num.fetch_add(1, Relaxed);
                                 Ok::<_, io::Error>(())
                             }
-                        })
-                        .unwrap();
+                        });
                     Ok::<_, io::Error>(())
                 })
                 .unwrap()
-                .on_worker_start(move |_| {
+                .on_worker_start(move || {
                     let _ = num2.fetch_add(1, Relaxed);
                     Ready::Ok::<_, io::Error>(())
                 })
@@ -191,6 +190,8 @@ fn test_on_worker_start() {
 #[test]
 #[cfg(feature = "tokio")]
 fn test_configure_async() {
+    env_logger::init();
+
     let addr1 = TestServer::unused_addr();
     let addr2 = TestServer::unused_addr();
     let addr3 = TestServer::unused_addr();
@@ -203,7 +204,7 @@ fn test_configure_async() {
         let num2 = num2.clone();
         let sys = ntex::rt::System::new("test");
         sys.block_on(async move {
-            let srv = Server::build()
+            let srv = build()
                 .disable_signals()
                 .configure_async(move |cfg| {
                     let num = num.clone();
@@ -221,13 +222,12 @@ fn test_configure_async() {
                                 let _ = num.fetch_add(1, Relaxed);
                                 Ok::<_, io::Error>(())
                             }
-                        })
-                        .unwrap();
+                        });
                     Ready::Ok::<_, io::Error>(())
                 })
                 .await
                 .unwrap()
-                .on_worker_start(move |_| {
+                .on_worker_start(move || {
                     let _ = num2.fetch_add(1, Relaxed);
                     Ready::Ok::<_, io::Error>(())
                 })
@@ -263,7 +263,7 @@ fn test_panic_in_worker() {
         let counter = counter2.clone();
         sys.run(move || {
             let counter = counter.clone();
-            let srv = Server::build()
+            let srv = build()
                 .workers(1)
                 .disable_signals()
                 .bind("test", addr, move |_| {

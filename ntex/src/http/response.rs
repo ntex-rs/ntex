@@ -734,7 +734,7 @@ impl fmt::Debug for ResponseBuilder {
 
 fn log_error<T: Into<HttpError>>(err: T) -> HttpError {
     let e = err.into();
-    error!("Error in ResponseBuilder {}", e);
+    log::error!("Error in ResponseBuilder {}", e);
     e
 }
 

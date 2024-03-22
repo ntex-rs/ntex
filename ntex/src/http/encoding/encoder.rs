@@ -248,21 +248,21 @@ impl ContentEncoder {
             ContentEncoder::Br(ref mut encoder) => match encoder.write_all(data) {
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    trace!("Error decoding br encoding: {}", err);
+                    log::trace!("Error decoding br encoding: {}", err);
                     Err(err)
                 }
             },
             ContentEncoder::Gzip(ref mut encoder) => match encoder.write_all(data) {
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    trace!("Error decoding gzip encoding: {}", err);
+                    log::trace!("Error decoding gzip encoding: {}", err);
                     Err(err)
                 }
             },
             ContentEncoder::Deflate(ref mut encoder) => match encoder.write_all(data) {
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    trace!("Error decoding deflate encoding: {}", err);
+                    log::trace!("Error decoding deflate encoding: {}", err);
                     Err(err)
                 }
             },

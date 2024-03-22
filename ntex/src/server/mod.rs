@@ -5,9 +5,10 @@ mod accept;
 mod builder;
 mod config;
 mod counter;
+mod factory;
 mod service;
 mod socket;
-// mod test;
+mod test;
 
 #[cfg(feature = "openssl")]
 pub use ntex_tls::openssl;
@@ -18,10 +19,13 @@ pub use ntex_tls::rustls;
 pub use ntex_tls::max_concurrent_ssl_accept;
 
 pub(crate) use self::builder::create_tcp_listener;
+
+pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
 pub use self::builder::ServerBuilder;
 pub use self::config::{Config, ServiceConfig, ServiceRuntime};
-// pub use self::test::{build_test_server, test_server, TestServer};
+pub use self::service::{ServerMessage, StreamServer};
 pub use self::socket::{Connection, Stream};
+pub use self::test::{build_test_server, test_server, TestServer};
 
 pub type Server = ntex_server::Server<Connection>;
 
@@ -36,10 +40,10 @@ pub enum ServerStatus {
 
 /// Socket id token
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct Token(usize);
+pub struct Token(usize);
 
 impl Token {
-    pub(self) fn next(&mut self) -> Token {
+    pub fn next(&mut self) -> Token {
         let token = Token(self.0);
         self.0 += 1;
         token

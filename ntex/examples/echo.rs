@@ -4,14 +4,14 @@ use futures_util::StreamExt;
 use log::info;
 use ntex::http::header::HeaderValue;
 use ntex::http::{HttpService, Request, Response};
-use ntex::{server::Server, time::Seconds, util::BytesMut};
+use ntex::{time::Seconds, util::BytesMut};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
     env::set_var("RUST_LOG", "echo=info");
     env_logger::init();
 
-    Server::build()
+    ntex::server::build()
         .bind("echo", "127.0.0.1:8080", |_| {
             HttpService::build()
                 .headers_read_rate(Seconds(1), Seconds(5), 128)

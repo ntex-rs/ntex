@@ -39,9 +39,9 @@ impl<T: ResponseError> From<T> for Response {
     fn from(err: T) -> Response {
         let resp = err.error_response();
         if resp.head().status == StatusCode::INTERNAL_SERVER_ERROR {
-            error!("Internal Server Error: {:?}", err);
+            log::error!("Internal Server Error: {:?}", err);
         } else {
-            debug!("Error in response: {:?}", err);
+            log::debug!("Error in response: {:?}", err);
         }
         resp
     }

@@ -3,20 +3,19 @@ use std::{fmt, future::Future, io, net};
 use ntex_server::{Server, WorkerPool};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::{io::Io, service::ServiceFactory, time::Millis};
+use crate::service::ServiceFactory;
+use crate::{io::Io, time::Millis};
 
 use super::accept::AcceptLoop;
 use super::config::{Config, ServiceConfig};
-use super::service::{Factory, OnWorkerStart, OnWorkerStartWrapper, StreamServer};
-use super::{socket::Listener, ServerStatus, Token};
-
-const STOP_DELAY: Millis = Millis(300);
+use super::factory::{self, FactoryServiceType, OnWorkerStart, OnWorkerStartWrapper};
+use super::{socket::Listener, Connection, ServerStatus, StreamServer, Token};
 
 /// Server builder
 pub struct ServerBuilder {
     token: Token,
     backlog: i32,
-    services: Vec<Factory>,
+    services: Vec<FactoryServiceType>,
     sockets: Vec<(Token, String, Listener)>,
     on_worker_start: Vec<Box<dyn OnWorkerStart + Send>>,
     accept: AcceptLoop,
@@ -149,7 +148,6 @@ impl ServerBuilder {
         R: Future<Output = io::Result<()>>,
     {
         let cfg = ServiceConfig::new(self.token, self.backlog);
-        let inner = cfg.0.clone();
 
         f(cfg.clone()).await?;
 
@@ -181,7 +179,7 @@ impl ServerBuilder {
         U: net::ToSocketAddrs,
         N: AsRef<str>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io>,
+        R: ServiceFactory<Io> + 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -193,8 +191,11 @@ impl ServerBuilder {
             tokens.push((token, ""));
         }
 
-        self.services
-            .push(Factory::new(name.as_ref().to_string(), tokens, factory));
+        self.services.push(factory::create_factory_service(
+            name.as_ref().to_string(),
+            tokens,
+            factory,
+        ));
 
         Ok(self)
     }
@@ -206,7 +207,7 @@ impl ServerBuilder {
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io>,
+        R: ServiceFactory<Io> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -235,10 +236,10 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io>,
+        R: ServiceFactory<Io> + 'static,
     {
         let token = self.token.next();
-        self.services.push(Factory::new(
+        self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
             vec![(token, "")],
             factory,
@@ -257,10 +258,10 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io>,
+        R: ServiceFactory<Io> + 'static,
     {
         let token = self.token.next();
-        self.services.push(Factory::new(
+        self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
             vec![(token, "")],
             factory,
@@ -282,7 +283,7 @@ impl ServerBuilder {
 
         if let Some(token) = token {
             for svc in &mut self.services {
-                if svc.name() == name.as_ref() {
+                if svc.name(token) == name.as_ref() {
                     svc.set_tag(token, tag);
                 }
             }
@@ -294,74 +295,31 @@ impl ServerBuilder {
     }
 
     /// Starts processing incoming connections and return server controller.
-    pub fn run(mut self) -> Server<StreamServer> {
+    pub fn run(self) -> Server<Connection> {
         if self.sockets.is_empty() {
             panic!("Server should have at least one bound socket");
         } else {
-            // info!("Starting {} workers", self.workers);
+            let srv = StreamServer::new(
+                self.accept.notify(),
+                self.services,
+                self.on_worker_start,
+            );
+            let svc = self.pool.run(srv);
 
-            // start workers
-            // let mut workers = Vec::new();
-            // for idx in 0..self.threads {
-            //     let worker = self.start_worker(idx, self.accept.notify());
-            //     workers.push(worker.clone());
-            //     self.workers.push((idx, worker));
-            // }
+            let sockets = self
+                .sockets
+                .into_iter()
+                .map(|sock| {
+                    log::info!("Starting \"{}\" service on {}", sock.1, sock.2);
+                    (sock.0, sock.2)
+                })
+                .collect();
+            self.accept.start(sockets, svc.clone());
 
-            // // start accept thread
-            // for sock in &self.sockets {
-            //     info!("Starting \"{}\" service on {}", sock.1, sock.2);
-            // }
-            // self.accept.start(
-            //     mem::take(&mut self.sockets)
-            //         .into_iter()
-            //         .map(|t| (t.0, t.2))
-            //         .collect(),
-            //     workers,
-            // );
-
-            // handle signals
-            // if !self.no_signals {
-            // spawn(signals(self.server.clone()));
-            // }
-
-            // start http server
-            // crate::rt::spawn(self.server.clone());
-
-            // self.server
-            todo!()
+            svc
         }
     }
 }
-
-// impl Future for ServerBuilder {
-//     type Output = ();
-
-//     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         loop {
-//             match Pin::new(&mut self.cmd).poll_next(cx) {
-//                 Poll::Ready(Some(it)) => self.as_mut().get_mut().handle_cmd(it),
-//                 Poll::Ready(None) => return Poll::Pending,
-//                 Poll::Pending => return Poll::Pending,
-//             }
-//         }
-//     }
-// }
-
-// async fn signals(srv: Server) {
-//     loop {
-//         if let Some(rx) = crate::rt::signal() {
-//             if let Ok(sig) = rx.await {
-//                 srv.signal(sig);
-//             } else {
-//                 return;
-//             }
-//         } else {
-//             log::info!("Signals are not supported by current runtime");
-//             return;
-//         }
-//     }
-// }
 
 pub(super) fn bind_addr<S: net::ToSocketAddrs>(
     addr: S,
