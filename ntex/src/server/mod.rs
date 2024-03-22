@@ -43,6 +43,7 @@ pub enum ServerStatus {
 pub struct Token(usize);
 
 impl Token {
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Token {
         let token = Token(self.0);
         self.0 += 1;
