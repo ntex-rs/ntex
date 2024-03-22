@@ -1,5 +1,11 @@
 # Changes
 
+## [1.2.0] - 2024-03-xx
+
+* Refactor server workers management
+
+* Move ntex::server to separate crate
+
 ## [1.1.2] - 2024-03-12
 
 * Update ntex-h2
