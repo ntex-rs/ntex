@@ -63,7 +63,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
         .name("ntex-server signals".to_string())
         .spawn(move || {
             ctrlc::set_handler(move || {
-                srv.send(Signal::Int);
+                srv.signal(Signal::Int);
             })
             .expect("Error setting Ctrl-C handler");
         });
