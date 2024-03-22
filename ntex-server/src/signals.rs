@@ -1,8 +1,7 @@
 use std::thread;
 
 use signal_hook::consts::signal::*;
-use signal_hook::iterator::exfiltrator::WithOrigin;
-use signal_hook::iterator::SignalsInfo;
+use signal_hook::iterator::Signals;
 
 use crate::server::Server;
 
@@ -29,7 +28,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
         .spawn(move || {
             let sigs = vec![SIGHUP, SIGINT, SIGTERM, SIGQUIT];
 
-            let mut signals = match SignalsInfo::<WithOrigin>::new(sigs) {
+            let mut signals = match Signals::new(sigs) {
                 Ok(signals) => signals,
                 Err(e) => {
                     log::error!("Cannot initialize signals handler: {}", e);
@@ -37,7 +36,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
                 }
             };
             for info in &mut signals {
-                match info.signal {
+                match info {
                     SIGHUP => srv.signal(Signal::Hup),
                     SIGTERM => srv.signal(Signal::Term),
                     SIGINT => {

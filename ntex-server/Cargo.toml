@@ -24,7 +24,7 @@ ntex-util = "1.0"
 async-channel = "2.2"
 async-broadcast = "0.7"
 log = "0.4"
-signal-hook = { version = "0.3", features=["extended-siginfo"] }
+signal-hook = { version = "0.3", features=["iterator"] }
 oneshot = { version = "0.1", default-features = false, features = ["async"] }
 
 [dev-dependencies]
