@@ -1,7 +1,5 @@
 use std::thread;
 
-use signal_hook::consts::signal::*;
-
 use crate::server::Server;
 
 /// Different types of process signals
@@ -26,6 +24,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
     let _ = thread::Builder::new()
         .name("ntex-server signals".to_string())
         .spawn(move || {
+            use signal_hook::consts::signal::*;
             use signal_hook::iterator::Signals;
 
             let sigs = vec![SIGHUP, SIGINT, SIGTERM, SIGQUIT];

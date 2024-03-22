@@ -335,31 +335,29 @@ impl Accept {
             ServerStatus::Ready
         });
 
-        if self.backpressure {
-            if !on {
-                // handle backlog
-                while let Some(msg) = self.backlog.pop_front() {
-                    if let Err(msg) = self.srv.process(msg) {
-                        log::trace!("Server is unavailable");
-                        self.backlog.push_front(msg);
-                        return;
-                    }
-                }
-
-                // re-enable acceptors
-                self.backpressure = false;
-                for (key, info) in self.sockets.iter().enumerate() {
-                    if info.timeout.get().is_none() {
-                        // socket with timeout will re-register itself after timeout
-                        log::info!(
-                            "Resuming socket listener on {} after back-pressure",
-                            info.addr
-                        );
-                        self.add_source(key);
-                    }
+        if self.backpressure && !on {
+            // handle backlog
+            while let Some(msg) = self.backlog.pop_front() {
+                if let Err(msg) = self.srv.process(msg) {
+                    log::trace!("Server is unavailable");
+                    self.backlog.push_front(msg);
+                    return;
                 }
             }
-        } else if on {
+
+            // re-enable acceptors
+            self.backpressure = false;
+            for (key, info) in self.sockets.iter().enumerate() {
+                if info.timeout.get().is_none() {
+                    // socket with timeout will re-register itself after timeout
+                    log::info!(
+                        "Resuming socket listener on {} after back-pressure",
+                        info.addr
+                    );
+                    self.add_source(key);
+                }
+            }
+        } else if !self.backpressure && on {
             self.backpressure = true;
             for key in 0..self.sockets.len() {
                 // disable err timeout
