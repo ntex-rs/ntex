@@ -10,24 +10,14 @@ mod service;
 mod socket;
 mod test;
 
-#[cfg(feature = "openssl")]
-pub use ntex_tls::openssl;
-
-#[cfg(feature = "rustls")]
-pub use ntex_tls::rustls;
-
-pub use ntex_tls::max_concurrent_ssl_accept;
-
-pub(crate) use self::builder::create_tcp_listener;
-
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
-pub use self::builder::ServerBuilder;
+pub use self::builder::{bind_addr, create_tcp_listener, ServerBuilder};
 pub use self::config::{Config, ServiceConfig, ServiceRuntime};
 pub use self::service::{ServerMessage, StreamServer};
 pub use self::socket::{Connection, Stream};
 pub use self::test::{build_test_server, test_server, TestServer};
 
-pub type Server = ntex_server::Server<Connection>;
+pub type Server = crate::Server<Connection>;
 
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

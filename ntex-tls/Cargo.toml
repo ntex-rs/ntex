@@ -30,7 +30,6 @@ ntex-io = "1.0.0"
 ntex-util = "1.0.0"
 ntex-service = "2.0.0"
 log = "0.4"
-pin-project-lite = "0.2"
 
 # openssl
 tls_openssl = { version = "0.10", package = "openssl", optional = true }

@@ -1,0 +1,37 @@
+[package]
+name = "ntex-net"
+version = "1.0.0"
+authors = ["ntex contributors <team@ntex.rs>"]
+description = "ntexwork utils for ntex framework"
+keywords = ["network", "framework", "async", "futures"]
+homepage = "https://ntex.rs"
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/ntex-connect/"
+categories = ["network-programming", "asynchronous"]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+
+[lib]
+name = "ntex_net"
+path = "src/lib.rs"
+
+[features]
+default = []
+
+# tokio runtime
+tokio = ["ntex-rt/tokio", "ntex-tokio"]
+
+# glommio runtime
+glommio = ["ntex-rt/glommio", "ntex-glommio"]
+
+# async-std runtime
+async-std = ["ntex-rt/async-std", "ntex-async-std"]
+
+[dependencies]
+ntex-bytes = "0.1.24"
+ntex-io = "1.0.0"
+ntex-rt = "0.4.7"
+
+ntex-tokio = { version = "0.4.0", optional = true }
+ntex-glommio = { version = "0.4.0", optional = true }
+ntex-async-std = { version = "0.4.0", optional = true }

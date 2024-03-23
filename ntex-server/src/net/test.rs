@@ -1,11 +1,12 @@
 //! Test server
 use std::{io, net, sync::mpsc, thread};
 
+use ntex_net::{tcp_connect, Io};
+use ntex_rt::System;
+use ntex_service::ServiceFactory;
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::rt::{tcp_connect, System};
-use crate::server::ServerBuilder;
-use crate::{io::Io, service::ServiceFactory};
+use super::ServerBuilder;
 
 /// Start test server
 ///

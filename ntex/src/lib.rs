@@ -30,7 +30,6 @@ pub(crate) use ntex_macros::rt_test2 as rt_test;
 pub use ntex_service::{forward_poll_ready, forward_poll_shutdown};
 
 pub mod http;
-pub mod server;
 pub mod web;
 pub mod ws;
 
@@ -60,26 +59,22 @@ pub mod rt {
     //! A runtime implementation that runs everything on the current thread.
     pub use ntex_rt::*;
 
-    #[cfg(feature = "tokio")]
-    pub use ntex_tokio::*;
-
-    #[cfg(all(
-        feature = "async-std",
-        not(feature = "tokio"),
-        not(feature = "glommio")
-    ))]
-    pub use ntex_async_std::*;
-
-    #[cfg(all(
-        feature = "glommio",
-        not(feature = "tokio"),
-        not(feature = "async-std")
-    ))]
-    pub use ntex_glommio::*;
+    pub use ntex_net::*;
 }
 
 pub mod service {
     pub use ntex_service::*;
+}
+
+pub mod server {
+    //! General purpose tcp server
+    pub use ntex_server::net::*;
+
+    #[cfg(feature = "openssl")]
+    pub use ntex_tls::openssl;
+
+    #[cfg(feature = "rustls")]
+    pub use ntex_tls::rustls;
 }
 
 pub mod time {

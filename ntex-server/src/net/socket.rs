@@ -1,6 +1,8 @@
 use std::{fmt, io, net};
 
-use crate::{io::Io, rt, server::Token};
+use ntex_net::{self as rt, Io};
+
+use super::Token;
 
 #[derive(Debug)]
 pub struct Connection {

@@ -1,9 +1,10 @@
 use std::task::{Context, Poll};
 use std::{fmt, future::Future, marker::PhantomData};
 
-use crate::io::Io;
-use crate::service::{boxed, Service, ServiceCtx, ServiceFactory};
-use crate::util::{BoxFuture, PoolId, Ready};
+use ntex_bytes::PoolId;
+use ntex_net::Io;
+use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
+use ntex_util::future::{BoxFuture, Ready};
 
 use super::{Config, Token};
 
@@ -143,7 +144,7 @@ where
     type Response = ();
     type Error = ();
 
-    crate::forward_poll_shutdown!(inner);
+    ntex_service::forward_poll_shutdown!(inner);
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
         self.inner.poll_ready(cx).map_err(|_| ())

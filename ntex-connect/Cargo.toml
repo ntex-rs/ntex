@@ -1,6 +1,6 @@
 [package]
 name = "ntex-connect"
-version = "1.0.0"
+version = "1.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork connect utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -25,13 +25,13 @@ openssl = ["tls-openssl", "ntex-tls/openssl"]
 rustls = ["tls-rustls", "webpki-roots", "ntex-tls/rustls"]
 
 # tokio runtime
-tokio = ["ntex-rt/tokio", "ntex-tokio"]
+tokio = ["ntex-net/tokio"]
 
 # glommio runtime
-glommio = ["ntex-rt/glommio", "ntex-glommio"]
+glommio = ["ntex-net/glommio"]
 
 # async-std runtime
-async-std = ["ntex-rt/async-std", "ntex-async-std"]
+async-std = ["ntex-net/async-std"]
 
 [dependencies]
 ntex-service = "2.0.0"
@@ -41,13 +41,10 @@ ntex-util = "1.0.0"
 ntex-bytes = "0.1.21"
 ntex-http = "0.1"
 ntex-rt = "0.4.7"
+ntex-net = "1.0.0"
 
 log = "0.4"
 thiserror = "1.0"
-
-ntex-tokio = { version = "0.4.0", optional = true }
-ntex-glommio = { version = "0.4.0", optional = true }
-ntex-async-std = { version = "0.4.0", optional = true }
 
 # openssl
 tls-openssl = { version="0.10", package = "openssl", optional = true }

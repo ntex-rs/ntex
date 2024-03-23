@@ -1,10 +1,11 @@
 use std::{task::Context, task::Poll};
 
-use ntex_server::{ServerConfiguration, WorkerMessage};
+use ntex_bytes::{Pool, PoolRef};
+use ntex_net::Io;
+use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
+use ntex_util::HashMap;
 
-use crate::io::Io;
-use crate::service::{boxed, Service, ServiceCtx, ServiceFactory};
-use crate::util::{HashMap, Pool, PoolRef};
+use crate::{ServerConfiguration, WorkerMessage};
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::counter::Counter;
