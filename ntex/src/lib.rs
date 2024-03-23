@@ -69,6 +69,12 @@ pub mod service {
 pub mod server {
     //! General purpose tcp server
     pub use ntex_server::net::*;
+
+    #[cfg(feature = "openssl")]
+    pub use ntex_tls::openssl;
+
+    #[cfg(feature = "rustls")]
+    pub use ntex_tls::rustls;
 }
 
 pub mod time {
