@@ -232,14 +232,14 @@ where
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
-        tx.send((sys.system(), local_addr)).unwrap();
-
-        sys.run(|| {
+        let system = sys.system();
+        sys.run(move || {
             crate::server::build()
                 .listen("test", tcp, move |_| factory())?
                 .workers(1)
                 .disable_signals()
                 .run();
+            tx.send((system, local_addr)).unwrap();
             Ok(())
         })
     });
