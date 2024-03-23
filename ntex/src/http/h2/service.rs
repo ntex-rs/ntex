@@ -425,7 +425,7 @@ where
                         }
                     }
                     Some(Err(e)) => {
-                        error!("Response payload stream error: {:?}", e);
+                        log::error!("Response payload stream error: {:?}", e);
                         return Err(e.into());
                     }
                 }

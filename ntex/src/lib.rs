@@ -10,7 +10,7 @@
     rust_2018_idioms,
     unreachable_pub,
     // missing_debug_implementations,
-    // missing_docs,
+    // missing_docs
 )]
 #![allow(
     type_alias_bounds,
@@ -20,9 +20,6 @@
     clippy::too_many_arguments,
     clippy::new_without_default
 )]
-
-#[macro_use]
-extern crate log;
 
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use ntex_macros::{rt_main as main, rt_test as test};

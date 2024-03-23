@@ -133,7 +133,7 @@ pub struct WeakSender<T> {
 }
 
 impl<T> WeakSender<T> {
-    /// Upgrade to Sender<T>
+    /// Upgrade to `Sender<T>`
     pub fn upgrade(&self) -> Option<Sender<T>> {
         self.shared.upgrade().map(|shared| Sender { shared })
     }

@@ -1,13 +1,16 @@
 //! Utilities for ntex framework
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
 
+#[doc(hidden)]
+pub use std::task::ready;
+
 pub mod channel;
 pub mod future;
 pub mod services;
 pub mod task;
 pub mod time;
 
-pub use futures_core::{ready, Stream};
+pub use futures_core::Stream;
 pub use futures_sink::Sink;
 pub use ntex_rt::spawn;
 

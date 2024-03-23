@@ -64,7 +64,7 @@ where
     TimeoutChecked::new_with_delay(future, dur.into())
 }
 
-/// Future returned by [`sleep`](sleep).
+/// Future returned by [`sleep`].
 ///
 /// # Examples
 ///
@@ -126,7 +126,7 @@ impl Future for Sleep {
     }
 }
 
-/// Future returned by [`deadline`](deadline).
+/// Future returned by [`deadline`].
 ///
 /// # Examples
 ///

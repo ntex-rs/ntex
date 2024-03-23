@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.2] - 2024-03-20
+
+* Add boxed rc service factory
+
 ## [2.0.1] - 2024-02-07
 
 * Add fmt::Debug impl for PipelineCall

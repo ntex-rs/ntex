@@ -1,8 +1,14 @@
 use std::{fmt, io, net};
 
-use crate::{io::Io, rt};
+use crate::{io::Io, rt, server::Token};
 
-pub(crate) enum Listener {
+#[derive(Debug)]
+pub struct Connection {
+    pub(crate) io: Stream,
+    pub(crate) token: Token,
+}
+
+pub enum Listener {
     Tcp(net::TcpListener),
     #[cfg(unix)]
     Uds(std::os::unix::net::UnixListener),

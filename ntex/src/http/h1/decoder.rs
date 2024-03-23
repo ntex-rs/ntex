@@ -258,7 +258,7 @@ impl MessageType for Request {
                 }
                 httparse::Status::Partial => {
                     if src.len() >= MAX_BUFFER_SIZE {
-                        trace!("MAX_BUFFER_SIZE unprocessed data reached, closing");
+                        log::trace!("MAX_BUFFER_SIZE unprocessed data reached, closing");
                         return Err(DecodeError::TooLarge(src.len()));
                     }
                     return Ok(None);
@@ -274,7 +274,7 @@ impl MessageType for Request {
         // disallow HTTP/1.0 POST requests that do not contain a Content-Length headers
         // see https://datatracker.ietf.org/doc/html/rfc1945#section-7.2.2
         if ver == Version::HTTP_10 && method == Method::POST && length.is_none() {
-            debug!("no Content-Length specified for HTTP/1.0 POST request");
+            log::debug!("no Content-Length specified for HTTP/1.0 POST request");
             return Err(DecodeError::Header);
         }
 

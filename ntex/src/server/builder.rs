@@ -1,40 +1,25 @@
-use std::{fmt, future::Future, io, marker, mem, net, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, io, net};
 
-use async_channel::unbounded;
-use log::{error, info};
+use ntex_server::{Server, WorkerPool};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::rt::{spawn, Signal, System};
-use crate::time::{sleep, Millis};
-use crate::{io::Io, service::ServiceFactory, util::join_all, util::Stream};
+use crate::service::ServiceFactory;
+use crate::{io::Io, time::Millis};
 
-use super::accept::{AcceptLoop, AcceptNotify, Command};
-use super::config::{
-    Config, ConfigWrapper, ConfiguredService, ServiceConfig, ServiceRuntime,
-};
-use super::service::{Factory, InternalServiceFactory};
-use super::worker::{self, Worker, WorkerAvailability, WorkerClient};
-use super::{socket::Listener, Server, ServerCommand, ServerStatus, Token};
-
-const STOP_DELAY: Millis = Millis(300);
-
-type ServerStream = Pin<Box<dyn Stream<Item = ServerCommand>>>;
+use super::accept::AcceptLoop;
+use super::config::{Config, ServiceConfig};
+use super::factory::{self, FactoryServiceType, OnWorkerStart, OnWorkerStartWrapper};
+use super::{socket::Listener, Connection, ServerStatus, StreamServer, Token};
 
 /// Server builder
 pub struct ServerBuilder {
-    threads: usize,
     token: Token,
     backlog: i32,
-    workers: Vec<(usize, WorkerClient)>,
-    services: Vec<Box<dyn InternalServiceFactory>>,
+    services: Vec<FactoryServiceType>,
     sockets: Vec<(Token, String, Listener)>,
+    on_worker_start: Vec<Box<dyn OnWorkerStart + Send>>,
     accept: AcceptLoop,
-    exit: bool,
-    shutdown_timeout: Millis,
-    no_signals: bool,
-    cmd: ServerStream,
-    server: Server,
-    notify: Vec<oneshot::Sender<()>>,
+    pool: WorkerPool,
 }
 
 impl Default for ServerBuilder {
@@ -46,24 +31,14 @@ impl Default for ServerBuilder {
 impl ServerBuilder {
     /// Create new Server builder instance
     pub fn new() -> ServerBuilder {
-        let (tx, rx) = unbounded();
-        let server = Server::new(tx);
-
         ServerBuilder {
-            threads: std::thread::available_parallelism()
-                .map_or(2, std::num::NonZeroUsize::get),
             token: Token(0),
-            workers: Vec::new(),
             services: Vec::new(),
             sockets: Vec::new(),
-            accept: AcceptLoop::new(server.clone()),
+            on_worker_start: Vec::new(),
+            accept: AcceptLoop::new(),
             backlog: 2048,
-            exit: false,
-            shutdown_timeout: Millis::from_secs(30),
-            no_signals: false,
-            cmd: Box::pin(rx),
-            notify: Vec::new(),
-            server,
+            pool: WorkerPool::new(),
         }
     }
 
@@ -72,7 +47,7 @@ impl ServerBuilder {
     /// By default server uses number of available logical cpu as workers
     /// count.
     pub fn workers(mut self, num: usize) -> Self {
-        self.threads = num;
+        self.pool = self.pool.workers(num);
         self
     }
 
@@ -98,7 +73,7 @@ impl ServerBuilder {
     ///
     /// By default max connections is set to a 25k per worker.
     pub fn maxconn(self, num: usize) -> Self {
-        worker::max_concurrent_connections(num);
+        super::max_concurrent_connections(num);
         self
     }
 
@@ -106,7 +81,7 @@ impl ServerBuilder {
     ///
     /// By default "stop runtime" is disabled.
     pub fn stop_runtime(mut self) -> Self {
-        self.exit = true;
+        self.pool = self.pool.stop_runtime();
         self
     }
 
@@ -114,7 +89,7 @@ impl ServerBuilder {
     ///
     /// By default signal handling is enabled.
     pub fn disable_signals(mut self) -> Self {
-        self.no_signals = true;
+        self.pool = self.pool.disable_signals();
         self
     }
 
@@ -126,7 +101,7 @@ impl ServerBuilder {
     ///
     /// By default shutdown timeout sets to 30 seconds.
     pub fn shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
-        self.shutdown_timeout = timeout.into();
+        self.pool = self.pool.shutdown_timeout(timeout);
         self
     }
 
@@ -150,19 +125,14 @@ impl ServerBuilder {
     where
         F: Fn(&mut ServiceConfig) -> io::Result<()>,
     {
-        let mut cfg = ServiceConfig::new(self.threads, self.backlog);
+        let mut cfg = ServiceConfig::new(self.token, self.backlog);
 
         f(&mut cfg)?;
 
-        let mut cfg = cfg.0.borrow_mut();
-        let mut srv = ConfiguredService::new(cfg.apply.take().unwrap());
-        for (name, lst, tag) in mem::take(&mut cfg.services) {
-            let token = self.token.next();
-            srv.stream(token, name.clone(), lst.local_addr()?, tag);
-            self.sockets.push((token, name, Listener::from_tcp(lst)));
-        }
-        self.services.push(Box::new(srv));
-        self.threads = cfg.threads;
+        let (token, sockets, factory) = cfg.into_factory();
+        self.token = token;
+        self.sockets.extend(sockets);
+        self.services.push(factory);
 
         Ok(self)
     }
@@ -177,20 +147,14 @@ impl ServerBuilder {
         F: Fn(ServiceConfig) -> R,
         R: Future<Output = io::Result<()>>,
     {
-        let cfg = ServiceConfig::new(self.threads, self.backlog);
-        let inner = cfg.0.clone();
+        let cfg = ServiceConfig::new(self.token, self.backlog);
 
-        f(cfg).await?;
+        f(cfg.clone()).await?;
 
-        let mut cfg = inner.borrow_mut();
-        let mut srv = ConfiguredService::new(cfg.apply.take().unwrap());
-        for (name, lst, tag) in mem::take(&mut cfg.services) {
-            let token = self.token.next();
-            srv.stream(token, name.clone(), lst.local_addr()?, tag);
-            self.sockets.push((token, name, Listener::from_tcp(lst)));
-        }
-        self.services.push(Box::new(srv));
-        self.threads = cfg.threads;
+        let (token, sockets, factory) = cfg.into_factory();
+        self.token = token;
+        self.sockets.extend(sockets);
+        self.services.push(factory);
 
         Ok(self)
     }
@@ -201,44 +165,38 @@ impl ServerBuilder {
     /// It get executed in the worker thread.
     pub fn on_worker_start<F, R, E>(mut self, f: F) -> Self
     where
-        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
+        F: Fn() -> R + Send + Clone + 'static,
         R: Future<Output = Result<(), E>> + 'static,
         E: fmt::Display + 'static,
     {
-        self.services
-            .push(Box::new(ConfiguredService::new(Box::new(ConfigWrapper {
-                f,
-                _t: marker::PhantomData,
-            }))));
+        self.on_worker_start.push(OnWorkerStartWrapper::create(f));
         self
     }
 
     /// Add new service to the server.
-    pub fn bind<F, U, N: AsRef<str>, R>(
-        mut self,
-        name: N,
-        addr: U,
-        factory: F,
-    ) -> io::Result<Self>
+    pub fn bind<F, U, N, R>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
         U: net::ToSocketAddrs,
+        N: AsRef<str>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io>,
+        R: ServiceFactory<Io> + 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
+        let mut tokens = Vec::new();
         for lst in sockets {
             let token = self.token.next();
-            self.services.push(Factory::create(
-                name.as_ref().to_string(),
-                token,
-                factory.clone(),
-                lst.local_addr()?,
-                "",
-            ));
             self.sockets
                 .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
+            tokens.push((token, ""));
         }
+
+        self.services.push(factory::create_factory_service(
+            name.as_ref().to_string(),
+            tokens,
+            factory,
+        ));
+
         Ok(self)
     }
 
@@ -249,7 +207,7 @@ impl ServerBuilder {
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io>,
+        R: ServiceFactory<Io> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -278,17 +236,13 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io>,
+        R: ServiceFactory<Io> + 'static,
     {
-        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
         let token = self.token.next();
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        self.services.push(Factory::create(
+        self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            token,
+            vec![(token, "")],
             factory,
-            addr,
-            "",
         ));
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_uds(lst)));
@@ -304,15 +258,13 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io>,
+        R: ServiceFactory<Io> + 'static,
     {
         let token = self.token.next();
-        self.services.push(Factory::create(
+        self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            token,
+            vec![(token, "")],
             factory,
-            lst.local_addr()?,
-            "",
         ));
         self.sockets
             .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
@@ -343,208 +295,28 @@ impl ServerBuilder {
     }
 
     /// Starts processing incoming connections and return server controller.
-    pub fn run(mut self) -> Server {
+    pub fn run(self) -> Server<Connection> {
         if self.sockets.is_empty() {
             panic!("Server should have at least one bound socket");
         } else {
-            info!("Starting {} workers", self.threads);
-
-            // start workers
-            let mut workers = Vec::new();
-            for idx in 0..self.threads {
-                let worker = self.start_worker(idx, self.accept.notify());
-                workers.push(worker.clone());
-                self.workers.push((idx, worker));
-            }
-
-            // start accept thread
-            for sock in &self.sockets {
-                info!("Starting \"{}\" service on {}", sock.1, sock.2);
-            }
-            self.accept.start(
-                mem::take(&mut self.sockets)
-                    .into_iter()
-                    .map(|t| (t.0, t.2))
-                    .collect(),
-                workers,
+            let srv = StreamServer::new(
+                self.accept.notify(),
+                self.services,
+                self.on_worker_start,
             );
+            let svc = self.pool.run(srv);
 
-            // handle signals
-            if !self.no_signals {
-                spawn(signals(self.server.clone()));
-            }
+            let sockets = self
+                .sockets
+                .into_iter()
+                .map(|sock| {
+                    log::info!("Starting \"{}\" service on {}", sock.1, sock.2);
+                    (sock.0, sock.2)
+                })
+                .collect();
+            self.accept.start(sockets, svc.clone());
 
-            // start http server actor
-            let server = self.server.clone();
-            spawn(self);
-            server
-        }
-    }
-
-    fn start_worker(&self, idx: usize, notify: AcceptNotify) -> WorkerClient {
-        let avail = WorkerAvailability::new(notify);
-        let services: Vec<Box<dyn InternalServiceFactory>> =
-            self.services.iter().map(|v| v.clone_factory()).collect();
-
-        Worker::start(idx, services, avail, self.shutdown_timeout)
-    }
-
-    fn handle_cmd(&mut self, item: ServerCommand) {
-        match item {
-            ServerCommand::Pause(tx) => {
-                self.accept.send(Command::Pause);
-                let _ = tx.send(());
-            }
-            ServerCommand::Resume(tx) => {
-                self.accept.send(Command::Resume);
-                let _ = tx.send(());
-            }
-            ServerCommand::Signal(sig) => {
-                // Signals support
-                // Handle `SIGINT`, `SIGTERM`, `SIGQUIT` signals and stop ntex system
-                match sig {
-                    Signal::Int => {
-                        info!("SIGINT received, exiting");
-                        self.exit = true;
-                        self.handle_cmd(ServerCommand::Stop {
-                            graceful: false,
-                            completion: None,
-                        })
-                    }
-                    Signal::Term => {
-                        info!("SIGTERM received, stopping");
-                        self.exit = true;
-                        self.handle_cmd(ServerCommand::Stop {
-                            graceful: true,
-                            completion: None,
-                        })
-                    }
-                    Signal::Quit => {
-                        info!("SIGQUIT received, exiting");
-                        self.exit = true;
-                        self.handle_cmd(ServerCommand::Stop {
-                            graceful: false,
-                            completion: None,
-                        })
-                    }
-                    _ => (),
-                }
-            }
-            ServerCommand::Notify(tx) => {
-                self.notify.push(tx);
-            }
-            ServerCommand::Stop {
-                graceful,
-                completion,
-            } => {
-                let exit = self.exit;
-
-                // stop accept thread
-                let (tx, rx) = std::sync::mpsc::channel();
-                self.accept.send(Command::Stop(tx));
-                let _ = rx.recv();
-
-                let notify = std::mem::take(&mut self.notify);
-
-                // stop workers
-                if !self.workers.is_empty() && graceful {
-                    let futs: Vec<_> = self
-                        .workers
-                        .iter()
-                        .map(move |worker| worker.1.stop(graceful))
-                        .collect();
-                    spawn(async move {
-                        let _ = join_all(futs).await;
-
-                        if let Some(tx) = completion {
-                            let _ = tx.send(());
-                        }
-                        for tx in notify {
-                            let _ = tx.send(());
-                        }
-                        if exit {
-                            sleep(STOP_DELAY).await;
-                            System::current().stop();
-                        }
-                    });
-                } else {
-                    self.workers.iter().for_each(move |worker| {
-                        worker.1.stop(false);
-                    });
-
-                    // we need to stop system if server was spawned
-                    if self.exit {
-                        spawn(async {
-                            sleep(STOP_DELAY).await;
-                            System::current().stop();
-                        });
-                    }
-                    if let Some(tx) = completion {
-                        let _ = tx.send(());
-                    }
-                    for tx in notify {
-                        let _ = tx.send(());
-                    }
-                }
-            }
-            ServerCommand::WorkerFaulted(idx) => {
-                let mut found = false;
-                for i in 0..self.workers.len() {
-                    if self.workers[i].0 == idx {
-                        self.workers.swap_remove(i);
-                        found = true;
-                        break;
-                    }
-                }
-
-                if found {
-                    error!("Worker has died {:?}, restarting", idx);
-
-                    let mut new_idx = self.workers.len();
-                    'found: loop {
-                        for i in 0..self.workers.len() {
-                            if self.workers[i].0 == new_idx {
-                                new_idx += 1;
-                                continue 'found;
-                            }
-                        }
-                        break;
-                    }
-
-                    let worker = self.start_worker(new_idx, self.accept.notify());
-                    self.workers.push((new_idx, worker.clone()));
-                    self.accept.send(Command::Worker(worker));
-                }
-            }
-        }
-    }
-}
-
-impl Future for ServerBuilder {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        loop {
-            match Pin::new(&mut self.cmd).poll_next(cx) {
-                Poll::Ready(Some(it)) => self.as_mut().get_mut().handle_cmd(it),
-                Poll::Ready(None) => return Poll::Pending,
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
-
-async fn signals(srv: Server) {
-    loop {
-        if let Some(rx) = crate::rt::signal() {
-            if let Ok(sig) = rx.await {
-                srv.signal(sig);
-            } else {
-                return;
-            }
-        } else {
-            log::info!("Signals are not supported by current runtime");
-            return;
+            svc
         }
     }
 }

@@ -1,4 +1,3 @@
-use log::debug;
 use nanorand::{Rng, WyRand};
 
 use super::proto::{CloseCode, CloseReason, OpCode};
@@ -117,7 +116,7 @@ impl Parser {
                 return Err(ProtocolError::InvalidLength(length));
             }
             OpCode::Close if length > 125 => {
-                debug!("Received close frame with payload length exceeding 125. Morphing to protocol close frame.");
+                log::debug!("Received close frame with payload length exceeding 125. Morphing to protocol close frame.");
                 return Ok(Some((true, OpCode::Close, None)));
             }
             _ => (),

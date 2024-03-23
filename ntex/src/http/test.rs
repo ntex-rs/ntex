@@ -6,7 +6,7 @@ use coo_kie::{Cookie, CookieJar};
 
 use crate::io::{Filter, Io};
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
-use crate::{rt::System, server::Server, service::ServiceFactory};
+use crate::{rt::System, service::ServiceFactory};
 use crate::{time::Millis, time::Seconds, util::Bytes};
 
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
@@ -222,7 +222,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 pub fn server<F, R>(factory: F) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io>,
+    R: ServiceFactory<Io> + 'static,
 {
     let (tx, rx) = mpsc::channel();
 
@@ -232,14 +232,14 @@ where
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
-        tx.send((sys.system(), local_addr)).unwrap();
-
-        sys.run(|| {
-            Server::build()
+        let system = sys.system();
+        sys.run(move || {
+            crate::server::build()
                 .listen("test", tcp, move |_| factory())?
                 .workers(1)
                 .disable_signals()
                 .run();
+            tx.send((system, local_addr)).unwrap();
             Ok(())
         })
     });
