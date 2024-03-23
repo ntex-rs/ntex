@@ -129,17 +129,18 @@ impl<F: ServerConfiguration> ServerManager<F> {
 
 fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>) {
     let _ = ntex_rt::spawn(async move {
-        let mut wrk = Worker::start(mgr.next_id(), mgr.factory());
+        let id = mgr.next_id();
+        let mut wrk = Worker::start(id, mgr.factory());
 
         loop {
             match wrk.status() {
                 WorkerStatus::Available => mgr.available(wrk.clone()),
                 WorkerStatus::Unavailable => mgr.unavailable(wrk.clone()),
                 WorkerStatus::Failed => {
-                    mgr.unavailable(wrk.clone());
+                    mgr.unavailable(wrk);
                     sleep(RESTART_DELAY).await;
                     if !mgr.stopping() {
-                        wrk = Worker::start(mgr.next_id(), mgr.factory());
+                        wrk = Worker::start(id, mgr.factory());
                     } else {
                         return;
                     }
