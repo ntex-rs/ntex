@@ -213,6 +213,7 @@ fn test_configure_async() {
                             .bind("addr2", addr2)
                             .unwrap()
                             .listen("addr3", lst)
+                            .set_tag("addr1", "srv-addr1")
                             .on_worker_start(move |rt| {
                                 let num = num.clone();
                                 async move {
