@@ -69,7 +69,6 @@ impl<T> PartialEq for Worker<T> {
 }
 
 #[derive(Debug)]
-#[must_use = "Future do nothing unless polled"]
 /// Stop worker process
 ///
 /// Stop future resolves when worker completes processing

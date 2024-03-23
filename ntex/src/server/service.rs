@@ -144,17 +144,27 @@ impl Service<ServerMessage> for StreamServiceImpl {
 
     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let mut ready = self.conns.available(cx);
-        for (idx, tag, pool, _) in self.tokens.values() {
-            match self.services[*idx].poll_ready(cx) {
+        for (idx, svc) in self.services.iter().enumerate() {
+            match svc.poll_ready(cx) {
                 Poll::Pending => ready = false,
                 Poll::Ready(Ok(())) => (),
                 Poll::Ready(Err(_)) => {
-                    log::error!("{}: Service readiness has failed", tag);
+                    for (idx_, tag, _, _) in self.tokens.values() {
+                        if idx == *idx_ {
+                            log::error!("{}: Service readiness has failed", tag);
+                            break;
+                        }
+                    }
                     return Poll::Ready(Err(()));
                 }
             }
+        }
+
+        // check memory pools
+        for (_, _, pool, _) in self.tokens.values() {
             ready = pool.poll_ready(cx).is_ready() && ready;
         }
+
         if ready {
             Poll::Ready(Ok(()))
         } else {
