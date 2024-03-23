@@ -25,13 +25,13 @@ openssl = ["tls-openssl", "ntex-tls/openssl"]
 rustls = ["tls-rustls", "webpki-roots", "ntex-tls/rustls"]
 
 # tokio runtime
-tokio = []
+tokio = ["ntex-net/tokio"]
 
 # glommio runtime
-glommio = []
+glommio = ["ntex-net/glommio"]
 
 # async-std runtime
-async-std = []
+async-std = ["ntex-net/async-std"]
 
 [dependencies]
 ntex-service = "2.0.0"
