@@ -1,10 +1,11 @@
-#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+#![deny(rust_2018_idioms, unreachable_pub)]
 #![allow(clippy::let_underscore_future)]
 
 use ntex_service::ServiceFactory;
 use ntex_util::time::Millis;
 
 mod manager;
+pub mod net;
 mod pool;
 mod server;
 mod signals;

@@ -1,10 +1,12 @@
 use std::{fmt, future::Future, io, net};
 
-use ntex_server::{Server, WorkerPool};
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use crate::service::ServiceFactory;
-use crate::{io::Io, time::Millis};
+use ntex_net::Io;
+use ntex_service::ServiceFactory;
+use ntex_util::time::Millis;
+
+use crate::{Server, WorkerPool};
 
 use super::accept::AcceptLoop;
 use super::config::{Config, ServiceConfig};
@@ -321,7 +323,7 @@ impl ServerBuilder {
     }
 }
 
-pub(super) fn bind_addr<S: net::ToSocketAddrs>(
+pub fn bind_addr<S: net::ToSocketAddrs>(
     addr: S,
     backlog: i32,
 ) -> io::Result<Vec<net::TcpListener>> {
@@ -352,7 +354,7 @@ pub(super) fn bind_addr<S: net::ToSocketAddrs>(
     }
 }
 
-pub(crate) fn create_tcp_listener(
+pub fn create_tcp_listener(
     addr: net::SocketAddr,
     backlog: i32,
 ) -> io::Result<net::TcpListener> {

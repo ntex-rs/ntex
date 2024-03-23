@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc, task};
 
-use crate::task::LocalWaker;
+use ntex_util::task::LocalWaker;
 
 /// Simple counter with ability to notify task on reaching specific number
 ///

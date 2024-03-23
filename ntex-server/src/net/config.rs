@@ -1,8 +1,9 @@
 use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, rc::Rc};
 
-use crate::io::Io;
-use crate::service::{IntoServiceFactory, ServiceFactory};
-use crate::util::{BoxFuture, HashMap, PoolId, Ready};
+use ntex_bytes::PoolId;
+use ntex_net::Io;
+use ntex_service::{IntoServiceFactory, ServiceFactory};
+use ntex_util::{future::BoxFuture, future::Ready, HashMap};
 
 use super::factory::{
     self, BoxServerService, FactoryService, FactoryServiceType, NetService,

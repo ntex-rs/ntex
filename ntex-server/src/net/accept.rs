@@ -2,9 +2,9 @@ use std::time::{Duration, Instant};
 use std::{cell::Cell, fmt, io, sync::mpsc, sync::Arc, thread};
 use std::{collections::VecDeque, num::NonZeroUsize};
 
+use ntex_rt::System;
+use ntex_util::{future::Either, time::sleep, time::Millis};
 use polling::{Event, Events, Poller};
-
-use crate::{rt::System, time::sleep, time::Millis, util::Either};
 
 use super::socket::{Connection, Listener, SocketAddr};
 use super::{Server, ServerStatus, Token};
@@ -50,6 +50,12 @@ pub struct AcceptLoop {
     notify: AcceptNotify,
     inner: Option<(mpsc::Receiver<AcceptorCommand>, Arc<Poller>)>,
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
+}
+
+impl Default for AcceptLoop {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AcceptLoop {

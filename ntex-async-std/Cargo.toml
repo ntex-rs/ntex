@@ -20,6 +20,5 @@ ntex-bytes = "0.1.21"
 ntex-io = "1.0.0"
 ntex-util = "1.0.0"
 log = "0.4"
-pin-project-lite = "0.2"
 async-std = { version = "1", features = ["unstable"] }
 oneshot = { version = "0.1", default-features = false, features = ["async"] }
