@@ -28,6 +28,11 @@ impl<T> Server<T> {
         }
     }
 
+    /// Start streaming server building process
+    pub fn build() -> crate::net::ServerBuilder {
+        crate::net::ServerBuilder::default()
+    }
+
     pub(crate) fn signal(&self, sig: Signal) {
         let _ = self.cmd.try_send(ServerCommand::Signal(sig));
     }
