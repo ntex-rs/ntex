@@ -1,10 +1,13 @@
-use std::{io, rc::Rc, sync::Arc};
+use std::{io, rc::Rc};
 
 use ntex::codec::BytesCodec;
 use ntex::connect::Connect;
 use ntex::io::{types::PeerAddr, Io};
 use ntex::service::{chain_factory, fn_service, Pipeline, ServiceFactory};
 use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
+
+#[cfg(feature = "rustls")]
+mod rustls_utils;
 
 #[cfg(feature = "openssl")]
 fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
@@ -19,72 +22,6 @@ fn ssl_acceptor() -> tls_openssl::ssl::SslAcceptor {
         .set_certificate_chain_file("./tests/cert.pem")
         .unwrap();
     builder.build()
-}
-
-#[cfg(feature = "rustls")]
-use tls_rustls::ServerConfig;
-
-#[cfg(feature = "rustls")]
-fn tls_acceptor() -> Arc<ServerConfig> {
-    use std::fs::File;
-    use std::io::BufReader;
-
-    let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = rustls_pemfile::certs(cert_file)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    let key = rustls_pemfile::private_key(key_file).unwrap().unwrap();
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)
-        .unwrap();
-    Arc::new(config)
-}
-
-mod danger {
-    use tls_rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-
-    #[derive(Debug)]
-    pub struct NoCertificateVerification {}
-
-    impl tls_rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
-        fn verify_server_cert(
-            &self,
-            _end_entity: &CertificateDer<'_>,
-            _certs: &[CertificateDer<'_>],
-            _hostname: &ServerName<'_>,
-            _ocsp: &[u8],
-            _now: UnixTime,
-        ) -> Result<tls_rustls::client::danger::ServerCertVerified, tls_rustls::Error>
-        {
-            Ok(tls_rustls::client::danger::ServerCertVerified::assertion())
-        }
-
-        fn verify_tls12_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &tls_rustls::DigitallySignedStruct,
-        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error>
-        {
-            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &tls_rustls::DigitallySignedStruct,
-        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error>
-        {
-            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<tls_rustls::SignatureScheme> {
-            vec![]
-        }
-    }
 }
 
 #[cfg(feature = "openssl")]
@@ -192,13 +129,13 @@ async fn test_openssl_read_before_error() {
 }
 
 #[cfg(feature = "rustls")]
-// #[ntex::test]
+#[ignore]
+#[ntex::test]
 async fn test_rustls_string() {
+    use std::{fs::File, io::BufReader};
+
     use ntex::{io::types::HttpProtocol, server::rustls};
     use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain};
-    use std::fs::File;
-    use std::io::BufReader;
-    use tls_rustls::ClientConfig;
 
     let srv = test_server(|| {
         chain_factory(
@@ -209,7 +146,12 @@ async fn test_rustls_string() {
             })
             .map_init_err(|_| ()),
         )
-        .and_then(rustls::TlsAcceptor::new(tls_acceptor()))
+        .and_then(
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+                log::error!("tls negotiation is failed: {:?}", e);
+                e
+            }),
+        )
         .and_then(
             fn_service(|io: Io<_>| async move {
                 assert!(io.query::<PeerCert>().as_ref().is_none());
@@ -224,12 +166,9 @@ async fn test_rustls_string() {
         )
     });
 
-    let config = ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(danger::NoCertificateVerification {}))
-        .with_no_client_auth();
-
-    let conn = Pipeline::new(ntex::connect::rustls::Connector::new(config));
+    let conn = Pipeline::new(ntex::connect::rustls::Connector::new(
+        rustls_utils::tls_connector(),
+    ));
     let addr = format!("localhost:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());

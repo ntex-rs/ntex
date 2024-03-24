@@ -18,6 +18,9 @@ use ntex::util::{ready, Bytes, Ready, Stream};
 use ntex::web::{self, middleware::Compress, test};
 use ntex::web::{App, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};
 
+#[cfg(feature = "rustls")]
+mod rustls_utils;
+
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -842,35 +845,20 @@ async fn test_brotli_encoding_large_openssl_h2() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls() {
-    use std::{fs::File, io::BufReader};
-
-    use tls_rustls::ServerConfig;
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
         .map(char::from)
         .collect::<String>();
 
-    // load ssl keys
-    let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = rustls_pemfile::certs(cert_file)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, keys)
-        .unwrap();
-
-    let srv = test::server_with(test::config().rustls(config), || {
-        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
-            HttpResponse::Ok()
-                .encoding(ContentEncoding::Identity)
-                .body(bytes)
-        })))
-    });
+    let srv =
+        test::server_with(test::config().rustls(rustls_utils::tls_acceptor()), || {
+            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+                HttpResponse::Ok()
+                    .encoding(ContentEncoding::Identity)
+                    .body(bytes)
+            })))
+        });
 
     // encode data
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -896,35 +884,22 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h1() {
-    use std::fs::File;
-    use std::io::BufReader;
-    use tls_rustls::ServerConfig;
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
         .map(char::from)
         .collect::<String>();
 
-    // load ssl keys
-    let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = rustls_pemfile::certs(cert_file)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, keys)
-        .unwrap();
-
-    let srv = test::server_with(test::config().rustls(config).h1(), || {
-        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
-            HttpResponse::Ok()
-                .encoding(ContentEncoding::Identity)
-                .body(bytes)
-        })))
-    });
+    let srv = test::server_with(
+        test::config().rustls(rustls_utils::tls_acceptor()).h1(),
+        || {
+            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+                HttpResponse::Ok()
+                    .encoding(ContentEncoding::Identity)
+                    .body(bytes)
+            })))
+        },
+    );
 
     // encode data
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -950,35 +925,22 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h2() {
-    use std::{fs::File, io::BufReader};
-
-    use tls_rustls::ServerConfig;
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
         .map(char::from)
         .collect::<String>();
 
-    // load ssl keys
-    let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = rustls_pemfile::certs(cert_file)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, keys)
-        .unwrap();
-
-    let srv = test::server_with(test::config().rustls(config).h2(), || {
-        App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
-            HttpResponse::Ok()
-                .encoding(ContentEncoding::Identity)
-                .body(bytes)
-        })))
-    });
+    let srv = test::server_with(
+        test::config().rustls(rustls_utils::tls_acceptor()).h2(),
+        || {
+            App::new().service(web::resource("/").route(web::to(|bytes: Bytes| async {
+                HttpResponse::Ok()
+                    .encoding(ContentEncoding::Identity)
+                    .body(bytes)
+            })))
+        },
+    );
 
     // encode data
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
