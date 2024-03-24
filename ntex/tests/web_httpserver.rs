@@ -131,6 +131,7 @@ async fn test_openssl() {
         })
     });
     let (srv, sys) = rx.recv().unwrap();
+    thread::sleep(Duration::from_millis(100));
 
     let client = client();
     let host = format!("https://{}", addr);

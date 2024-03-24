@@ -513,9 +513,6 @@ async fn test_h1_head_binary() {
 
 #[ntex::test]
 async fn test_h1_head_binary2() {
-    std::env::set_var("RUST_LOG", "trace");
-    let _ = env_logger::try_init();
-
     let srv = test_server(|| {
         HttpService::build().h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     });
