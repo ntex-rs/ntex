@@ -1,10 +1,12 @@
 # Changes
 
-## [1.2.0] - 2024-03-xx
+## [1.2.0] - 2024-03-24
 
 * Refactor server workers management
 
 * Move ntex::server to separate crate
+
+* Use ntex-net
 
 ## [1.1.2] - 2024-03-12
 

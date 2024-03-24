@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
-use tls_rustls::ClientConfig;
 
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
@@ -11,6 +10,8 @@ use ntex::http::HttpService;
 use ntex::service::{chain_factory, map_config, ServiceFactory};
 use ntex::util::Ready;
 use ntex::web::{self, dev::AppConfig, App, HttpResponse};
+
+mod rustls_utils;
 
 fn ssl_acceptor() -> SslAcceptor {
     // load ssl keys
@@ -32,48 +33,6 @@ fn ssl_acceptor() -> SslAcceptor {
     });
     builder.set_alpn_protos(b"\x02h2").unwrap();
     builder.build()
-}
-
-mod danger {
-    use tls_rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-
-    #[derive(Debug)]
-    pub struct NoCertificateVerification {}
-
-    impl tls_rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
-        fn verify_server_cert(
-            &self,
-            _end_entity: &CertificateDer<'_>,
-            _certs: &[CertificateDer<'_>],
-            _hostname: &ServerName<'_>,
-            _ocsp: &[u8],
-            _now: UnixTime,
-        ) -> Result<tls_rustls::client::danger::ServerCertVerified, tls_rustls::Error> {
-            Ok(tls_rustls::client::danger::ServerCertVerified::assertion())
-        }
-
-        fn verify_tls12_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &tls_rustls::DigitallySignedStruct,
-        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
-            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &tls_rustls::DigitallySignedStruct,
-        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
-            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<tls_rustls::SignatureScheme> {
-            vec![]
-        }
-    }
 }
 
 #[ntex::test]
@@ -101,10 +60,7 @@ async fn test_connection_reuse_h2() {
     });
 
     // disable ssl verification
-    let mut config = ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(danger::NoCertificateVerification {}))
-        .with_no_client_auth();
+    let mut config = rustls_utils::tls_connector();
     let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     config.alpn_protocols = protos;
 

@@ -4,6 +4,9 @@ use std::{sync::mpsc, thread, time::Duration};
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::SslAcceptorBuilder;
 
+#[cfg(feature = "rustls")]
+mod rustls_utils;
+
 use ntex::web::{self, App, HttpResponse, HttpServer};
 use ntex::{rt, server::TestServer, time::sleep, time::Seconds};
 
@@ -128,6 +131,7 @@ async fn test_openssl() {
         })
     });
     let (srv, sys) = rx.recv().unwrap();
+    thread::sleep(Duration::from_millis(100));
 
     let client = client();
     let host = format!("https://{}", addr);
@@ -144,26 +148,14 @@ async fn test_openssl() {
 #[ntex::test]
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 async fn test_rustls() {
-    use std::{fs::File, io::BufReader};
-
     use ntex::web::HttpRequest;
-    use tls_rustls::ServerConfig as RustlsServerConfig;
 
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
         let sys = ntex::rt::System::new("test");
-
-        // load ssl keys
-        let cert_file = &mut BufReader::new(File::open("./tests/cert.pem").unwrap());
-        let key_file = &mut BufReader::new(File::open("./tests/key.pem").unwrap());
-        let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
-        let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
-        let config = RustlsServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, keys)
-            .unwrap();
+        let config = rustls_utils::tls_acceptor();
 
         sys.run(move || {
             let srv = HttpServer::new(|| {

@@ -47,7 +47,25 @@ pub mod codec {
 
 pub mod connect {
     //! Tcp connector service
-    pub use ntex_connect::*;
+    pub use ntex_net::connect::*;
+
+    #[cfg(feature = "openssl")]
+    pub mod openssl {
+        pub use ntex_tls::openssl::{SslConnector, SslFilter};
+
+        #[doc(hidden)]
+        #[deprecated]
+        pub use ntex_tls::openssl::SslConnector as Connector;
+    }
+
+    #[cfg(feature = "rustls")]
+    pub mod rustls {
+        pub use ntex_tls::rustls::{TlsClientFilter, TlsConnector};
+
+        #[doc(hidden)]
+        #[deprecated]
+        pub use ntex_tls::rustls::TlsConnector as Connector;
+    }
 }
 
 pub mod router {

@@ -64,11 +64,17 @@ impl FilterLayer for TlsClientFilter {
                 buf.with_dst(|dst| {
                     loop {
                         let mut cursor = io::Cursor::new(&src);
-                        let n = session.read_tls(&mut cursor)?;
+                        let n = match session.read_tls(&mut cursor) {
+                            Ok(n) => n,
+                            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
+                                break
+                            }
+                            Err(err) => return Err(err),
+                        };
                         src.split_to(n);
                         let state = session
                             .process_new_packets()
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
                         let new_b = state.plaintext_bytes_to_read();
                         if new_b > 0 {
@@ -92,18 +98,26 @@ impl FilterLayer for TlsClientFilter {
     fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
         buf.with_src(|src| {
             if let Some(src) = src {
-                let mut session = self.session.borrow_mut();
                 let mut io = Wrapper(buf);
+                let mut session = self.session.borrow_mut();
 
-                loop {
+                'outer: loop {
                     if !src.is_empty() {
                         src.split_to(session.writer().write(src)?);
-                    }
-                    if session.wants_write() {
-                        session.complete_io(&mut io)?;
                     } else {
                         break;
                     }
+                    while session.wants_write() {
+                        match session.write_tls(&mut io) {
+                            Ok(0) => continue 'outer,
+                            Ok(_) => continue,
+                            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
+                                break
+                            }
+                            Err(err) => return Err(err),
+                        }
+                    }
+                    break;
                 }
             }
             Ok(())

@@ -1,5 +1,11 @@
 # Changes
 
+## [1.1.0] - 2024-03-24
+
+* Move tls connectors from ntex-connect
+
+* Upgrade to rustls 0.23
+
 ## [1.0.0] - 2024-01-09
 
 * Release
