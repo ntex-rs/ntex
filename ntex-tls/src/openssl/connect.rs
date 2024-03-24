@@ -1,12 +1,13 @@
 use std::{fmt, io};
 
-pub use ntex_tls::openssl::SslFilter;
 pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
 
 use ntex_bytes::PoolId;
 use ntex_io::{Io, Layer};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use ntex_tls::openssl::connect as connect_io;
+
+use super::SslFilter;
 
 use super::{Address, Connect, ConnectError, Connector as BaseConnector};
 
