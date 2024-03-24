@@ -35,7 +35,7 @@ impl FilterLayer for TlsServerFilter {
                 types::HttpProtocol::Http1
             };
             Some(Box::new(proto))
-        } else if id == any::TypeId::of::<PeerCert>() {
+        } else if id == any::TypeId::of::<PeerCert<'_>>() {
             if let Some(cert_chain) = self.session.borrow().peer_certificates() {
                 if let Some(cert) = cert_chain.first() {
                     Some(Box::new(PeerCert(cert.to_owned())))
@@ -45,7 +45,7 @@ impl FilterLayer for TlsServerFilter {
             } else {
                 None
             }
-        } else if id == any::TypeId::of::<PeerCertChain>() {
+        } else if id == any::TypeId::of::<PeerCertChain<'_>>() {
             if let Some(cert_chain) = self.session.borrow().peer_certificates() {
                 Some(Box::new(PeerCertChain(cert_chain.to_vec())))
             } else {

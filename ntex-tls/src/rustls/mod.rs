@@ -2,7 +2,7 @@
 use std::{cmp, io};
 
 use ntex_io::WriteBuf;
-use tls_rust::Certificate;
+use tls_rust::pki_types::CertificateDer;
 
 mod accept;
 mod client;
@@ -14,11 +14,11 @@ pub use self::server::TlsServerFilter;
 
 /// Connection's peer cert
 #[derive(Debug)]
-pub struct PeerCert(pub Certificate);
+pub struct PeerCert<'a>(pub CertificateDer<'a>);
 
 /// Connection's peer cert chain
 #[derive(Debug)]
-pub struct PeerCertChain(pub Vec<Certificate>);
+pub struct PeerCertChain<'a>(pub Vec<CertificateDer<'a>>);
 
 pub(crate) struct Wrapper<'a, 'b>(&'a WriteBuf<'b>);
 

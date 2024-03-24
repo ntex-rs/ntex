@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::{codec, connect, io::types::PeerAddr, util::Bytes, util::Either};
-use tls_rust::{ClientConfig, OwnedTrustAnchor, RootCertStore};
+use tls_rust::{ClientConfig, RootCertStore};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -9,16 +9,8 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     // rustls config
-    let mut cert_store = RootCertStore::empty();
-    cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-        OwnedTrustAnchor::from_subject_spki_name_constraints(
-            ta.subject,
-            ta.spki,
-            ta.name_constraints,
-        )
-    }));
+    let cert_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(cert_store)
         .with_no_client_auth();
 

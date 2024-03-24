@@ -1,7 +1,7 @@
 use std::{fmt, io, sync::Arc};
 
 pub use ntex_tls::rustls::TlsClientFilter;
-pub use tls_rustls::{ClientConfig, ServerName};
+pub use tls_rustls::{pki_types::ServerName, ClientConfig};
 
 use ntex_bytes::PoolId;
 use ntex_io::{Io, Layer};
@@ -67,7 +67,7 @@ impl<T: Address> Connector<T> {
 
         let tag = io.tag();
         let config = self.config.clone();
-        let host = ServerName::try_from(host.as_str())
+        let host = ServerName::try_from(host)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
 
         match TlsClientFilter::create(io, config, host.clone()).await {
@@ -126,7 +126,7 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
 
 #[cfg(test)]
 mod tests {
-    use tls_rustls::{OwnedTrustAnchor, RootCertStore};
+    use tls_rustls::RootCertStore;
 
     use super::*;
     use ntex_util::future::lazy;
@@ -137,16 +137,8 @@ mod tests {
             ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let mut cert_store = RootCertStore::empty();
-        cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject,
-                ta.spki,
-                ta.name_constraints,
-            )
-        }));
+        let cert_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let config = ClientConfig::builder()
-            .with_safe_defaults()
             .with_root_certificates(cert_store)
             .with_no_client_auth();
         let _ = Connector::<&'static str>::new(config.clone()).clone();

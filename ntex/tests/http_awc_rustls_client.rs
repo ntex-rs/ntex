@@ -35,22 +35,43 @@ fn ssl_acceptor() -> SslAcceptor {
 }
 
 mod danger {
-    use std::time::SystemTime;
-    use tls_rustls::{Certificate, ServerName};
+    use tls_rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
+    #[derive(Debug)]
     pub struct NoCertificateVerification {}
 
-    impl tls_rustls::client::ServerCertVerifier for NoCertificateVerification {
+    impl tls_rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
         fn verify_server_cert(
             &self,
-            _end_entity: &Certificate,
-            _intermediates: &[Certificate],
-            _server_name: &ServerName,
-            _scts: &mut dyn Iterator<Item = &[u8]>,
-            _ocsp_response: &[u8],
-            _now: SystemTime,
-        ) -> Result<tls_rustls::client::ServerCertVerified, tls_rustls::Error> {
-            Ok(tls_rustls::client::ServerCertVerified::assertion())
+            _end_entity: &CertificateDer<'_>,
+            _certs: &[CertificateDer<'_>],
+            _hostname: &ServerName<'_>,
+            _ocsp: &[u8],
+            _now: UnixTime,
+        ) -> Result<tls_rustls::client::danger::ServerCertVerified, tls_rustls::Error> {
+            Ok(tls_rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &tls_rustls::DigitallySignedStruct,
+        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
+            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &tls_rustls::DigitallySignedStruct,
+        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
+            Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<tls_rustls::SignatureScheme> {
+            vec![]
         }
     }
 }
@@ -81,7 +102,7 @@ async fn test_connection_reuse_h2() {
 
     // disable ssl verification
     let mut config = ClientConfig::builder()
-        .with_safe_defaults()
+        .dangerous()
         .with_custom_certificate_verifier(Arc::new(danger::NoCertificateVerification {}))
         .with_no_client_auth();
     let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];

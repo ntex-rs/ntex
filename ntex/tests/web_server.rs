@@ -844,8 +844,7 @@ async fn test_brotli_encoding_large_openssl_h2() {
 async fn test_reading_deflate_encoding_large_random_rustls() {
     use std::{fs::File, io::BufReader};
 
-    use rustls_pemfile::{certs, pkcs8_private_keys};
-    use tls_rustls::{Certificate, PrivateKey, ServerConfig};
+    use tls_rustls::ServerConfig;
 
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -856,14 +855,9 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // load ssl keys
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file)
-        .unwrap()
-        .iter()
-        .map(|c| Certificate(c.to_vec()))
-        .collect();
-    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
     let config = ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert_chain, keys)
         .unwrap();
@@ -900,10 +894,9 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h1() {
-    use rustls_pemfile::{certs, pkcs8_private_keys};
     use std::fs::File;
     use std::io::BufReader;
-    use tls_rustls::{Certificate, PrivateKey, ServerConfig};
+    use tls_rustls::ServerConfig;
 
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -914,14 +907,9 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     // load ssl keys
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file)
-        .unwrap()
-        .iter()
-        .map(|c| Certificate(c.to_vec()))
-        .collect();
-    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
     let config = ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert_chain, keys)
         .unwrap();
@@ -960,8 +948,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
 async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     use std::{fs::File, io::BufReader};
 
-    use rustls_pemfile::{certs, pkcs8_private_keys};
-    use tls_rustls::{Certificate, PrivateKey, ServerConfig};
+    use tls_rustls::ServerConfig;
 
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -972,14 +959,9 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     // load ssl keys
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = certs(cert_file)
-        .unwrap()
-        .iter()
-        .map(|c| Certificate(c.to_vec()))
-        .collect();
-    let keys = PrivateKey(pkcs8_private_keys(key_file).unwrap().remove(0));
+    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+    let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
     let config = ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(cert_chain, keys)
         .unwrap();

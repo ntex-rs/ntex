@@ -88,8 +88,8 @@ coo-kie = { version = "0.18", package = "cookie", optional = true }
 tls-openssl = { version="0.10", package = "openssl", optional = true }
 
 # rustls
-tls-rustls = { version = "0.21", package = "rustls", optional = true }
-webpki-roots = { version = "0.25", optional = true }
+tls-rustls = { version = "0.23", package = "rustls", optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 # compression
 brotli2 = { version="0.3.2", optional = true }
@@ -101,6 +101,6 @@ rand = "0.8"
 time = "0.3"
 futures-util = "0.3"
 tls-openssl = { version="0.10", package = "openssl" }
-tls-rustls = { version = "0.21", package="rustls", features = ["dangerous_configuration"]  }
-rustls-pemfile = "1.0"
-webpki-roots = "0.25"
+tls-rustls = { version = "0.23", package="rustls" }
+rustls-pemfile = "2"
+webpki-roots = "0.26"

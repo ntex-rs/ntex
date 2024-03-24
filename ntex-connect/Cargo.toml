@@ -50,8 +50,8 @@ thiserror = "1.0"
 tls-openssl = { version="0.10", package = "openssl", optional = true }
 
 # rustls
-tls-rustls = { version = "0.21", package = "rustls", optional = true }
-webpki-roots = { version = "0.25", optional = true }
+tls-rustls = { version = "0.23", package = "rustls", optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 [dev-dependencies]
 rand = "0.8"
