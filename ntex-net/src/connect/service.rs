@@ -250,11 +250,11 @@ mod tests {
                 .unwrap(),
             server.addr(),
         ]);
-        let result = crate::connect(msg).await;
+        let result = crate::connect::connect(msg).await;
         assert!(result.is_ok());
 
         let msg = Connect::new(server.addr());
-        let result = crate::connect(msg).await;
+        let result = crate::connect::connect(msg).await;
         assert!(result.is_ok());
     }
 }

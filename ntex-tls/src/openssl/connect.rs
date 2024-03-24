@@ -121,6 +121,8 @@ impl<T: Address> Service<Connect<T>> for SslConnector<T> {
 
 #[cfg(test)]
 mod tests {
+    use tls_openssl::ssl::SslMethod;
+
     use super::*;
 
     #[ntex::test]

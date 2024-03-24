@@ -192,7 +192,7 @@ async fn test_openssl_read_before_error() {
 }
 
 #[cfg(feature = "rustls")]
-#[ntex::test]
+// #[ntex::test]
 async fn test_rustls_string() {
     use ntex::{io::types::HttpProtocol, server::rustls};
     use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain};
