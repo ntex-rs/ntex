@@ -1,8 +1,4 @@
 //! Utility for async runtime abstraction
-#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
-
-pub use ntex_io::Io;
-pub use ntex_rt::spawn;
 
 #[cfg(feature = "tokio")]
 pub use ntex_tokio::{from_tcp_stream, tcp_connect, tcp_connect_in};

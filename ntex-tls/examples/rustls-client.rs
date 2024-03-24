@@ -9,7 +9,8 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     // rustls config
-    let cert_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let cert_store =
+        RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = ClientConfig::builder()
         .with_root_certificates(cert_store)
         .with_no_client_auth();

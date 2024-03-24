@@ -48,7 +48,8 @@ mod danger {
             _hostname: &ServerName<'_>,
             _ocsp: &[u8],
             _now: UnixTime,
-        ) -> Result<tls_rustls::client::danger::ServerCertVerified, tls_rustls::Error> {
+        ) -> Result<tls_rustls::client::danger::ServerCertVerified, tls_rustls::Error>
+        {
             Ok(tls_rustls::client::danger::ServerCertVerified::assertion())
         }
 
@@ -57,7 +58,8 @@ mod danger {
             _message: &[u8],
             _cert: &CertificateDer<'_>,
             _dss: &tls_rustls::DigitallySignedStruct,
-        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
+        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error>
+        {
             Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
         }
 
@@ -66,7 +68,8 @@ mod danger {
             _message: &[u8],
             _cert: &CertificateDer<'_>,
             _dss: &tls_rustls::DigitallySignedStruct,
-        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error> {
+        ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error>
+        {
             Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
         }
 

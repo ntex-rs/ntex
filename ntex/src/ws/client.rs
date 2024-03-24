@@ -533,7 +533,7 @@ where
     /// Use openssl connector.
     pub fn openssl(
         &mut self,
-        connector: openssl::SslConnector,
+        connector: tls_openssl::ssl::SslConnector,
     ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::Connector<Uri>> {
         self.connector(openssl::Connector::new(connector))
     }
@@ -542,7 +542,7 @@ where
     /// Use rustls connector.
     pub fn rustls(
         &mut self,
-        config: std::sync::Arc<rustls::ClientConfig>,
+        config: std::sync::Arc<tls_rustls::ClientConfig>,
     ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::Connector<Uri>> {
         self.connector(rustls::Connector::from(config))
     }

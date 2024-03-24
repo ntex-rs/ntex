@@ -6,7 +6,8 @@ use ntex_io::{types, Io};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::{BoxFuture, Either};
 
-use crate::{net::tcp_connect_in, Address, Connect, ConnectError, Resolver};
+use super::{Address, Connect, ConnectError, Resolver};
+use crate::tcp_connect_in;
 
 #[derive(Copy)]
 pub struct Connector<T> {

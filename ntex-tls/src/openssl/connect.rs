@@ -1,25 +1,22 @@
 use std::{fmt, io};
 
-pub use tls_openssl::ssl::{Error as SslError, HandshakeError, SslConnector, SslMethod};
-
 use ntex_bytes::PoolId;
 use ntex_io::{Io, Layer};
+use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnector};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
-use ntex_tls::openssl::connect as connect_io;
+use tls_openssl::ssl::SslConnector as BaseSslConnector;
 
-use super::SslFilter;
+use super::{connect as connect_io, SslFilter};
 
-use super::{Address, Connect, ConnectError, Connector as BaseConnector};
-
-pub struct Connector<T> {
+pub struct SslConnector<T> {
     connector: Pipeline<BaseConnector<T>>,
-    openssl: SslConnector,
+    openssl: BaseSslConnector,
 }
 
-impl<T: Address> Connector<T> {
+impl<T: Address> SslConnector<T> {
     /// Construct new OpensslConnectService factory
-    pub fn new(connector: SslConnector) -> Self {
-        Connector {
+    pub fn new(connector: BaseSslConnector) -> Self {
+        SslConnector {
             connector: BaseConnector::default().into(),
             openssl: connector,
         }
@@ -44,7 +41,7 @@ impl<T: Address> Connector<T> {
     }
 }
 
-impl<T: Address> Connector<T> {
+impl<T: Address> SslConnector<T> {
     /// Resolve and connect to remote host
     pub async fn connect<U>(&self, message: U) -> Result<Io<Layer<SslFilter>>, ConnectError>
     where
@@ -80,28 +77,28 @@ impl<T: Address> Connector<T> {
     }
 }
 
-impl<T> Clone for Connector<T> {
+impl<T> Clone for SslConnector<T> {
     fn clone(&self) -> Self {
-        Connector {
+        Self {
             connector: self.connector.clone(),
             openssl: self.openssl.clone(),
         }
     }
 }
 
-impl<T> fmt::Debug for Connector<T> {
+impl<T> fmt::Debug for SslConnector<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Connector(openssl)")
+        f.debug_struct("SslConnector(openssl)")
             .field("connector", &self.connector)
             .field("openssl", &self.openssl)
             .finish()
     }
 }
 
-impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
+impl<T: Address, C> ServiceFactory<Connect<T>, C> for SslConnector<T> {
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
-    type Service = Connector<T>;
+    type Service = SslConnector<T>;
     type InitError = ();
 
     async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
@@ -109,7 +106,7 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     }
 }
 
-impl<T: Address> Service<Connect<T>> for Connector<T> {
+impl<T: Address> Service<Connect<T>> for SslConnector<T> {
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
 
@@ -132,14 +129,16 @@ mod tests {
             ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let ssl = SslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = Connector::new(ssl.build()).memory_pool(PoolId::P5).clone();
+        let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
+        let factory = SslConnector::new(ssl.build())
+            .memory_pool(PoolId::P5)
+            .clone();
 
         let srv = factory.pipeline(&()).await.unwrap();
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
-        assert!(format!("{:?}", srv).contains("Connector"));
+        assert!(format!("{:?}", srv).contains("SslConnector"));
     }
 }

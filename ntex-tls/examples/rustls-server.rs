@@ -17,7 +17,9 @@ async fn main() -> io::Result<()> {
         &mut BufReader::new(File::open("../ntex-tls/examples/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("../ntex-tls/examples/key.pem").unwrap());
     let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
-    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+    let cert_chain = rustls_pemfile::certs(cert_file)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     let tls_config = Arc::new(
         ServerConfig::builder()
             .with_no_client_auth()

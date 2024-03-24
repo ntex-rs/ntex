@@ -855,7 +855,9 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // load ssl keys
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+    let cert_chain = rustls_pemfile::certs(cert_file)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
     let config = ServerConfig::builder()
         .with_no_client_auth()
@@ -907,7 +909,9 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     // load ssl keys
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+    let cert_chain = rustls_pemfile::certs(cert_file)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
     let config = ServerConfig::builder()
         .with_no_client_auth()
@@ -959,7 +963,9 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     // load ssl keys
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
-    let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+    let cert_chain = rustls_pemfile::certs(cert_file)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
     let config = ServerConfig::builder()
         .with_no_client_auth()

@@ -19,10 +19,10 @@ path = "src/lib.rs"
 default = []
 
 # openssl
-openssl = ["tls-openssl", "ntex-tls/openssl"]
+openssl = ["ntex-tls/openssl", "tls_openssl"]
 
 # rustls support
-rustls = ["tls-rustls", "webpki-roots", "ntex-tls/rustls"]
+rustls = ["ntex-tls/rustls", "tls_rust"]
 
 # tokio runtime
 tokio = ["ntex-net/tokio"]
@@ -34,26 +34,15 @@ glommio = ["ntex-net/glommio"]
 async-std = ["ntex-net/async-std"]
 
 [dependencies]
-ntex-service = "2.0.0"
 ntex-io = "1.0.0"
-ntex-tls = "1.0.0"
-ntex-util = "1.0.0"
-ntex-bytes = "0.1.21"
-ntex-http = "0.1"
-ntex-rt = "0.4.7"
-ntex-net = "1.0.0"
+ntex-net = "1.0"
+ntex-tls = "1.1"
 
 log = "0.4"
 thiserror = "1.0"
 
 # openssl
-tls-openssl = { version="0.10", package = "openssl", optional = true }
+tls_openssl = { version = "0.10", package = "openssl", optional = true }
 
 # rustls
-tls-rustls = { version = "0.23", package = "rustls", optional = true }
-webpki-roots = { version = "0.26", optional = true }
-
-[dev-dependencies]
-rand = "0.8"
-env_logger = "0.11"
-ntex = { version = "1", features = ["tokio"] }
+tls_rust = { version = "0.23", package = "rustls", optional = true }

@@ -159,7 +159,9 @@ async fn test_rustls() {
         let cert_file = &mut BufReader::new(File::open("./tests/cert.pem").unwrap());
         let key_file = &mut BufReader::new(File::open("./tests/key.pem").unwrap());
         let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
-        let cert_chain = rustls_pemfile::certs(cert_file).collect::<Result<Vec<_>, _>>().unwrap();
+        let cert_chain = rustls_pemfile::certs(cert_file)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         let config = RustlsServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(cert_chain, keys)

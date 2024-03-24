@@ -6,10 +6,12 @@ use tls_rust::pki_types::CertificateDer;
 
 mod accept;
 mod client;
+mod connect;
 mod server;
-pub use accept::{TlsAcceptor, TlsAcceptorService};
 
+pub use self::accept::{TlsAcceptor, TlsAcceptorService};
 pub use self::client::TlsClientFilter;
+pub use self::connect::TlsConnector;
 pub use self::server::TlsServerFilter;
 
 /// Connection's peer cert

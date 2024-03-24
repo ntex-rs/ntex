@@ -4,7 +4,7 @@ use ntex_rt::spawn_blocking;
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::Either;
 
-use crate::{Address, Connect, ConnectError};
+use super::{Address, Connect, ConnectError};
 
 #[derive(Copy)]
 /// DNS Resolver Service

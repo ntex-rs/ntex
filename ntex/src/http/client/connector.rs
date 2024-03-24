@@ -11,10 +11,10 @@ use crate::{http::Uri, io::IoBoxed};
 use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
 
 #[cfg(feature = "openssl")]
-use crate::connect::openssl::SslConnector;
+use tls_openssl::ssl::SslConnector as OpensslConnector;
 
 #[cfg(feature = "rustls")]
-use crate::connect::rustls::ClientConfig;
+use tls_rustls::ClientConfig;
 
 type BoxedConnector = boxed::BoxService<TcpConnect<Uri>, IoBoxed, ConnectError>;
 
@@ -68,9 +68,9 @@ impl Connector {
 
         #[cfg(feature = "openssl")]
         {
-            use crate::connect::openssl::SslMethod;
+            use tls_openssl::ssl::SslMethod;
 
-            let mut ssl = SslConnector::builder(SslMethod::tls()).unwrap();
+            let mut ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
             let _ = ssl
                 .set_alpn_protos(b"\x02h2\x08http/1.1")
                 .map_err(|e| log::error!("Cannot set ALPN protocol: {:?}", e));
@@ -111,18 +111,18 @@ impl Connector {
 
     #[cfg(feature = "openssl")]
     /// Use openssl connector for secured connections.
-    pub fn openssl(self, connector: SslConnector) -> Self {
-        use crate::connect::openssl::Connector;
+    pub fn openssl(self, connector: OpensslConnector) -> Self {
+        use crate::connect::openssl::SslConnector;
 
-        self.secure_connector(Connector::new(connector))
+        self.secure_connector(SslConnector::new(connector))
     }
 
     #[cfg(feature = "rustls")]
     /// Use rustls connector for secured connections.
     pub fn rustls(self, connector: ClientConfig) -> Self {
-        use crate::connect::rustls::Connector;
+        use crate::connect::rustls::TlsConnector;
 
-        self.secure_connector(Connector::new(connector))
+        self.secure_connector(TlsConnector::new(connector))
     }
 
     /// Set total number of simultaneous connections per type of scheme.
