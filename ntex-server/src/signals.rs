@@ -1,10 +1,16 @@
-use std::thread;
+use std::{cell::RefCell, thread};
+
+use ntex_rt::System;
 
 use crate::server::Server;
 
+thread_local! {
+    static HANDLERS: RefCell<Vec<oneshot::Sender<Signal>>> = Default::default();
+}
+
 /// Different types of process signals
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub(crate) enum Signal {
+pub enum Signal {
     /// SIGHUP
     Hup,
     /// SIGINT
@@ -13,6 +19,19 @@ pub(crate) enum Signal {
     Term,
     /// SIGQUIT
     Quit,
+}
+
+#[doc(hidden)]
+/// Register signal handler.
+pub fn signal() -> oneshot::Receiver<Signal> {
+    let (tx, rx) = oneshot::channel();
+    System::current().arbiter().exec_fn(|| {
+        HANDLERS.with(|handlers| {
+            handlers.borrow_mut().push(tx);
+        })
+    });
+
+    rx
 }
 
 #[cfg(target_family = "unix")]
@@ -36,18 +55,25 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
                 }
             };
             for info in &mut signals {
-                match info {
-                    SIGHUP => srv.signal(Signal::Hup),
-                    SIGTERM => srv.signal(Signal::Term),
-                    SIGINT => {
-                        srv.signal(Signal::Int);
-                        return;
-                    }
-                    SIGQUIT => {
-                        srv.signal(Signal::Quit);
-                        return;
-                    }
-                    _ => {}
+                let sig = match info {
+                    SIGHUP => Signal::Hup,
+                    SIGTERM => Signal::Term,
+                    SIGINT => Signal::Int,
+                    SIGQUIT => Signal::Quit,
+                    _ => continue,
+                };
+
+                srv.signal(sig);
+                System::current().arbiter().exec_fn(move || {
+                    HANDLERS.with(|handlers| {
+                        for tx in handlers.borrow_mut().drain(..) {
+                            let _ = tx.send(sig);
+                        }
+                    })
+                });
+
+                if matches!(sig, Signal::Int | Signal::Quit) {
+                    return;
                 }
             }
         });
@@ -64,6 +90,14 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
         .spawn(move || {
             ctrlc::set_handler(move || {
                 srv.signal(Signal::Int);
+
+                System::current().arbiter().exec_fn(|| {
+                    HANDLERS.with(|handlers| {
+                        for tx in handlers.borrow_mut().drain(..) {
+                            let _ = tx.send(Signal::Int);
+                        }
+                    })
+                });
             })
             .expect("Error setting Ctrl-C handler");
         });

@@ -150,7 +150,7 @@ impl Arbiter {
     pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, oneshot::RecvError>>
     where
         F: FnOnce() -> R + Send + 'static,
-        R: Sync + Send + 'static,
+        R: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
         let _ = self

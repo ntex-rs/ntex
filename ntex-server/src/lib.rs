@@ -15,6 +15,9 @@ pub use self::pool::WorkerPool;
 pub use self::server::Server;
 pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
 
+#[doc(hidden)]
+pub use self::signals::{signal, Signal};
+
 /// Worker id
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WorkerId(usize);

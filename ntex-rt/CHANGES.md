@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.12] - 2024-03-25
+
+* Relax Arbiter::exec() generic param
+
 ## [0.4.11] - 2023-11-22
 
 * Replace async-oneshot with oneshot
