@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.2] - 2024-03-25
+
+* Add basic signals support
+
 ## [1.0.1] - 2024-03-24
 
 * Re-add Server::build() method
