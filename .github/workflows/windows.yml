@@ -53,6 +53,7 @@ jobs:
       - name: Install OpenSSL
         run: |
           vcpkg integrate install
+          vcpkg install cmake:x64-windows
           vcpkg install openssl:x64-windows
           Copy-Item C:\vcpkg\installed\x64-windows\bin\libcrypto-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libcrypto.dll
           Copy-Item C:\vcpkg\installed\x64-windows\bin\libssl-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libssl.dll

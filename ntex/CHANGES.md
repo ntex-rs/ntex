@@ -1,5 +1,11 @@
 # Changes
 
+## [1.2.1] - 2024-03-28
+
+* Feature gate websocket support #320
+
+* Feature gate brotli2 encoder
+
 ## [1.2.0] - 2024-03-24
 
 * Refactor server workers management
