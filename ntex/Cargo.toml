@@ -7,9 +7,12 @@ readme = "README.md"
 keywords = ["ntex", "networking", "framework", "async", "futures"]
 repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex/"
-categories = ["network-programming", "asynchronous",
-              "web-programming::http-server",
-              "web-programming::websocket"]
+categories = [
+    "network-programming",
+    "asynchronous",
+    "web-programming::http-server",
+    "web-programming::websocket",
+]
 license = "MIT OR Apache-2.0"
 edition = "2021"
 
@@ -47,6 +50,9 @@ glommio = ["ntex-net/glommio"]
 # async-std runtime
 async-std = ["ntex-net/async-std"]
 
+# websocket support
+ws = ["dep:sha-1"]
+
 [dependencies]
 ntex-codec = "0.6.2"
 ntex-http = "0.1.12"
@@ -65,11 +71,14 @@ ntex-tls = "1.0.0"
 base64 = "0.22"
 bitflags = "2"
 log = "0.4"
-nanorand = { version = "0.7", default-features = false, features = ["std", "wyrand"] }
+nanorand = { version = "0.7", default-features = false, features = [
+    "std",
+    "wyrand",
+] }
 pin-project-lite = "0.2"
 regex = { version = "1.10", default-features = false, features = ["std"] }
-serde = { version = "1.0", features=["derive"] }
-sha-1 = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+sha-1 = { version = "0.10", optional = true }
 thiserror = "1.0"
 
 # http/web framework
@@ -84,14 +93,14 @@ url-pkg = { version = "2.4", package = "url", optional = true }
 coo-kie = { version = "0.18", package = "cookie", optional = true }
 
 # openssl
-tls-openssl = { version="0.10", package = "openssl", optional = true }
+tls-openssl = { version = "0.10", package = "openssl", optional = true }
 
 # rustls
 tls-rustls = { version = "0.23", package = "rustls", optional = true }
 webpki-roots = { version = "0.26", optional = true }
 
 # compression
-brotli2 = { version="0.3.2", optional = true }
+brotli2 = { version = "0.3.2", optional = true }
 flate2 = { version = "1.0.22", optional = true }
 
 [dev-dependencies]
@@ -99,7 +108,7 @@ env_logger = "0.11"
 rand = "0.8"
 time = "0.3"
 futures-util = "0.3"
-tls-openssl = { version="0.10", package = "openssl" }
-tls-rustls = { version = "0.23", package="rustls" }
+tls-openssl = { version = "0.10", package = "openssl" }
+tls-rustls = { version = "0.23", package = "rustls" }
 rustls-pemfile = "2"
 webpki-roots = "0.26"

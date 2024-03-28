@@ -71,6 +71,7 @@ impl ClientResponse {
         }
     }
 
+    #[cfg(feature = "ws")]
     pub(crate) fn with_empty_payload(head: ResponseHead, config: Rc<ClientConfig>) -> Self {
         ClientResponse::new(head, Payload::None, config)
     }

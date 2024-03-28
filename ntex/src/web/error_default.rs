@@ -9,6 +9,7 @@ use crate::http::body::Body;
 use crate::http::helpers::Writer;
 use crate::http::{self, header, StatusCode};
 use crate::util::{timeout::TimeoutError, BytesMut};
+#[cfg(feature = "ws")]
 use crate::ws::error::HandshakeError;
 
 use super::error::{self, ErrorContainer, ErrorRenderer, WebResponseError};
@@ -234,6 +235,7 @@ impl WebResponseError<DefaultError> for http::client::error::SendRequestError {
     }
 }
 
+#[cfg(feature = "ws")]
 /// Error renderer for ws::HandshakeError
 impl WebResponseError<DefaultError> for HandshakeError {
     fn error_response(&self, _: &HttpRequest) -> HttpResponse {

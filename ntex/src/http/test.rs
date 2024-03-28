@@ -4,7 +4,10 @@ use std::{net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use crate::io::{Filter, Io};
+#[cfg(feature = "ws")]
+use crate::io::Filter;
+use crate::io::Io;
+#[cfg(feature = "ws")]
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
 use crate::{rt::System, service::ServiceFactory};
 use crate::{time::Millis, time::Seconds, util::Bytes};
@@ -333,11 +336,13 @@ impl TestServer {
         response.body().limit(10_485_760).await
     }
 
+    #[cfg(feature = "ws")]
     /// Connect to a websocket server
     pub async fn ws(&mut self) -> Result<WsConnection<impl Filter>, WsClientError> {
         self.ws_at("/").await
     }
 
+    #[cfg(feature = "ws")]
     /// Connect to websocket server at a given path
     pub async fn ws_at(
         &mut self,
@@ -352,7 +357,7 @@ impl TestServer {
             .await
     }
 
-    #[cfg(feature = "openssl")]
+    #[cfg(all(feature = "openssl", feature = "ws"))]
     /// Connect to a websocket server
     pub async fn wss(
         &mut self,
@@ -363,7 +368,7 @@ impl TestServer {
         self.wss_at("/").await
     }
 
-    #[cfg(feature = "openssl")]
+    #[cfg(all(feature = "openssl", feature = "ws"))]
     /// Connect to secure websocket server at a given path
     pub async fn wss_at(
         &mut self,
