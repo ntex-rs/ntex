@@ -32,28 +32,33 @@ jobs:
         with:
           command: generate-lockfile
 
-      # - name: Cache vcpkg
-      #   uses: actions/cache@v1
-      #   with:
-      #     path: C:\vcpkg\installed\x64-windows\
-      #     key: x86_64-pc-windows-msvc-openssl
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed\x64-windows\
+          key: x86_64-pc-windows-msvc-openssl
 
       - name: Cache cargo registry
-        uses: actions/cache@v1
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
           key: ${{ matrix.version }}-x86_64-pc-windows-msvc-cargo-registry-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo index
-        uses: actions/cache@v1
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/git
           key: ${{ matrix.version }}-x86_64-pc-windows-msvc-cargo-index-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install cmake
+        uses: lukka/get-cmake@latest
+
+      - name: Install nasm
+        uses: ilammy/setup-nasm@v1
+
       - name: Install OpenSSL
         run: |
           vcpkg integrate install
-          vcpkg install cmake:x64-windows
           vcpkg install openssl:x64-windows
           Copy-Item C:\vcpkg\installed\x64-windows\bin\libcrypto-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libcrypto.dll
           Copy-Item C:\vcpkg\installed\x64-windows\bin\libssl-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libssl.dll
