@@ -11,14 +11,17 @@ use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
+#[cfg(feature = "ws")]
+use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
 use crate::service::{
     map_config, IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory,
 };
 use crate::time::{sleep, Millis, Seconds};
 use crate::util::{stream_recv, Bytes, BytesMut, Extensions, Ready, Stream};
+#[cfg(feature = "ws")]
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
-use crate::{io::Sealed, rt::System, server::Server};
+use crate::{rt::System, server::Server};
 
 use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
@@ -907,6 +910,7 @@ impl TestServer {
         response.body().limit(10_485_760).await
     }
 
+    #[cfg(feature = "ws")]
     /// Connect to websocket server at a given path
     pub async fn ws_at(&self, path: &str) -> Result<WsConnection<Sealed>, WsClientError> {
         if self.ssl {
@@ -947,6 +951,7 @@ impl TestServer {
         }
     }
 
+    #[cfg(feature = "ws")]
     /// Connect to a websocket server
     pub async fn ws(&self) -> Result<WsConnection<Sealed>, WsClientError> {
         self.ws_at("/").await

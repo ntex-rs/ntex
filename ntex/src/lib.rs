@@ -31,6 +31,8 @@ pub use ntex_service::{forward_poll_ready, forward_poll_shutdown};
 
 pub mod http;
 pub mod web;
+
+#[cfg(feature = "ws")]
 pub mod ws;
 
 pub use self::service::{

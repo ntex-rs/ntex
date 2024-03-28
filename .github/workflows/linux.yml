@@ -59,7 +59,7 @@ jobs:
         continue-on-error: true
         run: |
           cd ntex
-          cargo test --no-default-features --no-fail-fast --features="async-std,cookie,url,compress,openssl,rustls"
+          cargo test --no-default-features --no-fail-fast --features="async-std,cookie,url,compress,openssl,rustls,ws"
 
       - name: Install cargo-cache
         continue-on-error: true

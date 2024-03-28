@@ -85,6 +85,8 @@ mod service;
 pub mod test;
 pub mod types;
 mod util;
+
+#[cfg(feature = "ws")]
 pub mod ws;
 
 // re-export proc macro
