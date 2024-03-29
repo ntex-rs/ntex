@@ -87,7 +87,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
 pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
     use std::sync::{Arc, Mutex};
 
-    use ntex_rt::{spawn, System};
+    use ntex_rt::spawn;
 
     static CUR_SYS: Mutex<RefCell<Option<System>>> = Mutex::new(RefCell::new(None));
 
