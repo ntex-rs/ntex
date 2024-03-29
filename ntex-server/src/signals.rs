@@ -1,8 +1,11 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::RefCell, thread};
 
 use ntex_rt::System;
 
 use crate::server::Server;
+
+static CTRL_C_HANDLER_SET: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static HANDLERS: RefCell<Vec<oneshot::Sender<Signal>>> = Default::default();
@@ -88,17 +91,20 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
     let _ = thread::Builder::new()
         .name("ntex-server signals".to_string())
         .spawn(move || {
-            ctrlc::set_handler(move || {
-                srv.signal(Signal::Int);
+            if !CTRL_C_HANDLER_SET.load(Ordering::SeqCst) {
+                ctrlc::set_handler(move || {
+                    srv.signal(Signal::Int);
 
-                System::current().arbiter().exec_fn(|| {
-                    HANDLERS.with(|handlers| {
-                        for tx in handlers.borrow_mut().drain(..) {
-                            let _ = tx.send(Signal::Int);
-                        }
-                    })
-                });
-            })
-            .expect("Error setting Ctrl-C handler");
+                    System::current().arbiter().exec_fn(|| {
+                        HANDLERS.with(|handlers| {
+                            for tx in handlers.borrow_mut().drain(..) {
+                                let _ = tx.send(Signal::Int);
+                            }
+                        })
+                    });
+                })
+                .expect("Error setting Ctrl-C handler");
+                CTRL_C_HANDLER_SET.store(true, Ordering::SeqCst);
+            }
         });
 }
