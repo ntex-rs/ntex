@@ -1,6 +1,7 @@
 use std::collections::{vec_deque, VecDeque};
 use std::{fmt, iter::FusedIterator, net::SocketAddr};
 
+use ntex_bytes::ByteString;
 use ntex_util::future::Either;
 
 /// Connect request
@@ -18,6 +19,16 @@ pub trait Address: Unpin + 'static {
 }
 
 impl Address for String {
+    fn host(&self) -> &str {
+        self
+    }
+
+    fn port(&self) -> Option<u16> {
+        None
+    }
+}
+
+impl Address for ByteString {
     fn host(&self) -> &str {
         self
     }
@@ -157,6 +168,20 @@ impl<T: Address> Connect<T> {
     pub fn get_ref(&self) -> &T {
         &self.req
     }
+
+    /// Call callback with current address and construct new Connect instance.
+    pub fn map_addr<F, R>(self, f: F) -> Connect<R>
+    where
+        F: FnOnce(T) -> R,
+    {
+        let req = f(self.req);
+
+        Connect {
+            req,
+            port: self.port,
+            addr: self.addr,
+        }
+    }
 }
 
 impl<T: Clone> Clone for Connect<T> {
@@ -285,6 +310,13 @@ mod tests {
         assert_eq!(format!("{:?}", addrs), "[]");
         assert!(connect.addrs().next().is_none());
         assert!(format!("{:?}", connect.clone()).contains("Connect"));
+
+        let c = connect.clone().map_addr(|_| "www.rust-lang.org:80");
+        assert_eq!(c.host(), "www.rust-lang.org:80");
+        assert_eq!(c.port(), 80);
+        let addrs = c.addrs().clone();
+        assert_eq!(format!("{:?}", addrs), "[]");
+        assert!(c.addrs().next().is_none());
 
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         connect = connect.set_addrs(vec![addr]);
