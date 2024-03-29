@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.3] - 2024-03-29
+
+* Fix windows signals support
+
 ## [1.0.2] - 2024-03-25
 
 * Add basic signals support
