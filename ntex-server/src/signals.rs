@@ -85,7 +85,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
 /// Signals are handled by oneshots, you have to re-register
 /// after each signal.
 pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     use ntex_rt::spawn;
 
@@ -99,12 +99,12 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
         }
     };
 
-    let sys = guard.borrow_mut();
+    let mut sys = guard.borrow_mut();
     let started = sys.is_some();
     *sys = Some(System::current());
 
     let rx = signal();
-    spawn(async move {
+    let _ = spawn(async move {
         if let Ok(sig) = rx.await {
             srv.signal(sig);
         }
@@ -116,7 +116,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
             .spawn(move || {
                 ctrlc::set_handler(move || {
                     if let Ok(guard) = CUR_SYS.lock() {
-                        if let Some(sys) = *guard.borrow() {
+                        if let Some(sys) = &*guard.borrow() {
                             sys.arbiter().exec_fn(|| {
                                 HANDLERS.with(|handlers| {
                                     for tx in handlers.borrow_mut().drain(..) {
