@@ -34,7 +34,7 @@ pub use ntex_glommio::{from_tcp_stream, tcp_connect, tcp_connect_in};
     not(feature = "tokio"),
     not(feature = "async-std")
 ))]
-pub use ntex_async_std::{from_unix_stream, unix_connect, unix_connect_in};
+pub use ntex_glommio::{from_unix_stream, unix_connect, unix_connect_in};
 
 #[cfg(all(
     not(feature = "tokio"),
