@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.2] - 2024-03-31
+
+* Add IoRef::is_wr_backpressure() method
+
 ## [1.0.1] - 2024-02-05
 
 * Add IoBoxed::take() method
