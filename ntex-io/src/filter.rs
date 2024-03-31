@@ -134,12 +134,16 @@ impl Filter for Base {
         s.with_write_destination(io, |buf| {
             if let Some(buf) = buf {
                 let len = buf.len();
-                if len > 0 && self.0.flags().contains(Flags::WR_PAUSED) {
+                let flags = self.0.flags();
+                if len > 0 && flags.contains(Flags::WR_PAUSED) {
                     self.0 .0.remove_flags(Flags::WR_PAUSED);
                     self.0 .0.write_task.wake();
                 }
-                if len >= self.0.memory_pool().write_params_high() {
+                if len >= self.0.memory_pool().write_params_high()
+                    && !flags.contains(Flags::WR_BACKPRESSURE)
+                {
                     self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+                    self.0 .0.dispatch_task.wake();
                 }
             }
         });
