@@ -193,15 +193,17 @@ impl FactoryService for ConfiguredService {
             let mut services = mem::take(&mut rt.0.borrow_mut().services);
 
             let mut res = Vec::new();
-            while let Some(Some(svc)) = services.pop() {
-                for entry in names.values() {
-                    if entry.idx == services.len() {
-                        res.push(NetService {
-                            pool: entry.pool,
-                            tokens: entry.tokens.clone(),
-                            factory: svc,
-                        });
-                        break;
+            while let Some(svc) = services.pop() {
+                if let Some(svc) = svc {
+                    for entry in names.values() {
+                        if entry.idx == services.len() {
+                            res.push(NetService {
+                                pool: entry.pool,
+                                tokens: entry.tokens.clone(),
+                                factory: svc,
+                            });
+                            break;
+                        }
                     }
                 }
             }

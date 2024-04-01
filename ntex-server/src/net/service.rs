@@ -107,6 +107,7 @@ impl ServiceFactory<ServerMessage> for StreamService {
         for info in &self.services {
             match info.factory.create(()).await {
                 Ok(svc) => {
+                    log::debug!("Constructed server service for {:?}", info.tokens);
                     services.push(svc);
                     let idx = services.len() - 1;
                     for (token, tag) in &info.tokens {
@@ -123,12 +124,10 @@ impl ServiceFactory<ServerMessage> for StreamService {
             }
         }
 
-        let conns = MAX_CONNS_COUNTER.with(|conns| conns.priv_clone());
-
         Ok(StreamServiceImpl {
             tokens,
             services,
-            conns,
+            conns: MAX_CONNS_COUNTER.with(|conns| conns.priv_clone()),
         })
     }
 }
