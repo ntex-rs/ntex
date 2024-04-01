@@ -90,9 +90,9 @@ impl<T> Worker<T> {
             let _ = spawn(async move {
                 log::info!("Starting worker {:?}", id);
 
-                log::debug!("Creating server instance in {:?} worker", id);
+                log::debug!("Creating server instance in {:?}", id);
                 let factory = cfg.create().await;
-                log::debug!("Server instance has been created in {:?} worker", id);
+                log::debug!("Server instance has been created in {:?}", id);
 
                 match create(id, rx1, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {

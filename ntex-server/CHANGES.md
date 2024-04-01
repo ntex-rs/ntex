@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.5] - 2024-04-02
+
+* Fix external configuration handling
+
 ## [1.0.4] - 2024-03-30
 
 * Fix signals support #324
