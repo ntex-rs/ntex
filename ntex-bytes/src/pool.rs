@@ -752,9 +752,7 @@ impl Waiters {
                     }
                     Some(node.item)
                 }
-                _ => {
-                    unreachable!()
-                }
+                _ => unreachable!(),
             }
         } else {
             None
@@ -789,7 +787,7 @@ impl Waiters {
                 self.tail = idx;
                 true
             }
-            _ => unreachable!(),
+            Entry::Vacant(_) => unreachable!(),
         }
     }
 
@@ -867,11 +865,6 @@ impl Waiters {
             });
             self.tail = idx;
         }
-
-        println!(
-            "APPEND: {:?} {:?} root:{:?} tail:{:?}",
-            idx, self.len, self.root, self.tail
-        );
 
         idx
     }
