@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.25] (2024-04-02)
+
+* Fix pool waiters management
+
 ## [0.1.24] (2024-02-01)
 
 * Add `checked` api

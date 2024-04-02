@@ -1,10 +1,10 @@
 [package]
 name = "ntex-bytes"
-version = "0.1.24"
+version = "0.1.25"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Carl Lerche <me@carllerche.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
-repository = "https://github.com/ntex-rs/ntex.git"
+repository = "https://github.com/ntex-rs/ntex"
 readme = "README.md"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]
@@ -18,13 +18,15 @@ default = []
 simd = ["simdutf8"]
 
 [dependencies]
-bitflags = "2.4"
+bitflags = "2"
 bytes = "1"
 serde = "1"
-futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-core = { version = "0.3", default-features = false }
 simdutf8 = { version = "0.1.4", optional = true }
 
+backtrace = "*"
+
 [dev-dependencies]
-serde_test = "1.0"
-serde_json = "1.0"
+serde_test = "1"
+serde_json = "1"
 ntex = { version = "1", features = ["tokio"] }
