@@ -36,8 +36,10 @@ oneshot = "0.1"
 tok-io = { version = "1", package = "tokio", default-features = false, features = [
     "rt",
     "net",
+    "macros"
 ], optional = true }
 async_std = { version = "1", package = "async-std", optional = true }
+env_logger = "0.11.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 glomm-io = { version = "0.8", package = "glommio", optional = true }

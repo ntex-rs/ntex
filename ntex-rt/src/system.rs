@@ -40,10 +40,30 @@ impl System {
     ///
     /// This allows to customize the runtime. See struct level docs on
     /// `Builder` for more information.
+    #[cfg(feature = "tokio")]
+    pub fn build_with_handle() -> Builder {
+        Builder::new_with_handle()
+    }
+
+    /// Build a new system with a customized tokio runtime.
+    ///
+    /// This allows to customize the runtime. See struct level docs on
+    /// `Builder` for more information.
+    #[cfg(not(feature = "tokio"))]
     pub fn build() -> Builder {
         Builder::new()
     }
 
+    #[allow(clippy::new_ret_no_self)]
+    /// Create new system.
+    ///
+    /// This method panics if it can not create tokio runtime
+    #[cfg(feature = "tokio")]
+    pub fn new_with_handle(name: &str) -> SystemRunner {
+        Self::build_with_handle().name(name).finish()
+    }
+
+    #[cfg(not(feature = "tokio"))]
     #[allow(clippy::new_ret_no_self)]
     /// Create new system.
     ///

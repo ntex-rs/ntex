@@ -1,4 +1,5 @@
 #![allow(clippy::let_underscore_future)]
+
 use std::{cell::RefCell, future::Future, io, rc::Rc};
 
 use async_channel::unbounded;
@@ -16,13 +17,25 @@ pub struct Builder {
     name: String,
     /// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
     stop_on_panic: bool,
+    /// Use current Handler
+    use_current_handle: bool,
 }
 
 impl Builder {
+    #[cfg(feature = "tokio")]
+    pub(super) fn new_with_handle() -> Self {
+        Builder {
+            name: "ntex".into(),
+            stop_on_panic: false,
+            use_current_handle: true,
+        }
+    }
+
     pub(super) fn new() -> Self {
         Builder {
             name: "ntex".into(),
             stop_on_panic: false,
+            use_current_handle: false,
         }
     }
 
@@ -56,15 +69,56 @@ impl Builder {
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
 
         // init system arbiter and run configuration method
-        SystemRunner {
-            stop,
-            arb,
-            arb_controller,
-            system,
+        #[cfg(feature = "tokio")]
+        {
+            use tok_io::runtime::Handle;
+            if !self.use_current_handle {
+                log::info!("Using current handle is disabled!");
+                return SystemRunner {
+                    stop,
+                    arb,
+                    arb_controller,
+                    system,
+                    handle: None,
+                };
+            }
+
+            let try_handle = match Handle::try_current() {
+                Ok(handle) => handle,
+                Err(_) => {
+                    log::error!("No tokio runtime available");
+                    return SystemRunner {
+                        stop,
+                        arb,
+                        arb_controller,
+                        system,
+                        handle: None,
+                    };
+                }
+            };
+
+            SystemRunner {
+                stop,
+                arb,
+                arb_controller,
+                system,
+                handle: Some(try_handle),
+            }
+        }
+
+        #[cfg(not(feature = "tokio"))]
+        {
+            SystemRunner {
+                stop,
+                arb,
+                arb_controller,
+                system,
+            }
         }
     }
 }
 
+#[cfg(not(feature = "tokio"))]
 /// Helper object that runs System's event loop
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
@@ -72,6 +126,18 @@ pub struct SystemRunner {
     arb: SystemArbiter,
     arb_controller: ArbiterController,
     system: System,
+}
+
+#[cfg(feature = "tokio")]
+use tok_io::runtime::Handle;
+
+#[cfg(feature = "tokio")]
+pub struct SystemRunner {
+    stop: oneshot::Receiver<i32>,
+    arb: SystemArbiter,
+    arb_controller: ArbiterController,
+    system: System,
+    handle: Option<Handle>,
 }
 
 impl SystemRunner {
@@ -93,26 +159,58 @@ impl SystemRunner {
     where
         F: FnOnce() -> io::Result<()> + 'static,
     {
-        let SystemRunner {
-            stop,
-            arb,
-            arb_controller,
-            ..
-        } = self;
+        #[cfg(feature = "tokio")]
+        {
+            let SystemRunner {
+                arb,
+                arb_controller,
+                stop,
+                handle,
+                ..
+            } = self;
+
+            if let Some(handle) = handle {
+                let result = handle.block_on(async { f() });
+                return result;
+            }
+
+            match crate::builder::block_on(stop, arb, arb_controller, f).take()? {
+                Ok(code) => {
+                    if code != 0 {
+                        Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Non-zero exit code: {}", code),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
+            }
+        }
 
         // run loop
-        match block_on(stop, arb, arb_controller, f).take()? {
-            Ok(code) => {
-                if code != 0 {
-                    Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Non-zero exit code: {}", code),
-                    ))
-                } else {
-                    Ok(())
+        #[cfg(not(feature = "tokio"))]
+        {
+            let SystemRunner {
+                arb,
+                arb_controller,
+                stop,
+                ..
+            } = self;
+            match crate::builder::block_on(stop, arb, arb_controller, f).take()? {
+                Ok(code) => {
+                    if code != 0 {
+                        Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Non-zero exit code: {}", code),
+                        ))
+                    } else {
+                        Ok(())
+                    }
                 }
+                Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
             }
-            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
         }
     }
 
@@ -123,16 +221,38 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner {
-            arb,
-            arb_controller,
-            ..
-        } = self;
+        #[cfg(feature = "tokio")]
+        {
+            let SystemRunner {
+                handle,
+                arb,
+                arb_controller,
+                ..
+            } = self;
+
+            if let Some(handle) = handle {
+                let result = handle.block_on(fut);
+                return result;
+            }
+
+            match crate::builder::block_on(fut, arb, arb_controller, || Ok(())).take() {
+                Ok(result) => result,
+                Err(_) => unreachable!(),
+            }
+        }
 
         // run loop
-        match block_on(fut, arb, arb_controller, || Ok(())).take() {
-            Ok(result) => result,
-            Err(_) => unreachable!(),
+        #[cfg(not(feature = "tokio"))]
+        {
+            let SystemRunner {
+                arb,
+                arb_controller,
+                ..
+            } = self;
+            match crate::builder::block_on(fut, arb, arb_controller, || Ok(())).take() {
+                Ok(result) => result,
+                Err(_) => unreachable!(),
+            }
         }
     }
 }
@@ -179,6 +299,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(feature = "tokio"))]
     #[test]
     fn test_async() {
         let (tx, rx) = mpsc::channel();
@@ -190,6 +311,46 @@ mod tests {
             let _ = runner.run_until_stop();
         });
         let s = System::new("test");
+
+        let sys = rx.recv().unwrap();
+        let id = sys.id();
+        let (tx, rx) = mpsc::channel();
+        sys.arbiter().exec_fn(move || {
+            let _ = tx.send(System::current().id());
+        });
+        let id2 = rx.recv().unwrap();
+        assert_eq!(id, id2);
+
+        let id2 = s
+            .block_on(sys.arbiter().exec(|| System::current().id()))
+            .unwrap();
+        assert_eq!(id, id2);
+
+        let (tx, rx) = mpsc::channel();
+        sys.arbiter().spawn(Box::pin(async move {
+            let _ = tx.send(System::current().id());
+        }));
+        let id2 = rx.recv().unwrap();
+        assert_eq!(id, id2);
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tok_io::test]
+    async fn test_async_tokio() {
+        env_logger::init();
+
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let runner = crate::System::build_with_handle()
+                .stop_on_panic(true)
+                .finish();
+
+            tx.send(runner.system()).unwrap();
+            let _ = runner.run_until_stop();
+        });
+
+        let s = System::new_with_handle("test");
 
         let sys = rx.recv().unwrap();
         let id = sys.id();

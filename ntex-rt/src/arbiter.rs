@@ -370,9 +370,21 @@ where
 mod tests {
     use super::*;
 
+    #[cfg(not(feature = "tokio"))]
     #[test]
     fn test_arbiter_local_storage() {
         let _s = System::new("test");
+        Arbiter::set_item("test");
+        assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
+        assert!(Arbiter::get_mut_item::<&'static str, _, _>(|s| *s == "test"));
+        assert!(Arbiter::contains_item::<&'static str>());
+        assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
+    }
+
+    #[tok_io::test]
+    #[cfg(feature = "tokio")]
+    async fn test_arbiter_local_storage() {
+        let _s = System::new_with_handle("test");
         Arbiter::set_item("test");
         assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
         assert!(Arbiter::get_mut_item::<&'static str, _, _>(|s| *s == "test"));
