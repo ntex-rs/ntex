@@ -5,7 +5,7 @@ authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
 keywords = ["ntex", "networking", "framework", "async", "futures"]
-repository = "https://github.com/ntex-rs/ntex.git"
+repository = "https://github.com/ntex-rs/ntex"
 documentation = "https://docs.rs/ntex/"
 categories = [
     "network-programming",
