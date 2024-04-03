@@ -18,19 +18,15 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v4
 
       - name: Install ${{ matrix.version }}
-        uses: actions-rs/toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ matrix.version }}-x86_64-pc-windows-msvc
-          profile: minimal
-          override: true
 
       - name: Generate Cargo.lock
-        uses: actions-rs/cargo@v1
-        with:
-          command: generate-lockfile
+        run: cargo generate-lockfile
 
       - name: Cache vcpkg
         uses: actions/cache@v4
@@ -66,24 +62,22 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
       - name: Run tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --lib --all-features --no-fail-fast -- --nocapture
-                --skip test_panic_in_worker
-                --skip test_connection_force_close
-                --skip test_connection_server_close
-                --skip test_freeze
-                --skip test_simple
-                --skip test_test_methods
-                --skip test_connection_wait_queue_force_close
-                --skip test_params
-                --skip test_body
-                --skip test_form
-                --skip test_json
-                --skip test_connection_reuse
-                --skip test_connection_wait_queue
-                --skip test_no_decompress
-                --skip test_connection_reuse_h2
-                --skip test_h2_tcp
-                --skip test_timer
+        run: |
+          cargo test --lib --all-features --no-fail-fast -- --nocapture \
+            --skip test_panic_in_worker \
+            --skip test_connection_force_close \
+            --skip test_connection_server_close \
+            --skip test_freeze \
+            --skip test_simple \
+            --skip test_test_methods \
+            --skip test_connection_wait_queue_force_close \
+            --skip test_params \
+            --skip test_body \
+            --skip test_form \
+            --skip test_json \
+            --skip test_connection_reuse \
+            --skip test_connection_wait_queue \
+            --skip test_no_decompress \
+            --skip test_connection_reuse_h2 \
+            --skip test_h2_tcp \
+            --skip test_timer

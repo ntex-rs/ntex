@@ -21,38 +21,32 @@ jobs:
         with:
           tool-cache: true
 
-      - uses: actions/checkout@master
+      - uses: actions/checkout@v4
 
       - name: Install ${{ matrix.version }}
-        uses: actions-rs/toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ matrix.version }}-x86_64-unknown-linux-gnu
-          profile: minimal
-          override: true
 
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Generate Cargo.lock
-        uses: actions-rs/cargo@v1
-        with:
-          command: generate-lockfile
+        run: cargo generate-lockfile
 
       - name: Cache cargo registry
-        uses: actions/cache@v1
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-registry-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo index
-        uses: actions/cache@v1
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/git
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-index-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests
-        uses: actions-rs/cargo@v1
         timeout-minutes: 40
-        with:
-          command: test
-          args: --all --all-features --no-fail-fast -- --nocapture
+        run: cargo test --all --all-features --no-fail-fast -- --nocapture
 
       - name: Run async-std tests
         timeout-minutes: 40
