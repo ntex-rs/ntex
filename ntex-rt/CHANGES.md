@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.13] - 2024-04-04
+
+* Use tokio Handle if available
+
 ## [0.4.12] - 2024-03-25
 
 * Relax Arbiter::exec() generic param
