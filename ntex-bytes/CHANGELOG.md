@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.26] (2024-04-04)
+
+* Make memory pools optional
+
 ## [0.1.25] (2024-04-02)
 
 * Fix pool waiters management

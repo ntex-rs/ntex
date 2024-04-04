@@ -1,6 +1,6 @@
 [package]
 name = "ntex-bytes"
-version = "0.1.25"
+version = "0.1.26"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Carl Lerche <me@carllerche.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
@@ -17,6 +17,8 @@ default = []
 # simd utf8 check support
 simd = ["simdutf8"]
 
+mpool = []
+
 [dependencies]
 bitflags = "2"
 bytes = "1"
@@ -28,3 +30,4 @@ simdutf8 = { version = "0.1.4", optional = true }
 serde_test = "1"
 serde_json = "1"
 ntex = { version = "1", features = ["tokio"] }
+ntex-bytes = { version = "*", features = ["mpool"] }
