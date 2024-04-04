@@ -163,17 +163,22 @@ mod glommio {
 #[cfg(feature = "tokio")]
 mod tokio {
     use std::future::{poll_fn, Future};
+    use tok_io::runtime::Handle;
     pub use tok_io::task::{spawn_blocking, JoinError, JoinHandle};
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
-        let rt = tok_io::runtime::Builder::new_current_thread()
-            .enable_all()
-            // .unhandled_panic(tok_io::runtime::UnhandledPanic::ShutdownRuntime)
-            .build()
-            .unwrap();
-        tok_io::task::LocalSet::new().block_on(&rt, fut);
+        if let Ok(hnd) = Handle::try_current() {
+            hnd.block_on(tok_io::task::LocalSet::new().run_until(fut));
+        } else {
+            let rt = tok_io::runtime::Builder::new_current_thread()
+                .enable_all()
+                //.unhandled_panic(tok_io::runtime::UnhandledPanic::ShutdownRuntime)
+                .build()
+                .unwrap();
+            tok_io::task::LocalSet::new().block_on(&rt, fut);
+        }
     }
 
     /// Spawn a future on the current thread. This does not create a new Arbiter

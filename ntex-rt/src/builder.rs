@@ -159,7 +159,7 @@ where
 {
     let result = Rc::new(RefCell::new(None));
     let result_inner = result.clone();
-    crate::block_on(Box::pin(async move {
+    crate::block_on(async move {
         let _ = crate::spawn(arb);
         let _ = crate::spawn(arb_controller);
         if let Err(e) = f() {
@@ -168,7 +168,7 @@ where
             let r = fut.await;
             *result_inner.borrow_mut() = Some(Ok(r));
         }
-    }));
+    });
     BlockResult(result)
 }
 

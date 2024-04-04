@@ -33,6 +33,10 @@ impl Default for ServerBuilder {
 impl ServerBuilder {
     /// Create new Server builder instance
     pub fn new() -> ServerBuilder {
+        if ntex_rt::System::query().is_none() {
+            let _ = ntex_rt::System::new("ntex server");
+        }
+
         ServerBuilder {
             token: Token(0),
             services: Vec::new(),

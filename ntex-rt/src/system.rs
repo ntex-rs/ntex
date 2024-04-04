@@ -60,6 +60,11 @@ impl System {
         })
     }
 
+    /// Query current running system.
+    pub fn query() -> Option<System> {
+        CURRENT.with(|cell| cell.borrow().clone())
+    }
+
     /// Set current running system.
     #[doc(hidden)]
     pub fn set_current(sys: System) {

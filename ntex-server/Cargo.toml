@@ -1,6 +1,6 @@
 [package]
 name = "ntex-server"
-version = "1.0.5"
+version = "1.0.6"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Server for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -19,10 +19,10 @@ path = "src/lib.rs"
 ntex-bytes = "0.1.24"
 ntex-net = "1.0"
 ntex-service = "2.0"
-ntex-rt = "0.4.12"
+ntex-rt = "0.4.13"
 ntex-util = "1.0"
 
-async-channel = "2.2"
+async-channel = "2"
 async-broadcast = "0.7"
 polling = "3.3"
 log = "0.4"

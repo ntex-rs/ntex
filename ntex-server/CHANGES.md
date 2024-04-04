@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.6] - 2024-04-04
+
+* Create System if not set
+
 ## [1.0.5] - 2024-04-02
 
 * Fix external configuration handling
