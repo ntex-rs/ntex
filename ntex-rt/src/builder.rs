@@ -135,6 +135,29 @@ impl SystemRunner {
             Err(_) => unreachable!(),
         }
     }
+
+    #[cfg(feature = "tokio")]
+    /// Execute a future and wait for result.
+    pub async fn run_local<F, R>(self, fut: F) -> R
+    where
+        F: Future<Output = R> + 'static,
+        R: 'static,
+    {
+        let SystemRunner {
+            arb,
+            arb_controller,
+            ..
+        } = self;
+
+        // run loop
+        tok_io::task::LocalSet::new()
+            .run_until(async move {
+                let _ = crate::spawn(arb);
+                let _ = crate::spawn(arb_controller);
+                fut.await
+            })
+            .await
+    }
 }
 
 pub struct BlockResult<T>(Rc<RefCell<Option<T>>>);
