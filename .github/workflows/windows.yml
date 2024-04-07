@@ -63,21 +63,21 @@ jobs:
 
       - name: Run tests
         run: |
-          cargo test --lib --all-features --no-fail-fast -- --nocapture \
-            --skip test_panic_in_worker \
-            --skip test_connection_force_close \
-            --skip test_connection_server_close \
-            --skip test_freeze \
-            --skip test_simple \
-            --skip test_test_methods \
-            --skip test_connection_wait_queue_force_close \
-            --skip test_params \
-            --skip test_body \
-            --skip test_form \
-            --skip test_json \
-            --skip test_connection_reuse \
-            --skip test_connection_wait_queue \
-            --skip test_no_decompress \
-            --skip test_connection_reuse_h2 \
-            --skip test_h2_tcp \
+          cargo test --lib --all-features --no-fail-fast -- --nocapture
+            --skip test_panic_in_worker
+            --skip test_connection_force_close
+            --skip test_connection_server_close
+            --skip test_freeze
+            --skip test_simple
+            --skip test_test_methods
+            --skip test_connection_wait_queue_force_close
+            --skip test_params
+            --skip test_body
+            --skip test_form
+            --skip test_json
+            --skip test_connection_reuse
+            --skip test_connection_wait_queue
+            --skip test_no_decompress
+            --skip test_connection_reuse_h2
+            --skip test_h2_tcp
             --skip test_timer
