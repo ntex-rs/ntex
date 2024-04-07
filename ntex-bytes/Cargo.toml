@@ -30,4 +30,4 @@ simdutf8 = { version = "0.1.4", optional = true }
 serde_test = "1"
 serde_json = "1"
 ntex = { version = "1", features = ["tokio"] }
-ntex-bytes = { version = "*", features = ["mpool"] }
+ntex-bytes = { path = ".", features = ["mpool"] }

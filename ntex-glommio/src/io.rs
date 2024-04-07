@@ -203,9 +203,10 @@ impl Future for WriteTask {
                                 Poll::Ready(Ok(())) => {
                                     let io = this.io.clone();
                                     let fut = Box::pin(async move {
-                                        io.0.borrow()
-                                            .shutdown(std::net::Shutdown::Write)
-                                            .await
+                                        let fut =
+                                            io.0.borrow()
+                                                .shutdown(std::net::Shutdown::Write);
+                                        fut.await
                                     });
                                     *st = Shutdown::Close(fut);
                                     continue;
@@ -511,9 +512,10 @@ impl Future for UnixWriteTask {
                                 Poll::Ready(Ok(())) => {
                                     let io = this.io.clone();
                                     let fut = Box::pin(async move {
-                                        io.0.borrow()
-                                            .shutdown(std::net::Shutdown::Write)
-                                            .await
+                                        let fut =
+                                            io.0.borrow()
+                                                .shutdown(std::net::Shutdown::Write);
+                                        fut.await
                                     });
                                     *st = Shutdown::Close(fut);
                                     continue;
