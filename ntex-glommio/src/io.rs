@@ -206,7 +206,7 @@ impl Future for WriteTask {
                                     let fut = Box::pin(async move {
                                         io.0.borrow()
                                             .shutdown(std::net::Shutdown::Write)
-                                            .await;
+                                            .await
                                     });
                                     *st = Shutdown::Close(fut);
                                     continue;
