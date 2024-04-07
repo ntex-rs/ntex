@@ -13,19 +13,15 @@ jobs:
         with:
           tool-cache: true
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install Rust
         run: rustup update nightly
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Generate Cargo.lock
-        uses: actions-rs/cargo@v1
-        with:
-          command: generate-lockfile
-
-      - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v1.0.1
+        run: cargo generate-lockfile
 
       - name: Clean coverage results
         run: cargo llvm-cov clean --workspace
@@ -40,7 +36,7 @@ jobs:
         run: cargo +nightly llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           files: lcov.info
           fail_ci_if_error: true

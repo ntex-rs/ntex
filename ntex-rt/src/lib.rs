@@ -140,6 +140,7 @@ mod glommio {
 
     /// Blocking operation completion future. It resolves with results
     /// of blocking function execution.
+    #[allow(clippy::type_complexity)]
     pub struct JoinHandle<T> {
         fut:
             Either<task::JoinHandle<T>, Pin<Box<dyn Future<Output = Result<T, Canceled>>>>>,
