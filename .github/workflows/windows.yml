@@ -62,7 +62,7 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
       - name: Run tests
-        run: |
+        run: >
           cargo test --lib --all-features --no-fail-fast -- --nocapture
             --skip test_panic_in_worker
             --skip test_connection_force_close
