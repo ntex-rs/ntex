@@ -147,11 +147,7 @@ impl<T: ResourcePath> Path<T> {
     /// If keyed parameter is not available empty string is used as default
     /// value.
     pub fn query(&self, key: &str) -> &str {
-        if let Some(s) = self.get(key) {
-            s
-        } else {
-            ""
-        }
+        self.get(key).unwrap_or_default()
     }
 
     /// Return iterator to items in parameter container

@@ -2,7 +2,7 @@ use std::borrow::{Borrow, BorrowMut};
 use std::ops::{Deref, DerefMut, RangeBounds};
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
-use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice, usize};
+use std::{cmp, fmt, hash, mem, ptr, ptr::NonNull, slice};
 
 use crate::pool::{PoolId, PoolRef};
 use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut};

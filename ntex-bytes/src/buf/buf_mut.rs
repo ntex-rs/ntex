@@ -1,4 +1,4 @@
-use std::{cmp, mem, ptr, usize};
+use std::{cmp, mem, ptr};
 
 use super::{UninitSlice, Writer};
 
