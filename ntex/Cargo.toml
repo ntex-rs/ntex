@@ -17,7 +17,7 @@ license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [package.metadata.docs.rs]
-features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws"]
+features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "brotli"]
 
 [lib]
 name = "ntex"
