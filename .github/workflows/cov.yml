@@ -36,7 +36,7 @@ jobs:
         run: cargo +nightly llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-tokio|ntex-glommio|ntex-async-std"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v3
         with:
           files: lcov.info
           fail_ci_if_error: true
