@@ -53,12 +53,12 @@ jobs:
         continue-on-error: true
         run: |
           cd ntex
-          cargo test --no-default-features --no-fail-fast --features="async-std,cookie,url,compress,openssl,rustls,ws"
+          cargo test --no-default-features --no-fail-fast --features="async-std,cookie,url,compress,openssl,rustls,ws,brotli"
 
       - name: Install cargo-cache
         continue-on-error: true
         run: |
-          cargo install cargo-cache --version 0.6.2 --no-default-features --features ci-autoclean
+          cargo install cargo-cache --no-default-features --features ci-autoclean
 
       - name: Clear the cargo caches
         continue-on-error: true
