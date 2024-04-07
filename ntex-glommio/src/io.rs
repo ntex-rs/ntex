@@ -202,11 +202,11 @@ impl Future for WriteTask {
                             match this.state.with_buf(|buf| flush_io(&mut *io, buf, cx)) {
                                 Poll::Ready(Ok(())) => {
                                     let io = this.io.clone();
+                                    #[allow(clippy::await_holding_refcell_ref)]
                                     let fut = Box::pin(async move {
-                                        let fut =
-                                            io.0.borrow()
-                                                .shutdown(std::net::Shutdown::Write);
-                                        fut.await
+                                        io.0.borrow()
+                                            .shutdown(std::net::Shutdown::Write)
+                                            .await;
                                     });
                                     *st = Shutdown::Close(fut);
                                     continue;
@@ -511,11 +511,11 @@ impl Future for UnixWriteTask {
                             match this.state.with_buf(|buf| flush_io(&mut *io, buf, cx)) {
                                 Poll::Ready(Ok(())) => {
                                     let io = this.io.clone();
+                                    #[allow(clippy::await_holding_refcell_ref)]
                                     let fut = Box::pin(async move {
-                                        let fut =
-                                            io.0.borrow()
-                                                .shutdown(std::net::Shutdown::Write);
-                                        fut.await
+                                        io.0.borrow()
+                                            .shutdown(std::net::Shutdown::Write)
+                                            .await
                                     });
                                     *st = Shutdown::Close(fut);
                                     continue;
