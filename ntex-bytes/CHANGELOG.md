@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.27] (2024-04-08)
+
+* Move more code under mpool feature
+
 ## [0.1.26] (2024-04-04)
 
 * Make memory pools optional

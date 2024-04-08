@@ -1592,6 +1592,7 @@ impl BytesMut {
         self.chunk().iter()
     }
 
+    #[cfg(feature = "mpool")]
     pub(crate) fn move_to_pool(&mut self, pool: PoolRef) {
         self.inner.move_to_pool(pool);
     }
@@ -2417,6 +2418,7 @@ impl BytesVec {
         self.chunk().iter()
     }
 
+    #[cfg(feature = "mpool")]
     pub(crate) fn move_to_pool(&mut self, pool: PoolRef) {
         self.inner.move_to_pool(pool);
     }
@@ -2686,6 +2688,7 @@ impl InnerVec {
         }
     }
 
+    #[cfg(feature = "mpool")]
     #[inline]
     fn move_to_pool(&mut self, pool: PoolRef) {
         unsafe {
@@ -3102,6 +3105,7 @@ impl Inner {
         }
     }
 
+    #[cfg(feature = "mpool")]
     #[inline]
     fn move_to_pool(&mut self, pool: PoolRef) {
         let kind = self.kind();
