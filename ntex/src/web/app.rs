@@ -592,12 +592,10 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for Filter<Err> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::header::{self, HeaderValue};
-    use crate::http::{Method, StatusCode};
-    use crate::service::fn_service;
-    use crate::util::{Bytes, Ready};
+    use crate::http::{header, header::HeaderValue, Method, StatusCode};
     use crate::web::test::{call_service, init_service, read_body, TestRequest};
     use crate::web::{self, middleware::DefaultHeaders, HttpRequest, HttpResponse};
+    use crate::{service::fn_service, util::Ready};
 
     #[crate::rt_test]
     async fn test_default_resource() {
@@ -775,6 +773,8 @@ mod tests {
     #[cfg(feature = "url")]
     #[crate::rt_test]
     async fn test_external_resource() {
+        use crate::util::Bytes;
+
         let srv = init_service(
             App::new()
                 .external_resource("youtube", "https://youtube.com/watch/{video_id}")

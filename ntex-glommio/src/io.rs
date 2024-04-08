@@ -202,6 +202,7 @@ impl Future for WriteTask {
                             match this.state.with_buf(|buf| flush_io(&mut *io, buf, cx)) {
                                 Poll::Ready(Ok(())) => {
                                     let io = this.io.clone();
+                                    #[allow(clippy::await_holding_refcell_ref)]
                                     let fut = Box::pin(async move {
                                         io.0.borrow()
                                             .shutdown(std::net::Shutdown::Write)
@@ -510,6 +511,7 @@ impl Future for UnixWriteTask {
                             match this.state.with_buf(|buf| flush_io(&mut *io, buf, cx)) {
                                 Poll::Ready(Ok(())) => {
                                     let io = this.io.clone();
+                                    #[allow(clippy::await_holding_refcell_ref)]
                                     let fut = Box::pin(async move {
                                         io.0.borrow()
                                             .shutdown(std::net::Shutdown::Write)
