@@ -1,4 +1,4 @@
-use std::{io::Result, net, net::SocketAddr, path::Path};
+use std::{io::Result, net, net::SocketAddr};
 
 use ntex_bytes::PoolRef;
 use ntex_io::Io;
@@ -32,7 +32,7 @@ pub async fn tcp_connect_in(addr: SocketAddr, pool: PoolRef) -> Result<Io> {
 /// Opens a unix stream connection.
 pub async fn unix_connect<'a, P>(addr: P) -> Result<Io>
 where
-    P: AsRef<Path> + 'a,
+    P: AsRef<std::path::Path> + 'a,
 {
     let sock = tokio::net::UnixStream::connect(addr).await?;
     Ok(Io::new(UnixStream(sock)))
@@ -42,7 +42,7 @@ where
 /// Opens a unix stream connection and specified memory pool.
 pub async fn unix_connect_in<'a, P>(addr: P, pool: PoolRef) -> Result<Io>
 where
-    P: AsRef<Path> + 'a,
+    P: AsRef<std::path::Path> + 'a,
 {
     let sock = tokio::net::UnixStream::connect(addr).await?;
     Ok(Io::with_memory_pool(UnixStream(sock), pool))
