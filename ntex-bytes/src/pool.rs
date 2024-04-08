@@ -1,8 +1,11 @@
 #![allow(clippy::type_complexity)]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+#[cfg(feature = "mpool")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::task::{Context, Poll};
 use std::{cell::Cell, cell::RefCell, fmt, future::Future, pin::Pin, ptr, rc::Rc};
 
+#[cfg(feature = "mpool")]
 use futures_core::task::__internal::AtomicWaker;
 
 use crate::{BufMut, BytesMut, BytesVec};
@@ -35,7 +38,9 @@ bitflags::bitflags! {
 
 struct MemoryPool {
     id: PoolId,
+    #[cfg(feature = "mpool")]
     waker: AtomicWaker,
+    #[cfg(feature = "mpool")]
     waker_alive: AtomicBool,
     #[cfg(feature = "mpool")]
     waiters: RefCell<mpool::Waiters>,
@@ -188,13 +193,15 @@ impl PoolRef {
     }
 
     #[inline]
-    pub fn move_in(self, buf: &mut BytesMut) {
-        buf.move_to_pool(self);
+    pub fn move_in(self, _buf: &mut BytesMut) {
+        #[cfg(feature = "mpool")]
+        _buf.move_to_pool(self);
     }
 
     #[inline]
-    pub fn move_vec_in(self, buf: &mut BytesVec) {
-        buf.move_to_pool(self);
+    pub fn move_vec_in(self, _buf: &mut BytesVec) {
+        #[cfg(feature = "mpool")]
+        _buf.move_to_pool(self);
     }
 
     #[inline]
@@ -361,21 +368,28 @@ impl PoolRef {
     }
 
     #[inline]
-    pub(crate) fn acquire(self, size: usize) {
-        let prev = self.0.size.fetch_add(size, Relaxed);
-        if self.0.waker_alive.load(Relaxed) {
-            self.wake_driver(prev + size)
+    pub(crate) fn acquire(self, _size: usize) {
+        #[cfg(feature = "mpool")]
+        {
+            let prev = self.0.size.fetch_add(_size, Relaxed);
+            if self.0.waker_alive.load(Relaxed) {
+                self.wake_driver(prev + _size)
+            }
         }
     }
 
     #[inline]
-    pub(crate) fn release(self, size: usize) {
-        let prev = self.0.size.fetch_sub(size, Relaxed);
-        if self.0.waker_alive.load(Relaxed) {
-            self.wake_driver(prev - size)
+    pub(crate) fn release(self, _size: usize) {
+        #[cfg(feature = "mpool")]
+        {
+            let prev = self.0.size.fetch_sub(_size, Relaxed);
+            if self.0.waker_alive.load(Relaxed) {
+                self.wake_driver(prev - _size)
+            }
         }
     }
 
+    #[cfg(feature = "mpool")]
     fn wake_driver(self, allocated: usize) {
         let l = self.0.window_l.get();
         let h = self.0.window_h.get();
@@ -428,7 +442,9 @@ impl MemoryPool {
     fn create(id: PoolId) -> &'static MemoryPool {
         Box::leak(Box::new(MemoryPool {
             id,
+            #[cfg(feature = "mpool")]
             waker: AtomicWaker::new(),
+            #[cfg(feature = "mpool")]
             waker_alive: AtomicBool::new(false),
             #[cfg(feature = "mpool")]
             waiters: RefCell::new(mpool::Waiters::new()),
