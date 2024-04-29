@@ -263,6 +263,10 @@ where
                 Connector::default()
                     .timeout(Millis(30_000))
                     .openssl(builder.build())
+                    .configure_http2(|cfg| {
+                        cfg.max_header_list_size(256 * 1024);
+                        cfg.max_header_continuation_frames(96);
+                    })
                     .finish()
             }
             #[cfg(not(feature = "openssl"))]
