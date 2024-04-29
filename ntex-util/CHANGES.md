@@ -1,8 +1,8 @@
 # Changes
 
-## [1.1.0] - 2024-03-xx
+## [1.1.0] - 2024-04-xx
 
-* Added server worker's management utils
+* Change Extensions::insert() method according doc #345
 
 ## [1.0.1] - 2024-01-19
 
@@ -12,7 +12,7 @@
 
 * Release
 
-## [1.0.0-b.1] - 2024-01-xx
+## [1.0.0-b.1] - 2024-01-08
 
 * Remove unnecessary 'static
 
