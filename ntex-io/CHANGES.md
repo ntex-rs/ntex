@@ -1,5 +1,11 @@
 # Changes
 
+## [1.1.0] - 2024-05-01
+
+* Add IoRef::notify_timeout() helper method
+
+* Fix KeepAlive timeout handling in default dispatcher
+
 ## [1.0.2] - 2024-03-31
 
 * Add IoRef::is_wr_backpressure() method

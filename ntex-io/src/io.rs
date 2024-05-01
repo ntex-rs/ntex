@@ -93,13 +93,12 @@ impl IoState {
     }
 
     pub(super) fn notify_timeout(&self) {
-        log::trace!("{}: Timeout, notify dispatcher", self.tag.get());
-
         let mut flags = self.flags.get();
         if !flags.contains(Flags::DSP_TIMEOUT) {
             flags.insert(Flags::DSP_TIMEOUT);
             self.flags.set(flags);
             self.dispatch_task.wake();
+            log::trace!("{}: Timer, notify dispatcher", self.tag.get());
         }
     }
 

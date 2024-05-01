@@ -575,15 +575,19 @@ where
                         self.shared.io.tag()
                     );
                 }
-                return Err(DispatchItem::ReadTimeout);
+                Err(DispatchItem::ReadTimeout)
+            } else {
+                Ok(())
             }
+        } else if self.flags.contains(Flags::KA_TIMEOUT) {
+            log::trace!(
+                "{}: Keep-alive error, stopping dispatcher",
+                self.shared.io.tag()
+            );
+            Err(DispatchItem::KeepAliveTimeout)
+        } else {
+            Ok(())
         }
-
-        log::trace!(
-            "{}: Keep-alive error, stopping dispatcher",
-            self.shared.io.tag()
-        );
-        Err(DispatchItem::KeepAliveTimeout)
     }
 }
 
