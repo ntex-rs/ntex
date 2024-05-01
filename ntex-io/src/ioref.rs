@@ -229,6 +229,12 @@ impl IoRef {
     }
 
     #[inline]
+    /// wakeup dispatcher and send keep-alive error
+    pub fn notify_timeout(&self) {
+        self.0.notify_timeout()
+    }
+
+    #[inline]
     /// Start timer
     pub fn start_timer(&self, timeout: Seconds) -> timer::TimerHandle {
         let cur_hnd = self.0.timeout.get();
