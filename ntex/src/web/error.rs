@@ -713,6 +713,12 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
         let resp = WebResponseError::<DefaultError>::error_response(
+            &TimeoutError::<UrlencodedError>::Service(UrlencodedError::Chunked),
+            &req,
+        );
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let resp = WebResponseError::<DefaultError>::error_response(
             &SendRequestError::Connect(ConnectError::Timeout),
             &req,
         );
