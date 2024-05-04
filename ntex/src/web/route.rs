@@ -372,5 +372,13 @@ mod tests {
 
         let body = read_body(resp).await;
         assert_eq!(body, Bytes::from_static(b"{\"name\":\"test\"}"));
+
+        let route: web::Route<DefaultError> =
+            web::get().to(|| async { HttpResponse::Ok() });
+        let repr = format!("{:?}", route);
+        assert!(repr.contains("Route"));
+        assert!(repr.contains("handler: Handler(\"ntex::web::route::tests::test_route::{{closure}}::{{closure}}\")"));
+        assert!(repr.contains("methods: [GET]"));
+        assert!(repr.contains("guards: AllGuard()"));
     }
 }
