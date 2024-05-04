@@ -679,6 +679,7 @@ mod tests {
     use std::io;
 
     use super::*;
+    use crate::http;
     use crate::http::client::error::{ConnectError, SendRequestError};
     use crate::web::test::TestRequest;
 
@@ -761,6 +762,10 @@ mod tests {
 
         #[allow(invalid_from_utf8)]
         let err = std::str::from_utf8(b"\xF0").unwrap_err();
+        let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let err = http::error::PayloadError::EncodingCorrupted;
         let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
