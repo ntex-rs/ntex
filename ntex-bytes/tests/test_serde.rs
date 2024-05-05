@@ -1,4 +1,3 @@
-#![cfg(feature = "serde")]
 #![deny(warnings, rust_2018_idioms)]
 
 use serde_test::{assert_tokens, Token};
