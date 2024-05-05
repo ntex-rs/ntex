@@ -278,6 +278,8 @@ array_routes!(12, a, b, c, d, e, f, g, h, i, j, k, l);
 
 #[cfg(test)]
 mod tests {
+    use ntex_service::ServiceFactory;
+
     use crate::http::{header, Method, StatusCode};
     use crate::time::{sleep, Millis};
     use crate::util::Bytes;
@@ -372,5 +374,23 @@ mod tests {
 
         let body = read_body(resp).await;
         assert_eq!(body, Bytes::from_static(b"{\"name\":\"test\"}"));
+
+        let route: web::Route<DefaultError> = web::get();
+        let repr = format!("{:?}", route);
+        assert!(repr.contains("Route"));
+        assert!(repr
+            .contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
+        assert!(repr.contains("methods: [GET]"));
+        assert!(repr.contains("guards: AllGuard()"));
+
+        assert!(route.create(()).await.is_ok());
+
+        let route_service = route.service();
+        let repr = format!("{:?}", route_service);
+        assert!(repr.contains("RouteService"));
+        assert!(repr
+            .contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
+        assert!(repr.contains("methods: [GET]"));
+        assert!(repr.contains("guards: AllGuard()"));
     }
 }
