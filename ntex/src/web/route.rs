@@ -278,6 +278,8 @@ array_routes!(12, a, b, c, d, e, f, g, h, i, j, k, l);
 
 #[cfg(test)]
 mod tests {
+    use ntex_service::ServiceFactory;
+
     use crate::http::{header, Method, StatusCode};
     use crate::time::{sleep, Millis};
     use crate::util::Bytes;
@@ -377,6 +379,15 @@ mod tests {
             web::get().to(|| async { HttpResponse::Ok() });
         let repr = format!("{:?}", route);
         assert!(repr.contains("Route"));
+        assert!(repr.contains("handler: Handler(\"ntex::web::route::tests::test_route::{{closure}}::{{closure}}\")"));
+        assert!(repr.contains("methods: [GET]"));
+        assert!(repr.contains("guards: AllGuard()"));
+
+        assert!(route.create(()).await.is_ok());
+
+        let route_service = route.service();
+        let repr = format!("{:?}", route_service);
+        assert!(repr.contains("RouteService"));
         assert!(repr.contains("handler: Handler(\"ntex::web::route::tests::test_route::{{closure}}::{{closure}}\")"));
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
