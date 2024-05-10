@@ -176,6 +176,52 @@ mod tests {
     }
 
     #[crate::rt_test]
+    async fn response_payload_limit() {
+        let builder = ClientBuilder::default();
+        assert_eq!(builder.config.response_pl_limit, 262_144);
+
+        let builder = builder.response_payload_limit(10);
+        assert_eq!(builder.config.response_pl_limit, 10);
+    }
+
+    #[crate::rt_test]
+    async fn response_payload_timeout() {
+        let builder = ClientBuilder::default();
+        assert_eq!(builder.config.response_pl_timeout, Millis(10_000));
+
+        let builder = builder.response_payload_timeout(Millis(10));
+        assert_eq!(builder.config.response_pl_timeout, Millis(10));
+    }
+
+    #[crate::rt_test]
+    async fn valid_header_name() {
+        let builder = ClientBuilder::new().header("Content-Length", 1);
+        assert!(builder.config.headers.contains_key("Content-Length"));
+    }
+
+    #[crate::rt_test]
+    async fn invalid_header_name() {
+        let builder = ClientBuilder::new().header("no valid header name", 1);
+        assert!(!builder.config.headers.contains_key("no valid header name"));
+    }
+
+    #[crate::rt_test]
+    async fn valid_header_value() {
+        let valid_header_value = HeaderValue::from(1234);
+        let builder = ClientBuilder::new().header("Content-Length", &valid_header_value);
+        assert_eq!(
+            builder.config.headers.get("Content-Length"),
+            Some(&valid_header_value)
+        );
+    }
+
+    #[crate::rt_test]
+    async fn invalid_header_value() {
+        let builder = ClientBuilder::new().header("Content-Length", "\n");
+        assert!(!builder.config.headers.contains_key("Content-Length"));
+    }
+
+    #[crate::rt_test]
     async fn client_basic_auth() {
         let client = ClientBuilder::new().basic_auth("username", Some("password"));
         assert_eq!(
