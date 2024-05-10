@@ -227,7 +227,22 @@ mod tests {
         let m = Millis::from(Duration::from_secs(1));
         assert_eq!(m.0, 1000);
 
+        let m = Millis::from(Duration::from_secs(u64::MAX));
+        assert_eq!(m.0, 2_147_483_648);
+
+        let m = Millis::from_secs(1);
+        assert_eq!(m.0, 1000);
+
+        let m = Millis(0);
+        assert_eq!(m.map(|m| m + Millis(1)), None);
+
+        let m = Millis(1);
+        assert_eq!(m.map(|m| m + Millis(1)), Some(Millis(2)));
+
         let s = Seconds::new(10);
+        assert_eq!(s.0, 10);
+
+        let s = Seconds::checked_new(10);
         assert_eq!(s.0, 10);
 
         let s = Seconds::checked_new(u16::MAX as usize + 10);
@@ -247,5 +262,8 @@ mod tests {
 
         assert_eq!(Seconds(0).map(|_| 1usize), None);
         assert_eq!(Seconds(2).map(|_| 1usize), Some(1));
+
+        let d = Duration::from(Seconds(100));
+        assert_eq!(d.as_secs(), 100);
     }
 }
