@@ -1,5 +1,11 @@
 # Changes
 
+## [1.2.0] - 2024-05-12
+
+* Better write back-pressure handling
+
+* Dispatcher optimization for handling first item
+
 ## [1.1.0] - 2024-05-01
 
 * Add IoRef::notify_timeout() helper method

@@ -32,6 +32,9 @@ pub use self::tasks::{ReadContext, WriteContext};
 pub use self::timer::TimerHandle;
 pub use self::utils::{seal, Decoded};
 
+#[doc(hidden)]
+pub use self::io::Flags;
+
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {
