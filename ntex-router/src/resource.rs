@@ -710,6 +710,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::mutable_key_type)]
     fn test_def() {
         let re = ResourceDef::new("/user/-{id}*");
         assert_eq!(re, ResourceDef::from("/user/-{id}*"));

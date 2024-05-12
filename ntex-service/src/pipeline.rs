@@ -176,6 +176,7 @@ where
         // SAFETY: `svc_call` has same lifetime same as lifetime of `pl.svc`
         // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
         // `svc_call` get resolved to result
+        #[allow(clippy::missing_transmute_annotations)]
         let fut = unsafe { std::mem::transmute(svc_call) };
 
         PipelineCallState::Call { fut }
