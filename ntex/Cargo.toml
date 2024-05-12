@@ -67,7 +67,7 @@ ntex-bytes = "0.1.25"
 ntex-server = "1.0.5"
 ntex-h2 = "0.5.4"
 ntex-rt = "0.4.12"
-ntex-io = "1.1.0"
+ntex-io = "1.2.0"
 ntex-net = "1.0.1"
 ntex-tls = "1.1.0"
 
