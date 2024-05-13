@@ -163,3 +163,74 @@ impl AcceptEncoding {
         ContentEncoding::Identity
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use super::*;
+
+    #[test]
+    fn test_accepting_encodings_equal() {
+        let accepting_encoding = AcceptEncoding {
+            encoding: ContentEncoding::Auto,
+            quality: 0.0,
+        };
+        let accepting_encoding2 = AcceptEncoding {
+            encoding: ContentEncoding::Br,
+            quality: 0.0,
+        };
+
+        assert!(accepting_encoding == accepting_encoding2);
+    }
+
+    #[test]
+    fn test_accepting_encodings_not_equal() {
+        let accepting_encoding = AcceptEncoding {
+            encoding: ContentEncoding::Auto,
+            quality: 1.0,
+        };
+        let accepting_encoding2 = AcceptEncoding {
+            encoding: ContentEncoding::Br,
+            quality: 0.0,
+        };
+
+        assert!(accepting_encoding != accepting_encoding2);
+    }
+
+    #[test]
+    fn test_accepting_encodings_cmp_order_less() {
+        let accepting_encoding = AcceptEncoding {
+            encoding: ContentEncoding::Auto,
+            quality: 1.0,
+        };
+        let accepting_encoding2 = AcceptEncoding {
+            encoding: ContentEncoding::Br,
+            quality: 0.0,
+        };
+
+        assert_eq!(accepting_encoding.cmp(&accepting_encoding2), Ordering::Less);
+    }
+
+    #[test]
+    fn test_accepting_encodings_cmp_order_equal() {
+        let accepting_encoding = AcceptEncoding {
+            encoding: ContentEncoding::Auto,
+            quality: 1.0,
+        };
+
+        assert_eq!(accepting_encoding.cmp(&accepting_encoding), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_accepting_encoding_from_tag_with_valid_quality() {
+        let accepting_encoding = AcceptEncoding::new("gzip;0.8").unwrap();
+        assert_eq!(accepting_encoding.quality, 0.8);
+    }
+
+    #[test]
+    fn test_accepting_encoding_from_tag_with_invalid_quality() {
+        let accepting_encoding = AcceptEncoding::new("gzip;q=abc").unwrap();
+        assert_eq!(accepting_encoding.quality, 0.0);
+    }
+}

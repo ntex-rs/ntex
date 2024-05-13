@@ -454,6 +454,13 @@ mod tests {
         dl.reset(Millis::ZERO);
         assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
 
+        let mut dl = deadline(Millis(1));
+        dl.reset(Millis(100));
+        let first_time = now();
+        dl.await;
+        let second_time = now();
+        assert!(second_time - first_time >= time::Duration::from_millis(100));
+
         let mut dl = deadline(Millis(0));
         assert!(dl.is_elapsed());
         dl.reset(Millis(1));

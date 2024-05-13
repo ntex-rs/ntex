@@ -176,6 +176,18 @@ mod tests {
     }
 
     #[crate::rt_test]
+    #[should_panic(expected = "Cannot create header name")]
+    async fn test_invalid_header_name() {
+        DefaultHeaders::new().header("no existing header name", "0001");
+    }
+
+    #[crate::rt_test]
+    #[should_panic(expected = "Cannot create header value")]
+    async fn test_invalid_header_value() {
+        DefaultHeaders::new().header(CONTENT_TYPE, "\n");
+    }
+
+    #[crate::rt_test]
     async fn test_content_type() {
         let srv = |req: WebRequest<DefaultError>| async move {
             Ok::<_, Error>(req.into_response(HttpResponse::Ok().finish()))
