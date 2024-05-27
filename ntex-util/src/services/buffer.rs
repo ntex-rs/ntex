@@ -1,9 +1,9 @@
 //! Service that buffers incomming requests.
 use std::cell::{Cell, RefCell};
-use std::task::{ready, Context, Poll};
-use std::{collections::VecDeque, fmt, marker::PhantomData};
+use std::task::{ready, Poll};
+use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
 
-use ntex_service::{IntoService, Middleware, Service, ServiceCtx};
+use ntex_service::{Middleware, Service, ServiceCtx};
 
 use crate::channel::oneshot;
 
@@ -121,15 +121,12 @@ impl<R, S> BufferService<R, S>
 where
     S: Service<R>,
 {
-    pub fn new<U>(size: usize, service: U) -> Self
-    where
-        U: IntoService<S, R>,
-    {
+    pub fn new(size: usize, service: S) -> Self {
         Self {
             size,
+            service,
             cancel_on_shutdown: false,
             ready: Cell::new(false),
-            service: service.into_service(),
             buf: RefCell::new(VecDeque::with_capacity(size)),
             next_call: RefCell::default(),
             _t: PhantomData,
@@ -185,7 +182,7 @@ where
     type Error = BufferServiceError<S::Error>;
 
     #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         let mut buffer = self.buf.borrow_mut();
         let mut next_call = self.next_call.borrow_mut();
         if let Some(next_call) = &*next_call {
@@ -220,42 +217,45 @@ where
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(&self, cx: &mut std::task::Context<'_>) -> Poll<()> {
-        let mut buffer = self.buf.borrow_mut();
-        if self.cancel_on_shutdown {
-            buffer.clear();
-        } else if !buffer.is_empty() {
-            let mut next_call = self.next_call.borrow_mut();
-            if let Some(next_call) = &*next_call {
-                // hold advancement until the last released task either makes a call or is dropped
-                let _ = ready!(next_call.poll_recv(cx));
-            }
-            next_call.take();
-
-            if ready!(self.service.poll_ready(cx)).is_err() {
-                log::error!(
-                    "Buffered inner service failed while buffer flushing on shutdown"
-                );
-                return Poll::Ready(());
-            }
-
-            while let Some(sender) = buffer.pop_front() {
-                let (next_call_tx, next_call_rx) = oneshot::channel();
-                if sender.send(next_call_tx).is_err()
-                    || next_call_rx.poll_recv(cx).is_ready()
-                {
-                    // the task is gone
-                    continue;
+    async fn shutdown(&self) {
+        poll_fn(|cx| {
+            let mut buffer = self.buf.borrow_mut();
+            if self.cancel_on_shutdown {
+                buffer.clear();
+            } else if !buffer.is_empty() {
+                let mut next_call = self.next_call.borrow_mut();
+                if let Some(next_call) = &*next_call {
+                    // hold advancement until the last released task either makes a call or is dropped
+                    let _ = ready!(next_call.poll_recv(cx));
                 }
-                next_call.replace(next_call_rx);
-                if buffer.is_empty() {
-                    break;
-                }
-                return Poll::Pending;
-            }
-        }
+                next_call.take();
 
-        self.service.poll_shutdown(cx)
+                if ready!(self.service.poll_ready(cx)).is_err() {
+                    log::error!(
+                        "Buffered inner service failed while buffer flushing on shutdown"
+                    );
+                    return Poll::Ready(());
+                }
+
+                while let Some(sender) = buffer.pop_front() {
+                    let (next_call_tx, next_call_rx) = oneshot::channel();
+                    if sender.send(next_call_tx).is_err()
+                        || next_call_rx.poll_recv(cx).is_ready()
+                    {
+                        // the task is gone
+                        continue;
+                    }
+                    next_call.replace(next_call_rx);
+                    if buffer.is_empty() {
+                        break;
+                    }
+                    return Poll::Pending;
+                }
+            }
+        })
+        .await;
+
+        self.service.shutdown().await;
     }
 
     async fn call(

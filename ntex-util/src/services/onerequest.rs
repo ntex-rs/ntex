@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests to 1.
-use std::{cell::Cell, task::Context, task::Poll};
+use std::{cell::Cell, future::poll_fn, task::Poll};
 
-use ntex_service::{IntoService, Middleware, Service, ServiceCtx};
+use ntex_service::{Middleware, Service, ServiceCtx};
 
 use crate::task::LocalWaker;
 
@@ -30,13 +30,12 @@ pub struct OneRequestService<S> {
 }
 
 impl<S> OneRequestService<S> {
-    pub fn new<U, R>(service: U) -> Self
+    pub fn new<R>(service: S) -> Self
     where
         S: Service<R>,
-        U: IntoService<S, R>,
     {
         Self {
-            service: service.into_service(),
+            service,
             ready: Cell::new(true),
             waker: LocalWaker::new(),
         }
@@ -51,15 +50,18 @@ where
     type Error = T::Error;
 
     #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.waker.register(cx.waker());
-        if self.service.poll_ready(cx)?.is_pending() {
-            Poll::Pending
-        } else if self.ready.get() {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        poll_fn(|cx| {
+            self.waker.register(cx.waker());
+            if self.ready.get() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+
+        ctx.ready(&self.service).await
     }
 
     #[inline]
@@ -76,7 +78,7 @@ where
         result
     }
 
-    ntex_service::forward_poll_shutdown!(service);
+    ntex_service::forward_shutdown!(service);
 }
 
 #[cfg(test)]
@@ -103,7 +105,7 @@ mod tests {
     async fn test_oneshot() {
         let (tx, rx) = oneshot::channel();
 
-        let srv = Pipeline::new(OneRequestService::new(SleepService(rx)));
+        let srv = Pipeline::new(OneRequestService::new(SleepService(rx))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();
@@ -116,7 +118,7 @@ mod tests {
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
+        assert_eq!(srv.shutdown().await, ());
     }
 
     #[ntex_macros::rt_test2]
@@ -133,7 +135,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap();
+        let srv = srv.pipeline(&()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();

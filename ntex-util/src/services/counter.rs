@@ -1,4 +1,4 @@
-use std::{cell::Cell, rc::Rc, task};
+use std::{cell::Cell, future::poll_fn, rc::Rc, task};
 
 use crate::task::LocalWaker;
 
@@ -32,7 +32,20 @@ impl Counter {
 
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub fn available(&self, cx: &mut task::Context<'_>) -> bool {
+    pub async fn available(&self) {
+        poll_fn(|cx| {
+            if self.poll_available(cx) {
+                task::Poll::Ready(())
+            } else {
+                task::Poll::Pending
+            }
+        })
+        .await
+    }
+
+    /// Check if counter is not at capacity. If counter at capacity
+    /// it registers notification for current task.
+    pub fn poll_available(&self, cx: &mut task::Context<'_>) -> bool {
         self.0.available(cx)
     }
 
