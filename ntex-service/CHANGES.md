@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0] - 2024-05-xx
+
+* Use "async fn" in trait for Service::ready() and Service::shutdown() methods
+
 ## [2.0.2] - 2024-03-20
 
 * Add boxed rc service factory

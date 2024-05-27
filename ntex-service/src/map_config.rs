@@ -115,7 +115,6 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_closure)]
 mod tests {
-    use ntex_util::future::Ready;
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
@@ -126,7 +125,7 @@ mod tests {
         let item = Rc::new(Cell::new(1usize));
 
         let factory = map_config(
-            fn_service(|item: usize| Ready::<_, ()>::Ok(item)),
+            fn_service(|item: usize| async move { Ok::<_, ()>(item) }),
             |t: &usize| {
                 item.set(item.get() + *t);
             },
@@ -140,7 +139,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_unit_config() {
-        let _ = unit_config(fn_service(|item: usize| Ready::<_, ()>::Ok(item)))
+        let _ = unit_config(fn_service(|item: usize| async move { Ok::<_, ()>(item) }))
             .clone()
             .create(&10)
             .await;

@@ -1,8 +1,9 @@
 #![allow(clippy::type_complexity)]
 use std::{fmt, future::Future, marker};
 
-use super::ctx::ServiceCtx;
-use super::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
+use super::{
+    IntoService, IntoServiceFactory, Pipeline, Service, ServiceCtx, ServiceFactory,
+};
 
 /// Apply transform function to a service.
 pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
@@ -98,8 +99,15 @@ where
     type Response = Out;
     type Error = Err;
 
-    crate::forward_poll_ready!(service);
-    crate::forward_poll_shutdown!(service);
+    #[inline]
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Err> {
+        self.service.ready().await.map_err(From::from)
+    }
+
+    #[inline]
+    async fn shutdown(&self) {
+        self.service.shutdown().await
+    }
 
     #[inline]
     async fn call(
@@ -199,14 +207,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_util::future::{lazy, Ready};
-    use std::task::Poll;
+    use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{chain, chain_factory};
+    use crate::{chain, chain_factory, fn_factory};
 
-    #[derive(Clone, Debug)]
-    struct Srv;
+    #[derive(Debug, Default, Clone)]
+    struct Srv(Rc<Cell<usize>>);
 
     impl Service<()> for Srv {
         type Response = ();
@@ -214,6 +221,10 @@ mod tests {
 
         async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Ok(())
+        }
+
+        async fn shutdown(&self) {
+            self.0.set(self.0.get() + 1);
         }
     }
 
@@ -228,8 +239,9 @@ mod tests {
 
     #[ntex::test]
     async fn test_call() {
+        let cnt_sht = Rc::new(Cell::new(0));
         let srv = chain(
-            apply_fn(Srv, |req: &'static str, svc| async move {
+            apply_fn(Srv(cnt_sht.clone()), |req: &'static str, svc| async move {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
@@ -237,12 +249,10 @@ mod tests {
         )
         .into_pipeline();
 
-        assert_eq!(
-            lazy(|cx| srv.poll_ready(cx)).await,
-            Poll::Ready(Ok::<_, Err>(()))
-        );
-        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
-        assert_eq!(res, Poll::Ready(()));
+        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 1);
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
@@ -251,7 +261,8 @@ mod tests {
 
     #[ntex::test]
     async fn test_call_chain() {
-        let srv = chain(Srv)
+        let cnt_sht = Rc::new(Cell::new(0));
+        let srv = chain(Srv(cnt_sht.clone()))
             .apply_fn(|req: &'static str, svc| async move {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
@@ -259,12 +270,10 @@ mod tests {
             .clone()
             .into_pipeline();
 
-        assert_eq!(
-            lazy(|cx| srv.poll_ready(cx)).await,
-            Poll::Ready(Ok::<_, Err>(()))
-        );
-        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
-        assert_eq!(res, Poll::Ready(()));
+        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 1);
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
@@ -276,7 +285,7 @@ mod tests {
     async fn test_create() {
         let new_srv = chain_factory(
             apply_fn_factory(
-                || Ready::<_, ()>::Ok(Srv),
+                fn_factory(|| async { Ok::<_, ()>(Srv::default()) }),
                 |req: &'static str, srv| async move {
                     srv.call(()).await.unwrap();
                     Ok((req, ()))
@@ -287,10 +296,7 @@ mod tests {
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
-        assert_eq!(
-            lazy(|cx| srv.poll_ready(cx)).await,
-            Poll::Ready(Ok::<_, Err>(()))
-        );
+        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
@@ -302,7 +308,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_create_chain() {
-        let new_srv = chain_factory(|| Ready::<_, ()>::Ok(Srv))
+        let new_srv = chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
             .apply_fn(|req: &'static str, srv| async move {
                 srv.call(()).await.unwrap();
                 Ok((req, ()))
@@ -311,10 +317,7 @@ mod tests {
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
-        assert_eq!(
-            lazy(|cx| srv.poll_ready(cx)).await,
-            Poll::Ready(Ok::<_, Err>(()))
-        );
+        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());

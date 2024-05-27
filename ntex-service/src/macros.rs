@@ -1,38 +1,35 @@
-/// An implementation of [`poll_ready`] that forwards readiness checks to a field.
+/// An implementation of [`ready`] that forwards readiness checks to a field.
 #[macro_export]
-macro_rules! forward_poll_ready {
+macro_rules! forward_ready {
     ($field:ident) => {
         #[inline]
-        fn poll_ready(
+        async fn ready(
             &self,
-            cx: &mut ::core::task::Context<'_>,
-        ) -> ::core::task::Poll<Result<(), Self::Error>> {
-            self.$field
-                .poll_ready(cx)
+            ctx: $crate::ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
+            ctx.ready(&self.$field)
+                .await
                 .map_err(::core::convert::Into::into)
         }
     };
     ($field:ident, $err:expr) => {
         #[inline]
-        fn poll_ready(
+        async fn ready(
             &self,
-            cx: &mut ::core::task::Context<'_>,
-        ) -> ::core::task::Poll<Result<(), Self::Error>> {
-            self.$field.poll_ready(cx).map_err($err)
+            ctx: $crate::ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
+            ctx.ready(&self.$field).await.map_err($err)
         }
     };
 }
 
-/// An implementation of [`poll_shutdown`] that forwards readiness checks to a field.
+/// An implementation of [`shutdown`] that forwards shutdown checks to a field.
 #[macro_export]
-macro_rules! forward_poll_shutdown {
+macro_rules! forward_shutdown {
     ($field:ident) => {
         #[inline]
-        fn poll_shutdown(
-            &self,
-            cx: &mut ::core::task::Context<'_>,
-        ) -> ::core::task::Poll<()> {
-            self.$field.poll_shutdown(cx)
+        async fn shutdown(&self) {
+            self.$field.shutdown().await
         }
     };
 }
