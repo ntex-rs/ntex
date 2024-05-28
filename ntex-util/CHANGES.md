@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.1] - 2024-05-28
+
+* Re-enable BufferService
+
 ## [2.0.0] - 2024-05-28
 
 * Use async fn for Service::ready() and Service::shutdown()
