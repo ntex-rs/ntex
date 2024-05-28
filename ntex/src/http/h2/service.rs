@@ -209,15 +209,17 @@ where
     type Response = ();
     type Error = DispatchError;
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.config.service.poll_ready(cx).map_err(|e| {
+    #[inline]
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        self.config.service.ready().await.map_err(|e| {
             log::error!("Service readiness error: {:?}", e);
             DispatchError::Service(Box::new(e))
         })
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        self.config.service.poll_shutdown(cx)
+    #[inline]
+    async fn shutdown(&self) {
+        self.config.service.shutdown().await
     }
 
     async fn call(

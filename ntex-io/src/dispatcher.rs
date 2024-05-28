@@ -2,7 +2,6 @@
 #![allow(clippy::let_underscore_future)]
 use std::{cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{Pipeline, PipelineBinding, PipelineCall, Service};
 use ntex_util::{future::Either, ready, spawn, time::Seconds};
@@ -144,7 +143,6 @@ where
     flags: Flags,
     shared: Rc<DispatcherShared<S, U>>,
     response: Option<PipelineCall<S::Response, S::Error>>,
-    pool: Pool,
     cfg: DispatcherConfig,
     read_remains: u32,
     read_remains_prev: u32,
@@ -211,7 +209,6 @@ where
             Flags::KA_ENABLED
         };
 
-        let pool = io.memory_pool().pool();
         let shared = Rc::new(DispatcherShared {
             io,
             codec,
@@ -222,7 +219,6 @@ where
 
         Dispatcher {
             inner: DispatcherInner {
-                pool,
                 shared,
                 flags,
                 cfg: cfg.clone(),
@@ -276,14 +272,6 @@ where
                 slf.shared.handle_result(item, &slf.shared.io, false);
                 slf.response = None;
             }
-        }
-
-        // handle memory pool pressure
-        if slf.pool.poll_ready(cx).is_pending() {
-            slf.flags.remove(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT);
-            slf.shared.io.stop_timer();
-            slf.shared.io.pause();
-            return Poll::Pending;
         }
 
         loop {

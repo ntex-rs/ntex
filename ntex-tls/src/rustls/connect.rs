@@ -38,8 +38,7 @@ impl<T: Address> TlsConnector<T> {
     pub fn memory_pool(self, id: PoolId) -> Self {
         let connector = self
             .connector
-            .into_service()
-            .unwrap()
+            .get_ref()
             .memory_pool(id)
             .into();
         Self {

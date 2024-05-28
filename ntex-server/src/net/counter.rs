@@ -1,4 +1,4 @@
-use std::{cell::Cell, rc::Rc, task};
+use std::{cell::Cell, rc::Rc, task, task::Poll, future::poll_fn};
 
 use ntex_util::task::LocalWaker;
 
@@ -30,8 +30,12 @@ impl Counter {
 
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub(super) fn available(&self, cx: &mut task::Context<'_>) -> bool {
-        self.0.available(cx)
+    pub(super) async fn available(&self) {
+        poll_fn(|cx| if self.0.available(cx) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }).await
     }
 
     /// Get total number of acquired counts

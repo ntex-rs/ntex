@@ -9,12 +9,14 @@ use ntex_util::future::{BoxFuture, Either};
 use super::{Address, Connect, ConnectError, Resolver};
 use crate::tcp_connect_in;
 
-#[derive(Copy)]
+/// Basic tcp stream connector
 pub struct Connector<T> {
     resolver: Resolver<T>,
     pool: PoolRef,
     tag: &'static str,
 }
+
+impl<T> Copy for Connector<T> {}
 
 impl<T> Connector<T> {
     /// Construct new connect service with default dns resolver

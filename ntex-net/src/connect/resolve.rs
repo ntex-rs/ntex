@@ -6,7 +6,6 @@ use ntex_util::future::Either;
 
 use super::{Address, Connect, ConnectError};
 
-#[derive(Copy)]
 /// DNS Resolver Service
 pub struct Resolver<T>(marker::PhantomData<T>);
 
@@ -16,6 +15,8 @@ impl<T> Resolver<T> {
         Resolver(marker::PhantomData)
     }
 }
+
+impl<T> Copy for Resolver<T> {}
 
 impl<T: Address> Resolver<T> {
     /// Lookup ip addresses for provided host

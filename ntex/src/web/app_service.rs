@@ -5,7 +5,7 @@ use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::ServiceChainFactory;
 use crate::service::{fn_service, Middleware, Service, ServiceCtx, ServiceFactory};
-use crate::util::{BoxFuture, Extensions};
+use crate::util::{join, BoxFuture, Extensions};
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
@@ -202,8 +202,8 @@ where
     type Response = WebResponse;
     type Error = T::Error;
 
-    crate::forward_poll_ready!(service);
-    crate::forward_poll_shutdown!(service);
+    crate::forward_ready!(service);
+    crate::forward_shutdown!(service);
 
     async fn call(
         &self,
@@ -294,14 +294,11 @@ where
     type Error = Err::Container;
 
     #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let ready1 = self.filter.poll_ready(cx)?.is_ready();
-        let ready2 = self.routing.poll_ready(cx)?.is_ready();
-        if ready1 && ready2 {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        let (ready1, ready2) =
+            join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
+        ready1?;
+        ready2
     }
 
     async fn call(

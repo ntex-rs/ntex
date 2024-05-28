@@ -5,7 +5,7 @@ use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{chain_factory, dev::ServiceChainFactory, IntoServiceFactory};
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory, Stack};
-use crate::util::Extensions;
+use crate::util::{join, Extensions};
 
 use super::app::Filter;
 use super::config::ServiceConfig;
@@ -486,14 +486,11 @@ where
     type Error = Err::Container;
 
     #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let ready1 = self.filter.poll_ready(cx)?.is_ready();
-        let ready2 = self.routing.poll_ready(cx)?.is_ready();
-        if ready1 && ready2 {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        let (ready1, ready2) =
+            join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
+        ready1?;
+        ready2
     }
 
     async fn call(

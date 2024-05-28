@@ -29,8 +29,7 @@ impl<T: Address> SslConnector<T> {
     pub fn memory_pool(self, id: PoolId) -> Self {
         let connector = self
             .connector
-            .into_service()
-            .expect("Connector has been cloned")
+            .get_ref()
             .memory_pool(id)
             .into();
 
