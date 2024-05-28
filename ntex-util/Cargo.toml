@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "2.0.0"
+version = "2.0.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,8 +18,8 @@ path = "src/lib.rs"
 [dependencies]
 ntex-service = "3.0"
 ntex-rt = "0.4"
-bitflags = "2.4"
-fxhash = "0.2.1"
+bitflags = "2"
+fxhash = "0.2"
 log = "0.4"
 slab = "0.4"
 futures-timer = "3.0"
