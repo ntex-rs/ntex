@@ -29,4 +29,4 @@ pin-project-lite = "0.2"
 rand = "0.8"
 env_logger = "0.11"
 
-ntex = { version = "1", features = ["tokio"] }
+ntex = { version = "2", features = ["tokio"] }

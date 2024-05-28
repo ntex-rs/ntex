@@ -685,7 +685,6 @@ mod tests {
             cfg: DispatcherConfig,
         ) -> (Self, State) {
             let state = Io::new(io);
-            let pool = state.memory_pool().pool();
             state.set_disconnect_timeout(cfg.disconnect_timeout());
             state.set_tag("DBG");
 
@@ -715,7 +714,6 @@ mod tests {
                         read_remains: 0,
                         read_remains_prev: 0,
                         read_max_timeout: Seconds::ZERO,
-                        pool,
                         shared,
                         cfg,
                         flags,

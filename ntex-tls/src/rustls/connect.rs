@@ -141,7 +141,7 @@ mod tests {
             .memory_pool(PoolId::P5)
             .clone();
 
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline(&()).await.unwrap().bind();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv
