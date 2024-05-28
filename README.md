@@ -29,7 +29,7 @@ Starting ntex v0.5 async runtime must be selected as a feature. Available option
 
 ```toml
 [dependencies]
-ntex = { version = "1.0", features = ["tokio"] }
+ntex = { version = "2", features = ["tokio"] }
 ```
 
 ## Documentation & community resources

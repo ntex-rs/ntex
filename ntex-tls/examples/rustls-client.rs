@@ -16,7 +16,7 @@ async fn main() -> io::Result<()> {
         .with_no_client_auth();
 
     // rustls connector
-    let connector = connect::rustls::Connector::new(config.clone());
+    let connector = connect::rustls::TlsConnector::new(config.clone());
 
     //let io = connector.connect("www.rust-lang.org:443").await.unwrap();
     let io = connector.connect("127.0.0.1:8443").await.unwrap();

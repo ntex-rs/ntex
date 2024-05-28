@@ -1,11 +1,11 @@
-use std::{fmt, task::Context, task::Poll, time::Duration};
+use std::{fmt, time::Duration};
 
 use ntex_h2::{self as h2};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::service::{apply_fn, boxed, Service, ServiceCtx};
 use crate::time::{Millis, Seconds};
-use crate::util::{timeout::TimeoutError, timeout::TimeoutService};
+use crate::util::{join, timeout::TimeoutError, timeout::TimeoutService};
 use crate::{http::Uri, io::IoBoxed};
 
 use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
@@ -273,31 +273,20 @@ where
     type Response = <ConnectionPool<T> as Service<Connect>>::Response;
     type Error = ConnectError;
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let ready = self.tcp_pool.poll_ready(cx)?.is_ready();
-        let ready = if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.poll_ready(cx)?.is_ready() && ready
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        if let Some(ref ssl_pool) = self.ssl_pool {
+            let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
+            r1?;
+            r2
         } else {
-            ready
-        };
-        if ready {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
+            ctx.ready(&self.tcp_pool).await
         }
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let tcp_ready = self.tcp_pool.poll_shutdown(cx).is_ready();
-        let ssl_ready = self
-            .ssl_pool
-            .as_ref()
-            .map(|pool| pool.poll_shutdown(cx).is_ready())
-            .unwrap_or(true);
-        if tcp_ready && ssl_ready {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
+    async fn shutdown(&self) {
+        self.tcp_pool.shutdown().await;
+        if let Some(ref ssl_pool) = self.ssl_pool {
+            ssl_pool.shutdown().await;
         }
     }
 
@@ -322,11 +311,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::lazy;
+    use crate::{service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_readiness() {
-        let conn = Connector::default().finish();
+        let conn = Pipeline::new(Connector::default().finish()).bind();
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }

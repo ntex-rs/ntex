@@ -80,7 +80,7 @@ where
         }));
 
         // start pool support future
-        crate::rt::spawn(ConnectionPoolSupport {
+        let _ = crate::rt::spawn(ConnectionPoolSupport {
             connector: connector.clone(),
             inner: inner.clone(),
             waiters: waiters.clone(),
@@ -117,8 +117,13 @@ where
     type Response = Connection;
     type Error = ConnectError;
 
-    crate::forward_poll_ready!(connector);
-    crate::forward_poll_shutdown!(connector);
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        self.connector.ready().await
+    }
+
+    async fn shutdown(&self) {
+        self.connector.shutdown().await
+    }
 
     async fn call(
         &self,
@@ -252,7 +257,7 @@ impl Inner {
                     || (now - conn.created) > self.conn_lifetime
                 {
                     if let ConnectionType::H1(io) = conn.io {
-                        spawn(async move {
+                        let _ = spawn(async move {
                             let _ = io.shutdown().await;
                         });
                     }
@@ -419,7 +424,7 @@ where
         let disconnect_timeout = inner.borrow().disconnect_timeout;
 
         #[allow(clippy::redundant_async_block)]
-        spawn(async move {
+        let _ = spawn(async move {
             OpenConnection::<T> {
                 tx: Some(tx),
                 key: key.clone(),
@@ -576,7 +581,7 @@ impl Acquired {
                 );
                 match io {
                     ConnectionType::H1(io) => {
-                        spawn(async move {
+                        let _ = spawn(async move {
                             let _ = io.shutdown().await;
                         });
                     }
@@ -634,7 +639,8 @@ mod tests {
                 h2::Config::client(),
             )
             .clone(),
-        );
+        )
+        .bind();
 
         // uri must contain authority
         let req = Connect {

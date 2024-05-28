@@ -18,7 +18,8 @@
     clippy::borrow_interior_mutable_const,
     clippy::needless_doctest_main,
     clippy::too_many_arguments,
-    clippy::new_without_default
+    clippy::new_without_default,
+    clippy::let_underscore_future
 )]
 
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
@@ -27,7 +28,7 @@ pub use ntex_macros::{rt_main as main, rt_test as test};
 #[cfg(test)]
 pub(crate) use ntex_macros::rt_test2 as rt_test;
 
-pub use ntex_service::{forward_poll_ready, forward_poll_shutdown};
+pub use ntex_service::{forward_ready, forward_shutdown};
 
 pub mod http;
 pub mod web;
@@ -36,8 +37,8 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    chain, chain_factory, fn_service, into_service, IntoService, IntoServiceFactory,
-    Middleware, Pipeline, Service, ServiceCtx, ServiceFactory,
+    chain, chain_factory, fn_service, IntoService, IntoServiceFactory, Middleware,
+    Pipeline, Service, ServiceCtx, ServiceFactory,
 };
 
 pub use ntex_util::{channel, task};
@@ -54,19 +55,11 @@ pub mod connect {
     #[cfg(feature = "openssl")]
     pub mod openssl {
         pub use ntex_tls::openssl::{SslConnector, SslFilter};
-
-        #[doc(hidden)]
-        #[deprecated]
-        pub use ntex_tls::openssl::SslConnector as Connector;
     }
 
     #[cfg(feature = "rustls")]
     pub mod rustls {
         pub use ntex_tls::rustls::{TlsClientFilter, TlsConnector};
-
-        #[doc(hidden)]
-        #[deprecated]
-        pub use ntex_tls::rustls::TlsConnector as Connector;
     }
 }
 

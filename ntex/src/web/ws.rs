@@ -38,7 +38,7 @@ where
                     Either::Left(async move {
                         let result = srv.call(item).await;
                         if let Some(s) = s {
-                            rt::spawn(async move { s.io().close() });
+                            let _ = rt::spawn(async move { s.io().close() });
                         }
                         result
                     })
@@ -104,7 +104,7 @@ where
     cfg.set_keepalive_timeout(Seconds::ZERO);
 
     // start websockets service dispatcher
-    rt::spawn(async move {
+    let _ = rt::spawn(async move {
         let res = crate::io::Dispatcher::new(io, codec, srv, &cfg).await;
         log::trace!("Ws handler is terminated: {:?}", res);
     });

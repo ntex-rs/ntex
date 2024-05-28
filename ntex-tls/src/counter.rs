@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::{cell::Cell, future::poll_fn, rc::Rc, task, task::Poll};
 
 use ntex_util::task::LocalWaker;
