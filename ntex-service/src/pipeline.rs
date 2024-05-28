@@ -158,6 +158,12 @@ where
     }
 
     #[inline]
+    /// Return reference to enclosed service
+    pub fn get_ref(&self) -> &S {
+        self.pl.svc.as_ref()
+    }
+
+    #[inline]
     /// Returns `Ready` when the pipeline is able to process requests.
     ///
     /// panics if .poll_shutdown() was called before.
