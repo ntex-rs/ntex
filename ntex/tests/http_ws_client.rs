@@ -111,7 +111,7 @@ async fn test_transport() {
                         Dispatcher::new(
                             io.seal(),
                             ws::Codec::default(),
-                            ws_service,
+                            fn_service(ws_service),
                             &Default::default(),
                         )
                         .await
@@ -153,8 +153,13 @@ async fn test_keepalive_timeout() {
                         // start websocket service
                         let cfg = DispatcherConfig::default();
                         cfg.set_keepalive_timeout(Seconds::ZERO);
-                        Dispatcher::new(io.seal(), ws::Codec::default(), ws_service, &cfg)
-                            .await
+                        Dispatcher::new(
+                            io.seal(),
+                            ws::Codec::default(),
+                            fn_service(ws_service),
+                            &cfg,
+                        )
+                        .await
                     })
                 } else {
                     req.ack()

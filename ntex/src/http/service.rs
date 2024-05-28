@@ -1,7 +1,8 @@
-use std::{error, fmt, marker, rc::Rc, task::Context, task::Poll};
+use std::{error, fmt, marker, rc::Rc};
 
 use crate::io::{types, Filter, Io};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
+use crate::util::join;
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
@@ -289,43 +290,24 @@ where
     type Response = ();
     type Error = DispatchError;
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         let cfg = self.config.as_ref();
 
-        let ready1 = cfg
-            .service
-            .poll_ready(cx)
-            .map_err(|e| {
-                log::error!("Http service readiness error: {:?}", e);
-                DispatchError::Service(Box::new(e))
-            })?
-            .is_ready();
-
-        let ready2 = cfg
-            .control
-            .poll_ready(cx)
-            .map_err(|e| {
-                log::error!("Http control service readiness error: {:?}", e);
-                DispatchError::Control(Box::new(e))
-            })?
-            .is_ready();
-
-        if ready1 && ready2 {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
+        let (ready1, ready2) = join(cfg.control.ready(), cfg.service.ready()).await;
+        ready1.map_err(|e| {
+            log::error!("Http control service readiness error: {:?}", e);
+            DispatchError::Control(Box::new(e))
+        })?;
+        ready2.map_err(|e| {
+            log::error!("Http service readiness error: {:?}", e);
+            DispatchError::Service(Box::new(e))
+        })
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let ready1 = self.config.control.poll_shutdown(cx).is_ready();
-        let ready2 = self.config.service.poll_shutdown(cx).is_ready();
-
-        if ready1 && ready2 {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
+    #[inline]
+    async fn shutdown(&self) {
+        self.config.control.shutdown().await;
+        self.config.service.shutdown().await;
     }
 
     async fn call(

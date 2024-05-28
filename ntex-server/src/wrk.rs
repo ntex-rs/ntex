@@ -6,7 +6,7 @@ use async_broadcast::{self as bus, broadcast};
 use async_channel::{unbounded, Receiver, Sender};
 
 use ntex_rt::{spawn, Arbiter};
-use ntex_service::{Pipeline, ServiceFactory, PipelineBinding};
+use ntex_service::{Pipeline, PipelineBinding, ServiceFactory};
 use ntex_util::future::{select, stream_recv, Either, Stream};
 use ntex_util::time::{sleep, timeout_checked, Millis};
 
@@ -240,8 +240,10 @@ struct WorkerSt<T, F: ServiceFactory<WorkerMessage<T>>> {
     availability: WorkerAvailabilityTx,
 }
 
-async fn run_worker<T, F>(mut svc: PipelineBinding<F::Service, WorkerMessage<T>>, mut wrk: WorkerSt<T, F>)
-where
+async fn run_worker<T, F>(
+    mut svc: PipelineBinding<F::Service, WorkerMessage<T>>,
+    mut wrk: WorkerSt<T, F>,
+) where
     T: Send + 'static,
     F: ServiceFactory<WorkerMessage<T>> + 'static,
 {
@@ -305,7 +307,13 @@ async fn create<T, F>(
     stop: Receiver<Shutdown>,
     factory: Result<F, ()>,
     availability: WorkerAvailabilityTx,
-) -> Result<(PipelineBinding<F::Service, WorkerMessage<T>>, WorkerSt<T, F>), ()>
+) -> Result<
+    (
+        PipelineBinding<F::Service, WorkerMessage<T>>,
+        WorkerSt<T, F>,
+    ),
+    (),
+>
 where
     T: Send + 'static,
     F: ServiceFactory<WorkerMessage<T>> + 'static,

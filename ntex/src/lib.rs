@@ -27,7 +27,7 @@ pub use ntex_macros::{rt_main as main, rt_test as test};
 #[cfg(test)]
 pub(crate) use ntex_macros::rt_test2 as rt_test;
 
-pub use ntex_service::{forward_poll_ready, forward_poll_shutdown};
+pub use ntex_service::{forward_ready, forward_shutdown};
 
 pub mod http;
 pub mod web;
@@ -36,8 +36,8 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    chain, chain_factory, fn_service, into_service, IntoService, IntoServiceFactory,
-    Middleware, Pipeline, Service, ServiceCtx, ServiceFactory,
+    chain, chain_factory, fn_service, IntoService, IntoServiceFactory, Middleware,
+    Pipeline, Service, ServiceCtx, ServiceFactory,
 };
 
 pub use ntex_util::{channel, task};

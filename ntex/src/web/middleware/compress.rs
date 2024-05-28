@@ -67,8 +67,8 @@ where
     type Response = WebResponse;
     type Error = S::Error;
 
-    crate::forward_poll_ready!(service);
-    crate::forward_poll_shutdown!(service);
+    crate::forward_ready!(service);
+    crate::forward_shutdown!(service);
 
     async fn call(
         &self,

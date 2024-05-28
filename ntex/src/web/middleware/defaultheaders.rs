@@ -110,8 +110,8 @@ where
     type Response = WebResponse;
     type Error = S::Error;
 
-    crate::forward_poll_ready!(service);
-    crate::forward_poll_shutdown!(service);
+    crate::forward_ready!(service);
+    crate::forward_shutdown!(service);
 
     async fn call(
         &self,
@@ -151,7 +151,8 @@ mod tests {
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
                 .create(ok_service()),
-        );
+        )
+        .bind();
 
         assert!(lazy(|cx| mw.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| mw.poll_shutdown(cx).is_ready()).await);

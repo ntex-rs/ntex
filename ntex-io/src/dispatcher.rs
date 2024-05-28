@@ -3,7 +3,7 @@
 use std::{cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use ntex_codec::{Decoder, Encoder};
-use ntex_service::{Pipeline, PipelineBinding, PipelineCall, Service};
+use ntex_service::{IntoService, Pipeline, PipelineBinding, PipelineCall, Service};
 use ntex_util::{future::Either, ready, spawn, time::Seconds};
 
 use crate::{Decoded, DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
@@ -142,7 +142,7 @@ where
     error: Option<S::Error>,
     flags: Flags,
     shared: Rc<DispatcherShared<S, U>>,
-    response: Option<PipelineCall<S::Response, S::Error>>,
+    response: Option<PipelineCall<S, DispatchItem<U>>>,
     cfg: DispatcherConfig,
     read_remains: u32,
     read_remains_prev: u32,
@@ -196,9 +196,15 @@ where
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io>(io: Io, codec: U, service: S, cfg: &DispatcherConfig) -> Dispatcher<S, U>
+    pub fn new<Io, F>(
+        io: Io,
+        codec: U,
+        service: F,
+        cfg: &DispatcherConfig,
+    ) -> Dispatcher<S, U>
     where
         IoBoxed: From<Io>,
+        F: IntoService<S, DispatchItem<U>>,
     {
         let io = IoBoxed::from(io);
         io.set_disconnect_timeout(cfg.disconnect_timeout());
@@ -214,7 +220,7 @@ where
             codec,
             error: Cell::new(None),
             inflight: Cell::new(0),
-            service: Pipeline::new(service).bind(),
+            service: Pipeline::new(service.into_service()).bind(),
         });
 
         Dispatcher {

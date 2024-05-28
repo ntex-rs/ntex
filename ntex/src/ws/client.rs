@@ -18,7 +18,7 @@ use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri}
 use crate::io::{
     Base, DispatchItem, Dispatcher, DispatcherConfig, Filter, Io, Layer, Sealed,
 };
-use crate::service::{apply_fn, into_service, IntoService, Pipeline, Service};
+use crate::service::{apply_fn, fn_service, IntoService, Pipeline, Service};
 use crate::time::{timeout, Millis, Seconds};
 use crate::{channel::mpsc, rt, util::Ready, ws};
 
@@ -732,12 +732,12 @@ impl WsConnection<Sealed> {
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
-        rt::spawn(async move {
+        let _ = rt::spawn(async move {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
 
             let result = self
-                .start(into_service(move |item: ws::Frame| {
+                .start(fn_service(move |item: ws::Frame| {
                     match tx.send(Ok(item)) {
                         Ok(()) => (),
                         Err(_) => io.close(),

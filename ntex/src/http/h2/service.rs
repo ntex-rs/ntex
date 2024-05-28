@@ -1,5 +1,4 @@
-use std::{cell::RefCell, io, task::Context, task::Poll};
-use std::{error::Error, fmt, future::poll_fn, marker, mem, rc::Rc};
+use std::{cell::RefCell, error::Error, fmt, future::poll_fn, io, marker, mem, rc::Rc};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 

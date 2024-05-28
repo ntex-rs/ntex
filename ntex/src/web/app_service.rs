@@ -1,4 +1,4 @@
-use std::{cell::RefCell, marker, rc::Rc, task::Context, task::Poll};
+use std::{cell::RefCell, marker, rc::Rc};
 
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};

@@ -1,4 +1,4 @@
-use std::{cell::Cell, io, sync::Arc, sync::Mutex, task::Context, task::Poll};
+use std::{cell::Cell, io, sync::Arc, sync::Mutex};
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
@@ -35,9 +35,9 @@ impl Service<(Request, Io, h1::Codec)> for WsService {
     type Response = ();
     type Error = io::Error;
 
-    fn poll_ready(&self, _ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         self.set_polled();
-        Poll::Ready(Ok(()))
+        Ok(())
     }
 
     async fn call(

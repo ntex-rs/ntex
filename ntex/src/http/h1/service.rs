@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, marker, rc::Rc, task::Context, task::Poll};
+use std::{error::Error, fmt, marker, rc::Rc};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, ServiceConfig};
@@ -209,11 +209,10 @@ where
     type Response = ();
     type Error = DispatchError;
 
-    async fn ready(&self) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         let cfg = self.config.as_ref();
 
         let (ready1, ready2) = join(cfg.control.ready(), cfg.service.ready()).await;
-
         ready1.map_err(|e| {
             log::error!("Http control service readiness error: {:?}", e);
             DispatchError::Control(Box::new(e))
