@@ -61,8 +61,8 @@ where
     type Response = Res;
     type Error = A::Error;
 
-    crate::forward_poll_ready!(service);
-    crate::forward_poll_shutdown!(service);
+    crate::forward_ready!(service);
+    crate::forward_shutdown!(service);
 
     #[inline]
     async fn call(
@@ -146,60 +146,61 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_util::future::lazy;
-    use std::task::{Context, Poll};
+    use std::{cell::Cell, rc::Rc};
 
     use crate::{fn_factory, Pipeline, Service, ServiceCtx, ServiceFactory};
 
-    #[derive(Debug, Clone)]
-    struct Srv;
+    #[derive(Debug, Default, Clone)]
+    struct Srv(Rc<Cell<usize>>);
 
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
 
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            Ok(())
         }
 
         async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Ok(())
         }
+
+        async fn shutdown(&self) {
+            self.0.set(self.0.get() + 1);
+        }
     }
 
     #[ntex::test]
     async fn test_service() {
-        let srv = Pipeline::new(Srv.map(|_| "ok").clone());
+        let cnt_sht = Rc::new(Cell::new(0));
+        let srv = Pipeline::new(Srv(cnt_sht.clone()).map(|_| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
 
-        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
-        assert_eq!(res, Poll::Ready(()));
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 1);
 
         format!("{:?}", srv);
     }
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = Pipeline::new(crate::chain(Srv).map(|_| "ok").clone());
+        let srv = Pipeline::new(crate::chain(Srv::default()).map(|_| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
-
-        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
-        assert_eq!(res, Poll::Ready(()));
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
     }
 
     #[ntex::test]
     async fn test_factory() {
-        let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv) })
+        let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv::default()) })
             .map(|_| "ok")
             .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
@@ -212,9 +213,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline_factory() {
-        let new_srv = crate::chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv) }))
-            .map(|_| "ok")
-            .clone();
+        let new_srv =
+            crate::chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
+                .map(|_| "ok")
+                .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
         assert!(res.is_ok());

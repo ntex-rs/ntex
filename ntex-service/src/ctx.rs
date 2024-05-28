@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, fmt, future::poll_fn, marker, rc::Rc, task, task::Poll};
+use std::{cell, fmt, future::poll_fn, future::Future, marker, pin, rc::Rc, task};
 
 use crate::Service;
 
@@ -8,17 +8,20 @@ pub struct ServiceCtx<'a, S: ?Sized> {
     _t: marker::PhantomData<Rc<S>>,
 }
 
-pub(crate) struct WaitersRef(UnsafeCell<slab::Slab<Option<task::Waker>>>);
-
 pub(crate) struct Waiters {
     index: usize,
     waiters: Rc<WaitersRef>,
 }
 
+pub(crate) struct WaitersRef {
+    cur: cell::Cell<usize>,
+    indexes: cell::UnsafeCell<slab::Slab<Option<task::Waker>>>,
+}
+
 impl WaitersRef {
     #[allow(clippy::mut_from_ref)]
     fn get(&self) -> &mut slab::Slab<Option<task::Waker>> {
-        unsafe { &mut *self.0.get() }
+        unsafe { &mut *self.indexes.get() }
     }
 
     fn insert(&self) -> usize {
@@ -40,6 +43,21 @@ impl WaitersRef {
                 waker.wake();
             }
         }
+
+        self.cur.set(usize::MAX);
+    }
+
+    pub(crate) fn can_check(&self, idx: usize, cx: &mut task::Context<'_>) -> bool {
+        let cur = self.cur.get();
+        if cur == idx {
+            true
+        } else if cur == usize::MAX {
+            self.cur.set(idx);
+            true
+        } else {
+            self.register(idx, cx);
+            false
+        }
     }
 }
 
@@ -49,7 +67,10 @@ impl Waiters {
         let index = waiters.insert(None);
         Waiters {
             index,
-            waiters: Rc::new(WaitersRef(UnsafeCell::new(waiters))),
+            waiters: Rc::new(WaitersRef {
+                cur: cell::Cell::new(usize::MAX),
+                indexes: cell::UnsafeCell::new(waiters),
+            }),
         }
     }
 
@@ -57,12 +78,26 @@ impl Waiters {
         self.waiters.as_ref()
     }
 
+    pub(crate) fn can_check(&self, cx: &mut task::Context<'_>) -> bool {
+        self.waiters.can_check(self.index, cx)
+    }
+
     pub(crate) fn register(&self, cx: &mut task::Context<'_>) {
-        self.waiters.register(self.index, cx)
+        self.waiters.register(self.index, cx);
     }
 
     pub(crate) fn notify(&self) {
-        self.waiters.notify()
+        if self.waiters.cur.get() == self.index {
+            self.waiters.notify();
+        }
+    }
+}
+
+impl Drop for Waiters {
+    #[inline]
+    fn drop(&mut self) {
+        self.waiters.remove(self.index);
+        self.waiters.notify();
     }
 }
 
@@ -81,13 +116,6 @@ impl fmt::Debug for Waiters {
             .field("index", &self.index)
             .field("waiters", &self.waiters.get().len())
             .finish()
-    }
-}
-
-impl Drop for Waiters {
-    #[inline]
-    fn drop(&mut self) {
-        self.waiters.remove(self.index);
     }
 }
 
@@ -118,15 +146,25 @@ impl<'a, S> ServiceCtx<'a, S> {
         T: Service<R>,
     {
         // check readiness and notify waiters
-        poll_fn(move |cx| match svc.poll_ready(cx)? {
-            Poll::Ready(()) => {
-                self.waiters.notify();
-                Poll::Ready(Ok(()))
+        let mut fut = svc.ready(ServiceCtx {
+            idx: self.idx,
+            waiters: self.waiters,
+            _t: marker::PhantomData,
+        });
+
+        poll_fn(|cx| {
+            if self.waiters.can_check(self.idx, cx) {
+                // SAFETY: `fut` never moves
+                let p = unsafe { pin::Pin::new_unchecked(&mut fut) };
+                match p.poll(cx) {
+                    task::Poll::Pending => self.waiters.register(self.idx, cx),
+                    task::Poll::Ready(res) => {
+                        self.waiters.notify();
+                        return task::Poll::Ready(res);
+                    }
+                }
             }
-            Poll::Pending => {
-                self.waiters.register(self.idx, cx);
-                Poll::Pending
-            }
+            task::Poll::Pending
         })
         .await
     }
@@ -139,6 +177,7 @@ impl<'a, S> ServiceCtx<'a, S> {
         R: 'a,
     {
         self.ready(svc).await?;
+
         svc.call(
             req,
             ServiceCtx {
@@ -193,8 +232,7 @@ impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::task::Context;
-    use std::{cell::Cell, cell::RefCell};
+    use std::{cell::Cell, cell::RefCell, future::poll_fn, task::Poll};
 
     use ntex_util::{channel::condition, future::lazy, time};
 
@@ -207,9 +245,10 @@ mod tests {
         type Response = &'static str;
         type Error = ();
 
-        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
-            self.1.poll_ready(cx).map(|_| Ok(()))
+            self.1.ready().await;
+            Ok(())
         }
 
         async fn call(
@@ -225,11 +264,11 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_poll_ready() {
+    async fn test_ready() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait()));
+        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
         let srv2 = srv1.clone();
 
         let res = lazy(|cx| srv1.poll_ready(cx)).await;
@@ -238,17 +277,26 @@ mod tests {
 
         let res = lazy(|cx| srv2.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
-        assert_eq!(cnt.get(), 2);
 
+        assert_eq!(cnt.get(), 1);
         con.notify();
 
         let res = lazy(|cx| srv1.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
-        assert_eq!(cnt.get(), 3);
+        assert_eq!(cnt.get(), 1);
 
         let res = lazy(|cx| srv2.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
-        assert_eq!(cnt.get(), 4);
+        assert_eq!(cnt.get(), 2);
+
+        con.notify();
+        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+        assert_eq!(cnt.get(), 2);
+
+        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
+        assert_eq!(cnt.get(), 3);
     }
 
     #[ntex::test]
@@ -258,7 +306,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait()));
+        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
         let srv2 = srv1.clone();
 
         let data1 = data.clone();
@@ -270,7 +318,7 @@ mod tests {
 
         let data2 = data.clone();
         ntex::rt::spawn(async move {
-            let i = srv2.call_static("srv2").await.unwrap();
+            let i = srv2.call("srv2").await.unwrap();
             data2.borrow_mut().push(i);
         });
         time::sleep(time::Millis(50)).await;
@@ -278,13 +326,13 @@ mod tests {
         con.notify();
         time::sleep(time::Millis(150)).await;
 
-        assert_eq!(cnt.get(), 4);
-        assert_eq!(&*data.borrow(), &["srv2"]);
+        assert_eq!(cnt.get(), 2);
+        assert_eq!(&*data.borrow(), &["srv1"]);
 
         con.notify();
         time::sleep(time::Millis(150)).await;
 
-        assert_eq!(cnt.get(), 5);
-        assert_eq!(&*data.borrow(), &["srv2", "srv1"]);
+        assert_eq!(cnt.get(), 2);
+        assert_eq!(&*data.borrow(), &["srv1", "srv2"]);
     }
 }

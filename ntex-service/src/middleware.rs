@@ -21,10 +21,18 @@ where
 ///
 /// For example, timeout middleware:
 ///
-/// ```rust,ignore
+/// ```rust
+/// use ntex_service::{Service, ServiceCtx};
+/// use ntex_util::{time::sleep, future::Either, future::select};
+///
 /// pub struct Timeout<S> {
 ///     service: S,
-///     timeout: Duration,
+///     timeout: std::time::Duration,
+/// }
+///
+/// pub enum TimeoutError<E> {
+///    Service(E),
+///    Timeout,
 /// }
 ///
 /// impl<S, R> Service<R> for Timeout<S>
@@ -34,11 +42,11 @@ where
 ///     type Response = S::Response;
 ///     type Error = TimeoutError<S::Error>;
 ///
-///     fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-///         self.service.poll_ready(cx).map_err(TimeoutError::Service)
+///     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
 ///     }
 ///
-///     async fn call(&self, req: S::Request) -> Result<Self::Response, Self::Error> {
+///     async fn call(&self, req: R, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
 ///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
 ///             Either::Left(_) => Err(TimeoutError::Timeout),
 ///             Either::Right(res) => res.map_err(TimeoutError::Service),
@@ -59,18 +67,18 @@ where
 ///
 /// ```rust,ignore
 /// pub struct TimeoutMiddleware {
-///     timeout: Duration,
+///     timeout: std::time::Duration,
 /// }
 ///
-/// impl<S> Middleware<S> for TimeoutMiddleware<E>
+/// impl<S> Middleware<S> for TimeoutMiddleware
 /// {
 ///     type Service = Timeout<S>;
 ///
 ///     fn create(&self, service: S) -> Self::Service {
-///         ok(Timeout {
+///         Timeout {
 ///             service,
 ///             timeout: self.timeout,
-///         })
+///         }
 ///     }
 /// }
 /// ```
@@ -183,32 +191,31 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_clone)]
 mod tests {
-    use ntex_util::future::{lazy, Ready};
-    use std::task::{Context, Poll};
+    use std::{cell::Cell, rc::Rc};
 
     use super::*;
     use crate::{fn_service, Pipeline, ServiceCtx};
 
     #[derive(Debug, Clone)]
-    struct Tr<R>(PhantomData<R>);
+    struct Tr<R>(PhantomData<R>, Rc<Cell<usize>>);
 
     impl<S, R> Middleware<S> for Tr<R> {
         type Service = Srv<S, R>;
 
         fn create(&self, service: S) -> Self::Service {
-            Srv(service, PhantomData)
+            Srv(service, PhantomData, self.1.clone())
         }
     }
 
     #[derive(Debug, Clone)]
-    struct Srv<S, R>(S, PhantomData<R>);
+    struct Srv<S, R>(S, PhantomData<R>, Rc<Cell<usize>>);
 
     impl<S: Service<R>, R> Service<R> for Srv<S, R> {
         type Response = S::Response;
         type Error = S::Error;
 
-        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            self.0.poll_ready(cx)
+        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            ctx.ready(&self.0).await
         }
 
         async fn call(
@@ -218,13 +225,18 @@ mod tests {
         ) -> Result<S::Response, S::Error> {
             ctx.call(&self.0, req).await
         }
+
+        async fn shutdown(&self) {
+            self.2.set(self.2.get() + 1);
+        }
     }
 
     #[ntex::test]
     async fn middleware() {
+        let cnt_sht = Rc::new(Cell::new(0));
         let factory = apply(
-            Rc::new(Tr(PhantomData).clone()),
-            fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)),
+            Rc::new(Tr(PhantomData, cnt_sht.clone()).clone()),
+            fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
         )
         .clone();
 
@@ -234,15 +246,13 @@ mod tests {
         assert_eq!(res.unwrap(), 20);
         format!("{:?} {:?}", factory, srv);
 
-        let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
-
-        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
-        assert_eq!(res, Poll::Ready(()));
+        assert_eq!(srv.ready().await, Ok(()));
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 1);
 
         let factory =
-            crate::chain_factory(fn_service(|i: usize| Ready::<_, ()>::Ok(i * 2)))
-                .apply(Rc::new(Tr(PhantomData).clone()))
+            crate::chain_factory(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+                .apply(Rc::new(Tr(PhantomData, Rc::new(Cell::new(0))).clone()))
                 .clone();
 
         let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
@@ -251,10 +261,6 @@ mod tests {
         assert_eq!(res.unwrap(), 20);
         format!("{:?} {:?}", factory, srv);
 
-        let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
-
-        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
-        assert_eq!(res, Poll::Ready(()));
+        assert_eq!(srv.ready().await, Ok(()));
     }
 }

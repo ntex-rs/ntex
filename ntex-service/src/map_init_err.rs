@@ -69,7 +69,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{chain_factory, fn_factory_with_config, into_service, ServiceFactory};
+    use crate::{chain_factory, fn_factory_with_config, fn_service, ServiceFactory};
 
     #[ntex::test]
     async fn map_init_err() {
@@ -79,7 +79,7 @@ mod tests {
                 if err {
                     Err(())
                 } else {
-                    Ok(into_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+                    Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
                 }
             }
         }))
@@ -99,7 +99,7 @@ mod tests {
                 if err {
                     Err(())
                 } else {
-                    Ok(into_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
+                    Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
                 }
             }
         })

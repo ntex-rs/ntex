@@ -396,14 +396,14 @@ mod tests {
         let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
         format!("{:?}", new_srv);
 
-        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(()).await.unwrap()).bind();
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         format!("{:?}", srv);
 
-        let srv2 = Pipeline::new(new_srv.clone());
+        let srv2 = Pipeline::new(new_srv.clone()).bind();
         let res = srv2.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
@@ -421,7 +421,8 @@ mod tests {
                 .await
                 .unwrap()
                 .clone(),
-        );
+        )
+        .bind();
 
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
@@ -442,7 +443,7 @@ mod tests {
         })
         .clone();
 
-        let srv = Pipeline::new(new_srv.create(&1).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(&1).await.unwrap()).bind();
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

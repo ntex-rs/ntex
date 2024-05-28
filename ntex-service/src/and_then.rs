@@ -1,6 +1,4 @@
-use std::{task::Context, task::Poll};
-
-use super::{Service, ServiceCtx, ServiceFactory};
+use super::{util, Service, ServiceCtx, ServiceFactory};
 
 #[derive(Clone, Debug)]
 /// Service for the `and_then` combinator, chaining a computation onto the end
@@ -27,22 +25,14 @@ where
     type Response = B::Response;
     type Error = A::Error;
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let not_ready = !self.svc1.poll_ready(cx)?.is_ready();
-        if !self.svc2.poll_ready(cx)?.is_ready() || not_ready {
-            Poll::Pending
-        } else {
-            Poll::Ready(Ok(()))
-        }
+    #[inline]
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.svc1.poll_shutdown(cx).is_ready() && self.svc2.poll_shutdown(cx).is_ready()
-        {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
+    #[inline]
+    async fn shutdown(&self) {
+        util::shutdown(&self.svc1, &self.svc2).await
     }
 
     #[inline]
@@ -93,21 +83,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc, task::Context, task::Poll};
+    use std::{cell::Cell, rc::Rc};
 
     use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
-    use ntex_util::future::{lazy, Ready};
 
     #[derive(Clone)]
-    struct Srv1(Rc<Cell<usize>>);
+    struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
     impl Service<&'static str> for Srv1 {
         type Response = &'static str;
         type Error = ();
 
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
-            Poll::Ready(Ok(()))
+            Ok(())
         }
 
         async fn call(
@@ -117,18 +106,22 @@ mod tests {
         ) -> Result<Self::Response, ()> {
             Ok(req)
         }
+
+        async fn shutdown(&self) {
+            self.1.set(self.1.get() + 1);
+        }
     }
 
     #[derive(Clone)]
-    struct Srv2(Rc<Cell<usize>>);
+    struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
     impl Service<&'static str> for Srv2 {
         type Response = (&'static str, &'static str);
         type Error = ();
 
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
-            Poll::Ready(Ok(()))
+            Ok(())
         }
 
         async fn call(
@@ -138,34 +131,46 @@ mod tests {
         ) -> Result<Self::Response, ()> {
             Ok((req, "srv2"))
         }
+
+        async fn shutdown(&self) {
+            self.1.set(self.1.get() + 1);
+        }
     }
 
     #[ntex::test]
-    async fn test_poll_ready() {
+    async fn test_ready() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = chain(Srv1(cnt.clone())).and_then(Srv2(cnt.clone())).clone();
-        let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
+        let cnt_sht = Rc::new(Cell::new(0));
+        let srv = chain(Srv1(cnt.clone(), cnt_sht.clone()))
+            .and_then(Srv2(cnt.clone(), cnt_sht.clone()))
+            .clone()
+            .into_pipeline();
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
-        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
-        assert_eq!(res, Poll::Ready(()));
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 2);
     }
 
     #[ntex::test]
-    async fn test_poll_ready2() {
+    async fn test_ready2() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = Box::new(chain(Srv1(cnt.clone())).and_then(Srv2(cnt.clone())));
-        let res = lazy(|cx| srv.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
+        let srv = Box::new(
+            chain(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
+                .and_then(Srv2(cnt.clone(), Rc::new(Cell::new(0)))),
+        )
+        .into_pipeline();
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
-        let res = lazy(|cx| srv.poll_shutdown(cx)).await;
-        assert_eq!(res, Poll::Ready(()));
     }
 
     #[ntex::test]
     async fn test_call() {
         let cnt = Rc::new(Cell::new(0));
-        let srv = chain(Srv1(cnt.clone())).and_then(Srv2(cnt)).into_pipeline();
+        let srv = chain(Srv1(cnt.clone(), Rc::new(Cell::new(0))))
+            .and_then(Srv2(cnt, Rc::new(Cell::new(0))))
+            .into_pipeline();
         let res = srv.call("srv1").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));
@@ -176,9 +181,13 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
         let new_srv = chain_factory(fn_factory(move || {
-            Ready::from(Ok::<_, ()>(Srv1(cnt2.clone())))
+            let cnt = cnt2.clone();
+            async move { Ok::<_, ()>(Srv1(cnt, Rc::new(Cell::new(0)))) }
         }))
-        .and_then(move || Ready::from(Ok(Srv2(cnt.clone()))))
+        .and_then(fn_factory(move || {
+            let cnt = cnt.clone();
+            async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }
+        }))
         .clone();
 
         let srv = new_srv.pipeline(&()).await.unwrap();
