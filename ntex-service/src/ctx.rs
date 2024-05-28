@@ -1,6 +1,4 @@
-use std::{
-    cell, fmt, future::poll_fn, future::Future, marker, pin, rc::Rc, task, task::Poll,
-};
+use std::{cell, fmt, future::poll_fn, future::Future, marker, pin, rc::Rc, task};
 
 use crate::Service;
 
@@ -159,14 +157,14 @@ impl<'a, S> ServiceCtx<'a, S> {
                 // SAFETY: `fut` never moves
                 let p = unsafe { pin::Pin::new_unchecked(&mut fut) };
                 match p.poll(cx) {
-                    Poll::Pending => self.waiters.register(self.idx, cx),
-                    Poll::Ready(res) => {
+                    task::Poll::Pending => self.waiters.register(self.idx, cx),
+                    task::Poll::Ready(res) => {
                         self.waiters.notify();
-                        return Poll::Ready(res);
+                        return task::Poll::Ready(res);
                     }
                 }
             }
-            Poll::Pending
+            task::Poll::Pending
         })
         .await
     }
@@ -234,7 +232,7 @@ impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, cell::RefCell, future::poll_fn};
+    use std::{cell::Cell, cell::RefCell, future::poll_fn, task::Poll};
 
     use ntex_util::{channel::condition, future::lazy, time};
 
