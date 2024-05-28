@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.0] - 2024-05-28
+
+* Use async fn for Service::ready() and Service::shutdown()
+
 ## [1.1.0] - 2024-04-xx
 
 * Change Extensions::insert() method according doc #345

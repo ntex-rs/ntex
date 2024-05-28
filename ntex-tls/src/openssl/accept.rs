@@ -1,4 +1,4 @@
-use std::{cell::RefCell, error::Error, fmt, io, task::Context, task::Poll};
+use std::{cell::RefCell, error::Error, fmt, io};
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
@@ -97,12 +97,9 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
     type Response = Io<Layer<SslFilter, F>>;
     type Error = Box<dyn Error>;
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.conns.available(cx) {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        self.conns.available().await;
+        Ok(())
     }
 
     async fn call(

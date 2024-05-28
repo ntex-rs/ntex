@@ -2,9 +2,8 @@
 #![allow(clippy::let_underscore_future)]
 use std::{cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use ntex_bytes::Pool;
 use ntex_codec::{Decoder, Encoder};
-use ntex_service::{IntoService, Pipeline, PipelineCall, Service};
+use ntex_service::{IntoService, Pipeline, PipelineBinding, PipelineCall, Service};
 use ntex_util::{future::Either, ready, spawn, time::Seconds};
 
 use crate::{Decoded, DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
@@ -144,7 +143,6 @@ where
     flags: Flags,
     shared: Rc<DispatcherShared<S, U>>,
     response: Option<PipelineCall<S, DispatchItem<U>>>,
-    pool: Pool,
     cfg: DispatcherConfig,
     read_remains: u32,
     read_remains_prev: u32,
@@ -158,7 +156,7 @@ where
 {
     io: IoBoxed,
     codec: U,
-    service: Pipeline<S>,
+    service: PipelineBinding<S, DispatchItem<U>>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<usize>,
 }
@@ -194,7 +192,7 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
 
 impl<S, U> Dispatcher<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
@@ -217,18 +215,16 @@ where
             Flags::KA_ENABLED
         };
 
-        let pool = io.memory_pool().pool();
         let shared = Rc::new(DispatcherShared {
             io,
             codec,
             error: Cell::new(None),
             inflight: Cell::new(0),
-            service: Pipeline::new(service.into_service()),
+            service: Pipeline::new(service.into_service()).bind(),
         });
 
         Dispatcher {
             inner: DispatcherInner {
-                pool,
                 shared,
                 flags,
                 cfg: cfg.clone(),
@@ -282,14 +278,6 @@ where
                 slf.shared.handle_result(item, &slf.shared.io, false);
                 slf.response = None;
             }
-        }
-
-        // handle memory pool pressure
-        if slf.pool.poll_ready(cx).is_pending() {
-            slf.flags.remove(Flags::KA_TIMEOUT | Flags::READ_TIMEOUT);
-            slf.shared.io.stop_timer();
-            slf.shared.io.pause();
-            return Poll::Pending;
         }
 
         loop {
@@ -434,7 +422,7 @@ where
     U: Decoder + Encoder + 'static,
 {
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>) {
-        let mut fut = self.shared.service.call_static(item);
+        let mut fut = self.shared.service.call(item);
         self.shared.inflight.set(self.shared.inflight.get() + 1);
 
         // optimize first call
@@ -682,11 +670,7 @@ mod tests {
         U: Decoder + Encoder + 'static,
     {
         /// Construct new `Dispatcher` instance
-        pub(crate) fn debug<T: IoStream, F: IntoService<S, DispatchItem<U>>>(
-            io: T,
-            codec: U,
-            service: F,
-        ) -> (Self, State) {
+        pub(crate) fn debug<T: IoStream>(io: T, codec: U, service: S) -> (Self, State) {
             let cfg = DispatcherConfig::default()
                 .set_keepalive_timeout(Seconds(1))
                 .clone();
@@ -694,14 +678,13 @@ mod tests {
         }
 
         /// Construct new `Dispatcher` instance
-        pub(crate) fn debug_cfg<T: IoStream, F: IntoService<S, DispatchItem<U>>>(
+        pub(crate) fn debug_cfg<T: IoStream>(
             io: T,
             codec: U,
-            service: F,
+            service: S,
             cfg: DispatcherConfig,
         ) -> (Self, State) {
             let state = Io::new(io);
-            let pool = state.memory_pool().pool();
             state.set_disconnect_timeout(cfg.disconnect_timeout());
             state.set_tag("DBG");
 
@@ -719,7 +702,7 @@ mod tests {
                 io: state.into(),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
-                service: Pipeline::new(service.into_service()),
+                service: Pipeline::new(service).bind(),
             });
 
             (
@@ -731,7 +714,6 @@ mod tests {
                         read_remains: 0,
                         read_remains_prev: 0,
                         read_max_timeout: Seconds::ZERO,
-                        pool,
                         shared,
                         cfg,
                         flags,
@@ -864,9 +846,9 @@ mod tests {
             type Response = Option<Response<BytesCodec>>;
             type Error = ();
 
-            fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), ()>> {
+            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), ()> {
                 self.0.set(self.0.get() + 1);
-                Poll::Ready(Err(()))
+                Err(())
             }
 
             async fn call(

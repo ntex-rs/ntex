@@ -9,12 +9,14 @@ use ntex_util::future::{BoxFuture, Either};
 use super::{Address, Connect, ConnectError, Resolver};
 use crate::tcp_connect_in;
 
-#[derive(Copy)]
+/// Basic tcp stream connector
 pub struct Connector<T> {
     resolver: Resolver<T>,
     pool: PoolRef,
     tag: &'static str,
 }
+
+impl<T> Copy for Connector<T> {}
 
 impl<T> Connector<T> {
     /// Construct new connect service with default dns resolver
@@ -85,11 +87,7 @@ impl<T> Default for Connector<T> {
 
 impl<T> Clone for Connector<T> {
     fn clone(&self) -> Self {
-        Connector {
-            resolver: self.resolver.clone(),
-            tag: self.tag,
-            pool: self.pool,
-        }
+        *self
     }
 }
 
@@ -110,7 +108,7 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
     type InitError = ();
 
     async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        Ok(self.clone())
+        Ok(*self)
     }
 }
 

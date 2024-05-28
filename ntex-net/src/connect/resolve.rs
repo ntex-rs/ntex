@@ -6,7 +6,6 @@ use ntex_util::future::Either;
 
 use super::{Address, Connect, ConnectError};
 
-#[derive(Copy)]
 /// DNS Resolver Service
 pub struct Resolver<T>(marker::PhantomData<T>);
 
@@ -16,6 +15,8 @@ impl<T> Resolver<T> {
         Resolver(marker::PhantomData)
     }
 }
+
+impl<T> Copy for Resolver<T> {}
 
 impl<T: Address> Resolver<T> {
     /// Lookup ip addresses for provided host
@@ -100,7 +101,7 @@ impl<T> Default for Resolver<T> {
 
 impl<T> Clone for Resolver<T> {
     fn clone(&self) -> Self {
-        Resolver(marker::PhantomData)
+        *self
     }
 }
 
@@ -117,7 +118,7 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Resolver<T> {
     type InitError = ();
 
     async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        Ok(self.clone())
+        Ok(*self)
     }
 }
 
@@ -144,7 +145,7 @@ mod tests {
     async fn resolver() {
         let resolver = Resolver::default().clone();
         assert!(format!("{:?}", resolver).contains("Resolver"));
-        let srv = resolver.pipeline(()).await.unwrap();
+        let srv = resolver.pipeline(()).await.unwrap().bind();
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
 
         let res = srv.call(Connect::new("www.rust-lang.org")).await;

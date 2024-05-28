@@ -36,12 +36,7 @@ impl<T: Address> TlsConnector<T> {
     /// Use specified memory pool for memory allocations. By default P0
     /// memory pool is used.
     pub fn memory_pool(self, id: PoolId) -> Self {
-        let connector = self
-            .connector
-            .into_service()
-            .unwrap()
-            .memory_pool(id)
-            .into();
+        let connector = self.connector.get_ref().memory_pool(id).into();
         Self {
             connector,
             config: self.config,
@@ -146,7 +141,7 @@ mod tests {
             .memory_pool(PoolId::P5)
             .clone();
 
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline(&()).await.unwrap().bind();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

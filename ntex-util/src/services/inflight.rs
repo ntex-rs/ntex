@@ -1,7 +1,5 @@
 //! Service that limits number of in-flight async requests.
-use std::{task::Context, task::Poll};
-
-use ntex_service::{IntoService, Middleware, Service, ServiceCtx};
+use ntex_service::{Middleware, Service, ServiceCtx};
 
 use super::counter::Counter;
 
@@ -44,14 +42,13 @@ pub struct InFlightService<S> {
 }
 
 impl<S> InFlightService<S> {
-    pub fn new<U, R>(max: usize, service: U) -> Self
+    pub fn new<R>(max: usize, service: S) -> Self
     where
         S: Service<R>,
-        U: IntoService<S, R>,
     {
         Self {
+            service,
             count: Counter::new(max),
-            service: service.into_service(),
         }
     }
 }
@@ -64,15 +61,9 @@ where
     type Error = T::Error;
 
     #[inline]
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.service.poll_ready(cx)?.is_pending() {
-            Poll::Pending
-        } else if !self.count.available(cx) {
-            log::trace!("InFlight limit exceeded");
-            Poll::Pending
-        } else {
-            Poll::Ready(Ok(()))
-        }
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        self.count.available().await;
+        ctx.ready(&self.service).await
     }
 
     #[inline]
@@ -85,13 +76,14 @@ where
         ctx.call(&self.service, req).await
     }
 
-    ntex_service::forward_poll_shutdown!(service);
+    ntex_service::forward_shutdown!(service);
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, task::Poll, time::Duration};
+
     use ntex_service::{apply, fn_factory, Pipeline, ServiceFactory};
-    use std::{cell::RefCell, time::Duration};
 
     use super::*;
     use crate::{channel::oneshot, future::lazy};
@@ -112,7 +104,7 @@ mod tests {
     async fn test_service() {
         let (tx, rx) = oneshot::channel();
 
-        let srv = Pipeline::new(InFlightService::new(1, SleepService(rx)));
+        let srv = Pipeline::new(InFlightService::new(1, SleepService(rx))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();
@@ -125,7 +117,7 @@ mod tests {
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
+        assert_eq!(srv.shutdown().await, ());
     }
 
     #[ntex_macros::rt_test2]
@@ -146,7 +138,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap();
+        let srv = srv.pipeline(&()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();

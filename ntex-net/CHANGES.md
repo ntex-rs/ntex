@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.0] - 2024-05-28
+
+* Use async fn for Service::ready() and Service::shutdown()
+
 ## [1.0.2] - 2024-03-30
 
 * Fix glommio compat feature #327

@@ -6,7 +6,7 @@ use async_broadcast::{self as bus, broadcast};
 use async_channel::{unbounded, Receiver, Sender};
 
 use ntex_rt::{spawn, Arbiter};
-use ntex_service::{Pipeline, ServiceFactory};
+use ntex_service::{Pipeline, PipelineBinding, ServiceFactory};
 use ntex_util::future::{select, stream_recv, Either, Stream};
 use ntex_util::time::{sleep, timeout_checked, Millis};
 
@@ -240,8 +240,10 @@ struct WorkerSt<T, F: ServiceFactory<WorkerMessage<T>>> {
     availability: WorkerAvailabilityTx,
 }
 
-async fn run_worker<T, F>(mut svc: Pipeline<F::Service>, mut wrk: WorkerSt<T, F>)
-where
+async fn run_worker<T, F>(
+    mut svc: PipelineBinding<F::Service, WorkerMessage<T>>,
+    mut wrk: WorkerSt<T, F>,
+) where
     T: Send + 'static,
     F: ServiceFactory<WorkerMessage<T>> + 'static,
 {
@@ -250,7 +252,7 @@ where
             ready!(svc.poll_ready(cx)?);
 
             if let Some(item) = ready!(Pin::new(&mut wrk.rx).poll_next(cx)) {
-                let fut = svc.call_static(WorkerMessage::New(item));
+                let fut = svc.call(WorkerMessage::New(item));
                 let _ = spawn(async move {
                     let _ = fut.await;
                 });
@@ -267,17 +269,17 @@ where
                 wrk.availability.set(false);
 
                 if timeout.is_zero() {
-                    let fut = svc.call_static(WorkerMessage::ForceShutdown);
+                    let fut = svc.call(WorkerMessage::ForceShutdown);
                     let _ = spawn(async move {
                         let _ = fut.await;
                     });
                     sleep(STOP_TIMEOUT).await;
                 } else {
-                    let fut = svc.call_static(WorkerMessage::Shutdown(timeout));
+                    let fut = svc.call(WorkerMessage::Shutdown(timeout));
                     let res = timeout_checked(timeout, fut).await;
                     let _ = result.send(res.is_ok());
                 };
-                poll_fn(|cx| svc.poll_shutdown(cx)).await;
+                svc.shutdown().await;
 
                 log::info!("Stopping worker {:?}", wrk.id);
                 return;
@@ -289,7 +291,7 @@ where
             match select(wrk.factory.create(()), stream_recv(&mut wrk.stop)).await {
                 Either::Left(Ok(service)) => {
                     wrk.availability.set(true);
-                    svc = Pipeline::new(service);
+                    svc = Pipeline::new(service).bind();
                     break;
                 }
                 Either::Left(Err(_)) => sleep(STOP_TIMEOUT).await,
@@ -305,7 +307,13 @@ async fn create<T, F>(
     stop: Receiver<Shutdown>,
     factory: Result<F, ()>,
     availability: WorkerAvailabilityTx,
-) -> Result<(Pipeline<F::Service>, WorkerSt<T, F>), ()>
+) -> Result<
+    (
+        PipelineBinding<F::Service, WorkerMessage<T>>,
+        WorkerSt<T, F>,
+    ),
+    (),
+>
 where
     T: Send + 'static,
     F: ServiceFactory<WorkerMessage<T>> + 'static,
@@ -317,7 +325,7 @@ where
     let mut stop = Box::pin(stop);
 
     let svc = match select(factory.create(()), stream_recv(&mut stop)).await {
-        Either::Left(Ok(svc)) => Pipeline::new(svc),
+        Either::Left(Ok(svc)) => Pipeline::new(svc).bind(),
         Either::Left(Err(_)) => return Err(()),
         Either::Right(Some(Shutdown { result, .. })) => {
             log::trace!("Shutdown uninitialized worker");

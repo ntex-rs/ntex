@@ -27,12 +27,7 @@ impl<T: Address> SslConnector<T> {
     /// Use specified memory pool for memory allocations. By default P0
     /// memory pool is used.
     pub fn memory_pool(self, id: PoolId) -> Self {
-        let connector = self
-            .connector
-            .into_service()
-            .expect("Connector has been cloned")
-            .memory_pool(id)
-            .into();
+        let connector = self.connector.get_ref().memory_pool(id).into();
 
         Self {
             connector,
