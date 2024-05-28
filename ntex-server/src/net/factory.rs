@@ -1,4 +1,3 @@
-use std::task::{Context, Poll};
 use std::{fmt, future::Future, marker::PhantomData};
 
 use ntex_bytes::PoolId;
@@ -144,10 +143,10 @@ where
     type Response = ();
     type Error = ();
 
-    ntex_service::forward_poll_shutdown!(inner);
+    ntex_service::forward_shutdown!(inner);
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), ()>> {
-        self.inner.poll_ready(cx).map_err(|_| ())
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        ctx.ready(&self.inner).await.map_err(|_| ())
     }
 
     async fn call(&self, req: Io, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {

@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.0] - 2024-05-28
+
+* Use async fn for Service::ready() and Service::shutdown()
+
 ## [1.2.0] - 2024-05-12
 
 * Better write back-pressure handling

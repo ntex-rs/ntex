@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.0] - 2024-05-28
+
+* Use async fn for Service::ready() and Service::shutdown()
+
 ## [1.0.5] - 2024-04-02
 
 * Fix external configuration handling

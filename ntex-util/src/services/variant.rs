@@ -1,5 +1,6 @@
 //! Contains `Variant` service and related types and functions.
-use std::{fmt, marker::PhantomData, task::Context, task::Poll};
+#![allow(non_snake_case)]
+use std::{fmt, marker::PhantomData, task::Poll};
 
 use ntex_service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
@@ -70,7 +71,7 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
                     Response = V1::Response,
                     Error = V1::Error,
                     InitError = V1::InitError>,
-                F: IntoServiceFactory<$name, $r_name, V1C>,
+                  F: IntoServiceFactory<$name, $r_name, V1C>,
             {
                 $fac2_type {
                     V1: self.V1,
@@ -124,30 +125,30 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         type Response = V1::Response;
         type Error = V1::Error;
 
-        fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            let mut ready = self.V1.poll_ready(cx)?.is_ready();
-            $(ready = self.$T.poll_ready(cx)?.is_ready() && ready;)+
+        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            use std::{future::Future, pin::Pin};
 
-            if ready {
-                Poll::Ready(Ok(()))
-            } else {
-                Poll::Pending
-            }
+            let mut fut1 = ::std::pin::pin!(ctx.ready(&self.V1));
+            $(let mut $T = ::std::pin::pin!(ctx.ready(&self.$T));)+
+
+            ::std::future::poll_fn(|cx| {
+                let mut ready = Pin::new(&mut fut1).poll(cx)?.is_ready();
+                $(ready = Pin::new(&mut $T).poll(cx)?.is_ready() && ready;)+
+
+                if ready {
+                   Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            }).await
         }
 
-        fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-            let mut ready = self.V1.poll_shutdown(cx).is_ready();
-            $(ready = self.$T.poll_shutdown(cx).is_ready() && ready;)+
-
-            if ready {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
-            }
+        async fn shutdown(&self) {
+            self.V1.shutdown().await;
+            $(self.$T.shutdown().await;)+
         }
 
-        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error>
-        {
+        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
             match req {
                 $enum_type::V1(req) => ctx.call(&self.V1, req).await,
                 $($enum_type::$T(req) => ctx.call(&self.$T, req).await,)+
@@ -235,7 +236,6 @@ mod tests {
     use ntex_service::fn_factory;
 
     use super::*;
-    use crate::future::lazy;
 
     #[derive(Clone)]
     struct Srv1;
@@ -244,13 +244,11 @@ mod tests {
         type Response = usize;
         type Error = ();
 
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            Ok(())
         }
 
-        fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
-            Poll::Ready(())
-        }
+        async fn shutdown(&self) {}
 
         async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
             Ok(1)
@@ -264,13 +262,11 @@ mod tests {
         type Response = usize;
         type Error = ();
 
-        fn poll_ready(&self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            Ok(())
         }
 
-        fn poll_shutdown(&self, _: &mut Context<'_>) -> Poll<()> {
-            Poll::Ready(())
-        }
+        async fn shutdown(&self) {}
 
         async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
             Ok(2)
@@ -286,8 +282,8 @@ mod tests {
             .clone();
         let service = factory.pipeline(&()).await.unwrap().clone();
 
-        assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| service.poll_shutdown(cx)).await.is_ready());
+        assert!(service.ready().await.is_ok());
+        assert_eq!(service.shutdown().await, ());
 
         assert_eq!(service.call(Variant3::V1(())).await, Ok(1));
         assert_eq!(service.call(Variant3::V2(())).await, Ok(2));

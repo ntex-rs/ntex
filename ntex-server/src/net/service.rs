@@ -1,5 +1,3 @@
-use std::{task::Context, task::Poll};
-
 use ntex_bytes::{Pool, PoolRef};
 use ntex_net::Io;
 use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
@@ -142,53 +140,34 @@ impl Service<ServerMessage> for StreamServiceImpl {
     type Response = ();
     type Error = ();
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let mut ready = self.conns.available(cx);
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        self.conns.available().await;
         for (idx, svc) in self.services.iter().enumerate() {
-            match svc.poll_ready(cx) {
-                Poll::Pending => ready = false,
-                Poll::Ready(Ok(())) => (),
-                Poll::Ready(Err(_)) => {
+            match ctx.ready(svc).await {
+                Ok(()) => (),
+                Err(_) => {
                     for (idx_, tag, _, _) in self.tokens.values() {
                         if idx == *idx_ {
                             log::error!("{}: Service readiness has failed", tag);
                             break;
                         }
                     }
-                    return Poll::Ready(Err(()));
+                    return Err(());
                 }
             }
         }
 
-        // check memory pools
-        for (_, _, pool, _) in self.tokens.values() {
-            ready = pool.poll_ready(cx).is_ready() && ready;
-        }
-
-        if ready {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
+        Ok(())
     }
 
-    fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let mut ready = true;
+    async fn shutdown(&self) {
         for svc in &self.services {
-            match svc.poll_shutdown(cx) {
-                Poll::Pending => ready = false,
-                Poll::Ready(_) => (),
-            }
+            svc.shutdown().await;
         }
-        if ready {
-            log::info!(
-                "Worker service shutdown, {} connections",
-                super::num_connections()
-            );
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
+        log::info!(
+            "Worker service shutdown, {} connections",
+            super::num_connections()
+        );
     }
 
     async fn call(&self, req: ServerMessage, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {

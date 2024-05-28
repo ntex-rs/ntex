@@ -4,7 +4,7 @@
 //! will be aborted.
 use std::{fmt, marker};
 
-use ntex_service::{IntoService, Middleware, Service, ServiceCtx};
+use ntex_service::{Middleware, Service, ServiceCtx};
 
 use crate::future::{select, Either};
 use crate::time::{sleep, Millis};
@@ -104,15 +104,14 @@ pub struct TimeoutService<S> {
 }
 
 impl<S> TimeoutService<S> {
-    pub fn new<T, U, R>(timeout: T, service: U) -> Self
+    pub fn new<T, R>(timeout: T, service: S) -> Self
     where
         T: Into<Millis>,
         S: Service<R>,
-        U: IntoService<S, R>,
     {
         TimeoutService {
+            service,
             timeout: timeout.into(),
-            service: service.into_service(),
         }
     }
 }
@@ -141,8 +140,8 @@ where
         }
     }
 
-    ntex_service::forward_poll_ready!(service, TimeoutError::Service);
-    ntex_service::forward_poll_shutdown!(service);
+    ntex_service::forward_ready!(service, TimeoutError::Service);
+    ntex_service::forward_shutdown!(service);
 }
 
 #[cfg(test)]
@@ -152,7 +151,6 @@ mod tests {
     use ntex_service::{apply, fn_factory, Pipeline, ServiceFactory};
 
     use super::*;
-    use crate::future::lazy;
 
     #[derive(Clone, Debug, PartialEq)]
     struct SleepService(Duration);
@@ -184,8 +182,8 @@ mod tests {
         let timeout =
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)).clone());
         assert_eq!(timeout.call(()).await, Ok(()));
-        assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| timeout.poll_shutdown(cx)).await.is_ready());
+        assert_eq!(timeout.ready().await, Ok(()));
+        assert_eq!(timeout.shutdown().await, ());
     }
 
     #[ntex_macros::rt_test2]
@@ -196,7 +194,7 @@ mod tests {
         let timeout =
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
         assert_eq!(timeout.call(()).await, Ok(()));
-        assert!(lazy(|cx| timeout.poll_ready(cx)).await.is_ready());
+        assert_eq!(timeout.ready().await, Ok(()));
     }
 
     #[ntex_macros::rt_test2]
