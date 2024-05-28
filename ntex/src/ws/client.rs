@@ -18,7 +18,7 @@ use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri}
 use crate::io::{
     Base, DispatchItem, Dispatcher, DispatcherConfig, Filter, Io, Layer, Sealed,
 };
-use crate::service::{apply_fn, into_service, IntoService, Pipeline, Service};
+use crate::service::{apply_fn, fn_service, IntoService, Pipeline, Service};
 use crate::time::{timeout, Millis, Seconds};
 use crate::{channel::mpsc, rt, util::Ready, ws};
 
@@ -534,8 +534,8 @@ where
     pub fn openssl(
         &mut self,
         connector: tls_openssl::ssl::SslConnector,
-    ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::Connector<Uri>> {
-        self.connector(openssl::Connector::new(connector))
+    ) -> WsClientBuilder<Layer<openssl::SslFilter>, openssl::SslConnector<Uri>> {
+        self.connector(openssl::SslConnector::new(connector))
     }
 
     #[cfg(feature = "rustls")]
@@ -543,8 +543,8 @@ where
     pub fn rustls(
         &mut self,
         config: std::sync::Arc<tls_rustls::ClientConfig>,
-    ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::Connector<Uri>> {
-        self.connector(rustls::Connector::from(config))
+    ) -> WsClientBuilder<Layer<rustls::TlsClientFilter>, rustls::TlsConnector<Uri>> {
+        self.connector(rustls::TlsConnector::from(config))
     }
 
     /// This method construct new `WsClientBuilder`
@@ -732,12 +732,12 @@ impl WsConnection<Sealed> {
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
-        rt::spawn(async move {
+        let _ = rt::spawn(async move {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
 
             let result = self
-                .start(into_service(move |item: ws::Frame| {
+                .start(fn_service(move |item: ws::Frame| {
                     match tx.send(Ok(item)) {
                         Ok(()) => (),
                         Err(_) => io.close(),

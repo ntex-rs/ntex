@@ -1,5 +1,9 @@
 # Changes
 
+## [2.0.0] - 2024-05-28
+
+* Use "async fn" for Service::ready() and Service::shutdown()
+
 ## [1.2.1] - 2024-03-28
 
 * Feature gate websocket support #320

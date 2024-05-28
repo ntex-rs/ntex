@@ -325,7 +325,7 @@ impl DateService {
 
             // periodic date update
             let s = self.clone();
-            crate::rt::spawn(async move {
+            let _ = crate::rt::spawn(async move {
                 sleep(Millis(500)).await;
                 s.0.current.set(false);
             });

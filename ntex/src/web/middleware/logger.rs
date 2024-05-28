@@ -139,8 +139,8 @@ where
     type Response = WebResponse;
     type Error = S::Error;
 
-    crate::forward_poll_ready!(service);
-    crate::forward_poll_shutdown!(service);
+    crate::forward_ready!(service);
+    crate::forward_shutdown!(service);
 
     async fn call(
         &self,
@@ -437,7 +437,7 @@ mod tests {
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
             .exclude("/test");
 
-        let srv = Pipeline::new(Middleware::create(&logger, srv.into_service()));
+        let srv = Pipeline::new(Middleware::create(&logger, srv.into_service())).bind();
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 

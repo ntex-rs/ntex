@@ -67,7 +67,7 @@ async fn test_openssl_string() {
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
 
-    let conn = Pipeline::new(ntex::connect::openssl::Connector::new(builder.build()));
+    let conn = Pipeline::new(ntex::connect::openssl::SslConnector::new(builder.build()));
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
@@ -116,7 +116,7 @@ async fn test_openssl_read_before_error() {
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
 
-    let conn = Pipeline::new(ntex::connect::openssl::Connector::new(builder.build()));
+    let conn = Pipeline::new(ntex::connect::openssl::SslConnector::new(builder.build()));
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     let item = io.recv(&Rc::new(BytesCodec)).await.unwrap().unwrap();
@@ -166,7 +166,7 @@ async fn test_rustls_string() {
         )
     });
 
-    let conn = Pipeline::new(ntex::connect::rustls::Connector::new(
+    let conn = Pipeline::new(ntex::connect::rustls::TlsConnector::new(
         rustls_utils::tls_connector(),
     ));
     let addr = format!("localhost:{}", srv.addr().port());

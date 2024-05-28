@@ -21,7 +21,7 @@ async fn main() -> io::Result<()> {
     builder.set_verify(SslVerifyMode::NONE);
 
     // openssl connector
-    let connector = connect::openssl::Connector::new(builder.build());
+    let connector = connect::openssl::SslConnector::new(builder.build());
 
     let io = connector.connect("127.0.0.1:8443").await.unwrap();
     println!("Connected to ssl server");

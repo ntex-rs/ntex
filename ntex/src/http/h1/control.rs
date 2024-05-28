@@ -210,7 +210,7 @@ impl<F: Filter> Upgrade<F> {
         H: FnOnce(Request, Io<F>, Codec) -> R + 'static,
         R: Future<Output = O>,
     {
-        crate::rt::spawn(async move {
+        let _ = crate::rt::spawn(async move {
             let _ = f(self.req, self.io, self.codec).await;
         });
         ControlAck {
