@@ -101,7 +101,7 @@ impl<T> Default for Resolver<T> {
 
 impl<T> Clone for Resolver<T> {
     fn clone(&self) -> Self {
-        Resolver(marker::PhantomData)
+        *self
     }
 }
 
@@ -118,7 +118,7 @@ impl<T: Address, C> ServiceFactory<Connect<T>, C> for Resolver<T> {
     type InitError = ();
 
     async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        Ok(self.clone())
+        Ok(*self)
     }
 }
 
