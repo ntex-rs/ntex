@@ -380,6 +380,29 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
+/// Handle not consumed payload
+#[ntex::test]
+async fn test_http1_handle_not_consumed_payload() {
+    let srv = test_server(|| {
+        HttpService::build()
+            .h1_control(fn_service(move |msg: Control<_, _>| {
+                if matches!(msg, Control::ProtocolError(_)) {
+                    panic!()
+                }
+                async move { Ok::<_, io::Error>(msg.ack()) }
+            }))
+            .h1(|_| async move { Ok::<_, io::Error>(Response::Ok().finish()) })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 4\r\n\r\n");
+    sleep(Millis(250)).await;
+    let _ = stream.write_all(b"1234");
+    let mut data = vec![0; 1024];
+    let _ = stream.read(&mut data);
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+}
+
 #[ntex::test]
 async fn test_content_length() {
     let srv = test_server(|| {

@@ -4,6 +4,8 @@
 
 * http: Fix handling payload timer after payload got consumed
 
+* http: Fix handling not consumed request's payload
+
 ## [2.0.0] - 2024-05-28
 
 * Use "async fn" for Service::ready() and Service::shutdown()

@@ -76,10 +76,6 @@ pub enum ProtocolError {
     #[error("Payload did not complete within the specified timeout")]
     SlowPayloadTimeout,
 
-    /// Payload is not consumed
-    #[error("Task is completed but request's payload is not consumed")]
-    PayloadIsNotConsumed,
-
     /// Response body processing error
     #[error("Response body processing error: {0}")]
     ResponsePayload(Box<dyn std::error::Error>),
@@ -89,14 +85,10 @@ impl super::ResponseError for ProtocolError {
     fn error_response(&self) -> super::Response {
         match self {
             ProtocolError::Decode(_) => super::Response::BadRequest().into(),
-
             ProtocolError::SlowRequestTimeout | ProtocolError::SlowPayloadTimeout => {
                 super::Response::RequestTimeout().into()
             }
-
-            ProtocolError::Encode(_)
-            | ProtocolError::PayloadIsNotConsumed
-            | ProtocolError::ResponsePayload(_) => {
+            ProtocolError::Encode(_) | ProtocolError::ResponsePayload(_) => {
                 super::Response::InternalServerError().into()
             }
         }
