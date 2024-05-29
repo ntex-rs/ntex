@@ -4,6 +4,7 @@ use crate::http::message::CurrentIo;
 use crate::http::{body::Body, h1::Codec, Request, Response, ResponseError};
 use crate::io::{Filter, Io, IoBoxed};
 
+#[derive(Debug)]
 pub enum Control<F, Err> {
     /// New request is loaded
     NewRequest(NewRequest),
@@ -40,19 +41,19 @@ bitflags::bitflags! {
 
 #[derive(Debug)]
 pub(super) enum ControlResult {
-    // handle request expect
+    /// handle request expect
     Expect(Request),
-    // handle request upgrade
+    /// handle request upgrade
     Upgrade(Request),
-    // forward request to publish service
+    /// forward request to publish service
     Publish(Request),
-    // forward request to publish service
+    /// forward request to publish service
     PublishUpgrade(Request),
-    // send response
+    /// send response
     Response(Response<()>, Body),
-    // send response
+    /// send response
     ResponseWithIo(Response<()>, Body, IoBoxed),
-    // drop connection
+    /// drop connection
     Stop,
 }
 

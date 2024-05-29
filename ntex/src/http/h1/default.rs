@@ -20,6 +20,7 @@ where
     type Service = DefaultControlService;
     type InitError = io::Error;
 
+    #[inline]
     async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
         Ok(DefaultControlService)
     }
@@ -33,6 +34,7 @@ where
     type Response = ControlAck;
     type Error = io::Error;
 
+    #[inline]
     async fn call(
         &self,
         req: Control<F, Err>,
