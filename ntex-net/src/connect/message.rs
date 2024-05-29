@@ -296,6 +296,10 @@ mod tests {
         let s = "test".to_string();
         assert_eq!(s.host(), "test");
         assert_eq!(s.port(), None);
+
+        let s = ByteString::from("test");
+        assert_eq!(s.host(), "test");
+        assert_eq!(s.port(), None);
     }
 
     #[test]

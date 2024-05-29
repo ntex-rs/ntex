@@ -39,3 +39,22 @@ impl<T, E> From<Result<T, E>> for Ready<T, E> {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::future::poll_fn;
+
+    use super::*;
+
+    #[ntex_macros::rt_test2]
+    async fn ready() {
+        let ok = Ok::<_, ()>("ok");
+        let mut f = Ready::from(ok);
+        let res = poll_fn(|cx| Pin::new(&mut f).poll(cx)).await;
+        assert_eq!(res.unwrap(), "ok");
+        let err = Err::<(), _>("err");
+        let mut f = Ready::from(err);
+        let res = poll_fn(|cx| Pin::new(&mut f).poll(cx)).await;
+        assert_eq!(res.unwrap_err(), "err");
+    }
+}

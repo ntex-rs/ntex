@@ -148,22 +148,42 @@ mod tests {
     use std::error::Error as StdError;
 
     #[test]
+    fn inner_http_error() {
+        let e = method::Method::from_bytes(b"").unwrap_err();
+        let err: Error = http::Error::from(e).into();
+        let ie = err.get_ref();
+        assert!(ie.is::<http::Error>());
+    }
+
+    #[test]
     fn inner_error_is_invalid_status_code() {
-        if let Err(e) = status::StatusCode::from_u16(6666) {
-            let err: Error = e.into();
-            let ie = err.get_ref();
-            assert!(!ie.is::<header::InvalidHeaderValue>());
-            assert!(ie.is::<status::InvalidStatusCode>());
-            ie.downcast_ref::<status::InvalidStatusCode>().unwrap();
+        let e = status::StatusCode::from_u16(6666).unwrap_err();
+        let err: Error = e.into();
+        let ie = err.get_ref();
+        assert!(!ie.is::<header::InvalidHeaderValue>());
+        assert!(ie.is::<status::InvalidStatusCode>());
+        ie.downcast_ref::<status::InvalidStatusCode>().unwrap();
 
-            assert!(err.source().is_none());
-            assert!(!err.is::<InvalidHeaderValue>());
-            assert!(err.is::<status::InvalidStatusCode>());
+        assert!(err.source().is_none());
+        assert!(!err.is::<InvalidHeaderValue>());
+        assert!(err.is::<status::InvalidStatusCode>());
 
-            let s = format!("{:?}", err);
-            assert!(s.starts_with("ntex_http::Error"));
-        } else {
-            panic!("Bad status allowed!");
-        }
+        let s = format!("{:?}", err);
+        assert!(s.starts_with("ntex_http::Error"));
+    }
+
+    #[test]
+    fn inner_error_is_invalid_method() {
+        let e = method::Method::from_bytes(b"").unwrap_err();
+        let err: Error = e.into();
+        let ie = err.get_ref();
+        assert!(ie.is::<method::InvalidMethod>());
+        ie.downcast_ref::<method::InvalidMethod>().unwrap();
+
+        assert!(err.source().is_none());
+        assert!(err.is::<method::InvalidMethod>());
+
+        let s = format!("{:?}", err);
+        assert!(s.starts_with("ntex_http::Error"));
     }
 }
