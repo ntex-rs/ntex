@@ -14,17 +14,11 @@ where
     let mut ready2 = false;
 
     poll_fn(move |cx| {
-        if !ready1 {
-            match pin::Pin::new(&mut fut1).poll(cx) {
-                Poll::Ready(_) => ready1 = true,
-                Poll::Pending => (),
-            }
+        if !ready1 && pin::Pin::new(&mut fut1).poll(cx).is_ready() {
+            ready1 = true;
         }
-        if !ready2 {
-            match pin::Pin::new(&mut fut2).poll(cx) {
-                Poll::Ready(_) => ready2 = true,
-                Poll::Pending => (),
-            }
+        if !ready2 && pin::Pin::new(&mut fut2).poll(cx).is_ready() {
+            ready2 = true
         }
         if ready1 && ready2 {
             Poll::Ready(())
@@ -51,19 +45,11 @@ where
     let mut ready2 = false;
 
     poll_fn(move |cx| {
-        if !ready1 {
-            match pin::Pin::new(&mut fut1).poll(cx) {
-                Poll::Ready(Ok(())) => ready1 = true,
-                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                Poll::Pending => (),
-            }
+        if !ready1 && pin::Pin::new(&mut fut1).poll(cx)?.is_ready() {
+            ready1 = true;
         }
-        if !ready2 {
-            match pin::Pin::new(&mut fut2).poll(cx) {
-                Poll::Ready(Ok(())) => ready2 = true,
-                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                Poll::Pending => (),
-            };
+        if !ready2 && pin::Pin::new(&mut fut2).poll(cx)?.is_ready() {
+            ready2 = true;
         }
         if ready1 && ready2 {
             Poll::Ready(Ok(()))
