@@ -208,7 +208,12 @@ where
                 State::ReadRequest => ready!(inner.poll_read_request(cx)),
                 // consume request's payload
                 State::ReadPayload => {
-                    ready!(inner.poll_request_payload(cx)).unwrap_or(State::ReadRequest)
+                    let result = inner.poll_request_payload(cx);
+                    if inner.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
+                        inner.stop()
+                    } else {
+                        ready!(result).unwrap_or(State::ReadRequest)
+                    }
                 }
                 // send response body
                 State::SendPayload { body } => {
@@ -224,6 +229,7 @@ where
                         let _ = ready!(Pin::new(f).poll(cx));
                         fut.take();
                     }
+                    log::debug!("{}: Dispatcher is stopped", inner.io.tag());
 
                     return Poll::Ready(
                         if let Some(io) = io {
@@ -654,7 +660,8 @@ where
                 // wait until future completes and then close
                 // connection
                 self.payload = None;
-                Poll::Ready(Err(Either::Left(ProtocolError::PayloadIsNotConsumed)))
+                self.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
+                Poll::Pending
             }
         }
     }
