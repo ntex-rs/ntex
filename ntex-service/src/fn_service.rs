@@ -369,20 +369,6 @@ where
     }
 }
 
-impl<F, S, R, Req, E, C> IntoServiceFactory<FnServiceNoConfig<F, S, R, Req, E>, Req, C>
-    for F
-where
-    F: Fn() -> R,
-    R: Future<Output = Result<S, E>>,
-    S: Service<Req>,
-    C: 'static,
-{
-    #[inline]
-    fn into_factory(self) -> FnServiceNoConfig<F, S, R, Req, E> {
-        FnServiceNoConfig::new(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use ntex_util::future::lazy;

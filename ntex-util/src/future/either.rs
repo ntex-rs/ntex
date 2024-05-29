@@ -141,11 +141,13 @@ mod test {
         e.as_ref();
         e.as_mut();
 
-        let e = Either::<(), ()>::Right(());
+        let mut e = Either::<(), ()>::Right(());
         assert!(!e.is_left());
         assert!(e.is_right());
         assert!(e.left().is_none());
         assert!(e.right().is_some());
+        e.as_ref();
+        e.as_mut();
 
         assert_eq!(Either::<(), ()>::Left(()).into_inner(), ());
         assert_eq!(Either::<(), ()>::Right(()).into_inner(), ());

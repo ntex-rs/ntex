@@ -685,5 +685,11 @@ mod tests {
 
         let res = lazy(|cx| server2.poll_write_buf(cx, b"123")).await;
         assert!(res.is_pending());
+
+        let (client, _) = IoTest::create();
+        let addr: net::SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let client = crate::Io::new(client.set_peer_addr(addr));
+        let item = client.query::<crate::types::PeerAddr>();
+        assert!(format!("{:?}", item).contains("QueryItem(127.0.0.1:8080)"));
     }
 }
