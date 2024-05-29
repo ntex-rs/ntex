@@ -6,8 +6,7 @@
     unreachable_pub,
     missing_debug_implementations
 )]
-
-use std::{future::Future, rc::Rc};
+use std::rc::Rc;
 
 mod and_then;
 mod apply;
@@ -183,11 +182,9 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     type InitError;
 
     /// Create and return a new service value asynchronously.
-    fn create(
-        &self,
-        cfg: Cfg,
-    ) -> impl Future<Output = Result<Self::Service, Self::InitError>>;
+    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError>;
 
+    #[inline]
     /// Create and return a new service value asynchronously and wrap into a container
     async fn pipeline(&self, cfg: Cfg) -> Result<Pipeline<Self::Service>, Self::InitError>
     where

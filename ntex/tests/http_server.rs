@@ -5,15 +5,11 @@ use futures_util::future::{self, FutureExt};
 use futures_util::stream::{once, StreamExt};
 use regex::Regex;
 
-use ntex::http::h1::Control;
 use ntex::http::header::{self, HeaderName, HeaderValue};
-use ntex::http::test::server as test_server;
-use ntex::http::{
-    body, HttpService, KeepAlive, Method, Request, Response, StatusCode, Version,
-};
-use ntex::service::fn_service;
+use ntex::http::{body, h1::Control, test::server as test_server};
+use ntex::http::{HttpService, KeepAlive, Method, Request, Response, StatusCode, Version};
 use ntex::time::{sleep, timeout, Millis, Seconds};
-use ntex::{util::Bytes, util::Ready, web::error};
+use ntex::{service::fn_service, util::Bytes, util::Ready, web::error};
 
 #[ntex::test]
 async fn test_h1() {
@@ -256,7 +252,7 @@ async fn test_http1_keepalive_timeout() {
 async fn test_http1_no_keepalive_during_response() {
     let srv = test_server(|| {
         HttpService::build().keep_alive(1).h1(|_| async {
-            sleep(Millis(1100)).await;
+            sleep(Millis(1200)).await;
             Ok::<_, io::Error>(Response::Ok().finish())
         })
     });
@@ -353,6 +349,35 @@ async fn test_http1_keepalive_disabled() {
     let mut data = vec![0; 1024];
     let res = stream.read(&mut data).unwrap();
     assert_eq!(res, 0);
+}
+
+/// Payload timer should not fire aftre dispatcher has read whole payload
+#[ntex::test]
+async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
+    let srv = test_server(|| {
+        HttpService::build()
+            .headers_read_rate(Seconds(1), Seconds(1), 128)
+            .payload_read_rate(Seconds(1), Seconds(1), 512)
+            .keep_alive(1)
+            .h1_control(fn_service(move |msg: Control<_, _>| async move {
+                Ok::<_, io::Error>(msg.ack())
+            }))
+            .h1(|mut req: Request| async move {
+                req.payload().recv().await;
+                sleep(Millis(1500)).await;
+                Ok::<_, io::Error>(Response::Ok().finish())
+            })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 4\r\n");
+    sleep(Millis(250)).await;
+    let _ = stream.write_all(b"\r\n");
+    sleep(Millis(250)).await;
+    let _ = stream.write_all(b"1234");
+    let mut data = vec![0; 1024];
+    let _ = stream.read(&mut data);
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
 #[ntex::test]

@@ -507,13 +507,20 @@ where
     fn poll_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, C, S, B>> {
         if self.payload.is_some() {
             if let Some(st) = ready!(self.poll_request_payload(cx)) {
-                return Poll::Ready(st);
+                Poll::Ready(st)
+            } else {
+                Poll::Pending
             }
-        } else if self.poll_io_closed(cx) {
-            // check if io is closed
-            return Poll::Ready(self.stop());
+        } else {
+            // check for io changes, could close while waiting for service call
+            match ready!(self.io.poll_status_update(cx)) {
+                IoStatusUpdate::KeepAlive => Poll::Pending,
+                IoStatusUpdate::Stop | IoStatusUpdate::PeerGone(_) => {
+                    Poll::Ready(self.stop())
+                }
+                IoStatusUpdate::WriteBackpressure => Poll::Pending,
+            }
         }
-        Poll::Pending
     }
 
     fn set_payload_error(&mut self, err: PayloadError) {
@@ -580,6 +587,7 @@ where
                             self.payload.as_mut().unwrap().1.feed_data(chunk);
                         }
                         Ok(PayloadItem::Eof) => {
+                            self.flags.remove(Flags::READ_PL_TIMEOUT);
                             self.payload.as_mut().unwrap().1.feed_eof();
                             self.payload = None;
                             break;
@@ -651,76 +659,66 @@ where
         }
     }
 
-    /// check for io changes, could close while waiting for service call
-    fn poll_io_closed(&self, cx: &mut Context<'_>) -> bool {
-        match self.io.poll_status_update(cx) {
-            Poll::Pending => false,
-            Poll::Ready(
-                IoStatusUpdate::KeepAlive
-                | IoStatusUpdate::Stop
-                | IoStatusUpdate::PeerGone(_),
-            ) => true,
-            Poll::Ready(IoStatusUpdate::WriteBackpressure) => false,
-        }
-    }
-
     fn handle_timeout(&mut self) -> Result<(), ProtocolError> {
         // check read rate
-        if self
-            .flags
-            .intersects(Flags::READ_PL_TIMEOUT | Flags::READ_HDRS_TIMEOUT)
-        {
-            let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-                &self.config.headers_read_rate
+        let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+            &self.config.headers_read_rate
+        } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+            &self.config.payload_read_rate
+        } else {
+            return Ok(());
+        };
+
+        if let Some(ref cfg) = cfg {
+            let total = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
+                let total = (self.read_remains - self.read_consumed)
+                    .try_into()
+                    .unwrap_or(u16::MAX);
+                self.read_remains = 0;
+                total
             } else {
-                &self.config.payload_read_rate
+                let total = (self.read_remains + self.read_consumed)
+                    .try_into()
+                    .unwrap_or(u16::MAX);
+                self.read_consumed = 0;
+                total
             };
 
-            if let Some(ref cfg) = cfg {
-                let total = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-                    let total = (self.read_remains - self.read_consumed)
-                        .try_into()
-                        .unwrap_or(u16::MAX);
-                    self.read_remains = 0;
-                    total
-                } else {
-                    let total = (self.read_remains + self.read_consumed)
-                        .try_into()
-                        .unwrap_or(u16::MAX);
-                    self.read_consumed = 0;
-                    total
-                };
+            if total > cfg.rate {
+                // update max timeout
+                if !cfg.max_timeout.is_zero() {
+                    self.read_max_timeout =
+                        Seconds(self.read_max_timeout.0.saturating_sub(cfg.timeout.0));
+                }
 
-                if total > cfg.rate {
-                    // update max timeout
-                    if !cfg.max_timeout.is_zero() {
-                        self.read_max_timeout =
-                            Seconds(self.read_max_timeout.0.saturating_sub(cfg.timeout.0));
-                    }
-
-                    // start timer for next period
-                    if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
-                        log::trace!(
-                            "{}: Bytes read rate {:?}, extend timer",
-                            self.io.tag(),
-                            total
-                        );
-                        self.io.start_timer(cfg.timeout);
-                        return Ok(());
-                    }
+                // start timer for next period
+                if cfg.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
+                    log::trace!(
+                        "{}: Bytes read rate {:?}, extend timer",
+                        self.io.tag(),
+                        total
+                    );
+                    self.io.start_timer(cfg.timeout);
+                    return Ok(());
                 }
             }
-        }
 
-        log::trace!("{}: Timeout during reading", self.io.tag());
-        if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            self.set_payload_error(PayloadError::Io(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Keep-alive",
-            )));
-            Err(ProtocolError::SlowPayloadTimeout)
+            log::trace!(
+                "{}: Timeout during reading, {:?}",
+                self.io.tag(),
+                self.flags
+            );
+            if self.flags.contains(Flags::READ_PL_TIMEOUT) {
+                self.set_payload_error(PayloadError::Io(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Keep-alive",
+                )));
+                Err(ProtocolError::SlowPayloadTimeout)
+            } else {
+                Err(ProtocolError::SlowRequestTimeout)
+            }
         } else {
-            Err(ProtocolError::SlowRequestTimeout)
+            Ok(())
         }
     }
 
@@ -731,7 +729,6 @@ where
         // got parsed frame
         if decoded.item.is_some() {
             self.read_remains = 0;
-            self.io.stop_timer();
             self.flags.remove(
                 Flags::READ_KA_TIMEOUT | Flags::READ_HDRS_TIMEOUT | Flags::READ_PL_TIMEOUT,
             );
@@ -741,16 +738,16 @@ where
         } else if self.read_remains == 0 && decoded.remains == 0 {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
-                if !self.flags.contains(Flags::READ_KA_TIMEOUT) {
+                if !self.flags.contains(Flags::READ_KA_TIMEOUT)
+                    && self.config.keep_alive_enabled()
+                {
                     log::debug!(
                         "{}: Start keep-alive timer {:?}",
                         self.io.tag(),
                         self.config.keep_alive
                     );
                     self.flags.insert(Flags::READ_KA_TIMEOUT);
-                    if self.config.keep_alive_enabled() {
-                        self.io.start_timer(self.config.keep_alive);
-                    }
+                    self.io.start_timer(self.config.keep_alive);
                 }
             } else {
                 self.io.close();
@@ -765,7 +762,8 @@ where
 
             // we got new data but not enough to parse single frame
             // start read timer
-            self.flags.remove(Flags::READ_KA_TIMEOUT);
+            self.flags
+                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
             self.flags.insert(Flags::READ_HDRS_TIMEOUT);
 
             self.read_consumed = 0;
@@ -781,6 +779,8 @@ where
             self.read_remains = decoded.remains as u32;
             self.read_consumed += decoded.consumed as u32;
         } else if let Some(ref cfg) = self.config.payload_read_rate {
+            log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
+
             // start payload timer
             self.flags.insert(Flags::READ_PL_TIMEOUT);
 
@@ -1298,6 +1298,8 @@ mod tests {
     async fn test_payload_timeout() {
         let mark = Arc::new(AtomicUsize::new(0));
         let mark2 = mark.clone();
+        let err_mark = Arc::new(AtomicUsize::new(0));
+        let err_mark2 = err_mark.clone();
 
         let (client, server) = Io::create();
         client.remote_buffer_cap(4096);
@@ -1332,7 +1334,17 @@ mod tests {
             Rc::new(DispatcherConfig::new(
                 config,
                 svc.into_service(),
-                DefaultControlService,
+                fn_service(move |msg: Control<_, _>| {
+                    if let Control::ProtocolError(ref err) = msg {
+                        if matches!(err.err(), ProtocolError::SlowPayloadTimeout) {
+                            err_mark2.store(
+                                err_mark2.load(Ordering::Relaxed) + 1,
+                                Ordering::Relaxed,
+                            );
+                        }
+                    }
+                    async move { Ok::<_, io::Error>(msg.ack()) }
+                }),
             )),
         );
         crate::rt::spawn(disp);
@@ -1347,5 +1359,6 @@ mod tests {
             sleep(Millis(750)).await;
         }
         assert!(mark.load(Ordering::Relaxed) == 1536);
+        assert!(err_mark.load(Ordering::Relaxed) == 1);
     }
 }
