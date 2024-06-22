@@ -1,10 +1,9 @@
-use std::{future::Future, io};
+use std::{fmt, future::Future, io};
 
 use crate::http::message::CurrentIo;
 use crate::http::{body::Body, h1::Codec, Request, Response, ResponseError};
 use crate::io::{Filter, Io, IoBoxed};
 
-#[derive(Debug)]
 pub enum Control<F, Err> {
     /// New request is loaded
     NewRequest(NewRequest),
@@ -108,6 +107,29 @@ impl<F, Err> Control<F, Err> {
     }
 }
 
+impl<F, Err> fmt::Debug for Control<F, Err>
+where
+    Err: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Control::NewRequest(msg) => {
+                f.debug_tuple("Control::NewRequest").field(msg).finish()
+            }
+            Control::Upgrade(msg) => f.debug_tuple("Control::Upgrade").field(msg).finish(),
+            Control::Expect(msg) => f.debug_tuple("Control::Expect").field(msg).finish(),
+            Control::Closed(msg) => f.debug_tuple("Control::Closed").field(msg).finish(),
+            Control::Error(msg) => f.debug_tuple("Control::Error").field(msg).finish(),
+            Control::ProtocolError(msg) => {
+                f.debug_tuple("Control::ProtocolError").field(msg).finish()
+            }
+            Control::PeerGone(msg) => {
+                f.debug_tuple("Control::PeerGone").field(msg).finish()
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct NewRequest(Request);
 
@@ -164,7 +186,6 @@ impl NewRequest {
     }
 }
 
-#[derive(Debug)]
 pub struct Upgrade<F> {
     req: Request,
     io: Io<F>,
@@ -241,6 +262,16 @@ impl<F: Filter> Upgrade<F> {
             result: ControlResult::ResponseWithIo(res, body.into(), self.io.into()),
             flags: ControlFlags::DISCONNECT,
         }
+    }
+}
+
+impl<F> fmt::Debug for Upgrade<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Upgrade")
+            .field("req", &self.req)
+            .field("io", &self.io)
+            .field("codec", &self.codec)
+            .finish()
     }
 }
 
