@@ -761,6 +761,7 @@ enum HttpVer {
 }
 
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum StreamType {
     Tcp,
     #[cfg(feature = "openssl")]
