@@ -398,13 +398,13 @@ fn connection_type(val: &str) -> Option<ConnectionType> {
     let l = val.len();
     let bytes = val.as_bytes();
     for i in 0..bytes.len() {
-        if i <= S_CLOSE.len() {
+        if i >= S_CLOSE.len() {
             return None;
         }
         let result = match bytes[i] {
             b'k' | b'K' => {
                 let pos = i + S_KEEP_ALIVE.len();
-                if l > pos && val[i..pos].eq_ignore_ascii_case(S_KEEP_ALIVE) {
+                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_KEEP_ALIVE) {
                     Some((ConnectionType::KeepAlive, pos))
                 } else {
                     None
@@ -412,7 +412,7 @@ fn connection_type(val: &str) -> Option<ConnectionType> {
             }
             b'c' | b'C' => {
                 let pos = i + S_CLOSE.len();
-                if l > pos && val[i..pos].eq_ignore_ascii_case(S_CLOSE) {
+                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_CLOSE) {
                     Some((ConnectionType::Close, pos))
                 } else {
                     None
@@ -420,7 +420,7 @@ fn connection_type(val: &str) -> Option<ConnectionType> {
             }
             b'u' | b'U' => {
                 let pos = i + S_UPGRADE.len();
-                if l > pos && val[i..pos].eq_ignore_ascii_case(S_UPGRADE) {
+                if l >= pos && val[i..pos].eq_ignore_ascii_case(S_UPGRADE) {
                     Some((ConnectionType::Upgrade, pos))
                 } else {
                     None
@@ -432,7 +432,7 @@ fn connection_type(val: &str) -> Option<ConnectionType> {
         if let Some((t, pos)) = result {
             let next = pos + 1;
             if val.len() > next {
-                if matches!(bytes[next], b' ' | b',') {
+                if matches!(bytes[next], b' ' | b',' | b'\r' | b'\n') {
                     return Some(t);
                 }
             } else {
