@@ -245,9 +245,10 @@ impl HttpMessage for HttpRequest {
 
 impl Drop for HttpRequest {
     fn drop(&mut self) {
-        if Rc::strong_count(&self.0) == 1 {
-            let v = &mut self.0.pool.0.borrow_mut();
+        if let Some(inner) = Rc::get_mut(&mut self.0) {
+            let v = &mut inner.pool.0.borrow_mut();
             if v.len() < 128 {
+                inner.head.remove_io();
                 self.extensions_mut().clear();
                 v.push(self.0.clone());
             }

@@ -87,6 +87,29 @@ async fn web_no_ws() {
 }
 
 #[ntex::test]
+async fn web_no_ws_2() {
+    let srv = test::server(|| {
+        App::new().service(
+            web::resource("/")
+                .route(web::to(|| async { HttpResponse::Ok().body("Hello world") })),
+        )
+    });
+
+    let mut response = srv
+        .get("/")
+        .no_decompress()
+        .header("test", "h2c")
+        .header("connection", "upgrade, test")
+        .set_connection_type(ntex::http::ConnectionType::Upgrade)
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let body = response.body().await.unwrap();
+    assert_eq!(body, b"Hello world");
+}
+
+#[ntex::test]
 async fn web_ws_client() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
