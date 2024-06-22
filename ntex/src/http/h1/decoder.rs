@@ -848,6 +848,22 @@ mod tests {
     }
 
     #[test]
+    fn test_connection_type() {
+        for s in &["Close", "Close\r\n", "close,", "close "] {
+            assert_eq!(connection_type(s), Some(ConnectionType::Close));
+        }
+        for s in &["upgrade", "upGrade\r\n", "upgrade,", "upgrade "] {
+            assert_eq!(connection_type(s), Some(ConnectionType::Upgrade));
+        }
+        for s in &["keep-alive", "keep-Alive\r\n", "keep-alive,", "Keep-alive "] {
+            assert_eq!(connection_type(s), Some(ConnectionType::KeepAlive));
+        }
+        for s in &["keep-aliv", "clos\r\n", "clos", "upgrad"] {
+            assert_eq!(connection_type(s), None);
+        }
+    }
+
+    #[test]
     fn test_parse_partial() {
         let mut buf = BytesMut::from("PUT /test HTTP/1");
 
