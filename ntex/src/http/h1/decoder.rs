@@ -395,12 +395,16 @@ const S_CLOSE: &str = "close";
 const S_UPGRADE: &str = "upgrade";
 
 fn connection_type(val: &str) -> Option<ConnectionType> {
+    let l = val.len();
     let bytes = val.as_bytes();
     for i in 0..bytes.len() {
+        if i <= S_CLOSE.len() {
+            return None;
+        }
         let result = match bytes[i] {
             b'k' | b'K' => {
                 let pos = i + S_KEEP_ALIVE.len();
-                if val[i..pos].eq_ignore_ascii_case(S_KEEP_ALIVE) {
+                if l > pos && val[i..pos].eq_ignore_ascii_case(S_KEEP_ALIVE) {
                     Some((ConnectionType::KeepAlive, pos))
                 } else {
                     None
@@ -408,7 +412,7 @@ fn connection_type(val: &str) -> Option<ConnectionType> {
             }
             b'c' | b'C' => {
                 let pos = i + S_CLOSE.len();
-                if val[i..pos].eq_ignore_ascii_case(S_CLOSE) {
+                if l > pos && val[i..pos].eq_ignore_ascii_case(S_CLOSE) {
                     Some((ConnectionType::Close, pos))
                 } else {
                     None
@@ -416,7 +420,7 @@ fn connection_type(val: &str) -> Option<ConnectionType> {
             }
             b'u' | b'U' => {
                 let pos = i + S_UPGRADE.len();
-                if val[i..pos].eq_ignore_ascii_case(S_UPGRADE) {
+                if l > pos && val[i..pos].eq_ignore_ascii_case(S_UPGRADE) {
                     Some((ConnectionType::Upgrade, pos))
                 } else {
                     None
