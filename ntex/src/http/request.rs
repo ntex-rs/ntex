@@ -117,12 +117,7 @@ impl Request {
     /// Check if request requires connection upgrade
     #[inline]
     pub fn upgrade(&self) -> bool {
-        if let Some(conn) = self.head().headers.get(header::CONNECTION) {
-            if let Ok(s) = conn.to_str() {
-                return s.to_lowercase().contains("upgrade");
-            }
-        }
-        self.head().method == Method::CONNECT
+        self.head().upgrade() || self.head().method == Method::CONNECT
     }
 
     /// Io reference for current connection

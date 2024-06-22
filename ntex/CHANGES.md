@@ -1,5 +1,11 @@
 # Changes
 
+## [2.0.2] - 2024-06-22
+
+* web: Cleanup http request in cache
+
+* http: Fix handling of connection header
+
 ## [2.0.1] - 2024-05-29
 
 * http: Fix handling payload timer after payload got consumed

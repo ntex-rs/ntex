@@ -153,16 +153,8 @@ pub(super) trait MessageType: Sized {
                     }
                     // connection keep-alive state
                     header::CONNECTION => {
-                        ka = if let Ok(conn) = value.to_str().map(|conn| conn.trim()) {
-                            if conn.eq_ignore_ascii_case("keep-alive") {
-                                Some(ConnectionType::KeepAlive)
-                            } else if conn.eq_ignore_ascii_case("close") {
-                                Some(ConnectionType::Close)
-                            } else if conn.eq_ignore_ascii_case("upgrade") {
-                                Some(ConnectionType::Upgrade)
-                            } else {
-                                None
-                            }
+                        ka = if let Ok(val) = value.to_str() {
+                            connection_type(val)
                         } else {
                             None
                         };
@@ -396,6 +388,55 @@ impl MessageType for ResponseHead {
 
         Ok(Some((msg, decoder)))
     }
+}
+
+const S_KEEP_ALIVE: &str = "keep-alive";
+const S_CLOSE: &str = "close";
+const S_UPGRADE: &str = "upgrade";
+
+fn connection_type(val: &str) -> Option<ConnectionType> {
+    let bytes = val.as_bytes();
+    for i in 0..bytes.len() {
+        let result = match bytes[i] {
+            b'k' | b'K' => {
+                let pos = i + S_KEEP_ALIVE.len();
+                if val[i..pos].eq_ignore_ascii_case(S_KEEP_ALIVE) {
+                    Some((ConnectionType::KeepAlive, pos))
+                } else {
+                    None
+                }
+            }
+            b'c' | b'C' => {
+                let pos = i + S_CLOSE.len();
+                if val[i..pos].eq_ignore_ascii_case(S_CLOSE) {
+                    Some((ConnectionType::Close, pos))
+                } else {
+                    None
+                }
+            }
+            b'u' | b'U' => {
+                let pos = i + S_UPGRADE.len();
+                if val[i..pos].eq_ignore_ascii_case(S_UPGRADE) {
+                    Some((ConnectionType::Upgrade, pos))
+                } else {
+                    None
+                }
+            }
+            _ => continue,
+        };
+
+        if let Some((t, pos)) = result {
+            let next = pos + 1;
+            if val.len() > next {
+                if matches!(bytes[next], b' ' | b',') {
+                    return Some(t);
+                }
+            } else {
+                return Some(t);
+            }
+        }
+    }
+    None
 }
 
 #[derive(Clone, Copy)]
