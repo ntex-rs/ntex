@@ -73,6 +73,8 @@ impl fmt::Debug for LocalWaker {
 #[doc(hidden)]
 /// Yields execution back to the current runtime.
 pub async fn yield_to() {
+    use std::{future::Future, pin::Pin, task::Context, task::Poll};
+
     struct Yield {
         completed: bool,
     }
@@ -86,7 +88,7 @@ pub async fn yield_to() {
             }
 
             self.completed = true;
-            cx.waker().clone().wake();
+            cx.waker().wake_by_ref();
 
             Poll::Pending
         }
