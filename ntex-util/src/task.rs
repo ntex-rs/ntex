@@ -69,3 +69,40 @@ impl fmt::Debug for LocalWaker {
         write!(f, "LocalWaker")
     }
 }
+
+#[doc(hidden)]
+/// Yields execution back to the current runtime.
+pub async fn yield_to() {
+    use std::{future::Future, pin::Pin, task::Context, task::Poll};
+
+    struct Yield {
+        completed: bool,
+    }
+
+    impl Future for Yield {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.completed {
+                return Poll::Ready(());
+            }
+
+            self.completed = true;
+            cx.waker().wake_by_ref();
+
+            Poll::Pending
+        }
+    }
+
+    Yield { completed: false }.await;
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[ntex_macros::rt_test2]
+    async fn yield_test() {
+        yield_to().await;
+    }
+}

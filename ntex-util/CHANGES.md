@@ -1,5 +1,9 @@
 # Changes
 
+## [2.1.0] - 2024-06-26
+
+* Add task::yield_to() helper
+
 ## [2.0.1] - 2024-05-28
 
 * Re-enable BufferService
