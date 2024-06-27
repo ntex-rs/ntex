@@ -40,9 +40,10 @@ impl Config {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
 
+#[derive(Debug)]
 struct Socket {
     name: String,
     sockets: Vec<(Token, Listener, &'static str)>,
@@ -53,6 +54,16 @@ pub(super) struct ServiceConfigInner {
     apply: Option<Box<dyn OnWorkerStart>>,
     sockets: Vec<Socket>,
     backlog: i32,
+}
+
+impl fmt::Debug for ServiceConfigInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceConfigInner")
+            .field("token", &self.token)
+            .field("backlog", &self.backlog)
+            .field("sockets", &self.sockets)
+            .finish()
+    }
 }
 
 impl ServiceConfig {

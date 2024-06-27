@@ -13,7 +13,10 @@ use super::config::{Config, ServiceConfig};
 use super::factory::{self, FactoryServiceType, OnWorkerStart, OnWorkerStartWrapper};
 use super::{socket::Listener, Connection, ServerStatus, StreamServer, Token};
 
-/// Server builder
+/// Streaming service builder
+///
+/// This type can be used to construct an instance of `net streaming server` through a
+/// builder-like pattern.
 pub struct ServerBuilder {
     token: Token,
     backlog: i32,
@@ -27,6 +30,18 @@ pub struct ServerBuilder {
 impl Default for ServerBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl fmt::Debug for ServerBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerBuilder")
+            .field("token", &self.token)
+            .field("backlog", &self.backlog)
+            .field("sockets", &self.sockets)
+            .field("accept", &self.accept)
+            .field("worker-pool", &self.pool)
+            .finish()
     }
 }
 
@@ -382,5 +397,11 @@ mod tests {
     fn test_bind_addr() {
         let addrs: Vec<net::SocketAddr> = Vec::new();
         assert!(bind_addr(&addrs[..], 10).is_err());
+    }
+
+    #[test]
+    fn test_debug() {
+        let builder = ServerBuilder::default();
+        assert!(format!("{:?}", builder).contains("ServerBuilder"));
     }
 }

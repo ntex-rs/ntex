@@ -10,6 +10,7 @@ use super::{Config, Token};
 pub(super) type BoxServerService = boxed::BoxServiceFactory<(), Io, (), (), ()>;
 pub(crate) type FactoryServiceType = Box<dyn FactoryService>;
 
+#[derive(Debug)]
 pub(crate) struct NetService {
     pub(crate) tokens: Vec<(Token, &'static str)>,
     pub(crate) factory: BoxServerService,
