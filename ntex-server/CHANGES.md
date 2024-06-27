@@ -1,5 +1,9 @@
 # Changes
 
+## [2.1.0] - 2024-06-27
+
+* Shutdown service on error and on worker shutdown
+
 ## [2.0.0] - 2024-05-28
 
 * Use async fn for Service::ready() and Service::shutdown()

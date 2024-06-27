@@ -1,19 +1,20 @@
+use std::fmt;
+
 use ntex_bytes::{Pool, PoolRef};
 use ntex_net::Io;
 use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
-use ntex_util::HashMap;
+use ntex_util::{future::join_all, HashMap};
 
-use crate::{ServerConfiguration, WorkerMessage};
+use crate::ServerConfiguration;
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::counter::Counter;
 use super::factory::{FactoryServiceType, NetService, OnWorkerStart};
 use super::{socket::Connection, Token, MAX_CONNS_COUNTER};
 
-pub type ServerMessage = WorkerMessage<Connection>;
-
 pub(super) type BoxService = boxed::BoxService<Io, (), ()>;
 
+/// Net streaming server
 pub struct StreamServer {
     notify: AcceptNotify,
     services: Vec<FactoryServiceType>,
@@ -31,6 +32,14 @@ impl StreamServer {
             services,
             on_worker_start,
         }
+    }
+}
+
+impl fmt::Debug for StreamServer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StreamServer")
+            .field("services", &self.services.len())
+            .finish()
     }
 }
 
@@ -88,11 +97,12 @@ impl Clone for StreamServer {
     }
 }
 
+#[derive(Debug)]
 pub struct StreamService {
     services: Vec<NetService>,
 }
 
-impl ServiceFactory<ServerMessage> for StreamService {
+impl ServiceFactory<Connection> for StreamService {
     type Response = ();
     type Error = ();
     type Service = StreamServiceImpl;
@@ -130,13 +140,14 @@ impl ServiceFactory<ServerMessage> for StreamService {
     }
 }
 
+#[derive(Debug)]
 pub struct StreamServiceImpl {
     tokens: HashMap<Token, (usize, &'static str, Pool, PoolRef)>,
     services: Vec<BoxService>,
     conns: Counter,
 }
 
-impl Service<ServerMessage> for StreamServiceImpl {
+impl Service<Connection> for StreamServiceImpl {
     type Response = ();
     type Error = ();
 
@@ -161,35 +172,28 @@ impl Service<ServerMessage> for StreamServiceImpl {
     }
 
     async fn shutdown(&self) {
-        for svc in &self.services {
-            svc.shutdown().await;
-        }
+        let _ = join_all(self.services.iter().map(|svc| svc.shutdown())).await;
         log::info!(
             "Worker service shutdown, {} connections",
             super::num_connections()
         );
     }
 
-    async fn call(&self, req: ServerMessage, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
-        match req {
-            ServerMessage::New(con) => {
-                if let Some((idx, tag, _, pool)) = self.tokens.get(&con.token) {
-                    let stream: Io<_> = con.io.try_into().map_err(|e| {
-                        log::error!("Cannot convert to an async io stream: {}", e);
-                    })?;
+    async fn call(&self, con: Connection, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        if let Some((idx, tag, _, pool)) = self.tokens.get(&con.token) {
+            let stream: Io<_> = con.io.try_into().map_err(|e| {
+                log::error!("Cannot convert to an async io stream: {}", e);
+            })?;
 
-                    stream.set_tag(tag);
-                    stream.set_memory_pool(*pool);
-                    let guard = self.conns.get();
-                    let _ = ctx.call(&self.services[*idx], stream).await;
-                    drop(guard);
-                    Ok(())
-                } else {
-                    log::error!("Cannot get handler service for connection: {:?}", con);
-                    Err(())
-                }
-            }
-            _ => Ok(()),
+            stream.set_tag(tag);
+            stream.set_memory_pool(*pool);
+            let guard = self.conns.get();
+            let _ = ctx.call(&self.services[*idx], stream).await;
+            drop(guard);
+            Ok(())
+        } else {
+            log::error!("Cannot get handler service for connection: {:?}", con);
+            Err(())
         }
     }
 }

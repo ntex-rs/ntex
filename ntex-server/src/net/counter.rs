@@ -2,11 +2,13 @@ use std::{cell::Cell, future::poll_fn, rc::Rc, task, task::Poll};
 
 use ntex_util::task::LocalWaker;
 
+#[derive(Debug)]
 /// Simple counter with ability to notify task on reaching specific number
 ///
 /// Counter could be cloned, total count is shared across all clones.
 pub(super) struct Counter(Rc<CounterInner>);
 
+#[derive(Debug)]
 struct CounterInner {
     count: Cell<usize>,
     capacity: usize,

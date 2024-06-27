@@ -13,7 +13,7 @@ mod test;
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
 pub use self::builder::{bind_addr, create_tcp_listener, ServerBuilder};
 pub use self::config::{Config, ServiceConfig, ServiceRuntime};
-pub use self::service::{ServerMessage, StreamServer};
+pub use self::service::StreamServer;
 pub use self::socket::{Connection, Stream};
 pub use self::test::{build_test_server, test_server, TestServer};
 

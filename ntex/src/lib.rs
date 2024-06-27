@@ -83,6 +83,8 @@ pub mod server {
     //! General purpose tcp server
     pub use ntex_server::net::*;
 
+    pub use ntex_server::{signal, Signal};
+
     #[cfg(feature = "openssl")]
     pub use ntex_tls::openssl;
 
