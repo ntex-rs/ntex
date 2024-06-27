@@ -57,6 +57,7 @@ impl Default for AppConfig {
 }
 
 /// Service config is used for external configuration.
+///
 /// Part of application configuration could be offloaded
 /// to set of external methods. This could help with
 /// modularization of big application configuration.
