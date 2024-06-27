@@ -39,6 +39,8 @@ impl fmt::Debug for ServerBuilder {
             .field("token", &self.token)
             .field("backlog", &self.backlog)
             .field("sockets", &self.sockets)
+            .field("accept", &self.accept)
+            .field("worker-pool", &self.pool)
             .finish()
     }
 }
@@ -395,5 +397,11 @@ mod tests {
     fn test_bind_addr() {
         let addrs: Vec<net::SocketAddr> = Vec::new();
         assert!(bind_addr(&addrs[..], 10).is_err());
+    }
+
+    #[test]
+    fn test_debug() {
+        let builder = ServerBuilder::default();
+        assert!(format!("{:?}", builder).contains("ServerBuilder"));
     }
 }
