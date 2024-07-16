@@ -59,14 +59,19 @@ where
                 .workers(1)
                 .disable_signals()
                 .run();
-            tx.send((system, local_addr, server)).expect("Failed to send Server to TestServer");
+            tx.send((system, local_addr, server))
+                .expect("Failed to send Server to TestServer");
             Ok(())
         })
     });
 
     let (system, addr, server) = rx.recv().unwrap();
-    
-    TestServer { addr, server, system }
+
+    TestServer {
+        addr,
+        server,
+        system,
+    }
 }
 
 /// Start new server with server builder
@@ -82,7 +87,8 @@ where
 
         sys.run(|| {
             let server = factory(super::build()).workers(1).disable_signals().run();
-            tx.send((system, server)).expect("Failed to send Server to TestServer");
+            tx.send((system, server))
+                .expect("Failed to send Server to TestServer");
             Ok(())
         })
     });
