@@ -306,7 +306,7 @@ impl ResourceDef {
 
             elems.push(PathElement::Var(name.to_string()));
 
-            if let Some(idx) = rem.find(|c| c == '{' || c == '/') {
+            if let Some(idx) = rem.find(['{', '/']) {
                 end = Some(idx);
                 pattern = rem;
                 continue;
@@ -346,7 +346,7 @@ impl ResourceDef {
 
         loop {
             let start = usize::from(pattern.starts_with('/'));
-            let idx = if let Some(idx) = pattern[start..].find(|c| c == '{' || c == '/') {
+            let idx = if let Some(idx) = pattern[start..].find(['{', '/']) {
                 idx + start
             } else {
                 break;
@@ -710,6 +710,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::mutable_key_type)]
     fn test_def() {
         let re = ResourceDef::new("/user/-{id}*");
         assert_eq!(re, ResourceDef::from("/user/-{id}*"));
