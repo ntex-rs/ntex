@@ -45,31 +45,27 @@ where
     R: ServiceFactory<Io> + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    let (server_tx, server_rx) = oneshot::channel();
-
     // run server in separate thread
     thread::spawn(move || {
         let sys = System::new("ntex-test-server");
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
+        let system = sys.system();
 
-        tx.send((sys.system(), local_addr)).unwrap();
-        sys.run(|| {
+        sys.run(move || {
             let server = ServerBuilder::new()
                 .listen("test", tcp, move |_| factory())?
                 .set_tag("test", "TEST-SERVER")
                 .workers(1)
                 .disable_signals()
                 .run();
-            server_tx.send(server).expect("Failed to send Server to TestServer");
+            tx.send((system, local_addr, server)).expect("Failed to send Server to TestServer");
             Ok(())
         })
     });
 
-    let (system, addr) = rx.recv().unwrap();
-    let server= server_rx.recv().expect("Failed to recieve Server to TestServer");
-
-
+    let (system, addr, server) = rx.recv().unwrap();
+    
     TestServer { addr, server, system }
 }
 
@@ -79,21 +75,18 @@ where
     F: FnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
-    let (server_tx, server_rx) = oneshot::channel();
-
     // run server in separate thread
     thread::spawn(move || {
         let sys = System::new("ntex-test-server");
+        let system = sys.system();
 
-        tx.send(sys.system()).unwrap();
         sys.run(|| {
             let server = factory(super::build()).workers(1).disable_signals().run();
-            server_tx.send(server).expect("Failed to send Server to TestServer");
+            tx.send((system, server)).expect("Failed to send Server to TestServer");
             Ok(())
         })
     });
-    let system = rx.recv().unwrap();
-    let server: crate::Server<super::Connection> = server_rx.recv().expect("Failed to recieve Server to TestServer");
+    let (system, server) = rx.recv().unwrap();
 
     TestServer {
         system,
@@ -142,13 +135,8 @@ impl TestServer {
     }
 
     /// Get access to the running Server
-    pub fn server(&self) -> &Server {
-        &self.server
-    }
-
-    /// Get mutable access to the running Server
-    pub fn server_mut(&mut self) -> &mut Server {
-        &mut self.server
+    pub fn server(&self) -> Server {
+        self.server.clone()
     }
 }
 
