@@ -256,7 +256,7 @@ mod tests {
             req: &'static str,
             ctx: ServiceCtx<'_, Self>,
         ) -> Result<Self::Response, Self::Error> {
-            format!("{:?}", ctx);
+            let _ = format!("{:?}", ctx);
             #[allow(clippy::clone_on_copy)]
             let _ = ctx.clone();
             Ok(req)

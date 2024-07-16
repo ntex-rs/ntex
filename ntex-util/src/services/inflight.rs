@@ -117,7 +117,7 @@ mod tests {
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(srv.shutdown().await, ());
+        srv.shutdown().await;
     }
 
     #[ntex_macros::rt_test2]

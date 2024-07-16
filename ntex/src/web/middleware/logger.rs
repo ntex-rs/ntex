@@ -339,11 +339,7 @@ impl FormatText {
             }
             FormatText::ResponseHeader(ref name) => {
                 let s = if let Some(val) = res.headers().get(name) {
-                    if let Ok(s) = val.to_str() {
-                        s
-                    } else {
-                        "-"
-                    }
+                    val.to_str().unwrap_or("-")
                 } else {
                     "-"
                 };
@@ -380,11 +376,7 @@ impl FormatText {
             }
             FormatText::RequestHeader(ref name) => {
                 let s = if let Some(val) = req.headers().get(name) {
-                    if let Ok(s) = val.to_str() {
-                        s
-                    } else {
-                        "-"
-                    }
+                    val.to_str().unwrap_or("-")
                 } else {
                     "-"
                 };

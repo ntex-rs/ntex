@@ -244,7 +244,7 @@ mod tests {
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
-        format!("{:?} {:?}", factory, srv);
+        let _ = format!("{:?} {:?}", factory, srv);
 
         assert_eq!(srv.ready().await, Ok(()));
         srv.shutdown().await;
@@ -259,7 +259,7 @@ mod tests {
         let res = srv.call(10).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
-        format!("{:?} {:?}", factory, srv);
+        let _ = format!("{:?} {:?}", factory, srv);
 
         assert_eq!(srv.ready().await, Ok(()));
     }

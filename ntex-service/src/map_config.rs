@@ -134,7 +134,7 @@ mod tests {
 
         let _ = factory.create(&10).await;
         assert_eq!(item.get(), 11);
-        format!("{:?}", factory);
+        let _ = format!("{:?}", factory);
     }
 
     #[ntex::test]

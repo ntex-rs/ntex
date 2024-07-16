@@ -283,7 +283,7 @@ mod tests {
         let service = factory.pipeline(&()).await.unwrap().clone();
 
         assert!(service.ready().await.is_ok());
-        assert_eq!(service.shutdown().await, ());
+        service.shutdown().await;
 
         assert_eq!(service.call(Variant3::V1(())).await, Ok(1));
         assert_eq!(service.call(Variant3::V2(())).await, Ok(2));

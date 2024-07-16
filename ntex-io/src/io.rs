@@ -1015,7 +1015,7 @@ mod tests {
 
         let (client, server) = IoTest::create();
         let f = DropFilter { p: p.clone() };
-        format!("{:?}", f);
+        let _ = format!("{:?}", f);
         let mut io = Io::new(server).add_filter(f);
 
         client.remote_buffer_cap(1024);

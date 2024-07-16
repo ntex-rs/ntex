@@ -15,6 +15,7 @@ categories = [
 ]
 license = "MIT OR Apache-2.0"
 edition = "2021"
+rust-version = "1.75"
 
 [package.metadata.docs.rs]
 features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "brotli"]
