@@ -184,7 +184,7 @@ mod tests {
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
-        format!("{:?}", srv);
+        let _ = format!("{:?}", srv);
     }
 
     #[ntex::test]
@@ -208,7 +208,7 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
 
-        format!("{:?}", new_srv);
+        let _ = format!("{:?}", new_srv);
     }
 
     #[ntex::test]
@@ -222,6 +222,6 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
 
-        format!("{:?}", new_srv);
+        let _ = format!("{:?}", new_srv);
     }
 }

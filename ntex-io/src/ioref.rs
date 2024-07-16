@@ -496,7 +496,7 @@ mod tests {
             read_order: read_order.clone(),
             write_order: write_order.clone(),
         };
-        format!("{:?}", counter);
+        let _ = format!("{:?}", counter);
         let io = Io::new(server).add_filter(counter);
 
         client.remote_buffer_cap(1024);

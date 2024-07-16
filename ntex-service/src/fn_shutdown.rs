@@ -94,6 +94,6 @@ mod tests {
         pipe.shutdown().await;
         assert!(is_called.get());
 
-        format!("{:?}", pipe);
+        let _ = format!("{:?}", pipe);
     }
 }

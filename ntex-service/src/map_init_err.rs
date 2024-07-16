@@ -88,7 +88,7 @@ mod tests {
 
         assert!(factory.create(&true).await.is_err());
         assert!(factory.create(&false).await.is_ok());
-        format!("{:?}", factory);
+        let _ = format!("{:?}", factory);
     }
 
     #[ntex::test]
@@ -108,6 +108,6 @@ mod tests {
 
         assert!(factory.create(&true).await.is_err());
         assert!(factory.create(&false).await.is_ok());
-        format!("{:?}", factory);
+        let _ = format!("{:?}", factory);
     }
 }

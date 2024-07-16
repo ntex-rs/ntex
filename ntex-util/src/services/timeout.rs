@@ -183,7 +183,7 @@ mod tests {
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)).clone());
         assert_eq!(timeout.call(()).await, Ok(()));
         assert_eq!(timeout.ready().await, Ok(()));
-        assert_eq!(timeout.shutdown().await, ());
+        timeout.shutdown().await;
     }
 
     #[ntex_macros::rt_test2]
