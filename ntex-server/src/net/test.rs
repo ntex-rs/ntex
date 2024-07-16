@@ -1,12 +1,12 @@
 //! Test server
-use std::{io, net, sync::mpsc, thread};
+use std::{io, net, thread};
 
 use ntex_net::{tcp_connect, Io};
 use ntex_rt::System;
 use ntex_service::ServiceFactory;
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use super::ServerBuilder;
+use super::{Server, ServerBuilder};
 
 /// Start test server
 ///
@@ -44,7 +44,8 @@ where
     F: Fn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io> + 'static,
 {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = oneshot::channel();
+    let (server_tx, server_rx) = oneshot::channel();
 
     // run server in separate thread
     thread::spawn(move || {
@@ -54,19 +55,22 @@ where
 
         tx.send((sys.system(), local_addr)).unwrap();
         sys.run(|| {
-            ServerBuilder::new()
+            let server = ServerBuilder::new()
                 .listen("test", tcp, move |_| factory())?
                 .set_tag("test", "TEST-SERVER")
                 .workers(1)
                 .disable_signals()
                 .run();
+            server_tx.send(server).expect("Failed to send Server to TestServer");
             Ok(())
         })
     });
 
     let (system, addr) = rx.recv().unwrap();
+    let server= server_rx.recv().expect("Failed to recieve Server to TestServer");
 
-    TestServer { addr, system }
+
+    TestServer { addr, server, system }
 }
 
 /// Start new server with server builder
@@ -74,7 +78,8 @@ pub fn build_test_server<F>(factory: F) -> TestServer
 where
     F: FnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
 {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = oneshot::channel();
+    let (server_tx, server_rx) = oneshot::channel();
 
     // run server in separate thread
     thread::spawn(move || {
@@ -82,14 +87,17 @@ where
 
         tx.send(sys.system()).unwrap();
         sys.run(|| {
-            factory(super::build()).workers(1).disable_signals().run();
+            let server = factory(super::build()).workers(1).disable_signals().run();
+            server_tx.send(server).expect("Failed to send Server to TestServer");
             Ok(())
         })
     });
     let system = rx.recv().unwrap();
+    let server: crate::Server<super::Connection> = server_rx.recv().expect("Failed to recieve Server to TestServer");
 
     TestServer {
         system,
+        server,
         addr: "127.0.0.1:0".parse().unwrap(),
     }
 }
@@ -99,6 +107,7 @@ where
 pub struct TestServer {
     addr: net::SocketAddr,
     system: System,
+    server: Server,
 }
 
 impl TestServer {
@@ -117,7 +126,7 @@ impl TestServer {
         tcp_connect(self.addr).await
     }
 
-    /// Stop http server
+    /// Stop http server by stopping the runtime.
     pub fn stop(&self) {
         self.system.stop();
     }
@@ -130,6 +139,16 @@ impl TestServer {
         socket.bind(&SockAddr::from(addr)).unwrap();
         let tcp = net::TcpListener::from(socket);
         tcp.local_addr().unwrap()
+    }
+
+    /// Get access to the running Server
+    pub fn server(&self) -> &Server {
+        &self.server
+    }
+
+    /// Get mutable access to the running Server
+    pub fn server_mut(&mut self) -> &mut Server {
+        &mut self.server
     }
 }
 
