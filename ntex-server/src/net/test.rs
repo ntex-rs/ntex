@@ -118,7 +118,7 @@ impl TestServer {
     }
 
     /// Stop http server
-    fn stop(&mut self) {
+    pub fn stop(&self) {
         self.system.stop();
     }
 

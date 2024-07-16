@@ -1,5 +1,9 @@
 # Changes
 
+## [2.2.0] - 2024-07-16
+
+* Expose TetServer::stop() method
+
 ## [2.1.0] - 2024-06-27
 
 * Shutdown service on error and on worker shutdown
