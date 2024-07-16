@@ -1,5 +1,9 @@
 # Changes
 
+## [2.3.0] - 2024-07-16
+
+* Add Server to TestServer
+
 ## [2.2.0] - 2024-07-16
 
 * Expose TetServer::stop() method
