@@ -1,29 +1,44 @@
-use ntex::web;
+use ntex::http;
+use ntex::web::{self, middleware, App, HttpRequest, HttpResponse, HttpServer};
 
-#[derive(serde::Deserialize)]
-struct Info {
-    username: String,
+#[web::get("/resource1/{name}/index.html")]
+async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
+    println!("REQ: {:?}", req);
+    format!("Hello: {}!\r\n", name)
 }
 
-async fn submit(info: web::types::Json<Info>) -> Result<String, web::Error> {
-    Ok(format!("Welcome {}!", info.username))
+async fn index_async(req: HttpRequest) -> &'static str {
+    println!("REQ: {:?}", req);
+    "Hello world!\r\n"
+}
+
+#[web::get("/")]
+async fn no_params() -> &'static str {
+    "Hello world!\r\n"
 }
 
 #[ntex::main]
 async fn main() -> std::io::Result<()> {
-    std::env::set_var("RUST_LOG", "trace");
+    std::env::set_var("RUST_LOG", "ntex=trace");
     env_logger::init();
-    web::HttpServer::new(|| {
-        let json_config = web::types::JsonConfig::default().limit(4096);
 
-        web::App::new().service(
-            web::resource("/")
-                .state(json_config)
-                .route(web::post().to(submit)),
-        )
+    HttpServer::new(|| {
+        App::new()
+            .wrap(middleware::Logger::default())
+            .service((index, no_params))
+            .service(
+                web::resource("/resource2/index.html")
+                    .wrap(middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"))
+                    .default_service(
+                        web::route().to(|| async { HttpResponse::MethodNotAllowed() }),
+                    )
+                    .route(web::get().to(index_async)),
+            )
+            .service(web::resource("/test1.html").to(|| async { "Test\r\n" }))
     })
-    .bind(("127.0.0.1", 8080))?
-    .workers(1)
+    .bind("0.0.0.0:8081")?
+    .workers(4)
+    .keep_alive(http::KeepAlive::Disabled)
     .run()
     .await
 }
