@@ -99,10 +99,6 @@ impl Codec {
         self.ctype.get() == ConnectionType::KeepAlive
     }
 
-    pub(super) fn set_ctype(&self, ctype: ConnectionType) {
-        self.ctype.set(ctype)
-    }
-
     #[inline]
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
@@ -115,10 +111,11 @@ impl Codec {
         self.flags.set(flags);
     }
 
-    pub(super) fn unset_streaming(&self) {
+    pub(super) fn reset_upgrade(&self) {
         let mut flags = self.flags.get();
         flags.remove(Flags::STREAM);
         self.flags.set(flags);
+        self.ctype.set(ConnectionType::Close);
     }
 }
 

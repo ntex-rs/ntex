@@ -39,26 +39,32 @@ pub(crate) trait Head: Default + 'static + fmt::Debug {
 #[derive(Clone, Debug)]
 pub(crate) enum CurrentIo {
     Ref(IoRef),
-    Io(Rc<(IoRef, RefCell<Option<(IoBoxed, Codec)>>)>),
+    Io(Rc<dyn IoAccess>),
     None,
 }
 
+pub(crate) trait IoAccess: fmt::Debug {
+    fn get(&self) -> Option<&IoRef>;
+
+    fn take(&self) -> Option<(IoBoxed, Codec)>;
+}
+
 impl CurrentIo {
-    pub(crate) fn new(io: IoBoxed, codec: Codec) -> Self {
-        CurrentIo::Io(Rc::new((io.get_ref(), RefCell::new(Some((io, codec))))))
+    pub(crate) fn new(io: Rc<dyn IoAccess>) -> Self {
+        CurrentIo::Io(io)
     }
 
     pub(crate) fn as_ref(&self) -> Option<&IoRef> {
         match self {
             CurrentIo::Ref(ref io) => Some(io),
-            CurrentIo::Io(ref io) => Some(&io.0),
+            CurrentIo::Io(ref io) => io.get(),
             CurrentIo::None => None,
         }
     }
 
     pub(crate) fn take(&self) -> Option<(IoBoxed, Codec)> {
         match self {
-            CurrentIo::Io(ref inner) => inner.1.borrow_mut().take(),
+            CurrentIo::Io(ref io) => io.take(),
             _ => None,
         }
     }
@@ -214,16 +220,6 @@ impl RequestHead {
     #[doc(hidden)]
     pub fn remove_io(&mut self) {
         self.io = CurrentIo::None;
-    }
-
-    pub(crate) fn take_io_rc(
-        &self,
-    ) -> Option<Rc<(IoRef, RefCell<Option<(IoBoxed, Codec)>>)>> {
-        if let CurrentIo::Io(ref r) = self.io {
-            Some(r.clone())
-        } else {
-            None
-        }
     }
 }
 
@@ -383,10 +379,6 @@ impl ResponseHead {
         } else {
             self.flags.remove(Flags::NO_CHUNKING);
         }
-    }
-
-    pub(crate) fn set_io(&mut self, io: Rc<(IoRef, RefCell<Option<(IoBoxed, Codec)>>)>) {
-        self.io = CurrentIo::Io(io)
     }
 }
 

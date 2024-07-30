@@ -1141,8 +1141,9 @@ async fn test_web_server() {
     system.stop();
 }
 
+/// Websocket connection, no ws handler and response contains payload
 #[ntex::test]
-async fn web_no_ws_payload() {
+async fn web_no_ws_with_response_payload() {
     let srv = test::server_with(test::config().h1(), || {
         App::new()
             .service(web::resource("/").route(web::get().to(move || async {

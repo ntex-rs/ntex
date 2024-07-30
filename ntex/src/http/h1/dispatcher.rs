@@ -1,14 +1,14 @@
 //! HTTP/1 protocol dispatcher
 use std::{error, future, io, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::io::{Decoded, Filter, Io, IoBoxed, IoStatusUpdate, RecvError};
+use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::{PipelineCall, Service};
 use crate::time::Seconds;
 use crate::util::{ready, Either};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::error::{PayloadError, ResponseError};
-use crate::http::message::{ConnectionType, CurrentIo};
+use crate::http::message::CurrentIo;
 use crate::http::{self, config::DispatcherConfig, request::Request, response::Response};
 
 use super::control::{Control, ControlAck, ControlFlags, ControlResult};
@@ -19,8 +19,6 @@ use super::{codec::Codec, Message, ProtocolError};
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u8 {
-        /// Upgrade hnd
-        const UPGRADE              = 0b0000_0001;
         /// Stopping
         const SENDPAYLOAD_AND_STOP = 0b0000_0010;
         /// Complete operation and disconnect
@@ -65,18 +63,13 @@ where
     SendPayload {
         body: ResponseBody<B>,
     },
-    SendPayloadAndStop {
-        body: ResponseBody<B>,
-        io: IoBoxed,
-    },
     Stop {
         fut: Option<PipelineCall<C, Control<F, S::Error>>>,
-        io: Option<IoBoxed>,
     },
 }
 
 struct DispatcherInner<F, C, S, B> {
-    io: Io<F>,
+    io: Rc<Io<F>>,
     flags: Flags,
     codec: Codec,
     config: Rc<DispatcherConfig<S, C>>,
@@ -112,10 +105,10 @@ where
         Dispatcher {
             st: State::ReadRequest,
             inner: DispatcherInner {
-                io,
                 flags,
                 codec,
                 config,
+                io: Rc::new(io),
                 payload: None,
                 read_remains: 0,
                 read_consumed: 0,
@@ -148,20 +141,10 @@ where
                 State::CallPublish { fut } => match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(res)) => {
                         let (res, body) = res.into().into_parts();
-                        if inner.flags.contains(Flags::UPGRADE) {
-                            inner.send_response_to(res, body, None)
-                        } else {
-                            inner.send_response(res, body)
-                        }
+                        inner.send_response(res, body)
                     }
                     Poll::Ready(Err(err)) => inner.control(Control::err(err)),
-                    Poll::Pending => {
-                        if !inner.flags.contains(Flags::UPGRADE) {
-                            ready!(inner.poll_request(cx))
-                        } else {
-                            return Poll::Pending;
-                        }
-                    }
+                    Poll::Pending => ready!(inner.poll_request(cx)),
                 },
                 // handle control service responses
                 State::CallControl { fut } => match Pin::new(fut).poll(cx) {
@@ -181,15 +164,8 @@ where
 
                         match result {
                             ControlResult::Publish(req) => inner.publish(req),
-                            ControlResult::PublishUpgrade(req) => {
-                                inner.flags.insert(Flags::UPGRADE);
-                                inner.publish(req)
-                            }
                             ControlResult::Response(res, body) => {
                                 inner.send_response(res, body.into())
-                            }
-                            ControlResult::ResponseWithIo(res, body, io) => {
-                                inner.send_response_to(res, body.into(), Some(io))
                             }
                             ControlResult::Expect(req) => {
                                 inner.control(Control::expect(req))
@@ -219,27 +195,17 @@ where
                 State::SendPayload { body } => {
                     ready!(inner.poll_send_payload(cx, body))
                 }
-                // send response body
-                State::SendPayloadAndStop { body, io } => {
-                    ready!(inner.poll_send_payload_to(cx, body, io))
-                }
                 // shutdown io
-                State::Stop { fut, io } => {
+                State::Stop { fut } => {
                     if let Some(ref mut f) = fut {
                         let _ = ready!(Pin::new(f).poll(cx));
                         fut.take();
                     }
                     log::debug!("{}: Dispatcher is stopped", inner.io.tag());
 
+                    inner.io.stop_timer();
                     return Poll::Ready(
-                        if let Some(io) = io {
-                            io.stop_timer();
-                            ready!(io.poll_shutdown(cx))
-                        } else {
-                            inner.io.stop_timer();
-                            ready!(inner.io.poll_shutdown(cx))
-                        }
-                        .map_err(From::from),
+                        ready!(inner.io.poll_shutdown(cx)).map_err(From::from),
                     );
                 }
             }
@@ -435,76 +401,6 @@ where
                 }
             };
             return Poll::Ready(st);
-        }
-    }
-
-    fn send_response_to(
-        &mut self,
-        res: Response<()>,
-        body: ResponseBody<B>,
-        io: Option<IoBoxed>,
-    ) -> State<F, C, S, B> {
-        let io = if let Some(io) = io {
-            io
-        } else if let Some((io, codec)) = res.head().io.take() {
-            self.codec = codec;
-            io
-        } else {
-            log::trace!("Handler service consumed io, stop");
-            return self.stop();
-        };
-
-        self.codec.set_ctype(ConnectionType::Close);
-        self.codec.unset_streaming();
-
-        if io
-            .encode(Message::Item((res, body.size())), &self.codec)
-            .is_ok()
-        {
-            match body.size() {
-                BodySize::None | BodySize::Empty => self.stop_io(io),
-                _ => State::SendPayloadAndStop { io, body },
-            }
-        } else {
-            self.stop_io(io)
-        }
-    }
-
-    /// send response body to specified io
-    fn poll_send_payload_to(
-        &mut self,
-        cx: &mut Context<'_>,
-        body: &mut ResponseBody<B>,
-        io: &mut IoBoxed,
-    ) -> Poll<State<F, C, S, B>> {
-        if io.is_closed() {
-            return Poll::Ready(self.stop());
-        } else if !self.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
-            if let Poll::Ready(Err(_)) = self._poll_request_payload(Some(io), cx) {
-                self.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
-            }
-        }
-
-        loop {
-            let _ = ready!(io.poll_flush(cx, false));
-            match ready!(body.poll_next_chunk(cx)) {
-                Some(Ok(item)) => {
-                    if let Err(e) = io.encode(Message::Chunk(Some(item)), &self.codec) {
-                        log::trace!("{}: Cannot encode chunk: {:?}", io.tag(), e);
-                    } else {
-                        continue;
-                    }
-                }
-                None => {
-                    if let Err(e) = io.encode(Message::Chunk(None), &self.codec) {
-                        log::trace!("{}: Cannot encode payload eof: {:?}", io.tag(), e);
-                    }
-                }
-                Some(Err(e)) => {
-                    log::trace!("{}: error during response body poll: {:?}", io.tag(), e);
-                }
-            }
-            return Poll::Ready(self.stop_io(io.take()));
         }
     }
 
@@ -823,20 +719,13 @@ where
     }
 
     fn ctl_upgrade(&mut self, req: Request) -> State<F, C, S, B> {
-        let msg = Control::upgrade(req, self.io.take(), self.codec.clone());
+        self.codec.reset_upgrade();
+        let msg = Control::upgrade(req, self.io.clone(), self.codec.clone());
         self.control(msg)
     }
 
     fn stop(&mut self) -> State<F, C, S, B> {
         State::Stop {
-            io: None,
-            fut: Some(self.config.control.call_nowait(Control::closed())),
-        }
-    }
-
-    fn stop_io(&mut self, io: IoBoxed) -> State<F, C, S, B> {
-        State::Stop {
-            io: Some(io),
             fut: Some(self.config.control.call_nowait(Control::closed())),
         }
     }

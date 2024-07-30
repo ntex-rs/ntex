@@ -239,6 +239,7 @@ where
         sys.run(move || {
             crate::server::build()
                 .listen("test", tcp, move |_| factory())?
+                .set_tag("test", "HTTP-TEST-SRV")
                 .workers(1)
                 .disable_signals()
                 .run();
