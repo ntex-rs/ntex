@@ -167,11 +167,12 @@ impl FilterLayer for SslFilter {
                                 Ok(new_bytes)
                             }
                             Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
+                                log::debug!("{}: SSL Error: {:?}", buf.tag(), e);
                                 buf.want_shutdown();
                                 Ok(new_bytes)
                             }
                             Err(e) => {
-                                log::trace!("SSL Error: {:?}", e);
+                                log::trace!("{}: SSL Error: {:?}", buf.tag(), e);
                                 Err(map_to_ioerr(e))
                             }
                         };

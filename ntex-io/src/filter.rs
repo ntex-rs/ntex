@@ -26,7 +26,7 @@ pub(crate) struct NullFilter;
 const NULL: NullFilter = NullFilter;
 
 impl NullFilter {
-    pub(super) fn get() -> &'static dyn Filter {
+    pub(super) const fn get() -> &'static dyn Filter {
         &NULL
     }
 }

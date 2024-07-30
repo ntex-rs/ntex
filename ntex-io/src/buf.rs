@@ -37,28 +37,6 @@ impl Stack {
         }
     }
 
-    pub(crate) fn take(&self) -> Stack {
-        let buffers = match self.buffers {
-            Either::Left(ref array) => Either::Left([
-                Buffer(Cell::new(array[0].0.take()), Cell::new(array[0].1.take())),
-                Buffer(Cell::new(array[1].0.take()), Cell::new(array[1].1.take())),
-                Buffer(Cell::new(array[2].0.take()), Cell::new(array[2].1.take())),
-            ]),
-            Either::Right(ref vec) => {
-                let mut bufs = Vec::with_capacity(self.len);
-                for item in vec {
-                    bufs.push(Buffer(Cell::new(item.0.take()), Cell::new(item.1.take())));
-                }
-                Either::Right(bufs)
-            }
-        };
-
-        Stack {
-            buffers,
-            len: self.len,
-        }
-    }
-
     pub(crate) fn add_layer(&mut self) {
         match &mut self.buffers {
             Either::Left(b) => {
@@ -318,6 +296,12 @@ pub struct ReadBuf<'a> {
 
 impl<'a> ReadBuf<'a> {
     #[inline]
+    /// Get io tag
+    pub fn tag(&self) -> &'static str {
+        self.io.tag()
+    }
+
+    #[inline]
     /// Get number of newly added bytes
     pub fn nbytes(&self) -> usize {
         self.nbytes
@@ -455,6 +439,12 @@ pub struct WriteBuf<'a> {
 }
 
 impl<'a> WriteBuf<'a> {
+    #[inline]
+    /// Get io tag
+    pub fn tag(&self) -> &'static str {
+        self.io.tag()
+    }
+
     #[inline]
     /// Initiate graceful io stream shutdown
     pub fn want_shutdown(&self) {

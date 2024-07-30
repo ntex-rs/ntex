@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::future::{poll_fn, Future};
 use std::task::{Context, Poll};
 use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
@@ -50,7 +50,7 @@ bitflags::bitflags! {
 }
 
 /// Interface object to underlying io stream
-pub struct Io<F = Base>(pub(super) IoRef, marker::PhantomData<F>);
+pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
@@ -175,7 +175,7 @@ impl fmt::Debug for IoState {
         let res = f
             .debug_struct("IoState")
             .field("flags", &self.flags)
-            .field("pool", &self.pool)
+            .field("filter", &self.filter.is_set())
             .field("disconnect_timeout", &self.disconnect_timeout)
             .field("timeout", &self.timeout)
             .field("error", &err)
@@ -201,13 +201,13 @@ impl Io {
             pool: Cell::new(pool),
             flags: Cell::new(Flags::empty()),
             error: Cell::new(None),
-            disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
             buffer: Stack::new(),
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
+            disconnect_timeout: Cell::new(Seconds(1)),
             on_disconnect: Cell::new(None),
             tag: Cell::new(DEFAULT_TAG),
         });
@@ -219,7 +219,7 @@ impl Io {
         let hnd = io.start(ReadContext::new(&io_ref), WriteContext::new(&io_ref));
         io_ref.0.handle.set(hnd);
 
-        Io(io_ref, marker::PhantomData)
+        Io(UnsafeCell::new(io_ref), marker::PhantomData)
     }
 }
 
@@ -227,14 +227,14 @@ impl<F> Io<F> {
     #[inline]
     /// Set memory pool
     pub fn set_memory_pool(&self, pool: PoolRef) {
-        self.0 .0.buffer.set_memory_pool(pool);
-        self.0 .0.pool.set(pool);
+        self.st().buffer.set_memory_pool(pool);
+        self.st().pool.set(pool);
     }
 
     #[inline]
     /// Set io disconnect timeout in millis
     pub fn set_disconnect_timeout(&self, timeout: Seconds) {
-        self.0 .0.disconnect_timeout.set(timeout);
+        self.st().disconnect_timeout.set(timeout);
     }
 
     #[inline]
@@ -242,33 +242,31 @@ impl<F> Io<F> {
     ///
     /// Current io object becomes closed.
     pub fn take(&self) -> Self {
-        let st = &self.0 .0;
-        let new = Rc::new(IoState {
-            filter: st.filter.take(),
-            pool: st.pool.clone(),
-            flags: Cell::new(st.flags.get()),
-            error: Cell::new(st.error.take()),
-            disconnect_timeout: Cell::new(st.disconnect_timeout.get()),
+        Self(UnsafeCell::new(self.take_io_ref()), marker::PhantomData)
+    }
+
+    fn take_io_ref(&self) -> IoRef {
+        let inner = Rc::new(IoState {
+            filter: FilterPtr::null(),
+            pool: self.st().pool.clone(),
+            flags: Cell::new(
+                Flags::DSP_STOP
+                    | Flags::IO_STOPPED
+                    | Flags::IO_STOPPING
+                    | Flags::IO_STOPPING_FILTERS,
+            ),
+            error: Cell::new(None),
+            disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            buffer: st.buffer.take(),
-            handle: Cell::new(st.handle.take()),
-            timeout: Cell::new(st.timeout.take()),
-            on_disconnect: Cell::new(st.on_disconnect.take()),
-            tag: Cell::new(st.tag.get()),
+            buffer: Stack::new(),
+            handle: Cell::new(None),
+            timeout: Cell::new(TimerHandle::default()),
+            on_disconnect: Cell::new(None),
+            tag: Cell::new(DEFAULT_TAG),
         });
-
-        st.flags.set(
-            Flags::DSP_STOP
-                | Flags::IO_STOPPED
-                | Flags::IO_STOPPING
-                | Flags::IO_STOPPING_FILTERS,
-        );
-        st.timeout.set(TimerHandle::default());
-        st.tag.set(DEFAULT_TAG);
-
-        Self(IoRef(new), marker::PhantomData)
+        unsafe { mem::replace(&mut *self.0.get(), IoRef(inner)) }
     }
 }
 
@@ -277,18 +275,26 @@ impl<F> Io<F> {
     #[doc(hidden)]
     /// Get current state flags
     pub fn flags(&self) -> Flags {
-        self.0 .0.flags.get()
+        self.st().flags.get()
     }
 
     #[inline]
     /// Get instance of `IoRef`
     pub fn get_ref(&self) -> IoRef {
-        self.0.clone()
+        self.io_ref().clone()
+    }
+
+    fn st(&self) -> &IoState {
+        unsafe { &(*self.0.get()).0 }
+    }
+
+    fn io_ref(&self) -> &IoRef {
+        unsafe { &*self.0.get() }
     }
 
     /// Get current io error
     fn error(&self) -> Option<io::Error> {
-        self.0 .0.error.take()
+        self.st().error.take()
     }
 }
 
@@ -296,7 +302,7 @@ impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
     #[inline]
     /// Get referece to a filter
     pub fn filter(&self) -> &F {
-        &self.0 .0.filter.filter::<Layer<F, T>>().0
+        &self.st().filter.filter::<Layer<F, T>>().0
     }
 }
 
@@ -304,9 +310,10 @@ impl<F: Filter> Io<F> {
     #[inline]
     /// Convert current io stream into sealed version
     pub fn seal(self) -> Io<Sealed> {
-        self.0 .0.filter.seal::<F>();
+        let state = self.take_io_ref();
+        state.0.filter.seal::<F>();
 
-        Io(self.0.clone(), marker::PhantomData)
+        Io(UnsafeCell::new(state), marker::PhantomData)
     }
 
     #[inline]
@@ -315,20 +322,22 @@ impl<F: Filter> Io<F> {
     where
         U: FilterLayer,
     {
+        let state = self.take_io_ref();
+
         // add layer to buffers
         if U::BUFFERS {
             // Safety: .add_layer() only increases internal buffers
             // there is no api that holds references into buffers storage
             // all apis first removes buffer from storage and then work with it
-            unsafe { &mut *(Rc::as_ptr(&self.0 .0) as *mut IoState) }
+            unsafe { &mut *(Rc::as_ptr(&state.0) as *mut IoState) }
                 .buffer
                 .add_layer();
         }
 
         // replace current filter
-        self.0 .0.filter.add_filter::<F, U>(nf);
+        state.0.filter.add_filter::<F, U>(nf);
 
-        Io(self.0.clone(), marker::PhantomData)
+        Io(UnsafeCell::new(state), marker::PhantomData)
     }
 }
 
@@ -382,9 +391,10 @@ impl<F> Io<F> {
     #[inline]
     /// Pause read task
     pub fn pause(&self) {
-        if !self.0.flags().contains(Flags::RD_PAUSED) {
-            self.0 .0.read_task.wake();
-            self.0 .0.insert_flags(Flags::RD_PAUSED);
+        let st = self.st();
+        if !st.flags.get().contains(Flags::RD_PAUSED) {
+            st.read_task.wake();
+            st.insert_flags(Flags::RD_PAUSED);
         }
     }
 
@@ -436,18 +446,19 @@ impl<F> Io<F> {
     /// `Poll::Ready(Ok(None))` if io stream is disconnected
     /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
-        let mut flags = self.0 .0.flags.get();
+        let st = self.st();
+        let mut flags = st.flags.get();
 
         if flags.contains(Flags::IO_STOPPED) {
             Poll::Ready(self.error().map(Err).unwrap_or(Ok(None)))
         } else {
-            self.0 .0.dispatch_task.register(cx.waker());
+            st.dispatch_task.register(cx.waker());
 
             let ready = flags.contains(Flags::RD_READY);
             if flags.intersects(Flags::RD_BUF_FULL | Flags::RD_PAUSED) {
                 flags.remove(Flags::RD_READY | Flags::RD_BUF_FULL | Flags::RD_PAUSED);
-                self.0 .0.read_task.wake();
-                self.0 .0.flags.set(flags);
+                st.read_task.wake();
+                st.flags.set(flags);
                 if ready {
                     Poll::Ready(Ok(Some(())))
                 } else {
@@ -455,7 +466,7 @@ impl<F> Io<F> {
                 }
             } else if ready {
                 flags.remove(Flags::RD_READY);
-                self.0 .0.flags.set(flags);
+                st.flags.set(flags);
                 Poll::Ready(Ok(Some(())))
             } else {
                 Poll::Pending
@@ -485,10 +496,11 @@ impl<F> Io<F> {
         let ready = self.poll_read_ready(cx);
 
         if ready.is_pending() {
-            if self.0 .0.remove_flags(Flags::RD_FORCE_READY) {
+            let st = self.st();
+            if st.remove_flags(Flags::RD_FORCE_READY) {
                 Poll::Ready(Ok(Some(())))
             } else {
-                self.0 .0.insert_flags(Flags::RD_FORCE_READY);
+                st.insert_flags(Flags::RD_FORCE_READY);
                 Poll::Pending
             }
         } else {
@@ -539,14 +551,15 @@ impl<F> Io<F> {
         if decoded.item.is_some() {
             Ok(decoded)
         } else {
-            let flags = self.flags();
+            let st = self.st();
+            let flags = st.flags.get();
             if flags.contains(Flags::IO_STOPPED) {
                 Err(RecvError::PeerGone(self.error()))
             } else if flags.contains(Flags::DSP_STOP) {
-                self.0 .0.remove_flags(Flags::DSP_STOP);
+                st.remove_flags(Flags::DSP_STOP);
                 Err(RecvError::Stop)
             } else if flags.contains(Flags::DSP_TIMEOUT) {
-                self.0 .0.remove_flags(Flags::DSP_TIMEOUT);
+                st.remove_flags(Flags::DSP_TIMEOUT);
                 Err(RecvError::KeepAlive)
             } else if flags.contains(Flags::WR_BACKPRESSURE) {
                 Err(RecvError::WriteBackpressure)
@@ -580,20 +593,20 @@ impl<F> Io<F> {
         if flags.contains(Flags::IO_STOPPED) {
             Poll::Ready(self.error().map(Err).unwrap_or(Ok(())))
         } else {
-            let inner = &self.0 .0;
-            let len = inner.buffer.write_destination_size();
+            let st = self.st();
+            let len = st.buffer.write_destination_size();
             if len > 0 {
                 if full {
-                    inner.insert_flags(Flags::WR_WAIT);
-                    inner.dispatch_task.register(cx.waker());
+                    st.insert_flags(Flags::WR_WAIT);
+                    st.dispatch_task.register(cx.waker());
                     return Poll::Pending;
-                } else if len >= inner.pool.get().write_params_high() << 1 {
-                    inner.insert_flags(Flags::WR_BACKPRESSURE);
-                    inner.dispatch_task.register(cx.waker());
+                } else if len >= st.pool.get().write_params_high() << 1 {
+                    st.insert_flags(Flags::WR_BACKPRESSURE);
+                    st.dispatch_task.register(cx.waker());
                     return Poll::Pending;
                 }
             }
-            inner.remove_flags(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
+            st.remove_flags(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
             Poll::Ready(Ok(()))
         }
     }
@@ -601,7 +614,8 @@ impl<F> Io<F> {
     #[inline]
     /// Gracefully shutdown io stream
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let flags = self.flags();
+        let st = self.st();
+        let flags = st.flags.get();
 
         if flags.intersects(Flags::IO_STOPPED) {
             if let Some(err) = self.error() {
@@ -611,12 +625,12 @@ impl<F> Io<F> {
             }
         } else {
             if !flags.contains(Flags::IO_STOPPING_FILTERS) {
-                self.0 .0.init_shutdown();
+                st.init_shutdown();
             }
 
-            self.0 .0.read_task.wake();
-            self.0 .0.write_task.wake();
-            self.0 .0.dispatch_task.register(cx.waker());
+            st.read_task.wake();
+            st.write_task.wake();
+            st.dispatch_task.register(cx.waker());
             Poll::Pending
         }
     }
@@ -629,7 +643,7 @@ impl<F> Io<F> {
         self.pause();
         let result = self.poll_status_update(cx);
         if !result.is_pending() {
-            self.0 .0.dispatch_task.register(cx.waker());
+            self.st().dispatch_task.register(cx.waker());
         }
         result
     }
@@ -637,19 +651,20 @@ impl<F> Io<F> {
     #[inline]
     /// Wait for status updates
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
-        let flags = self.flags();
+        let st = self.st();
+        let flags = st.flags.get();
         if flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
             Poll::Ready(IoStatusUpdate::PeerGone(self.error()))
         } else if flags.contains(Flags::DSP_STOP) {
-            self.0 .0.remove_flags(Flags::DSP_STOP);
+            st.remove_flags(Flags::DSP_STOP);
             Poll::Ready(IoStatusUpdate::Stop)
         } else if flags.contains(Flags::DSP_TIMEOUT) {
-            self.0 .0.remove_flags(Flags::DSP_TIMEOUT);
+            st.remove_flags(Flags::DSP_TIMEOUT);
             Poll::Ready(IoStatusUpdate::KeepAlive)
         } else if flags.contains(Flags::WR_BACKPRESSURE) {
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
-            self.0 .0.dispatch_task.register(cx.waker());
+            st.dispatch_task.register(cx.waker());
             Poll::Pending
         }
     }
@@ -657,14 +672,14 @@ impl<F> Io<F> {
     #[inline]
     /// Register dispatch task
     pub fn poll_dispatch(&self, cx: &mut Context<'_>) {
-        self.0 .0.dispatch_task.register(cx.waker());
+        self.st().dispatch_task.register(cx.waker());
     }
 }
 
 impl<F> AsRef<IoRef> for Io<F> {
     #[inline]
     fn as_ref(&self) -> &IoRef {
-        &self.0
+        self.io_ref()
     }
 }
 
@@ -673,20 +688,20 @@ impl<F> Eq for Io<F> {}
 impl<F> PartialEq for Io<F> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.0.eq(&other.0)
+        self.io_ref().eq(other.io_ref())
     }
 }
 
 impl<F> hash::Hash for Io<F> {
     #[inline]
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
+        self.io_ref().hash(state);
     }
 }
 
 impl<F> fmt::Debug for Io<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Io").field("state", &self.0).finish()
+        f.debug_struct("Io").field("state", self.st()).finish()
     }
 }
 
@@ -695,27 +710,28 @@ impl<F> ops::Deref for Io<F> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.io_ref()
     }
 }
 
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
+        let st = self.st();
         self.stop_timer();
 
-        // filter must be dropped, it is unsafe
-        // and wont be dropped without special attention
-        if self.0 .0.filter.is_set() || Rc::strong_count(&self.0 .0) == 1 {
-            if !self.0.flags().contains(Flags::IO_STOPPED) {
+        if st.filter.is_set() {
+            // filter is unsafe and must be dropped explicitly,
+            // and wont be dropped without special attention
+            if !st.flags.get().contains(Flags::IO_STOPPED) {
                 log::trace!(
                     "{}: Io is dropped, force stopping io streams {:?}",
-                    self.tag(),
-                    self.0.flags()
+                    st.tag.get(),
+                    st.flags.get()
                 );
             }
 
             self.force_close();
-            self.0 .0.filter.drop_filter::<F>();
+            st.filter.drop_filter::<F>();
         }
     }
 }
@@ -727,6 +743,7 @@ const KIND_UNMASK: u8 = !KIND_MASK;
 const KIND_MASK_USIZE: usize = 0b11;
 const KIND_UNMASK_USIZE: usize = !KIND_MASK_USIZE;
 const SEALED_SIZE: usize = mem::size_of::<Sealed>();
+const NULL: [u8; SEALED_SIZE] = [0u8; SEALED_SIZE];
 
 #[cfg(target_endian = "little")]
 const KIND_IDX: usize = 0;
@@ -740,44 +757,32 @@ struct FilterPtr {
 }
 
 impl FilterPtr {
-    fn null() -> Self {
+    const fn null() -> Self {
         Self {
-            data: Cell::new([0u8; SEALED_SIZE]),
+            data: Cell::new(NULL),
             filter: Cell::new(NullFilter::get()),
         }
     }
 
-    fn take(&self) -> FilterPtr {
-        let new = FilterPtr {
-            data: Cell::new(self.data.get()),
-            filter: Cell::new(self.filter.get()),
-        };
-
-        self.data.set([0u8; SEALED_SIZE]);
-        self.filter.set(NullFilter::get());
-
-        new
-    }
-
     fn update<F: Filter>(&self, filter: F) {
         if self.is_set() {
-            self.drop_filter::<F>();
+            panic!("Filter is set, must be dropped first");
         }
 
         let filter = Box::new(filter);
-        let filter_ref: &'static dyn Filter = unsafe {
-            let filter: &dyn Filter = filter.as_ref();
-            std::mem::transmute(filter)
-        };
-
-        let mut data = [0; SEALED_SIZE];
+        let mut data = NULL;
         unsafe {
+            let filter_ref: &'static dyn Filter = {
+                let f: &dyn Filter = filter.as_ref();
+                std::mem::transmute(f)
+            };
+            self.filter.set(filter_ref);
+
             let ptr = &mut data as *mut _ as *mut *mut F;
             ptr.write(Box::into_raw(filter));
             data[KIND_IDX] |= KIND_PTR;
+            self.data.set(data);
         }
-        self.data.set(data);
-        self.filter.set(filter_ref);
     }
 
     /// Get filter, panic if it is not filter
@@ -832,32 +837,34 @@ impl FilterPtr {
     fn drop_filter<F>(&self) {
         let data = self.data.get();
 
-        if data[KIND_IDX] & KIND_PTR != 0 {
-            self.take_filter::<F>();
-        } else if data[KIND_IDX] & KIND_SEALED != 0 {
-            self.take_sealed();
+        if data[KIND_IDX] & KIND_MASK != 0 {
+            if data[KIND_IDX] & KIND_PTR != 0 {
+                self.take_filter::<F>();
+            } else if data[KIND_IDX] & KIND_SEALED != 0 {
+                self.take_sealed();
+            }
+            self.data.set(NULL);
+            self.filter.set(NullFilter::get());
         }
-        self.filter.set(NullFilter::get());
     }
 }
 
 impl FilterPtr {
     fn add_filter<F: Filter, T: FilterLayer>(&self, new: T) {
-        let mut data = [0; SEALED_SIZE];
-
-        let filter = Box::new(Layer::new(new, *self.take_filter()));
+        let mut data = NULL;
+        let filter = Box::new(Layer::new(new, *self.take_filter::<F>()));
         unsafe {
             let filter_ref: &'static dyn Filter = {
-                let filter: &dyn Filter = filter.as_ref();
-                std::mem::transmute(filter)
+                let f: &dyn Filter = filter.as_ref();
+                std::mem::transmute(f)
             };
             self.filter.set(filter_ref);
 
             let ptr = &mut data as *mut _ as *mut *mut Layer<T, F>;
             ptr.write(Box::into_raw(filter));
             data[KIND_IDX] |= KIND_PTR;
+            self.data.set(data);
         }
-        self.data.set(data);
     }
 
     fn seal<F: Filter>(&self) {
@@ -874,18 +881,18 @@ impl FilterPtr {
             );
         };
 
-        let filter_ref: &'static dyn Filter = {
-            let filter: &dyn Filter = filter.0.as_ref();
-            unsafe { std::mem::transmute(filter) }
-        };
-
         unsafe {
+            let filter_ref: &'static dyn Filter = {
+                let f: &dyn Filter = filter.0.as_ref();
+                std::mem::transmute(f)
+            };
+            self.filter.set(filter_ref);
+
             let ptr = &mut data as *mut _ as *mut Sealed;
             ptr.write(filter);
             data[KIND_IDX] |= KIND_SEALED;
+            self.data.set(data);
         }
-        self.data.set(data);
-        self.filter.set(filter_ref);
     }
 }
 
@@ -973,7 +980,7 @@ mod tests {
 
         let server = Io::new(server);
         assert!(server.eq(&server));
-        assert!(server.0.eq(&server.0));
+        assert!(server.io_ref().eq(server.io_ref()));
 
         assert!(format!("{:?}", Flags::IO_STOPPED).contains("IO_STOPPED"));
         assert!(Flags::IO_STOPPED == Flags::IO_STOPPED);
@@ -987,16 +994,16 @@ mod tests {
 
         let server = Io::new(server);
 
-        server.0 .0.notify_timeout();
+        server.st().notify_timeout();
         let err = server.recv(&BytesCodec).await.err().unwrap();
         assert!(format!("{:?}", err).contains("Timeout"));
 
-        server.0 .0.insert_flags(Flags::DSP_STOP);
+        server.st().insert_flags(Flags::DSP_STOP);
         let err = server.recv(&BytesCodec).await.err().unwrap();
         assert!(format!("{:?}", err).contains("Dispatcher stopped"));
 
         client.write(TEXT);
-        server.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+        server.st().insert_flags(Flags::WR_BACKPRESSURE);
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
     }
@@ -1046,7 +1053,7 @@ mod tests {
         let (client, server) = IoTest::create();
         let f = DropFilter { p: p.clone() };
         let _ = format!("{:?}", f);
-        let mut io = Io::new(server).add_filter(f);
+        let io = Io::new(server).add_filter(f);
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
