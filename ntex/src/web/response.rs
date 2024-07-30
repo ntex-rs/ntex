@@ -124,10 +124,7 @@ impl WebResponse {
 }
 
 impl From<WebResponse> for Response<Body> {
-    fn from(mut res: WebResponse) -> Response<Body> {
-        if let Some(io) = res.request.head().take_io_rc() {
-            res.response.head_mut().set_io(io);
-        }
+    fn from(res: WebResponse) -> Response<Body> {
         res.response
     }
 }

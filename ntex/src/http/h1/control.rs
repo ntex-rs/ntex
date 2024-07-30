@@ -1,8 +1,8 @@
-use std::{fmt, future::Future, io};
+use std::{fmt, future::Future, io, rc::Rc};
 
 use crate::http::message::CurrentIo;
 use crate::http::{body::Body, h1::Codec, Request, Response, ResponseError};
-use crate::io::{Filter, Io, IoBoxed};
+use crate::io::{Filter, Io, IoBoxed, IoRef};
 
 pub enum Control<F, Err> {
     /// New request is loaded
@@ -46,12 +46,8 @@ pub(super) enum ControlResult {
     Upgrade(Request),
     /// forward request to publish service
     Publish(Request),
-    /// forward request to publish service
-    PublishUpgrade(Request),
     /// send response
     Response(Response<()>, Body),
-    /// send response
-    ResponseWithIo(Response<()>, Body, IoBoxed),
     /// drop connection
     Stop,
 }
@@ -72,7 +68,7 @@ impl<F, Err> Control<F, Err> {
         Control::NewRequest(NewRequest(req))
     }
 
-    pub(super) fn upgrade(req: Request, io: Io<F>, codec: Codec) -> Self {
+    pub(super) fn upgrade(req: Request, io: Rc<Io<F>>, codec: Codec) -> Self {
         Control::Upgrade(Upgrade { req, io, codec })
     }
 
@@ -188,8 +184,32 @@ impl NewRequest {
 
 pub struct Upgrade<F> {
     req: Request,
-    io: Io<F>,
+    io: Rc<Io<F>>,
     codec: Codec,
+}
+
+struct RequestIoAccess<F> {
+    io: Rc<Io<F>>,
+    codec: Codec,
+}
+
+impl<F> fmt::Debug for RequestIoAccess<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RequestIoAccess")
+            .field("io", self.io.as_ref())
+            .field("codec", &self.codec)
+            .finish()
+    }
+}
+
+impl<F: Filter> crate::http::message::IoAccess for RequestIoAccess<F> {
+    fn get(&self) -> Option<&IoRef> {
+        Some(self.io.as_ref())
+    }
+
+    fn take(&self) -> Option<(IoBoxed, Codec)> {
+        Some((self.io.take().into(), self.codec.clone()))
+    }
 }
 
 impl<F: Filter> Upgrade<F> {
@@ -215,12 +235,14 @@ impl<F: Filter> Upgrade<F> {
     /// Ack upgrade request and continue handling process
     pub fn ack(mut self) -> ControlAck {
         // Move io into request
-        let io: IoBoxed = self.io.into();
-        io.stop_timer();
-        self.req.head_mut().io = CurrentIo::new(io, self.codec);
+        let io = Rc::new(RequestIoAccess {
+            io: self.io,
+            codec: self.codec,
+        });
+        self.req.head_mut().io = CurrentIo::new(io);
 
         ControlAck {
-            result: ControlResult::PublishUpgrade(self.req),
+            result: ControlResult::Publish(self.req),
             flags: ControlFlags::DISCONNECT,
         }
     }
@@ -232,8 +254,9 @@ impl<F: Filter> Upgrade<F> {
         H: FnOnce(Request, Io<F>, Codec) -> R + 'static,
         R: Future<Output = O>,
     {
+        let io = self.io.take();
         let _ = crate::rt::spawn(async move {
-            let _ = f(self.req, self.io, self.codec).await;
+            let _ = f(self.req, io, self.codec).await;
         });
         ControlAck {
             result: ControlResult::Stop,
@@ -248,7 +271,7 @@ impl<F: Filter> Upgrade<F> {
         let (res, body) = res.into_parts();
 
         ControlAck {
-            result: ControlResult::ResponseWithIo(res, body.into(), self.io.into()),
+            result: ControlResult::Response(res, body.into()),
             flags: ControlFlags::DISCONNECT,
         }
     }
@@ -259,7 +282,7 @@ impl<F: Filter> Upgrade<F> {
         let (res, body) = res.into_parts();
 
         ControlAck {
-            result: ControlResult::ResponseWithIo(res, body.into(), self.io.into()),
+            result: ControlResult::Response(res, body.into()),
             flags: ControlFlags::DISCONNECT,
         }
     }
