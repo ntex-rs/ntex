@@ -296,6 +296,12 @@ pub struct ReadBuf<'a> {
 
 impl<'a> ReadBuf<'a> {
     #[inline]
+    /// Get io tag
+    pub fn tag(&self) -> &'static str {
+        self.io.tag()
+    }
+
+    #[inline]
     /// Get number of newly added bytes
     pub fn nbytes(&self) -> usize {
         self.nbytes
@@ -433,6 +439,12 @@ pub struct WriteBuf<'a> {
 }
 
 impl<'a> WriteBuf<'a> {
+    #[inline]
+    /// Get io tag
+    pub fn tag(&self) -> &'static str {
+        self.io.tag()
+    }
+
     #[inline]
     /// Initiate graceful io stream shutdown
     pub fn want_shutdown(&self) {

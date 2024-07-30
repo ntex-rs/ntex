@@ -1,5 +1,9 @@
 # Changes
 
+## [2.1.0] - 2024-07-30
+
+* Optimize `Io` layout
+
 ## [2.0.0] - 2024-05-28
 
 * Use async fn for Service::ready() and Service::shutdown()
