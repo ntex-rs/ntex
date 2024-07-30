@@ -21,9 +21,9 @@ impl IoRef {
     }
 
     #[inline]
-    /// Get memory pool
+    /// Get current filter
     pub(crate) fn filter(&self) -> &dyn Filter {
-        self.0.filter.get()
+        self.0.filter()
     }
 
     #[inline]
@@ -192,10 +192,7 @@ impl IoRef {
         F: FnOnce(&WriteBuf<'_>) -> R,
     {
         let result = self.0.buffer.write_buf(self, 0, f);
-        self.0
-            .filter
-            .get()
-            .process_write_buf(self, &self.0.buffer, 0)?;
+        self.0.filter().process_write_buf(self, &self.0.buffer, 0)?;
         Ok(result)
     }
 
@@ -206,10 +203,7 @@ impl IoRef {
         F: FnOnce(&mut BytesVec) -> R,
     {
         let result = self.0.buffer.with_write_source(self, f);
-        self.0
-            .filter
-            .get()
-            .process_write_buf(self, &self.0.buffer, 0)?;
+        self.0.filter().process_write_buf(self, &self.0.buffer, 0)?;
         Ok(result)
     }
 
