@@ -32,6 +32,14 @@ impl LocalWaker {
         }
     }
 
+    /// Create an `LocalWaker`.
+    pub fn with(waker: Option<Waker>) -> Self {
+        LocalWaker {
+            waker: Cell::new(waker),
+            _t: PhantomData,
+        }
+    }
+
     #[inline]
     /// Registers the waker to be notified on calls to `wake`.
     ///

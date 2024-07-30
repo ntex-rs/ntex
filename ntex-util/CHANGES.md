@@ -1,5 +1,9 @@
 # Changes
 
+## [2.2.0] - 2024-07-30
+
+* Add LocalWaker::with() helper
+
 ## [2.1.0] - 2024-06-26
 
 * Add task::yield_to() helper
