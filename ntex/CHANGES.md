@@ -1,5 +1,9 @@
 # Changes
 
+## [2.2.0] - 2024-08-12
+
+* Http server gracefull shutdown support
+
 ## [2.1.0] - 2024-07-30
 
 * Better handling for connection upgrade #385

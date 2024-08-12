@@ -1,8 +1,8 @@
-use std::{error, fmt, marker, rc::Rc};
+use std::{cell::Cell, cell::RefCell, error, fmt, marker, rc::Rc};
 
-use crate::io::{types, Filter, Io};
+use crate::io::{types, Filter, Io, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::util::join;
+use crate::{channel::oneshot, util::join, util::HashSet};
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
@@ -257,11 +257,15 @@ where
             .await
             .map_err(|e| log::error!("Cannot construct control service: {:?}", e))?;
 
+        let (tx, rx) = oneshot::channel();
         let config = DispatcherConfig::new(self.cfg.clone(), service, control);
 
         Ok(HttpServiceHandler {
             config: Rc::new(config),
             h2_control: self.h2_control.clone(),
+            inflight: RefCell::new(HashSet::default()),
+            rx: Cell::new(Some(rx)),
+            tx: Cell::new(Some(tx)),
             _t: marker::PhantomData,
         })
     }
@@ -271,6 +275,9 @@ where
 pub struct HttpServiceHandler<F, S, B, C1, C2> {
     config: Rc<DispatcherConfig<S, C1>>,
     h2_control: Rc<C2>,
+    inflight: RefCell<HashSet<IoRef>>,
+    rx: Cell<Option<oneshot::Receiver<()>>>,
+    tx: Cell<Option<oneshot::Sender<()>>>,
     _t: marker::PhantomData<(F, B)>,
 }
 
@@ -306,8 +313,31 @@ where
 
     #[inline]
     async fn shutdown(&self) {
-        self.config.control.shutdown().await;
-        self.config.service.shutdown().await;
+        self.config.shutdown();
+
+        // check inflight connections
+        let inflight = {
+            let inflight = self.inflight.borrow();
+            for io in inflight.iter() {
+                io.notify_dispatcher();
+            }
+            inflight.len()
+        };
+        if inflight != 0 {
+            log::trace!("Shutting down service, in-flight connections: {}", inflight);
+
+            if let Some(rx) = self.rx.take() {
+                let _ = rx.await;
+            }
+
+            log::trace!("Shutting down is complected",);
+        }
+
+        join(
+            self.config.control.shutdown(),
+            self.config.service.shutdown(),
+        )
+        .await;
     }
 
     async fn call(
@@ -315,12 +345,22 @@ where
         io: Io<F>,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        log::trace!(
-            "New http connection, peer address {:?}",
-            io.query::<types::PeerAddr>().get()
-        );
+        let inflight = {
+            let mut inflight = self.inflight.borrow_mut();
+            inflight.insert(io.get_ref());
+            inflight.len()
+        };
 
-        if io.query::<types::HttpProtocol>().get() == Some(types::HttpProtocol::Http2) {
+        log::trace!(
+            "New http connection, peer address {:?}, in-flight: {}",
+            io.query::<types::PeerAddr>().get(),
+            inflight
+        );
+        let ioref = io.get_ref();
+
+        let result = if io.query::<types::HttpProtocol>().get()
+            == Some(types::HttpProtocol::Http2)
+        {
             let control = self.h2_control.create(()).await.map_err(|e| {
                 DispatchError::Control(
                     format!("Cannot construct control service: {:?}", e).into(),
@@ -331,6 +371,19 @@ where
             h1::Dispatcher::new(io, self.config.clone())
                 .await
                 .map_err(DispatchError::Control)
+        };
+
+        {
+            let mut inflight = self.inflight.borrow_mut();
+            inflight.remove(&ioref);
+
+            if inflight.len() == 0 {
+                if let Some(tx) = self.tx.take() {
+                    let _ = tx.send(());
+                }
+            }
         }
+
+        result
     }
 }

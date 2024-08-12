@@ -217,15 +217,22 @@ impl IoRef {
     }
 
     #[inline]
-    /// current timer handle
-    pub fn timer_handle(&self) -> timer::TimerHandle {
-        self.0.timeout.get()
+    /// Wakeup dispatcher
+    pub fn notify_dispatcher(&self) {
+        self.0.dispatch_task.wake();
+        log::trace!("{}: Timer, notify dispatcher", self.tag());
     }
 
     #[inline]
-    /// wakeup dispatcher and send keep-alive error
+    /// Wakeup dispatcher and send keep-alive error
     pub fn notify_timeout(&self) {
         self.0.notify_timeout()
+    }
+
+    #[inline]
+    /// current timer handle
+    pub fn timer_handle(&self) -> timer::TimerHandle {
+        self.0.timeout.get()
     }
 
     #[inline]

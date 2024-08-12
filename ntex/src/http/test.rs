@@ -7,6 +7,7 @@ use coo_kie::{Cookie, CookieJar};
 #[cfg(feature = "ws")]
 use crate::io::Filter;
 use crate::io::Io;
+use crate::server::Server;
 #[cfg(feature = "ws")]
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
 use crate::{rt::System, service::ServiceFactory};
@@ -237,18 +238,18 @@ where
 
         let system = sys.system();
         sys.run(move || {
-            crate::server::build()
+            let srv = crate::server::build()
                 .listen("test", tcp, move |_| factory())?
                 .set_tag("test", "HTTP-TEST-SRV")
                 .workers(1)
                 .disable_signals()
                 .run();
-            tx.send((system, local_addr)).unwrap();
+            tx.send((system, srv, local_addr)).unwrap();
             Ok(())
         })
     });
 
-    let (system, addr) = rx.recv().unwrap();
+    let (system, server, addr) = rx.recv().unwrap();
 
     let client = {
         let connector = {
@@ -286,6 +287,7 @@ where
         addr,
         client,
         system,
+        server,
     }
 }
 
@@ -295,6 +297,7 @@ pub struct TestServer {
     addr: net::SocketAddr,
     client: Client,
     system: System,
+    server: Server,
 }
 
 impl TestServer {
@@ -402,13 +405,14 @@ impl TestServer {
     }
 
     /// Stop http server
-    fn stop(&mut self) {
+    pub async fn stop(&self) {
+        self.server.stop(true).await;
         self.system.stop();
     }
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.stop()
+        self.system.stop();
     }
 }
