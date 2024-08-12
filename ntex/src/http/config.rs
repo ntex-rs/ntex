@@ -234,13 +234,23 @@ impl ServiceConfig {
     }
 }
 
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+    struct Flags: u8 {
+        /// Keep-alive enabled
+        const KA_ENABLED = 0b0000_0001;
+        /// Shutdown service
+        const SHUTDOWN   = 0b0000_0010;
+    }
+}
+
 pub(super) struct DispatcherConfig<S, C> {
+    flags: Cell<Flags>,
     pub(super) service: Pipeline<S>,
     pub(super) control: Pipeline<C>,
     pub(super) keep_alive: Seconds,
     pub(super) client_disconnect: Seconds,
     pub(super) h2config: h2::Config,
-    pub(super) ka_enabled: bool,
     pub(super) headers_read_rate: Option<ReadRate>,
     pub(super) payload_read_rate: Option<ReadRate>,
     pub(super) timer: DateService,
@@ -253,21 +263,36 @@ impl<S, C> DispatcherConfig<S, C> {
             control: control.into(),
             keep_alive: cfg.keep_alive,
             client_disconnect: cfg.client_disconnect,
-            ka_enabled: cfg.ka_enabled,
             headers_read_rate: cfg.headers_read_rate,
             payload_read_rate: cfg.payload_read_rate,
             h2config: cfg.h2config.clone(),
             timer: cfg.timer.clone(),
+            flags: Cell::new(if cfg.ka_enabled {
+                Flags::KA_ENABLED
+            } else {
+                Flags::empty()
+            }),
         }
     }
 
     /// Return state of connection keep-alive functionality
     pub(super) fn keep_alive_enabled(&self) -> bool {
-        self.ka_enabled
+        self.flags.get().contains(Flags::KA_ENABLED)
     }
 
     pub(super) fn headers_read_rate(&self) -> Option<&ReadRate> {
         self.headers_read_rate.as_ref()
+    }
+
+    /// Service is shuting down
+    pub(super) fn is_shutdown(&self) -> bool {
+        self.flags.get().contains(Flags::SHUTDOWN)
+    }
+
+    pub(super) fn shutdown(&self) {
+        let mut flags = self.flags.get();
+        flags.insert(Flags::SHUTDOWN);
+        self.flags.set(flags);
     }
 }
 

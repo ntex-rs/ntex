@@ -223,6 +223,12 @@ where
     B: MessageBody,
 {
     fn poll_read_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, C, S, B>> {
+        // stop dispatcher
+        if self.config.is_shutdown() {
+            log::trace!("{}: Service is shutting down", self.io.tag());
+            return Poll::Ready(self.stop());
+        }
+
         log::trace!("{}: Trying to read http message", self.io.tag());
 
         let result = match self.io.poll_recv_decode(&self.codec, cx) {

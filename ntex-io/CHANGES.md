@@ -1,5 +1,9 @@
 # Changes
 
+## [2.2.0] - 2024-08-12
+
+* Allow to notify dispatcher from IoRef
+
 ## [2.1.0] - 2024-07-30
 
 * Optimize `Io` layout

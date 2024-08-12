@@ -9,7 +9,7 @@ use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::{body, h1::Control, test::server as test_server};
 use ntex::http::{HttpService, KeepAlive, Method, Request, Response, StatusCode, Version};
 use ntex::time::{sleep, timeout, Millis, Seconds};
-use ntex::{service::fn_service, util::Bytes, util::Ready, web::error};
+use ntex::{rt, service::fn_service, util::Bytes, util::Ready, web::error};
 
 #[ntex::test]
 async fn test_h1() {
@@ -723,4 +723,78 @@ async fn test_h1_client_drop() -> io::Result<()> {
     sleep(Millis(150)).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
+}
+
+#[ntex::test]
+async fn test_h1_gracefull_shutdown() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let count2 = count.clone();
+
+    let srv = test_server(move || {
+        let count = count2.clone();
+        HttpService::build().h1(move |_: Request| {
+            let count = count.clone();
+            count.fetch_add(1, Ordering::Relaxed);
+            async move {
+                sleep(Millis(1000)).await;
+                count.fetch_sub(1, Ordering::Relaxed);
+                Ok::<_, io::Error>(Response::Ok().finish())
+            }
+        })
+    });
+
+    let mut stream1 = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream1.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+
+    let mut stream2 = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream2.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+
+    sleep(Millis(150)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+
+    rt::spawn(async move {
+        srv.stop().await;
+    });
+    sleep(Millis(150)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+
+    sleep(Millis(1100)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+}
+
+#[ntex::test]
+async fn test_h1_gracefull_shutdown_2() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let count2 = count.clone();
+
+    let srv = test_server(move || {
+        let count = count2.clone();
+        HttpService::build().finish(move |_: Request| {
+            let count = count.clone();
+            count.fetch_add(1, Ordering::Relaxed);
+            async move {
+                sleep(Millis(1000)).await;
+                count.fetch_sub(1, Ordering::Relaxed);
+                Ok::<_, io::Error>(Response::Ok().finish())
+            }
+        })
+    });
+
+    let mut stream1 = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream1.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+
+    let mut stream2 = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream2.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
+
+    sleep(Millis(150)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+
+    rt::spawn(async move {
+        srv.stop().await;
+    });
+    sleep(Millis(150)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+
+    sleep(Millis(1100)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 0);
 }
