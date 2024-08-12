@@ -9,7 +9,9 @@ use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::{body, h1::Control, test::server as test_server};
 use ntex::http::{HttpService, KeepAlive, Method, Request, Response, StatusCode, Version};
 use ntex::time::{sleep, timeout, Millis, Seconds};
-use ntex::{rt, service::fn_service, util::Bytes, util::Ready, web::error};
+use ntex::{
+    channel::oneshot, rt, service::fn_service, util::Bytes, util::Ready, web::error,
+};
 
 #[ntex::test]
 async fn test_h1() {
@@ -752,13 +754,15 @@ async fn test_h1_gracefull_shutdown() {
     sleep(Millis(150)).await;
     assert_eq!(count.load(Ordering::Relaxed), 2);
 
+    let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
         srv.stop().await;
+        let _ = tx.send(());
     });
     sleep(Millis(150)).await;
     assert_eq!(count.load(Ordering::Relaxed), 2);
 
-    sleep(Millis(1100)).await;
+    let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
 
@@ -789,12 +793,14 @@ async fn test_h1_gracefull_shutdown_2() {
     sleep(Millis(150)).await;
     assert_eq!(count.load(Ordering::Relaxed), 2);
 
+    let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
         srv.stop().await;
+        let _ = tx.send(());
     });
     sleep(Millis(150)).await;
     assert_eq!(count.load(Ordering::Relaxed), 2);
 
-    sleep(Millis(1100)).await;
+    let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }

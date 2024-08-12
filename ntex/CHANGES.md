@@ -2,7 +2,7 @@
 
 ## [2.2.0] - 2024-08-12
 
-* Http gracefull shutdown support
+* Http server gracefull shutdown support
 
 ## [2.1.0] - 2024-07-30
 

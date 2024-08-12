@@ -290,6 +290,8 @@ impl<S, C> DispatcherConfig<S, C> {
     }
 
     pub(super) fn shutdown(&self) {
+        self.h2config.shutdown();
+
         let mut flags = self.flags.get();
         flags.insert(Flags::SHUTDOWN);
         self.flags.set(flags);

@@ -12,7 +12,7 @@ use ntex::http::{body, h1, HttpService, Method, Request, Response, StatusCode, V
 use ntex::service::{fn_service, ServiceFactory};
 use ntex::time::{sleep, timeout, Millis, Seconds};
 use ntex::util::{Bytes, BytesMut, Ready};
-use ntex::{web::error::InternalError, ws, ws::handshake_response};
+use ntex::{channel::oneshot, rt, web::error::InternalError, ws, ws::handshake_response};
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>
 where
@@ -533,4 +533,51 @@ async fn test_ws_transport() {
             description: None
         }))
     );
+}
+
+#[ntex::test]
+async fn test_h2_graceful_shutdown() -> io::Result<()> {
+    let count = Arc::new(AtomicUsize::new(0));
+    let count2 = count.clone();
+
+    let srv = test_server(move || {
+        let count = count2.clone();
+        HttpService::build()
+            .h2(move |_| {
+                let count = count.clone();
+                count.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    sleep(Millis(1000)).await;
+                    count.fetch_sub(1, Ordering::Relaxed);
+                    Ok::<_, io::Error>(Response::Ok().finish())
+                }
+            })
+            .openssl(ssl_acceptor())
+            .map_err(|_| ())
+    });
+
+    let req = srv.srequest(Method::GET, "/");
+    rt::spawn(async move {
+        let _ = req.send().await.unwrap();
+        sleep(Millis(100000)).await;
+    });
+    let req = srv.srequest(Method::GET, "/");
+    rt::spawn(async move {
+        let _ = req.send().await.unwrap();
+        sleep(Millis(100000)).await;
+    });
+    sleep(Millis(150)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+
+    let (tx, rx) = oneshot::channel();
+    rt::spawn(async move {
+        srv.stop().await;
+        let _ = tx.send(());
+    });
+    sleep(Millis(150)).await;
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+
+    let _ = rx.await;
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    Ok(())
 }

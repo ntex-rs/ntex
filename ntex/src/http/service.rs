@@ -315,12 +315,6 @@ where
     async fn shutdown(&self) {
         self.config.shutdown();
 
-        join(
-            self.config.control.shutdown(),
-            self.config.service.shutdown(),
-        )
-        .await;
-
         // check inflight connections
         let inflight = {
             let inflight = self.inflight.borrow();
@@ -338,6 +332,12 @@ where
 
             log::trace!("Shutting down is complected",);
         }
+
+        join(
+            self.config.control.shutdown(),
+            self.config.service.shutdown(),
+        )
+        .await;
     }
 
     async fn call(
