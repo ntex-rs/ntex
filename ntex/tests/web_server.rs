@@ -1119,6 +1119,7 @@ async fn test_web_server() {
                 )
             })
             .headers_read_rate(Seconds(1), Seconds(5), 128)
+            .payload_read_rate(Seconds(1), Seconds(5), 128)
             .disconnect_timeout(Seconds(1))
             .memory_pool(ntex_bytes::PoolId::P1)
             .listen(tcp)
