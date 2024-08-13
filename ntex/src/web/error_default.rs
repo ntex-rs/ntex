@@ -83,11 +83,14 @@ impl fmt::Debug for Error {
 }
 
 /// Return `GATEWAY_TIMEOUT` for `TimeoutError`
-impl<E: WebResponseError<DefaultError>> WebResponseError<DefaultError> for TimeoutError<E> {
-    fn status_code(&self) -> StatusCode {
-        match self {
-            TimeoutError::Service(e) => e.status_code(),
-            TimeoutError::Timeout => StatusCode::GATEWAY_TIMEOUT,
+impl<E> From<TimeoutError<E>> for Error
+where
+    Error: From<E>,
+{
+    fn from(err: TimeoutError<E>) -> Error {
+        match err {
+            TimeoutError::Service(e) => e.into(),
+            TimeoutError::Timeout => super::error::ErrorGatewayTimeout("").into(),
         }
     }
 }

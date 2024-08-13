@@ -1,5 +1,9 @@
 # Changes
 
+## [2.3.0] - 2024-08-13
+
+* web: Allow to use generic middlewares #390
+
 ## [2.2.0] - 2024-08-12
 
 * Http server gracefull shutdown support

@@ -5,18 +5,16 @@ use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
 use crate::service::{chain, chain_factory, ServiceCtx};
-use crate::service::{
-    Identity, IntoServiceFactory, Middleware, Service, ServiceFactory, Stack,
-};
+use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
 use crate::util::Extensions;
 
 use super::dev::{insert_slash, WebServiceConfig, WebServiceFactory};
 use super::extract::FromRequest;
 use super::handler::Handler;
-use super::request::WebRequest;
-use super::response::WebResponse;
 use super::route::{IntoRoutes, Route, RouteService};
+use super::stack::WebStack;
 use super::{app::Filter, error::ErrorRenderer, guard::Guard, service::AppState};
+use super::{request::WebRequest, response::WebResponse};
 
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
@@ -276,9 +274,9 @@ where
     /// type (i.e modify response's body).
     ///
     /// **Note**: middlewares get called in opposite order of middlewares registration.
-    pub fn wrap<U>(self, mw: U) -> Resource<Err, Stack<M, U>, T> {
+    pub fn wrap<U>(self, mw: U) -> Resource<Err, WebStack<M, U, Err>, T> {
         Resource {
-            middleware: Stack::new(self.middleware, mw),
+            middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
             rdef: self.rdef,
             name: self.name,
