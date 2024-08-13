@@ -413,6 +413,11 @@ mod tests {
         assert_eq!(j.name, "test");
         assert!(format!("{:?}", j).contains("Json"));
         assert!(format!("{}", j).contains("test"));
+
+        let cfg = JsonConfig::default().content_type(|mime: mime::Mime| {
+            mime.type_() == mime::TEXT && mime.subtype() == mime::PLAIN
+        });
+        assert!(format!("{:?}", cfg).contains("JsonConfig"));
     }
 
     #[crate::rt_test]

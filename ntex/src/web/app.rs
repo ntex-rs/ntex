@@ -6,7 +6,7 @@ use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{
     chain_factory, dev::ServiceChainFactory, map_config, IntoServiceFactory,
 };
-use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory, Stack};
+use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
 use crate::util::{BoxFuture, Extensions};
 
 use super::app_service::{AppFactory, AppService};
@@ -16,6 +16,7 @@ use super::resource::Resource;
 use super::response::WebResponse;
 use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
+use super::stack::WebStack;
 use super::{DefaultError, ErrorRenderer};
 
 type HttpNewService<Err: ErrorRenderer> =
@@ -396,9 +397,9 @@ where
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn wrap<U>(self, mw: U) -> App<Stack<M, U>, T, Err> {
+    pub fn wrap<U>(self, mw: U) -> App<WebStack<M, U, Err>, T, Err> {
         App {
-            middleware: Stack::new(self.middleware, mw),
+            middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
             state_factories: self.state_factories,
             services: self.services,

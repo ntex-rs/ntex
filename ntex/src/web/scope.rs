@@ -4,7 +4,7 @@ use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{chain_factory, dev::ServiceChainFactory, IntoServiceFactory};
-use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory, Stack};
+use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
 use crate::util::{join, Extensions};
 
 use super::app::Filter;
@@ -18,6 +18,7 @@ use super::response::WebResponse;
 use super::rmap::ResourceMap;
 use super::route::Route;
 use super::service::{AppServiceFactory, AppState, ServiceFactoryWrapper};
+use super::stack::WebStack;
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
@@ -342,9 +343,9 @@ where
     /// WebResponse.
     ///
     /// Use middleware when you need to read or modify *every* request in some way.
-    pub fn wrap<U>(self, mw: U) -> Scope<Err, Stack<M, U>, T> {
+    pub fn wrap<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
         Scope {
-            middleware: Stack::new(self.middleware, mw),
+            middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
             rdef: self.rdef,
             state: self.state,

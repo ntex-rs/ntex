@@ -707,16 +707,14 @@ mod tests {
         let req = TestRequest::default().to_http_request();
 
         use crate::util::timeout::TimeoutError;
-        let resp = WebResponseError::<DefaultError>::error_response(
-            &TimeoutError::<UrlencodedError>::Timeout,
-            &req,
-        );
+        let resp =
+            Error::from(TimeoutError::<UrlencodedError>::Timeout).error_response(&req);
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
-        let resp = WebResponseError::<DefaultError>::error_response(
-            &TimeoutError::<UrlencodedError>::Service(UrlencodedError::Chunked),
-            &req,
-        );
+        let resp = Error::from(TimeoutError::<UrlencodedError>::Service(
+            UrlencodedError::Chunked,
+        ))
+        .error_response(&req);
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let resp = WebResponseError::<DefaultError>::error_response(
