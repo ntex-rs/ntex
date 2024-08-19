@@ -58,6 +58,19 @@ impl LocalWaker {
         }
     }
 
+    #[inline]
+    /// Calls `wake` on the last `Waker` passed to `register`.
+    ///
+    /// If `register` has not been called yet, then this returns `false`.
+    pub fn wake_checked(&self) -> bool {
+        if let Some(waker) = self.take() {
+            waker.wake();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Returns the last `Waker` passed to `register`, so that the user can wake it.
     ///
     /// If a waker has not been registered, this returns `None`.

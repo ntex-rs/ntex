@@ -1,5 +1,9 @@
 # Changes
 
+## [2.3.0] - 2024-08-19
+
+* Allow to send clonable value via `Condition`
+
 ## [2.2.0] - 2024-07-30
 
 * Add LocalWaker::with() helper
