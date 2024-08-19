@@ -1,5 +1,9 @@
 # Changes
 
+## [2.4.0] - 2024-xx-xx
+
+* Remove mpsc::Sender::downgrade()
+
 ## [2.3.0] - 2024-08-19
 
 * Allow to send clonable value via `Condition`
