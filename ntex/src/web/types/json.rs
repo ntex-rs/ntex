@@ -8,7 +8,9 @@ use crate::http::encoding::Decoder;
 use crate::http::header::CONTENT_LENGTH;
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
 use crate::util::{stream_recv, BoxFuture, BytesMut};
-use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError, WebResponseError};
+use crate::web::error::{
+    Error, ErrorRenderer, JsonError, JsonPayloadError, WebResponseError,
+};
 use crate::web::{FromRequest, HttpRequest, Responder};
 
 /// Json helper
@@ -158,17 +160,17 @@ impl<T, Err: ErrorRenderer> FromRequest<Err> for Json<T>
 where
     T: DeserializeOwned + 'static,
 {
-    type Error = JsonPayloadError;
+    type Error = Error;
 
     async fn from_request(
         req: &HttpRequest,
         payload: &mut Payload,
     ) -> Result<Self, Self::Error> {
         let req2 = req.clone();
-        let (limit, ctype) = req
+        let (limit, ctype, error_handler) = req
             .app_state::<JsonConfig>()
-            .map(|c| (c.limit, c.content_type.clone()))
-            .unwrap_or((32768, None));
+            .map(|c| (c.limit, c.content_type.clone(), c.error_handler.clone()))
+            .unwrap_or((32768, None, None));
 
         match JsonBody::new(req, payload, ctype).limit(limit).await {
             Err(e) => {
@@ -177,7 +179,11 @@ where
                      Request path: {}",
                     req2.path()
                 );
-                Err(e)
+                Err(if let Some(error_handler) = error_handler {
+                    error_handler(e, &req2)
+                } else {
+                    e.into()
+                })
             }
             Ok(data) => Ok(Json(data)),
         }
@@ -215,10 +221,13 @@ where
 ///     );
 /// }
 /// ```
+
 #[derive(Clone)]
 pub struct JsonConfig {
     limit: usize,
     content_type: Option<Arc<dyn Fn(mime::Mime) -> bool + Send + Sync>>,
+    error_handler:
+        Option<Arc<dyn Fn(JsonPayloadError, &HttpRequest) -> Error + Send + Sync>>,
 }
 
 impl JsonConfig {
@@ -236,6 +245,15 @@ impl JsonConfig {
         self.content_type = Some(Arc::new(predicate));
         self
     }
+
+    /// Set error handler
+    pub fn error_handler<F>(mut self, predicate: F) -> Self
+    where
+        F: Fn(JsonPayloadError, &HttpRequest) -> Error + Send + Sync + 'static,
+    {
+        self.error_handler = Some(Arc::new(predicate));
+        self
+    }
 }
 
 impl Default for JsonConfig {
@@ -243,6 +261,7 @@ impl Default for JsonConfig {
         JsonConfig {
             limit: 32768,
             content_type: None,
+            error_handler: None,
         }
     }
 }
@@ -257,6 +276,12 @@ impl fmt::Debug for JsonConfig {
                     .content_type
                     .as_ref()
                     .map(|_| "Arc<dyn Fn(mime::Mime) -> bool + Send + Sync>"),
+            )
+            .field(
+                "error_handler",
+                &self.error_handler.as_ref().map(|_| {
+                    "Arc<dyn Fn(JsonPayloadError, &HttpRequest) -> Error + Send + Sync>"
+                }),
             )
             .finish()
     }
@@ -600,5 +625,36 @@ mod tests {
 
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
         assert!(s.is_err())
+    }
+
+    #[crate::rt_test]
+    async fn test_with_json_and_bad_custom_error_handler() {
+        #[derive(Debug, Serialize)]
+        struct MyError {}
+
+        impl std::fmt::Display for MyError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "error")
+            }
+        }
+
+        impl WebResponseError for MyError {
+            // builds the actual response to send back when an error occurs
+            fn error_response(&self, _: &HttpRequest) -> crate::web::HttpResponse {
+                crate::web::HttpResponse::build(StatusCode::BAD_REQUEST)
+                    .body(Bytes::from(self.to_string()))
+            }
+        }
+
+        let (req, mut pl) = TestRequest::with_header(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        )
+        .set_payload(Bytes::from_static(b"{\"name\": \"test\""))
+        .state(JsonConfig::default().error_handler(|_, _| Error::from(MyError {})))
+        .to_http_parts();
+
+        let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
+        assert_eq!(s.unwrap_err().to_string(), "error")
     }
 }
