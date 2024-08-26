@@ -693,6 +693,7 @@ where
                 },
             }
             .unwrap()
+            .set_tag("test", "WEB-SRV")
             .run();
 
             tx.send((System::current(), srv, local_addr)).unwrap();

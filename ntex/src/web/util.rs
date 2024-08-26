@@ -255,9 +255,9 @@ pub fn service<T: IntoPattern>(path: T) -> WebServiceAdapter {
 /// to result of the function execution.
 pub async fn block<F, I, E>(f: F) -> Result<I, BlockingError<E>>
 where
-    F: FnOnce() -> Result<I, E> + Send + 'static,
+    F: FnOnce() -> Result<I, E> + Send + Sync + 'static,
     I: Send + 'static,
-    E: Send + std::fmt::Debug + 'static,
+    E: Send + fmt::Debug + 'static,
 {
     match crate::rt::spawn_blocking(f).await {
         Ok(res) => res.map_err(BlockingError::Error),
