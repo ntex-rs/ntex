@@ -96,11 +96,8 @@ impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-
-    use super::*;
     use crate::http::StatusCode;
-    use crate::web::test::{self, init_service, TestRequest};
+    use crate::web::test::{init_service, TestRequest};
     use crate::web::{self, App, HttpResponse};
 
     #[crate::rt_test]
@@ -132,6 +129,8 @@ mod tests {
     #[cfg(feature = "tokio")]
     #[crate::rt_test]
     async fn test_state_drop() {
+        use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+
         struct TestData(Arc<AtomicUsize>);
 
         impl TestData {
@@ -159,12 +158,12 @@ mod tests {
         let data = TestData::new(num.clone());
         assert_eq!(num.load(Ordering::SeqCst), 1);
 
-        let srv = test::server(move || {
+        let srv = web::test::server(move || {
             let data = data.clone();
 
-            App::new()
-                .state(data)
-                .service(web::resource("/").to(|_data: State<TestData>| async { "ok" }))
+            App::new().state(data).service(
+                web::resource("/").to(|_data: super::State<TestData>| async { "ok" }),
+            )
         });
 
         assert!(srv.get("/").send().await.unwrap().status().is_success());
