@@ -1,6 +1,10 @@
 #![allow(clippy::let_underscore_future)]
+
+#[cfg(feature = "tokio")]
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use std::{io, io::Read, net, sync::mpsc, sync::Arc, thread, time};
+#[cfg(feature = "tokio")]
+use std::{io, sync::Arc};
+use std::{io::Read, net, sync::mpsc, thread, time};
 
 use ntex::codec::BytesCodec;
 use ntex::io::Io;

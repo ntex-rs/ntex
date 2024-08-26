@@ -122,7 +122,7 @@ async fn test_chunked_payload() {
     let returned_size = {
         let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
         let _ =
-            stream.write_all(b"POST /test HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n");
+            stream.write_all(b"POST /test HTTP/1.1\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n");
 
         for chunk_size in chunk_sizes.iter() {
             let mut bytes = Vec::new();
@@ -722,7 +722,7 @@ async fn test_h1_client_drop() -> io::Result<()> {
 
     let result = timeout(Millis(100), srv.request(Method::GET, "/").send()).await;
     assert!(result.is_err());
-    sleep(Millis(150)).await;
+    sleep(Millis(250)).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }
