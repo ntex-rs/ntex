@@ -104,17 +104,16 @@ impl FilterLayer for TlsClientFilter {
                 'outer: loop {
                     if !src.is_empty() {
                         src.split_to(session.writer().write(src)?);
-                    } else {
-                        break;
-                    }
-                    while session.wants_write() {
-                        match session.write_tls(&mut io) {
-                            Ok(0) => continue 'outer,
-                            Ok(_) => continue,
-                            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                                break
+
+                        loop {
+                            match session.write_tls(&mut io) {
+                                Ok(0) => continue 'outer,
+                                Ok(_) => continue,
+                                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
+                                    break
+                                }
+                                Err(err) => return Err(err),
                             }
-                            Err(err) => return Err(err),
                         }
                     }
                     break;
