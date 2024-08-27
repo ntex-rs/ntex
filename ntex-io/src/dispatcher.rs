@@ -615,7 +615,7 @@ mod tests {
     use ntex_util::{time::sleep, time::Millis};
 
     use super::*;
-    use crate::{io::Flags, testing::IoTest, Io, IoRef, IoStream};
+    use crate::{testing::IoTest, Flags, Io, IoRef, IoStream};
 
     pub(crate) struct State(IoRef);
 

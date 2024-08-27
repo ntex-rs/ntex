@@ -173,7 +173,7 @@ impl TlsServerFilter {
                         }
                         poll_fn(|cx| {
                             let read_ready = if wants_read {
-                                match ready!(io.poll_force_read_ready(cx))? {
+                                match ready!(io.poll_read_notify(cx))? {
                                     Some(_) => Ok(true),
                                     None => Err(io::Error::new(
                                         io::ErrorKind::Other,

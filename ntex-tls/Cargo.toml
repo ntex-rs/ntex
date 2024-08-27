@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "2.0.1"
+version = "2.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]
@@ -26,7 +26,7 @@ rustls = ["tls_rust"]
 
 [dependencies]
 ntex-bytes = "0.1"
-ntex-io = "2"
+ntex-io = "2.3"
 ntex-util = "2"
 ntex-service = "3"
 ntex-net = "2"

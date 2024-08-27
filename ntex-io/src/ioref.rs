@@ -4,7 +4,7 @@ use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Seconds;
 
-use super::{io::Flags, timer, types, Decoded, Filter, IoRef, OnDisconnect, WriteBuf};
+use crate::{timer, types, Decoded, Filter, Flags, IoRef, OnDisconnect, WriteBuf};
 
 impl IoRef {
     #[inline]
@@ -44,7 +44,7 @@ impl IoRef {
     #[inline]
     /// Check if write back-pressure is enabled
     pub fn is_wr_backpressure(&self) -> bool {
-        self.0.flags.get().contains(Flags::WR_BACKPRESSURE)
+        self.0.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
     }
 
     #[inline]

@@ -1,6 +1,6 @@
 use std::{any, io, task::Context, task::Poll};
 
-use super::{buf::Stack, io::Flags, FilterLayer, IoRef, ReadStatus, WriteStatus};
+use crate::{buf::Stack, FilterLayer, Flags, IoRef, ReadStatus, WriteStatus};
 
 #[derive(Debug)]
 /// Default `Io` filter
@@ -80,9 +80,10 @@ impl Filter for Base {
             Poll::Ready(ReadStatus::Terminate)
         } else {
             self.0 .0.read_task.register(cx.waker());
+
             if flags.intersects(Flags::IO_STOPPING_FILTERS) {
                 Poll::Ready(ReadStatus::Ready)
-            } else if flags.intersects(Flags::RD_PAUSED | Flags::RD_BUF_FULL) {
+            } else if flags.cannot_read() {
                 Poll::Pending
             } else {
                 Poll::Ready(ReadStatus::Ready)
@@ -109,6 +110,9 @@ impl Filter for Base {
             Poll::Ready(WriteStatus::Timeout(
                 self.0 .0.disconnect_timeout.get().into(),
             ))
+        } else if flags.intersects(Flags::WR_PAUSED) {
+            self.0 .0.write_task.register(cx.waker());
+            Poll::Pending
         } else {
             self.0 .0.write_task.register(cx.waker());
             Poll::Ready(WriteStatus::Ready)
@@ -140,9 +144,9 @@ impl Filter for Base {
                     self.0 .0.write_task.wake();
                 }
                 if len >= self.0.memory_pool().write_params_high()
-                    && !flags.contains(Flags::WR_BACKPRESSURE)
+                    && !flags.contains(Flags::BUF_W_BACKPRESSURE)
                 {
-                    self.0 .0.insert_flags(Flags::WR_BACKPRESSURE);
+                    self.0 .0.insert_flags(Flags::BUF_W_BACKPRESSURE);
                     self.0 .0.dispatch_task.wake();
                 }
             }

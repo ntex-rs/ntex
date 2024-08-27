@@ -9,45 +9,11 @@ use ntex_util::{future::Either, task::LocalWaker, time::Seconds};
 
 use crate::buf::Stack;
 use crate::filter::{Base, Filter, Layer, NullFilter};
+use crate::flags::Flags;
 use crate::seal::Sealed;
 use crate::tasks::{ReadContext, WriteContext};
 use crate::timer::TimerHandle;
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
-
-bitflags::bitflags! {
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct Flags: u16 {
-        /// io is closed
-        const IO_STOPPED          = 0b0000_0000_0000_0001;
-        /// shutdown io tasks
-        const IO_STOPPING         = 0b0000_0000_0000_0010;
-        /// shuting down filters
-        const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
-        /// initiate filters shutdown timeout in write task
-        const IO_FILTERS_TIMEOUT  = 0b0000_0000_0000_1000;
-
-        /// pause io read
-        const RD_PAUSED           = 0b0000_0000_0001_0000;
-        /// new data is available
-        const RD_READY            = 0b0000_0000_0010_0000;
-        /// read buffer is full
-        const RD_BUF_FULL         = 0b0000_0000_0100_0000;
-        /// any new data is available
-        const RD_FORCE_READY      = 0b0000_0000_1000_0000;
-
-        /// wait write completion
-        const WR_WAIT             = 0b0000_0001_0000_0000;
-        /// write buffer is full
-        const WR_BACKPRESSURE     = 0b0000_0010_0000_0000;
-        /// write task paused
-        const WR_PAUSED           = 0b0000_0100_0000_0000;
-
-        /// dispatcher is marked stopped
-        const DSP_STOP            = 0b0001_0000_0000_0000;
-        /// timeout occured
-        const DSP_TIMEOUT         = 0b0010_0000_0000_0000;
-    }
-}
 
 /// Interface object to underlying io stream
 pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
@@ -384,8 +350,14 @@ impl<F> Io<F> {
     #[doc(hidden)]
     #[inline]
     /// Wait until read becomes ready.
+    pub async fn read_notify(&self) -> io::Result<Option<()>> {
+        poll_fn(|cx| self.poll_read_notify(cx)).await
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
     pub async fn force_read_ready(&self) -> io::Result<Option<()>> {
-        poll_fn(|cx| self.poll_force_read_ready(cx)).await
+        poll_fn(|cx| self.poll_read_notify(cx)).await
     }
 
     #[inline]
@@ -454,9 +426,9 @@ impl<F> Io<F> {
         } else {
             st.dispatch_task.register(cx.waker());
 
-            let ready = flags.contains(Flags::RD_READY);
-            if flags.intersects(Flags::RD_BUF_FULL | Flags::RD_PAUSED) {
-                flags.remove(Flags::RD_READY | Flags::RD_BUF_FULL | Flags::RD_PAUSED);
+            let ready = flags.contains(Flags::BUF_R_READY);
+            if flags.cannot_read() {
+                flags.cleanup_read_flags();
                 st.read_task.wake();
                 st.flags.set(flags);
                 if ready {
@@ -465,7 +437,7 @@ impl<F> Io<F> {
                     Poll::Pending
                 }
             } else if ready {
-                flags.remove(Flags::RD_READY);
+                flags.remove(Flags::BUF_R_READY);
                 st.flags.set(flags);
                 Poll::Ready(Ok(Some(())))
             } else {
@@ -489,23 +461,29 @@ impl<F> Io<F> {
     /// `Poll::Ready(Ok(Some(()))))` if the io stream is ready for reading.
     /// `Poll::Ready(Ok(None))` if io stream is disconnected
     /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
-    pub fn poll_force_read_ready(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<Option<()>>> {
+    pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let ready = self.poll_read_ready(cx);
 
         if ready.is_pending() {
             let st = self.st();
-            if st.remove_flags(Flags::RD_FORCE_READY) {
+            if st.remove_flags(Flags::RD_NOTIFY) {
                 Poll::Ready(Ok(Some(())))
             } else {
-                st.insert_flags(Flags::RD_FORCE_READY);
+                st.insert_flags(Flags::RD_NOTIFY);
                 Poll::Pending
             }
         } else {
             ready
         }
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    pub fn poll_force_read_ready(
+        &self,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<Option<()>>> {
+        self.poll_read_notify(cx)
     }
 
     #[inline]
@@ -561,7 +539,7 @@ impl<F> Io<F> {
             } else if flags.contains(Flags::DSP_TIMEOUT) {
                 st.remove_flags(Flags::DSP_TIMEOUT);
                 Err(RecvError::KeepAlive)
-            } else if flags.contains(Flags::WR_BACKPRESSURE) {
+            } else if flags.contains(Flags::BUF_W_BACKPRESSURE) {
                 Err(RecvError::WriteBackpressure)
             } else {
                 match self.poll_read_ready(cx) {
@@ -597,16 +575,16 @@ impl<F> Io<F> {
             let len = st.buffer.write_destination_size();
             if len > 0 {
                 if full {
-                    st.insert_flags(Flags::WR_WAIT);
+                    st.insert_flags(Flags::BUF_W_MUST_FLUSH);
                     st.dispatch_task.register(cx.waker());
                     return Poll::Pending;
                 } else if len >= st.pool.get().write_params_high() << 1 {
-                    st.insert_flags(Flags::WR_BACKPRESSURE);
+                    st.insert_flags(Flags::BUF_W_BACKPRESSURE);
                     st.dispatch_task.register(cx.waker());
                     return Poll::Pending;
                 }
             }
-            st.remove_flags(Flags::WR_WAIT | Flags::WR_BACKPRESSURE);
+            st.remove_flags(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
             Poll::Ready(Ok(()))
         }
     }
@@ -661,7 +639,7 @@ impl<F> Io<F> {
         } else if flags.contains(Flags::DSP_TIMEOUT) {
             st.remove_flags(Flags::DSP_TIMEOUT);
             Poll::Ready(IoStatusUpdate::KeepAlive)
-        } else if flags.contains(Flags::WR_BACKPRESSURE) {
+        } else if flags.contains(Flags::BUF_W_BACKPRESSURE) {
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
             st.dispatch_task.register(cx.waker());
@@ -1003,7 +981,7 @@ mod tests {
         assert!(format!("{:?}", err).contains("Dispatcher stopped"));
 
         client.write(TEXT);
-        server.st().insert_flags(Flags::WR_BACKPRESSURE);
+        server.st().insert_flags(Flags::BUF_W_BACKPRESSURE);
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
     }

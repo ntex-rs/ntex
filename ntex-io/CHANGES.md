@@ -1,5 +1,9 @@
 # Changes
 
+## [2.3.0] - 2024-08-28
+
+* Extend io task contexts, for "compio" runtime compatibility
+
 ## [2.2.0] - 2024-08-12
 
 * Allow to notify dispatcher from IoRef
