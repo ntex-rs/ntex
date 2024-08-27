@@ -140,6 +140,18 @@ impl Stack {
         })
     }
 
+    pub(crate) fn get_read_source(&self) -> Option<BytesVec> {
+        self.get_last_level().0.take()
+    }
+
+    pub(crate) fn set_read_source(&self, io: &IoRef, buf: BytesVec) {
+        if buf.is_empty() {
+            io.memory_pool().release_read_buf(buf);
+        } else {
+            self.get_last_level().0.set(Some(buf));
+        }
+    }
+
     pub(crate) fn with_read_source<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytesVec) -> R,
@@ -208,6 +220,10 @@ impl Stack {
             }
         }
         result
+    }
+
+    pub(crate) fn get_write_destination(&self) -> Option<BytesVec> {
+        self.get_last_level().1.take()
     }
 
     pub(crate) fn with_write_destination<F, R>(&self, io: &IoRef, f: F) -> R

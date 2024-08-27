@@ -1,5 +1,9 @@
 # Changes
 
+## [2.1.0] - 2024-08-28
+
+* Update io api usage
+
 ## [2.0.1] - 2024-08-26
 
 * Fix rustls client/server filters

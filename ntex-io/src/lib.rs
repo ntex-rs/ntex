@@ -11,6 +11,7 @@ pub mod types;
 mod buf;
 mod dispatcher;
 mod filter;
+mod flags;
 mod framed;
 mod io;
 mod ioref;
@@ -33,7 +34,7 @@ pub use self::timer::TimerHandle;
 pub use self::utils::{seal, Decoded};
 
 #[doc(hidden)]
-pub use self::io::Flags;
+pub use self::flags::Flags;
 
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
