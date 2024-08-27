@@ -539,7 +539,7 @@ impl<F> Io<F> {
             } else if flags.contains(Flags::DSP_TIMEOUT) {
                 st.remove_flags(Flags::DSP_TIMEOUT);
                 Err(RecvError::KeepAlive)
-            } else if flags.contains(Flags::WR_BACKPRESSURE) {
+            } else if flags.contains(Flags::BUF_W_BACKPRESSURE) {
                 Err(RecvError::WriteBackpressure)
             } else {
                 match self.poll_read_ready(cx) {
@@ -579,12 +579,12 @@ impl<F> Io<F> {
                     st.dispatch_task.register(cx.waker());
                     return Poll::Pending;
                 } else if len >= st.pool.get().write_params_high() << 1 {
-                    st.insert_flags(Flags::WR_BACKPRESSURE);
+                    st.insert_flags(Flags::BUF_W_BACKPRESSURE);
                     st.dispatch_task.register(cx.waker());
                     return Poll::Pending;
                 }
             }
-            st.remove_flags(Flags::BUF_W_MUST_FLUSH | Flags::WR_BACKPRESSURE);
+            st.remove_flags(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
             Poll::Ready(Ok(()))
         }
     }
@@ -639,7 +639,7 @@ impl<F> Io<F> {
         } else if flags.contains(Flags::DSP_TIMEOUT) {
             st.remove_flags(Flags::DSP_TIMEOUT);
             Poll::Ready(IoStatusUpdate::KeepAlive)
-        } else if flags.contains(Flags::WR_BACKPRESSURE) {
+        } else if flags.contains(Flags::BUF_W_BACKPRESSURE) {
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
             st.dispatch_task.register(cx.waker());
@@ -981,7 +981,7 @@ mod tests {
         assert!(format!("{:?}", err).contains("Dispatcher stopped"));
 
         client.write(TEXT);
-        server.st().insert_flags(Flags::WR_BACKPRESSURE);
+        server.st().insert_flags(Flags::BUF_W_BACKPRESSURE);
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
     }

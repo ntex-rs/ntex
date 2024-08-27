@@ -44,7 +44,7 @@ impl IoRef {
     #[inline]
     /// Check if write back-pressure is enabled
     pub fn is_wr_backpressure(&self) -> bool {
-        self.0.flags.get().contains(Flags::WR_BACKPRESSURE)
+        self.0.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
     }
 
     #[inline]

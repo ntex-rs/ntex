@@ -317,10 +317,10 @@ impl WriteContext {
                 flags.waiting_for_write_is_done();
                 inner.dispatch_task.wake();
             }
-        } else if flags.contains(Flags::WR_BACKPRESSURE)
+        } else if flags.contains(Flags::BUF_W_BACKPRESSURE)
             && len < inner.pool.get().write_params_high() << 1
         {
-            flags.remove(Flags::WR_BACKPRESSURE);
+            flags.remove(Flags::BUF_W_BACKPRESSURE);
             inner.dispatch_task.wake();
         }
 
@@ -374,10 +374,10 @@ impl WriteContext {
             }
             flags.insert(Flags::WR_PAUSED);
             inner.flags.set(flags);
-        } else if flags.contains(Flags::WR_BACKPRESSURE)
+        } else if flags.contains(Flags::BUF_W_BACKPRESSURE)
             && len < inner.pool.get().write_params_high() << 1
         {
-            flags.remove(Flags::WR_BACKPRESSURE);
+            flags.remove(Flags::BUF_W_BACKPRESSURE);
             inner.flags.set(flags);
             inner.dispatch_task.wake();
         }

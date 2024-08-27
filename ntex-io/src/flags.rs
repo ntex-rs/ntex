@@ -22,9 +22,9 @@ bitflags::bitflags! {
 
         /// wait while write task flushes buf
         const BUF_W_MUST_FLUSH    = 0b0000_0001_0000_0000;
-
         /// write buffer is full
-        const WR_BACKPRESSURE     = 0b0000_0010_0000_0000;
+        const BUF_W_BACKPRESSURE  = 0b0000_0010_0000_0000;
+
         /// write task paused
         const WR_PAUSED           = 0b0000_0100_0000_0000;
 
@@ -37,11 +37,11 @@ bitflags::bitflags! {
 
 impl Flags {
     pub(crate) fn is_waiting_for_write(&self) -> bool {
-        self.intersects(Flags::BUF_W_MUST_FLUSH | Flags::WR_BACKPRESSURE)
+        self.intersects(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE)
     }
 
     pub(crate) fn waiting_for_write_is_done(&mut self) {
-        self.remove(Flags::BUF_W_MUST_FLUSH | Flags::WR_BACKPRESSURE);
+        self.remove(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
     }
 
     pub(crate) fn is_read_buf_ready(&self) -> bool {
