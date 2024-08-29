@@ -34,6 +34,7 @@ ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
+ntex-compio = { path = "ntex-compio" }
 ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
