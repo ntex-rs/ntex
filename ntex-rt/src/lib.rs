@@ -473,39 +473,52 @@ pub use self::glommio::*;
 ))]
 pub use self::compio::*;
 
-/// Runs the provided future, blocking the current thread until the future
-/// completes.
+#[allow(dead_code)]
 #[cfg(all(
     not(feature = "tokio"),
     not(feature = "async-std"),
     not(feature = "compio"),
     not(feature = "glommio")
 ))]
-pub fn block_on<F: std::future::Future<Output = ()>>(_: F) {
-    panic!("async runtime is not configured");
-}
+mod no_rt {
+    use std::task::{Context, Poll};
+    use std::{fmt, future::Future, marker::PhantomData, pin::Pin};
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "async-std"),
-    not(feature = "compio"),
-    not(feature = "glommio")
-))]
-pub fn spawn<F>(_: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = F::Output>>>
-where
-    F: std::future::Future + 'static,
-{
-    unimplemented!()
-}
+    /// Runs the provided future, blocking the current thread until the future
+    /// completes.
+    pub fn block_on<F: Future<Output = ()>>(_: F) {
+        panic!("async runtime is not configured");
+    }
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "async-std"),
-    not(feature = "compio"),
-    not(feature = "glommio")
-))]
-mod spawn_blocking_stub {
-    use std::fmt;
+    pub fn spawn<F>(_: F) -> JoinHandle<F::Output>
+    where
+        F: Future + 'static,
+    {
+        unimplemented!()
+    }
+
+    pub fn spawn_blocking<F, T>(_: F) -> JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + Sync + 'static,
+        T: Send + 'static,
+    {
+        unimplemented!()
+    }
+
+    /// Blocking operation completion future. It resolves with results
+    /// of blocking function execution.
+    #[allow(clippy::type_complexity)]
+    pub struct JoinHandle<T> {
+        t: PhantomData<T>,
+    }
+
+    impl<T> Future for JoinHandle<T> {
+        type Output = Result<T, JoinError>;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            todo!()
+        }
+    }
 
     #[derive(Debug, Copy, Clone)]
     pub struct JoinError;
@@ -517,21 +530,12 @@ mod spawn_blocking_stub {
     }
 
     impl std::error::Error for JoinError {}
-
-    pub fn spawn_blocking<F, T>(
-        _: F,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, JoinError>>>>
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
-    {
-        unimplemented!()
-    }
 }
+
 #[cfg(all(
     not(feature = "tokio"),
     not(feature = "async-std"),
     not(feature = "compio"),
     not(feature = "glommio")
 ))]
-pub use self::spawn_blocking_stub::*;
+pub use self::no_rt::*;
