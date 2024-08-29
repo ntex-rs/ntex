@@ -214,6 +214,16 @@ mod compio {
         fut: Option<comp_io::runtime::JoinHandle<T>>,
     }
 
+    impl<T> JoinHandle<T> {
+        pub fn is_finished(&self) -> bool {
+            if let Some(hnd) = &self.fut {
+                hnd.is_finished()
+            } else {
+                true
+            }
+        }
+    }
+
     impl<T> Drop for JoinHandle<T> {
         fn drop(&mut self) {
             self.fut.take().unwrap().detach();
@@ -510,6 +520,12 @@ mod no_rt {
     #[allow(clippy::type_complexity)]
     pub struct JoinHandle<T> {
         t: PhantomData<T>,
+    }
+
+    impl<T> JoinHandle<T> {
+        pub fn is_finished(&self) -> bool {
+            true
+        }
     }
 
     impl<T> Future for JoinHandle<T> {
