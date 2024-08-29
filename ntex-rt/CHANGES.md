@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.14] - 2024-08-29
+
+* Add `compio` runtime support
+
 ## [0.4.13] - 2024-04-04
 
 * Use tokio Handle if available
