@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "2.0.0"
+version = "2.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -21,6 +21,9 @@ default = []
 # tokio runtime
 tokio = ["ntex-rt/tokio", "ntex-tokio"]
 
+# compio runtime
+compio = ["ntex-rt/compio", "ntex-compio"]
+
 # glommio runtime
 glommio = ["ntex-rt/glommio", "ntex-glommio"]
 
@@ -28,19 +31,20 @@ glommio = ["ntex-rt/glommio", "ntex-glommio"]
 async-std = ["ntex-rt/async-std", "ntex-async-std"]
 
 [dependencies]
-ntex-service = "3.0"
+ntex-service = "3"
 ntex-bytes = "0.1"
 ntex-http = "0.1"
-ntex-io = "2.0"
-ntex-rt = "0.4.11"
-ntex-util = "2.0"
+ntex-io = "2.3"
+ntex-rt = "0.4.14"
+ntex-util = "2"
 
-ntex-tokio = { version = "0.5.0", optional = true }
-ntex-glommio = { version = "0.5.0", optional = true }
-ntex-async-std = { version = "0.5.0", optional = true }
+ntex-tokio = { version = "0.5", optional = true }
+ntex-compio = { version = "0.1", optional = true }
+ntex-glommio = { version = "0.5", optional = true }
+ntex-async-std = { version = "0.5", optional = true }
 
 log = "0.4"
-thiserror = "1.0"
+thiserror = "1"
 
 [dev-dependencies]
 env_logger = "0.11"

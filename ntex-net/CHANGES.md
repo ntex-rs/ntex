@@ -1,5 +1,9 @@
 # Changes
 
+## [2.1.0] - 2024-08-29
+
+* Add `compio` runtime support
+
 ## [2.0.0] - 2024-05-28
 
 * Use async fn for Service::ready() and Service::shutdown()
