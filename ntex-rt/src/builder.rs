@@ -1,5 +1,5 @@
 #![allow(clippy::let_underscore_future)]
-use std::{cell::RefCell, future::Future, io, rc::Rc};
+use std::{cell::RefCell, future::Future, io, pin::Pin, rc::Rc};
 
 use async_channel::unbounded;
 
@@ -134,6 +134,33 @@ impl SystemRunner {
             Ok(result) => result,
             Err(_) => unreachable!(),
         }
+    }
+
+    /// Execute a future with custom `block_on` method and wait for result.
+    #[inline]
+    pub fn with_block_on<B, F, R>(self, block_on: B, fut: F) -> R
+    where
+        B: FnOnce(Pin<Box<dyn Future<Output = ()>>>),
+        F: Future<Output = R> + 'static,
+        R: 'static,
+    {
+        let SystemRunner {
+            arb,
+            arb_controller,
+            ..
+        } = self;
+
+        // run loop
+        let result = Rc::new(RefCell::new(None));
+        let result_inner = result.clone();
+        block_on(Box::pin(async move {
+            let _ = crate::spawn(arb);
+            let _ = crate::spawn(arb_controller);
+            let r = fut.await;
+            *result_inner.borrow_mut() = Some(r);
+        }));
+        let res = result.borrow_mut().take().unwrap();
+        res
     }
 
     #[cfg(feature = "tokio")]
