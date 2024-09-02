@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity, clippy::let_underscore_future)]
 //! A runtime implementation that runs everything on the current thread.
 use std::{cell::RefCell, ptr};
 

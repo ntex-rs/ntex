@@ -1,10 +1,9 @@
-#![allow(clippy::let_underscore_future)]
-use std::{cell::RefCell, future::Future, io, rc::Rc};
+use std::{future::Future, io, pin::Pin, sync::Arc};
 
 use async_channel::unbounded;
 
 use crate::arbiter::{Arbiter, ArbiterController, SystemArbiter};
-use crate::System;
+use crate::{system::SystemConfig, System};
 
 /// Builder struct for a ntex runtime.
 ///
@@ -16,6 +15,10 @@ pub struct Builder {
     name: String,
     /// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
     stop_on_panic: bool,
+    /// New thread stack size
+    stack_size: usize,
+    /// Block on fn
+    block_on: Option<Arc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>) + Sync + Send>>,
 }
 
 impl Builder {
@@ -23,6 +26,8 @@ impl Builder {
         Builder {
             name: "ntex".into(),
             stop_on_panic: false,
+            stack_size: 0,
+            block_on: None,
         }
     }
 
@@ -41,16 +46,36 @@ impl Builder {
         self
     }
 
+    /// Sets the size of the stack (in bytes) for the new thread.
+    pub fn stack_size(mut self, size: usize) -> Self {
+        self.stack_size = size;
+        self
+    }
+
+    /// Use custom block_on function
+    pub fn block_on<F>(mut self, block_on: F) -> Self
+    where
+        F: Fn(Pin<Box<dyn Future<Output = ()>>>) + Sync + Send + 'static,
+    {
+        self.block_on = Some(Arc::new(block_on));
+        self
+    }
+
     /// Create new System.
     ///
     /// This method panics if it can not create tokio runtime
     pub fn finish(self) -> SystemRunner {
         let (stop_tx, stop) = oneshot::channel();
         let (sys_sender, sys_receiver) = unbounded();
-        let stop_on_panic = self.stop_on_panic;
+
+        let config = SystemConfig {
+            block_on: self.block_on,
+            stack_size: self.stack_size,
+            stop_on_panic: self.stop_on_panic,
+        };
 
         let (arb, arb_controller) = Arbiter::new_system();
-        let system = System::construct(sys_sender, arb, stop_on_panic);
+        let system = System::construct(sys_sender, arb, config);
 
         // system arbiter
         let arb = SystemArbiter::new(stop_tx, sys_receiver);
@@ -97,23 +122,30 @@ impl SystemRunner {
             stop,
             arb,
             arb_controller,
+            system,
             ..
         } = self;
 
         // run loop
-        match block_on(stop, arb, arb_controller, f).take()? {
-            Ok(code) => {
-                if code != 0 {
-                    Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Non-zero exit code: {}", code),
-                    ))
-                } else {
-                    Ok(())
+        system.config().block_on(async move {
+            f()?;
+
+            let _ = crate::spawn(arb);
+            let _ = crate::spawn(arb_controller);
+            match stop.await {
+                Ok(code) => {
+                    if code != 0 {
+                        Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("Non-zero exit code: {}", code),
+                        ))
+                    } else {
+                        Ok(())
+                    }
                 }
+                Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
             }
-            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Closed")),
-        }
+        })
     }
 
     /// Execute a future and wait for result.
@@ -126,14 +158,15 @@ impl SystemRunner {
         let SystemRunner {
             arb,
             arb_controller,
+            system,
             ..
         } = self;
 
-        // run loop
-        match block_on(fut, arb, arb_controller, || Ok(())).take() {
-            Ok(result) => result,
-            Err(_) => unreachable!(),
-        }
+        system.config().block_on(async move {
+            let _ = crate::spawn(arb);
+            let _ = crate::spawn(arb_controller);
+            fut.await
+        })
     }
 
     #[cfg(feature = "tokio")]
@@ -158,41 +191,6 @@ impl SystemRunner {
             })
             .await
     }
-}
-
-pub struct BlockResult<T>(Rc<RefCell<Option<T>>>);
-
-impl<T> BlockResult<T> {
-    pub fn take(self) -> T {
-        self.0.borrow_mut().take().unwrap()
-    }
-}
-
-#[inline]
-fn block_on<F, R, F1>(
-    fut: F,
-    arb: SystemArbiter,
-    arb_controller: ArbiterController,
-    f: F1,
-) -> BlockResult<io::Result<R>>
-where
-    F: Future<Output = R> + 'static,
-    R: 'static,
-    F1: FnOnce() -> io::Result<()> + 'static,
-{
-    let result = Rc::new(RefCell::new(None));
-    let result_inner = result.clone();
-    crate::block_on(async move {
-        let _ = crate::spawn(arb);
-        let _ = crate::spawn(arb_controller);
-        if let Err(e) = f() {
-            *result_inner.borrow_mut() = Some(Err(e));
-        } else {
-            let r = fut.await;
-            *result_inner.borrow_mut() = Some(Ok(r));
-        }
-    });
-    BlockResult(result)
 }
 
 #[cfg(test)]
@@ -234,5 +232,44 @@ mod tests {
         }));
         let id2 = rx.recv().unwrap();
         assert_eq!(id, id2);
+    }
+
+    #[cfg(feature = "tokio")]
+    #[test]
+    fn test_block_on() {
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let runner = crate::System::build()
+                .stop_on_panic(true)
+                .block_on(|fut| {
+                    let rt = tok_io::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap();
+                    tok_io::task::LocalSet::new().block_on(&rt, fut);
+                })
+                .finish();
+
+            tx.send(runner.system()).unwrap();
+            let _ = runner.run_until_stop();
+        });
+        let s = System::new("test");
+
+        let sys = rx.recv().unwrap();
+        let id = sys.id();
+        let (tx, rx) = mpsc::channel();
+        sys.arbiter().exec_fn(move || {
+            let _ = tx.send(System::current().id());
+        });
+        let id2 = rx.recv().unwrap();
+        assert_eq!(id, id2);
+
+        let id2 = s
+            .block_on(sys.arbiter().exec(|| System::current().id()))
+            .unwrap();
+        assert_eq!(id, id2);
+
+        sys.stop();
     }
 }

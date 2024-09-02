@@ -1,5 +1,7 @@
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
+
 use async_channel::Sender;
-use std::{cell::RefCell, sync::atomic::AtomicUsize, sync::atomic::Ordering};
 
 use super::arbiter::{Arbiter, SystemCommand};
 use super::builder::{Builder, SystemRunner};
@@ -12,7 +14,15 @@ pub struct System {
     id: usize,
     sys: Sender<SystemCommand>,
     arbiter: Arbiter,
-    stop_on_panic: bool,
+    config: SystemConfig,
+}
+
+#[derive(Clone)]
+pub(super) struct SystemConfig {
+    pub(super) stack_size: usize,
+    pub(super) stop_on_panic: bool,
+    pub(super) block_on:
+        Option<Arc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>) + Sync + Send>>,
 }
 
 thread_local!(
@@ -24,12 +34,12 @@ impl System {
     pub(super) fn construct(
         sys: Sender<SystemCommand>,
         arbiter: Arbiter,
-        stop_on_panic: bool,
+        config: SystemConfig,
     ) -> Self {
         let sys = System {
             sys,
+            config,
             arbiter,
-            stop_on_panic,
             id: SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst),
         };
         System::set_current(sys.clone());
@@ -83,18 +93,60 @@ impl System {
         let _ = self.sys.try_send(SystemCommand::Exit(code));
     }
 
-    pub(super) fn sys(&self) -> &Sender<SystemCommand> {
-        &self.sys
-    }
-
     /// Return status of 'stop_on_panic' option which controls whether the System is stopped when an
     /// uncaught panic is thrown from a worker thread.
     pub fn stop_on_panic(&self) -> bool {
-        self.stop_on_panic
+        self.config.stop_on_panic
     }
 
     /// System arbiter
     pub fn arbiter(&self) -> &Arbiter {
         &self.arbiter
+    }
+
+    pub(super) fn sys(&self) -> &Sender<SystemCommand> {
+        &self.sys
+    }
+
+    /// System config
+    pub(super) fn config(&self) -> SystemConfig {
+        self.config.clone()
+    }
+}
+
+impl SystemConfig {
+    /// Execute a future with custom `block_on` method and wait for result.
+    #[inline]
+    pub(super) fn block_on<F, R>(&self, fut: F) -> R
+    where
+        F: Future<Output = R> + 'static,
+        R: 'static,
+    {
+        // run loop
+        let result = Rc::new(RefCell::new(None));
+        let result_inner = result.clone();
+
+        if let Some(block_on) = &self.block_on {
+            (*block_on)(Box::pin(async move {
+                let r = fut.await;
+                *result_inner.borrow_mut() = Some(r);
+            }));
+        } else {
+            crate::block_on(Box::pin(async move {
+                let r = fut.await;
+                *result_inner.borrow_mut() = Some(r);
+            }));
+        }
+        let res = result.borrow_mut().take().unwrap();
+        res
+    }
+}
+
+impl fmt::Debug for SystemConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SystemConfig")
+            .field("stack_size", &self.stack_size)
+            .field("stop_on_panic", &self.stop_on_panic)
+            .finish()
     }
 }

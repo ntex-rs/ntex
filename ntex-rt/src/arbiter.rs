@@ -91,11 +91,19 @@ impl Arbiter {
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
         let name = format!("ntex-rt:worker:{}", id);
         let sys = System::current();
+        let config = sys.config();
         let (arb_tx, arb_rx) = unbounded();
         let arb_tx2 = arb_tx.clone();
 
-        let handle = thread::Builder::new()
-            .name(name.clone())
+        let builder = if sys.config().stack_size > 0 {
+            thread::Builder::new()
+                .name(name.clone())
+                .stack_size(sys.config().stack_size)
+        } else {
+            thread::Builder::new().name(name.clone())
+        };
+
+        let handle = builder
             .spawn(move || {
                 let arb = Arbiter::with_sender(arb_tx);
 
@@ -104,7 +112,7 @@ impl Arbiter {
 
                 System::set_current(sys);
 
-                crate::block_on(async move {
+                config.block_on(async move {
                     // start arbiter controller
                     let _ = crate::spawn(ArbiterController {
                         stop: Some(stop),
