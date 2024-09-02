@@ -1,8 +1,10 @@
 # Changes
 
-## [0.4.16] - 2024-08-31
+## [0.4.16] - 2024-09-02
 
-* Add SustemRunner::with_block_on() helper, allows to use custom block_on fn
+* Allow to override block_on function
+
+* Add stack size configuration
 
 ## [0.4.15] - 2024-08-30
 
