@@ -15,8 +15,10 @@ impl IoStream for crate::TcpStream {
         compio::runtime::spawn(async move {
             run(&mut io, &read, write).await;
 
-            let res = io.close().await;
-            log::debug!("{} Stream is closed, {:?}", read.tag(), res);
+            match io.close().await {
+                Ok(_) => log::debug!("{} Stream is closed", read.tag()),
+                Err(e) => log::error!("{} Stream is closed, {:?}", read.tag(), e),
+            }
         })
         .detach();
 
@@ -31,8 +33,10 @@ impl IoStream for crate::UnixStream {
         compio::runtime::spawn(async move {
             run(&mut io, &read, write).await;
 
-            let res = io.close().await;
-            log::debug!("{} Stream is closed, {:?}", read.tag(), res);
+            match io.close().await {
+                Ok(_) => log::debug!("{} Unix stream is closed", read.tag()),
+                Err(e) => log::error!("{} Unix stream is closed, {:?}", read.tag(), e),
+            }
         })
         .detach();
 
@@ -221,21 +225,23 @@ async fn write<T: AsyncWrite>(io: &mut T, state: &WriteContext) -> io::Result<()
                 let BufResult(result, buf1) = io.write(buf).await;
                 buf = buf1;
 
-                match result {
+                return match result {
+                    Ok(0) => Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "failed to write frame to transport",
+                    )),
                     Ok(size) => {
                         if buf.0.len() == size {
-                            return io.flush().await;
+                            // return io.flush().await;
+                            state.memory_pool().release_write_buf(buf.0);
+                            Ok(())
+                        } else {
+                            buf.0.advance(size);
+                            continue;
                         }
-                        if size == 0 {
-                            return Err(io::Error::new(
-                                io::ErrorKind::WriteZero,
-                                "failed to write frame to transport",
-                            ));
-                        }
-                        buf.0.advance(size);
                     }
-                    Err(e) => return Err(e),
-                }
+                    Err(e) => Err(e),
+                };
             }
         })
         .await

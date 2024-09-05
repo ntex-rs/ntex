@@ -1,7 +1,6 @@
 use std::{future::poll_fn, future::Future, io, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
-use ntex_util::task;
 
 use crate::{Flags, IoRef, ReadStatus, WriteStatus};
 
@@ -157,11 +156,11 @@ impl ReadContext {
     {
         let inner = &self.0 .0;
 
-        // we already pushed new data to read buffer,
-        // we have to wait for dispatcher to read data from buffer
-        if inner.flags.get().is_read_buf_ready() {
-            task::yield_to().await;
-        }
+        // // we already pushed new data to read buffer,
+        // // we have to wait for dispatcher to read data from buffer
+        // if inner.flags.get().is_read_buf_ready() {
+        //   ntex_util::task::yield_to().await;
+        // }
 
         let mut buf = if inner.flags.get().is_read_buf_ready() {
             // read buffer is still not read by dispatcher
@@ -175,9 +174,9 @@ impl ReadContext {
         };
 
         // make sure we've got room
-        let remaining = buf.remaining_mut();
         let (hw, lw) = self.0.memory_pool().read_params().unpack();
-        if remaining < lw {
+        let remaining = buf.remaining_mut();
+        if remaining <= lw {
             buf.reserve(hw - remaining);
         }
         let total = buf.len();

@@ -1,5 +1,9 @@
 # Changes
 
+## [2.3.1] - 2024-09-05
+
+* Tune async io tasks support
+
 ## [2.3.0] - 2024-08-28
 
 * Extend io task contexts, for "compio" runtime compatibility
