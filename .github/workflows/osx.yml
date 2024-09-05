@@ -40,6 +40,12 @@ jobs:
       - name: Run tests
         run: cargo test --all --all-features --no-fail-fast -- --nocapture
 
+      - name: Run compio tests
+        timeout-minutes: 40
+        run: |
+          cd ntex
+          cargo test --no-default-features --no-fail-fast --features="compio,cookie,url,compress,openssl,rustls,ws,brotli"
+
       - name: Install cargo-cache
         continue-on-error: true
         run: |

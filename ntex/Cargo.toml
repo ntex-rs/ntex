@@ -51,6 +51,9 @@ glommio = ["ntex-net/glommio"]
 # async-std runtime
 async-std = ["ntex-net/async-std"]
 
+# compio runtime
+compio = ["ntex-net/compio"]
+
 # websocket support
 ws = ["dep:sha-1"]
 

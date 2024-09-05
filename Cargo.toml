@@ -15,10 +15,10 @@ members = [
   "ntex-macros",
   "ntex-util",
 
+  "ntex-async-std",
   "ntex-compio",
   "ntex-glommio",
   "ntex-tokio",
-  "ntex-async-std",
 ]
 
 [patch.crates-io]
