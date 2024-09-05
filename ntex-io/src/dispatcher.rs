@@ -605,7 +605,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
     use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
     use std::{cell::RefCell, io};
 
@@ -613,6 +612,7 @@ mod tests {
     use ntex_codec::BytesCodec;
     use ntex_service::ServiceCtx;
     use ntex_util::{time::sleep, time::Millis};
+    use rand::Rng;
 
     use super::*;
     use crate::{testing::IoTest, Flags, Io, IoRef, IoStream};
@@ -823,6 +823,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         // write side must be closed, dispatcher waiting for read side to close
+        sleep(Millis(250)).await;
         assert!(client.is_closed());
 
         // close read side
@@ -875,6 +876,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
         // write side must be closed, dispatcher waiting for read side to close
+        sleep(Millis(250)).await;
         assert!(client.is_closed());
 
         // close read side

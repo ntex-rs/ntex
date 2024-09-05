@@ -44,22 +44,21 @@ jobs:
           path: ~/.cargo/git
           key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-index-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run tests
-        timeout-minutes: 40
-        run: cargo test --all --all-features --no-fail-fast -- --nocapture
-
-      - name: Run compio tests
+      - name: Run tests (tokio)
         timeout-minutes: 40
         run: |
-          cd ntex
-          cargo test --no-default-features --no-fail-fast --features="compio,cookie,url,compress,openssl,rustls,ws,brotli"
+          cargo test --all --no-fail-fast --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
-      - name: Run async-std tests
+      - name: Run tests (compio)
+        timeout-minutes: 40
+        run: |
+          cargo test --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+
+      - name: Run tests (async-std)
         timeout-minutes: 40
         continue-on-error: true
         run: |
-          cd ntex
-          cargo test --no-default-features --no-fail-fast --features="async-std,cookie,url,compress,openssl,rustls,ws,brotli"
+          cargo test --all --no-default-features --features="ntex/async-std,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
       - name: Install cargo-cache
         continue-on-error: true
