@@ -48,6 +48,7 @@ pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
     });
 }
 
+#[allow(dead_code)]
 #[cfg(feature = "tokio")]
 mod tokio {
     use std::future::{poll_fn, Future};

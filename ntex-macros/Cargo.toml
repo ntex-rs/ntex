@@ -16,6 +16,6 @@ syn = { version = "^1", features = ["full", "parsing"] }
 proc-macro2 = "^1"
 
 [dev-dependencies]
-ntex = { version = "2", features = ["tokio"] }
+ntex = "2"
 futures = "0.3"
 env_logger = "0.11"

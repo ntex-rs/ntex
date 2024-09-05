@@ -61,13 +61,10 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\bin
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
-      - name: Run tests
+      - name: Run tests (tokio)
         run: |
-          cargo test --lib --all-features --no-fail-fast -- --nocapture --skip test_timer
+          cargo test --all --lib --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli" -- --skip test_timer
 
-      - name: Run compio tests
-        timeout-minutes: 40
-        continue-on-error: true
+      - name: Run tests (compio)
         run: |
-          cd ntex
-          cargo test --no-default-features --no-fail-fast --features="compio,cookie,url,compress,openssl,rustls,ws,brotli"
+          cargo test --all --lib --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli" -- --skip test_timer
