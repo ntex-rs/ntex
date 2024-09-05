@@ -1,5 +1,9 @@
 # Changes
 
+## [2.4.0] - 2024-09-05
+
+* Add experimental `compio` runtime support
+
 ## [2.3.0] - 2024-08-13
 
 * web: Allow to use generic middlewares #390
