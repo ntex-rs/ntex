@@ -1,6 +1,6 @@
 [package]
 name = "ntex-compio"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "compio runtime intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
