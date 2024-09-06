@@ -41,6 +41,10 @@ impl IoRef {
             .intersects(Flags::IO_STOPPING | Flags::IO_STOPPED)
     }
 
+    pub(crate) fn is_io_closed(&self) -> bool {
+        self.0.flags.get().intersects(Flags::IO_STOPPED)
+    }
+
     #[inline]
     /// Check if write back-pressure is enabled
     pub fn is_wr_backpressure(&self) -> bool {

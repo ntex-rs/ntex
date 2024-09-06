@@ -137,6 +137,10 @@ impl Future for WriteTask {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().get_mut();
 
+        if this.state.poll_close(cx).is_ready() {
+            return Poll::Ready(());
+        }
+
         match this.st {
             IoWriteState::Processing(ref mut delay) => {
                 match ready!(this.state.poll_ready(cx)) {
@@ -215,6 +219,9 @@ impl Future for WriteTask {
                 // close WRITE side and wait for disconnect on read side.
                 // use disconnect timeout, otherwise it could hang forever.
                 loop {
+                    if this.state.poll_close(cx).is_ready() {
+                        return Poll::Ready(());
+                    }
                     match st {
                         Shutdown::None => {
                             // flush write buffer
@@ -564,6 +571,10 @@ mod unixstream {
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             let this = self.as_mut().get_mut();
 
+            if this.state.poll_close(cx).is_ready() {
+                return Poll::Ready(());
+            }
+
             match this.st {
                 IoWriteState::Processing(ref mut delay) => {
                     match this.state.poll_ready(cx) {
@@ -630,6 +641,9 @@ mod unixstream {
                     // close WRITE side and wait for disconnect on read side.
                     // use disconnect timeout, otherwise it could hang forever.
                     loop {
+                        if this.state.poll_close(cx).is_ready() {
+                            return Poll::Ready(());
+                        }
                         match st {
                             Shutdown::None => {
                                 // flush write buffer
