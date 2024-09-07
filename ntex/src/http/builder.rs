@@ -85,7 +85,7 @@ where
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default disconnect timeout is set to 3 seconds.
+    /// By default disconnect timeout is set to 1 seconds.
     pub fn disconnect_timeout(mut self, timeout: Seconds) -> Self {
         self.config.disconnect_timeout(timeout);
         self

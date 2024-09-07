@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.1] - 2024-09-06
+
+* Stop write task if io is closed
+
 ## [0.4.0] - 2024-01-09
 
 * Log io tags

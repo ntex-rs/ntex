@@ -97,25 +97,26 @@ impl Filter for Base {
 
         if flags.contains(Flags::IO_STOPPED) {
             Poll::Ready(WriteStatus::Terminate)
-        } else if flags.intersects(Flags::IO_STOPPING) {
-            Poll::Ready(WriteStatus::Shutdown(
-                self.0 .0.disconnect_timeout.get().into(),
-            ))
-        } else if flags.contains(Flags::IO_STOPPING_FILTERS)
-            && !flags.contains(Flags::IO_FILTERS_TIMEOUT)
-        {
-            flags.insert(Flags::IO_FILTERS_TIMEOUT);
-            self.0.set_flags(flags);
-            self.0 .0.write_task.register(cx.waker());
-            Poll::Ready(WriteStatus::Timeout(
-                self.0 .0.disconnect_timeout.get().into(),
-            ))
-        } else if flags.intersects(Flags::WR_PAUSED) {
-            self.0 .0.write_task.register(cx.waker());
-            Poll::Pending
         } else {
             self.0 .0.write_task.register(cx.waker());
-            Poll::Ready(WriteStatus::Ready)
+
+            if flags.intersects(Flags::IO_STOPPING) {
+                Poll::Ready(WriteStatus::Shutdown(
+                    self.0 .0.disconnect_timeout.get().into(),
+                ))
+            } else if flags.contains(Flags::IO_STOPPING_FILTERS)
+                && !flags.contains(Flags::IO_FILTERS_TIMEOUT)
+            {
+                flags.insert(Flags::IO_FILTERS_TIMEOUT);
+                self.0.set_flags(flags);
+                Poll::Ready(WriteStatus::Timeout(
+                    self.0 .0.disconnect_timeout.get().into(),
+                ))
+            } else if flags.intersects(Flags::WR_PAUSED) {
+                Poll::Pending
+            } else {
+                Poll::Ready(WriteStatus::Ready)
+            }
         }
     }
 

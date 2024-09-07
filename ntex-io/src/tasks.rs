@@ -296,6 +296,17 @@ impl WriteContext {
         self.0.filter().poll_write_ready(cx)
     }
 
+    #[inline]
+    /// Check if io is closed
+    pub fn poll_close(&self, cx: &mut Context<'_>) -> Poll<()> {
+        if self.0.is_io_closed() {
+            Poll::Ready(())
+        } else {
+            self.0 .0.write_task.register(cx.waker());
+            Poll::Pending
+        }
+    }
+
     /// Get write buffer
     pub fn with_buf<F>(&self, f: F) -> Poll<io::Result<()>>
     where
