@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "2.1.0"
+version = "2.2.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -34,14 +34,14 @@ async-std = ["ntex-rt/async-std", "ntex-async-std"]
 ntex-service = "3"
 ntex-bytes = "0.1"
 ntex-http = "0.1"
-ntex-io = "2.4"
+ntex-io = "2.5"
 ntex-rt = "0.4.14"
 ntex-util = "2"
 
-ntex-tokio = { version = "0.5.1", optional = true }
-ntex-compio = { version = "0.1", optional = true }
-ntex-glommio = { version = "0.5", optional = true }
-ntex-async-std = { version = "0.5", optional = true }
+ntex-tokio = { version = "0.5.2", optional = true }
+ntex-compio = { version = "0.1.2", optional = true }
+ntex-glommio = { version = "0.5.1", optional = true }
+ntex-async-std = { version = "0.5.1", optional = true }
 
 log = "0.4"
 thiserror = "1"

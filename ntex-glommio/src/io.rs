@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{any, future::Future, io, pin::Pin};
+use std::{any, future::poll_fn, future::Future, io, pin::Pin};
 
 use futures_lite::future::FutureExt;
 use futures_lite::io::{AsyncRead, AsyncWrite};
@@ -51,7 +51,7 @@ impl ntex_io::AsyncRead for ReadTask {
     async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
         // read data from socket
         let result = poll_fn(|cx| {
-            let mut io = self.0.borrow_mut();
+            let mut io = self.0 .0.borrow_mut();
             poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
         })
         .await;
@@ -324,7 +324,7 @@ impl ntex_io::AsyncRead for UnixReadTask {
     async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
         // read data from socket
         let result = poll_fn(|cx| {
-            let mut io = self.0.borrow_mut();
+            let mut io = self.0 .0.borrow_mut();
             poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
         })
         .await;
