@@ -152,27 +152,6 @@ impl Stack {
         }
     }
 
-    pub(crate) fn with_read_source<F, R>(&self, io: &IoRef, f: F) -> R
-    where
-        F: FnOnce(&mut BytesVec) -> R,
-    {
-        let item = self.get_last_level();
-        let mut rb = item.0.take();
-        if rb.is_none() {
-            rb = Some(io.memory_pool().get_read_buf());
-        }
-
-        let result = f(rb.as_mut().unwrap());
-        if let Some(b) = rb {
-            if b.is_empty() {
-                io.memory_pool().release_read_buf(b);
-            } else {
-                item.0.set(Some(b));
-            }
-        }
-        result
-    }
-
     pub(crate) fn with_read_destination<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytesVec) -> R,
@@ -224,6 +203,17 @@ impl Stack {
 
     pub(crate) fn get_write_destination(&self) -> Option<BytesVec> {
         self.get_last_level().1.take()
+    }
+
+    pub(crate) fn set_write_destination(&self, buf: BytesVec) -> Option<BytesVec> {
+        let b = self.get_last_level().1.take();
+        if b.is_some() {
+            self.get_last_level().1.set(b);
+            Some(buf)
+        } else {
+            self.get_last_level().1.set(Some(buf));
+            None
+        }
     }
 
     pub(crate) fn with_write_destination<F, R>(&self, io: &IoRef, f: F) -> R

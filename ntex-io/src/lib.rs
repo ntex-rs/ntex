@@ -39,16 +39,24 @@ pub use self::utils::{seal, Decoded};
 pub use self::flags::Flags;
 
 #[doc(hidden)]
+pub trait AsyncRead {
+    async fn read(&mut self, buf: BytesVec) -> (BytesVec, sio::Result<usize>);
+}
+
+#[doc(hidden)]
+pub trait AsyncWrite {
+    async fn write(&mut self, buf: BytesVec) -> (BytesVec, sio::Result<()>);
+
+    async fn flush(&mut self) -> sio::Result<()>;
+
+    async fn shutdown(&mut self) -> sio::Result<()>;
+}
+
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {
     Ready,
     Terminate,
-}
-
-#[doc(hidden)]
-pub trait AsyncRead {
-    async fn read(&mut self, buf: BytesVec) -> (BytesVec, sio::Result<usize>);
 }
 
 /// Status for write task
