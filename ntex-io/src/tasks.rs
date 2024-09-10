@@ -1,8 +1,9 @@
 use std::{future::poll_fn, future::Future, io, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec, PoolRef};
+use ntex_util::future::{select, Either};
 
-use crate::{Flags, IoRef, ReadStatus, WriteStatus};
+use crate::{AsyncRead, Flags, IoRef, ReadStatus, WriteStatus};
 
 #[derive(Debug)]
 /// Context for io read task
@@ -149,115 +150,124 @@ impl ReadContext {
     }
 
     /// Get read buffer (async)
-    pub async fn with_buf_async<F, R>(&self, f: F) -> Poll<()>
+    pub async fn handle<T>(&self, io: &mut T)
     where
-        F: FnOnce(BytesVec) -> R,
-        R: Future<Output = (BytesVec, io::Result<usize>)>,
+        T: AsyncRead,
     {
         let inner = &self.0 .0;
 
-        // // we already pushed new data to read buffer,
-        // // we have to wait for dispatcher to read data from buffer
-        // if inner.flags.get().is_read_buf_ready() {
-        //   ntex_util::task::yield_to().await;
-        // }
+        loop {
+            let result = poll_fn(|cx| self.0.filter().poll_read_ready(cx)).await;
+            if result == ReadStatus::Terminate {
+                log::trace!("{}: Read task is instructed to shutdown", self.tag());
+                break;
+            }
 
-        let mut buf = if inner.flags.get().is_read_buf_ready() {
-            // read buffer is still not read by dispatcher
-            // we cannot touch it
-            inner.pool.get().get_read_buf()
-        } else {
-            inner
-                .buffer
-                .get_read_source()
-                .unwrap_or_else(|| inner.pool.get().get_read_buf())
-        };
+            let mut buf = if inner.flags.get().is_read_buf_ready() {
+                // read buffer is still not read by dispatcher
+                // we cannot touch it
+                inner.pool.get().get_read_buf()
+            } else {
+                inner
+                    .buffer
+                    .get_read_source()
+                    .unwrap_or_else(|| inner.pool.get().get_read_buf())
+            };
 
-        // make sure we've got room
-        let (hw, lw) = self.0.memory_pool().read_params().unpack();
-        let remaining = buf.remaining_mut();
-        if remaining <= lw {
-            buf.reserve(hw - remaining);
-        }
-        let total = buf.len();
+            // make sure we've got room
+            let (hw, lw) = self.0.memory_pool().read_params().unpack();
+            let remaining = buf.remaining_mut();
+            if remaining <= lw {
+                buf.reserve(hw - remaining);
+            }
+            let total = buf.len();
 
-        // call provided callback
-        let (buf, result) = f(buf).await;
-        let total2 = buf.len();
-        let nbytes = if total2 > total { total2 - total } else { 0 };
-        let total = total2;
+            // call provided callback
+            let (buf, result) = match select(io.read(buf), self.wait_for_close()).await {
+                Either::Left(res) => res,
+                Either::Right(_) => {
+                    log::trace!("{}: Read io is closed, stop read task", self.tag());
+                    break;
+                }
+            };
 
-        if let Some(mut first_buf) = inner.buffer.get_read_source() {
-            first_buf.extend_from_slice(&buf);
-            inner.buffer.set_read_source(&self.0, first_buf);
-        } else {
-            inner.buffer.set_read_source(&self.0, buf);
-        }
+            // handle incoming data
+            let total2 = buf.len();
+            let nbytes = if total2 > total { total2 - total } else { 0 };
+            let total = total2;
 
-        // handle buffer changes
-        if nbytes > 0 {
-            let filter = self.0.filter();
-            let res = match filter.process_read_buf(&self.0, &inner.buffer, 0, nbytes) {
-                Ok(status) => {
-                    if status.nbytes > 0 {
-                        // check read back-pressure
-                        if hw < inner.buffer.read_destination_size() {
-                            log::trace!(
+            if let Some(mut first_buf) = inner.buffer.get_read_source() {
+                first_buf.extend_from_slice(&buf);
+                inner.buffer.set_read_source(&self.0, first_buf);
+            } else {
+                inner.buffer.set_read_source(&self.0, buf);
+            }
+
+            // handle buffer changes
+            if nbytes > 0 {
+                let filter = self.0.filter();
+                let res = match filter.process_read_buf(&self.0, &inner.buffer, 0, nbytes) {
+                    Ok(status) => {
+                        if status.nbytes > 0 {
+                            // check read back-pressure
+                            if hw < inner.buffer.read_destination_size() {
+                                log::trace!(
                                 "{}: Io read buffer is too large {}, enable read back-pressure",
                                 self.0.tag(),
                                 total
                             );
-                            inner.insert_flags(Flags::BUF_R_READY | Flags::BUF_R_FULL);
-                        } else {
-                            inner.insert_flags(Flags::BUF_R_READY);
+                                inner.insert_flags(Flags::BUF_R_READY | Flags::BUF_R_FULL);
+                            } else {
+                                inner.insert_flags(Flags::BUF_R_READY);
+                            }
+                            log::trace!(
+                                "{}: New {} bytes available, wakeup dispatcher",
+                                self.0.tag(),
+                                nbytes
+                            );
+                            // dest buffer has new data, wake up dispatcher
+                            inner.dispatch_task.wake();
+                        } else if inner.flags.get().contains(Flags::RD_NOTIFY) {
+                            // in case of "notify" we must wake up dispatch task
+                            // if we read any data from source
+                            inner.dispatch_task.wake();
                         }
-                        log::trace!(
-                            "{}: New {} bytes available, wakeup dispatcher",
-                            self.0.tag(),
-                            nbytes
-                        );
-                        // dest buffer has new data, wake up dispatcher
-                        inner.dispatch_task.wake();
-                    } else if inner.flags.get().contains(Flags::RD_NOTIFY) {
-                        // in case of "notify" we must wake up dispatch task
-                        // if we read any data from source
-                        inner.dispatch_task.wake();
-                    }
 
-                    // while reading, filter wrote some data
-                    // in that case filters need to process write buffers
-                    // and potentialy wake write task
-                    if status.need_write {
-                        filter.process_write_buf(&self.0, &inner.buffer, 0)
-                    } else {
-                        Ok(())
+                        // while reading, filter wrote some data
+                        // in that case filters need to process write buffers
+                        // and potentialy wake write task
+                        if status.need_write {
+                            filter.process_write_buf(&self.0, &inner.buffer, 0)
+                        } else {
+                            Ok(())
+                        }
                     }
+                    Err(err) => Err(err),
+                };
+
+                if let Err(err) = res {
+                    inner.dispatch_task.wake();
+                    inner.io_stopped(Some(err));
+                    inner.insert_flags(Flags::BUF_R_READY);
                 }
-                Err(err) => Err(err),
-            };
-
-            if let Err(err) = res {
-                inner.dispatch_task.wake();
-                inner.io_stopped(Some(err));
-                inner.insert_flags(Flags::BUF_R_READY);
             }
-        }
 
-        match result {
-            Ok(n) => {
-                if n == 0 {
+            match result {
+                Ok(0) => {
+                    log::trace!("{}: Tcp stream is disconnected", self.tag());
                     inner.io_stopped(None);
-                    Poll::Ready(())
-                } else {
+                    break;
+                }
+                Ok(_) => {
                     if inner.flags.get().contains(Flags::IO_STOPPING_FILTERS) {
                         shutdown_filters(&self.0);
                     }
-                    Poll::Pending
                 }
-            }
-            Err(e) => {
-                inner.io_stopped(Some(e));
-                Poll::Ready(())
+                Err(err) => {
+                    log::trace!("{}: Read task failed on io {:?}", self.tag(), err);
+                    inner.io_stopped(Some(err));
+                    break;
+                }
             }
         }
     }

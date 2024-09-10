@@ -1,5 +1,6 @@
 //! Utilities for abstructing io streams
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+#![allow(async_fn_in_trait)]
 
 use std::{
     any::Any, any::TypeId, fmt, io as sio, io::Error as IoError, task::Context, task::Poll,
@@ -20,6 +21,7 @@ mod tasks;
 mod timer;
 mod utils;
 
+use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Millis;
 
@@ -41,6 +43,11 @@ pub use self::flags::Flags;
 pub enum ReadStatus {
     Ready,
     Terminate,
+}
+
+#[doc(hidden)]
+pub trait AsyncRead {
+    async fn read(&mut self, buf: BytesVec) -> (BytesVec, sio::Result<usize>);
 }
 
 /// Status for write task

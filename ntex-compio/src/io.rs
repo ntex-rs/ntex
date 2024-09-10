@@ -4,18 +4,28 @@ use compio::buf::{BufResult, IoBuf, IoBufMut, SetBufInit};
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::{
-    types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
-};
+use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteStatus};
 use ntex_util::{future::select, future::Either, time::sleep};
 
 impl IoStream for crate::TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        let mut io = self.0.clone();
+        let io = self.0.clone();
         compio::runtime::spawn(async move {
-            run(&mut io, &read, write).await;
+            let mut wr_io = io.clone();
+            let wr_task = compio::runtime::spawn(async move {
+                write_task(&mut wr_io, &write).await;
+                log::debug!("{} Write task is stopped", write.tag());
+            });
+            let mut io = ReadIo(io);
 
-            match io.close().await {
+            read.handle(&mut io).await;
+            log::debug!("{} Read task is stopped", read.tag());
+
+            if !wr_task.is_finished() {
+                let _ = wr_task.await;
+            }
+
+            match io.0.close().await {
                 Ok(_) => log::debug!("{} Stream is closed", read.tag()),
                 Err(e) => log::error!("{} Stream is closed, {:?}", read.tag(), e),
             }
@@ -29,11 +39,24 @@ impl IoStream for crate::TcpStream {
 #[cfg(unix)]
 impl IoStream for crate::UnixStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        let mut io = self.0;
+        let io = self.0;
         compio::runtime::spawn(async move {
-            run(&mut io, &read, write).await;
+            let mut wr_io = io.clone();
+            let wr_task = compio::runtime::spawn(async move {
+                write_task(&mut wr_io, &write).await;
+                log::debug!("{} Write task is stopped", write.tag());
+            });
 
-            match io.close().await {
+            let mut io = ReadIo(io);
+
+            read.handle(&mut io).await;
+            log::debug!("{} Read task is stopped", read.tag());
+
+            if !wr_task.is_finished() {
+                let _ = wr_task.await;
+            }
+
+            match io.0.close().await {
                 Ok(_) => log::debug!("{} Unix stream is closed", read.tag()),
                 Err(e) => log::error!("{} Unix stream is closed, {:?}", read.tag(), e),
             }
@@ -88,71 +111,15 @@ impl SetBufInit for CompioBuf {
     }
 }
 
-async fn run<T: AsyncRead + AsyncWrite + Clone + 'static>(
-    io: &mut T,
-    read: &ReadContext,
-    write: WriteContext,
-) {
-    let mut wr_io = io.clone();
-    let wr_task = compio::runtime::spawn(async move {
-        write_task(&mut wr_io, &write).await;
-        log::debug!("{} Write task is stopped", write.tag());
-    });
+struct ReadIo<T: AsyncRead>(T);
 
-    read_task(io, read).await;
-    log::debug!("{} Read task is stopped", read.tag());
-
-    if !wr_task.is_finished() {
-        let _ = wr_task.await;
-    }
-}
-
-/// Read io task
-async fn read_task<T: AsyncRead>(io: &mut T, state: &ReadContext) {
-    loop {
-        match state.ready().await {
-            ReadStatus::Ready => {
-                let result = state
-                    .with_buf_async(|buf| async {
-                        let BufResult(result, buf) =
-                            match select(io.read(CompioBuf(buf)), state.wait_for_close())
-                                .await
-                            {
-                                Either::Left(res) => res,
-                                Either::Right(_) => return (Default::default(), Ok(1)),
-                            };
-
-                        match result {
-                            Ok(n) => {
-                                if n == 0 {
-                                    log::trace!(
-                                        "{}: Tcp stream is disconnected",
-                                        state.tag()
-                                    );
-                                }
-                                (buf.0, Ok(n))
-                            }
-                            Err(err) => {
-                                log::trace!(
-                                    "{}: Read task failed on io {:?}",
-                                    state.tag(),
-                                    err
-                                );
-                                (buf.0, Err(err))
-                            }
-                        }
-                    })
-                    .await;
-
-                if result.is_ready() {
-                    break;
-                }
-            }
-            ReadStatus::Terminate => {
-                log::trace!("{}: Read task is instructed to shutdown", state.tag());
-                break;
-            }
-        }
+impl<T> ntex_io::AsyncRead for ReadIo<T>
+where
+    T: AsyncRead,
+{
+    async fn read(&mut self, buf: BytesVec) -> (BytesVec, io::Result<usize>) {
+        let BufResult(result, buf) = self.0.read(CompioBuf(buf)).await;
+        (buf.0, result)
     }
 }
 

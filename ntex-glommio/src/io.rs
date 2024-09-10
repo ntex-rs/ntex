@@ -13,7 +13,10 @@ use crate::net_impl::{TcpStream, UnixStream};
 
 impl IoStream for TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        glommio::spawn_local(ReadTask::new(self.clone(), read)).detach();
+        let mut rio = ReadTask(self.clone());
+        glommio::spawn_local(async move {
+            read.handle(&mut rio).await;
+        });
         glommio::spawn_local(WriteTask::new(self.clone(), write)).detach();
         Some(Box::new(self))
     }
@@ -21,7 +24,10 @@ impl IoStream for TcpStream {
 
 impl IoStream for UnixStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        glommio::spawn_local(UnixReadTask::new(self.clone(), read)).detach();
+        let mut rio = UnixReadTask(self.clone());
+        glommio::spawn_local(async move {
+            read.handle(&mut rio).await;
+        });
         glommio::spawn_local(UnixWriteTask::new(self, write)).detach();
         None
     }
@@ -39,64 +45,17 @@ impl Handle for TcpStream {
 }
 
 /// Read io task
-struct ReadTask {
-    io: TcpStream,
-    state: ReadContext,
-}
+struct ReadTask(TcpStream);
 
-impl ReadTask {
-    /// Create new read io task
-    fn new(io: TcpStream, state: ReadContext) -> Self {
-        Self { io, state }
-    }
-}
-
-impl Future for ReadTask {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut();
-
-        this.state.with_buf(|buf, hw, lw| {
-            match ready!(this.state.poll_ready(cx)) {
-                ReadStatus::Ready => {
-                    // read data from socket
-                    loop {
-                        // make sure we've got room
-                        let remaining = buf.remaining_mut();
-                        if remaining < lw {
-                            buf.reserve(hw - remaining);
-                        }
-
-                        return match poll_read_buf(
-                            Pin::new(&mut *this.io.0.borrow_mut()),
-                            cx,
-                            buf,
-                        ) {
-                            Poll::Pending => Poll::Pending,
-                            Poll::Ready(Ok(n)) => {
-                                if n == 0 {
-                                    log::trace!("glommio stream is disconnected");
-                                    Poll::Ready(Ok(()))
-                                } else if buf.len() < hw {
-                                    continue;
-                                } else {
-                                    Poll::Pending
-                                }
-                            }
-                            Poll::Ready(Err(err)) => {
-                                log::trace!("read task failed on io {:?}", err);
-                                Poll::Ready(Err(err))
-                            }
-                        };
-                    }
-                }
-                ReadStatus::Terminate => {
-                    log::trace!("read task is instructed to shutdown");
-                    Poll::Ready(Ok(()))
-                }
-            }
+impl ntex_io::AsyncRead for ReadTask {
+    async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
+        // read data from socket
+        let result = poll_fn(|cx| {
+            let mut io = self.0.borrow_mut();
+            poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
         })
+        .await;
+        (buf, result)
     }
 }
 
@@ -359,64 +318,17 @@ pub fn poll_read_buf<T: AsyncRead>(
 }
 
 /// Read io task
-struct UnixReadTask {
-    io: UnixStream,
-    state: ReadContext,
-}
+struct UnixReadTask(UnixStream);
 
-impl UnixReadTask {
-    /// Create new read io task
-    fn new(io: UnixStream, state: ReadContext) -> Self {
-        Self { io, state }
-    }
-}
-
-impl Future for UnixReadTask {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_mut();
-
-        this.state.with_buf(|buf, hw, lw| {
-            match ready!(this.state.poll_ready(cx)) {
-                ReadStatus::Ready => {
-                    // read data from socket
-                    loop {
-                        // make sure we've got room
-                        let remaining = buf.remaining_mut();
-                        if remaining < lw {
-                            buf.reserve(hw - remaining);
-                        }
-
-                        return match poll_read_buf(
-                            Pin::new(&mut *this.io.0.borrow_mut()),
-                            cx,
-                            buf,
-                        ) {
-                            Poll::Pending => Poll::Pending,
-                            Poll::Ready(Ok(n)) => {
-                                if n == 0 {
-                                    log::trace!("glommio stream is disconnected");
-                                    Poll::Ready(Ok(()))
-                                } else if buf.len() < hw {
-                                    continue;
-                                } else {
-                                    Poll::Pending
-                                }
-                            }
-                            Poll::Ready(Err(err)) => {
-                                log::trace!("read task failed on io {:?}", err);
-                                Poll::Ready(Err(err))
-                            }
-                        };
-                    }
-                }
-                ReadStatus::Terminate => {
-                    log::trace!("read task is instructed to shutdown");
-                    Poll::Ready(Ok(()))
-                }
-            }
+impl ntex_io::AsyncRead for UnixReadTask {
+    async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
+        // read data from socket
+        let result = poll_fn(|cx| {
+            let mut io = self.0.borrow_mut();
+            poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
         })
+        .await;
+        (buf, result)
     }
 }
 

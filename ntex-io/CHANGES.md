@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.0] - 2024-09-10
+
+* Refactor async io support
+
 ## [2.3.1] - 2024-09-05
 
 * Tune async io tasks support

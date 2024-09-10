@@ -1,17 +1,19 @@
-use std::{any, cell::RefCell, future::Future, io, pin::Pin, task::Context, task::Poll};
+use std::future::{poll_fn, Future};
+use std::{any, cell::RefCell, io, pin::Pin, task::Context, task::Poll};
 
 use async_std::io::{Read, Write};
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::{
-    types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
-};
+use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteStatus};
 use ntex_util::{ready, time::sleep, time::Sleep};
 
 use crate::TcpStream;
 
 impl IoStream for TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        async_std::task::spawn_local(ReadTask::new(self.clone(), read));
+        let mut rio = ReadTask(RefCell::new(self.clone()));
+        async_std::task::spawn_local(async move {
+            read.handle(&mut rio).await;
+        });
         async_std::task::spawn_local(WriteTask::new(self.clone(), write));
         Some(Box::new(self))
     }
@@ -29,64 +31,17 @@ impl Handle for TcpStream {
 }
 
 /// Read io task
-struct ReadTask {
-    io: RefCell<TcpStream>,
-    state: ReadContext,
-}
+struct ReadTask(RefCell<TcpStream>);
 
-impl ReadTask {
-    /// Create new read io task
-    fn new(io: TcpStream, state: ReadContext) -> Self {
-        Self {
-            state,
-            io: RefCell::new(io),
-        }
-    }
-}
-
-impl Future for ReadTask {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_ref();
-
-        match ready!(this.state.poll_ready(cx)) {
-            ReadStatus::Ready => {
-                this.state.with_buf(|buf, hw, lw| {
-                    // read data from socket
-                    let mut io = self.io.borrow_mut();
-                    loop {
-                        // make sure we've got room
-                        let remaining = buf.remaining_mut();
-                        if remaining < lw {
-                            buf.reserve(hw - remaining);
-                        }
-
-                        return match poll_read_buf(Pin::new(&mut io.0), cx, buf) {
-                            Poll::Pending => Poll::Pending,
-                            Poll::Ready(Ok(n)) => {
-                                if n == 0 {
-                                    log::trace!("async-std stream is disconnected");
-                                    Poll::Ready(Ok(()))
-                                } else if buf.len() < hw {
-                                    continue;
-                                } else {
-                                    Poll::Pending
-                                }
-                            }
-                            Poll::Ready(Err(err)) => {
-                                log::trace!("async-std read task failed on io {:?}", err);
-                                Poll::Ready(Err(err))
-                            }
-                        };
-                    }
-                })
-            }
-            ReadStatus::Terminate => {
-                log::trace!("read task is instructed to shutdown");
-                Poll::Ready(())
-            }
-        }
+impl ntex_io::AsyncRead for ReadTask {
+    async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
+        // read data from socket
+        let result = poll_fn(|cx| {
+            let mut io = self.0.borrow_mut();
+            poll_read_buf(Pin::new(&mut io.0), cx, &mut buf)
+        })
+        .await;
+        (buf, result)
     }
 }
 
@@ -342,71 +297,27 @@ mod unixstream {
 
     impl IoStream for UnixStream {
         fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-            async_std::task::spawn_local(ReadTask::new(self.clone(), read));
+            let mut rio = ReadTask(RefCell::new(self.clone()));
+            async_std::task::spawn_local(async move {
+                read.handle(&mut rio).await;
+            });
             async_std::task::spawn_local(WriteTask::new(self, write));
             None
         }
     }
 
     /// Read io task
-    struct ReadTask {
-        io: RefCell<UnixStream>,
-        state: ReadContext,
-    }
+    struct ReadTask(RefCell<UnixStream>);
 
-    impl ReadTask {
-        /// Create new read io task
-        fn new(io: UnixStream, state: ReadContext) -> Self {
-            Self {
-                state,
-                io: RefCell::new(io),
-            }
-        }
-    }
-
-    impl Future for ReadTask {
-        type Output = ();
-
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let this = self.as_ref();
-
-            this.state.with_buf(|buf, hw, lw| {
-                match ready!(this.state.poll_ready(cx)) {
-                    ReadStatus::Ready => {
-                        // read data from socket
-                        let mut io = this.io.borrow_mut();
-                        loop {
-                            // make sure we've got room
-                            let remaining = buf.remaining_mut();
-                            if remaining < lw {
-                                buf.reserve(hw - remaining);
-                            }
-
-                            return match poll_read_buf(Pin::new(&mut io.0), cx, buf) {
-                                Poll::Pending => Poll::Pending,
-                                Poll::Ready(Ok(n)) => {
-                                    if n == 0 {
-                                        log::trace!("async-std stream is disconnected");
-                                        Poll::Ready(Ok(()))
-                                    } else if buf.len() < hw {
-                                        continue;
-                                    } else {
-                                        Poll::Pending
-                                    }
-                                }
-                                Poll::Ready(Err(err)) => {
-                                    log::trace!("read task failed on io {:?}", err);
-                                    Poll::Ready(Err(err))
-                                }
-                            };
-                        }
-                    }
-                    ReadStatus::Terminate => {
-                        log::trace!("read task is instructed to shutdown");
-                        Poll::Ready(Ok(()))
-                    }
-                }
+    impl ntex_io::AsyncRead for ReadTask {
+        async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
+            // read data from socket
+            let result = poll_fn(|cx| {
+                let mut io = self.0.borrow_mut();
+                poll_read_buf(Pin::new(&mut io.0), cx, &mut buf)
             })
+            .await;
+            (buf, result)
         }
     }
 
