@@ -20,15 +20,22 @@ impl ReadContext {
         self.0.tag()
     }
 
+    #[deprecated]
     #[inline]
     /// Check readiness for read operations
     pub async fn ready(&self) -> ReadStatus {
         poll_fn(|cx| self.0.filter().poll_read_ready(cx)).await
     }
 
+    #[deprecated]
     #[inline]
     /// Wait when io get closed or preparing for close
     pub async fn wait_for_close(&self) {
+        self.wait_for_close2().await
+    }
+
+    /// Wait when io get closed or preparing for close
+    async fn wait_for_close2(&self) {
         poll_fn(|cx| {
             let flags = self.0.flags();
 
@@ -45,12 +52,14 @@ impl ReadContext {
         .await
     }
 
+    #[deprecated]
     #[inline]
     /// Check readiness for read operations
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.0.filter().poll_read_ready(cx)
     }
 
+    #[deprecated]
     /// Get read buffer
     pub fn with_buf<F>(&self, f: F) -> Poll<()>
     where
@@ -183,7 +192,7 @@ impl ReadContext {
             let total = buf.len();
 
             // call provided callback
-            let (buf, result) = match select(io.read(buf), self.wait_for_close()).await {
+            let (buf, result) = match select(io.read(buf), self.wait_for_close2()).await {
                 Either::Left(res) => res,
                 Either::Right(_) => {
                     log::trace!("{}: Read io is closed, stop read task", self.tag());

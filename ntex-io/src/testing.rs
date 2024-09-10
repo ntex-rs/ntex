@@ -8,7 +8,7 @@ use std::{any, cell::RefCell, cmp, fmt, io, mem, net, pin::Pin, rc::Rc};
 use ntex_bytes::{Buf, BufMut, Bytes, BytesVec};
 use ntex_util::time::{sleep, Millis, Sleep};
 
-use crate::{types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus};
+use crate::{types, Handle, IoStream, ReadContext, WriteContext, WriteStatus};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
@@ -356,9 +356,9 @@ impl IoStream for IoTest {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(self);
 
-        let _ = ntex_util::spawn(ReadTask {
-            io: io.clone(),
-            state: read,
+        let mut rio = ReadTask(io.clone());
+        let _ = ntex_util::spawn(async move {
+            read.handle(&mut rio).await;
         });
         let _ = ntex_util::spawn(WriteTask {
             io: io.clone(),
@@ -382,69 +382,13 @@ impl Handle for Rc<IoTest> {
 }
 
 /// Read io task
-struct ReadTask {
-    io: Rc<IoTest>,
-    state: ReadContext,
-}
+struct ReadTask(Rc<IoTest>);
 
-impl Future for ReadTask {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.as_ref();
-
-        this.state.with_buf(|buf, hw, lw| {
-            match this.state.poll_ready(cx) {
-                Poll::Ready(ReadStatus::Terminate) => {
-                    log::trace!("read task is instructed to terminate");
-                    Poll::Ready(Ok(()))
-                }
-                Poll::Ready(ReadStatus::Ready) => {
-                    let io = &this.io;
-
-                    // read data from socket
-                    let mut new_bytes = 0;
-                    loop {
-                        // make sure we've got room
-                        let remaining = buf.remaining_mut();
-                        if remaining < lw {
-                            buf.reserve(hw - remaining);
-                        }
-                        match io.poll_read_buf(cx, buf) {
-                            Poll::Pending => {
-                                log::trace!(
-                                    "no more data in io stream, read: {:?}",
-                                    new_bytes
-                                );
-                                break;
-                            }
-                            Poll::Ready(Ok(n)) => {
-                                if n == 0 {
-                                    log::trace!("io stream is disconnected");
-                                    return Poll::Ready(Ok(()));
-                                } else {
-                                    new_bytes += n;
-                                    if buf.len() >= hw {
-                                        log::trace!(
-                                            "high water mark pause reading, read: {:?}",
-                                            new_bytes
-                                        );
-                                        break;
-                                    }
-                                }
-                            }
-                            Poll::Ready(Err(err)) => {
-                                log::trace!("read task failed on io {:?}", err);
-                                return Poll::Ready(Err(err));
-                            }
-                        }
-                    }
-
-                    Poll::Pending
-                }
-                Poll::Pending => Poll::Pending,
-            }
-        })
+impl crate::AsyncRead for ReadTask {
+    async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
+        // read data from socket
+        let result = poll_fn(|cx| self.0.poll_read_buf(cx, &mut buf)).await;
+        (buf, result)
     }
 }
 

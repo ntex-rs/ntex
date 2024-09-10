@@ -38,6 +38,7 @@ pub use self::utils::{seal, Decoded};
 #[doc(hidden)]
 pub use self::flags::Flags;
 
+#[doc(hidden)]
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {
