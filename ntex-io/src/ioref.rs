@@ -15,12 +15,6 @@ impl IoRef {
     }
 
     #[inline]
-    /// Set flags
-    pub(crate) fn set_flags(&self, flags: Flags) {
-        self.0.flags.set(flags)
-    }
-
-    #[inline]
     /// Get current filter
     pub(crate) fn filter(&self) -> &dyn Filter {
         self.0.filter()

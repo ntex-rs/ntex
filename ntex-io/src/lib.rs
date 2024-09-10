@@ -23,7 +23,6 @@ mod utils;
 
 use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::time::Millis;
 
 pub use self::buf::{ReadBuf, WriteBuf};
 pub use self::dispatcher::{Dispatcher, DispatcherConfig};
@@ -64,10 +63,8 @@ pub enum ReadStatus {
 pub enum WriteStatus {
     /// Write task is clear to proceed with write operation
     Ready,
-    /// Initiate timeout for normal write operations, shutdown connection after timeout
-    Timeout(Millis),
-    /// Initiate graceful io shutdown operation with timeout
-    Shutdown(Millis),
+    /// Initiate graceful io shutdown operation
+    Shutdown,
     /// Immediately terminate connection
     Terminate,
 }

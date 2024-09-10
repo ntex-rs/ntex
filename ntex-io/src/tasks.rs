@@ -1,17 +1,22 @@
-use std::{future::poll_fn, io, task::Poll};
+use std::{cell::Cell, fmt, future::poll_fn, io, task::Context, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec};
-use ntex_util::{future::select, future::Either, time::sleep};
+use ntex_util::{future::lazy, future::select, future::Either, time::sleep, time::Sleep};
 
 use crate::{AsyncRead, AsyncWrite, Flags, IoRef, ReadStatus, WriteStatus};
 
-#[derive(Debug)]
 /// Context for io read task
-pub struct ReadContext(IoRef);
+pub struct ReadContext(IoRef, Cell<Option<Sleep>>);
+
+impl fmt::Debug for ReadContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadContext").field("io", &self.0).finish()
+    }
+}
 
 impl ReadContext {
     pub(crate) fn new(io: &IoRef) -> Self {
-        Self(io.clone())
+        Self(io.clone(), Cell::new(None))
     }
 
     #[inline]
@@ -30,7 +35,7 @@ impl ReadContext {
             } else {
                 self.0 .0.read_task.register(cx.waker());
                 if flags.contains(Flags::IO_STOPPING_FILTERS) {
-                    shutdown_filters(&self.0);
+                    self.shutdown_filters(cx);
                 }
                 Poll::Pending
             }
@@ -149,7 +154,7 @@ impl ReadContext {
                 }
                 Ok(_) => {
                     if inner.flags.get().contains(Flags::IO_STOPPING_FILTERS) {
-                        shutdown_filters(&self.0);
+                        lazy(|cx| self.shutdown_filters(cx)).await;
                     }
                 }
                 Err(err) => {
@@ -158,6 +163,48 @@ impl ReadContext {
                     break;
                 }
             }
+        }
+    }
+
+    fn shutdown_filters(&self, cx: &mut Context<'_>) {
+        let st = &self.0 .0;
+        let filter = self.0.filter();
+
+        match filter.shutdown(&self.0, &st.buffer, 0) {
+            Ok(Poll::Ready(())) => {
+                st.dispatch_task.wake();
+                st.insert_flags(Flags::IO_STOPPING);
+            }
+            Ok(Poll::Pending) => {
+                let flags = st.flags.get();
+
+                // check read buffer, if buffer is not consumed it is unlikely
+                // that filter will properly complete shutdown
+                if flags.contains(Flags::RD_PAUSED)
+                    || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
+                {
+                    st.dispatch_task.wake();
+                    st.insert_flags(Flags::IO_STOPPING);
+                } else {
+                    // filter shutdown timeout
+                    let timeout = self
+                        .1
+                        .take()
+                        .unwrap_or_else(|| sleep(st.disconnect_timeout.get()));
+                    if timeout.poll_elapsed(cx).is_ready() {
+                        st.dispatch_task.wake();
+                        st.insert_flags(Flags::IO_STOPPING);
+                    } else {
+                        self.1.set(Some(timeout));
+                    }
+                }
+            }
+            Err(err) => {
+                st.io_stopped(Some(err));
+            }
+        }
+        if let Err(err) = filter.process_write_buf(&self.0, &st.buffer, 0) {
+            st.io_stopped(Some(err));
         }
     }
 }
@@ -212,41 +259,13 @@ impl WriteContext {
     where
         T: AsyncWrite,
     {
-        let inner = &self.0 .0;
-        let mut delay = None;
         let mut buf = WriteContextBuf {
             io: self.0.clone(),
             buf: None,
         };
 
         loop {
-            // check readiness
-            let result = if let Some(ref mut sleep) = delay {
-                let result = match select(sleep, self.ready()).await {
-                    Either::Left(_) => {
-                        self.close(Some(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "Operation timedout",
-                        )));
-                        return;
-                    }
-                    Either::Right(res) => res,
-                };
-                delay = None;
-                result
-            } else {
-                self.ready().await
-            };
-
-            // running
-            let mut flags = inner.flags.get();
-            if flags.contains(Flags::WR_PAUSED) {
-                flags.remove(Flags::WR_PAUSED);
-                inner.flags.set(flags);
-            }
-
-            // handle write
-            match result {
+            match self.ready().await {
                 WriteStatus::Ready => {
                     // write io stream
                     match select(io.write(&mut buf), self.when_stopped()).await {
@@ -255,12 +274,7 @@ impl WriteContext {
                         Either::Right(_) => return,
                     }
                 }
-                WriteStatus::Timeout(time) => {
-                    log::trace!("{}: Initiate timeout delay for {:?}", self.tag(), time);
-                    delay = Some(sleep(time));
-                    continue;
-                }
-                WriteStatus::Shutdown(time) => {
+                WriteStatus::Shutdown => {
                     log::trace!("{}: Write task is instructed to shutdown", self.tag());
 
                     let fut = async {
@@ -270,7 +284,7 @@ impl WriteContext {
                         io.shutdown().await?;
                         Ok(())
                     };
-                    match select(sleep(time), fut).await {
+                    match select(sleep(self.0 .0.disconnect_timeout.get()), fut).await {
                         Either::Left(_) => self.close(None),
                         Either::Right(res) => self.close(res.err()),
                     }
@@ -325,37 +339,6 @@ impl WriteContextBuf {
             Some(buf)
         } else {
             self.io.0.buffer.get_write_destination()
-        }
-    }
-}
-
-fn shutdown_filters(io: &IoRef) {
-    let st = &io.0;
-    let flags = st.flags.get();
-
-    if !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
-        let filter = io.filter();
-        match filter.shutdown(io, &st.buffer, 0) {
-            Ok(Poll::Ready(())) => {
-                st.dispatch_task.wake();
-                st.insert_flags(Flags::IO_STOPPING);
-            }
-            Ok(Poll::Pending) => {
-                // check read buffer, if buffer is not consumed it is unlikely
-                // that filter will properly complete shutdown
-                if flags.contains(Flags::RD_PAUSED)
-                    || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
-                {
-                    st.dispatch_task.wake();
-                    st.insert_flags(Flags::IO_STOPPING);
-                }
-            }
-            Err(err) => {
-                st.io_stopped(Some(err));
-            }
-        }
-        if let Err(err) = filter.process_write_buf(io, &st.buffer, 0) {
-            st.io_stopped(Some(err));
         }
     }
 }
