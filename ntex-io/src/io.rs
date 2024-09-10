@@ -165,7 +165,7 @@ impl Io {
         let inner = Rc::new(IoState {
             filter: FilterPtr::null(),
             pool: Cell::new(pool),
-            flags: Cell::new(Flags::empty()),
+            flags: Cell::new(Flags::WR_PAUSED),
             error: Cell::new(None),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
@@ -421,7 +421,7 @@ impl<F> Io<F> {
         let st = self.st();
         let mut flags = st.flags.get();
 
-        if flags.contains(Flags::IO_STOPPED) {
+        if flags.is_stopped() {
             Poll::Ready(self.error().map(Err).unwrap_or(Ok(None)))
         } else {
             st.dispatch_task.register(cx.waker());
@@ -531,7 +531,7 @@ impl<F> Io<F> {
         } else {
             let st = self.st();
             let flags = st.flags.get();
-            if flags.contains(Flags::IO_STOPPED) {
+            if flags.is_stopped() {
                 Err(RecvError::PeerGone(self.error()))
             } else if flags.contains(Flags::DSP_STOP) {
                 st.remove_flags(Flags::DSP_STOP);
@@ -568,7 +568,7 @@ impl<F> Io<F> {
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         let flags = self.flags();
 
-        if flags.contains(Flags::IO_STOPPED) {
+        if flags.is_stopped() {
             Poll::Ready(self.error().map(Err).unwrap_or(Ok(())))
         } else {
             let st = self.st();
@@ -595,7 +595,7 @@ impl<F> Io<F> {
         let st = self.st();
         let flags = st.flags.get();
 
-        if flags.intersects(Flags::IO_STOPPED) {
+        if flags.is_stopped() {
             if let Some(err) = self.error() {
                 Poll::Ready(Err(err))
             } else {
@@ -700,7 +700,7 @@ impl<F> Drop for Io<F> {
         if st.filter.is_set() {
             // filter is unsafe and must be dropped explicitly,
             // and wont be dropped without special attention
-            if !st.flags.get().contains(Flags::IO_STOPPED) {
+            if !st.flags.get().is_stopped() {
                 log::trace!(
                     "{}: Io is dropped, force stopping io streams {:?}",
                     st.tag.get(),
@@ -884,7 +884,7 @@ pub struct OnDisconnect {
 
 impl OnDisconnect {
     pub(super) fn new(inner: Rc<IoState>) -> Self {
-        Self::new_inner(inner.flags.get().contains(Flags::IO_STOPPED), inner)
+        Self::new_inner(inner.flags.get().is_stopped(), inner)
     }
 
     fn new_inner(disconnected: bool, inner: Rc<IoState>) -> Self {
@@ -909,7 +909,7 @@ impl OnDisconnect {
     #[inline]
     /// Check if connection is disconnected
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.token == usize::MAX || self.inner.flags.get().contains(Flags::IO_STOPPED) {
+        if self.token == usize::MAX || self.inner.flags.get().is_stopped() {
             Poll::Ready(())
         } else if let Some(on_disconnect) = self.inner.on_disconnect.take() {
             on_disconnect[self.token].register(cx.waker());

@@ -95,7 +95,7 @@ impl Filter for Base {
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         let mut flags = self.0.flags();
 
-        if flags.contains(Flags::IO_STOPPED) {
+        if flags.is_stopped() {
             Poll::Ready(WriteStatus::Terminate)
         } else {
             self.0 .0.write_task.register(cx.waker());

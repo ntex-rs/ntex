@@ -4,10 +4,8 @@ use ntex_bytes::PoolRef;
 use ntex_io::Io;
 
 mod io;
-mod signals;
 
 pub use self::io::{SocketOptions, TokioIoBoxed};
-pub use self::signals::{signal, Signal};
 
 struct TcpStream(tokio::net::TcpStream);
 

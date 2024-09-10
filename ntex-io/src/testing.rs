@@ -7,7 +7,7 @@ use std::{any, cell::RefCell, cmp, fmt, future::poll_fn, io, mem, net, rc::Rc};
 use ntex_bytes::{Buf, BufMut, Bytes, BytesVec};
 use ntex_util::time::{sleep, Millis};
 
-use crate::{types, Handle, IoStream, ReadContext, WriteContext};
+use crate::{types, Handle, IoStream, ReadContext, WriteContext, WriteContextBuf};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
@@ -395,10 +395,17 @@ impl crate::AsyncRead for Read {
 struct Write(Rc<IoTest>);
 
 impl crate::AsyncWrite for Write {
-    async fn write(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<()>) {
-        let result = poll_fn(|cx| write_io(&self.0, &mut buf, cx)).await;
-
-        (buf, result)
+    async fn write(&mut self, buf: &mut WriteContextBuf) -> io::Result<()> {
+        poll_fn(|cx| {
+            if let Some(mut b) = buf.take() {
+                let result = write_io(&self.0, &mut b, cx);
+                buf.set(b);
+                result
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        })
+        .await
     }
 
     async fn flush(&mut self) -> io::Result<()> {

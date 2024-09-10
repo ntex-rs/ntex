@@ -31,7 +31,7 @@ pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::tasks::{ReadContext, WriteContext};
+pub use self::tasks::{ReadContext, WriteContext, WriteContextBuf};
 pub use self::timer::TimerHandle;
 pub use self::utils::{seal, Decoded};
 
@@ -45,7 +45,7 @@ pub trait AsyncRead {
 
 #[doc(hidden)]
 pub trait AsyncWrite {
-    async fn write(&mut self, buf: BytesVec) -> (BytesVec, sio::Result<()>);
+    async fn write(&mut self, buf: &mut WriteContextBuf) -> sio::Result<()>;
 
     async fn flush(&mut self) -> sio::Result<()>;
 

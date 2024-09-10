@@ -36,6 +36,10 @@ bitflags::bitflags! {
 }
 
 impl Flags {
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.intersects(Flags::IO_STOPPED)
+    }
+
     pub(crate) fn is_waiting_for_write(&self) -> bool {
         self.intersects(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE)
     }

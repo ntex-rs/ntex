@@ -4,27 +4,14 @@ use compio::buf::{BufResult, IoBuf, IoBufMut, SetBufInit};
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext};
+use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteContextBuf};
 
 impl IoStream for crate::TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0.clone();
         compio::runtime::spawn(async move {
-            let mut wr_io = WriteIo(io.clone());
-            let wr_task = compio::runtime::spawn(async move {
-                write.handle(&mut wr_io).await;
-                log::debug!("{} Write task is stopped", write.tag());
-            });
-            let mut io = ReadIo(io);
-
-            read.handle(&mut io).await;
-            log::debug!("{} Read task is stopped", read.tag());
-
-            if !wr_task.is_finished() {
-                let _ = wr_task.await;
-            }
-
-            match io.0.close().await {
+            run(io.clone(), &read, write).await;
+            match io.close().await {
                 Ok(_) => log::debug!("{} Stream is closed", read.tag()),
                 Err(e) => log::error!("{} Stream is closed, {:?}", read.tag(), e),
             }
@@ -38,24 +25,9 @@ impl IoStream for crate::TcpStream {
 #[cfg(unix)]
 impl IoStream for crate::UnixStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        let io = self.0;
         compio::runtime::spawn(async move {
-            let mut wr_io = WriteIo(io.clone());
-            let wr_task = compio::runtime::spawn(async move {
-                write.handle(&mut wr_io).await;
-                log::debug!("{} Write task is stopped", write.tag());
-            });
-
-            let mut io = ReadIo(io);
-
-            read.handle(&mut io).await;
-            log::debug!("{} Read task is stopped", read.tag());
-
-            if !wr_task.is_finished() {
-                let _ = wr_task.await;
-            }
-
-            match io.0.close().await {
+            run(self.0.clone(), &read, write).await;
+            match self.0.close().await {
                 Ok(_) => log::debug!("{} Unix stream is closed", read.tag()),
                 Err(e) => log::error!("{} Unix stream is closed, {:?}", read.tag(), e),
             }
@@ -110,6 +82,26 @@ impl SetBufInit for CompioBuf {
     }
 }
 
+async fn run<T: AsyncRead + AsyncWrite + Clone + 'static>(
+    io: T,
+    read: &ReadContext,
+    write: WriteContext,
+) {
+    let mut wr_io = WriteIo(io.clone());
+    let wr_task = compio::runtime::spawn(async move {
+        write.handle(&mut wr_io).await;
+        log::debug!("{} Write task is stopped", write.tag());
+    });
+    let mut io = ReadIo(io);
+
+    read.handle(&mut io).await;
+    log::debug!("{} Read task is stopped", read.tag());
+
+    if !wr_task.is_finished() {
+        let _ = wr_task.await;
+    }
+}
+
 struct ReadIo<T>(T);
 
 impl<T> ntex_io::AsyncRead for ReadIo<T>
@@ -130,31 +122,33 @@ where
     T: AsyncWrite,
 {
     #[inline]
-    async fn write(&mut self, buf: BytesVec) -> (BytesVec, io::Result<()>) {
-        let mut buf = CompioBuf(buf);
-        loop {
-            let BufResult(result, buf1) = self.0.write(buf).await;
-            buf = buf1;
+    async fn write(&mut self, wbuf: &mut WriteContextBuf) -> io::Result<()> {
+        if let Some(b) = wbuf.take() {
+            let mut buf = CompioBuf(b);
+            loop {
+                let BufResult(result, buf1) = self.0.write(buf).await;
+                buf = buf1;
 
-            return match result {
-                Ok(0) => (
-                    buf.0,
-                    Err(io::Error::new(
+                let result = match result {
+                    Ok(0) => Err(io::Error::new(
                         io::ErrorKind::WriteZero,
                         "failed to write frame to transport",
                     )),
-                ),
-                Ok(size) => {
-                    buf.0.advance(size);
-
-                    if buf.0.is_empty() {
-                        (buf.0, Ok(()))
-                    } else {
-                        continue;
+                    Ok(size) => {
+                        buf.0.advance(size);
+                        if buf.0.is_empty() {
+                            Ok(())
+                        } else {
+                            continue;
+                        }
                     }
-                }
-                Err(e) => (buf.0, Err(e)),
-            };
+                    Err(e) => Err(e),
+                };
+                wbuf.set(buf.0);
+                return result;
+            }
+        } else {
+            Ok(())
         }
     }
 

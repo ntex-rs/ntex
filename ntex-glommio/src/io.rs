@@ -1,11 +1,8 @@
-use std::task::{Context, Poll};
-use std::{any, future::poll_fn, future::Future, io, pin::Pin};
+use std::{any, future::poll_fn, io, pin::Pin, task::ready, task::Context, task::Poll};
 
-use futures_lite::future::FutureExt;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteStatus};
-use ntex_util::{ready, time::sleep, time::Sleep};
+use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteContextBuf};
 
 use crate::net_impl::{TcpStream, UnixStream};
 
@@ -62,11 +59,17 @@ struct Write(TcpStream);
 
 impl ntex_io::AsyncWrite for Write {
     #[inline]
-    async fn write(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<()>) {
-        match lazy(|cx| flush_io(&mut *self.0.borrow_mut(), &mut buf, cx)).await {
-            Poll::Ready(res) => (buf, res),
-            Poll::Pending => (buf, Ok(())),
-        }
+    async fn write(&mut self, buf: &mut WriteContextBuf) -> io::Result<()> {
+        poll_fn(|cx| {
+            if let Some(mut b) = buf.take() {
+                let result = flush_io(&mut *self.0 .0.borrow_mut(), &mut b, cx);
+                buf.set(b);
+                result
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        })
+        .await
     }
 
     #[inline]
@@ -76,7 +79,49 @@ impl ntex_io::AsyncWrite for Write {
 
     #[inline]
     async fn shutdown(&mut self) -> io::Result<()> {
-        poll_fn(|cx| Pin::new(&mut *self.0.borrow_mut()).poll_close(cx)).await
+        poll_fn(|cx| Pin::new(&mut *self.0 .0.borrow_mut()).poll_close(cx)).await
+    }
+}
+
+struct UnixRead(UnixStream);
+
+impl ntex_io::AsyncRead for UnixRead {
+    async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
+        // read data from socket
+        let result = poll_fn(|cx| {
+            let mut io = self.0 .0.borrow_mut();
+            poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
+        })
+        .await;
+        (buf, result)
+    }
+}
+
+struct UnixWrite(UnixStream);
+
+impl ntex_io::AsyncWrite for UnixWrite {
+    #[inline]
+    async fn write(&mut self, buf: &mut WriteContextBuf) -> io::Result<()> {
+        poll_fn(|cx| {
+            if let Some(mut b) = buf.take() {
+                let result = flush_io(&mut *self.0 .0.borrow_mut(), &mut b, cx);
+                buf.set(b);
+                result
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        })
+        .await
+    }
+
+    #[inline]
+    async fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[inline]
+    async fn shutdown(&mut self) -> io::Result<()> {
+        poll_fn(|cx| Pin::new(&mut *self.0 .0.borrow_mut()).poll_close(cx)).await
     }
 }
 
@@ -125,7 +170,7 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
         // log::trace!("flushed {} bytes", written);
 
         // flush
-        return if written > 0 {
+        if written > 0 {
             match Pin::new(&mut *io).poll_flush(cx) {
                 Poll::Ready(Ok(_)) => result,
                 Poll::Pending => Poll::Pending,
@@ -136,7 +181,7 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
             }
         } else {
             result
-        };
+        }
     } else {
         Poll::Ready(Ok(()))
     }
@@ -157,40 +202,4 @@ pub fn poll_read_buf<T: AsyncRead>(
     }
 
     Poll::Ready(Ok(n))
-}
-
-struct UnixRead(UnixStream);
-
-impl ntex_io::AsyncRead for UnixRead {
-    async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
-        // read data from socket
-        let result = poll_fn(|cx| {
-            let mut io = self.0 .0.borrow_mut();
-            poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
-        })
-        .await;
-        (buf, result)
-    }
-}
-
-struct UnixWrite(UnixStream);
-
-impl ntex_io::AsyncWrite for UnixWrite {
-    #[inline]
-    async fn write(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<()>) {
-        match lazy(|cx| flush_io(&mut *self.0.borrow_mut(), &mut buf, cx)).await {
-            Poll::Ready(res) => (buf, res),
-            Poll::Pending => (buf, Ok(())),
-        }
-    }
-
-    #[inline]
-    async fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-
-    #[inline]
-    async fn shutdown(&mut self) -> io::Result<()> {
-        poll_fn(|cx| Pin::new(&mut *self.0.borrow_mut()).poll_close(cx)).await
-    }
 }

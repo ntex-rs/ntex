@@ -1,6 +1,6 @@
 use std::{future::poll_fn, io, task::Poll};
 
-use ntex_bytes::BufMut;
+use ntex_bytes::{BufMut, BytesVec};
 use ntex_util::{future::select, future::Either, time::sleep};
 
 use crate::{AsyncRead, AsyncWrite, Flags, IoRef, ReadStatus, WriteStatus};
@@ -166,6 +166,13 @@ impl ReadContext {
 /// Context for io write task
 pub struct WriteContext(IoRef);
 
+#[derive(Debug)]
+/// Context buf for io write task
+pub struct WriteContextBuf {
+    io: IoRef,
+    buf: Option<BytesVec>,
+}
+
 impl WriteContext {
     pub(crate) fn new(io: &IoRef) -> Self {
         Self(io.clone())
@@ -187,6 +194,19 @@ impl WriteContext {
         self.0 .0.io_stopped(err);
     }
 
+    /// Check if io is closed
+    async fn when_stopped(&self) {
+        poll_fn(|cx| {
+            if self.0.flags().is_stopped() {
+                Poll::Ready(())
+            } else {
+                self.0 .0.write_task.register(cx.waker());
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
     /// Handle write io operations
     pub async fn handle<T>(&self, io: &mut T)
     where
@@ -194,7 +214,10 @@ impl WriteContext {
     {
         let inner = &self.0 .0;
         let mut delay = None;
-        let mut buf = None;
+        let mut buf = WriteContextBuf {
+            io: self.0.clone(),
+            buf: None,
+        };
 
         loop {
             // check readiness
@@ -222,73 +245,14 @@ impl WriteContext {
                 inner.flags.set(flags);
             }
 
-            // call provided callback
+            // handle write
             match result {
                 WriteStatus::Ready => {
                     // write io stream
-                    let (buf_result, result) = if let Some(b) = buf.take() {
-                        io.write(b).await
-                    } else if let Some(b) = inner.buffer.get_write_destination() {
-                        io.write(b).await
-                    } else {
-                        // nothing to write, wait for wakeup
-                        if flags.is_waiting_for_write() {
-                            flags.waiting_for_write_is_done();
-                            inner.dispatch_task.wake();
-                        }
-                        flags.insert(Flags::WR_PAUSED);
-
-                        if flags.contains(Flags::BUF_W_BACKPRESSURE) {
-                            flags.remove(
-                                Flags::BUF_W_BACKPRESSURE | Flags::BUF_W_MUST_FLUSH,
-                            );
-                            inner.dispatch_task.wake();
-                        }
-                        inner.flags.set(flags);
-
-                        continue;
-                    };
-
-                    match result {
-                        Ok(_) => {
-                            let len = if buf_result.is_empty() {
-                                // return io.flush().await;
-                                self.0.memory_pool().release_write_buf(buf_result);
-                                0
-                            } else if let Some(b) =
-                                inner.buffer.set_write_destination(buf_result)
-                            {
-                                // write buffer is already set, we have to write
-                                // current buffer
-                                let l = b.len();
-                                buf = Some(b);
-                                l
-                            } else {
-                                0
-                            };
-
-                            // if write buffer is smaller than high watermark value, turn off back-pressure
-                            let mut flags = inner.flags.get();
-                            let len = len + inner.buffer.write_destination_size();
-
-                            if len == 0 {
-                                if flags.is_waiting_for_write() {
-                                    flags.waiting_for_write_is_done();
-                                    inner.dispatch_task.wake();
-                                }
-                                flags.insert(Flags::WR_PAUSED);
-                                inner.flags.set(flags);
-                            } else if flags.contains(Flags::BUF_W_BACKPRESSURE)
-                                && len < inner.pool.get().write_params_high() << 1
-                            {
-                                flags.remove(Flags::BUF_W_BACKPRESSURE);
-                                inner.flags.set(flags);
-                                inner.dispatch_task.wake();
-                            }
-
-                            continue;
-                        }
-                        Err(e) => self.close(Some(e)),
+                    match select(io.write(&mut buf), self.when_stopped()).await {
+                        Either::Left(Ok(_)) => continue,
+                        Either::Left(Err(e)) => self.close(Some(e)),
+                        Either::Right(_) => return,
                     }
                 }
                 WriteStatus::Timeout(time) => {
@@ -301,23 +265,7 @@ impl WriteContext {
 
                     let fut = async {
                         // write io stream
-                        loop {
-                            buf = if let Some(b) = buf {
-                                let (b, result) = io.write(b).await;
-                                result?;
-                                if !b.is_empty() {
-                                    Some(b)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                inner.buffer.get_write_destination()
-                            };
-
-                            if buf.is_none() {
-                                break;
-                            }
-                        }
+                        io.write(&mut buf).await?;
                         io.flush().await?;
                         io.shutdown().await?;
                         Ok(())
@@ -333,6 +281,50 @@ impl WriteContext {
                 }
             }
             return;
+        }
+    }
+}
+
+impl WriteContextBuf {
+    pub fn set(&mut self, mut buf: BytesVec) {
+        if buf.is_empty() {
+            self.io.memory_pool().release_write_buf(buf);
+        } else if let Some(b) = self.buf.take() {
+            buf.extend_from_slice(&b);
+            self.io.memory_pool().release_write_buf(b);
+            self.buf = Some(buf);
+        } else if let Some(b) = self.io.0.buffer.set_write_destination(buf) {
+            // write buffer is already set
+            self.buf = Some(b);
+        }
+
+        // if write buffer is smaller than high watermark value, turn off back-pressure
+        let inner = &self.io.0;
+        let len = self.buf.as_ref().map(|b| b.len()).unwrap_or_default()
+            + inner.buffer.write_destination_size();
+        let mut flags = inner.flags.get();
+
+        if len == 0 {
+            if flags.is_waiting_for_write() {
+                flags.waiting_for_write_is_done();
+                inner.dispatch_task.wake();
+            }
+            flags.insert(Flags::WR_PAUSED);
+            inner.flags.set(flags);
+        } else if flags.contains(Flags::BUF_W_BACKPRESSURE)
+            && len < inner.pool.get().write_params_high() << 1
+        {
+            flags.remove(Flags::BUF_W_BACKPRESSURE);
+            inner.flags.set(flags);
+            inner.dispatch_task.wake();
+        }
+    }
+
+    pub fn take(&mut self) -> Option<BytesVec> {
+        if let Some(buf) = self.buf.take() {
+            Some(buf)
+        } else {
+            self.io.0.buffer.get_write_destination()
         }
     }
 }

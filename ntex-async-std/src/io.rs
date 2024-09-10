@@ -1,9 +1,11 @@
-use std::{any, cell::RefCell, future::poll_fn, io, pin::Pin, task::Context, task::Poll};
+use std::{
+    any, cell::RefCell, future::poll_fn, io, pin::Pin, task::ready, task::Context,
+    task::Poll,
+};
 
 use async_std::io::{Read as ARead, Write as AWrite};
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext};
-use ntex_util::{future::lazy, ready};
+use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteContextBuf};
 
 use crate::TcpStream;
 
@@ -51,11 +53,17 @@ struct Write(RefCell<TcpStream>);
 
 impl ntex_io::AsyncWrite for Write {
     #[inline]
-    async fn write(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<()>) {
-        match lazy(|cx| flush_io(&mut self.0.borrow_mut().0, &mut buf, cx)).await {
-            Poll::Ready(res) => (buf, res),
-            Poll::Pending => (buf, Ok(())),
-        }
+    async fn write(&mut self, buf: &mut WriteContextBuf) -> io::Result<()> {
+        poll_fn(|cx| {
+            if let Some(mut b) = buf.take() {
+                let result = flush_io(&mut self.0.borrow_mut().0, &mut b, cx);
+                buf.set(b);
+                result
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        })
+        .await
     }
 
     #[inline]
@@ -186,11 +194,17 @@ mod unixstream {
 
     impl ntex_io::AsyncWrite for Write {
         #[inline]
-        async fn write(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<()>) {
-            match lazy(|cx| flush_io(&mut self.0.borrow_mut().0, &mut buf, cx)).await {
-                Poll::Ready(res) => (buf, res),
-                Poll::Pending => (buf, Ok(())),
-            }
+        async fn write(&mut self, buf: &mut WriteContextBuf) -> io::Result<()> {
+            poll_fn(|cx| {
+                if let Some(mut b) = buf.take() {
+                    let result = flush_io(&mut self.0.borrow_mut().0, &mut b, cx);
+                    buf.set(b);
+                    result
+                } else {
+                    Poll::Ready(Ok(()))
+                }
+            })
+            .await
         }
 
         #[inline]
