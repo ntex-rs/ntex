@@ -4,9 +4,7 @@ use std::{any, future::poll_fn, future::Future, io, pin::Pin};
 use futures_lite::future::FutureExt;
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::{
-    types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
-};
+use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteStatus};
 use ntex_util::{ready, time::sleep, time::Sleep};
 
 use crate::net_impl::{TcpStream, UnixStream};
@@ -16,7 +14,8 @@ impl IoStream for TcpStream {
         let mut rio = ReadTask(self.clone());
         glommio::spawn_local(async move {
             read.handle(&mut rio).await;
-        });
+        })
+        .detach();
         glommio::spawn_local(WriteTask::new(self.clone(), write)).detach();
         Some(Box::new(self))
     }
@@ -27,7 +26,8 @@ impl IoStream for UnixStream {
         let mut rio = UnixReadTask(self.clone());
         glommio::spawn_local(async move {
             read.handle(&mut rio).await;
-        });
+        })
+        .detach();
         glommio::spawn_local(UnixWriteTask::new(self, write)).detach();
         None
     }
