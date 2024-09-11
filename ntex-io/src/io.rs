@@ -347,16 +347,9 @@ impl<F> Io<F> {
         poll_fn(|cx| self.poll_read_ready(cx)).await
     }
 
-    #[doc(hidden)]
     #[inline]
-    /// Wait until read becomes ready.
+    /// Wait until io reads any data.
     pub async fn read_notify(&self) -> io::Result<Option<()>> {
-        poll_fn(|cx| self.poll_read_notify(cx)).await
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    pub async fn force_read_ready(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_notify(cx)).await
     }
 
@@ -446,21 +439,8 @@ impl<F> Io<F> {
         }
     }
 
-    #[doc(hidden)]
     #[inline]
-    /// Polls for read readiness.
-    ///
-    /// If the io stream is not currently ready for reading,
-    /// this method will store a clone of the Waker from the provided Context.
-    /// When the io stream becomes ready for reading, Waker::wake will be called on the waker.
-    ///
-    /// Return value
-    /// The function returns:
-    ///
-    /// `Poll::Pending` if the io stream is not ready for reading.
-    /// `Poll::Ready(Ok(Some(()))))` if the io stream is ready for reading.
-    /// `Poll::Ready(Ok(None))` if io stream is disconnected
-    /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
+    /// Polls for any incoming data.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let ready = self.poll_read_ready(cx);
 
@@ -475,15 +455,6 @@ impl<F> Io<F> {
         } else {
             ready
         }
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    pub fn poll_force_read_ready(
-        &self,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<Option<()>>> {
-        self.poll_read_notify(cx)
     }
 
     #[inline]
