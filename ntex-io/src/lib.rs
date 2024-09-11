@@ -2,9 +2,8 @@
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
 #![allow(async_fn_in_trait)]
 
-use std::{
-    any::Any, any::TypeId, fmt, io as sio, io::Error as IoError, task::Context, task::Poll,
-};
+use std::io::{Error as IoError, Result as IoResult};
+use std::{any::Any, any::TypeId, fmt, task::Context, task::Poll};
 
 pub mod testing;
 pub mod types;
@@ -39,16 +38,16 @@ pub use self::flags::Flags;
 
 #[doc(hidden)]
 pub trait AsyncRead {
-    async fn read(&mut self, buf: BytesVec) -> (BytesVec, sio::Result<usize>);
+    async fn read(&mut self, buf: BytesVec) -> (BytesVec, IoResult<usize>);
 }
 
 #[doc(hidden)]
 pub trait AsyncWrite {
-    async fn write(&mut self, buf: &mut WriteContextBuf) -> sio::Result<()>;
+    async fn write(&mut self, buf: &mut WriteContextBuf) -> IoResult<()>;
 
-    async fn flush(&mut self) -> sio::Result<()>;
+    async fn flush(&mut self) -> IoResult<()>;
 
-    async fn shutdown(&mut self) -> sio::Result<()>;
+    async fn shutdown(&mut self) -> IoResult<()>;
 }
 
 /// Status for read task
@@ -90,10 +89,10 @@ pub trait FilterLayer: fmt::Debug + 'static {
     ///
     /// Inner filter must process buffer before current.
     /// Returns number of new bytes.
-    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> sio::Result<usize>;
+    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> IoResult<usize>;
 
     /// Process write buffer
-    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> sio::Result<()>;
+    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> IoResult<()>;
 
     #[inline]
     /// Query internal filter data
@@ -103,7 +102,7 @@ pub trait FilterLayer: fmt::Debug + 'static {
 
     #[inline]
     /// Gracefully shutdown filter
-    fn shutdown(&self, buf: &WriteBuf<'_>) -> sio::Result<Poll<()>> {
+    fn shutdown(&self, buf: &WriteBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }
@@ -126,7 +125,7 @@ pub enum IoStatusUpdate {
     /// Stop io stream handling
     Stop,
     /// Peer is disconnected
-    PeerGone(Option<sio::Error>),
+    PeerGone(Option<IoError>),
 }
 
 /// Recv error
@@ -141,7 +140,7 @@ pub enum RecvError<U: Decoder> {
     /// Unrecoverable frame decoding errors
     Decoder(U::Error),
     /// Peer is disconnected
-    PeerGone(Option<sio::Error>),
+    PeerGone(Option<IoError>),
 }
 
 /// Dispatcher item
