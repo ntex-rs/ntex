@@ -49,10 +49,29 @@ impl ntex_io::AsyncRead for Read {
     async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
         // read data from socket
         let result = poll_fn(|cx| {
+            let mut n = 0;
             let mut io = self.0.borrow_mut();
-            poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
+            loop {
+                return match poll_read_buf(Pin::new(&mut *io), cx, &mut buf)? {
+                    Poll::Pending => {
+                        if n > 0 {
+                            Poll::Ready(Ok(n))
+                        } else {
+                            Poll::Pending
+                        }
+                    }
+                    Poll::Ready(size) => {
+                        n += size;
+                        if n > 0 && buf.remaining_mut() > 0 {
+                            continue;
+                        }
+                        Poll::Ready(Ok(n))
+                    }
+                };
+            }
         })
         .await;
+
         (buf, result)
     }
 }
@@ -83,6 +102,34 @@ impl ntex_io::AsyncWrite for Write {
     async fn shutdown(&mut self) -> io::Result<()> {
         poll_fn(|cx| Pin::new(&mut *self.0.borrow_mut()).poll_shutdown(cx)).await
     }
+}
+
+pub fn poll_read_buf<T: AsyncRead>(
+    io: Pin<&mut T>,
+    cx: &mut Context<'_>,
+    buf: &mut BytesVec,
+) -> Poll<io::Result<usize>> {
+    let n = {
+        let dst =
+            unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>]) };
+        let mut buf = ReadBuf::uninit(dst);
+        let ptr = buf.filled().as_ptr();
+        if io.poll_read(cx, &mut buf)?.is_pending() {
+            return Poll::Pending;
+        }
+
+        // Ensure the pointer does not change from under us
+        assert_eq!(ptr, buf.filled().as_ptr());
+        buf.filled().len()
+    };
+
+    // Safety: This is guaranteed to be the number of initialized (and read)
+    // bytes due to the invariants provided by `ReadBuf::filled`.
+    unsafe {
+        buf.advance_mut(n);
+    }
+
+    Poll::Ready(Ok(n))
 }
 
 /// Flush write buffer to underlying I/O stream.
@@ -254,10 +301,29 @@ mod unixstream {
         async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
             // read data from socket
             let result = poll_fn(|cx| {
+                let mut n = 0;
                 let mut io = self.0.borrow_mut();
-                poll_read_buf(Pin::new(&mut *io), cx, &mut buf)
+                loop {
+                    return match poll_read_buf(Pin::new(&mut *io), cx, &mut buf)? {
+                        Poll::Pending => {
+                            if n > 0 {
+                                Poll::Ready(Ok(n))
+                            } else {
+                                Poll::Pending
+                            }
+                        }
+                        Poll::Ready(size) => {
+                            n += size;
+                            if n > 0 && buf.remaining_mut() > 0 {
+                                continue;
+                            }
+                            Poll::Ready(Ok(n))
+                        }
+                    };
+                }
             })
             .await;
+
             (buf, result)
         }
     }
@@ -289,32 +355,4 @@ mod unixstream {
             poll_fn(|cx| Pin::new(&mut *self.0.borrow_mut()).poll_shutdown(cx)).await
         }
     }
-}
-
-pub fn poll_read_buf<T: AsyncRead>(
-    io: Pin<&mut T>,
-    cx: &mut Context<'_>,
-    buf: &mut BytesVec,
-) -> Poll<io::Result<usize>> {
-    let n = {
-        let dst =
-            unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>]) };
-        let mut buf = ReadBuf::uninit(dst);
-        let ptr = buf.filled().as_ptr();
-        if io.poll_read(cx, &mut buf)?.is_pending() {
-            return Poll::Pending;
-        }
-
-        // Ensure the pointer does not change from under us
-        assert_eq!(ptr, buf.filled().as_ptr());
-        buf.filled().len()
-    };
-
-    // Safety: This is guaranteed to be the number of initialized (and read)
-    // bytes due to the invariants provided by `ReadBuf::filled`.
-    unsafe {
-        buf.advance_mut(n);
-    }
-
-    Poll::Ready(Ok(n))
 }
