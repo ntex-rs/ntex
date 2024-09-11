@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.2] - 2024-09-11
+
+* Use new io api
+
 ## [0.5.1] - 2024-09-06
 
 * Stop write task if io is closed

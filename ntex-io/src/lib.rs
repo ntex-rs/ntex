@@ -1,5 +1,6 @@
 //! Utilities for abstructing io streams
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+#![allow(async_fn_in_trait)]
 
 use std::{
     any::Any, any::TypeId, fmt, io as sio, io::Error as IoError, task::Context, task::Poll,
@@ -20,8 +21,8 @@ mod tasks;
 mod timer;
 mod utils;
 
+use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::time::Millis;
 
 pub use self::buf::{ReadBuf, WriteBuf};
 pub use self::dispatcher::{Dispatcher, DispatcherConfig};
@@ -29,12 +30,26 @@ pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::tasks::{ReadContext, WriteContext};
+pub use self::tasks::{ReadContext, WriteContext, WriteContextBuf};
 pub use self::timer::TimerHandle;
 pub use self::utils::{seal, Decoded};
 
 #[doc(hidden)]
 pub use self::flags::Flags;
+
+#[doc(hidden)]
+pub trait AsyncRead {
+    async fn read(&mut self, buf: BytesVec) -> (BytesVec, sio::Result<usize>);
+}
+
+#[doc(hidden)]
+pub trait AsyncWrite {
+    async fn write(&mut self, buf: &mut WriteContextBuf) -> sio::Result<()>;
+
+    async fn flush(&mut self) -> sio::Result<()>;
+
+    async fn shutdown(&mut self) -> sio::Result<()>;
+}
 
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -48,10 +63,8 @@ pub enum ReadStatus {
 pub enum WriteStatus {
     /// Write task is clear to proceed with write operation
     Ready,
-    /// Initiate timeout for normal write operations, shutdown connection after timeout
-    Timeout(Millis),
-    /// Initiate graceful io shutdown operation with timeout
-    Shutdown(Millis),
+    /// Initiate graceful io shutdown operation
+    Shutdown,
     /// Immediately terminate connection
     Terminate,
 }

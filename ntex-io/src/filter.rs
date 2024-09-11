@@ -93,26 +93,16 @@ impl Filter for Base {
 
     #[inline]
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
-        let mut flags = self.0.flags();
+        let flags = self.0.flags();
 
-        if flags.contains(Flags::IO_STOPPED) {
+        if flags.is_stopped() {
             Poll::Ready(WriteStatus::Terminate)
         } else {
             self.0 .0.write_task.register(cx.waker());
 
-            if flags.intersects(Flags::IO_STOPPING) {
-                Poll::Ready(WriteStatus::Shutdown(
-                    self.0 .0.disconnect_timeout.get().into(),
-                ))
-            } else if flags.contains(Flags::IO_STOPPING_FILTERS)
-                && !flags.contains(Flags::IO_FILTERS_TIMEOUT)
-            {
-                flags.insert(Flags::IO_FILTERS_TIMEOUT);
-                self.0.set_flags(flags);
-                Poll::Ready(WriteStatus::Timeout(
-                    self.0 .0.disconnect_timeout.get().into(),
-                ))
-            } else if flags.intersects(Flags::WR_PAUSED) {
+            if flags.contains(Flags::IO_STOPPING) {
+                Poll::Ready(WriteStatus::Shutdown)
+            } else if flags.contains(Flags::WR_PAUSED) {
                 Poll::Pending
             } else {
                 Poll::Ready(WriteStatus::Ready)
@@ -242,20 +232,13 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(WriteStatus::Ready) => res2,
             Poll::Ready(WriteStatus::Terminate) => Poll::Ready(WriteStatus::Terminate),
-            Poll::Ready(WriteStatus::Shutdown(t)) => {
+            Poll::Ready(WriteStatus::Shutdown) => {
                 if res2 == Poll::Ready(WriteStatus::Terminate) {
                     Poll::Ready(WriteStatus::Terminate)
                 } else {
-                    Poll::Ready(WriteStatus::Shutdown(t))
+                    Poll::Ready(WriteStatus::Shutdown)
                 }
             }
-            Poll::Ready(WriteStatus::Timeout(t)) => match res2 {
-                Poll::Ready(WriteStatus::Terminate) => Poll::Ready(WriteStatus::Terminate),
-                Poll::Ready(WriteStatus::Shutdown(t)) => {
-                    Poll::Ready(WriteStatus::Shutdown(t))
-                }
-                _ => Poll::Ready(WriteStatus::Timeout(t)),
-            },
         }
     }
 }

@@ -7,8 +7,6 @@ bitflags::bitflags! {
         const IO_STOPPING         = 0b0000_0000_0000_0010;
         /// shuting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
-        /// initiate filters shutdown timeout in write task
-        const IO_FILTERS_TIMEOUT  = 0b0000_0000_0000_1000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
@@ -36,6 +34,10 @@ bitflags::bitflags! {
 }
 
 impl Flags {
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.intersects(Flags::IO_STOPPED)
+    }
+
     pub(crate) fn is_waiting_for_write(&self) -> bool {
         self.intersects(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE)
     }

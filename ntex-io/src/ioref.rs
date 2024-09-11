@@ -15,12 +15,6 @@ impl IoRef {
     }
 
     #[inline]
-    /// Set flags
-    pub(crate) fn set_flags(&self, flags: Flags) {
-        self.0.flags.set(flags)
-    }
-
-    #[inline]
     /// Get current filter
     pub(crate) fn filter(&self) -> &dyn Filter {
         self.0.filter()
@@ -39,10 +33,6 @@ impl IoRef {
             .flags
             .get()
             .intersects(Flags::IO_STOPPING | Flags::IO_STOPPED)
-    }
-
-    pub(crate) fn is_io_closed(&self) -> bool {
-        self.0.flags.get().intersects(Flags::IO_STOPPED)
     }
 
     #[inline]
