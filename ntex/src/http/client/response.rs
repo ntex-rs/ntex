@@ -59,7 +59,7 @@ impl HttpMessage for ClientResponse {
 
 impl ClientResponse {
     /// Create new client response instance
-    pub(crate) fn new(
+    pub fn new(
         head: ResponseHead,
         payload: Payload,
         config: Rc<ClientConfig>,
