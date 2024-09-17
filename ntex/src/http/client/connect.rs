@@ -20,7 +20,7 @@ where
     }
 }
 
-pub(super) trait Connect: fmt::Debug {
+pub trait Connect: fmt::Debug {
     fn send_request(
         &self,
         head: RequestHeadType,
