@@ -20,6 +20,7 @@ where
     }
 }
 
+#[doc(hidden)]
 pub trait Connect: fmt::Debug {
     fn send_request(
         &self,
