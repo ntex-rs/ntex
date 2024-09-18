@@ -74,6 +74,7 @@ pub struct Connect {
 pub struct Client(Rc<ClientConfig>);
 
 #[derive(Debug)]
+#[doc(hidden)]
 pub struct ClientConfig {
     pub(self) connector: Box<dyn HttpConnect>,
     pub headers: HeaderMap,
