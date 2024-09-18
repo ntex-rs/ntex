@@ -57,7 +57,7 @@ impl ClientBuilder {
 
     /// Use custom connection.  Mainly used for mocking connections.
     /// # Note
-    /// This overrides anything set with [`Self::connector`]. 
+    /// This overrides anything set with [`Self::connector`].
     #[doc(hidden)]
     pub fn connection(
         mut self,
