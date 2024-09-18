@@ -58,8 +58,10 @@ impl ClientBuilder {
     /// Use custom connection.  Mainly used for mocking connections.
     /// # Note
     /// This overrides anything set with [`Self::connector`].
-    pub fn connection(mut self, connection: impl super::connect::Connect + 'static) -> Self
-    {
+    pub fn connection(
+        mut self,
+        connection: impl super::connect::Connect + 'static,
+    ) -> Self {
         self.config.connector = Box::new(connection);
         self
     }

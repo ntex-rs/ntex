@@ -59,11 +59,7 @@ impl HttpMessage for ClientResponse {
 
 impl ClientResponse {
     /// Create new client response instance
-    pub fn new(
-        head: ResponseHead,
-        payload: Payload,
-        config: Rc<ClientConfig>,
-    ) -> Self {
+    pub fn new(head: ResponseHead, payload: Payload, config: Rc<ClientConfig>) -> Self {
         ClientResponse {
             head,
             payload,
