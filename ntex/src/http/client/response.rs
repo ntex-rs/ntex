@@ -59,11 +59,8 @@ impl HttpMessage for ClientResponse {
 
 impl ClientResponse {
     /// Create new client response instance
-    pub(crate) fn new(
-        head: ResponseHead,
-        payload: Payload,
-        config: Rc<ClientConfig>,
-    ) -> Self {
+    #[doc(hidden)]
+    pub fn new(head: ResponseHead, payload: Payload, config: Rc<ClientConfig>) -> Self {
         ClientResponse {
             head,
             payload,

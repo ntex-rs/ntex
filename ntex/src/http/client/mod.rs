@@ -19,7 +19,7 @@
 use std::rc::Rc;
 
 mod builder;
-mod connect;
+pub mod connect;
 mod connection;
 mod connector;
 pub mod error;
@@ -74,12 +74,13 @@ pub struct Connect {
 pub struct Client(Rc<ClientConfig>);
 
 #[derive(Debug)]
-pub(crate) struct ClientConfig {
+#[doc(hidden)]
+pub struct ClientConfig {
     pub(self) connector: Box<dyn HttpConnect>,
-    pub(self) headers: HeaderMap,
-    pub(self) timeout: Millis,
-    pub(self) response_pl_limit: usize,
-    pub(self) response_pl_timeout: Millis,
+    pub headers: HeaderMap,
+    pub timeout: Millis,
+    pub response_pl_limit: usize,
+    pub response_pl_timeout: Millis,
 }
 
 impl Default for ClientConfig {

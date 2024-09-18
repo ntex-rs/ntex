@@ -55,6 +55,18 @@ impl ClientBuilder {
         self
     }
 
+    /// Use custom connection.  Mainly used for mocking connections.
+    /// # Note
+    /// This overrides anything set with [`Self::connector`]. 
+    #[doc(hidden)]
+    pub fn connection(
+        mut self,
+        connection: impl super::connect::Connect + 'static,
+    ) -> Self {
+        self.config.connector = Box::new(connection);
+        self
+    }
+
     /// Set request timeout.
     ///
     /// Request timeout is the total time before a response must be received.
