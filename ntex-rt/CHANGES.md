@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.17] - 2024-09-24
+
+* Upgrade compio v0.12
+
 ## [0.4.16] - 2024-09-02
 
 * Allow to override block_on function

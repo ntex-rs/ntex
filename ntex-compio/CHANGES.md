@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.0] - 2024-09-24
+
+* Upgrade compio v0.12
+
 ## [0.1.2] - 2024-09-11
 
 * Use new io api
