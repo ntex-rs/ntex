@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.2] - 2024-09-xx
+
+* Update to glommio v0.9
+
 ## [0.4.0] - 2024-01-09
 
 * Release

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-glommio"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "glommio intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -24,4 +24,4 @@ log = "0.4"
 oneshot = { version = "0.1", default-features = false, features = ["async"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-glommio = "0.8"
+glommio = "0.9"
