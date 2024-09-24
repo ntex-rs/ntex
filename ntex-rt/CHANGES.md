@@ -2,7 +2,7 @@
 
 ## [0.4.17] - 2024-09-24
 
-* Upgrade compio v0.12
+* Update to compio v0.12
 
 ## [0.4.16] - 2024-09-02
 
