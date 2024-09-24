@@ -16,12 +16,14 @@ pub struct Config(Rc<InnerServiceConfig>);
 #[derive(Debug)]
 pub(super) struct InnerServiceConfig {
     pub(super) pool: Cell<PoolId>,
+    pub(super) tag: Cell<Option<&'static str>>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self(Rc::new(InnerServiceConfig {
             pool: Cell::new(PoolId::DEFAULT),
+            tag: Cell::new(None),
         }))
     }
 }
@@ -35,8 +37,18 @@ impl Config {
         self
     }
 
+    /// Set io tag for the service.
+    pub fn tag(&self, tag: &'static str) -> &Self {
+        self.0.tag.set(Some(tag));
+        self
+    }
+
     pub(super) fn get_pool_id(&self) -> PoolId {
         self.0.pool.get()
+    }
+
+    pub(super) fn get_tag(&self) -> Option<&'static str> {
+        self.0.tag.get()
     }
 }
 
