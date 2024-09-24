@@ -46,5 +46,5 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
 ], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-glomm-io = { version = "0.8", package = "glommio", optional = true }
+glomm-io = { version = "0.9", package = "glommio", optional = true }
 futures-channel = { version = "0.3", optional = true }
