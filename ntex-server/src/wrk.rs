@@ -12,7 +12,7 @@ use ntex_util::time::{sleep, timeout_checked, Millis};
 
 use crate::{ServerConfiguration, WorkerId};
 
-const STOP_TIMEOUT: Millis = Millis(5000);
+const STOP_TIMEOUT: Millis = Millis(3000);
 
 #[derive(Debug)]
 /// Shutdown worker
@@ -284,6 +284,7 @@ where
             }
         }
 
+        // re-create service
         loop {
             match select(wrk.factory.create(()), stream_recv(&mut wrk.stop)).await {
                 Either::Left(Ok(service)) => {

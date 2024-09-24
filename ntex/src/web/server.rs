@@ -21,6 +21,7 @@ struct Config {
     ssl_handshake_timeout: Seconds,
     headers_read_rate: Option<ReadRate>,
     payload_read_rate: Option<ReadRate>,
+    tag: &'static str,
     pool: PoolId,
 }
 
@@ -107,6 +108,7 @@ where
                     max_timeout: Seconds(13),
                 }),
                 payload_read_rate: None,
+                tag: "WEB",
                 pool: PoolId::P0,
             })),
             backlog: 1024,
@@ -308,6 +310,12 @@ where
         self
     }
 
+    /// Set io tag for web server
+    pub fn tag(self, tag: &'static str) -> Self {
+        self.config.lock().unwrap().tag = tag;
+        self
+    }
+
     /// Set memory pool.
     ///
     /// Use specified memory pool for memory allocations.
@@ -334,6 +342,7 @@ where
                         addr,
                         c.host.clone().unwrap_or_else(|| format!("{}", addr)),
                     );
+                    r.tag(c.tag);
                     r.memory_pool(c.pool);
 
                     HttpService::build_with_config(c.into_cfg())
@@ -373,6 +382,7 @@ where
                         addr,
                         c.host.clone().unwrap_or_else(|| format!("{}", addr)),
                     );
+                    r.tag(c.tag);
                     r.memory_pool(c.pool);
 
                     HttpService::build_with_config(c.into_cfg())
@@ -414,6 +424,7 @@ where
                     addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", addr)),
                 );
+                r.tag(c.tag);
                 r.memory_pool(c.pool);
 
                 HttpService::build_with_config(c.into_cfg())
@@ -522,6 +533,7 @@ where
                 socket_addr,
                 c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
             );
+            r.tag(c.tag);
             r.memory_pool(c.pool);
 
             HttpService::build_with_config(c.into_cfg())
@@ -553,6 +565,7 @@ where
                     socket_addr,
                     c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
                 );
+                r.tag(c.tag);
                 r.memory_pool(c.pool);
 
                 HttpService::build_with_config(c.into_cfg())

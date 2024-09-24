@@ -288,7 +288,7 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    /// Add new service to the server.
+    /// Set io tag for named service.
     pub fn set_tag<N: AsRef<str>>(mut self, name: N, tag: &'static str) -> Self {
         let mut token = None;
         for sock in &self.sockets {

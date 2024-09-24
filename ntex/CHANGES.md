@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.0] - 2024-09-24
+
+* Allow to set io tag for web server
+
 ## [2.4.0] - 2024-09-05
 
 * Add experimental `compio` runtime support

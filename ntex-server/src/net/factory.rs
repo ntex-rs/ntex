@@ -91,20 +91,24 @@ where
 
     fn create(&self) -> BoxFuture<'static, Result<Vec<NetService>, ()>> {
         let cfg = Config::default();
-        let pool = cfg.get_pool_id();
         let name = self.name.clone();
-        let tokens = self.tokens.clone();
-        let factory_fut = (self.factory)(cfg);
+        let mut tokens = self.tokens.clone();
+        let factory_fut = (self.factory)(cfg.clone());
 
         Box::pin(async move {
             let factory = factory_fut.await.map_err(|_| {
                 log::error!("Cannot create {:?} service", name);
             })?;
+            if let Some(tag) = cfg.get_tag() {
+                for item in &mut tokens {
+                    item.1 = tag;
+                }
+            }
 
             Ok(vec![NetService {
                 tokens,
                 factory,
-                pool,
+                pool: cfg.get_pool_id(),
             }])
         })
     }
