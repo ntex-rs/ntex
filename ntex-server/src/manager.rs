@@ -3,7 +3,8 @@ use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 use async_channel::{unbounded, Receiver, Sender};
 use ntex_rt::System;
-use ntex_util::{future::join_all, time::sleep, time::Millis};
+use ntex_util::future::join_all;
+use ntex_util::time::{sleep, timeout, Millis};
 
 use crate::server::ServerShared;
 use crate::signals::Signal;
@@ -238,16 +239,13 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
 
         // stop workers
         if !self.workers.is_empty() {
-            let timeout = self.mgr.0.cfg.shutdown_timeout;
+            let to = self.mgr.0.cfg.shutdown_timeout;
 
-            if graceful && !timeout.is_zero() {
-                let futs: Vec<_> = self
-                    .workers
-                    .iter()
-                    .map(|worker| worker.stop(timeout))
-                    .collect();
+            if graceful && !to.is_zero() {
+                let futs: Vec<_> =
+                    self.workers.iter().map(|worker| worker.stop(to)).collect();
 
-                let _ = join_all(futs).await;
+                let _ = timeout(to, join_all(futs)).await;
             } else {
                 self.workers.iter().for_each(|worker| {
                     let _ = worker.stop(Millis::ZERO);
