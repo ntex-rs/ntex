@@ -1,5 +1,9 @@
 # Changes
 
+## [2.3.0] - 2024-09-24
+
+* Update to compio v0.12
+
 ## [2.1.0] - 2024-08-29
 
 * Add `compio` runtime support
