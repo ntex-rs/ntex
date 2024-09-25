@@ -23,7 +23,7 @@ openssl = ["tls_openssl"]
 
 # rustls support
 rustls = ["tls_rust"]
-rustls-default = ["tls_rust", "tls_rust/ring", "tls_rust/std"]
+rustls-ring = ["tls_rust", "tls_rust/ring", "tls_rust/std"]
 
 [dependencies]
 ntex-bytes = "0.1"
