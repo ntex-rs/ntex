@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.5.0"
+version = "2.6.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -70,9 +70,9 @@ ntex-util = "2"
 ntex-bytes = "0.1.27"
 ntex-server = "2.4"
 ntex-h2 = "1.1"
-ntex-rt = "0.4.17"
+ntex-rt = "0.4.18"
 ntex-io = "2.5"
-ntex-net = "2.3"
+ntex-net = "2.4"
 ntex-tls = "2.1"
 
 base64 = "0.22"
@@ -104,7 +104,7 @@ coo-kie = { version = "0.18", package = "cookie", optional = true }
 tls-openssl = { version = "0.10", package = "openssl", optional = true }
 
 # rustls
-tls-rustls = { version = "0.23", package = "rustls", optional = true }
+tls-rustls = { version = "0.23", package = "rustls", optional = true, default-features = false }
 webpki-roots = { version = "0.26", optional = true }
 
 # compression
@@ -117,6 +117,6 @@ rand = "0.8"
 time = "0.3"
 futures-util = "0.3"
 tls-openssl = { version = "0.10", package = "openssl" }
-tls-rustls = { version = "0.23", package = "rustls" }
+tls-rustls = { version = "0.23", package = "rustls", features = ["ring", "std"], default-features = false }
 rustls-pemfile = "2"
 webpki-roots = "0.26"

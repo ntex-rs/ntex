@@ -1,5 +1,9 @@
 # Changes
 
+## [2.4.0] - 2024-09-25
+
+* Update to glommio v0.9
+
 ## [2.3.0] - 2024-09-24
 
 * Update to compio v0.12
