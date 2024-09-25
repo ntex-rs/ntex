@@ -12,7 +12,7 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - run: cargo clippy --all-features --features=["dep:rustls"]
+      - run: cargo clippy --all-features
 
   fmt:
     name: Rustfmt
