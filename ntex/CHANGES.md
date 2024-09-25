@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.0] - 2024-09-25
+
+* Disable default features for rustls
+
 ## [2.5.0] - 2024-09-24
 
 * Allow to set io tag for web server

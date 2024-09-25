@@ -1,5 +1,9 @@
 # Changes
 
+## [2.2.0] - 2024-09-25
+
+* Disable default features for rustls
+
 ## [2.1.0] - 2024-08-28
 
 * Update io api usage
