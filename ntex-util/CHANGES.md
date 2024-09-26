@@ -1,6 +1,8 @@
 # Changes
 
-## [2.4.0] - 2024-xx-xx
+## [2.4.0] - 2024-09-26
+
+* Remove "must_use" from `condition::Waiter`
 
 * Remove mpsc::Sender::downgrade()
 
