@@ -130,7 +130,7 @@ impl<T: Default> Drop for Condition<T> {
     }
 }
 
-#[must_use = "Waiter do nothing unless polled"]
+/// Waits for result from condition
 pub struct Waiter<T = ()> {
     token: usize,
     inner: Cell<Inner<T>>,
