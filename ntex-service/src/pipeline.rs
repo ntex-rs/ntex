@@ -245,6 +245,15 @@ where
     }
 }
 
+impl<S, R> Drop for PipelineBinding<S, R>
+where
+    S: Service<R>,
+{
+    fn drop(&mut self) {
+        self.st = cell::UnsafeCell::new(State::New);
+    }
+}
+
 impl<S, R> Clone for PipelineBinding<S, R>
 where
     S: Service<R>,
@@ -317,6 +326,15 @@ struct CheckReadiness<S: 'static, F, Fut> {
 }
 
 impl<S, F, Fut> Unpin for CheckReadiness<S, F, Fut> {}
+
+impl<S, F, Fut> Drop for CheckReadiness<S, F, Fut> {
+    fn drop(&mut self) {
+        // future fot dropped during polling, we must notify other waiters
+        if self.fut.is_some() {
+            self.pl.waiters.notify();
+        }
+    }
+}
 
 impl<T, S, F, Fut> Future for CheckReadiness<S, F, Fut>
 where
