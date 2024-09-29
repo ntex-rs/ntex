@@ -245,6 +245,15 @@ where
     }
 }
 
+impl<S, R> Drop for PipelineBinding<S, R>
+where
+    S: Service<R>,
+{
+    fn drop(&mut self) {
+        self.st = cell::UnsafeCell::new(State::New);
+    }
+}
+
 impl<S, R> Clone for PipelineBinding<S, R>
 where
     S: Service<R>,
