@@ -262,6 +262,14 @@ impl<F> Io<F> {
     fn error(&self) -> Option<io::Error> {
         self.st().error.take()
     }
+
+    /// Get current io error
+    fn error_or_disconnected(&self) -> io::Error {
+        self.st()
+            .error
+            .take()
+            .unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "Disconnected"))
+    }
 }
 
 impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
@@ -415,7 +423,7 @@ impl<F> Io<F> {
         let mut flags = st.flags.get();
 
         if flags.is_stopped() {
-            Poll::Ready(self.error().map(Err).unwrap_or(Ok(None)))
+            Poll::Ready(Err(self.error_or_disconnected()))
         } else {
             st.dispatch_task.register(cx.waker());
 
@@ -540,9 +548,7 @@ impl<F> Io<F> {
         let flags = self.flags();
 
         if flags.is_stopped() {
-            Poll::Ready(self.error().map(Err).unwrap_or_else(|| {
-                Err(io::Error::new(io::ErrorKind::Other, "Disconnected"))
-            }))
+            Poll::Ready(Err(self.error_or_disconnected()))
         } else {
             let st = self.st();
             let len = st.buffer.write_destination_size();
