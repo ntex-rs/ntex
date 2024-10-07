@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.0] - 2024-10-17
+
+* Return error for IoRef::write(), IoRef::with_write_buf(), Io::poll_flush() if io is closed.
+
 ## [2.5.0] - 2024-09-10
 
 * Refactor async io support
