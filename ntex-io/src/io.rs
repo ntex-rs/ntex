@@ -540,7 +540,9 @@ impl<F> Io<F> {
         let flags = self.flags();
 
         if flags.is_stopped() {
-            Poll::Ready(self.error().map(Err).unwrap_or(Ok(())))
+            Poll::Ready(self.error().map(Err).unwrap_or_else(|| {
+                Err(io::Error::new(io::ErrorKind::Other, "Disconnected"))
+            }))
         } else {
             let st = self.st();
             let len = st.buffer.write_destination_size();

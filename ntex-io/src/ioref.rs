@@ -170,13 +170,7 @@ impl IoRef {
     #[inline]
     /// Write bytes to a buffer and wake up write task
     pub fn write(&self, src: &[u8]) -> io::Result<()> {
-        let flags = self.0.flags.get();
-
-        if !flags.intersects(Flags::IO_STOPPING) {
-            self.with_write_buf(|buf| buf.extend_from_slice(src))
-        } else {
-            Ok(())
-        }
+        self.with_write_buf(|buf| buf.extend_from_slice(src))
     }
 
     #[inline]
@@ -196,9 +190,13 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesVec) -> R,
     {
-        let result = self.0.buffer.with_write_source(self, f);
-        self.0.filter().process_write_buf(self, &self.0.buffer, 0)?;
-        Ok(result)
+        if self.0.flags.get().contains(Flags::IO_STOPPED) {
+            Err(io::Error::new(io::ErrorKind::Other, "Disconnected"))
+        } else {
+            let result = self.0.buffer.with_write_source(self, f);
+            self.0.filter().process_write_buf(self, &self.0.buffer, 0)?;
+            Ok(result)
+        }
     }
 
     #[inline]
@@ -448,6 +446,19 @@ mod tests {
         );
         client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
         assert_eq!(waiter.await, ());
+    }
+
+    #[ntex::test]
+    async fn write_to_closed_io() {
+        let (client, server) = IoTest::create();
+        let state = Io::new(server);
+        client.close().await;
+
+        assert!(state.is_closed());
+        assert!(state.write(TEXT.as_bytes()).is_err());
+        assert!(state
+            .with_write_buf(|buf| buf.extend_from_slice(BIN))
+            .is_err());
     }
 
     #[derive(Debug)]
