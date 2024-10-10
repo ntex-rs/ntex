@@ -1,10 +1,16 @@
 # Changes
 
-## [2.6.1] - 2024-10-17
+## [2.7.0] - 2024-10-10
+
+* Do not check readiness for dispatcher call
+
+* Handle service readiness errors during shutdown in dispatcher
+
+## [2.6.1] - 2024-10-07
 
 * Return error for Io::poll_read_ready() if io is closed.
 
-## [2.6.0] - 2024-10-17
+## [2.6.0] - 2024-10-07
 
 * Return error for IoRef::write(), IoRef::with_write_buf(), Io::poll_flush() if io is closed.
 

@@ -366,7 +366,11 @@ where
 
                     // service may relay on poll_ready for response results
                     if !slf.flags.contains(Flags::READY_ERR) {
-                        let _ = slf.shared.service.poll_ready(cx);
+                        if let Poll::Ready(res) = slf.shared.service.poll_ready(cx) {
+                            if res.is_err() {
+                                slf.flags.insert(Flags::READY_ERR);
+                            }
+                        }
                     }
 
                     if slf.shared.inflight.get() == 0 {
@@ -422,7 +426,7 @@ where
     U: Decoder + Encoder + 'static,
 {
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>) {
-        let mut fut = self.shared.service.call(item);
+        let mut fut = self.shared.service.call_nowait(item);
         self.shared.inflight.set(self.shared.inflight.get() + 1);
 
         // optimize first call
@@ -434,7 +438,7 @@ where
             }
         } else {
             let shared = self.shared.clone();
-            let _ = spawn(async move {
+            spawn(async move {
                 let result = fut.await;
                 shared.handle_result(result, &shared.io, true);
             });
@@ -468,7 +472,7 @@ where
             // pause io read task
             Poll::Pending => {
                 log::trace!(
-                    "{}: Service is not ready, register dispatch task",
+                    "{}: Service is not ready, register dispatcher",
                     self.shared.io.tag()
                 );
 
@@ -610,8 +614,8 @@ mod tests {
 
     use ntex_bytes::{Bytes, BytesMut, PoolId, PoolRef};
     use ntex_codec::BytesCodec;
-    use ntex_service::ServiceCtx;
-    use ntex_util::{time::sleep, time::Millis};
+    use ntex_service::{chain, fn_service, ServiceCtx};
+    use ntex_util::{channel::condition, time::sleep, time::Millis};
     use rand::Rng;
 
     use super::*;
@@ -862,13 +866,14 @@ mod tests {
         }
 
         let (disp, state) = Dispatcher::debug(server, BytesCodec, Srv(counter.clone()));
+        spawn(async move {
+            let _ = disp.await;
+        });
+
         state
             .io()
             .encode(Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"), &BytesCodec)
             .unwrap();
-        spawn(async move {
-            let _ = disp.await;
-        });
 
         // buffer should be flushed
         client.remote_buffer_cap(1024);

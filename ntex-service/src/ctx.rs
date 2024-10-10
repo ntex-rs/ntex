@@ -246,15 +246,19 @@ impl<'a, S: ?Sized, F: Future> Future for ReadyCall<'a, S, F> {
             // SAFETY: `fut` never moves
             let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
             match result {
-                task::Poll::Pending => self.ctx.waiters.register(self.ctx.idx, cx),
+                task::Poll::Pending => {
+                    self.ctx.waiters.register(self.ctx.idx, cx);
+                    task::Poll::Pending
+                }
                 task::Poll::Ready(res) => {
                     self.completed = true;
                     self.ctx.waiters.notify();
-                    return task::Poll::Ready(res);
+                    task::Poll::Ready(res)
                 }
             }
+        } else {
+            task::Poll::Pending
         }
-        task::Poll::Pending
     }
 }
 
