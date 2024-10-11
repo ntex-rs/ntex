@@ -132,7 +132,10 @@ mod compio {
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
-        log::debug!("Create compio runtime and block on future");
+        log::info!(
+            "Starting compio runtime, driver {:?}",
+            comp_io::driver::DriverType::current()
+        );
         let rt = Runtime::new().unwrap();
         rt.block_on(fut);
     }
