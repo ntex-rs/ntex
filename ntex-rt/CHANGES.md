@@ -1,6 +1,10 @@
 # Changes
 
-## [0.4.18] - 2024-09-xx
+## [0.4.19] - 2024-10-11
+
+* Force runtime feature selection
+
+## [0.4.18] - 2024-09-24
 
 * Update to glommio v0.9
 

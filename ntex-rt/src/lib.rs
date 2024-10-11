@@ -461,99 +461,11 @@ mod glommio {
 #[cfg(feature = "tokio")]
 pub use self::tokio::*;
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "glommio"),
-    feature = "async-std",
-))]
+#[cfg(feature = "async-std")]
 pub use self::asyncstd::*;
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "async-std"),
-    feature = "glommio"
-))]
+#[cfg(feature = "glommio")]
 pub use self::glommio::*;
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "glommio"),
-    not(feature = "async-std"),
-    feature = "compio"
-))]
+#[cfg(feature = "compio")]
 pub use self::compio::*;
-
-#[allow(dead_code)]
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "async-std"),
-    not(feature = "compio"),
-    not(feature = "glommio")
-))]
-mod no_rt {
-    use std::task::{Context, Poll};
-    use std::{fmt, future::Future, marker::PhantomData, pin::Pin};
-
-    /// Runs the provided future, blocking the current thread until the future
-    /// completes.
-    pub fn block_on<F: Future<Output = ()>>(_: F) {
-        panic!("async runtime is not configured");
-    }
-
-    pub fn spawn<F>(_: F) -> JoinHandle<F::Output>
-    where
-        F: Future + 'static,
-    {
-        unimplemented!()
-    }
-
-    pub fn spawn_blocking<F, T>(_: F) -> JoinHandle<T>
-    where
-        F: FnOnce() -> T + Send + Sync + 'static,
-        T: Send + 'static,
-    {
-        unimplemented!()
-    }
-
-    /// Blocking operation completion future. It resolves with results
-    /// of blocking function execution.
-    #[allow(clippy::type_complexity)]
-    pub struct JoinHandle<T> {
-        t: PhantomData<T>,
-    }
-
-    impl<T> JoinHandle<T> {
-        pub fn is_finished(&self) -> bool {
-            true
-        }
-    }
-
-    impl<T> Future for JoinHandle<T> {
-        type Output = Result<T, JoinError>;
-
-        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-            todo!()
-        }
-    }
-
-    #[derive(Debug, Copy, Clone)]
-    pub struct JoinError;
-
-    impl fmt::Display for JoinError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "JoinError")
-        }
-    }
-
-    impl std::error::Error for JoinError {}
-}
-
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "async-std"),
-    not(feature = "compio"),
-    not(feature = "glommio")
-))]
-pub use self::no_rt::*;
