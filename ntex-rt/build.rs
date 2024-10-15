@@ -14,7 +14,7 @@ fn main() {
     }
 
     if features.is_empty() {
-        panic!("Runtime must be selected '--feature=ntex\\$runtime', available options are \"compio\", \"tokio\", \"async-std\", \"glommio\"");
+        panic!("Runtime must be selected '--feature=ntex/$runtime', available options are \"compio\", \"tokio\", \"async-std\", \"glommio\"");
     } else if features.len() > 1 {
         panic!(
             "Only one runtime feature could be selected, current selection {:?}",
