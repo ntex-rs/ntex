@@ -1,5 +1,9 @@
 # Changes
 
+## [2.7.1] - 2024-10-15
+
+* Disconnect on error from service readiness check
+
 ## [2.7.0] - 2024-10-10
 
 * Do not check readiness for dispatcher call

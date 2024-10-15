@@ -521,7 +521,7 @@ where
                 self.st = DispatcherState::Stop;
                 self.error = Some(err);
                 self.flags.insert(Flags::READY_ERR);
-                Poll::Ready(PollService::Continue)
+                Poll::Ready(PollService::Item(DispatchItem::Disconnect(None)))
             }
         }
     }
