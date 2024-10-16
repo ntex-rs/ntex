@@ -18,7 +18,7 @@ edition = "2021"
 rust-version = "1.75"
 
 [package.metadata.docs.rs]
-features = ["compio", "openssl", "rustls", "compress", "cookie", "ws", "brotli", "ntex-tls/rustls-ring"]
+features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "brotli", "ntex-tls/rustls-ring"]
 
 [lib]
 name = "ntex"
