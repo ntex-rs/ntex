@@ -41,8 +41,7 @@ pub use self::response::{ClientResponse, JsonBody, MessageBody};
 pub use self::sender::SendClientRequest;
 pub use self::test::TestResponse;
 
-use crate::http::error::HttpError;
-use crate::http::{HeaderMap, Method, RequestHead, Uri};
+use crate::http::{error::HttpError, HeaderMap, Method, RequestHead, Uri};
 use crate::time::Millis;
 
 use self::connect::{Connect as HttpConnect, ConnectorWrapper};

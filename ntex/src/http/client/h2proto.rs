@@ -1,14 +1,13 @@
 use std::{future::poll_fn, io};
 
-use ntex_h2::client::{RecvStream, SimpleClient};
-use ntex_h2::{self as h2, frame};
+use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::{h2::payload, payload::Payload, Method, Version};
 use crate::time::{timeout_checked, Millis};
-use crate::util::{ByteString, Bytes};
+use crate::util::{select, ByteString, Bytes, Either};
 
 use super::error::{ConnectError, SendRequestError};
 
@@ -21,7 +20,12 @@ pub(super) async fn send_request<B>(
 where
     B: MessageBody,
 {
-    log::trace!("Sending client request: {:?} {:?}", head, body.size());
+    log::trace!(
+        "{}: Sending client request: {:?} {:?}",
+        client.client.tag(),
+        head,
+        body.size()
+    );
     let length = body.size();
     let eof = if head.as_ref().method == Method::HEAD {
         true
@@ -82,7 +86,7 @@ where
         // at the same time
         let _ = crate::rt::spawn(async move {
             if let Err(e) = send_body(body, &snd_stream).await {
-                log::error!("Cannot send body: {:?}", e);
+                log::error!("{}: Cannot send body: {:?}", snd_stream.tag(), e);
                 snd_stream.reset(frame::Reason::INTERNAL_ERROR);
             }
         });
@@ -108,7 +112,8 @@ async fn get_response(
             eof,
         } => {
             log::trace!(
-                "{:?} got response (eof: {}): {:#?}\nheaders: {:#?}",
+                "{}: {:?} got response (eof: {}): {:#?}\nheaders: {:#?}",
+                stream.tag(),
                 stream.id(),
                 eof,
                 pseudo,
@@ -122,31 +127,44 @@ async fn get_response(
                     head.version = Version::HTTP_2;
 
                     let payload = if !eof {
-                        log::debug!("Creating local payload stream for {:?}", stream.id());
+                        log::debug!(
+                            "{}: Creating local payload stream for {:?}",
+                            stream.tag(),
+                            stream.id()
+                        );
                         let (mut pl, payload) =
                             payload::Payload::create(stream.empty_capacity());
+
                         let _ = crate::rt::spawn(async move {
                             loop {
-                                let h2::Message { stream, kind } =
-                                    match rcv_stream.recv().await {
-                                        Some(msg) => msg,
-                                        None => {
-                                            pl.feed_eof(Bytes::new());
-                                            break;
-                                        }
-                                    };
+                                let h2::Message { stream, kind } = match select(
+                                    rcv_stream.recv(),
+                                    poll_fn(|cx| pl.on_cancel(cx.waker())),
+                                )
+                                .await
+                                {
+                                    Either::Left(Some(msg)) => msg,
+                                    Either::Left(None) => {
+                                        pl.feed_eof(Bytes::new());
+                                        break;
+                                    }
+                                    Either::Right(_) => break,
+                                };
+
                                 match kind {
                                     h2::MessageKind::Data(data, cap) => {
-                                        log::debug!(
-                                            "Got data chunk for {:?}: {:?}",
+                                        log::trace!(
+                                            "{}: Got data chunk for {:?}: {:?}",
+                                            stream.tag(),
                                             stream.id(),
                                             data.len()
                                         );
                                         pl.feed_data(data, cap);
                                     }
                                     h2::MessageKind::Eof(item) => {
-                                        log::debug!(
-                                            "Got payload eof for {:?}: {:?}",
+                                        log::trace!(
+                                            "{}: Got payload eof for {:?}: {:?}",
+                                            stream.tag(),
                                             stream.id(),
                                             item
                                         );
@@ -163,7 +181,11 @@ async fn get_response(
                                         }
                                     }
                                     h2::MessageKind::Disconnect(err) => {
-                                        log::debug!("Connection is disconnected {:?}", err);
+                                        log::trace!(
+                                            "{}: Connection is disconnected {:?}",
+                                            stream.tag(),
+                                            err
+                                        );
                                         pl.set_error(
                                             io::Error::new(io::ErrorKind::Other, err)
                                                 .into(),
@@ -207,12 +229,17 @@ async fn send_body<B: MessageBody>(
     loop {
         match poll_fn(|cx| body.poll_next_chunk(cx)).await {
             Some(Ok(b)) => {
-                log::debug!("{:?} sending chunk, {} bytes", stream.id(), b.len());
+                log::trace!(
+                    "{}: {:?} sending chunk, {} bytes",
+                    stream.tag(),
+                    stream.id(),
+                    b.len()
+                );
                 stream.send_payload(b, false).await?
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
-                log::debug!("{:?} eof of send stream ", stream.id());
+                log::trace!("{}: {:?} eof of send stream ", stream.tag(), stream.id());
                 stream.send_payload(Bytes::new(), true).await?;
                 return Ok(());
             }

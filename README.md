@@ -24,8 +24,8 @@
 
 ## Usage
 
-Starting ntex v0.5 async runtime must be selected as a feature. Available options are `glommio`,
-`tokio` or `async-std`.
+ntex supports multiple async runtimes, runtime must be selected as a feature. Available options are `compio`, `tokio`,
+`glommio` or `async-std`.
 
 ```toml
 [dependencies]

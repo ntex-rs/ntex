@@ -1,5 +1,9 @@
 # Changes
 
+## [2.7.0] - 2024-10-16
+
+* Better handling for h2 remote payload
+
 ## [2.6.0] - 2024-09-25
 
 * Disable default features for rustls
