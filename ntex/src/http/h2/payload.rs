@@ -1,12 +1,20 @@
 //! Payload stream
 use std::collections::VecDeque;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 use std::{cell::RefCell, future::poll_fn, pin::Pin, rc::Rc, rc::Weak};
 
 use ntex_h2::{self as h2};
 
 use crate::util::{Bytes, Stream};
 use crate::{http::error::PayloadError, task::LocalWaker};
+
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+    struct Flags: u8 {
+        const EOF = 0b0000_0001;
+        const DROPPED = 0b0000_0010;
+    }
+}
 
 /// Buffered stream of byte chunks
 ///
@@ -51,6 +59,14 @@ impl Payload {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, PayloadError>>> {
         self.inner.borrow_mut().readany(cx)
+    }
+}
+
+impl Drop for Payload {
+    fn drop(&mut self) {
+        let mut inner = self.inner.borrow_mut();
+        inner.io_task.wake();
+        inner.flags.insert(Flags::DROPPED);
     }
 }
 
@@ -103,11 +119,24 @@ impl PayloadSender {
             shared.borrow_mut().stream = stream;
         }
     }
+
+    pub(crate) fn on_cancel(&self, w: &Waker) -> Poll<()> {
+        if let Some(shared) = self.inner.upgrade() {
+            if shared.borrow_mut().flags.contains(Flags::DROPPED) {
+                Poll::Ready(())
+            } else {
+                shared.borrow_mut().io_task.register(w);
+                Poll::Pending
+            }
+        } else {
+            Poll::Ready(())
+        }
+    }
 }
 
 #[derive(Debug)]
 struct Inner {
-    eof: bool,
+    flags: Flags,
     cap: h2::Capacity,
     err: Option<PayloadError>,
     items: VecDeque<Bytes>,
@@ -120,7 +149,7 @@ impl Inner {
     fn new(cap: h2::Capacity) -> Self {
         Inner {
             cap,
-            eof: false,
+            flags: Flags::empty(),
             err: None,
             stream: None,
             items: VecDeque::new(),
@@ -135,7 +164,7 @@ impl Inner {
     }
 
     fn feed_eof(&mut self, data: Bytes) {
-        self.eof = true;
+        self.flags.insert(Flags::EOF);
         if !data.is_empty() {
             self.items.push_back(data);
         }
@@ -153,7 +182,7 @@ impl Inner {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, PayloadError>>> {
         if let Some(data) = self.items.pop_front() {
-            if !self.eof {
+            if !self.flags.contains(Flags::EOF) {
                 self.cap.consume(data.len() as u32);
 
                 if self.cap.size() == 0 {
@@ -163,7 +192,7 @@ impl Inner {
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.err.take() {
             Poll::Ready(Some(Err(err)))
-        } else if self.eof {
+        } else if self.flags.contains(Flags::EOF) {
             Poll::Ready(None)
         } else {
             self.task.register(cx.waker());
