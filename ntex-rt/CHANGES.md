@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.20] - 2024-10-17
+
+* Allow to skip runtime feature for clippy run
+
 ## [0.4.19] - 2024-10-11
 
 * Force runtime feature selection
