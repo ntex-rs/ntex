@@ -50,14 +50,17 @@ trait ServiceObj<Req> {
 
     fn ready<'a>(
         &'a self,
-        idx: usize,
+        idx: u32,
+        bound: bool,
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, (), Self::Error>;
+
+    fn unready(&self) -> BoxFuture<'_, (), Self::Error>;
 
     fn call<'a>(
         &'a self,
         req: Req,
-        idx: usize,
+        idx: u32,
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, Self::Response, Self::Error>;
 
@@ -75,14 +78,20 @@ where
     #[inline]
     fn ready<'a>(
         &'a self,
-        idx: usize,
+        idx: u32,
+        bound: bool,
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, (), Self::Error> {
         Box::pin(async move {
-            ServiceCtx::<'a, S>::from_ref(idx, waiters)
+            ServiceCtx::<'a, S>::from_ref(idx, bound, waiters)
                 .ready(self)
                 .await
         })
+    }
+
+    #[inline]
+    fn unready(&self) -> BoxFuture<'_, (), Self::Error> {
+        Box::pin(crate::Service::unready(self))
     }
 
     #[inline]
@@ -94,11 +103,11 @@ where
     fn call<'a>(
         &'a self,
         req: Req,
-        idx: usize,
+        idx: u32,
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, Self::Response, Self::Error> {
         Box::pin(async move {
-            ServiceCtx::<'a, S>::from_ref(idx, waiters)
+            ServiceCtx::<'a, S>::from_ref(idx, false, waiters)
                 .call_nowait(self, req)
                 .await
         })
@@ -151,8 +160,13 @@ where
 
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        let (idx, waiters) = ctx.inner();
-        self.0.ready(idx, waiters).await
+        let (idx, bound, waiters) = ctx.inner();
+        self.0.ready(idx, bound, waiters).await
+    }
+
+    #[inline]
+    async fn unready(&self) -> Result<(), Self::Error> {
+        self.0.unready().await
     }
 
     #[inline]
@@ -162,7 +176,7 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: ServiceCtx<'_, Self>) -> Result<Res, Err> {
-        let (idx, waiters) = ctx.inner();
+        let (idx, _, waiters) = ctx.inner();
         self.0.call(req, idx, waiters).await
     }
 }

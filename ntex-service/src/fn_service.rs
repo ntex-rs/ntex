@@ -135,6 +135,11 @@ where
     type Error = Err;
 
     #[inline]
+    async fn unready(&self) -> Result<(), Self::Error> {
+        std::future::pending().await
+    }
+
+    #[inline]
     async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
         (self.f)(req).await
     }
@@ -206,6 +211,11 @@ where
 {
     type Response = Res;
     type Error = Err;
+
+    #[inline]
+    async fn unready(&self) -> Result<(), Self::Error> {
+        std::future::pending().await
+    }
 
     #[inline]
     async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
@@ -382,20 +392,20 @@ mod tests {
         let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
         let _ = format!("{:?}", new_srv);
 
-        let srv = Pipeline::new(new_srv.create(()).await.unwrap()).bind();
+        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
         let res = srv.call(()).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(srv.ready().await, Ok(()));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         let _ = format!("{:?}", srv);
 
-        let srv2 = Pipeline::new(new_srv.clone()).bind();
+        let srv2 = Pipeline::new(new_srv.clone());
         let res = srv2.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         let _ = format!("{:?}", srv2);
 
-        assert_eq!(lazy(|cx| srv2.poll_shutdown(cx)).await, Poll::Ready(()));
+        assert_eq!(srv2.shutdown().await, ());
     }
 
     #[ntex::test]
@@ -407,14 +417,13 @@ mod tests {
                 .await
                 .unwrap()
                 .clone(),
-        )
-        .bind();
+        );
 
         let res = srv.call(()).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(srv.ready().await, Ok(()));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
-        assert_eq!(lazy(|cx| srv.poll_shutdown(cx)).await, Poll::Ready(()));
+        assert_eq!(srv.shutdown().await, ());
     }
 
     #[ntex::test]
@@ -429,9 +438,10 @@ mod tests {
         })
         .clone();
 
-        let srv = Pipeline::new(new_srv.create(&1).await.unwrap()).bind();
+        let srv = Pipeline::new(new_srv.create(&1).await.unwrap());
         let res = srv.call(()).await;
-        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        let mut rd = srv.bind();
+        assert_eq!(lazy(|cx| rd.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", 1));
     }

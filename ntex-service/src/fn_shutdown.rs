@@ -63,6 +63,11 @@ where
     }
 
     #[inline]
+    async fn unready(&self) -> Result<(), Self::Error> {
+        std::future::pending().await
+    }
+
+    #[inline]
     async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Req, Err> {
         Ok(req)
     }

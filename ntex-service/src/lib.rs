@@ -32,7 +32,7 @@ pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{apply, Identity, Middleware, Stack};
-pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall};
+pub use self::pipeline::{Pipeline, PipelineCall, Readiness};
 
 #[allow(unused_variables)]
 /// An asynchronous function of `Request` to a `Response`.
@@ -116,6 +116,12 @@ pub trait Service<Req> {
     /// results in an error.
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         Ok(())
+    }
+
+    /// Returns when the service becomes un-ready and not able to process requests.
+    ///
+    async fn unready(&self) -> Result<(), Self::Error> {
+        std::future::pending().await
     }
 
     #[inline]
@@ -247,6 +253,11 @@ where
     }
 
     #[inline]
+    async fn unready(&self) -> Result<(), S::Error> {
+        (**self).unready().await
+    }
+
+    #[inline]
     async fn shutdown(&self) {
         (**self).shutdown().await
     }
@@ -271,6 +282,11 @@ where
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
+    }
+
+    #[inline]
+    async fn unready(&self) -> Result<(), S::Error> {
+        (**self).unready().await
     }
 
     #[inline]

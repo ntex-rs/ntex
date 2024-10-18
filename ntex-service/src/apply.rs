@@ -105,6 +105,11 @@ where
     }
 
     #[inline]
+    async fn unready(&self) -> Result<(), Err> {
+        self.service.unready().await.map_err(From::from)
+    }
+
+    #[inline]
     async fn shutdown(&self) {
         self.service.shutdown().await
     }

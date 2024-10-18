@@ -1,40 +1,63 @@
-use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc, task};
+use std::task::{Context, Poll, Waker};
+use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
 use crate::Service;
 
 pub struct ServiceCtx<'a, S: ?Sized> {
-    idx: usize,
+    idx: u32,
+    bound: bool,
     waiters: &'a WaitersRef,
     _t: marker::PhantomData<Rc<S>>,
 }
 
 pub(crate) struct Waiters {
-    index: usize,
-    waiters: Rc<WaitersRef>,
+    index: u32,
+    pub waiters: Rc<WaitersRef>,
+}
+
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+    struct Flags: u8 {
+        const BOUND      = 0b0000_0001;
+        const READY      = 0b0000_0010;
+    }
 }
 
 pub(crate) struct WaitersRef {
-    cur: cell::Cell<usize>,
-    indexes: cell::UnsafeCell<slab::Slab<Option<task::Waker>>>,
+    cur: cell::Cell<u32>,
+    state: cell::Cell<Flags>,
+    indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
 }
 
 impl WaitersRef {
     #[allow(clippy::mut_from_ref)]
-    fn get(&self) -> &mut slab::Slab<Option<task::Waker>> {
+    fn get(&self) -> &mut slab::Slab<Option<Waker>> {
         unsafe { &mut *self.indexes.get() }
     }
 
-    fn insert(&self) -> usize {
-        self.get().insert(None)
+    fn insert_flag(&self, fl: Flags) {
+        let mut flags = self.state.get();
+        flags.insert(fl);
+        self.state.set(flags);
     }
 
-    fn remove(&self, idx: usize) {
+    fn remove_flag(&self, fl: Flags) {
+        let mut flags = self.state.get();
+        flags.remove(fl);
+        self.state.set(flags);
+    }
+
+    fn insert(&self) -> u32 {
+        self.get().insert(None) as u32
+    }
+
+    fn remove(&self, idx: u32) {
         self.notify();
-        self.get().remove(idx);
+        self.get().remove(idx as usize);
     }
 
-    fn register(&self, idx: usize, cx: &mut task::Context<'_>) {
-        self.get()[idx] = Some(cx.waker().clone());
+    fn register(&self, idx: u32, cx: &mut Context<'_>) {
+        self.get()[idx as usize] = Some(cx.waker().clone());
     }
 
     fn notify(&self) {
@@ -44,14 +67,32 @@ impl WaitersRef {
             }
         }
 
-        self.cur.set(usize::MAX);
+        self.cur.set(u32::MAX);
     }
 
-    pub(crate) fn can_check(&self, idx: usize, cx: &mut task::Context<'_>) -> bool {
+    pub(crate) fn len(&self) -> usize {
+        self.get().len()
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.state.get().contains(Flags::READY)
+    }
+
+    pub(crate) fn bind(&self) {
+        self.state.set(Flags::BOUND);
+        self.notify();
+    }
+
+    pub(crate) fn unbind(&self) {
+        self.state.set(Flags::empty());
+        self.notify();
+    }
+
+    pub(crate) fn can_check(&self, idx: u32, cx: &mut Context<'_>) -> bool {
         let cur = self.cur.get();
         if cur == idx {
             true
-        } else if cur == usize::MAX {
+        } else if cur == u32::MAX {
             self.cur.set(idx);
             true
         } else {
@@ -64,11 +105,12 @@ impl WaitersRef {
 impl Waiters {
     pub(crate) fn new() -> Self {
         let mut waiters = slab::Slab::new();
-        let index = waiters.insert(None);
+        let index = waiters.insert(None) as u32;
         Waiters {
             index,
             waiters: Rc::new(WaitersRef {
-                cur: cell::Cell::new(usize::MAX),
+                cur: cell::Cell::new(u32::MAX),
+                state: cell::Cell::new(Flags::empty()),
                 indexes: cell::UnsafeCell::new(waiters),
             }),
         }
@@ -78,18 +120,19 @@ impl Waiters {
         self.waiters.as_ref()
     }
 
-    pub(crate) fn can_check(&self, cx: &mut task::Context<'_>) -> bool {
-        self.waiters.can_check(self.index, cx)
+    pub(crate) fn is_bound(&self) -> bool {
+        self.waiters.state.get().contains(Flags::BOUND)
     }
 
-    pub(crate) fn register(&self, cx: &mut task::Context<'_>) {
-        self.waiters.register(self.index, cx);
-    }
-
-    pub(crate) fn notify(&self) {
-        if self.waiters.cur.get() == self.index {
+    pub(crate) fn set_ready(&self) {
+        if !self.waiters.state.get().contains(Flags::READY) {
+            self.waiters.insert_flag(Flags::READY);
             self.waiters.notify();
         }
+    }
+
+    pub(crate) fn set_notready(&self) {
+        self.waiters.remove_flag(Flags::READY);
     }
 }
 
@@ -97,7 +140,9 @@ impl Drop for Waiters {
     #[inline]
     fn drop(&mut self) {
         self.waiters.remove(self.index);
-        self.waiters.notify();
+        if self.waiters.cur.get() == self.index {
+            self.waiters.notify();
+        }
     }
 }
 
@@ -123,21 +168,40 @@ impl<'a, S> ServiceCtx<'a, S> {
     pub(crate) fn new(waiters: &'a Waiters) -> Self {
         Self {
             idx: waiters.index,
+            bound: false,
             waiters: waiters.get_ref(),
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn from_ref(idx: usize, waiters: &'a WaitersRef) -> Self {
+    pub(crate) fn new_bound(waiters: &'a Waiters) -> Self {
+        Self {
+            idx: waiters.index,
+            bound: true,
+            waiters: waiters.get_ref(),
+            _t: marker::PhantomData,
+        }
+    }
+
+    pub(crate) fn from_ref(idx: u32, bound: bool, waiters: &'a WaitersRef) -> Self {
         Self {
             idx,
+            bound,
             waiters,
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn inner(self) -> (usize, &'a WaitersRef) {
-        (self.idx, self.waiters)
+    pub(crate) fn inner(self) -> (u32, bool, &'a WaitersRef) {
+        (self.idx, self.bound, self.waiters)
+    }
+
+    /// Mark service as un-ready, force readiness re-evaluation for pipeline
+    pub fn unready(&self) {
+        if self.waiters.state.get().contains(Flags::READY) {
+            self.waiters.remove_flag(Flags::READY);
+            self.waiters.notify();
+        }
     }
 
     /// Returns when the service is able to process requests.
@@ -145,17 +209,33 @@ impl<'a, S> ServiceCtx<'a, S> {
     where
         T: Service<R>,
     {
-        // check readiness and notify waiters
-        ReadyCall {
-            completed: false,
-            fut: svc.ready(ServiceCtx {
+        if self.bound {
+            svc.ready(ServiceCtx {
                 idx: self.idx,
+                bound: true,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
-            }),
-            ctx: *self,
+            })
+            .await
+        } else {
+            // active readiness
+            if self.waiters.is_ready() {
+                Ok(())
+            } else {
+                // check readiness and notify waiters
+                ReadyCall {
+                    completed: false,
+                    fut: svc.ready(ServiceCtx {
+                        idx: self.idx,
+                        bound: false,
+                        waiters: self.waiters,
+                        _t: marker::PhantomData,
+                    }),
+                    ctx: *self,
+                }
+                .await
+            }
         }
-        .await
     }
 
     #[inline]
@@ -171,6 +251,7 @@ impl<'a, S> ServiceCtx<'a, S> {
             req,
             ServiceCtx {
                 idx: self.idx,
+                bound: false,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             },
@@ -193,6 +274,7 @@ impl<'a, S> ServiceCtx<'a, S> {
             req,
             ServiceCtx {
                 idx: self.idx,
+                bound: false,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             },
@@ -219,52 +301,59 @@ impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
     }
 }
 
-struct ReadyCall<'a, S: ?Sized, F: Future> {
+struct ReadyCall<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> {
     completed: bool,
     fut: F,
     ctx: ServiceCtx<'a, S>,
 }
 
-impl<'a, S: ?Sized, F: Future> Drop for ReadyCall<'a, S, F> {
+impl<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> Drop for ReadyCall<'a, S, F, E> {
     fn drop(&mut self) {
-        if !self.completed {
+        if !self.completed && !self.ctx.waiters.state.get().contains(Flags::BOUND) {
             self.ctx.waiters.notify();
         }
     }
 }
 
-impl<'a, S: ?Sized, F: Future> Unpin for ReadyCall<'a, S, F> {}
+impl<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> Unpin for ReadyCall<'a, S, F, E> {}
 
-impl<'a, S: ?Sized, F: Future> Future for ReadyCall<'a, S, F> {
+impl<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> Future
+    for ReadyCall<'a, S, F, E>
+{
     type Output = F::Output;
 
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Self::Output> {
-        if self.ctx.waiters.can_check(self.ctx.idx, cx) {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let st = self.ctx.waiters.state.get();
+        if st.contains(Flags::BOUND) {
+            if st.contains(Flags::READY) {
+                Poll::Ready(Ok(()))
+            } else {
+                self.ctx.waiters.register(self.ctx.idx, cx);
+                Poll::Pending
+            }
+        } else if self.ctx.waiters.can_check(self.ctx.idx, cx) {
             // SAFETY: `fut` never moves
             let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
             match result {
-                task::Poll::Pending => {
+                Poll::Pending => {
                     self.ctx.waiters.register(self.ctx.idx, cx);
-                    task::Poll::Pending
+                    Poll::Pending
                 }
-                task::Poll::Ready(res) => {
+                Poll::Ready(res) => {
                     self.completed = true;
                     self.ctx.waiters.notify();
-                    task::Poll::Ready(res)
+                    Poll::Ready(res)
                 }
             }
         } else {
-            task::Poll::Pending
+            Poll::Pending
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, cell::RefCell, future::poll_fn, task::Poll};
+    use std::{cell::Cell, cell::RefCell, task::Poll};
 
     use ntex_util::channel::{condition, oneshot};
     use ntex_util::{future::lazy, future::select, spawn, time};
@@ -284,12 +373,18 @@ mod tests {
             Ok(())
         }
 
+        async fn unready(&self) -> Result<(), Self::Error> {
+            self.1.ready().await;
+            Ok(())
+        }
+
         async fn call(
             &self,
             req: &'static str,
             ctx: ServiceCtx<'_, Self>,
         ) -> Result<Self::Response, Self::Error> {
             let _ = format!("{:?}", ctx);
+            ctx.unready();
             #[allow(clippy::clone_on_copy)]
             let _ = ctx.clone();
             Ok(req)
@@ -301,35 +396,34 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
+        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait()));
         let srv2 = srv1.clone();
+        let mut rd = srv1.bind();
 
-        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 1);
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
-
         assert_eq!(cnt.get(), 1);
+
+        // set ready
         con.notify();
-
-        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
         assert_eq!(cnt.get(), 1);
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Pending);
-        assert_eq!(cnt.get(), 2);
-
+        // set unready
         con.notify();
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
-        assert_eq!(res, Poll::Ready(Ok(())));
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 2);
 
-        let res = lazy(|cx| srv1.poll_ready(cx)).await;
+        // no call in-between
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
-        assert_eq!(cnt.get(), 3);
+        assert_eq!(cnt.get(), 2);
     }
 
     #[ntex::test]
@@ -339,27 +433,28 @@ mod tests {
         let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
 
         let srv1 = srv.clone();
-        let srv2 = srv1.clone().bind();
+        let srv2 = srv1.clone();
+        let mut rd = srv1.bind();
 
         let (tx, rx) = oneshot::channel();
         spawn(async move {
-            select(rx, srv1.ready()).await;
+            select(rx, srv2.ready()).await;
             time::sleep(time::Millis(25000)).await;
-            drop(srv1);
+            drop(srv2);
         });
         time::sleep(time::Millis(250)).await;
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
         let _ = tx.send(());
         time::sleep(time::Millis(250)).await;
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
         con.notify();
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
     }
 
@@ -369,29 +464,30 @@ mod tests {
         let con = condition::Condition::new();
         let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
 
-        let srv1 = srv.clone().bind();
+        let srv1 = srv.clone();
         let srv2 = srv1.clone();
+        let mut rd = srv1.bind();
 
         let (tx, rx) = oneshot::channel();
         spawn(async move {
-            select(rx, poll_fn(|cx| srv1.poll_ready(cx))).await;
-            poll_fn(|cx| srv1.poll_shutdown(cx)).await;
+            select(rx, srv2.ready()).await;
+            srv2.shutdown().await;
             time::sleep(time::Millis(25000)).await;
-            drop(srv1);
+            drop(srv2);
         });
         time::sleep(time::Millis(250)).await;
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
         let _ = tx.send(());
         time::sleep(time::Millis(250)).await;
 
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Pending);
 
         con.notify();
-        let res = lazy(|cx| srv2.poll_ready(cx)).await;
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
         assert_eq!(res, Poll::Ready(Ok(())));
     }
 
@@ -402,12 +498,15 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
+        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait()));
         let srv2 = srv1.clone();
+        let mut rd = srv1.bind();
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
 
         let data1 = data.clone();
         ntex::rt::spawn(async move {
-            let _ = poll_fn(|cx| srv1.poll_ready(cx)).await;
+            let _ = srv1.ready().await;
             let i = srv1.call_nowait("srv1").await.unwrap();
             data1.borrow_mut().push(i);
         });
@@ -417,18 +516,26 @@ mod tests {
             let i = srv2.call("srv2").await.unwrap();
             data2.borrow_mut().push(i);
         });
-        time::sleep(time::Millis(50)).await;
 
+        // set ready
         con.notify();
-        time::sleep(time::Millis(150)).await;
-
-        assert_eq!(cnt.get(), 2);
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+        time::sleep(time::Millis(50)).await;
+        assert_eq!(cnt.get(), 1);
         assert_eq!(&*data.borrow(), &["srv1"]);
 
+        // set un-ready
         con.notify();
-        time::sleep(time::Millis(150)).await;
-
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Pending);
         assert_eq!(cnt.get(), 2);
+
+        // set ready
+        con.notify();
+        let res = lazy(|cx| rd.poll_ready(cx)).await;
+        assert_eq!(res, Poll::Ready(Ok(())));
+        time::sleep(time::Millis(50)).await;
         assert_eq!(&*data.borrow(), &["srv1", "srv2"]);
     }
 }

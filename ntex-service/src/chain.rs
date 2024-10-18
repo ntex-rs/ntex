@@ -172,6 +172,7 @@ impl<Svc: Service<Req>, Req> Service<Req> for ServiceChain<Svc, Req> {
     type Error = Svc::Error;
 
     crate::forward_ready!(service);
+    crate::forward_unready!(service);
     crate::forward_shutdown!(service);
 
     #[inline]

@@ -59,3 +59,23 @@ where
     })
     .await
 }
+
+pub(crate) async fn unready<A, AR, B, BR>(svc1: &A, svc2: &B) -> Result<(), A::Error>
+where
+    A: Service<AR>,
+    B: Service<BR, Error = A::Error>,
+{
+    let mut fut1 = pin::pin!(svc1.unready());
+    let mut fut2 = pin::pin!(svc2.unready());
+
+    poll_fn(move |cx| {
+        if pin::Pin::new(&mut fut1).poll(cx)?.is_ready()
+            || pin::Pin::new(&mut fut2).poll(cx)?.is_ready()
+        {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}

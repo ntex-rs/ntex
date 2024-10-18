@@ -68,6 +68,11 @@ where
     }
 
     #[inline]
+    async fn unready(&self) -> Result<(), Self::Error> {
+        self.service.unready().await.map_err(&self.f)
+    }
+
+    #[inline]
     async fn call(
         &self,
         req: R,

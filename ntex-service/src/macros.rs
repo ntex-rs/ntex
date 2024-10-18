@@ -23,6 +23,20 @@ macro_rules! forward_ready {
     };
 }
 
+/// An implementation of [`unready`] that forwards unready checks to a field.
+#[macro_export]
+macro_rules! forward_unready {
+    ($field:ident) => {
+        #[inline]
+        async fn unready(&self) -> Result<(), Self::Error> {
+            self.$field
+                .unready()
+                .await
+                .map_err(::core::convert::Into::into)
+        }
+    };
+}
+
 /// An implementation of [`shutdown`] that forwards shutdown checks to a field.
 #[macro_export]
 macro_rules! forward_shutdown {
