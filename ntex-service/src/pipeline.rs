@@ -346,6 +346,9 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         let mut slf = self.as_mut();
 
+        // register pipeline tag
+        slf.pl.waiters.register_pipeline(cx);
+
         if slf.pl.waiters.can_check(cx) {
             if let Some(ref mut fut) = slf.fut {
                 match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
