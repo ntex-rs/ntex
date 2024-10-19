@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, pin::Pin};
+use std::{fmt, future::Future, pin::Pin, rc::Rc};
 
 use crate::ctx::{ServiceCtx, WaitersRef};
 
@@ -51,14 +51,14 @@ trait ServiceObj<Req> {
     fn ready<'a>(
         &'a self,
         idx: usize,
-        waiters: &'a WaitersRef,
+        waiters: &'a Rc<WaitersRef>,
     ) -> BoxFuture<'a, (), Self::Error>;
 
     fn call<'a>(
         &'a self,
         req: Req,
         idx: usize,
-        waiters: &'a WaitersRef,
+        waiters: &'a Rc<WaitersRef>,
     ) -> BoxFuture<'a, Self::Response, Self::Error>;
 
     fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
@@ -76,7 +76,7 @@ where
     fn ready<'a>(
         &'a self,
         idx: usize,
-        waiters: &'a WaitersRef,
+        waiters: &'a Rc<WaitersRef>,
     ) -> BoxFuture<'a, (), Self::Error> {
         Box::pin(async move {
             ServiceCtx::<'a, S>::from_ref(idx, waiters)
@@ -95,7 +95,7 @@ where
         &'a self,
         req: Req,
         idx: usize,
-        waiters: &'a WaitersRef,
+        waiters: &'a Rc<WaitersRef>,
     ) -> BoxFuture<'a, Self::Response, Self::Error> {
         Box::pin(async move {
             ServiceCtx::<'a, S>::from_ref(idx, waiters)
