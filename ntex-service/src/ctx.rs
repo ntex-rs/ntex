@@ -43,6 +43,7 @@ impl WaitersRef {
     }
 
     fn remove(&self, idx: usize) {
+        self.notify();
         self.get().remove(idx);
     }
 

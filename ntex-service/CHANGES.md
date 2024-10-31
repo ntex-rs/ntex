@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.1] - 2024-10-31
+
+* Fix shared readiness notification
+
 ## [3.2.0] - 2024-10-19
 
 * Introduce `PipelineTag`, which allows to notify pipeline binding
