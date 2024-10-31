@@ -9,14 +9,7 @@ use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteContextBu
 impl IoStream for crate::TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0.clone();
-        compio::runtime::spawn(async move {
-            run(io.clone(), &read, write).await;
-            match io.close().await {
-                Ok(_) => log::debug!("{} Stream is closed", read.tag()),
-                Err(e) => log::error!("{} Stream is closed, {:?}", read.tag(), e),
-            }
-        })
-        .detach();
+        compio::runtime::spawn(async move { run(io.clone(), &read, write).await }).detach();
 
         Some(Box::new(HandleWrapper(self.0)))
     }
@@ -25,14 +18,8 @@ impl IoStream for crate::TcpStream {
 #[cfg(unix)]
 impl IoStream for crate::UnixStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        compio::runtime::spawn(async move {
-            run(self.0.clone(), &read, write).await;
-            match self.0.close().await {
-                Ok(_) => log::debug!("{} Unix stream is closed", read.tag()),
-                Err(e) => log::error!("{} Unix stream is closed, {:?}", read.tag(), e),
-            }
-        })
-        .detach();
+        compio::runtime::spawn(async move { run(self.0.clone(), &read, write).await })
+            .detach();
 
         None
     }

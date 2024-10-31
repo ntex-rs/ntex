@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.1] - 2024-10-31
+
+* It's not required to close compio sockets explicitly #444
+
 ## [0.2.0] - 2024-09-24
 
 * Update to compio v0.12
