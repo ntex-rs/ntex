@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 slab = "0.4"
 bitflags = "2"
+pin-project-lite = "0.2"
 
 [dev-dependencies]
 ntex = "2"

@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomData};
+use std::{fmt, future::Future, marker::PhantomData};
 
 use super::{Service, ServiceCtx, ServiceFactory};
 
@@ -63,13 +63,11 @@ where
     type Error = E;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        ctx.ready(&self.service).await.map_err(&self.f)
-    }
-
-    #[inline]
-    async fn unready(&self) -> Result<(), Self::Error> {
-        self.service.unready().await.map_err(&self.f)
+    async fn ready(&self) -> Option<impl Future<Output = Result<(), E>>> {
+        self.service
+            .ready()
+            .await
+            .map(|fut| async move { fut.await.map_err(&self.f) })
     }
 
     #[inline]

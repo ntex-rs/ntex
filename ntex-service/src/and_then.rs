@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use super::{util, Service, ServiceCtx, ServiceFactory};
 
 #[derive(Clone, Debug)]
@@ -26,13 +28,8 @@ where
     type Error = A::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        util::ready(&self.svc1, &self.svc2, ctx).await
-    }
-
-    #[inline]
-    async fn unready(&self) -> Result<(), Self::Error> {
-        util::unready(&self.svc1, &self.svc2).await
+    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+        util::ready(&self.svc1, &self.svc2).await
     }
 
     #[inline]

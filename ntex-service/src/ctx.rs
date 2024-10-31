@@ -5,7 +5,6 @@ use crate::Service;
 
 pub struct ServiceCtx<'a, S: ?Sized> {
     idx: u32,
-    bound: bool,
     waiters: &'a WaitersRef,
     _t: marker::PhantomData<Rc<S>>,
 }
@@ -76,6 +75,10 @@ impl WaitersRef {
 
     pub(crate) fn is_ready(&self) -> bool {
         self.state.get().contains(Flags::READY)
+    }
+
+    pub(crate) fn is_bound(&self) -> bool {
+        self.state.get().contains(Flags::BOUND)
     }
 
     pub(crate) fn bind(&self) {
@@ -168,32 +171,21 @@ impl<'a, S> ServiceCtx<'a, S> {
     pub(crate) fn new(waiters: &'a Waiters) -> Self {
         Self {
             idx: waiters.index,
-            bound: false,
             waiters: waiters.get_ref(),
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn new_bound(waiters: &'a Waiters) -> Self {
-        Self {
-            idx: waiters.index,
-            bound: true,
-            waiters: waiters.get_ref(),
-            _t: marker::PhantomData,
-        }
-    }
-
-    pub(crate) fn from_ref(idx: u32, bound: bool, waiters: &'a WaitersRef) -> Self {
+    pub(crate) fn from_ref(idx: u32, waiters: &'a WaitersRef) -> Self {
         Self {
             idx,
-            bound,
             waiters,
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn inner(self) -> (u32, bool, &'a WaitersRef) {
-        (self.idx, self.bound, self.waiters)
+    pub(crate) fn inner(self) -> (u32, &'a WaitersRef) {
+        (self.idx, self.waiters)
     }
 
     /// Mark service as un-ready, force readiness re-evaluation for pipeline
@@ -205,36 +197,23 @@ impl<'a, S> ServiceCtx<'a, S> {
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<T, R>(&self, svc: &'a T) -> Result<(), T::Error>
+    pub async fn check_readiness<T, R>(&self, svc: &'a T) -> Result<(), T::Error>
     where
         T: Service<R>,
     {
-        if self.bound {
-            svc.ready(ServiceCtx {
-                idx: self.idx,
-                bound: true,
-                waiters: self.waiters,
-                _t: marker::PhantomData,
-            })
-            .await
+        // active readiness
+        if self.waiters.is_ready() {
+            Ok(())
         } else {
-            // active readiness
-            if self.waiters.is_ready() {
-                Ok(())
-            } else {
-                // check readiness and notify waiters
-                ReadyCall {
-                    completed: false,
-                    fut: svc.ready(ServiceCtx {
-                        idx: self.idx,
-                        bound: false,
-                        waiters: self.waiters,
-                        _t: marker::PhantomData,
-                    }),
-                    ctx: *self,
-                }
-                .await
+            // check readiness and notify waiters
+            ReadyCall {
+                fut: Some(svc.ready()),
+                fut1: None,
+                ctx: *self,
+                completed: false,
+                _t: marker::PhantomData,
             }
+            .await
         }
     }
 
@@ -245,13 +224,12 @@ impl<'a, S> ServiceCtx<'a, S> {
         T: Service<R>,
         R: 'a,
     {
-        self.ready(svc).await?;
+        self.check_readiness(svc).await?;
 
         svc.call(
             req,
             ServiceCtx {
                 idx: self.idx,
-                bound: false,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             },
@@ -274,7 +252,6 @@ impl<'a, S> ServiceCtx<'a, S> {
             req,
             ServiceCtx {
                 idx: self.idx,
-                bound: false,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             },
@@ -301,26 +278,35 @@ impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
     }
 }
 
-struct ReadyCall<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> {
+struct ReadyCall<'a, S: ?Sized, F: Future<Output = Option<R>>, E, R> {
     completed: bool,
-    fut: F,
+    fut: Option<F>,
+    fut1: Option<R>,
     ctx: ServiceCtx<'a, S>,
+    _t: marker::PhantomData<(R, E)>,
 }
 
-impl<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> Drop for ReadyCall<'a, S, F, E> {
+impl<'a, S: ?Sized, F: Future<Output = Option<R>>, E, R> Drop
+    for ReadyCall<'a, S, F, E, R>
+{
     fn drop(&mut self) {
-        if !self.completed && !self.ctx.waiters.state.get().contains(Flags::BOUND) {
+        if !self.completed && !self.ctx.waiters.is_bound() {
             self.ctx.waiters.notify();
         }
     }
 }
 
-impl<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> Unpin for ReadyCall<'a, S, F, E> {}
-
-impl<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> Future
-    for ReadyCall<'a, S, F, E>
+impl<'a, S: ?Sized, F: Future<Output = Option<R>>, E, R> Unpin
+    for ReadyCall<'a, S, F, E, R>
 {
-    type Output = F::Output;
+}
+
+impl<'a, S: ?Sized, F: Future<Output = Option<R>>, E, R> Future
+    for ReadyCall<'a, S, F, E, R>
+where
+    R: Future<Output = Result<(), E>>,
+{
+    type Output = Result<(), E>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let st = self.ctx.waiters.state.get();
@@ -333,17 +319,36 @@ impl<'a, S: ?Sized, F: Future<Output = Result<(), E>>, E> Future
             }
         } else if self.ctx.waiters.can_check(self.ctx.idx, cx) {
             // SAFETY: `fut` never moves
-            let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
-            match result {
-                Poll::Pending => {
-                    self.ctx.waiters.register(self.ctx.idx, cx);
-                    Poll::Pending
+            if let Some(ref mut fut) = self.as_mut().fut {
+                let result = unsafe { Pin::new_unchecked(fut).poll(cx) };
+                match result {
+                    Poll::Pending => {
+                        self.ctx.waiters.register(self.ctx.idx, cx);
+                        return Poll::Pending;
+                    }
+                    Poll::Ready(res) => {
+                        self.fut1 = res;
+                        let _ = self.fut.take();
+                    }
                 }
-                Poll::Ready(res) => {
-                    self.completed = true;
-                    self.ctx.waiters.notify();
-                    Poll::Ready(res)
+            }
+
+            if let Some(ref mut fut) = self.as_mut().fut1 {
+                match unsafe { Pin::new_unchecked(fut).poll(cx) } {
+                    Poll::Pending => {
+                        self.ctx.waiters.register(self.ctx.idx, cx);
+                        Poll::Pending
+                    }
+                    Poll::Ready(res) => {
+                        self.completed = true;
+                        self.ctx.waiters.notify();
+                        Poll::Ready(res)
+                    }
                 }
+            } else {
+                self.completed = true;
+                self.ctx.waiters.notify();
+                Poll::Ready(Ok(()))
             }
         } else {
             Poll::Pending
@@ -369,11 +374,6 @@ mod tests {
 
         async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
-            self.1.ready().await;
-            Ok(())
-        }
-
-        async fn unready(&self) -> Result<(), Self::Error> {
             self.1.ready().await;
             Ok(())
         }

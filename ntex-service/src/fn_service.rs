@@ -135,11 +135,6 @@ where
     type Error = Err;
 
     #[inline]
-    async fn unready(&self) -> Result<(), Self::Error> {
-        std::future::pending().await
-    }
-
-    #[inline]
     async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
         (self.f)(req).await
     }
@@ -211,11 +206,6 @@ where
 {
     type Response = Res;
     type Error = Err;
-
-    #[inline]
-    async fn unready(&self) -> Result<(), Self::Error> {
-        std::future::pending().await
-    }
 
     #[inline]
     async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {

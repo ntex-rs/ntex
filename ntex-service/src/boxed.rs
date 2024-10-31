@@ -3,6 +3,7 @@ use std::{fmt, future::Future, pin::Pin};
 use crate::ctx::{ServiceCtx, WaitersRef};
 
 type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
+type BoxFutureOne<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 pub struct BoxService<Req, Res, Err>(Box<dyn ServiceObj<Req, Response = Res, Error = Err>>);
 pub struct BoxServiceFactory<Cfg, Req, Res, Err, InitErr>(
     Box<dyn ServiceFactoryObj<Req, Cfg, Response = Res, Error = Err, InitError = InitErr>>,
@@ -48,14 +49,7 @@ trait ServiceObj<Req> {
     type Response;
     type Error;
 
-    fn ready<'a>(
-        &'a self,
-        idx: u32,
-        bound: bool,
-        waiters: &'a WaitersRef,
-    ) -> BoxFuture<'a, (), Self::Error>;
-
-    fn unready(&self) -> BoxFuture<'_, (), Self::Error>;
+    fn ready<'a>(&'a self) -> BoxFutureOne<'a, Option<BoxFuture<'a, (), Self::Error>>>;
 
     fn call<'a>(
         &'a self,
@@ -76,22 +70,15 @@ where
     type Error = S::Error;
 
     #[inline]
-    fn ready<'a>(
-        &'a self,
-        idx: u32,
-        bound: bool,
-        waiters: &'a WaitersRef,
-    ) -> BoxFuture<'a, (), Self::Error> {
+    fn ready<'a>(&'a self) -> BoxFutureOne<'a, Option<BoxFuture<'a, (), Self::Error>>> {
         Box::pin(async move {
-            ServiceCtx::<'a, S>::from_ref(idx, bound, waiters)
-                .ready(self)
-                .await
+            if let Some(fut) = self.ready().await {
+                let r: BoxFuture<'a, (), Self::Error> = Box::pin(fut);
+                Some(r)
+            } else {
+                None
+            }
         })
-    }
-
-    #[inline]
-    fn unready(&self) -> BoxFuture<'_, (), Self::Error> {
-        Box::pin(crate::Service::unready(self))
     }
 
     #[inline]
@@ -107,7 +94,7 @@ where
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, Self::Response, Self::Error> {
         Box::pin(async move {
-            ServiceCtx::<'a, S>::from_ref(idx, false, waiters)
+            ServiceCtx::<'a, S>::from_ref(idx, waiters)
                 .call_nowait(self, req)
                 .await
         })
@@ -159,14 +146,8 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        let (idx, bound, waiters) = ctx.inner();
-        self.0.ready(idx, bound, waiters).await
-    }
-
-    #[inline]
-    async fn unready(&self) -> Result<(), Self::Error> {
-        self.0.unready().await
+    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+        self.0.ready().await
     }
 
     #[inline]
@@ -176,7 +157,7 @@ where
 
     #[inline]
     async fn call(&self, req: Req, ctx: ServiceCtx<'_, Self>) -> Result<Res, Err> {
-        let (idx, _, waiters) = ctx.inner();
+        let (idx, waiters) = ctx.inner();
         self.0.call(req, idx, waiters).await
     }
 }

@@ -30,25 +30,13 @@ impl<S> Pipeline<S> {
 
     #[inline]
     /// Returns when the service is able to process requests.
-    pub async fn ready<R>(&self) -> Result<(), S::Error>
+    pub async fn ready<R>(
+        &self,
+    ) -> Option<impl Future<Output = Result<(), S::Error>> + use<'_, S, R>>
     where
         S: Service<R>,
     {
-        ServiceCtx::<'_, S>::new(&self.waiters)
-            .ready(self.svc.as_ref())
-            .await
-    }
-
-    #[inline]
-    /// Returns when the service is able to process requests.
-    pub async fn unready<R>(&self) -> Result<(), S::Error>
-    where
-        S: Service<R>,
-    {
-        self.waiters.set_ready();
-        let result = self.svc.unready().await;
-        self.waiters.set_notready();
-        result
+        self.svc.as_ref().ready().await
     }
 
     #[inline]
@@ -61,7 +49,7 @@ impl<S> Pipeline<S> {
         let ctx = ServiceCtx::<'_, S>::new(&self.waiters);
 
         // check service readiness
-        ctx.ready(self.svc.as_ref()).await?;
+        ctx.check_readiness(self.svc.as_ref()).await?;
 
         // call service
         self.svc.as_ref().call(req, ctx).await
@@ -168,10 +156,15 @@ where
 
         let fut = Box::pin(async move {
             loop {
-                pl.svc
-                    .ready(ServiceCtx::<'_, S>::new_bound(&pl.waiters))
-                    .await?;
-                pl.unready().await?;
+                if let Some(fut) = pl.svc.ready().await {
+                    pl.waiters.set_ready();
+                    let result = fut.await;
+                    pl.waiters.set_notready();
+                    result?
+                } else {
+                    pl.waiters.set_ready();
+                    std::future::pending().await
+                }
             }
         });
 

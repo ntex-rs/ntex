@@ -100,13 +100,11 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Err> {
-        self.service.ready().await.map_err(From::from)
-    }
-
-    #[inline]
-    async fn unready(&self) -> Result<(), Err> {
-        self.service.unready().await.map_err(From::from)
+    async fn ready(&self) -> Option<impl Future<Output = Result<(), Err>>> {
+        self.service
+            .ready()
+            .await
+            .map(|fut| async move { fut.await.map_err(From::from) })
     }
 
     #[inline]

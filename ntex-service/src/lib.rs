@@ -1,12 +1,12 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
 #![allow(async_fn_in_trait)]
-#![deny(
-    rust_2018_idioms,
-    warnings,
-    unreachable_pub,
-    missing_debug_implementations
-)]
-use std::rc::Rc;
+// #![deny(
+//     rust_2018_idioms,
+//     warnings,
+//     unreachable_pub,
+//     missing_debug_implementations
+// )]
+use std::{future::Future, rc::Rc};
 
 mod and_then;
 mod apply;
@@ -114,14 +114,8 @@ pub trait Service<Req> {
     /// This is a **best effort** implementation. False positives are permitted. It is permitted for
     /// the service to returns from a `ready` call and the next invocation of `call`
     /// results in an error.
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    /// Returns when the service becomes un-ready and not able to process requests.
-    ///
-    async fn unready(&self) -> Result<(), Self::Error> {
-        std::future::pending().await
+    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+        None::<util::Ready<Self::Error>>
     }
 
     #[inline]
@@ -248,13 +242,8 @@ where
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
-        ctx.ready(&**self).await
-    }
-
-    #[inline]
-    async fn unready(&self) -> Result<(), S::Error> {
-        (**self).unready().await
+    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+        (&**self).ready().await
     }
 
     #[inline]
@@ -280,13 +269,8 @@ where
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
-        ctx.ready(&**self).await
-    }
-
-    #[inline]
-    async fn unready(&self) -> Result<(), S::Error> {
-        (**self).unready().await
+    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+        (&**self).ready().await
     }
 
     #[inline]
