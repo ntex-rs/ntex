@@ -191,7 +191,7 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_clone)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, future::Future, rc::Rc};
 
     use super::*;
     use crate::{fn_service, Pipeline, ServiceCtx};
@@ -214,8 +214,8 @@ mod tests {
         type Response = S::Response;
         type Error = S::Error;
 
-        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-            ctx.ready(&self.0).await
+        async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+            self.0.ready().await
         }
 
         async fn call(
@@ -245,8 +245,8 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{:?} {:?}", factory, srv);
+        let _ = srv.ready().await;
 
-        assert_eq!(srv.ready().await, Ok(()));
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
@@ -261,6 +261,6 @@ mod tests {
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{:?} {:?}", factory, srv);
 
-        assert_eq!(srv.ready().await, Ok(()));
+        let _ = srv.ready().await;
     }
 }

@@ -173,12 +173,15 @@ mod tests {
         type Response = ();
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-            if self.0 {
-                Err(())
-            } else {
-                Ok(())
-            }
+        async fn ready(&self) -> Option<impl Future<Output = Result<(), ()>>> {
+            Some(async move {
+                if self.0 {
+                    Err(())
+                } else {
+                    std::future::pending::<()>().await;
+                    Ok(())
+                }
+            })
         }
 
         async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
@@ -194,7 +197,8 @@ mod tests {
     async fn test_ready() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = Pipeline::new(Srv(true, cnt_sht.clone()).map_err(|_| "error"));
-        let res = srv.ready().await;
+        let ready = srv.ready().await;
+        let res = ready.unwrap().await;
         assert_eq!(res, Err("error"));
 
         srv.shutdown().await;

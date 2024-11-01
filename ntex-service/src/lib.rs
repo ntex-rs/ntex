@@ -1,38 +1,43 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
-#![allow(async_fn_in_trait)]
+#![allow(async_fn_in_trait, dead_code)]
 // #![deny(
 //     rust_2018_idioms,
 //     warnings,
 //     unreachable_pub,
 //     missing_debug_implementations
 // )]
-use std::{future::Future, rc::Rc};
+use std::rc::Rc;
 
-mod and_then;
-mod apply;
-pub mod boxed;
-mod chain;
+//mod and_then;
+//mod apply;
+//pub mod boxed;
+//mod chain;
 mod ctx;
-mod fn_service;
-mod fn_shutdown;
-mod macros;
-mod map;
-mod map_config;
-mod map_err;
-mod map_init_err;
-mod middleware;
-mod pipeline;
-mod then;
-mod util;
+//mod fn_service;
+//mod fn_shutdown;
+//mod macros;
+//mod map;
+//mod map_config;
+//mod map_err;
+//mod map_init_err;
+//mod middleware;
+//mod pipeline;
+//mod then;
+//mod util;
 
-pub use self::apply::{apply_fn, apply_fn_factory};
-pub use self::chain::{chain, chain_factory};
+//pub use self::apply::{apply_fn, apply_fn_factory};
+//pub use self::chain::{chain, chain_factory};
 pub use self::ctx::ServiceCtx;
-pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
-pub use self::fn_shutdown::fn_shutdown;
-pub use self::map_config::{map_config, unit_config};
-pub use self::middleware::{apply, Identity, Middleware, Stack};
-pub use self::pipeline::{Pipeline, PipelineCall, Readiness};
+//pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
+//pub use self::fn_shutdown::fn_shutdown;
+//pub use self::map_config::{map_config, unit_config};
+//pub use self::middleware::{apply, Identity, Middleware, Stack};
+//pub use self::pipeline::{Pipeline, PipelineCall, Readiness};
+
+pub enum ServiceState {
+    Ready,
+    NotReady,
+}
 
 #[allow(unused_variables)]
 /// An asynchronous function of `Request` to a `Response`.
@@ -114,8 +119,15 @@ pub trait Service<Req> {
     /// This is a **best effort** implementation. False positives are permitted. It is permitted for
     /// the service to returns from a `ready` call and the next invocation of `call`
     /// results in an error.
-    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
-        None::<util::Ready<Self::Error>>
+    async fn ready(&self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    async fn state(&self, st: ServiceState) -> Result<ServiceState, Self::Error> {
+        match st {
+            ServiceState::Ready => std::future::pending().await,
+            ServiceState::NotReady => Ok(ServiceState::Ready)
+        }
     }
 
     #[inline]
@@ -124,37 +136,37 @@ pub trait Service<Req> {
     /// Returns when the service is properly shutdowns.
     async fn shutdown(&self) {}
 
-    #[inline]
-    /// Map this service's output to a different type, returning a new service of the resulting type.
-    ///
-    /// This function is similar to the `Option::map` or `Iterator::map` where it will change
-    /// the type of the underlying service.
-    ///
-    /// Note that this function consumes the receiving service and returns a wrapped version of it,
-    /// similar to the existing `map` methods in the standard library.
-    fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Req, Res>, Req>
-    where
-        Self: Sized,
-        F: Fn(Self::Response) -> Res,
-    {
-        chain(dev::Map::new(self, f))
-    }
+    // #[inline]
+    // /// Map this service's output to a different type, returning a new service of the resulting type.
+    // ///
+    // /// This function is similar to the `Option::map` or `Iterator::map` where it will change
+    // /// the type of the underlying service.
+    // ///
+    // /// Note that this function consumes the receiving service and returns a wrapped version of it,
+    // /// similar to the existing `map` methods in the standard library.
+    // fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Req, Res>, Req>
+    // where
+    //     Self: Sized,
+    //     F: Fn(Self::Response) -> Res,
+    // {
+    //     chain(dev::Map::new(self, f))
+    // }
 
-    #[inline]
-    /// Map this service's error to a different error, returning a new service.
-    ///
-    /// This function is similar to the `Result::map_err` where it will change the error type of
-    /// the underlying service. This is useful for example to ensure that services have the same
-    /// error type.
-    ///
-    /// Note that this function consumes the receiving service and returns a wrapped version of it.
-    fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>, Req>
-    where
-        Self: Sized,
-        F: Fn(Self::Error) -> E,
-    {
-        chain(dev::MapErr::new(self, f))
-    }
+    // #[inline]
+    // /// Map this service's error to a different error, returning a new service.
+    // ///
+    // /// This function is similar to the `Result::map_err` where it will change the error type of
+    // /// the underlying service. This is useful for example to ensure that services have the same
+    // /// error type.
+    // ///
+    // /// Note that this function consumes the receiving service and returns a wrapped version of it.
+    // fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>, Req>
+    // where
+    //     Self: Sized,
+    //     F: Fn(Self::Error) -> E,
+    // {
+    //     chain(dev::MapErr::new(self, f))
+    // }
 }
 
 /// Factory for creating `Service`s.
@@ -184,109 +196,109 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     /// Create and return a new service value asynchronously.
     async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError>;
 
-    #[inline]
-    /// Create and return a new service value asynchronously and wrap into a container
-    async fn pipeline(&self, cfg: Cfg) -> Result<Pipeline<Self::Service>, Self::InitError>
-    where
-        Self: Sized,
-    {
-        Ok(Pipeline::new(self.create(cfg).await?))
-    }
+    // #[inline]
+    // /// Create and return a new service value asynchronously and wrap into a container
+    // async fn pipeline(&self, cfg: Cfg) -> Result<Pipeline<Self::Service>, Self::InitError>
+    // where
+    //     Self: Sized,
+    // {
+    //     Ok(Pipeline::new(self.create(cfg).await?))
+    // }
 
-    #[inline]
-    /// Map this service's output to a different type, returning a new service
-    /// of the resulting type.
-    fn map<F, Res>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, Req, Res, Cfg>, Req, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::Response) -> Res + Clone,
-    {
-        chain_factory(dev::MapFactory::new(self, f))
-    }
+    // #[inline]
+    // /// Map this service's output to a different type, returning a new service
+    // /// of the resulting type.
+    // fn map<F, Res>(
+    //     self,
+    //     f: F,
+    // ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, Req, Res, Cfg>, Req, Cfg>
+    // where
+    //     Self: Sized,
+    //     F: Fn(Self::Response) -> Res + Clone,
+    // {
+    //     chain_factory(dev::MapFactory::new(self, f))
+    // }
 
-    #[inline]
-    /// Map this service's error to a different error, returning a new service.
-    fn map_err<F, E>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, Req, Cfg, F, E>, Req, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::Error) -> E + Clone,
-    {
-        chain_factory(dev::MapErrFactory::new(self, f))
-    }
+    // #[inline]
+    // /// Map this service's error to a different error, returning a new service.
+    // fn map_err<F, E>(
+    //     self,
+    //     f: F,
+    // ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, Req, Cfg, F, E>, Req, Cfg>
+    // where
+    //     Self: Sized,
+    //     F: Fn(Self::Error) -> E + Clone,
+    // {
+    //     chain_factory(dev::MapErrFactory::new(self, f))
+    // }
 
-    #[inline]
-    /// Map this factory's init error to a different error, returning a new service.
-    fn map_init_err<F, E>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, Req, Cfg, F, E>, Req, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::InitError) -> E + Clone,
-    {
-        chain_factory(dev::MapInitErr::new(self, f))
-    }
+    // #[inline]
+    // /// Map this factory's init error to a different error, returning a new service.
+    // fn map_init_err<F, E>(
+    //     self,
+    //     f: F,
+    // ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, Req, Cfg, F, E>, Req, Cfg>
+    // where
+    //     Self: Sized,
+    //     F: Fn(Self::InitError) -> E + Clone,
+    // {
+    //     chain_factory(dev::MapInitErr::new(self, f))
+    // }
 }
 
-impl<'a, S, Req> Service<Req> for &'a S
-where
-    S: Service<Req>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
+// impl<'a, S, Req> Service<Req> for &'a S
+// where
+//     S: Service<Req>,
+// {
+//     type Response = S::Response;
+//     type Error = S::Error;
 
-    #[inline]
-    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
-        (&**self).ready().await
-    }
+//     #[inline]
+//     async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+//         (&**self).ready().await
+//     }
 
-    #[inline]
-    async fn shutdown(&self) {
-        (**self).shutdown().await
-    }
+//     #[inline]
+//     async fn shutdown(&self) {
+//         (**self).shutdown().await
+//     }
 
-    #[inline]
-    async fn call(
-        &self,
-        request: Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        ctx.call_nowait(&**self, request).await
-    }
-}
+//     #[inline]
+//     async fn call(
+//         &self,
+//         request: Req,
+//         ctx: ServiceCtx<'_, Self>,
+//     ) -> Result<Self::Response, Self::Error> {
+//         ctx.call_nowait(&**self, request).await
+//     }
+// }
 
-impl<S, Req> Service<Req> for Box<S>
-where
-    S: Service<Req>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
+// impl<S, Req> Service<Req> for Box<S>
+// where
+//     S: Service<Req>,
+// {
+//     type Response = S::Response;
+//     type Error = S::Error;
 
-    #[inline]
-    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
-        (&**self).ready().await
-    }
+//     #[inline]
+//     async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+//         (&**self).ready().await
+//     }
 
-    #[inline]
-    async fn shutdown(&self) {
-        (**self).shutdown().await
-    }
+//     #[inline]
+//     async fn shutdown(&self) {
+//         (**self).shutdown().await
+//     }
 
-    #[inline]
-    async fn call(
-        &self,
-        request: Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        ctx.call_nowait(&**self, request).await
-    }
-}
+//     #[inline]
+//     async fn call(
+//         &self,
+//         request: Req,
+//         ctx: ServiceCtx<'_, Self>,
+//     ) -> Result<Self::Response, Self::Error> {
+//         ctx.call_nowait(&**self, request).await
+//     }
+// }
 
 impl<S, Req, Cfg> ServiceFactory<Req, Cfg> for Rc<S>
 where
@@ -340,18 +352,18 @@ where
     }
 }
 
-pub mod dev {
-    pub use crate::and_then::{AndThen, AndThenFactory};
-    pub use crate::apply::{Apply, ApplyFactory};
-    pub use crate::chain::{ServiceChain, ServiceChainFactory};
-    pub use crate::fn_service::{
-        FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
-    };
-    pub use crate::fn_shutdown::FnShutdown;
-    pub use crate::map::{Map, MapFactory};
-    pub use crate::map_config::{MapConfig, UnitConfig};
-    pub use crate::map_err::{MapErr, MapErrFactory};
-    pub use crate::map_init_err::MapInitErr;
-    pub use crate::middleware::ApplyMiddleware;
-    pub use crate::then::{Then, ThenFactory};
-}
+// pub mod dev {
+//     pub use crate::and_then::{AndThen, AndThenFactory};
+//     pub use crate::apply::{Apply, ApplyFactory};
+//     pub use crate::chain::{ServiceChain, ServiceChainFactory};
+//     pub use crate::fn_service::{
+//         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
+//     };
+//     pub use crate::fn_shutdown::FnShutdown;
+//     pub use crate::map::{Map, MapFactory};
+//     pub use crate::map_config::{MapConfig, UnitConfig};
+//     pub use crate::map_err::{MapErr, MapErrFactory};
+//     pub use crate::map_init_err::MapInitErr;
+//     pub use crate::middleware::ApplyMiddleware;
+//     pub use crate::then::{Then, ThenFactory};
+// }

@@ -252,12 +252,11 @@ mod tests {
         )
         .into_pipeline();
 
-        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
-
+        let _ = srv.ready().await;
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
-        let res = srv.call("srv").await;
+        let res: Result<_, ()> = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
     }
@@ -273,12 +272,11 @@ mod tests {
             .clone()
             .into_pipeline();
 
-        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
-
+        let _ = srv.ready().await;
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
-        let res = srv.call("srv").await;
+        let res: Result<_, ()> = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{:?}", srv);
@@ -299,9 +297,8 @@ mod tests {
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
-        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
-
-        let res = srv.call("srv").await;
+        let _ = srv.ready().await;
+        let res: Result<_, ()> = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{:?}", new_srv);
@@ -319,10 +316,9 @@ mod tests {
             .clone();
 
         let srv = new_srv.pipeline(&()).await.unwrap();
+        let _ = srv.ready().await;
 
-        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
-
-        let res = srv.call("srv").await;
+        let res: Result<_, ()> = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{:?}", new_srv);

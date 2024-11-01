@@ -94,7 +94,7 @@ where
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, Self::Response, Self::Error> {
         Box::pin(async move {
-            ServiceCtx::<'a, S>::from_ref(idx, waiters)
+            ServiceCtx::<'a, S>::new(idx, waiters)
                 .call_nowait(self, req)
                 .await
         })

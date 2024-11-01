@@ -384,7 +384,7 @@ mod tests {
 
         let srv = Pipeline::new(new_srv.create(()).await.unwrap());
         let res = srv.call(()).await;
-        assert_eq!(srv.ready().await, Ok(()));
+        let _ = srv.ready().await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         let _ = format!("{:?}", srv);
@@ -410,7 +410,7 @@ mod tests {
         );
 
         let res = srv.call(()).await;
-        assert_eq!(srv.ready().await, Ok(()));
+        let _ = srv.ready().await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "srv");
         assert_eq!(srv.shutdown().await, ());

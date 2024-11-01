@@ -88,7 +88,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, future::Future, rc::Rc};
 
     use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
 
@@ -99,9 +99,9 @@ mod tests {
         type Response = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
             self.0.set(self.0.get() + 1);
-            Ok(())
+            Some(std::future::pending())
         }
 
         async fn call(
@@ -127,9 +127,9 @@ mod tests {
         type Response = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
             self.0.set(self.0.get() + 1);
-            Ok(())
+            Some(std::future::pending())
         }
 
         async fn call(
@@ -155,8 +155,7 @@ mod tests {
         let srv = chain(Srv1(cnt.clone(), cnt_sht.clone()))
             .then(Srv2(cnt.clone(), cnt_sht.clone()))
             .into_pipeline();
-        let res = srv.ready().await;
-        assert_eq!(res, Ok(()));
+        let _ = srv.ready().await;
         assert_eq!(cnt.get(), 2);
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
@@ -181,6 +180,8 @@ mod tests {
 
     #[ntex::test]
     async fn test_factory() {
+        let _ = env_logger::try_init();
+        println!("1--------------------------");
         let cnt = Rc::new(Cell::new(0));
         let cnt2 = cnt.clone();
         let blank = fn_factory(move || {
@@ -193,8 +194,11 @@ mod tests {
                 async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }
             }))
             .clone();
+        println!("2--------------------------");
         let srv = factory.pipeline(&()).await.unwrap();
+        println!("3--------------------------");
         let res = srv.call(Ok("srv1")).await;
+        println!("4--------------------------");
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));
 

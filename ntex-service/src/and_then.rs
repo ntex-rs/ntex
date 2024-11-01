@@ -85,7 +85,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, future::Future, rc::Rc};
 
     use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
 
@@ -96,9 +96,9 @@ mod tests {
         type Response = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
             self.0.set(self.0.get() + 1);
-            Ok(())
+            Some(std::future::pending())
         }
 
         async fn call(
@@ -121,9 +121,9 @@ mod tests {
         type Response = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
             self.0.set(self.0.get() + 1);
-            Ok(())
+            Some(std::future::pending())
         }
 
         async fn call(
@@ -149,8 +149,7 @@ mod tests {
                 .clone(),
         )
         .into_pipeline();
-        let res = srv.ready().await;
-        assert_eq!(res, Ok(()));
+        let _ = srv.ready().await;
         assert_eq!(cnt.get(), 2);
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
@@ -164,8 +163,7 @@ mod tests {
                 .and_then(Srv2(cnt.clone(), Rc::new(Cell::new(0)))),
         )
         .into_pipeline();
-        let res = srv.ready().await;
-        assert_eq!(res, Ok(()));
+        let _ = srv.ready().await;
         assert_eq!(cnt.get(), 2);
     }
 
