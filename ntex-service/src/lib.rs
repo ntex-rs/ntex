@@ -21,8 +21,8 @@ mod ctx;
 //mod map_err;
 //mod map_init_err;
 //mod middleware;
-//mod pipeline;
-//mod then;
+mod pipeline;
+mod then;
 //mod util;
 
 //pub use self::apply::{apply_fn, apply_fn_factory};
@@ -119,14 +119,14 @@ pub trait Service<Req> {
     /// This is a **best effort** implementation. False positives are permitted. It is permitted for
     /// the service to returns from a `ready` call and the next invocation of `call`
     /// results in an error.
-    async fn ready(&self) -> Result<(), Self::Error> {
-        Ok(())
-    }
-
-    async fn state(&self, st: ServiceState) -> Result<ServiceState, Self::Error> {
+    async fn state(
+        &self,
+        st: ServiceState,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
         match st {
-            ServiceState::Ready => std::future::pending().await,
-            ServiceState::NotReady => Ok(ServiceState::Ready)
+            ServiceState::Ready => Ok(()),
+            ServiceState::NotReady => std::future::pending().await,
         }
     }
 

@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
-use std::{fmt, future::poll_fn, future::Future, pin::Pin, rc::Rc};
+use std::{fmt, cell, future::Future, pin::Pin, rc::Rc};
 
-use crate::{ctx::WaitersRef, Service, ServiceCtx};
+use crate::{ctx::WaitersRef, Service, ServiceCtx, ServiceState};
 
 #[derive(Debug)]
 /// Container for a service.
@@ -30,10 +30,7 @@ impl<S> Pipeline<S> {
         let (index, waiters) = WaitersRef::new();
         Pipeline {
             index,
-            state: Rc::new(PipelineState {
-                svc,
-                waiters
-            })
+            state: Rc::new(PipelineState { svc, waiters }),
         }
     }
 
@@ -45,13 +42,13 @@ impl<S> Pipeline<S> {
 
     #[inline]
     /// Returns when the service is able to process requests.
-    pub async fn ready<R>(
-        &self,
-    ) -> Option<impl Future<Output = Result<(), S::Error>> + use<'_, S, R>>
+    pub async fn ready<R>(&self) -> Result<(), S::Error>
     where
         S: Service<R>,
     {
-        self.state.svc.ready().await
+        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
+            .ready(&self.state.svc)
+            .await
     }
 
     #[inline]
@@ -61,13 +58,9 @@ impl<S> Pipeline<S> {
     where
         S: Service<R>,
     {
-        let ctx = ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref());
-
-        // check service readiness
-        ctx.check_readiness(&self.state.svc).await?;
-
-        // call service
-        self.state.svc.call(req, ctx).await
+        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
+            .call(&self.state.svc, req)
+            .await
     }
 
     #[inline]
@@ -119,15 +112,13 @@ impl<S> Pipeline<S> {
     }
 
     #[inline]
-    /// Get readiness object for current pipeline.
-    ///
-    /// Panics if more that one `Readiness` instance get created
-    pub fn bind<R>(&self) -> Readiness<S, R>
+    /// Get current pipeline.
+    pub fn bind<R>(self) -> PipelineBinding<S, R>
     where
         S: Service<R> + 'static,
         R: 'static,
     {
-        Readiness::new(self.clone())
+        PipelineBinding::new(self)
     }
 }
 
@@ -163,66 +154,208 @@ impl<S> fmt::Debug for PipelineState<S> {
 }
 
 /// Bound container for a service.
-pub struct Readiness<S, R>
+pub struct PipelineBinding<S, R>
 where
     S: Service<R>,
 {
-    st: Rc<PipelineState<S>>,
-    fut: Pin<Box<dyn Future<Output = Result<(), S::Error>>>>,
+    pl: Pipeline<S>,
+    st: cell::UnsafeCell<State<S::Error>>,
 }
 
-impl<S, R> Readiness<S, R>
+enum State<E> {
+    New,
+    Readiness(Pin<Box<dyn Future<Output = Result<(), E>> + 'static>>),
+    Shutdown(Pin<Box<dyn Future<Output = ()> + 'static>>),
+}
+
+impl<S, R> PipelineBinding<S, R>
 where
     S: Service<R> + 'static,
     R: 'static,
 {
     fn new(pl: Pipeline<S>) -> Self {
-        let st = pl.state.clone();
-        let fut = Box::pin(async move {
-            println!("READINESS");
-            loop {
-                if let Some(fut) = pl.state.svc.ready().await {
-                    println!("ready");
-                    let result = fut.await;
-                    println!("not ready");
-                    result?
-                } else {
-                    println!("always ready");
-                    std::future::pending().await
-                }
-            }
-        });
-
-        Readiness { st, fut }
+        PipelineBinding {
+            pl,
+            st: cell::UnsafeCell::new(State::New),
+        }
     }
 
     #[inline]
-    /// Returns when the service is able to process requests.
-    pub async fn ready(&mut self) -> Result<(), S::Error> {
-        poll_fn(|cx| self.poll_ready(cx)).await
+    /// Return reference to enclosed service
+    pub fn get_ref(&self) -> &S {
+        &self.pl.state.svc
     }
 
     #[inline]
     /// Returns `Ready` when the pipeline is able to process requests.
-    pub fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
-        println!("\n\n== POLL-READY ==");
-        if let Poll::Ready(res) = Pin::new(&mut self.fut).poll(cx) {
-            println!("READY -- 1");
-            Poll::Ready(res)
-        } else {
-            Poll::Pending
+    ///
+    /// panics if .poll_shutdown() was called before.
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        let st = unsafe { &mut *self.st.get() };
+
+        match st {
+            State::New => {
+                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
+                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
+                // `self` is alive
+                let pl: &'static Pipeline<S> = unsafe { std::mem::transmute(&self.pl) };
+                let fut = Box::pin(CheckReadiness {
+                    fut: None,
+                    f: ready,
+                    pl,
+                });
+                *st = State::Readiness(fut);
+                self.poll_ready(cx)
+            }
+            State::Readiness(ref mut fut) => Pin::new(fut).poll(cx),
+            State::Shutdown(_) => panic!("Pipeline is shutding down"),
+        }
+    }
+
+    #[inline]
+    /// Returns `Ready` when the service is properly shutdowns.
+    pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let st = unsafe { &mut *self.st.get() };
+
+        match st {
+            State::New | State::Readiness(_) => {
+                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
+                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
+                // `self` is alive
+                let pl: &'static Pipeline<S> = unsafe { std::mem::transmute(&self.pl) };
+                *st = State::Shutdown(Box::pin(async move { pl.shutdown().await }));
+                self.poll_shutdown(cx)
+            }
+            State::Shutdown(ref mut fut) => Pin::new(fut).poll(cx),
+        }
+    }
+
+    #[inline]
+    /// Wait for service readiness and then create future object
+    /// that resolves to service result.
+    pub fn call(&self, req: R) -> PipelineCall<S, R> {
+        let pl = self.pl.clone();
+
+        PipelineCall {
+            fut: Box::pin(async move {
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                    .call(&pl.state.svc, req)
+                    .await
+            }),
+        }
+    }
+
+    #[inline]
+    /// Call service and create future object that resolves to service result.
+    ///
+    /// Note, this call does not check service readiness.
+    pub fn call_nowait(&self, req: R) -> PipelineCall<S, R> {
+        let pl = self.pl.clone();
+
+        PipelineCall {
+            fut: Box::pin(async move {
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                    .call_nowait(&pl.state.svc, req)
+                    .await
+            }),
+        }
+    }
+
+    #[inline]
+    /// Shutdown enclosed service.
+    pub async fn shutdown(&self) {
+        self.pl.state.svc.shutdown().await
+    }
+}
+
+impl<S, R> Drop for PipelineBinding<S, R>
+where
+    S: Service<R>,
+{
+    fn drop(&mut self) {
+        self.st = cell::UnsafeCell::new(State::New);
+    }
+}
+
+impl<S, R> Clone for PipelineBinding<S, R>
+where
+    S: Service<R>,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            pl: self.pl.clone(),
+            st: cell::UnsafeCell::new(State::New),
         }
     }
 }
 
-impl<S, R> fmt::Debug for Readiness<S, R>
+impl<S, R> fmt::Debug for PipelineBinding<S, R>
 where
     S: Service<R> + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Readiness")
-            .field("waiters", &self.st.waiters.len())
+        f.debug_struct("PipelineBinding")
+            .field("pipeline", &self.pl)
             .finish()
+    }
+}
+
+fn ready<S, R>(pl: &'static Pipeline<S>) -> impl Future<Output = Result<(), S::Error>>
+where
+    S: Service<R>,
+    R: 'static,
+{
+    pl.state.svc.state(ServiceState::Ready, ServiceCtx::<'_, S>::new(pl.index, pl.state.waiters_ref()))
+}
+
+struct CheckReadiness<S: 'static, F, Fut> {
+    f: F,
+    fut: Option<Fut>,
+    pl: &'static Pipeline<S>,
+}
+
+impl<S, F, Fut> Unpin for CheckReadiness<S, F, Fut> {}
+
+impl<S, F, Fut> Drop for CheckReadiness<S, F, Fut> {
+    fn drop(&mut self) {
+        // future fot dropped during polling, we must notify other waiters
+        if self.fut.is_some() {
+            self.pl.state.waiters.notify();
+        }
+    }
+}
+
+impl<T, S, F, Fut> Future for CheckReadiness<S, F, Fut>
+where
+    F: Fn(&'static Pipeline<S>) -> Fut,
+    Fut: Future<Output = T>,
+{
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+        let mut slf = self.as_mut();
+
+        if slf.pl.state.waiters.can_check(slf.pl.index, cx) {
+            if let Some(ref mut fut) = slf.fut {
+                match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
+                    Poll::Pending => {
+                        slf.pl.state.waiters.register(slf.pl.index, cx);
+                        Poll::Pending
+                    }
+                    Poll::Ready(res) => {
+                        let _ = slf.fut.take();
+                        slf.pl.state.waiters.notify();
+                        Poll::Ready(res)
+                    }
+                }
+            } else {
+                slf.fut = Some((slf.f)(slf.pl));
+                self.poll(cx)
+            }
+        } else {
+            Poll::Pending
+        }
     }
 }
 

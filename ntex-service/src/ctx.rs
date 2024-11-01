@@ -1,7 +1,7 @@
 use std::task::{Context, Poll, Waker};
 use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
-use crate::Service;
+use crate::{Service, ServiceState};
 
 pub struct ServiceCtx<'a, S: ?Sized> {
     idx: u32,
@@ -11,29 +11,33 @@ pub struct ServiceCtx<'a, S: ?Sized> {
 
 pub(crate) struct WaitersRef {
     pub(crate) cur: cell::Cell<u32>,
-    pub(crate) indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
-    pub(crate) readiness: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
+    pub(crate) indexes: cell::UnsafeCell<slab::Slab<Item>>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Item {
+    ready: Option<Waker>,
+    not_ready: Option<Waker>,
 }
 
 impl WaitersRef {
     pub(crate) fn new() -> (u32, Self) {
         let mut waiters = slab::Slab::new();
-        let index = waiters.insert(None) as u32;
+        let index = waiters.insert(Default::default()) as u32;
 
         (index, WaitersRef {
             cur: cell::Cell::new(u32::MAX),
             indexes: cell::UnsafeCell::new(waiters),
-            readiness: cell::UnsafeCell::new(slab::Slab::new()),
         })
     }
 
     #[allow(clippy::mut_from_ref)]
-    pub(crate) fn get(&self) -> &mut slab::Slab<Option<Waker>> {
+    pub(crate) fn get(&self) -> &mut slab::Slab<Item> {
         unsafe { &mut *self.indexes.get() }
     }
 
     pub(crate) fn insert(&self) -> u32 {
-        self.get().insert(None) as u32
+        self.get().insert(Default::default()) as u32
     }
 
     pub(crate) fn remove(&self, idx: u32) {
@@ -50,12 +54,15 @@ impl WaitersRef {
     }
 
     pub(crate) fn register(&self, idx: u32, cx: &mut Context<'_>) {
-        self.get()[idx as usize] = Some(cx.waker().clone());
+        self.get()[idx as usize].ready = Some(cx.waker().clone());
     }
 
     pub(crate) fn notify(&self) {
-        for (_, waker) in self.get().iter_mut() {
-            if let Some(waker) = waker.take() {
+        for (_, item) in self.get().iter_mut() {
+            if let Some(waker) = item.ready.take() {
+                waker.wake();
+            }
+            if let Some(waker) = item.not_ready.take() {
                 waker.wake();
             }
         }
@@ -94,6 +101,24 @@ impl<'a, S> ServiceCtx<'a, S> {
         (self.idx, self.waiters)
     }
 
+    /// Returns when the service is able to process requests.
+    pub async fn ready<T, R>(&self, svc: &'a T) -> Result<(), T::Error>
+    where
+        T: Service<R>,
+    {
+        // check readiness and notify waiters
+        ReadyCall {
+            completed: false,
+            fut: svc.state(ServiceState::Ready, ServiceCtx {
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            }),
+            ctx: *self,
+        }
+        .await
+    }
+
     // /// Returns when the service is able to process requests.
     // pub async fn check_readiness<T, R>(&self, svc: &'a T) -> Result<(), T::Error>
     // where
@@ -124,7 +149,7 @@ impl<'a, S> ServiceCtx<'a, S> {
         T: Service<R>,
         R: 'a,
     {
-        // self.check_readiness(svc).await?;
+        self.ready(svc).await?;
 
         svc.call(
             req,
@@ -178,77 +203,39 @@ impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
     }
 }
 
-struct ReadyCall<'a, S: ?Sized, F: Future<Output = Option<R>>, E, R> {
+struct ReadyCall<'a, S: ?Sized, F: Future> {
     completed: bool,
-    fut: Option<F>,
-    fut1: Option<R>,
+    fut: F,
     ctx: ServiceCtx<'a, S>,
-    _t: marker::PhantomData<(R, E)>,
 }
 
-impl<'a, S: ?Sized, F: Future<Output = Option<R>>, E, R> Drop
-    for ReadyCall<'a, S, F, E, R>
-{
+impl<'a, S: ?Sized, F: Future> Drop for ReadyCall<'a, S, F> {
     fn drop(&mut self) {
-        if !self.completed {
+        if !self.completed && self.ctx.waiters.cur.get() == self.ctx.idx {
             self.ctx.waiters.notify();
         }
     }
 }
 
-impl<'a, S: ?Sized, F: Future<Output = Option<R>>, E, R> Unpin
-    for ReadyCall<'a, S, F, E, R>
-{
-}
+impl<'a, S: ?Sized, F: Future> Unpin for ReadyCall<'a, S, F> {}
 
-impl<'a, S: ?Sized, F: Future<Output = Option<R>>, E, R> Future
-    for ReadyCall<'a, S, F, E, R>
-where
-    R: Future<Output = Result<(), E>>,
-{
-    type Output = Result<bool, E>;
+impl<'a, S: ?Sized, F: Future> Future for ReadyCall<'a, S, F> {
+    type Output = F::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        println!("-- POLL -- {:?}", self.ctx.waiters.can_check(self.ctx.idx, cx));
-
         if self.ctx.waiters.can_check(self.ctx.idx, cx) {
-            if let Some(ref mut fut) = self.as_mut().fut {
-                // SAFETY: `fut` never moves
-                match unsafe { Pin::new_unchecked(fut).poll(cx) } {
-                    Poll::Pending => {
-                        self.ctx.waiters.register(self.ctx.idx, cx);
-                        return Poll::Pending;
-                    }
-                    Poll::Ready(res) => {
-                        self.fut1 = res;
-                        let _ = self.fut.take();
-                    }
+            // SAFETY: `fut` never moves
+            let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
+            match result {
+                Poll::Pending => {
+                    self.ctx.waiters.register(self.ctx.idx, cx);
+                    Poll::Pending
                 }
-            }
-
-            if let Some(ref mut fut) = self.as_mut().fut1 {
-                println!("poll -------- 1");
-                match unsafe { Pin::new_unchecked(fut).poll(cx) } {
-                    Poll::Pending => {
-                        // ready future is pending
-                        self.completed = true;
-                        self.ctx.waiters.notify();
-                        Poll::Ready(Ok(true))
-                    }
-                    Poll::Ready(Err(e)) => {
-                        self.completed = true;
-                        self.ctx.waiters.notify();
-                        Poll::Ready(Err(e))
-                    }
-                    Poll::Ready(Ok(())) => {
-                        self.completed = true;
-                        Poll::Ready(Ok(false))
-                    }
+                Poll::Ready(res) => {
+                    self.completed = true;
+                    self.ctx.waiters.notify();
+                    Poll::Ready(res)
                 }
-            } else {
-                self.completed = true;
-                self.ctx.waiters.notify();
-                Poll::Ready(Ok(true))
             }
         } else {
             Poll::Pending
