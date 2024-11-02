@@ -105,16 +105,6 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        self.service.not_ready().await
-    }
-
-    #[inline]
-    async fn shutdown(&self) {
-        self.service.shutdown().await
-    }
-
-    #[inline]
     async fn call(
         &self,
         req: In,
@@ -122,6 +112,9 @@ where
     ) -> Result<Self::Response, Self::Error> {
         (self.f)(req, self.service.clone()).await
     }
+
+    crate::forward_notready!(service);
+    crate::forward_shutdown!(service);
 }
 
 /// `apply()` service factory
@@ -228,6 +221,10 @@ mod tests {
             Ok(())
         }
 
+        async fn not_ready(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+
         async fn shutdown(&self) {
             self.0.set(self.0.get() + 1);
         }
@@ -256,8 +253,11 @@ mod tests {
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
-        srv.shutdown().await;
+        srv.not_ready().await;
         assert_eq!(cnt_sht.get(), 1);
+
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 2);
 
         let res = srv.call("srv").await;
         assert!(res.is_ok());
