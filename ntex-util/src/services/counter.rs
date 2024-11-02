@@ -102,10 +102,6 @@ impl CounterInner {
 
     fn available(&self, cx: &mut task::Context<'_>) -> bool {
         self.task.register(cx.waker());
-        if self.count.get() < self.capacity {
-            true
-        } else {
-            false
-        }
+        self.count.get() < self.capacity
     }
 }

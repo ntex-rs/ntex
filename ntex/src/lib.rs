@@ -118,5 +118,9 @@ pub mod util {
     pub use ntex_bytes::{
         Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef,
     };
-    pub use ntex_util::{future::*, ready, services::*, HashMap, HashSet};
+    pub use ntex_util::{future::*, services::*, HashMap, HashSet};
+
+    #[doc(hidden)]
+    #[deprecated]
+    pub use std::task::ready;
 }

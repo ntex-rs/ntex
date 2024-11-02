@@ -1,10 +1,11 @@
 //! Framed transport dispatcher
 #![allow(clippy::let_underscore_future)]
-use std::{cell::Cell, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::task::{ready, Context, Poll};
+use std::{cell::Cell, future::Future, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Pipeline, PipelineBinding, PipelineCall, Service};
-use ntex_util::{future::Either, ready, spawn, time::Seconds};
+use ntex_util::{future::Either, spawn, time::Seconds};
 
 use crate::{Decoded, DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
 
