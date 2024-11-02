@@ -1,5 +1,5 @@
 use std::task::{Context, Poll, Waker};
-use std::{cell, collections::VecDeque, fmt, future::Future, marker, pin::Pin, rc::Rc};
+use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
 use crate::Service;
 
@@ -12,7 +12,7 @@ pub struct ServiceCtx<'a, S: ?Sized> {
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
     cur: cell::Cell<u32>,
-    wakers: cell::UnsafeCell<VecDeque<u32>>,
+    wakers: cell::UnsafeCell<Vec<u32>>,
     indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
 }
 
@@ -28,7 +28,7 @@ impl WaitersRef {
             WaitersRef {
                 cur: cell::Cell::new(u32::MAX),
                 indexes: cell::UnsafeCell::new(waiters),
-                wakers: cell::UnsafeCell::new(VecDeque::default()),
+                wakers: cell::UnsafeCell::new(Vec::default()),
             },
         )
     }
@@ -39,7 +39,7 @@ impl WaitersRef {
     }
 
     #[allow(clippy::mut_from_ref)]
-    pub(crate) fn get_wakers(&self) -> &mut VecDeque<u32> {
+    pub(crate) fn get_wakers(&self) -> &mut Vec<u32> {
         unsafe { &mut *self.wakers.get() }
     }
 
@@ -57,12 +57,12 @@ impl WaitersRef {
 
     pub(crate) fn register(&self, idx: u32, cx: &mut Context<'_>) {
         self.get()[idx as usize] = Some(cx.waker().clone());
-        self.get_wakers().push_back(idx);
+        self.get_wakers().push(idx);
     }
 
     pub(crate) fn register_unready(&self, cx: &mut Context<'_>) {
         self.get()[0] = Some(cx.waker().clone());
-        self.get_wakers().push_back(0);
+        self.get_wakers().push(0);
     }
 
     pub(crate) fn notify(&self) {

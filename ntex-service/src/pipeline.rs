@@ -160,13 +160,18 @@ where
 {
     pl: Pipeline<S>,
     st: cell::UnsafeCell<State<S::Error>>,
-    not_ready: cell::UnsafeCell<State<S::Error>>,
+    not_ready: cell::UnsafeCell<StateNotReady<S::Error>>,
 }
 
 enum State<E> {
     New,
     Readiness(Pin<Box<dyn Future<Output = Result<(), E>> + 'static>>),
     Shutdown(Pin<Box<dyn Future<Output = ()> + 'static>>),
+}
+
+enum StateNotReady<E> {
+    New,
+    Readiness(Pin<Box<dyn Future<Output = Result<(), E>> + 'static>>),
 }
 
 impl<S, R> PipelineBinding<S, R>
@@ -178,7 +183,7 @@ where
         PipelineBinding {
             pl,
             st: cell::UnsafeCell::new(State::New),
-            not_ready: cell::UnsafeCell::new(State::New),
+            not_ready: cell::UnsafeCell::new(StateNotReady::New),
         }
     }
 
@@ -220,7 +225,7 @@ where
         let st = unsafe { &mut *self.not_ready.get() };
 
         match st {
-            State::New => {
+            StateNotReady::New => {
                 // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
                 // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
                 // `self` is alive
@@ -230,11 +235,10 @@ where
                     f: not_ready,
                     pl,
                 });
-                *st = State::Readiness(fut);
+                *st = StateNotReady::Readiness(fut);
                 self.poll_not_ready(cx)
             }
-            State::Readiness(ref mut fut) => Pin::new(fut).poll(cx),
-            State::Shutdown(_) => panic!("Pipeline is shutding down"),
+            StateNotReady::Readiness(ref mut fut) => Pin::new(fut).poll(cx),
         }
     }
 
@@ -312,7 +316,7 @@ where
         Self {
             pl: self.pl.clone(),
             st: cell::UnsafeCell::new(State::New),
-            not_ready: cell::UnsafeCell::new(State::New),
+            not_ready: cell::UnsafeCell::new(StateNotReady::New),
         }
     }
 }
