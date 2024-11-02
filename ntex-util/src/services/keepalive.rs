@@ -1,4 +1,4 @@
-use std::{cell::Cell, convert::Infallible, fmt, future::poll_fn, marker, task, time};
+use std::{cell::Cell, convert::Infallible, fmt, marker, time};
 
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
@@ -111,23 +111,28 @@ where
     type Error = E;
 
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        poll_fn(|cx| match self.sleep.poll_elapsed(cx) {
-            task::Poll::Ready(_) => {
-                let now = now();
-                let expire = self.expire.get() + time::Duration::from(self.dur);
-                if expire <= now {
-                    task::Poll::Ready(Err((self.f)()))
-                } else {
-                    let expire = expire - now;
-                    self.sleep
-                        .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
-                    let _ = self.sleep.poll_elapsed(cx);
-                    task::Poll::Ready(Ok(()))
-                }
+        let expire = self.expire.get() + time::Duration::from(self.dur);
+        if expire <= now() {
+            Err((self.f)())
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn not_ready(&self) {
+        loop {
+            self.sleep.wait().await;
+
+            let now = now();
+            let expire = self.expire.get() + time::Duration::from(self.dur);
+            if expire <= now {
+                return;
+            } else {
+                let expire = expire - now;
+                self.sleep
+                    .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
             }
-            task::Poll::Pending => task::Poll::Ready(Ok(())),
-        })
-        .await
+        }
     }
 
     async fn call(&self, req: R, _: ServiceCtx<'_, Self>) -> Result<R, E> {
@@ -157,11 +162,13 @@ mod tests {
 
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
+        assert!(!lazy(|cx| service.poll_not_ready(cx)).await.is_ready());
 
         sleep(Millis(500)).await;
         assert_eq!(
             lazy(|cx| service.poll_ready(cx)).await,
             Poll::Ready(Err(TestErr))
         );
+        assert!(lazy(|cx| service.poll_not_ready(cx)).await.is_ready());
     }
 }

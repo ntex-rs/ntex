@@ -143,6 +143,25 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }).await
         }
 
+        async fn not_ready(&self) {
+            use std::{future::Future, pin::Pin};
+
+            let mut fut1 = ::std::pin::pin!(self.V1.not_ready());
+            $(let mut $T = ::std::pin::pin!(self.$T.not_ready());)+
+
+            ::std::future::poll_fn(|cx| {
+                if Pin::new(&mut fut1).poll(cx).is_ready() {
+                    return Poll::Ready(())
+                }
+
+                $(if Pin::new(&mut $T).poll(cx).is_ready() {
+                    return Poll::Ready(());
+                })+
+
+                Poll::Pending
+            }).await
+        }
+
         async fn shutdown(&self) {
             self.V1.shutdown().await;
             $(self.$T.shutdown().await;)+
@@ -175,7 +194,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 
     impl<V1: fmt::Debug, V1C, $($T: fmt::Debug,)+ V1R, $($R,)+> fmt::Debug for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct(stringify!(fac_type))
+            f.debug_struct("Variant")
                 .field("V1", &self.V1)
                 $(.field(stringify!($T), &self.$T))+
                 .finish()
@@ -234,6 +253,7 @@ variant_impl_and!(VariantFactory7, VariantFactory8, V8, V8R, v8, (V2, V3, V4, V5
 #[cfg(test)]
 mod tests {
     use ntex_service::fn_factory;
+    use std::{future::poll_fn, future::Future, pin};
 
     use super::*;
 
@@ -275,12 +295,27 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_variant() {
-        let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }))
+        let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }));
+        assert!(format!("{:?}", factory).contains("Variant"));
+
+        let factory = factory
             .v2(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone()
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
+        assert!(format!("{:?}", factory).contains("Variant"));
+
         let service = factory.pipeline(&()).await.unwrap().clone();
+
+        let mut f = pin::pin!(service.not_ready());
+        let _ = poll_fn(|cx| {
+            if pin::Pin::new(&mut f).poll(cx).is_pending() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
 
         assert!(service.ready().await.is_ok());
         service.shutdown().await;

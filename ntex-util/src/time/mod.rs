@@ -113,6 +113,12 @@ impl Sleep {
     }
 
     #[inline]
+    /// Wait when `Sleep` instance get elapsed.
+    pub async fn wait(&self) {
+        poll_fn(|cx| self.hnd.poll_elapsed(cx)).await
+    }
+
+    #[inline]
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         self.hnd.poll_elapsed(cx)
     }
@@ -158,6 +164,12 @@ impl Deadline {
         } else {
             Deadline { hnd: None }
         }
+    }
+
+    #[inline]
+    /// Wait when `Sleep` instance get elapsed.
+    pub async fn wait(&self) {
+        poll_fn(|cx| self.poll_elapsed(cx)).await
     }
 
     /// Resets the `Deadline` instance to a new deadline.

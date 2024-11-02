@@ -120,7 +120,7 @@ pub trait Service<Req> {
 
     #[inline]
     /// Returns when the service is not able to process requests.
-    async fn not_ready(&self) -> Result<(), Self::Error> {
+    async fn not_ready(&self) {
         std::future::pending().await
     }
 
@@ -253,7 +253,7 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) -> Result<(), S::Error> {
+    async fn not_ready(&self) {
         (**self).not_ready().await
     }
 
@@ -285,7 +285,7 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) -> Result<(), S::Error> {
+    async fn not_ready(&self) {
         (**self).not_ready().await
     }
 
