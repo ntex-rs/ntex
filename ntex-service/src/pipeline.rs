@@ -144,9 +144,10 @@ impl<S> Drop for Pipeline<S> {
     }
 }
 
-impl<S> fmt::Debug for PipelineState<S> {
+impl<S: fmt::Debug> fmt::Debug for PipelineState<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PipelineState")
+            .field("svc", &self.svc)
             .field("waiters", &self.waiters.get().len())
             .finish()
     }
