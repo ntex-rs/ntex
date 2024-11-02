@@ -1,7 +1,7 @@
 use std::task::{Context, Poll, Waker};
 use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
-use crate::{Service, ServiceState};
+use crate::Service;
 
 pub struct ServiceCtx<'a, S: ?Sized> {
     idx: u32,
