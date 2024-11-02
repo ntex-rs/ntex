@@ -166,6 +166,12 @@ impl Deadline {
         }
     }
 
+    #[inline]
+    /// Wait when `Sleep` instance get elapsed.
+    pub async fn wait(&self) {
+        poll_fn(|cx| self.poll_elapsed(cx)).await
+    }
+
     /// Resets the `Deadline` instance to a new deadline.
     ///
     /// Calling this function allows changing the instant at which the `Deadline`

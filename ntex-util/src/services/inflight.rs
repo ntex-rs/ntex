@@ -118,6 +118,7 @@ mod tests {
 
         let srv = Pipeline::new(InFlightService::new(1, SleepService(rx))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         let srv2 = srv.clone();
         ntex::rt::spawn(async move {

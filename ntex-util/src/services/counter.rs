@@ -63,11 +63,6 @@ impl Counter {
     fn poll_available(&self, cx: &mut task::Context<'_>) -> bool {
         self.0.available(cx)
     }
-
-    /// Get total number of acquired counts
-    pub fn total(&self) -> usize {
-        self.0.count.get()
-    }
 }
 
 #[derive(Debug)]
@@ -90,8 +85,8 @@ impl Drop for CounterGuard {
 
 impl CounterInner {
     fn inc(&self) {
-        let num = self.count.get();
-        self.count.set(num + 1);
+        let num = self.count.get() + 1;
+        self.count.set(num);
         if num == self.capacity {
             self.task.wake();
         }
