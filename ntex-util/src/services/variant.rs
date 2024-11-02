@@ -314,7 +314,7 @@ mod tests {
             } else {
                 Poll::Pending
             }
-        });
+        }).await;
 
         assert!(service.ready().await.is_ok());
         service.shutdown().await;
