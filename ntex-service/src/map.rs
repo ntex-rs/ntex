@@ -61,7 +61,7 @@ where
     type Response = Res;
     type Error = A::Error;
 
-    crate::forward_ready!(service);
+    crate::forward_state!(service);
     crate::forward_shutdown!(service);
 
     #[inline]
@@ -148,7 +148,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{fn_factory, Pipeline, Service, ServiceCtx, ServiceFactory};
+    use crate::{fn_factory, Pipeline, Service, ServiceCtx, ServiceState, ServiceFactory};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
@@ -156,6 +156,10 @@ mod tests {
     impl Service<()> for Srv {
         type Response = ();
         type Error = ();
+
+        async fn state(&self, _: ServiceState, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            Ok(())
+        }
 
         async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Ok(())
@@ -174,7 +178,9 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let _ = srv.ready().await;
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
+
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
@@ -188,7 +194,8 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let _ = srv.ready().await;
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
     }
 
     #[ntex::test]

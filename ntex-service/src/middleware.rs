@@ -191,10 +191,10 @@ where
 #[cfg(test)]
 #[allow(clippy::redundant_clone)]
 mod tests {
-    use std::{cell::Cell, future::Future, rc::Rc};
+    use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{fn_service, Pipeline, ServiceCtx};
+    use crate::{fn_service, Pipeline, ServiceCtx, ServiceState};
 
     #[derive(Debug, Clone)]
     struct Tr<R>(PhantomData<R>, Rc<Cell<usize>>);
@@ -214,8 +214,8 @@ mod tests {
         type Response = S::Response;
         type Error = S::Error;
 
-        async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
-            self.0.ready().await
+        async fn state(&self, st: ServiceState, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            ctx.state(&self.0, st).await
         }
 
         async fn call(
@@ -245,8 +245,8 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{:?} {:?}", factory, srv);
-        let _ = srv.ready().await;
 
+        assert_eq!(srv.ready().await, Ok(()));
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
@@ -261,6 +261,6 @@ mod tests {
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{:?} {:?}", factory, srv);
 
-        let _ = srv.ready().await;
+        assert_eq!(srv.ready().await, Ok(()));
     }
 }

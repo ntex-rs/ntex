@@ -3,6 +3,7 @@ use std::{fmt, future::Future, marker};
 
 use super::{
     IntoService, IntoServiceFactory, Pipeline, Service, ServiceCtx, ServiceFactory,
+    ServiceState,
 };
 
 /// Apply transform function to a service.
@@ -100,11 +101,8 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self) -> Option<impl Future<Output = Result<(), Err>>> {
-        self.service
-            .ready()
-            .await
-            .map(|fut| async move { fut.await.map_err(From::from) })
+    async fn state(&self, st: ServiceState, _: ServiceCtx<'_, Self>) -> Result<(), Err> {
+        self.service.state(st).await.map_err(From::from)
     }
 
     #[inline]
@@ -252,11 +250,12 @@ mod tests {
         )
         .into_pipeline();
 
-        let _ = srv.ready().await;
+        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
-        let res: Result<_, ()> = srv.call("srv").await;
+        let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
     }
@@ -272,11 +271,12 @@ mod tests {
             .clone()
             .into_pipeline();
 
-        let _ = srv.ready().await;
+        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
-        let res: Result<_, ()> = srv.call("srv").await;
+        let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{:?}", srv);
@@ -297,8 +297,9 @@ mod tests {
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
-        let _ = srv.ready().await;
-        let res: Result<_, ()> = srv.call("srv").await;
+        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+
+        let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{:?}", new_srv);
@@ -316,9 +317,10 @@ mod tests {
             .clone();
 
         let srv = new_srv.pipeline(&()).await.unwrap();
-        let _ = srv.ready().await;
 
-        let res: Result<_, ()> = srv.call("srv").await;
+        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+
+        let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{:?}", new_srv);

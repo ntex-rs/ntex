@@ -1,5 +1,5 @@
 use std::task::{Context, Poll};
-use std::{fmt, cell, future::Future, pin::Pin, rc::Rc};
+use std::{cell, fmt, future::Future, pin::Pin, rc::Rc};
 
 use crate::{ctx::WaitersRef, Service, ServiceCtx, ServiceState};
 
@@ -48,6 +48,17 @@ impl<S> Pipeline<S> {
     {
         ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
             .ready(&self.state.svc)
+            .await
+    }
+
+    #[inline]
+    /// Returns when the service changes internal state according parameter
+    pub async fn state<R>(&self, st: ServiceState) -> Result<(), S::Error>
+    where
+        S: Service<R>,
+    {
+        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
+            .state(&self.state.svc, st)
             .await
     }
 
@@ -306,7 +317,10 @@ where
     S: Service<R>,
     R: 'static,
 {
-    pl.state.svc.state(ServiceState::Ready, ServiceCtx::<'_, S>::new(pl.index, pl.state.waiters_ref()))
+    pl.state.svc.state(
+        ServiceState::Ready,
+        ServiceCtx::<'_, S>::new(pl.index, pl.state.waiters_ref()),
+    )
 }
 
 struct CheckReadiness<S: 'static, F, Fut> {
@@ -336,11 +350,20 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         let mut slf = self.as_mut();
 
-        if slf.pl.state.waiters.can_check(slf.pl.index, cx) {
+        if slf
+            .pl
+            .state
+            .waiters
+            .can_check(slf.pl.index, ServiceState::NotReady, cx)
+        {
             if let Some(ref mut fut) = slf.fut {
                 match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
                     Poll::Pending => {
-                        slf.pl.state.waiters.register(slf.pl.index, cx);
+                        slf.pl.state.waiters.register(
+                            slf.pl.index,
+                            ServiceState::NotReady,
+                            cx,
+                        );
                         Poll::Pending
                     }
                     Poll::Ready(res) => {

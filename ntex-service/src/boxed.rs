@@ -1,9 +1,8 @@
 use std::{fmt, future::Future, pin::Pin};
 
-use crate::ctx::{ServiceCtx, WaitersRef};
+use crate::{ctx::ServiceCtx, ctx::WaitersRef, ServiceState};
 
 type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
-type BoxFutureOne<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 pub struct BoxService<Req, Res, Err>(Box<dyn ServiceObj<Req, Response = Res, Error = Err>>);
 pub struct BoxServiceFactory<Cfg, Req, Res, Err, InitErr>(
     Box<dyn ServiceFactoryObj<Req, Cfg, Response = Res, Error = Err, InitError = InitErr>>,
@@ -49,7 +48,12 @@ trait ServiceObj<Req> {
     type Response;
     type Error;
 
-    fn ready<'a>(&'a self) -> BoxFutureOne<'a, Option<BoxFuture<'a, (), Self::Error>>>;
+    fn state<'a>(
+        &'a self,
+        st: ServiceState,
+        idx: u32,
+        waiters: &'a WaitersRef,
+    ) -> BoxFuture<'a, (), Self::Error>;
 
     fn call<'a>(
         &'a self,
@@ -70,15 +74,15 @@ where
     type Error = S::Error;
 
     #[inline]
-    fn ready<'a>(&'a self) -> BoxFutureOne<'a, Option<BoxFuture<'a, (), Self::Error>>> {
-        Box::pin(async move {
-            if let Some(fut) = self.ready().await {
-                let r: BoxFuture<'a, (), Self::Error> = Box::pin(fut);
-                Some(r)
-            } else {
-                None
-            }
-        })
+    fn state<'a>(
+        &'a self,
+        st: ServiceState,
+        idx: u32,
+        waiters: &'a WaitersRef,
+    ) -> BoxFuture<'a, (), Self::Error> {
+        Box::pin(
+            async move { ServiceCtx::<'a, S>::new(idx, waiters).state(self, st).await },
+        )
     }
 
     #[inline]
@@ -146,8 +150,13 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
-        self.0.ready().await
+    async fn state(
+        &self,
+        st: ServiceState,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
+        let (idx, waiters) = ctx.inner();
+        self.0.state(st, idx, waiters).await
     }
 
     #[inline]

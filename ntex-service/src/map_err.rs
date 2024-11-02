@@ -1,6 +1,6 @@
-use std::{fmt, future::Future, marker::PhantomData};
+use std::{fmt, marker::PhantomData};
 
-use super::{Service, ServiceCtx, ServiceFactory};
+use super::{Service, ServiceCtx, ServiceFactory, ServiceState};
 
 /// Service for the `map_err` combinator, changing the type of a service's
 /// error.
@@ -63,11 +63,12 @@ where
     type Error = E;
 
     #[inline]
-    async fn ready(&self) -> Option<impl Future<Output = Result<(), E>>> {
-        self.service
-            .ready()
-            .await
-            .map(|fut| async move { fut.await.map_err(&self.f) })
+    async fn state(
+        &self,
+        st: ServiceState,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
+        ctx.state(&self.service, st).await.map_err(&self.f)
     }
 
     #[inline]
@@ -164,7 +165,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{fn_factory, Pipeline};
+    use crate::{fn_factory, ServiceState, Pipeline};
 
     #[derive(Debug, Clone)]
     struct Srv(bool, Rc<Cell<usize>>);
@@ -173,15 +174,12 @@ mod tests {
         type Response = ();
         type Error = ();
 
-        async fn ready(&self) -> Option<impl Future<Output = Result<(), ()>>> {
-            Some(async move {
-                if self.0 {
-                    Err(())
-                } else {
-                    std::future::pending::<()>().await;
-                    Ok(())
-                }
-            })
+        async fn state(&self, _: ServiceState, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            if self.0 {
+                Err(())
+            } else {
+                Ok(())
+            }
         }
 
         async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
@@ -197,8 +195,7 @@ mod tests {
     async fn test_ready() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = Pipeline::new(Srv(true, cnt_sht.clone()).map_err(|_| "error"));
-        let ready = srv.ready().await;
-        let res = ready.unwrap().await;
+        let res = srv.ready().await;
         assert_eq!(res, Err("error"));
 
         srv.shutdown().await;

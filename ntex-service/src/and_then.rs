@@ -1,6 +1,4 @@
-use std::future::Future;
-
-use super::{util, Service, ServiceCtx, ServiceFactory};
+use super::{util, Service, ServiceCtx, ServiceFactory, ServiceState};
 
 #[derive(Clone, Debug)]
 /// Service for the `and_then` combinator, chaining a computation onto the end
@@ -28,8 +26,12 @@ where
     type Error = A::Error;
 
     #[inline]
-    async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
-        util::ready(&self.svc1, &self.svc2).await
+    async fn state(
+        &self,
+        st: ServiceState,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<(), Self::Error> {
+        util::ready(st, &self.svc1, &self.svc2, ctx).await
     }
 
     #[inline]
@@ -85,9 +87,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, future::Future, rc::Rc};
+    use std::{cell::Cell, rc::Rc};
 
-    use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
+    use crate::{chain, chain_factory, fn_factory, Service, ServiceState, ServiceCtx};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
@@ -96,9 +98,9 @@ mod tests {
         type Response = &'static str;
         type Error = ();
 
-        async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+        async fn state(&self, _: ServiceState, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
-            Some(std::future::pending())
+            Ok(())
         }
 
         async fn call(
@@ -121,9 +123,9 @@ mod tests {
         type Response = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self) -> Option<impl Future<Output = Result<(), Self::Error>>> {
+        async fn state(&self, _: ServiceState, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
-            Some(std::future::pending())
+            Ok(())
         }
 
         async fn call(
@@ -149,7 +151,8 @@ mod tests {
                 .clone(),
         )
         .into_pipeline();
-        let _ = srv.ready().await;
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
@@ -163,7 +166,8 @@ mod tests {
                 .and_then(Srv2(cnt.clone(), Rc::new(Cell::new(0)))),
         )
         .into_pipeline();
-        let _ = srv.ready().await;
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
     }
 

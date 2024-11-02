@@ -1,12 +1,26 @@
 /// An implementation of [`ready`] that forwards readiness checks to a field.
 #[macro_export]
-macro_rules! forward_ready {
+macro_rules! forward_state {
     ($field:ident) => {
         #[inline]
-        async fn ready(
+        async fn state(
             &self,
-        ) -> Option<impl ::std::future::Future<Output = Result<(), Self::Error>>> {
-            self.$field.ready().await
+            st: $crate::ServiceState,
+            ctx: $crate::ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
+            ctx.state(&self.$field, st)
+                .await
+                .map_err(::core::convert::Into::into)
+        }
+    };
+    ($field:ident, $err:expr) => {
+        #[inline]
+        async fn state(
+            &self,
+            st: $crate::ServiceState,
+            ctx: $crate::ServiceCtx<'_, Self>,
+        ) -> Result<(), Self::Error> {
+            ctx.state(&self.$field, st).await.map_err($err)
         }
     };
 }
