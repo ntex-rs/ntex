@@ -31,6 +31,11 @@ where
     }
 
     #[inline]
+    async fn not_ready(&self) -> Result<(), Self::Error> {
+        util::select(self.svc1.not_ready(), self.svc2.not_ready()).await
+    }
+
+    #[inline]
     async fn shutdown(&self) {
         util::shutdown(&self.svc1, &self.svc2).await
     }

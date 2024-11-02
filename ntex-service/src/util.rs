@@ -1,4 +1,4 @@
-use std::{future::poll_fn, future::Future, pin, task::Poll};
+use std::{future::poll_fn, future::Future, pin, pin::Pin, task::Poll};
 
 use crate::{Service, ServiceCtx};
 
@@ -14,10 +14,10 @@ where
     let mut ready2 = false;
 
     poll_fn(move |cx| {
-        if !ready1 && pin::Pin::new(&mut fut1).poll(cx).is_ready() {
+        if !ready1 && Pin::new(&mut fut1).poll(cx).is_ready() {
             ready1 = true;
         }
-        if !ready2 && pin::Pin::new(&mut fut2).poll(cx).is_ready() {
+        if !ready2 && Pin::new(&mut fut2).poll(cx).is_ready() {
             ready2 = true
         }
         if ready1 && ready2 {
@@ -45,10 +45,10 @@ where
     let mut ready2 = false;
 
     poll_fn(move |cx| {
-        if !ready1 && pin::Pin::new(&mut fut1).poll(cx)?.is_ready() {
+        if !ready1 && Pin::new(&mut fut1).poll(cx)?.is_ready() {
             ready1 = true;
         }
-        if !ready2 && pin::Pin::new(&mut fut2).poll(cx)?.is_ready() {
+        if !ready2 && Pin::new(&mut fut2).poll(cx)?.is_ready() {
             ready2 = true;
         }
         if ready1 && ready2 {
@@ -56,6 +56,27 @@ where
         } else {
             Poll::Pending
         }
+    })
+    .await
+}
+
+/// Waits for either one of two differently-typed futures to complete.
+pub(crate) async fn select<A, B>(fut1: A, fut2: B) -> A::Output
+where
+    A: Future,
+    B: Future<Output = A::Output>,
+{
+    let mut fut1 = pin::pin!(fut1);
+    let mut fut2 = pin::pin!(fut2);
+
+    poll_fn(|cx| {
+        if let Poll::Ready(item) = Pin::new(&mut fut1).poll(cx) {
+            return Poll::Ready(item);
+        }
+        if let Poll::Ready(item) = Pin::new(&mut fut2).poll(cx) {
+            return Poll::Ready(item);
+        }
+        Poll::Pending
     })
     .await
 }

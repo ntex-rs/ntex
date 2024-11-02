@@ -119,6 +119,12 @@ pub trait Service<Req> {
     }
 
     #[inline]
+    /// Returns when the service is not able to process requests.
+    async fn not_ready(&self) -> Result<(), Self::Error> {
+        std::future::pending().await
+    }
+
+    #[inline]
     /// Shutdown service.
     ///
     /// Returns when the service is properly shutdowns.

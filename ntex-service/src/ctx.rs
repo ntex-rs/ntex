@@ -1,4 +1,5 @@
-use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc, task, task::Context};
+use std::task::{Context, Poll, Waker};
+use std::{cell, collections::VecDeque, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
 use crate::Service;
 
@@ -11,26 +12,35 @@ pub struct ServiceCtx<'a, S: ?Sized> {
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
     cur: cell::Cell<u32>,
-    indexes: cell::UnsafeCell<slab::Slab<Option<task::Waker>>>,
+    wakers: cell::UnsafeCell<VecDeque<u32>>,
+    indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
 }
 
 impl WaitersRef {
     pub(crate) fn new() -> (u32, Self) {
         let mut waiters = slab::Slab::new();
-        let index = waiters.insert(Default::default()) as u32;
+
+        // first insert for wake ups from services
+        let _ = waiters.insert(None);
 
         (
-            index,
+            waiters.insert(Default::default()) as u32,
             WaitersRef {
                 cur: cell::Cell::new(u32::MAX),
                 indexes: cell::UnsafeCell::new(waiters),
+                wakers: cell::UnsafeCell::new(VecDeque::default()),
             },
         )
     }
 
     #[allow(clippy::mut_from_ref)]
-    pub(crate) fn get(&self) -> &mut slab::Slab<Option<task::Waker>> {
+    pub(crate) fn get(&self) -> &mut slab::Slab<Option<Waker>> {
         unsafe { &mut *self.indexes.get() }
+    }
+
+    #[allow(clippy::mut_from_ref)]
+    pub(crate) fn get_wakers(&self) -> &mut VecDeque<u32> {
+        unsafe { &mut *self.wakers.get() }
     }
 
     pub(crate) fn insert(&self) -> u32 {
@@ -47,12 +57,23 @@ impl WaitersRef {
 
     pub(crate) fn register(&self, idx: u32, cx: &mut Context<'_>) {
         self.get()[idx as usize] = Some(cx.waker().clone());
+        self.get_wakers().push_back(idx);
+    }
+
+    pub(crate) fn register_unready(&self, cx: &mut Context<'_>) {
+        self.get()[0] = Some(cx.waker().clone());
+        self.get_wakers().push_back(0);
     }
 
     pub(crate) fn notify(&self) {
-        for (_, waker) in self.get().iter_mut().skip(1) {
-            if let Some(waker) = waker.take() {
-                waker.wake();
+        let indexes = self.get();
+        let wakers = self.get_wakers();
+
+        for idx in wakers.drain(..) {
+            if let Some(item) = indexes.get_mut(idx as usize) {
+                if let Some(waker) = item.take() {
+                    waker.wake();
+                }
             }
         }
 
@@ -184,30 +205,30 @@ impl<'a, S: ?Sized, F: Future> Unpin for ReadyCall<'a, S, F> {}
 impl<'a, S: ?Sized, F: Future> Future for ReadyCall<'a, S, F> {
     type Output = F::Output;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> task::Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if self.ctx.waiters.can_check(self.ctx.idx, cx) {
             // SAFETY: `fut` never moves
             let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
             match result {
-                task::Poll::Pending => {
+                Poll::Pending => {
                     self.ctx.waiters.register(self.ctx.idx, cx);
-                    task::Poll::Pending
+                    Poll::Pending
                 }
-                task::Poll::Ready(res) => {
+                Poll::Ready(res) => {
                     self.completed = true;
                     self.ctx.waiters.notify();
-                    task::Poll::Ready(res)
+                    Poll::Ready(res)
                 }
             }
         } else {
-            task::Poll::Pending
+            Poll::Pending
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, cell::RefCell, future::poll_fn, task::Poll};
+    use std::{cell::Cell, cell::RefCell, future::poll_fn};
 
     use ntex_util::channel::{condition, oneshot};
     use ntex_util::{future::lazy, future::select, spawn, time};
