@@ -27,7 +27,7 @@ mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::chain::{chain, chain_factory};
-pub use self::ctx::{PipelineTag, ServiceCtx};
+pub use self::ctx::ServiceCtx;
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
@@ -116,6 +116,12 @@ pub trait Service<Req> {
     /// results in an error.
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         Ok(())
+    }
+
+    #[inline]
+    /// Returns when the service is not able to process requests.
+    async fn not_ready(&self) -> Result<(), Self::Error> {
+        std::future::pending().await
     }
 
     #[inline]
@@ -247,6 +253,11 @@ where
     }
 
     #[inline]
+    async fn not_ready(&self) -> Result<(), S::Error> {
+        (**self).not_ready().await
+    }
+
+    #[inline]
     async fn shutdown(&self) {
         (**self).shutdown().await
     }
@@ -271,6 +282,11 @@ where
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
+    }
+
+    #[inline]
+    async fn not_ready(&self) -> Result<(), S::Error> {
+        (**self).not_ready().await
     }
 
     #[inline]
