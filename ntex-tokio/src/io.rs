@@ -1,4 +1,4 @@
-use std::task::{Context, Poll};
+use std::task::{ready, Context, Poll};
 use std::{any, cell::RefCell, cmp, future::poll_fn, io, mem, pin::Pin, rc::Rc, rc::Weak};
 
 use ntex_bytes::{Buf, BufMut, BytesVec};
@@ -6,7 +6,7 @@ use ntex_io::{
     types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, WriteContext,
     WriteContextBuf,
 };
-use ntex_util::{ready, time::Millis};
+use ntex_util::time::Millis;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 

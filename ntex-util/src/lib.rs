@@ -2,6 +2,7 @@
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
 
 #[doc(hidden)]
+#[deprecated]
 pub use std::task::ready;
 
 pub mod channel;
