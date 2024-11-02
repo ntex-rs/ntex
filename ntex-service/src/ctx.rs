@@ -168,16 +168,16 @@ impl<'a, S> ServiceCtx<'a, S> {
     }
 }
 
-impl<'a, S> Copy for ServiceCtx<'a, S> {}
+impl<S> Copy for ServiceCtx<'_, S> {}
 
-impl<'a, S> Clone for ServiceCtx<'a, S> {
+impl<S> Clone for ServiceCtx<'_, S> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, S> fmt::Debug for ServiceCtx<'a, S> {
+impl<S> fmt::Debug for ServiceCtx<'_, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServiceCtx")
             .field("idx", &self.idx)
@@ -192,7 +192,7 @@ struct ReadyCall<'a, S: ?Sized, F: Future> {
     ctx: ServiceCtx<'a, S>,
 }
 
-impl<'a, S: ?Sized, F: Future> Drop for ReadyCall<'a, S, F> {
+impl<S: ?Sized, F: Future> Drop for ReadyCall<'_, S, F> {
     fn drop(&mut self) {
         if !self.completed && self.ctx.waiters.cur.get() == self.ctx.idx {
             self.ctx.waiters.notify();
@@ -200,9 +200,9 @@ impl<'a, S: ?Sized, F: Future> Drop for ReadyCall<'a, S, F> {
     }
 }
 
-impl<'a, S: ?Sized, F: Future> Unpin for ReadyCall<'a, S, F> {}
+impl<S: ?Sized, F: Future> Unpin for ReadyCall<'_, S, F> {}
 
-impl<'a, S: ?Sized, F: Future> Future for ReadyCall<'a, S, F> {
+impl<S: ?Sized, F: Future> Future for ReadyCall<'_, S, F> {
     type Output = F::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

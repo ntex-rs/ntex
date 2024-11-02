@@ -253,6 +253,11 @@ where
     }
 
     #[inline]
+    async fn not_ready(&self) -> Result<(), S::Error> {
+        (**self).not_ready().await
+    }
+
+    #[inline]
     async fn shutdown(&self) {
         (**self).shutdown().await
     }
@@ -277,6 +282,11 @@ where
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
+    }
+
+    #[inline]
+    async fn not_ready(&self) -> Result<(), S::Error> {
+        (**self).not_ready().await
     }
 
     #[inline]
