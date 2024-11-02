@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.0] - 2024-11-02
+
+* Use updated Service trait
+
 ## [2.4.0] - 2024-09-26
 
 * Remove "must_use" from `condition::Waiter`

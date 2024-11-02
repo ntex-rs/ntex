@@ -143,6 +143,25 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             }).await
         }
 
+        async fn not_ready(&self) {
+            use std::{future::Future, pin::Pin};
+
+            let mut fut1 = ::std::pin::pin!(self.V1.not_ready());
+            $(let mut $T = ::std::pin::pin!(self.$T.not_ready());)+
+
+            ::std::future::poll_fn(|cx| {
+                if Pin::new(&mut fut1).poll(cx).is_ready() {
+                    return Poll::Ready(())
+                }
+
+                $(if Pin::new(&mut $T).poll(cx).is_ready() {
+                    return Poll::Ready(());
+                })+
+
+                Poll::Pending
+            }).await
+        }
+
         async fn shutdown(&self) {
             self.V1.shutdown().await;
             $(self.$T.shutdown().await;)+
@@ -234,6 +253,7 @@ variant_impl_and!(VariantFactory7, VariantFactory8, V8, V8R, v8, (V2, V3, V4, V5
 #[cfg(test)]
 mod tests {
     use ntex_service::fn_factory;
+    use std::{future::poll_fn, future::Future, pin};
 
     use super::*;
 
@@ -281,6 +301,15 @@ mod tests {
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
         let service = factory.pipeline(&()).await.unwrap().clone();
+
+        let mut f = pin::pin!(service.not_ready());
+        let _ = poll_fn(|cx| {
+            if pin::Pin::new(&mut f).poll(cx).is_pending() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        });
 
         assert!(service.ready().await.is_ok());
         service.shutdown().await;

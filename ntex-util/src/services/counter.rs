@@ -26,13 +26,17 @@ impl Counter {
     }
 
     /// Get counter guard.
-    pub fn get(&self) -> CounterGuard {
+    pub(crate) fn get(&self) -> CounterGuard {
         CounterGuard::new(self.0.clone())
+    }
+
+    pub(crate) fn is_available(&self) -> bool {
+        self.0.count.get() < self.0.capacity
     }
 
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub async fn available(&self) {
+    pub(crate) async fn available(&self) {
         poll_fn(|cx| {
             if self.poll_available(cx) {
                 task::Poll::Ready(())
@@ -43,9 +47,20 @@ impl Counter {
         .await
     }
 
+    pub(crate) async fn unavailable(&self) {
+        poll_fn(|cx| {
+            if self.poll_available(cx) {
+                task::Poll::Pending
+            } else {
+                task::Poll::Ready(())
+            }
+        })
+        .await
+    }
+
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub fn poll_available(&self, cx: &mut task::Context<'_>) -> bool {
+    fn poll_available(&self, cx: &mut task::Context<'_>) -> bool {
         self.0.available(cx)
     }
 
@@ -75,7 +90,11 @@ impl Drop for CounterGuard {
 
 impl CounterInner {
     fn inc(&self) {
-        self.count.set(self.count.get() + 1);
+        let num = self.count.get();
+        self.count.set(num + 1);
+        if num == self.capacity {
+            self.task.wake();
+        }
     }
 
     fn dec(&self) {
@@ -87,10 +106,10 @@ impl CounterInner {
     }
 
     fn available(&self, cx: &mut task::Context<'_>) -> bool {
+        self.task.register(cx.waker());
         if self.count.get() < self.capacity {
             true
         } else {
-            self.task.register(cx.waker());
             false
         }
     }

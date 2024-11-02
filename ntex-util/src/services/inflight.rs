@@ -62,8 +62,20 @@ where
 
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        self.count.available().await;
-        ctx.ready(&self.service).await
+        if !self.count.is_available() {
+            let (_, res) =
+                crate::future::join(self.count.available(), ctx.ready(&self.service)).await;
+            res
+        } else {
+            ctx.ready(&self.service).await
+        }
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        if self.count.is_available() {
+            crate::future::select(self.count.unavailable(), self.service.not_ready()).await;
+        }
     }
 
     #[inline]
@@ -113,10 +125,12 @@ mod tests {
         });
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Ready(()));
 
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
         srv.shutdown().await;
     }
 

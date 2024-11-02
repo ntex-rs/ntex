@@ -54,7 +54,7 @@ trait ServiceObj<Req> {
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, (), Self::Error>;
 
-    fn not_ready(&self) -> BoxFuture<'_, (), Self::Error>;
+    fn not_ready<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
 
     fn call<'a>(
         &'a self,
@@ -84,7 +84,7 @@ where
     }
 
     #[inline]
-    fn not_ready(&self) -> BoxFuture<'_, (), Self::Error> {
+    fn not_ready<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
         Box::pin(crate::Service::not_ready(self))
     }
 
@@ -159,7 +159,7 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) -> Result<(), Self::Error> {
+    async fn not_ready(&self) {
         self.0.not_ready().await
     }
 

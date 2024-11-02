@@ -13,11 +13,8 @@ macro_rules! forward_ready {
         }
 
         #[inline]
-        async fn not_ready(&self) -> Result<(), Self::Error> {
-            self.$field
-                .not_ready()
-                .await
-                .map_err(::core::convert::Into::into)
+        async fn not_ready(&self) {
+            self.$field.not_ready().await
         }
     };
     ($field:ident, $err:expr) => {
@@ -30,8 +27,19 @@ macro_rules! forward_ready {
         }
 
         #[inline]
-        async fn not_ready(&self) -> Result<(), Self::Error> {
-            self.$field.not_ready().await.map_err($err)
+        async fn not_ready(&self) {
+            self.$field.not_ready().await
+        }
+    };
+}
+
+/// An implementation of [`not_ready`] that forwards not_ready call to a field.
+#[macro_export]
+macro_rules! forward_notready {
+    ($field:ident) => {
+        #[inline]
+        async fn not_ready(&self) {
+            self.$field.not_ready().await
         }
     };
 }

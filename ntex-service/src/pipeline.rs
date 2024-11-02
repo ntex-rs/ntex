@@ -40,7 +40,7 @@ impl<S> Pipeline<S> {
     }
 
     #[inline]
-    /// Returns when the service is able to process requests.
+    /// Returns when the pipeline is able to process requests.
     pub async fn ready<R>(&self) -> Result<(), S::Error>
     where
         S: Service<R>,
@@ -48,6 +48,15 @@ impl<S> Pipeline<S> {
         ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
             .ready(&self.state.svc)
             .await
+    }
+
+    #[inline]
+    /// Returns when the pipeline is not able to process requests.
+    pub async fn not_ready<R>(&self)
+    where
+        S: Service<R>,
+    {
+        self.state.svc.not_ready().await
     }
 
     #[inline]
@@ -160,7 +169,7 @@ where
 {
     pl: Pipeline<S>,
     st: cell::UnsafeCell<State<S::Error>>,
-    not_ready: cell::UnsafeCell<StateNotReady<S::Error>>,
+    not_ready: cell::UnsafeCell<StateNotReady>,
 }
 
 enum State<E> {
@@ -169,9 +178,9 @@ enum State<E> {
     Shutdown(Pin<Box<dyn Future<Output = ()> + 'static>>),
 }
 
-enum StateNotReady<E> {
+enum StateNotReady {
     New,
-    Readiness(Pin<Box<dyn Future<Output = Result<(), E>> + 'static>>),
+    Readiness(Pin<Box<dyn Future<Output = ()>>>),
 }
 
 impl<S, R> PipelineBinding<S, R>
@@ -221,7 +230,7 @@ where
 
     #[inline]
     /// Returns when the pipeline is not able to process requests.
-    pub fn poll_not_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+    pub fn poll_not_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
         let st = unsafe { &mut *self.not_ready.get() };
 
         match st {
@@ -375,7 +384,7 @@ where
         .ready(ServiceCtx::<'_, S>::new(pl.index, pl.state.waiters_ref()))
 }
 
-fn not_ready<S, R>(pl: &'static Pipeline<S>) -> impl Future<Output = Result<(), S::Error>>
+fn not_ready<S, R>(pl: &'static Pipeline<S>) -> impl Future<Output = ()>
 where
     S: Service<R>,
     R: 'static,

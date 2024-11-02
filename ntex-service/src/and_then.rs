@@ -31,7 +31,7 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) -> Result<(), Self::Error> {
+    async fn not_ready(&self) {
         util::select(self.svc1.not_ready(), self.svc2.not_ready()).await
     }
 
@@ -88,6 +88,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use ntex_util::time;
     use std::{cell::Cell, rc::Rc};
 
     use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
@@ -102,6 +103,11 @@ mod tests {
         async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
+        }
+
+        async fn not_ready(&self) {
+            self.0.set(self.0.get() + 1);
+            std::future::pending().await
         }
 
         async fn call(
@@ -127,6 +133,11 @@ mod tests {
         async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
+        }
+
+        async fn not_ready(&self) {
+            self.0.set(self.0.get() + 1);
+            std::future::pending().await
         }
 
         async fn call(
@@ -155,6 +166,14 @@ mod tests {
         let res = srv.ready().await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
+
+        let srv2 = srv.clone();
+        ntex::rt::spawn(async move {
+            let _ = srv2.not_ready().await;
+        });
+        time::sleep(time::Millis(25)).await;
+        assert_eq!(cnt.get(), 4);
+
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
     }

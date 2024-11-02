@@ -68,11 +68,6 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) -> Result<(), Self::Error> {
-        self.service.not_ready().await.map_err(&self.f)
-    }
-
-    #[inline]
     async fn call(
         &self,
         req: R,
@@ -82,6 +77,7 @@ where
     }
 
     crate::forward_shutdown!(service);
+    crate::forward_notready!(service);
 }
 
 /// Factory for the `map_err` combinator, changing the type of a new
