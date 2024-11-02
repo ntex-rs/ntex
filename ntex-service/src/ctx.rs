@@ -3,69 +3,67 @@ use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc, task, task::Conte
 use crate::Service;
 
 pub struct ServiceCtx<'a, S: ?Sized> {
-    idx: usize,
-    waiters: &'a Rc<WaitersRef>,
+    idx: u32,
+    waiters: &'a WaitersRef,
     _t: marker::PhantomData<Rc<S>>,
-}
-
-#[derive(Clone, Debug)]
-/// Pipeline tag allows to notify pipeline binding
-pub struct PipelineTag(Rc<WaitersRef>);
-
-pub(crate) struct Waiters {
-    index: usize,
-    waiters: Rc<WaitersRef>,
 }
 
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
-    cur: cell::Cell<usize>,
+    cur: cell::Cell<u32>,
     indexes: cell::UnsafeCell<slab::Slab<Option<task::Waker>>>,
 }
 
-impl PipelineTag {
-    /// Notify pipeline dispatcher
-    pub fn notify(&self) {
-        if let Some(waker) = self.0.get()[0].take() {
-            waker.wake();
-        }
-    }
-}
-
 impl WaitersRef {
+    pub(crate) fn new() -> (u32, Self) {
+        let mut waiters = slab::Slab::new();
+        let index = waiters.insert(Default::default()) as u32;
+
+        (
+            index,
+            WaitersRef {
+                cur: cell::Cell::new(u32::MAX),
+                indexes: cell::UnsafeCell::new(waiters),
+            },
+        )
+    }
+
     #[allow(clippy::mut_from_ref)]
-    fn get(&self) -> &mut slab::Slab<Option<task::Waker>> {
+    pub(crate) fn get(&self) -> &mut slab::Slab<Option<task::Waker>> {
         unsafe { &mut *self.indexes.get() }
     }
 
-    fn insert(&self) -> usize {
-        self.get().insert(None)
+    pub(crate) fn insert(&self) -> u32 {
+        self.get().insert(None) as u32
     }
 
-    fn remove(&self, idx: usize) {
-        self.notify();
-        self.get().remove(idx);
+    pub(crate) fn remove(&self, idx: u32) {
+        self.get().remove(idx as usize);
+
+        if self.cur.get() == idx {
+            self.notify();
+        }
     }
 
-    fn register(&self, idx: usize, cx: &mut Context<'_>) {
-        self.get()[idx] = Some(cx.waker().clone());
+    pub(crate) fn register(&self, idx: u32, cx: &mut Context<'_>) {
+        self.get()[idx as usize] = Some(cx.waker().clone());
     }
 
-    fn notify(&self) {
+    pub(crate) fn notify(&self) {
         for (_, waker) in self.get().iter_mut().skip(1) {
             if let Some(waker) = waker.take() {
                 waker.wake();
             }
         }
 
-        self.cur.set(usize::MAX);
+        self.cur.set(u32::MAX);
     }
 
-    pub(crate) fn can_check(&self, idx: usize, cx: &mut Context<'_>) -> bool {
+    pub(crate) fn can_check(&self, idx: u32, cx: &mut Context<'_>) -> bool {
         let cur = self.cur.get();
         if cur == idx {
             true
-        } else if cur == usize::MAX {
+        } else if cur == u32::MAX {
             self.cur.set(idx);
             true
         } else {
@@ -75,81 +73,8 @@ impl WaitersRef {
     }
 }
 
-impl Waiters {
-    pub(crate) fn new() -> Self {
-        let mut waiters = slab::Slab::new();
-
-        // first insert for wake ups from services
-        let _ = waiters.insert(None);
-
-        Waiters {
-            index: waiters.insert(None),
-            waiters: Rc::new(WaitersRef {
-                cur: cell::Cell::new(usize::MAX),
-                indexes: cell::UnsafeCell::new(waiters),
-            }),
-        }
-    }
-
-    pub(crate) fn get_ref(&self) -> &Rc<WaitersRef> {
-        &self.waiters
-    }
-
-    pub(crate) fn can_check(&self, cx: &mut Context<'_>) -> bool {
-        self.waiters.can_check(self.index, cx)
-    }
-
-    pub(crate) fn register(&self, cx: &mut Context<'_>) {
-        self.waiters.register(self.index, cx);
-    }
-
-    pub(crate) fn register_pipeline(&self, cx: &mut Context<'_>) {
-        self.waiters.register(0, cx);
-    }
-
-    pub(crate) fn notify(&self) {
-        if self.waiters.cur.get() == self.index {
-            self.waiters.notify();
-        }
-    }
-}
-
-impl Drop for Waiters {
-    #[inline]
-    fn drop(&mut self) {
-        self.waiters.remove(self.index);
-        self.notify();
-    }
-}
-
-impl Clone for Waiters {
-    fn clone(&self) -> Self {
-        Waiters {
-            index: self.waiters.insert(),
-            waiters: self.waiters.clone(),
-        }
-    }
-}
-
-impl fmt::Debug for Waiters {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Waiters")
-            .field("index", &self.index)
-            .field("waiters", &self.waiters.get().len())
-            .finish()
-    }
-}
-
 impl<'a, S> ServiceCtx<'a, S> {
-    pub(crate) fn new(waiters: &'a Waiters) -> Self {
-        Self {
-            idx: waiters.index,
-            waiters: waiters.get_ref(),
-            _t: marker::PhantomData,
-        }
-    }
-
-    pub(crate) fn from_ref(idx: usize, waiters: &'a Rc<WaitersRef>) -> Self {
+    pub(crate) fn new(idx: u32, waiters: &'a WaitersRef) -> Self {
         Self {
             idx,
             waiters,
@@ -157,7 +82,7 @@ impl<'a, S> ServiceCtx<'a, S> {
         }
     }
 
-    pub(crate) fn inner(self) -> (usize, &'a Rc<WaitersRef>) {
+    pub(crate) fn inner(self) -> (u32, &'a WaitersRef) {
         (self.idx, self.waiters)
     }
 
@@ -219,11 +144,6 @@ impl<'a, S> ServiceCtx<'a, S> {
             },
         )
         .await
-    }
-
-    /// Get pipeline tag for current pipeline
-    pub fn tag(&self) -> PipelineTag {
-        PipelineTag(self.waiters.clone())
     }
 }
 
@@ -452,51 +372,5 @@ mod tests {
 
         assert_eq!(cnt.get(), 2);
         assert_eq!(&*data.borrow(), &["srv1", "srv2"]);
-    }
-
-    #[ntex::test]
-    async fn test_pipeline_tag() {
-        struct Srv(Rc<Cell<usize>>, Cell<Option<PipelineTag>>);
-
-        impl Service<&'static str> for Srv {
-            type Response = &'static str;
-            type Error = ();
-
-            async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-                self.1.set(Some(ctx.tag()));
-                self.0.set(self.0.get() + 1);
-                Ok(())
-            }
-
-            async fn call(
-                &self,
-                req: &'static str,
-                _: ServiceCtx<'_, Self>,
-            ) -> Result<&'static str, ()> {
-                Ok(req)
-            }
-        }
-
-        let cnt = Rc::new(Cell::new(0));
-        let con = condition::Condition::new();
-
-        let srv = Pipeline::from(Srv(cnt.clone(), Cell::new(None))).bind();
-
-        let srv1 = srv.clone();
-        let waiter = con.wait();
-        ntex::rt::spawn(async move {
-            let _ = poll_fn(|cx| {
-                let _ = srv1.poll_ready(cx);
-                waiter.poll_ready(cx)
-            })
-            .await;
-        });
-        time::sleep(time::Millis(50)).await;
-        assert_eq!(cnt.get(), 1);
-
-        let tag = srv.get_ref().1.take().unwrap();
-        tag.notify();
-        time::sleep(time::Millis(50)).await;
-        assert_eq!(cnt.get(), 2);
     }
 }

@@ -1,30 +1,42 @@
 use std::{cell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::{ctx::Waiters, Service, ServiceCtx};
+use crate::{ctx::WaitersRef, Service, ServiceCtx};
 
 #[derive(Debug)]
 /// Container for a service.
 ///
 /// Container allows to call enclosed service and adds support of shared readiness.
 pub struct Pipeline<S> {
-    svc: Rc<S>,
-    pub(crate) waiters: Waiters,
+    index: u32,
+    state: Rc<PipelineState<S>>,
+}
+
+struct PipelineState<S> {
+    svc: S,
+    waiters: WaitersRef,
+}
+
+impl<S> PipelineState<S> {
+    pub(crate) fn waiters_ref(&self) -> &WaitersRef {
+        &self.waiters
+    }
 }
 
 impl<S> Pipeline<S> {
     #[inline]
     /// Construct new container instance.
     pub fn new(svc: S) -> Self {
+        let (index, waiters) = WaitersRef::new();
         Pipeline {
-            svc: Rc::new(svc),
-            waiters: Waiters::new(),
+            index,
+            state: Rc::new(PipelineState { svc, waiters }),
         }
     }
 
     #[inline]
     /// Return reference to enclosed service
     pub fn get_ref(&self) -> &S {
-        self.svc.as_ref()
+        &self.state.svc
     }
 
     #[inline]
@@ -33,8 +45,8 @@ impl<S> Pipeline<S> {
     where
         S: Service<R>,
     {
-        ServiceCtx::<'_, S>::new(&self.waiters)
-            .ready(self.svc.as_ref())
+        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
+            .ready(&self.state.svc)
             .await
     }
 
@@ -45,13 +57,9 @@ impl<S> Pipeline<S> {
     where
         S: Service<R>,
     {
-        let ctx = ServiceCtx::<'_, S>::new(&self.waiters);
-
-        // check service readiness
-        self.svc.as_ref().ready(ctx).await?;
-
-        // call service
-        self.svc.as_ref().call(req, ctx).await
+        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
+            .call(&self.state.svc, req)
+            .await
     }
 
     #[inline]
@@ -66,8 +74,8 @@ impl<S> Pipeline<S> {
 
         PipelineCall {
             fut: Box::pin(async move {
-                ServiceCtx::<S>::new(&pl.waiters)
-                    .call(pl.svc.as_ref(), req)
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                    .call(&pl.state.svc, req)
                     .await
             }),
         }
@@ -86,8 +94,8 @@ impl<S> Pipeline<S> {
 
         PipelineCall {
             fut: Box::pin(async move {
-                ServiceCtx::<S>::new(&pl.waiters)
-                    .call_nowait(pl.svc.as_ref(), req)
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                    .call_nowait(&pl.state.svc, req)
                     .await
             }),
         }
@@ -99,11 +107,11 @@ impl<S> Pipeline<S> {
     where
         S: Service<R>,
     {
-        self.svc.as_ref().shutdown().await
+        self.state.svc.shutdown().await
     }
 
     #[inline]
-    /// Convert to lifetime object.
+    /// Get current pipeline.
     pub fn bind<R>(self) -> PipelineBinding<S, R>
     where
         S: Service<R> + 'static,
@@ -121,12 +129,26 @@ impl<S> From<S> for Pipeline<S> {
 }
 
 impl<S> Clone for Pipeline<S> {
-    #[inline]
     fn clone(&self) -> Self {
-        Self {
-            svc: self.svc.clone(),
-            waiters: self.waiters.clone(),
+        Pipeline {
+            index: self.state.waiters.insert(),
+            state: self.state.clone(),
         }
+    }
+}
+
+impl<S> Drop for Pipeline<S> {
+    #[inline]
+    fn drop(&mut self) {
+        self.state.waiters.remove(self.index);
+    }
+}
+
+impl<S> fmt::Debug for PipelineState<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PipelineState")
+            .field("waiters", &self.waiters.get().len())
+            .finish()
     }
 }
 
@@ -160,7 +182,7 @@ where
     #[inline]
     /// Return reference to enclosed service
     pub fn get_ref(&self) -> &S {
-        self.pl.svc.as_ref()
+        &self.pl.state.svc
     }
 
     #[inline]
@@ -215,8 +237,8 @@ where
 
         PipelineCall {
             fut: Box::pin(async move {
-                ServiceCtx::<S>::new(&pl.waiters)
-                    .call(pl.svc.as_ref(), req)
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                    .call(&pl.state.svc, req)
                     .await
             }),
         }
@@ -231,8 +253,8 @@ where
 
         PipelineCall {
             fut: Box::pin(async move {
-                ServiceCtx::<S>::new(&pl.waiters)
-                    .call_nowait(pl.svc.as_ref(), req)
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                    .call_nowait(&pl.state.svc, req)
                     .await
             }),
         }
@@ -241,7 +263,7 @@ where
     #[inline]
     /// Shutdown enclosed service.
     pub async fn shutdown(&self) {
-        self.pl.svc.as_ref().shutdown().await
+        self.pl.state.svc.shutdown().await
     }
 }
 
@@ -316,7 +338,9 @@ where
     S: Service<R>,
     R: 'static,
 {
-    pl.svc.ready(ServiceCtx::<'_, S>::new(&pl.waiters))
+    pl.state
+        .svc
+        .ready(ServiceCtx::<'_, S>::new(pl.index, pl.state.waiters_ref()))
 }
 
 struct CheckReadiness<S: 'static, F, Fut> {
@@ -331,7 +355,7 @@ impl<S, F, Fut> Drop for CheckReadiness<S, F, Fut> {
     fn drop(&mut self) {
         // future fot dropped during polling, we must notify other waiters
         if self.fut.is_some() {
-            self.pl.waiters.notify();
+            self.pl.state.waiters.notify();
         }
     }
 }
@@ -347,18 +371,18 @@ where
         let mut slf = self.as_mut();
 
         // register pipeline tag
-        slf.pl.waiters.register_pipeline(cx);
+        // slf.pl.state.waiters.register_pipeline(cx);
 
-        if slf.pl.waiters.can_check(cx) {
+        if slf.pl.state.waiters.can_check(slf.pl.index, cx) {
             if let Some(ref mut fut) = slf.fut {
                 match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
                     Poll::Pending => {
-                        slf.pl.waiters.register(cx);
+                        slf.pl.state.waiters.register(slf.pl.index, cx);
                         Poll::Pending
                     }
                     Poll::Ready(res) => {
                         let _ = slf.fut.take();
-                        slf.pl.waiters.notify();
+                        slf.pl.state.waiters.notify();
                         Poll::Ready(res)
                     }
                 }

@@ -27,7 +27,7 @@ mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::chain::{chain, chain_factory};
-pub use self::ctx::{PipelineTag, ServiceCtx};
+pub use self::ctx::ServiceCtx;
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
