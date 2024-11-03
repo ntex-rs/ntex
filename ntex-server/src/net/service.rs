@@ -156,7 +156,7 @@ impl Service<Connection> for StreamServiceImpl {
             self.conns.available().await;
         }
         for (idx, svc) in self.services.iter().enumerate() {
-            if let Err(_) = ctx.ready(svc).await {
+            if ctx.ready(svc).await.is_err() {
                 for (idx_, tag, _, _) in self.tokens.values() {
                     if idx == *idx_ {
                         log::error!("{}: Service readiness has failed", tag);
@@ -172,13 +172,13 @@ impl Service<Connection> for StreamServiceImpl {
 
     #[inline]
     async fn not_ready(&self) {
-        let mut futs: Vec<_> = self
-            .services
-            .iter()
-            .map(|s| Box::pin(s.not_ready()))
-            .collect();
-
         if self.conns.is_available() {
+            let mut futs: Vec<_> = self
+                .services
+                .iter()
+                .map(|s| Box::pin(s.not_ready()))
+                .collect();
+
             ntex_util::future::select(
                 self.conns.unavailable(),
                 poll_fn(move |cx| {
