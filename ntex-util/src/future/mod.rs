@@ -28,6 +28,8 @@ where
     poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
 }
 
+#[doc(hidden)]
+#[deprecated]
 /// A future that completes after the given item has been fully processed
 /// into the sink, including flushing.
 pub async fn sink_write<S, I>(sink: &mut S, item: I) -> Result<(), S::Error>
