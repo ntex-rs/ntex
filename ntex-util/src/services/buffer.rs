@@ -329,9 +329,10 @@ mod tests {
     use crate::future::lazy;
     use crate::task::LocalWaker;
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     struct TestService(Rc<Inner>);
 
+    #[derive(Debug)]
     struct Inner {
         ready: Cell<bool>,
         waker: LocalWaker,
@@ -423,6 +424,11 @@ mod tests {
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
         assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
+
+        let err = BufferServiceError::from("test");
+        assert!(format!("{}", err).contains("test"));
+        assert!(format!("{:?}", srv).contains("BufferService"));
+        assert!(format!("{:?}", Buffer::<TestService>::default()).contains("Buffer"));
     }
 
     #[ntex_macros::rt_test2]

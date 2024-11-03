@@ -257,7 +257,7 @@ mod tests {
 
     use super::*;
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     struct Srv1;
 
     impl Service<()> for Srv1 {
@@ -275,7 +275,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     struct Srv2;
 
     impl Service<()> for Srv2 {
@@ -303,9 +303,9 @@ mod tests {
             .clone()
             .v3(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
             .clone();
-        assert!(format!("{:?}", factory).contains("Variant"));
 
         let service = factory.pipeline(&()).await.unwrap().clone();
+        assert!(format!("{:?}", service).contains("Variant"));
 
         let mut f = pin::pin!(service.not_ready());
         let _ = poll_fn(|cx| {
