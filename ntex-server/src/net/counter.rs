@@ -1,4 +1,4 @@
-use std::{cell::Cell, future::poll_fn, rc::Rc, task, task::Poll};
+use std::{cell::Cell, future::poll_fn, rc::Rc, task};
 
 use ntex_util::task::LocalWaker;
 
@@ -30,14 +30,29 @@ impl Counter {
         CounterGuard::new(self.0.clone())
     }
 
+    pub(crate) fn is_available(&self) -> bool {
+        self.0.count.get() < self.0.capacity
+    }
+
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub(super) async fn available(&self) {
+    pub(crate) async fn available(&self) {
         poll_fn(|cx| {
             if self.0.available(cx) {
-                Poll::Ready(())
+                task::Poll::Ready(())
             } else {
-                Poll::Pending
+                task::Poll::Pending
+            }
+        })
+        .await
+    }
+
+    pub(crate) async fn unavailable(&self) {
+        poll_fn(|cx| {
+            if self.0.available(cx) {
+                task::Poll::Pending
+            } else {
+                task::Poll::Ready(())
             }
         })
         .await
@@ -72,7 +87,11 @@ impl Drop for CounterGuard {
 
 impl CounterInner {
     fn inc(&self) {
-        self.count.set(self.count.get() + 1);
+        let num = self.count.get() + 1;
+        self.count.set(num);
+        if num == self.capacity {
+            self.task.wake();
+        }
     }
 
     fn dec(&self) {
@@ -84,11 +103,7 @@ impl CounterInner {
     }
 
     fn available(&self, cx: &mut task::Context<'_>) -> bool {
-        if self.count.get() < self.capacity {
-            true
-        } else {
-            self.task.register(cx.waker());
-            false
-        }
+        self.task.register(cx.waker());
+        self.count.get() < self.capacity
     }
 }

@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, future::poll_fn, future::Future, pin::Pin, task::Poll};
 
 use ntex_bytes::{Pool, PoolRef};
 use ntex_net::Io;
@@ -152,23 +152,46 @@ impl Service<Connection> for StreamServiceImpl {
     type Error = ();
 
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        self.conns.available().await;
+        if !self.conns.is_available() {
+            self.conns.available().await;
+        }
         for (idx, svc) in self.services.iter().enumerate() {
-            match ctx.ready(svc).await {
-                Ok(()) => (),
-                Err(_) => {
-                    for (idx_, tag, _, _) in self.tokens.values() {
-                        if idx == *idx_ {
-                            log::error!("{}: Service readiness has failed", tag);
-                            break;
-                        }
+            if let Err(_) = ctx.ready(svc).await {
+                for (idx_, tag, _, _) in self.tokens.values() {
+                    if idx == *idx_ {
+                        log::error!("{}: Service readiness has failed", tag);
+                        break;
                     }
-                    return Err(());
                 }
+                return Err(());
             }
         }
 
         Ok(())
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        let mut futs: Vec<_> = self
+            .services
+            .iter()
+            .map(|s| Box::pin(s.not_ready()))
+            .collect();
+
+        if self.conns.is_available() {
+            ntex_util::future::select(
+                self.conns.unavailable(),
+                poll_fn(move |cx| {
+                    for f in &mut futs {
+                        if Pin::new(f).poll(cx).is_ready() {
+                            return Poll::Ready(());
+                        }
+                    }
+                    Poll::Pending
+                }),
+            )
+            .await;
+        }
     }
 
     async fn shutdown(&self) {

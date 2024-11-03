@@ -148,6 +148,7 @@ where
     type Response = ();
     type Error = ();
 
+    ntex_service::forward_notready!(inner);
     ntex_service::forward_shutdown!(inner);
 
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
