@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.0] - 2024-11-04
+
+* Use updated Service trait
+
 ## [2.7.1] - 2024-10-15
 
 * Disconnect on error from service readiness check

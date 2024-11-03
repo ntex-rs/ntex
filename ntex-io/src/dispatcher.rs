@@ -446,30 +446,38 @@ where
         }
     }
 
-    fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
-        match self.shared.service.poll_ready(cx) {
-            Poll::Ready(Ok(_)) => {
-                // check for errors
-                Poll::Ready(if let Some(err) = self.shared.error.take() {
-                    log::trace!(
-                        "{}: Error occured, stopping dispatcher",
-                        self.shared.io.tag()
-                    );
-                    self.st = DispatcherState::Stop;
+    fn check_error(&mut self) -> PollService<U> {
+        // check for errors
+        if let Some(err) = self.shared.error.take() {
+            log::trace!(
+                "{}: Error occured, stopping dispatcher",
+                self.shared.io.tag()
+            );
+            self.st = DispatcherState::Stop;
 
-                    match err {
-                        DispatcherError::Encoder(err) => {
-                            PollService::Item(DispatchItem::EncoderError(err))
-                        }
-                        DispatcherError::Service(err) => {
-                            self.error = Some(err);
-                            PollService::Continue
-                        }
-                    }
-                } else {
-                    PollService::Ready
-                })
+            match err {
+                DispatcherError::Encoder(err) => {
+                    PollService::Item(DispatchItem::EncoderError(err))
+                }
+                DispatcherError::Service(err) => {
+                    self.error = Some(err);
+                    PollService::Continue
+                }
             }
+        } else {
+            PollService::Ready
+        }
+    }
+
+    fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
+        // check service readiness
+        if self.shared.service.poll_not_ready(cx).is_pending() {
+            return Poll::Ready(self.check_error());
+        }
+
+        // wait until service becomes ready
+        match self.shared.service.poll_ready(cx) {
+            Poll::Ready(Ok(_)) => Poll::Ready(self.check_error()),
             // pause io read task
             Poll::Pending => {
                 log::trace!(
@@ -850,12 +858,14 @@ mod tests {
 
         impl Service<DispatchItem<BytesCodec>> for Srv {
             type Response = Option<Response<BytesCodec>>;
-            type Error = ();
+            type Error = &'static str;
 
-            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
                 self.0.set(self.0.get() + 1);
-                Err(())
+                Err("test")
             }
+
+            async fn not_ready(&self) {}
 
             async fn call(
                 &self,
@@ -868,7 +878,8 @@ mod tests {
 
         let (disp, state) = Dispatcher::debug(server, BytesCodec, Srv(counter.clone()));
         spawn(async move {
-            let _ = disp.await;
+            let res = disp.await;
+            assert_eq!(res, Err("test"));
         });
 
         state
