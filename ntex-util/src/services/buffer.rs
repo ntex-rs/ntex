@@ -372,6 +372,7 @@ mod tests {
         let srv =
             Pipeline::new(BufferService::new(2, TestService(inner.clone())).clone()).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         let srv1 = srv.clone();
         ntex::rt::spawn(async move {
@@ -380,6 +381,7 @@ mod tests {
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 0);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         let srv1 = srv.clone();
         ntex::rt::spawn(async move {
@@ -388,10 +390,12 @@ mod tests {
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 0);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Ready(()));
 
         inner.ready.set(true);
         inner.waker.wake();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 1);
@@ -399,6 +403,7 @@ mod tests {
         inner.ready.set(true);
         inner.waker.wake();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 2);
@@ -411,9 +416,12 @@ mod tests {
 
         let srv = Pipeline::new(BufferService::new(2, TestService(inner.clone()))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
+
         let _ = srv.call(()).await;
         assert_eq!(inner.count.get(), 1);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
         assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
     }
 
