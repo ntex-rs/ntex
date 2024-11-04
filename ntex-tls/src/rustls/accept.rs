@@ -4,10 +4,9 @@ use tls_rust::ServerConfig;
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::time::Millis;
+use ntex_util::{services::Counter, time::Millis};
 
-use super::TlsServerFilter;
-use crate::{counter::Counter, MAX_SSL_ACCEPT_COUNTER};
+use crate::{rustls::TlsServerFilter, MAX_SSL_ACCEPT_COUNTER};
 
 #[derive(Debug)]
 /// Support `SSL` connections via rustls package
@@ -81,8 +80,17 @@ impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
     type Error = io::Error;
 
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        self.conns.available().await;
+        if !self.conns.is_available() {
+            self.conns.available().await
+        }
         Ok(())
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        if self.conns.is_available() {
+            self.conns.unavailable().await
+        }
     }
 
     async fn call(

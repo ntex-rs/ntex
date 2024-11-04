@@ -1,5 +1,9 @@
 # Changes
 
+## [2.3.0] - 2024-11-04
+
+* Use updated Service trait
+
 ## [2.2.0] - 2024-09-25
 
 * Disable default features for rustls

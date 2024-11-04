@@ -1,4 +1,4 @@
-use std::{cell::Cell, future::poll_fn, rc::Rc, task};
+use std::{cell::Cell, cell::RefCell, future::poll_fn, rc::Rc, task::Context, task::Poll};
 
 use crate::task::LocalWaker;
 
@@ -6,53 +6,67 @@ use crate::task::LocalWaker;
 ///
 /// Counter could be cloned, total count is shared across all clones.
 #[derive(Debug)]
-pub struct Counter(Rc<CounterInner>);
+pub struct Counter(usize, Rc<CounterInner>);
 
 #[derive(Debug)]
 struct CounterInner {
     count: Cell<usize>,
-    capacity: usize,
-    task: LocalWaker,
+    capacity: Cell<usize>,
+    tasks: RefCell<slab::Slab<LocalWaker>>,
 }
 
 impl Counter {
     /// Create `Counter` instance and set max value.
     pub fn new(capacity: usize) -> Self {
-        Counter(Rc::new(CounterInner {
-            capacity,
-            count: Cell::new(0),
-            task: LocalWaker::new(),
-        }))
+        let mut tasks = slab::Slab::new();
+        let idx = tasks.insert(LocalWaker::new());
+
+        Counter(
+            idx,
+            Rc::new(CounterInner {
+                count: Cell::new(0),
+                capacity: Cell::new(capacity),
+                tasks: RefCell::new(tasks),
+            }),
+        )
     }
 
     /// Get counter guard.
-    pub(crate) fn get(&self) -> CounterGuard {
-        CounterGuard::new(self.0.clone())
+    pub fn get(&self) -> CounterGuard {
+        CounterGuard::new(self.1.clone())
     }
 
-    pub(crate) fn is_available(&self) -> bool {
-        self.0.count.get() < self.0.capacity
+    /// Set counter capacity
+    pub fn set_capacity(&self, cap: usize) {
+        self.1.capacity.set(cap);
+        self.1.notify();
+    }
+
+    /// Check is counter has free capacity.
+    pub fn is_available(&self) -> bool {
+        self.1.count.get() < self.1.capacity.get()
     }
 
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    pub(crate) async fn available(&self) {
+    pub async fn available(&self) {
         poll_fn(|cx| {
             if self.poll_available(cx) {
-                task::Poll::Ready(())
+                Poll::Ready(())
             } else {
-                task::Poll::Pending
+                Poll::Pending
             }
         })
         .await
     }
 
-    pub(crate) async fn unavailable(&self) {
+    /// Wait untile counter becomes at capacity.
+    pub async fn unavailable(&self) {
         poll_fn(|cx| {
             if self.poll_available(cx) {
-                task::Poll::Pending
+                Poll::Pending
             } else {
-                task::Poll::Ready(())
+                Poll::Ready(())
             }
         })
         .await
@@ -60,8 +74,28 @@ impl Counter {
 
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
-    fn poll_available(&self, cx: &mut task::Context<'_>) -> bool {
-        self.0.available(cx)
+    fn poll_available(&self, cx: &mut Context<'_>) -> bool {
+        let tasks = self.1.tasks.borrow();
+        tasks[self.0].register(cx.waker());
+        self.1.count.get() < self.1.capacity.get()
+    }
+
+    /// Get total number of acquired counts
+    pub fn total(&self) -> usize {
+        self.1.count.get()
+    }
+}
+
+impl Clone for Counter {
+    fn clone(&self) -> Self {
+        let idx = self.1.tasks.borrow_mut().insert(LocalWaker::new());
+        Self(idx, self.1.clone())
+    }
+}
+
+impl Drop for Counter {
+    fn drop(&mut self) {
+        self.1.tasks.borrow_mut().remove(self.0);
     }
 }
 
@@ -87,21 +121,23 @@ impl CounterInner {
     fn inc(&self) {
         let num = self.count.get() + 1;
         self.count.set(num);
-        if num == self.capacity {
-            self.task.wake();
+        if num == self.capacity.get() {
+            self.notify();
         }
     }
 
     fn dec(&self) {
         let num = self.count.get();
         self.count.set(num - 1);
-        if num == self.capacity {
-            self.task.wake();
+        if num == self.capacity.get() {
+            self.notify();
         }
     }
 
-    fn available(&self, cx: &mut task::Context<'_>) -> bool {
-        self.task.register(cx.waker());
-        self.count.get() < self.capacity
+    fn notify(&self) {
+        let tasks = self.tasks.borrow();
+        for (_, task) in &*tasks {
+            task.wake()
+        }
     }
 }
