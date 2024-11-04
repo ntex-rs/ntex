@@ -420,21 +420,20 @@ where
         let mut slf = self.as_mut();
 
         if slf.pl.state.waiters.can_check(slf.pl.index, cx) {
-            if let Some(ref mut fut) = slf.fut {
-                match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
-                    Poll::Pending => {
-                        slf.pl.state.waiters.register(slf.pl.index, cx);
-                        Poll::Pending
-                    }
-                    Poll::Ready(res) => {
-                        let _ = slf.fut.take();
-                        slf.pl.state.waiters.notify();
-                        Poll::Ready(res)
-                    }
-                }
-            } else {
+            if slf.fut.is_none() {
                 slf.fut = Some((slf.f)(slf.pl));
-                self.poll(cx)
+            }
+            let fut = slf.fut.as_mut().unwrap();
+            match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
+                Poll::Pending => {
+                    slf.pl.state.waiters.register(slf.pl.index, cx);
+                    Poll::Pending
+                }
+                Poll::Ready(res) => {
+                    let _ = slf.fut.take();
+                    slf.pl.state.waiters.notify();
+                    Poll::Ready(res)
+                }
             }
         } else {
             Poll::Pending
@@ -460,21 +459,20 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         let mut slf = self.as_mut();
 
-        if let Some(ref mut fut) = slf.fut {
-            match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
-                Poll::Pending => {
-                    slf.pl.state.waiters.register_unready(cx);
-                    Poll::Pending
-                }
-                Poll::Ready(res) => {
-                    let _ = slf.fut.take();
-                    slf.pl.state.waiters.notify();
-                    Poll::Ready(res)
-                }
-            }
-        } else {
+        if slf.fut.is_none() {
             slf.fut = Some((slf.f)(slf.pl));
-            self.poll(cx)
+        }
+        let fut = slf.fut.as_mut().unwrap();
+        match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
+            Poll::Pending => {
+                slf.pl.state.waiters.register_unready(cx);
+                Poll::Pending
+            }
+            Poll::Ready(res) => {
+                let _ = slf.fut.take();
+                slf.pl.state.waiters.notify();
+                Poll::Ready(res)
+            }
         }
     }
 }

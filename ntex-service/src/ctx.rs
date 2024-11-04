@@ -56,8 +56,14 @@ impl WaitersRef {
     }
 
     pub(crate) fn register(&self, idx: u32, cx: &mut Context<'_>) {
+        let wakers = self.get_wakers();
+        if let Some(last) = wakers.last() {
+            if idx == *last {
+                return;
+            }
+        }
+        wakers.push(idx);
         self.get()[idx as usize] = Some(cx.waker().clone());
-        self.get_wakers().push(idx);
     }
 
     pub(crate) fn register_unready(&self, cx: &mut Context<'_>) {
@@ -66,13 +72,14 @@ impl WaitersRef {
     }
 
     pub(crate) fn notify(&self) {
-        let indexes = self.get();
         let wakers = self.get_wakers();
-
-        for idx in wakers.drain(..) {
-            if let Some(item) = indexes.get_mut(idx as usize) {
-                if let Some(waker) = item.take() {
-                    waker.wake();
+        if !wakers.is_empty() {
+            let indexes = self.get();
+            for idx in wakers.drain(..) {
+                if let Some(item) = indexes.get_mut(idx as usize) {
+                    if let Some(waker) = item.take() {
+                        waker.wake();
+                    }
                 }
             }
         }
