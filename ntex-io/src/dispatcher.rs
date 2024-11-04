@@ -131,6 +131,7 @@ bitflags::bitflags! {
         const KA_ENABLED    = 0b00100;
         const KA_TIMEOUT    = 0b01000;
         const READ_TIMEOUT  = 0b10000;
+        const READY        = 0b100000;
     }
 }
 
@@ -471,13 +472,19 @@ where
 
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
         // check service readiness
-        if self.shared.service.poll_not_ready(cx).is_pending() {
-            return Poll::Ready(self.check_error());
+        if self.flags.contains(Flags::READY) {
+            if self.shared.service.poll_not_ready(cx).is_pending() {
+                return Poll::Ready(self.check_error());
+            }
+            self.flags.remove(Flags::READY);
         }
 
         // wait until service becomes ready
         match self.shared.service.poll_ready(cx) {
-            Poll::Ready(Ok(_)) => Poll::Ready(self.check_error()),
+            Poll::Ready(Ok(_)) => {
+                self.flags.insert(Flags::READY);
+                Poll::Ready(self.check_error())
+            }
             // pause io read task
             Poll::Pending => {
                 log::trace!(

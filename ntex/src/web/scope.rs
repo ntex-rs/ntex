@@ -494,6 +494,11 @@ where
         ready2
     }
 
+    #[inline]
+    async fn not_ready(&self) {
+        select(self.filter.not_ready(), self.routing.not_ready()).await;
+    }
+
     async fn call(
         &self,
         req: WebRequest<Err>,

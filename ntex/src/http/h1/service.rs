@@ -6,7 +6,7 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
 use crate::io::{types, Filter, Io, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::{channel::oneshot, util::join, util::HashSet};
+use crate::{channel::oneshot, util::join, util::select, util::HashSet};
 
 use super::control::{Control, ControlAck};
 use super::default::DefaultControlService;
@@ -228,6 +228,12 @@ where
             log::error!("Http service readiness error: {:?}", e);
             DispatchError::Service(Box::new(e))
         })
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        let cfg = self.config.as_ref();
+        select(cfg.control.not_ready(), cfg.service.not_ready()).await;
     }
 
     async fn shutdown(&self) {

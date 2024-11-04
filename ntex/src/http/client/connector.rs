@@ -5,7 +5,7 @@ use ntex_h2::{self as h2};
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::service::{apply_fn, boxed, Service, ServiceCtx};
 use crate::time::{Millis, Seconds};
-use crate::util::{join, timeout::TimeoutError, timeout::TimeoutService};
+use crate::util::{join, select, timeout::TimeoutError, timeout::TimeoutService};
 use crate::{http::Uri, io::IoBoxed};
 
 use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
@@ -273,6 +273,7 @@ where
     type Response = <ConnectionPool<T> as Service<Connect>>::Response;
     type Error = ConnectError;
 
+    #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {
             let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
@@ -280,6 +281,15 @@ where
             r2
         } else {
             ctx.ready(&self.tcp_pool).await
+        }
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        if let Some(ref ssl_pool) = self.ssl_pool {
+            select(self.tcp_pool.not_ready(), ssl_pool.not_ready()).await;
+        } else {
+            self.tcp_pool.not_ready().await
         }
     }
 

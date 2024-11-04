@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.0] - 2024-11-04
+
+* Use updated Service trait
+
 ## [2.7.0] - 2024-10-16
 
 * Better handling for h2 remote payload

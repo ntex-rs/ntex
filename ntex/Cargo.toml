@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.7.0"
+version = "2.8.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -73,7 +73,7 @@ ntex-h2 = "1.2"
 ntex-rt = "0.4.19"
 ntex-io = "2.8"
 ntex-net = "2.4"
-ntex-tls = "2.1"
+ntex-tls = "2.3"
 
 base64 = "0.22"
 bitflags = "2"
