@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.1] - 2024-11-04
+
+* Periodically check readiness
+
 ## [2.8.0] - 2024-11-04
 
 * Use updated Service trait
