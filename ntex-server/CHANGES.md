@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.0] - 2024-11-04
+
+* Use updated Service trait
+
 ## [2.3.0] - 2024-07-16
 
 * Add Server to TestServer
