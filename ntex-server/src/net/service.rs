@@ -3,7 +3,7 @@ use std::{fmt, future::poll_fn, future::Future, pin::Pin, task::Poll};
 use ntex_bytes::{Pool, PoolRef};
 use ntex_net::Io;
 use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
-use ntex_util::{future::join_all, services::counter::Counter, HashMap};
+use ntex_util::{future::join_all, services::Counter, HashMap};
 
 use crate::ServerConfiguration;
 

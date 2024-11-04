@@ -1,5 +1,5 @@
 //! General purpose tcp server
-use ntex_util::services::counter::Counter;
+use ntex_util::services::Counter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod accept;

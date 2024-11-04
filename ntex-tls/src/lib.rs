@@ -9,7 +9,7 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
-use ntex_util::services::counter::Counter;
+use ntex_util::services::Counter;
 
 /// Sets the maximum per-worker concurrent ssl connection establish process.
 ///

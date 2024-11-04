@@ -4,7 +4,7 @@ use tls_rust::ServerConfig;
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{services::counter::Counter, time::Millis};
+use ntex_util::{services::Counter, time::Millis};
 
 use crate::{rustls::TlsServerFilter, MAX_SSL_ACCEPT_COUNTER};
 

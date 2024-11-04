@@ -2,7 +2,7 @@ use std::{cell::RefCell, error::Error, fmt, io};
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{services::counter::Counter, time, time::Millis};
+use ntex_util::{services::Counter, time, time::Millis};
 use tls_openssl::ssl;
 
 use crate::{openssl::SslFilter, MAX_SSL_ACCEPT_COUNTER};
