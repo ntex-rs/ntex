@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.3] - 2024-11-04
+
+* Use std::task::ready
+
 ## [0.5.2] - 2024-09-11
 
 * Use new io api
