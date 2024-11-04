@@ -227,6 +227,11 @@ where
     }
 
     #[inline]
+    async fn not_ready(&self) {
+        self.config.service.not_ready().await;
+    }
+
+    #[inline]
     async fn shutdown(&self) {
         self.config.shutdown();
 

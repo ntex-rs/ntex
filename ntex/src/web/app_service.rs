@@ -5,7 +5,7 @@ use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::ServiceChainFactory;
 use crate::service::{fn_service, Middleware, Service, ServiceCtx, ServiceFactory};
-use crate::util::{join, BoxFuture, Extensions};
+use crate::util::{join, select, BoxFuture, Extensions};
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
@@ -299,6 +299,11 @@ where
             join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
         ready1?;
         ready2
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        select(self.filter.not_ready(), self.routing.not_ready()).await;
     }
 
     async fn call(

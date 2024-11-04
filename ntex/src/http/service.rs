@@ -2,7 +2,7 @@ use std::{cell::Cell, cell::RefCell, error, fmt, marker, rc::Rc};
 
 use crate::io::{types, Filter, Io, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::{channel::oneshot, util::join, util::HashSet};
+use crate::{channel::oneshot, util::join, util::select, util::HashSet};
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;
@@ -309,6 +309,12 @@ where
             log::error!("Http service readiness error: {:?}", e);
             DispatchError::Service(Box::new(e))
         })
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        let cfg = self.config.as_ref();
+        select(cfg.control.not_ready(), cfg.service.not_ready()).await;
     }
 
     #[inline]

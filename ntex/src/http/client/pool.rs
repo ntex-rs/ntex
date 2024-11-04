@@ -117,8 +117,14 @@ where
     type Response = Connection;
     type Error = ConnectError;
 
+    #[inline]
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         self.connector.ready().await
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        self.connector.not_ready().await
     }
 
     async fn shutdown(&self) {
