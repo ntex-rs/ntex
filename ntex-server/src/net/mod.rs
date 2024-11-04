@@ -1,10 +1,10 @@
 //! General purpose tcp server
+use ntex_util::services::counter::Counter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod accept;
 mod builder;
 mod config;
-mod counter;
 mod factory;
 mod service;
 mod socket;
@@ -56,8 +56,7 @@ pub enum SslError<E> {
 static MAX_CONNS: AtomicUsize = AtomicUsize::new(25600);
 
 thread_local! {
-    static MAX_CONNS_COUNTER: self::counter::Counter =
-        self::counter::Counter::new(MAX_CONNS.load(Ordering::Relaxed));
+    static MAX_CONNS_COUNTER: Counter = Counter::new(MAX_CONNS.load(Ordering::Relaxed));
 }
 
 /// Sets the maximum per-worker number of concurrent connections.
@@ -68,6 +67,7 @@ thread_local! {
 /// By default max connections is set to a 25k per worker.
 pub(super) fn max_concurrent_connections(num: usize) {
     MAX_CONNS.store(num, Ordering::Relaxed);
+    MAX_CONNS_COUNTER.with(|conns| conns.set_capacity(num));
 }
 
 pub(super) fn num_connections() -> usize {

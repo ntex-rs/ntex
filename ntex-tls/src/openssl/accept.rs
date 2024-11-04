@@ -2,13 +2,10 @@ use std::{cell::RefCell, error::Error, fmt, io};
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::time::{self, Millis};
+use ntex_util::{services::counter::Counter, time, time::Millis};
 use tls_openssl::ssl;
 
-use crate::counter::Counter;
-use crate::MAX_SSL_ACCEPT_COUNTER;
-
-use super::SslFilter;
+use crate::{openssl::SslFilter, MAX_SSL_ACCEPT_COUNTER};
 
 /// Support `TLS` server connections via openssl package
 ///
@@ -98,8 +95,17 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
     type Error = Box<dyn Error>;
 
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        self.conns.available().await;
+        if !self.conns.is_available() {
+            self.conns.available().await
+        }
         Ok(())
+    }
+
+    #[inline]
+    async fn not_ready(&self) {
+        if self.conns.is_available() {
+            self.conns.unavailable().await
+        }
     }
 
     async fn call(
@@ -107,6 +113,7 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
         io: Io<F>,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
+        let _guard = self.conns.get();
         let timeout = self.timeout;
         let ctx_result = ssl::Ssl::new(self.acceptor.context());
 

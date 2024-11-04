@@ -1,8 +1,10 @@
 # Changes
 
-## [2.5.0] - 2024-11-02
+## [2.5.0] - 2024-11-04
 
 * Use updated Service trait
+
+* Export Counter type
 
 ## [2.4.0] - 2024-09-26
 

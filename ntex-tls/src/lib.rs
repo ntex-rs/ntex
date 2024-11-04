@@ -9,7 +9,7 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
-mod counter;
+use ntex_util::services::counter::Counter;
 
 /// Sets the maximum per-worker concurrent ssl connection establish process.
 ///
@@ -19,12 +19,13 @@ mod counter;
 /// By default max connections is set to a 256.
 pub fn max_concurrent_ssl_accept(num: usize) {
     MAX_SSL_ACCEPT.store(num, Ordering::Relaxed);
+    MAX_SSL_ACCEPT_COUNTER.with(|counts| counts.set_capacity(num));
 }
 
 static MAX_SSL_ACCEPT: AtomicUsize = AtomicUsize::new(256);
 
 thread_local! {
-    static MAX_SSL_ACCEPT_COUNTER: counter::Counter = counter::Counter::new(MAX_SSL_ACCEPT.load(Ordering::Relaxed));
+    static MAX_SSL_ACCEPT_COUNTER: Counter = Counter::new(MAX_SSL_ACCEPT.load(Ordering::Relaxed));
 }
 
 /// A TLS PSK identity.

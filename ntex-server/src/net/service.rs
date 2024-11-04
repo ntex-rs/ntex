@@ -3,12 +3,11 @@ use std::{fmt, future::poll_fn, future::Future, pin::Pin, task::Poll};
 use ntex_bytes::{Pool, PoolRef};
 use ntex_net::Io;
 use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
-use ntex_util::{future::join_all, HashMap};
+use ntex_util::{future::join_all, services::counter::Counter, HashMap};
 
 use crate::ServerConfiguration;
 
 use super::accept::{AcceptNotify, AcceptorCommand};
-use super::counter::Counter;
 use super::factory::{FactoryServiceType, NetService, OnWorkerStart};
 use super::{socket::Connection, Token, MAX_CONNS_COUNTER};
 
@@ -135,7 +134,7 @@ impl ServiceFactory<Connection> for StreamService {
         Ok(StreamServiceImpl {
             tokens,
             services,
-            conns: MAX_CONNS_COUNTER.with(|conns| conns.priv_clone()),
+            conns: MAX_CONNS_COUNTER.with(|conns| conns.clone()),
         })
     }
 }
