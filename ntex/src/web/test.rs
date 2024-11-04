@@ -244,8 +244,9 @@ where
 {
     let body = read_response::<S>(app, req).await;
 
-    serde_json::from_slice(&body)
-        .unwrap_or_else(|_| panic!("read_response_json failed during deserialization"))
+    serde_json::from_slice(&body).unwrap_or_else(|e| {
+        panic!("read_response_json failed during deserialization, {:?}", e)
+    })
 }
 
 /// Helper method for extractors testing

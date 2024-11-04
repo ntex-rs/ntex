@@ -5,7 +5,7 @@ use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{chain_factory, dev::ServiceChainFactory, IntoServiceFactory};
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
-use crate::util::{join, Extensions};
+use crate::util::{join, select, Extensions};
 
 use super::app::Filter;
 use super::config::ServiceConfig;

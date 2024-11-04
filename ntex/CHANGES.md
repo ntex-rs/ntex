@@ -4,6 +4,8 @@
 
 * Use updated Service trait
 
+* Don't swallow error when calling panic for read_response_json #443
+
 ## [2.7.0] - 2024-10-16
 
 * Better handling for h2 remote payload
