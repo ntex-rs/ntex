@@ -737,6 +737,7 @@ mod tests {
                         error: None,
                         st: DispatcherState::Processing,
                         response: None,
+                        ready_count: 0,
                         read_remains: 0,
                         read_remains_prev: 0,
                         read_max_timeout: Seconds::ZERO,
