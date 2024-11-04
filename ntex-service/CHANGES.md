@@ -1,6 +1,10 @@
 # Changes
 
-## [3.3.0] - 2024-11-02
+## [3.3.1] - 2024-11-04
+
+* Optimize readiness handling
+
+## [3.3.0] - 2024-11-04
 
 * Added Service::not_ready() method
 
