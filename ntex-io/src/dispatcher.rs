@@ -477,7 +477,8 @@ where
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
         // check service readiness
         if self.flags.contains(Flags::READY) {
-            if self.ready_count != 0 && self.shared.service.poll_not_ready(cx).is_pending() {
+            if self.ready_count != 0 && self.shared.service.poll_not_ready(cx).is_pending()
+            {
                 self.ready_count -= 1;
                 return Poll::Ready(self.check_error());
             }
