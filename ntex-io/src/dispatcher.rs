@@ -11,6 +11,8 @@ use crate::{Decoded, DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
 
 type Response<U> = <U as Encoder>::Item;
 
+const READY_COUNT: u8 = 32;
+
 #[derive(Clone, Debug)]
 /// Shared dispatcher configuration
 pub struct DispatcherConfig(Rc<DispatcherConfigInner>);
@@ -146,6 +148,7 @@ where
     shared: Rc<DispatcherShared<S, U>>,
     response: Option<PipelineCall<S, DispatchItem<U>>>,
     cfg: DispatcherConfig,
+    ready_count: u8,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
@@ -473,7 +476,8 @@ where
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
         // check service readiness
         if self.flags.contains(Flags::READY) {
-            if self.shared.service.poll_not_ready(cx).is_pending() {
+            if self.ready_count != 0 && self.shared.service.poll_not_ready(cx).is_pending() {
+                self.ready_count -= 1;
                 return Poll::Ready(self.check_error());
             }
             self.flags.remove(Flags::READY);
@@ -482,6 +486,7 @@ where
         // wait until service becomes ready
         match self.shared.service.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
+                self.ready_count = READY_COUNT;
                 self.flags.insert(Flags::READY);
                 Poll::Ready(self.check_error())
             }
