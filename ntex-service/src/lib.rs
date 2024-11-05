@@ -124,6 +124,8 @@ pub trait Service<Req> {
     /// Unlike the "ready()" method, the "not_ready()" method returns
     /// only when the service becomes unready. This method is intended
     /// for actively monitoring and maintaining the service state.
+    ///
+    /// "not_ready()" implementation is optional.
     async fn not_ready(&self) {
         std::future::pending().await
     }
