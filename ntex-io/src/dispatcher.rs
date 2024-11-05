@@ -474,7 +474,7 @@ where
         // wait until service becomes ready
         match self.shared.service.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
-                self.shared.service.poll_not_ready(cx);
+                let _ = self.shared.service.poll_not_ready(cx);
                 Poll::Ready(self.check_error())
             }
             // pause io read task
@@ -723,7 +723,6 @@ mod tests {
                         error: None,
                         st: DispatcherState::Processing,
                         response: None,
-                        ready_count: 0,
                         read_remains: 0,
                         read_remains_prev: 0,
                         read_max_timeout: Seconds::ZERO,
