@@ -11,8 +11,6 @@ use crate::{Decoded, DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
 
 type Response<U> = <U as Encoder>::Item;
 
-const READY_COUNT: u8 = 32;
-
 #[derive(Clone, Debug)]
 /// Shared dispatcher configuration
 pub struct DispatcherConfig(Rc<DispatcherConfigInner>);
@@ -148,7 +146,6 @@ where
     shared: Rc<DispatcherShared<S, U>>,
     response: Option<PipelineCall<S, DispatchItem<U>>>,
     cfg: DispatcherConfig,
-    ready_count: u8,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
@@ -235,7 +232,6 @@ where
                 cfg: cfg.clone(),
                 response: None,
                 error: None,
-                ready_count: 0,
                 read_remains: 0,
                 read_remains_prev: 0,
                 read_max_timeout: Seconds::ZERO,
@@ -475,21 +471,10 @@ where
     }
 
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
-        // check service readiness
-        if self.flags.contains(Flags::READY) {
-            if self.ready_count != 0 && self.shared.service.poll_not_ready(cx).is_pending()
-            {
-                self.ready_count -= 1;
-                return Poll::Ready(self.check_error());
-            }
-            self.flags.remove(Flags::READY);
-        }
-
         // wait until service becomes ready
         match self.shared.service.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
-                self.ready_count = READY_COUNT;
-                self.flags.insert(Flags::READY);
+                let _ = self.shared.service.poll_not_ready(cx);
                 Poll::Ready(self.check_error())
             }
             // pause io read task
@@ -738,7 +723,6 @@ mod tests {
                         error: None,
                         st: DispatcherState::Processing,
                         response: None,
-                        ready_count: 0,
                         read_remains: 0,
                         read_remains_prev: 0,
                         read_max_timeout: Seconds::ZERO,
