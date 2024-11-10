@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.2] - 2024-11-10
+
+* Fix un-needed wakeups for unready future
+
 ## [3.3.1] - 2024-11-04
 
 * Optimize readiness handling
