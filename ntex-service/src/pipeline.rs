@@ -464,10 +464,7 @@ where
         }
         let fut = slf.fut.as_mut().unwrap();
         match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
-            Poll::Pending => {
-                slf.pl.state.waiters.register_unready(cx);
-                Poll::Pending
-            }
+            Poll::Pending => Poll::Pending,
             Poll::Ready(res) => {
                 let _ = slf.fut.take();
                 slf.pl.state.waiters.notify();
