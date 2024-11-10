@@ -12,6 +12,7 @@ pub struct ServiceCtx<'a, S: ?Sized> {
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
     cur: cell::Cell<u32>,
+    shutdown: cell::Cell<bool>,
     wakers: cell::UnsafeCell<Vec<u32>>,
     indexes: cell::UnsafeCell<slab::Slab<Option<Waker>>>,
 }
@@ -19,10 +20,15 @@ pub(crate) struct WaitersRef {
 impl WaitersRef {
     pub(crate) fn new() -> (u32, Self) {
         let mut waiters = slab::Slab::new();
+
+        // first insert for wake ups from services
+        let _ = waiters.insert(None);
+
         (
             waiters.insert(Default::default()) as u32,
             WaitersRef {
                 cur: cell::Cell::new(u32::MAX),
+                shutdown: cell::Cell::new(false),
                 indexes: cell::UnsafeCell::new(waiters),
                 wakers: cell::UnsafeCell::new(Vec::default()),
             },
@@ -62,6 +68,18 @@ impl WaitersRef {
         self.get()[idx as usize] = Some(cx.waker().clone());
     }
 
+    pub(crate) fn register_unready(&self, cx: &mut Context<'_>) {
+        self.get()[0] = Some(cx.waker().clone());
+    }
+
+    pub(crate) fn notify_unready(&self) {
+        if let Some(item) = self.get().get_mut(0) {
+            if let Some(waker) = item.take() {
+                waker.wake();
+            }
+        }
+    }
+
     pub(crate) fn notify(&self) {
         let wakers = self.get_wakers();
         if !wakers.is_empty() {
@@ -89,6 +107,14 @@ impl WaitersRef {
             self.register(idx, cx);
             false
         }
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.shutdown.set(true);
+    }
+
+    pub(crate) fn is_shutdown(&self) -> bool {
+        self.shutdown.get()
     }
 }
 

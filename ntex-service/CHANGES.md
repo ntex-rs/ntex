@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.3] - 2024-11-10
+
+* Add Pipeline::is_shutdown() helper
+
 ## [3.3.2] - 2024-11-10
 
 * Fix un-needed wakeups for unready future
