@@ -126,12 +126,12 @@ pin_project_lite::pin_project! {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8  {
-        const READY_ERR     = 0b00001;
-        const IO_ERR        = 0b00010;
-        const KA_ENABLED    = 0b00100;
-        const KA_TIMEOUT    = 0b01000;
-        const READ_TIMEOUT  = 0b10000;
-        const READY        = 0b100000;
+        const READY_ERR     = 0b000001;
+        const IO_ERR        = 0b000010;
+        const KA_ENABLED    = 0b000100;
+        const KA_TIMEOUT    = 0b001000;
+        const READ_TIMEOUT  = 0b010000;
+        const READY         = 0b100000;
     }
 }
 
@@ -342,6 +342,7 @@ where
                         PollService::Continue => continue,
                     };
 
+                    slf.flags.remove(Flags::READY);
                     slf.call_service(cx, item);
                 }
                 // handle write back-pressure
@@ -471,9 +472,18 @@ where
     }
 
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
+        if self.flags.contains(Flags::READY) {
+            if self.shared.service.poll_not_ready(cx).is_ready() {
+                self.flags.remove(Flags::READY);
+            } else {
+                return Poll::Ready(self.check_error());
+            }
+        }
+
         // wait until service becomes ready
         match self.shared.service.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
+                self.flags.insert(Flags::READY);
                 let _ = self.shared.service.poll_not_ready(cx);
                 Poll::Ready(self.check_error())
             }

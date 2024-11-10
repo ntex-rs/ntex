@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.3] - 2024-11-10
+
+* Check service readiness once per decoded item
+
 ## [2.8.2] - 2024-11-05
 
 * Do not rely on not_ready(), always check service readiness
