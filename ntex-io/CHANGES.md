@@ -4,6 +4,8 @@
 
 * Check service readiness once per decoded item
 
+* Run un-readiness check in separate task
+
 ## [2.8.2] - 2024-11-05
 
 * Do not rely on not_ready(), always check service readiness

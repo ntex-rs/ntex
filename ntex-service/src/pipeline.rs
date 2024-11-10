@@ -111,6 +111,12 @@ impl<S> Pipeline<S> {
     }
 
     #[inline]
+    /// Check if shutdown is initiated.
+    pub fn is_shutdown(&self) -> bool {
+        self.state.waiters.is_shutdown()
+    }
+
+    #[inline]
     /// Shutdown enclosed service.
     pub async fn shutdown<R>(&self)
     where
@@ -203,6 +209,12 @@ where
     }
 
     #[inline]
+    /// Get pipeline
+    pub fn pipeline(&self) -> Pipeline<S> {
+        self.pl.clone()
+    }
+
+    #[inline]
     /// Returns `Ready` when the pipeline is able to process requests.
     ///
     /// panics if .poll_shutdown() was called before.
@@ -263,6 +275,8 @@ where
                 // `self` is alive
                 let pl: &'static Pipeline<S> = unsafe { std::mem::transmute(&self.pl) };
                 *st = State::Shutdown(Box::pin(async move { pl.shutdown().await }));
+                pl.state.waiters.shutdown();
+                pl.state.waiters.notify_unready();
                 self.poll_shutdown(cx)
             }
             State::Shutdown(ref mut fut) => Pin::new(fut).poll(cx),
@@ -298,6 +312,12 @@ where
                     .await
             }),
         }
+    }
+
+    #[inline]
+    /// Check if shutdown is initiated.
+    pub fn is_shutdown(&self) -> bool {
+        self.pl.state.waiters.is_shutdown()
     }
 
     #[inline]
@@ -449,14 +469,14 @@ struct CheckUnReadiness<S: 'static, F, Fut> {
 
 impl<S, F, Fut> Unpin for CheckUnReadiness<S, F, Fut> {}
 
-impl<T, S, F, Fut> Future for CheckUnReadiness<S, F, Fut>
+impl<S, F, Fut> Future for CheckUnReadiness<S, F, Fut>
 where
     F: Fn(&'static Pipeline<S>) -> Fut,
-    Fut: Future<Output = T>,
+    Fut: Future<Output = ()>,
 {
-    type Output = T;
+    type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let mut slf = self.as_mut();
 
         if slf.fut.is_none() {
@@ -464,11 +484,18 @@ where
         }
         let fut = slf.fut.as_mut().unwrap();
         match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(res) => {
+            Poll::Pending => {
+                if slf.pl.state.waiters.is_shutdown() {
+                    Poll::Ready(())
+                } else {
+                    slf.pl.state.waiters.register_unready(cx);
+                    Poll::Pending
+                }
+            }
+            Poll::Ready(()) => {
                 let _ = slf.fut.take();
                 slf.pl.state.waiters.notify();
-                Poll::Ready(res)
+                Poll::Ready(())
             }
         }
     }

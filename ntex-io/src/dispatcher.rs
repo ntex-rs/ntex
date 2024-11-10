@@ -1,7 +1,7 @@
 //! Framed transport dispatcher
 #![allow(clippy::let_underscore_future)]
 use std::task::{ready, Context, Poll};
-use std::{cell::Cell, future::Future, pin::Pin, rc::Rc};
+use std::{cell::Cell, future::poll_fn, future::Future, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Pipeline, PipelineBinding, PipelineCall, Service};
@@ -126,12 +126,12 @@ pin_project_lite::pin_project! {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8  {
-        const READY_ERR     = 0b000001;
-        const IO_ERR        = 0b000010;
-        const KA_ENABLED    = 0b000100;
-        const KA_TIMEOUT    = 0b001000;
-        const READ_TIMEOUT  = 0b010000;
-        const READY         = 0b100000;
+        const READY_ERR     = 0b0000001;
+        const IO_ERR        = 0b0000010;
+        const KA_ENABLED    = 0b0000100;
+        const KA_TIMEOUT    = 0b0001000;
+        const READ_TIMEOUT  = 0b0010000;
+        const READY_TASK    = 0b1000000;
     }
 }
 
@@ -160,7 +160,8 @@ where
     codec: U,
     service: PipelineBinding<S, DispatchItem<U>>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
-    inflight: Cell<usize>,
+    inflight: Cell<u32>,
+    ready: Cell<bool>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -222,6 +223,7 @@ where
             codec,
             error: Cell::new(None),
             inflight: Cell::new(0),
+            ready: Cell::new(false),
             service: Pipeline::new(service.into_service()).bind(),
         });
 
@@ -280,6 +282,12 @@ where
                 slf.shared.handle_result(item, &slf.shared.io, false);
                 slf.response = None;
             }
+        }
+
+        // ready task
+        if slf.flags.contains(Flags::READY_TASK) {
+            slf.flags.insert(Flags::READY_TASK);
+            ntex_rt::spawn(not_ready(slf.shared.clone()));
         }
 
         loop {
@@ -342,7 +350,7 @@ where
                         PollService::Continue => continue,
                     };
 
-                    slf.flags.remove(Flags::READY);
+                    slf.shared.ready.set(false);
                     slf.call_service(cx, item);
                 }
                 // handle write back-pressure
@@ -472,19 +480,14 @@ where
     }
 
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
-        if self.flags.contains(Flags::READY) {
-            if self.shared.service.poll_not_ready(cx).is_ready() {
-                self.flags.remove(Flags::READY);
-            } else {
-                return Poll::Ready(self.check_error());
-            }
+        if self.shared.ready.get() {
+            return Poll::Ready(self.check_error());
         }
 
         // wait until service becomes ready
         match self.shared.service.poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
-                self.flags.insert(Flags::READY);
-                let _ = self.shared.service.poll_not_ready(cx);
+                self.shared.ready.set(true);
                 Poll::Ready(self.check_error())
             }
             // pause io read task
@@ -622,6 +625,30 @@ where
         } else {
             Ok(())
         }
+    }
+}
+
+async fn not_ready<S, U>(slf: Rc<DispatcherShared<S, U>>)
+where
+    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    U: Encoder + Decoder + 'static,
+{
+    let pl = slf.service.clone();
+    loop {
+        if !pl.is_shutdown() {
+            if let Err(err) = poll_fn(|cx| pl.poll_ready(cx)).await {
+                log::trace!("{}: Service readiness check failed, stopping", slf.io.tag());
+                slf.error.set(Some(DispatcherError::Service(err)));
+                break;
+            }
+            if !pl.is_shutdown() {
+                poll_fn(|cx| pl.poll_not_ready(cx)).await;
+                slf.ready.set(false);
+                slf.io.wake();
+                continue;
+            }
+        }
+        break;
     }
 }
 
