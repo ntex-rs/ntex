@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.0] - 2024-11-19
+
+* Use Cell instead of RefCell for timer
+
 ## [2.5.0] - 2024-11-04
 
 * Use updated Service trait
