@@ -251,44 +251,13 @@ where
 
     let (system, server, addr) = rx.recv().unwrap();
 
-    let client = {
-        let connector = {
-            #[cfg(feature = "openssl")]
-            {
-                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
-
-                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-                builder.set_verify(SslVerifyMode::NONE);
-                let _ = builder
-                    .set_alpn_protos(b"\x02h2\x08http/1.1")
-                    .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
-                Connector::default()
-                    .timeout(Millis(30_000))
-                    .openssl(builder.build())
-                    .configure_http2(|cfg| {
-                        cfg.max_header_list_size(256 * 1024);
-                        cfg.max_header_continuation_frames(96);
-                    })
-                    .finish()
-            }
-            #[cfg(not(feature = "openssl"))]
-            {
-                Connector::default().timeout(Millis(30_000)).finish()
-            }
-        };
-
-        Client::build()
-            .timeout(Seconds(30))
-            .connector(connector)
-            .finish()
-    };
-
     TestServer {
         addr,
-        client,
         system,
         server,
+        client: Client::build().finish(),
     }
+    .set_client_timeout(Seconds(30), Millis(30_000))
 }
 
 #[derive(Debug)]
@@ -301,6 +270,44 @@ pub struct TestServer {
 }
 
 impl TestServer {
+    /// Set client timeout
+    pub fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
+        let client = {
+            let connector = {
+                #[cfg(feature = "openssl")]
+                {
+                    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+
+                    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+                    builder.set_verify(SslVerifyMode::NONE);
+                    let _ = builder
+                        .set_alpn_protos(b"\x02h2\x08http/1.1")
+                        .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
+                    Connector::default()
+                        .timeout(connect_timeout)
+                        .openssl(builder.build())
+                        .configure_http2(|cfg| {
+                            cfg.max_header_list_size(256 * 1024);
+                            cfg.max_header_continuation_frames(96);
+                        })
+                        .finish()
+                }
+                #[cfg(not(feature = "openssl"))]
+                {
+                    Connector::default().timeout(connect_timeout).finish()
+                }
+            };
+
+            Client::build()
+                .timeout(timeout)
+                .connector(connector)
+                .finish()
+        };
+
+        self.client = client;
+        self
+    }
+
     /// Construct test server url
     pub fn addr(&self) -> net::SocketAddr {
         self.addr

@@ -1,9 +1,9 @@
 use std::io;
 
 use ntex::http::test::server as test_server;
-use ntex::http::{HttpService, Method, Request, Response};
+use ntex::http::{client::error::SendRequestError, HttpService, Method, Request, Response};
 use ntex::service::ServiceFactory;
-use ntex::util::{Bytes, Ready};
+use ntex::{time, util::Bytes, util::Ready};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -86,4 +86,26 @@ async fn test_with_query_parameter() {
     let request = srv.request(Method::GET, srv.url("/?qp=5"));
     let response = request.send().await.unwrap();
     assert!(response.status().is_success());
+}
+
+#[ntex::test]
+async fn test_client_timeout() {
+    let srv = test_server(move || {
+        HttpService::build()
+            .finish(|_| async {
+                time::sleep(time::Seconds(10)).await;
+                Ok::<_, io::Error>(Response::Ok().body(STR))
+            })
+            .map(|_| ())
+    })
+    .set_client_timeout(time::Seconds(1), time::Millis(30_000));
+
+    let err = srv
+        .request(Method::GET, "/")
+        .force_close()
+        .send()
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, SendRequestError::Timeout));
 }
