@@ -171,11 +171,6 @@ struct TimerMod {
 
 impl Timer {
     fn new() -> Self {
-        println!(
-            "=========== {:?}",
-            std::mem::size_of::<Option<Box<TimerMod>>>()
-        );
-
         Timer(Rc::new(TimerInner {
             elapsed: Cell::new(0),
             elapsed_time: Cell::new(None),
