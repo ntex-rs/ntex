@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.1] - 2024-11-23
+
+* Remove debug print
+
 ## [2.6.0] - 2024-11-19
 
 * Use Cell instead of RefCell for timer
