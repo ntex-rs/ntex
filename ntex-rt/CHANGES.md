@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.21] - 2024-11-25
+
+* Update to compio 0.13
+
 ## [0.4.20] - 2024-10-17
 
 * Allow to skip runtime feature for clippy run

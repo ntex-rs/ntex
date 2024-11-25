@@ -1,6 +1,6 @@
 [package]
 name = "ntex-compio"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "compio runtime intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -21,4 +21,4 @@ ntex-bytes = "0.1"
 ntex-io = "2.5"
 ntex-util = "2"
 log = "0.4"
-compio = { version = "0.12.0", features = ["macros", "io", "runtime"] }
+compio = { version = "0.13.0", features = ["macros", "io", "runtime"] }
