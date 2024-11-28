@@ -1,6 +1,6 @@
 [package]
 name = "ntex-http"
-version = "0.1.12"
+version = "0.1.13"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Http types for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -20,8 +20,9 @@ http = "1"
 log = "0.4"
 fxhash = "0.2.1"
 itoa = "1.0.4"
-ntex-bytes = "0.1.21"
+ntex-bytes = "0.1"
 serde = "1"
+futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 bincode = "1"

@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.8.0"
+version = "2.9.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -62,7 +62,7 @@ brotli = ["dep:brotli2"]
 
 [dependencies]
 ntex-codec = "0.6"
-ntex-http = "0.1.12"
+ntex-http = "0.1.13"
 ntex-router = "0.5"
 ntex-service = "3.3"
 ntex-macros = "0.1"

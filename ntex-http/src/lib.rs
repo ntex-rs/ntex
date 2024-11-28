@@ -1,6 +1,7 @@
 //! Http protocol support.
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
 
+pub mod body;
 pub mod error;
 mod map;
 mod serde;

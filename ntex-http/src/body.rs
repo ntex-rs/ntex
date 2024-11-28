@@ -1,8 +1,10 @@
+//! Traits and structures to aid consuming and writing HTTP payloads.
 use std::{
     error::Error, fmt, marker::PhantomData, mem, pin::Pin, task::Context, task::Poll,
 };
 
-use crate::util::{Bytes, BytesMut, Stream};
+use futures_core::Stream;
+use ntex_bytes::{Bytes, BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 /// Body size hint
@@ -19,8 +21,9 @@ impl BodySize {
     }
 }
 
-/// Type that provides this trait can be streamed to a peer.
+/// Interface for types that can be streamed to a peer.
 pub trait MessageBody: 'static {
+    /// Message body size hind
     fn size(&self) -> BodySize;
 
     fn poll_next_chunk(
@@ -30,10 +33,12 @@ pub trait MessageBody: 'static {
 }
 
 impl MessageBody for () {
+    #[inline]
     fn size(&self) -> BodySize {
         BodySize::Empty
     }
 
+    #[inline]
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
@@ -43,10 +48,12 @@ impl MessageBody for () {
 }
 
 impl<T: MessageBody> MessageBody for Box<T> {
+    #[inline]
     fn size(&self) -> BodySize {
         self.as_ref().size()
     }
 
+    #[inline]
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
@@ -56,6 +63,7 @@ impl<T: MessageBody> MessageBody for Box<T> {
 }
 
 #[derive(Debug)]
+/// Represents http response body
 pub enum ResponseBody<B> {
     Body(B),
     Other(Body),
@@ -86,10 +94,12 @@ impl<B> From<Body> for ResponseBody<B> {
 }
 
 impl<B> ResponseBody<B> {
+    #[inline]
     pub fn new(body: B) -> Self {
         ResponseBody::Body(body)
     }
 
+    #[inline]
     pub fn take_body(&mut self) -> ResponseBody<B> {
         std::mem::replace(self, ResponseBody::Other(Body::None))
     }
@@ -106,6 +116,7 @@ impl<B: MessageBody> ResponseBody<B> {
 }
 
 impl<B: MessageBody> MessageBody for ResponseBody<B> {
+    #[inline]
     fn size(&self) -> BodySize {
         match self {
             ResponseBody::Body(ref body) => body.size(),
@@ -113,6 +124,7 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
         }
     }
 
+    #[inline]
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
@@ -154,12 +166,13 @@ impl Body {
     }
 
     /// Create body from generic message body.
-    pub fn from_message<B: MessageBody + 'static>(body: B) -> Body {
+    pub fn from_message<B: MessageBody>(body: B) -> Body {
         Body::Message(Box::new(body))
     }
 }
 
 impl MessageBody for Body {
+    #[inline]
     fn size(&self) -> BodySize {
         match self {
             Body::None => BodySize::None,
@@ -250,12 +263,6 @@ impl From<Bytes> for Body {
 impl From<BytesMut> for Body {
     fn from(s: BytesMut) -> Body {
         Body::Bytes(s.freeze())
-    }
-}
-
-impl From<serde_json::Value> for Body {
-    fn from(v: serde_json::Value) -> Body {
-        Body::Bytes(v.to_string().into())
     }
 }
 

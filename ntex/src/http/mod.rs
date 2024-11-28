@@ -1,5 +1,4 @@
 //! Http protocol support.
-pub mod body;
 mod builder;
 pub mod client;
 mod config;
@@ -36,4 +35,4 @@ pub use crate::io::types::HttpProtocol;
 
 // re-exports
 pub use ntex_http::uri::{self, Uri};
-pub use ntex_http::{HeaderMap, Method, StatusCode, Version};
+pub use ntex_http::{body, HeaderMap, Method, StatusCode, Version};
