@@ -1,5 +1,9 @@
 # Changes
 
+## [0.2.3] - 2024-11-27
+
+* Disable default features
+
 ## [0.2.2] - 2024-11-25
 
 * Update to compio 0.13
