@@ -1,8 +1,10 @@
+//! Traits and structures to aid consuming and writing HTTP payloads.
 use std::{
     error::Error, fmt, marker::PhantomData, mem, pin::Pin, task::Context, task::Poll,
 };
 
-use crate::util::{Bytes, BytesMut, Stream};
+use futures_core::Stream;
+use ntex_bytes::{Bytes, BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 /// Body size hint
@@ -19,8 +21,9 @@ impl BodySize {
     }
 }
 
-/// Type that provides this trait can be streamed to a peer.
+/// Interface for types that can be streamed to a peer.
 pub trait MessageBody: 'static {
+    /// Message body size hind
     fn size(&self) -> BodySize;
 
     fn poll_next_chunk(
@@ -30,10 +33,12 @@ pub trait MessageBody: 'static {
 }
 
 impl MessageBody for () {
+    #[inline]
     fn size(&self) -> BodySize {
         BodySize::Empty
     }
 
+    #[inline]
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
@@ -43,10 +48,12 @@ impl MessageBody for () {
 }
 
 impl<T: MessageBody> MessageBody for Box<T> {
+    #[inline]
     fn size(&self) -> BodySize {
         self.as_ref().size()
     }
 
+    #[inline]
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
@@ -56,6 +63,7 @@ impl<T: MessageBody> MessageBody for Box<T> {
 }
 
 #[derive(Debug)]
+/// Represents http response body
 pub enum ResponseBody<B> {
     Body(B),
     Other(Body),
@@ -86,10 +94,12 @@ impl<B> From<Body> for ResponseBody<B> {
 }
 
 impl<B> ResponseBody<B> {
+    #[inline]
     pub fn new(body: B) -> Self {
         ResponseBody::Body(body)
     }
 
+    #[inline]
     pub fn take_body(&mut self) -> ResponseBody<B> {
         std::mem::replace(self, ResponseBody::Other(Body::None))
     }
@@ -106,6 +116,7 @@ impl<B: MessageBody> ResponseBody<B> {
 }
 
 impl<B: MessageBody> MessageBody for ResponseBody<B> {
+    #[inline]
     fn size(&self) -> BodySize {
         match self {
             ResponseBody::Body(ref body) => body.size(),
@@ -113,6 +124,7 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
         }
     }
 
+    #[inline]
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
@@ -154,12 +166,13 @@ impl Body {
     }
 
     /// Create body from generic message body.
-    pub fn from_message<B: MessageBody + 'static>(body: B) -> Body {
+    pub fn from_message<B: MessageBody>(body: B) -> Body {
         Body::Message(Box::new(body))
     }
 }
 
 impl MessageBody for Body {
+    #[inline]
     fn size(&self) -> BodySize {
         match self {
             Body::None => BodySize::None,
@@ -250,12 +263,6 @@ impl From<Bytes> for Body {
 impl From<BytesMut> for Body {
     fn from(s: BytesMut) -> Body {
         Body::Bytes(s.freeze())
-    }
-}
-
-impl From<serde_json::Value> for Body {
-    fn from(v: serde_json::Value) -> Body {
-        Body::Bytes(v.to_string().into())
     }
 }
 
@@ -551,11 +558,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures_util::stream;
     use std::{future::poll_fn, io};
 
+    use futures_util::stream;
+    use ntex_util::future::Ready;
+
     use super::*;
-    use crate::util::Ready;
 
     impl Body {
         pub(crate) fn get_ref(&self) -> &[u8] {
@@ -566,16 +574,7 @@ mod tests {
         }
     }
 
-    impl ResponseBody<Body> {
-        pub(crate) fn get_ref(&self) -> &[u8] {
-            match *self {
-                ResponseBody::Body(ref b) => b.get_ref(),
-                ResponseBody::Other(ref b) => b.get_ref(),
-            }
-        }
-    }
-
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_static_str() {
         assert_eq!(Body::from("").size(), BodySize::Sized(0));
         assert_eq!(Body::from("test").size(), BodySize::Sized(4));
@@ -593,7 +592,7 @@ mod tests {
         assert!(poll_fn(|cx| "".poll_next_chunk(cx)).await.is_none());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_static_bytes() {
         assert_eq!(Body::from(b"test".as_ref()).size(), BodySize::Sized(4));
         assert_eq!(Body::from(b"test".as_ref()).get_ref(), b"test");
@@ -615,7 +614,7 @@ mod tests {
         assert!(poll_fn(|cx| (&b""[..]).poll_next_chunk(cx)).await.is_none());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_vec() {
         assert_eq!(Body::from(Vec::from("test")).size(), BodySize::Sized(4));
         assert_eq!(Body::from(Vec::from("test")).get_ref(), b"test");
@@ -640,7 +639,7 @@ mod tests {
             .is_none());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_bytes() {
         let mut b = Bytes::from("test");
         assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
@@ -654,7 +653,7 @@ mod tests {
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_bytes_mut() {
         let mut b = Body::from(BytesMut::from("test"));
         assert_eq!(b.size(), BodySize::Sized(4));
@@ -675,7 +674,7 @@ mod tests {
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_string() {
         let mut b = "test".to_owned();
         assert_eq!(Body::from(b.clone()).size(), BodySize::Sized(4));
@@ -691,20 +690,20 @@ mod tests {
         assert!(poll_fn(|cx| b.poll_next_chunk(cx)).await.is_none(),);
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_unit() {
         assert_eq!(().size(), BodySize::Empty);
         assert!(poll_fn(|cx| ().poll_next_chunk(cx)).await.is_none());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_box() {
         let mut val = Box::new(());
         assert_eq!(val.size(), BodySize::Empty);
         assert!(poll_fn(|cx| val.poll_next_chunk(cx)).await.is_none());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     #[allow(clippy::eq_op)]
     async fn test_body_eq() {
         assert!(Body::None == Body::None);
@@ -717,27 +716,14 @@ mod tests {
         assert!(Body::Bytes(Bytes::from_static(b"1")) != Body::None);
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn test_body_debug() {
         assert!(format!("{:?}", Body::None).contains("Body::None"));
         assert!(format!("{:?}", Body::Empty).contains("Body::Empty"));
         assert!(format!("{:?}", Body::Bytes(Bytes::from_static(b"1"))).contains('1'));
     }
 
-    #[crate::rt_test]
-    async fn test_serde_json() {
-        use serde_json::json;
-        assert_eq!(
-            Body::from(serde_json::Value::String("test".into())).size(),
-            BodySize::Sized(6)
-        );
-        assert_eq!(
-            Body::from(json!({"test-key":"test-value"})).size(),
-            BodySize::Sized(25)
-        );
-    }
-
-    #[crate::rt_test]
+    #[ntex::test]
     async fn body_stream() {
         let st = BodyStream::new(stream::once(Ready::<_, io::Error>::Ok(Bytes::from("1"))));
         assert!(format!("{:?}", st).contains("BodyStream"));
@@ -749,7 +735,7 @@ mod tests {
         assert!(res.as_ref().is_some());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn boxed_body_stream() {
         let st = BoxedBodyStream::new(stream::once(Ready::<_, Box<dyn Error>>::Ok(
             Bytes::from("1"),
@@ -763,7 +749,7 @@ mod tests {
         assert!(res.as_ref().is_some());
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn body_skips_empty_chunks() {
         let mut body = BodyStream::new(stream::iter(
             ["1", "", "2"]
@@ -780,7 +766,7 @@ mod tests {
         );
     }
 
-    #[crate::rt_test]
+    #[ntex::test]
     async fn sized_skips_empty_chunks() {
         let mut body = SizedStream::new(
             2,

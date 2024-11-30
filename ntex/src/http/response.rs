@@ -227,6 +227,20 @@ impl<B> Response<B> {
     }
 }
 
+#[cfg(test)]
+impl Response<Body> {
+    pub(crate) fn get_body_ref(&self) -> &[u8] {
+        let b = match *self.body() {
+            ResponseBody::Body(ref b) => b,
+            ResponseBody::Other(ref b) => b,
+        };
+        match b {
+            Body::Bytes(bin) => bin,
+            _ => panic!(),
+        }
+    }
+}
+
 impl<B: MessageBody> fmt::Debug for Response<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let res = writeln!(
@@ -925,7 +939,7 @@ mod tests {
         let resp = Response::build(StatusCode::OK).json(&vec!["v1", "v2", "v3"]);
         let ct = resp.headers().get(CONTENT_TYPE).unwrap();
         assert_eq!(ct, HeaderValue::from_static("application/json"));
-        assert_eq!(resp.body().get_ref(), b"[\"v1\",\"v2\",\"v3\"]");
+        assert_eq!(resp.get_body_ref(), b"[\"v1\",\"v2\",\"v3\"]");
     }
 
     #[test]
@@ -935,14 +949,7 @@ mod tests {
             .json(&vec!["v1", "v2", "v3"]);
         let ct = resp.headers().get(CONTENT_TYPE).unwrap();
         assert_eq!(ct, HeaderValue::from_static("text/json"));
-        assert_eq!(resp.body().get_ref(), b"[\"v1\",\"v2\",\"v3\"]");
-    }
-
-    #[test]
-    fn test_serde_json_in_body() {
-        use serde_json::json;
-        let resp = Response::build(StatusCode::OK).body(json!({"test-key":"test-value"}));
-        assert_eq!(resp.body().get_ref(), br#"{"test-key":"test-value"}"#);
+        assert_eq!(resp.get_body_ref(), b"[\"v1\",\"v2\",\"v3\"]");
     }
 
     #[test]
@@ -955,7 +962,7 @@ mod tests {
             HeaderValue::from_static("text/plain; charset=utf-8")
         );
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().get_ref(), b"test");
+        assert_eq!(resp.get_body_ref(), b"test");
 
         let resp: Response = b"test".as_ref().into();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -964,7 +971,7 @@ mod tests {
             HeaderValue::from_static("application/octet-stream")
         );
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().get_ref(), b"test");
+        assert_eq!(resp.get_body_ref(), b"test");
 
         let resp: Response = "test".to_owned().into();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -973,7 +980,7 @@ mod tests {
             HeaderValue::from_static("text/plain; charset=utf-8")
         );
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().get_ref(), b"test");
+        assert_eq!(resp.get_body_ref(), b"test");
 
         let resp: Response = (&"test".to_owned()).into();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -982,7 +989,7 @@ mod tests {
             HeaderValue::from_static("text/plain; charset=utf-8")
         );
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().get_ref(), b"test");
+        assert_eq!(resp.get_body_ref(), b"test");
 
         let b = Bytes::from_static(b"test");
         let resp: Response = b.into();
@@ -992,7 +999,7 @@ mod tests {
             HeaderValue::from_static("application/octet-stream")
         );
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().get_ref(), b"test");
+        assert_eq!(resp.get_body_ref(), b"test");
 
         let b = Bytes::from_static(b"test");
         let resp: Response = b.into();
@@ -1002,7 +1009,7 @@ mod tests {
             HeaderValue::from_static("application/octet-stream")
         );
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().get_ref(), b"test");
+        assert_eq!(resp.get_body_ref(), b"test");
 
         let b = BytesMut::from("test");
         let resp: Response = b.into();
@@ -1013,7 +1020,7 @@ mod tests {
         );
 
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.body().get_ref(), b"test");
+        assert_eq!(resp.get_body_ref(), b"test");
 
         let builder = Response::build_from(ResponseBuilder::new(StatusCode::OK))
             .keep_alive()

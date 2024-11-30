@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.13] - 2024-01-xx
+
+* Move body related types from ntex::http
+
 ## [0.1.12] - 2024-01-16
 
 * Update http dependency
