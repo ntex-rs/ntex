@@ -127,14 +127,14 @@ mod compio {
     use std::task::{ready, Context, Poll};
     use std::{fmt, future::poll_fn, future::Future, pin::Pin};
 
-    use comp_io::runtime::Runtime;
+    use compio_runtime::Runtime;
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
         log::info!(
             "Starting compio runtime, driver {:?}",
-            comp_io::driver::DriverType::current()
+            compio_driver::DriverType::current()
         );
         let rt = Runtime::new().unwrap();
         rt.block_on(fut);
@@ -151,7 +151,7 @@ mod compio {
         T: Send + 'static,
     {
         JoinHandle {
-            fut: Some(comp_io::runtime::spawn_blocking(f)),
+            fut: Some(compio_runtime::spawn_blocking(f)),
         }
     }
 
@@ -168,7 +168,7 @@ mod compio {
         F: Future + 'static,
     {
         let ptr = crate::CB.with(|cb| (cb.borrow().0)());
-        let fut = comp_io::runtime::spawn(async move {
+        let fut = compio_runtime::spawn(async move {
             if let Some(ptr) = ptr {
                 let mut f = std::pin::pin!(f);
                 let result = poll_fn(|ctx| {
@@ -216,7 +216,7 @@ mod compio {
     impl std::error::Error for JoinError {}
 
     pub struct JoinHandle<T> {
-        fut: Option<comp_io::runtime::JoinHandle<T>>,
+        fut: Option<compio_runtime::JoinHandle<T>>,
     }
 
     impl<T> JoinHandle<T> {
