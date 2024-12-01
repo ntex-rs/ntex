@@ -1,5 +1,11 @@
 # Changes
 
+## [2.9.0] - 2024-11-30
+
+* Fix handling unconsumed payload in h1 dispatcher #477
+
+* Move body to ntex-http
+
 ## [2.8.0] - 2024-11-04
 
 * Use updated Service trait
