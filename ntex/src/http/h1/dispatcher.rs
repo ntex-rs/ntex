@@ -181,7 +181,13 @@ where
                     Poll::Pending => ready!(inner.poll_request(cx)),
                 },
                 // read request and call service
-                State::ReadRequest => ready!(inner.poll_read_request(cx)),
+                State::ReadRequest => {
+                    if inner.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
+                        inner.stop()
+                    } else {
+                        ready!(inner.poll_read_request(cx))
+                    }
+                }
                 // consume request's payload
                 State::ReadPayload => {
                     let result = inner.poll_request_payload(cx);
@@ -1262,5 +1268,22 @@ mod tests {
         }
         assert!(mark.load(Ordering::Relaxed) == 1536);
         assert!(err_mark.load(Ordering::Relaxed) == 1);
+    }
+
+    #[crate::rt_test]
+    async fn test_unconsumed_payload() {
+        let (client, server) = Io::create();
+        client.remote_buffer_cap(4096);
+        client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
+
+        let mut h1 = h1(server, |_| {
+            Box::pin(async { Ok::<_, io::Error>(Response::Ok().body("TEST")) })
+        });
+        // required because io shutdown is async oper
+        assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
+
+        assert!(h1.inner.io.is_closed());
+        let buf = client.local_buffer(|buf| buf.split());
+        assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
     }
 }
