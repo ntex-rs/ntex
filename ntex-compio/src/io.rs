@@ -1,15 +1,15 @@
 use std::{any, io};
 
-use compio::buf::{BufResult, IoBuf, IoBufMut, SetBufInit};
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_buf::{BufResult, IoBuf, IoBufMut, SetBufInit};
+use compio_io::{AsyncRead, AsyncWrite};
+use compio_net::TcpStream;
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{types, Handle, IoStream, ReadContext, WriteContext, WriteContextBuf};
 
 impl IoStream for crate::TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0.clone();
-        compio::runtime::spawn(async move { run(io.clone(), &read, write).await }).detach();
+        compio_runtime::spawn(async move { run(io.clone(), &read, write).await }).detach();
 
         Some(Box::new(HandleWrapper(self.0)))
     }
@@ -18,7 +18,7 @@ impl IoStream for crate::TcpStream {
 #[cfg(unix)]
 impl IoStream for crate::UnixStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-        compio::runtime::spawn(async move { run(self.0.clone(), &read, write).await })
+        compio_runtime::spawn(async move { run(self.0.clone(), &read, write).await })
             .detach();
 
         None
@@ -75,7 +75,7 @@ async fn run<T: AsyncRead + AsyncWrite + Clone + 'static>(
     write: WriteContext,
 ) {
     let mut wr_io = WriteIo(io.clone());
-    let wr_task = compio::runtime::spawn(async move {
+    let wr_task = compio_runtime::spawn(async move {
         write.handle(&mut wr_io).await;
         log::debug!("{} Write task is stopped", write.tag());
     });
