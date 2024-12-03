@@ -101,6 +101,12 @@ impl Sleep {
         self.hnd.is_elapsed()
     }
 
+    /// Complete sleep timer.
+    #[inline]
+    pub fn elapse(&self) {
+        self.hnd.elapse()
+    }
+
     /// Resets the `Sleep` instance to a new deadline.
     ///
     /// Calling this function allows changing the instant at which the `Sleep`
@@ -354,7 +360,7 @@ impl crate::Stream for Interval {
 #[allow(clippy::let_underscore_future)]
 mod tests {
     use futures_util::StreamExt;
-    use std::time;
+    use std::{future::poll_fn, rc::Rc, time};
 
     use super::*;
     use crate::future::lazy;
@@ -447,6 +453,17 @@ mod tests {
         };
         assert!(fut.is_elapsed());
         fut.await;
+        let second_time = now();
+        assert!(second_time - first_time < time::Duration::from_millis(1));
+
+        let first_time = now();
+        let fut = Rc::new(sleep(Millis(100000)));
+        let s = fut.clone();
+        ntex::rt::spawn(async move {
+            s.elapse();
+        });
+        poll_fn(|cx| fut.poll_elapsed(cx)).await;
+        assert!(fut.is_elapsed());
         let second_time = now();
         assert!(second_time - first_time < time::Duration::from_millis(1));
     }

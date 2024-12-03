@@ -106,6 +106,11 @@ impl TimerHandle {
         TIMER.with(|t| t.update_timer(self.0, millis))
     }
 
+    /// Resets the `TimerHandle` instance to elapsed state.
+    pub fn elapse(&self) {
+        TIMER.with(|t| t.remove_timer(self.0))
+    }
+
     pub fn is_elapsed(&self) -> bool {
         TIMER.with(|t| t.with_mod(|m| m.timers[self.0].bucket.is_none()))
     }
@@ -303,6 +308,14 @@ impl Timer {
         })
     }
 
+    /// Remove timer and wake task
+    fn remove_timer(&self, hnd: usize) {
+        self.with_mod(|inner| {
+            inner.remove_timer_bucket(hnd, false);
+            inner.timers[hnd].complete();
+        })
+    }
+
     /// Update existing timer
     fn update_timer(&self, hnd: usize, millis: u64) {
         self.with_mod(|inner| {
@@ -345,10 +358,6 @@ impl Timer {
             }
         })
     }
-
-    // fn remove_timer(&self, handle: usize) {
-    //     self.0.inner.borrow_mut().remove_timer_bucket(handle, true)
-    // }
 }
 
 impl TimerMod {
