@@ -1,5 +1,9 @@
 # Changes
 
+## [2.7.0] - 2024-12-03
+
+* Add time::Sleep::elapse() method
+
 ## [2.6.1] - 2024-11-23
 
 * Remove debug print
