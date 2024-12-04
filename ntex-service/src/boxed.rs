@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, pin::Pin};
+use std::{fmt, future::Future, pin::Pin, task::Context};
 
 use crate::ctx::{ServiceCtx, WaitersRef};
 
@@ -54,8 +54,6 @@ trait ServiceObj<Req> {
         waiters: &'a WaitersRef,
     ) -> BoxFuture<'a, (), Self::Error>;
 
-    fn not_ready<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
-
     fn call<'a>(
         &'a self,
         req: Req,
@@ -64,6 +62,8 @@ trait ServiceObj<Req> {
     ) -> BoxFuture<'a, Self::Response, Self::Error>;
 
     fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
+
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error>;
 }
 
 impl<S, Req> ServiceObj<Req> for S
@@ -84,11 +84,6 @@ where
     }
 
     #[inline]
-    fn not_ready<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
-        Box::pin(crate::Service::not_ready(self))
-    }
-
-    #[inline]
     fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
         Box::pin(crate::Service::shutdown(self))
     }
@@ -105,6 +100,11 @@ where
                 .call_nowait(self, req)
                 .await
         })
+    }
+
+    #[inline]
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        crate::Service::poll(self, cx)
     }
 }
 
@@ -159,11 +159,6 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        self.0.not_ready().await
-    }
-
-    #[inline]
     async fn shutdown(&self) {
         self.0.shutdown().await
     }
@@ -172,6 +167,11 @@ where
     async fn call(&self, req: Req, ctx: ServiceCtx<'_, Self>) -> Result<Res, Err> {
         let (idx, waiters) = ctx.inner();
         self.0.call(req, idx, waiters).await
+    }
+
+    #[inline]
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.0.poll(cx)
     }
 }
 

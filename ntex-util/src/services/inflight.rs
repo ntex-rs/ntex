@@ -72,13 +72,6 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        if self.count.is_available() {
-            crate::future::select(self.count.unavailable(), self.service.not_ready()).await;
-        }
-    }
-
-    #[inline]
     async fn call(
         &self,
         req: R,
@@ -88,6 +81,7 @@ where
         ctx.call(&self.service, req).await
     }
 
+    ntex_service::forward_poll!(service);
     ntex_service::forward_shutdown!(service);
 }
 
@@ -118,7 +112,6 @@ mod tests {
 
         let srv = Pipeline::new(InFlightService::new(1, SleepService(rx))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         let srv2 = srv.clone();
         ntex::rt::spawn(async move {
@@ -126,12 +119,10 @@ mod tests {
         });
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Ready(()));
 
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
         srv.shutdown().await;
     }
 

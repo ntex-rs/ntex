@@ -113,7 +113,7 @@ where
         (self.f)(req, self.service.clone()).await
     }
 
-    crate::forward_notready!(service);
+    crate::forward_poll!(service);
     crate::forward_shutdown!(service);
 }
 
@@ -205,7 +205,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use ntex_util::future::lazy;
+    use std::{cell::Cell, rc::Rc, task::Context};
 
     use super::*;
     use crate::{chain, chain_factory, fn_factory};
@@ -221,8 +222,9 @@ mod tests {
             Ok(())
         }
 
-        async fn not_ready(&self) {
+        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
+            Ok(())
         }
 
         async fn shutdown(&self) {
@@ -253,7 +255,7 @@ mod tests {
 
         assert_eq!(srv.ready().await, Ok::<_, Err>(()));
 
-        srv.not_ready().await;
+        lazy(|cx| srv.poll(cx)).await.unwrap();
         assert_eq!(cnt_sht.get(), 1);
 
         srv.shutdown().await;

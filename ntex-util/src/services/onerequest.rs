@@ -66,31 +66,12 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        if self.ready.get() {
-            crate::future::select(
-                poll_fn(|cx| {
-                    self.waker.register(cx.waker());
-                    if self.ready.get() {
-                        Poll::Pending
-                    } else {
-                        Poll::Ready(())
-                    }
-                }),
-                self.service.not_ready(),
-            )
-            .await;
-        }
-    }
-
-    #[inline]
     async fn call(
         &self,
         req: R,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         self.ready.set(false);
-        self.waker.wake();
 
         let result = ctx.call(&self.service, req).await;
         self.ready.set(true);
@@ -98,6 +79,7 @@ where
         result
     }
 
+    ntex_service::forward_poll!(service);
     ntex_service::forward_shutdown!(service);
 }
 
@@ -127,7 +109,6 @@ mod tests {
 
         let srv = Pipeline::new(OneRequestService::new(SleepService(rx))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         let srv2 = srv.clone();
         ntex::rt::spawn(async move {
@@ -135,12 +116,10 @@ mod tests {
         });
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Ready(()));
 
         let _ = tx.send(());
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
         srv.shutdown().await;
     }
 

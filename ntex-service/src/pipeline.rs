@@ -1,4 +1,4 @@
-use std::{cell, fmt, future::Future, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use crate::{ctx::WaitersRef, Service, ServiceCtx};
 
@@ -50,13 +50,14 @@ impl<S> Pipeline<S> {
             .await
     }
 
-    #[inline]
+    #[doc(hidden)]
+    #[deprecated]
     /// Returns when the pipeline is not able to process requests.
     pub async fn not_ready<R>(&self)
     where
         S: Service<R>,
     {
-        self.state.svc.not_ready().await
+        std::future::pending().await
     }
 
     #[inline]
@@ -126,6 +127,14 @@ impl<S> Pipeline<S> {
     }
 
     #[inline]
+    pub fn poll<R>(&self, cx: &mut Context<'_>) -> Result<(), S::Error>
+    where
+        S: Service<R>,
+    {
+        self.state.svc.poll(cx)
+    }
+
+    #[inline]
     /// Get current pipeline.
     pub fn bind<R>(self) -> PipelineBinding<S, R>
     where
@@ -175,18 +184,12 @@ where
 {
     pl: Pipeline<S>,
     st: cell::UnsafeCell<State<S::Error>>,
-    not_ready: cell::UnsafeCell<StateNotReady>,
 }
 
 enum State<E> {
     New,
     Readiness(Pin<Box<dyn Future<Output = Result<(), E>> + 'static>>),
     Shutdown(Pin<Box<dyn Future<Output = ()> + 'static>>),
-}
-
-enum StateNotReady {
-    New,
-    Readiness(Pin<Box<dyn Future<Output = ()>>>),
 }
 
 impl<S, R> PipelineBinding<S, R>
@@ -198,7 +201,6 @@ where
         PipelineBinding {
             pl,
             st: cell::UnsafeCell::new(State::New),
-            not_ready: cell::UnsafeCell::new(StateNotReady::New),
         }
     }
 
@@ -212,6 +214,11 @@ where
     /// Get pipeline
     pub fn pipeline(&self) -> Pipeline<S> {
         self.pl.clone()
+    }
+
+    #[inline]
+    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
+        self.pl.poll(cx)
     }
 
     #[inline]
@@ -230,6 +237,7 @@ where
                 let fut = Box::pin(CheckReadiness {
                     fut: None,
                     f: ready,
+                    _t: marker::PhantomData,
                     pl,
                 });
                 *st = State::Readiness(fut);
@@ -240,27 +248,12 @@ where
         }
     }
 
+    #[doc(hidden)]
+    #[deprecated]
     #[inline]
     /// Returns when the pipeline is not able to process requests.
-    pub fn poll_not_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        let st = unsafe { &mut *self.not_ready.get() };
-
-        match st {
-            StateNotReady::New => {
-                // SAFETY: `fut` has same lifetime same as lifetime of `self.pl`.
-                // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
-                // `self` is alive
-                let pl: &'static Pipeline<S> = unsafe { std::mem::transmute(&self.pl) };
-                let fut = Box::pin(CheckUnReadiness {
-                    fut: None,
-                    f: not_ready,
-                    pl,
-                });
-                *st = StateNotReady::Readiness(fut);
-                self.poll_not_ready(cx)
-            }
-            StateNotReady::Readiness(ref mut fut) => Pin::new(fut).poll(cx),
-        }
+    pub fn poll_not_ready(&self, _: &mut Context<'_>) -> Poll<()> {
+        Poll::Pending
     }
 
     #[inline]
@@ -276,7 +269,6 @@ where
                 let pl: &'static Pipeline<S> = unsafe { std::mem::transmute(&self.pl) };
                 *st = State::Shutdown(Box::pin(async move { pl.shutdown().await }));
                 pl.state.waiters.shutdown();
-                pl.state.waiters.notify_unready();
                 self.poll_shutdown(cx)
             }
             State::Shutdown(ref mut fut) => Pin::new(fut).poll(cx),
@@ -345,7 +337,6 @@ where
         Self {
             pl: self.pl.clone(),
             st: cell::UnsafeCell::new(State::New),
-            not_ready: cell::UnsafeCell::new(StateNotReady::New),
         }
     }
 }
@@ -404,23 +395,16 @@ where
         .ready(ServiceCtx::<'_, S>::new(pl.index, pl.state.waiters_ref()))
 }
 
-fn not_ready<S, R>(pl: &'static Pipeline<S>) -> impl Future<Output = ()>
-where
-    S: Service<R>,
-    R: 'static,
-{
-    pl.state.svc.not_ready()
-}
-
-struct CheckReadiness<S: 'static, F, Fut> {
+struct CheckReadiness<S: Service<R> + 'static, R, F, Fut> {
     f: F,
     fut: Option<Fut>,
     pl: &'static Pipeline<S>,
+    _t: marker::PhantomData<R>,
 }
 
-impl<S, F, Fut> Unpin for CheckReadiness<S, F, Fut> {}
+impl<S: Service<R>, R, F, Fut> Unpin for CheckReadiness<S, R, F, Fut> {}
 
-impl<S, F, Fut> Drop for CheckReadiness<S, F, Fut> {
+impl<S: Service<R>, R, F, Fut> Drop for CheckReadiness<S, R, F, Fut> {
     fn drop(&mut self) {
         // future fot dropped during polling, we must notify other waiters
         if self.fut.is_some() {
@@ -429,15 +413,18 @@ impl<S, F, Fut> Drop for CheckReadiness<S, F, Fut> {
     }
 }
 
-impl<T, S, F, Fut> Future for CheckReadiness<S, F, Fut>
+impl<S, R, F, Fut> Future for CheckReadiness<S, R, F, Fut>
 where
+    S: Service<R>,
     F: Fn(&'static Pipeline<S>) -> Fut,
-    Fut: Future<Output = T>,
+    Fut: Future<Output = Result<(), S::Error>>,
 {
-    type Output = T;
+    type Output = Result<(), S::Error>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut slf = self.as_mut();
+
+        slf.pl.poll(cx)?;
 
         if slf.pl.state.waiters.can_check(slf.pl.index, cx) {
             if slf.fut.is_none() {
@@ -457,46 +444,6 @@ where
             }
         } else {
             Poll::Pending
-        }
-    }
-}
-
-struct CheckUnReadiness<S: 'static, F, Fut> {
-    f: F,
-    fut: Option<Fut>,
-    pl: &'static Pipeline<S>,
-}
-
-impl<S, F, Fut> Unpin for CheckUnReadiness<S, F, Fut> {}
-
-impl<S, F, Fut> Future for CheckUnReadiness<S, F, Fut>
-where
-    F: Fn(&'static Pipeline<S>) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let mut slf = self.as_mut();
-
-        if slf.fut.is_none() {
-            slf.fut = Some((slf.f)(slf.pl));
-        }
-        let fut = slf.fut.as_mut().unwrap();
-        match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
-            Poll::Pending => {
-                if slf.pl.state.waiters.is_shutdown() {
-                    Poll::Ready(())
-                } else {
-                    slf.pl.state.waiters.register_unready(cx);
-                    Poll::Pending
-                }
-            }
-            Poll::Ready(()) => {
-                let _ = slf.fut.take();
-                slf.pl.state.waiters.notify();
-                Poll::Ready(())
-            }
         }
     }
 }

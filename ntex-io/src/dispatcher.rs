@@ -1,7 +1,7 @@
 //! Framed transport dispatcher
 #![allow(clippy::let_underscore_future)]
 use std::task::{ready, Context, Poll};
-use std::{cell::Cell, future::poll_fn, future::Future, pin::Pin, rc::Rc};
+use std::{cell::Cell, future::Future, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::{IntoService, Pipeline, PipelineBinding, PipelineCall, Service};
@@ -131,7 +131,6 @@ bitflags::bitflags! {
         const KA_ENABLED    = 0b0000100;
         const KA_TIMEOUT    = 0b0001000;
         const READ_TIMEOUT  = 0b0010000;
-        const READY_TASK    = 0b1000000;
     }
 }
 
@@ -282,12 +281,6 @@ where
                 slf.shared.handle_result(item, &slf.shared.io, false);
                 slf.response = None;
             }
-        }
-
-        // ready task
-        if slf.flags.contains(Flags::READY_TASK) {
-            slf.flags.insert(Flags::READY_TASK);
-            ntex_rt::spawn(not_ready(slf.shared.clone()));
         }
 
         loop {
@@ -628,30 +621,6 @@ where
     }
 }
 
-async fn not_ready<S, U>(slf: Rc<DispatcherShared<S, U>>)
-where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
-    U: Encoder + Decoder + 'static,
-{
-    let pl = slf.service.clone();
-    loop {
-        if !pl.is_shutdown() {
-            if let Err(err) = poll_fn(|cx| pl.poll_ready(cx)).await {
-                log::trace!("{}: Service readiness check failed, stopping", slf.io.tag());
-                slf.error.set(Some(DispatcherError::Service(err)));
-                break;
-            }
-            if !pl.is_shutdown() {
-                poll_fn(|cx| pl.poll_not_ready(cx)).await;
-                slf.ready.set(false);
-                slf.io.wake();
-                continue;
-            }
-        }
-        break;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
@@ -901,8 +870,6 @@ mod tests {
                 self.0.set(self.0.get() + 1);
                 Err("test")
             }
-
-            async fn not_ready(&self) {}
 
             async fn call(
                 &self,

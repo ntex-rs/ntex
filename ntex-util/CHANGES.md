@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.0] - 2024-12-04
+
+* Use updated Service trait
+
 ## [2.7.0] - 2024-12-03
 
 * Add time::Sleep::elapse() method

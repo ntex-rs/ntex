@@ -1,5 +1,9 @@
 # Changes
 
+## [3.4.0] - 2024-12-04
+
+* Added Service::poll() method
+
 ## [3.3.3] - 2024-11-10
 
 * Add Pipeline::is_shutdown() helper

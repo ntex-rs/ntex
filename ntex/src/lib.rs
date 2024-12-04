@@ -28,7 +28,7 @@ pub use ntex_macros::{rt_main as main, rt_test as test};
 #[cfg(test)]
 pub(crate) use ntex_macros::rt_test2 as rt_test;
 
-pub use ntex_service::{forward_ready, forward_shutdown};
+pub use ntex_service::{forward_poll, forward_ready, forward_shutdown};
 
 pub mod http;
 pub mod web;

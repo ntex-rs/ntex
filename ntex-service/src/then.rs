@@ -31,8 +31,9 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        util::select(self.svc1.not_ready(), self.svc2.not_ready()).await
+    fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
+        self.svc1.poll(cx)?;
+        self.svc2.poll(cx)
     }
 
     #[inline]
@@ -91,8 +92,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_util::time;
-    use std::{cell::Cell, rc::Rc};
+    use ntex_util::future::lazy;
+    use std::{cell::Cell, rc::Rc, task::Context};
 
     use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
 
@@ -108,9 +109,9 @@ mod tests {
             Ok(())
         }
 
-        async fn not_ready(&self) {
+        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
-            std::future::pending().await
+            Ok(())
         }
 
         async fn call(
@@ -141,9 +142,9 @@ mod tests {
             Ok(())
         }
 
-        async fn not_ready(&self) {
+        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
-            std::future::pending().await
+            Ok(())
         }
 
         async fn call(
@@ -173,11 +174,7 @@ mod tests {
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
 
-        let srv2 = srv.clone();
-        ntex::rt::spawn(async move {
-            let _ = srv2.not_ready().await;
-        });
-        time::sleep(time::Millis(25)).await;
+        lazy(|cx| srv.clone().poll(cx)).await.unwrap();
         assert_eq!(cnt.get(), 4);
 
         srv.shutdown().await;

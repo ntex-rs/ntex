@@ -70,7 +70,6 @@ where
     fn create(&self, service: S) -> Self::Service {
         BufferService {
             service: Pipeline::new(service).bind(),
-            service_pending: Cell::new(true),
             size: self.buf_size,
             ready: Cell::new(false),
             buf: RefCell::new(VecDeque::with_capacity(self.buf_size)),
@@ -113,7 +112,6 @@ impl<E: std::fmt::Display + std::fmt::Debug> std::error::Error for BufferService
 pub struct BufferService<R, S: Service<R>> {
     size: usize,
     ready: Cell<bool>,
-    service_pending: Cell<bool>,
     service: PipelineBinding<S, R>,
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
@@ -131,7 +129,6 @@ where
         Self {
             size,
             service: Pipeline::new(service).bind(),
-            service_pending: Cell::new(true),
             ready: Cell::new(false),
             buf: RefCell::new(VecDeque::with_capacity(size)),
             next_call: RefCell::default(),
@@ -158,7 +155,6 @@ where
             size: self.size,
             ready: Cell::new(false),
             service: self.service.clone(),
-            service_pending: Cell::new(false),
             buf: RefCell::new(VecDeque::with_capacity(self.size)),
             next_call: RefCell::default(),
             cancel_on_shutdown: self.cancel_on_shutdown,
@@ -178,7 +174,6 @@ where
             .field("cancel_on_shutdown", &self.cancel_on_shutdown)
             .field("ready", &self.ready)
             .field("service", &self.service)
-            .field("service_pending", &self.service_pending)
             .field("buf", &self.buf)
             .field("next_call", &self.next_call)
             .finish()
@@ -208,18 +203,14 @@ where
                 if buffer.len() < self.size {
                     // buffer next request
                     self.ready.set(false);
-                    self.service_pending.set(false);
                     Poll::Ready(Ok(()))
                 } else {
                     log::trace!("Buffer limit exceeded");
                     // service is not ready
-                    self.service_pending.set(true);
                     let _ = self.readiness.take().map(|w| w.wake());
                     Poll::Pending
                 }
             } else {
-                self.service_pending.set(false);
-
                 while let Some(sender) = buffer.pop_front() {
                     let (next_call_tx, next_call_rx) = oneshot::channel();
                     if sender.send(next_call_tx).is_err()
@@ -238,19 +229,6 @@ where
             }
         })
         .await
-    }
-
-    async fn not_ready(&self) {
-        let fut = poll_fn(|cx| {
-            if self.service_pending.get() {
-                Poll::Ready(())
-            } else {
-                self.readiness.set(Some(cx.waker().clone()));
-                Poll::Pending
-            }
-        });
-
-        crate::future::select(fut, self.service.get_ref().not_ready()).await;
     }
 
     async fn shutdown(&self) {
@@ -318,6 +296,8 @@ where
             Ok(self.service.call(req).await?)
         }
     }
+
+    ntex_service::forward_poll!(service);
 }
 
 #[cfg(test)]
@@ -373,7 +353,6 @@ mod tests {
         let srv =
             Pipeline::new(BufferService::new(2, TestService(inner.clone())).clone()).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         let srv1 = srv.clone();
         ntex::rt::spawn(async move {
@@ -382,7 +361,6 @@ mod tests {
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 0);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         let srv1 = srv.clone();
         ntex::rt::spawn(async move {
@@ -391,12 +369,10 @@ mod tests {
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 0);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Ready(()));
 
         inner.ready.set(true);
         inner.waker.wake();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 1);
@@ -404,7 +380,6 @@ mod tests {
         inner.ready.set(true);
         inner.waker.wake();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(inner.count.get(), 2);
@@ -417,12 +392,10 @@ mod tests {
 
         let srv = Pipeline::new(BufferService::new(2, TestService(inner.clone()))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
 
         let _ = srv.call(()).await;
         assert_eq!(inner.count.get(), 1);
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
-        assert_eq!(lazy(|cx| srv.poll_not_ready(cx)).await, Poll::Pending);
         assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
 
         let err = BufferServiceError::from("test");

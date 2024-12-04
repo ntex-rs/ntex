@@ -21,9 +21,6 @@ impl WaitersRef {
     pub(crate) fn new() -> (u32, Self) {
         let mut waiters = slab::Slab::new();
 
-        // first insert for wake ups from services
-        let _ = waiters.insert(None);
-
         (
             waiters.insert(Default::default()) as u32,
             WaitersRef {
@@ -66,18 +63,6 @@ impl WaitersRef {
         }
         wakers.push(idx);
         self.get()[idx as usize] = Some(cx.waker().clone());
-    }
-
-    pub(crate) fn register_unready(&self, cx: &mut Context<'_>) {
-        self.get()[0] = Some(cx.waker().clone());
-    }
-
-    pub(crate) fn notify_unready(&self) {
-        if let Some(item) = self.get().get_mut(0) {
-            if let Some(waker) = item.take() {
-                waker.wake();
-            }
-        }
     }
 
     pub(crate) fn notify(&self) {

@@ -140,6 +140,7 @@ where
         }
     }
 
+    ntex_service::forward_poll!(service, TimeoutError::Service);
     ntex_service::forward_ready!(service, TimeoutError::Service);
     ntex_service::forward_shutdown!(service);
 }
