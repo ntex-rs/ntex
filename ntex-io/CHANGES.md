@@ -1,5 +1,9 @@
 # Changes
 
+## [2.9.0] - 2024-12-04
+
+* Use updated Service trait
+
 ## [2.8.3] - 2024-11-10
 
 * Check service readiness once per decoded item
