@@ -710,7 +710,6 @@ mod tests {
                 io: state.into(),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
-                ready: Cell::new(false),
                 service: Pipeline::new(service).bind(),
             });
 
