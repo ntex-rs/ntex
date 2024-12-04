@@ -1,5 +1,9 @@
 # Changes
 
+## [2.9.1] - 2024-12-04
+
+* Check service readiness for every turn
+
 ## [2.9.0] - 2024-12-04
 
 * Use updated Service trait

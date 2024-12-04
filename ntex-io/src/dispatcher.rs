@@ -160,7 +160,6 @@ where
     service: PipelineBinding<S, DispatchItem<U>>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
-    ready: Cell<bool>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -222,7 +221,6 @@ where
             codec,
             error: Cell::new(None),
             inflight: Cell::new(0),
-            ready: Cell::new(false),
             service: Pipeline::new(service.into_service()).bind(),
         });
 
@@ -343,7 +341,6 @@ where
                         PollService::Continue => continue,
                     };
 
-                    slf.shared.ready.set(false);
                     slf.call_service(cx, item);
                 }
                 // handle write back-pressure
@@ -473,16 +470,9 @@ where
     }
 
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
-        if self.shared.ready.get() {
-            return Poll::Ready(self.check_error());
-        }
-
         // wait until service becomes ready
         match self.shared.service.poll_ready(cx) {
-            Poll::Ready(Ok(_)) => {
-                self.shared.ready.set(true);
-                Poll::Ready(self.check_error())
-            }
+            Poll::Ready(Ok(_)) => Poll::Ready(self.check_error()),
             // pause io read task
             Poll::Pending => {
                 log::trace!(
