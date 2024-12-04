@@ -6,7 +6,7 @@
     unreachable_pub,
     missing_debug_implementations
 )]
-use std::rc::Rc;
+use std::{rc::Rc, task::Context};
 
 mod and_then;
 mod apply;
@@ -118,7 +118,8 @@ pub trait Service<Req> {
         Ok(())
     }
 
-    #[inline]
+    #[deprecated]
+    #[doc(hidden)]
     /// Returns when the service is not able to process requests.
     ///
     /// Unlike the "ready()" method, the "not_ready()" method returns
@@ -135,6 +136,15 @@ pub trait Service<Req> {
     ///
     /// Returns when the service is properly shutdowns.
     async fn shutdown(&self) {}
+
+    #[inline]
+    /// Polls service from the current task.
+    ///
+    /// Service may require to execute asynchronous computation or
+    /// maintain asynchronous state.
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     #[inline]
     /// Map this service's output to a different type, returning a new service of the resulting type.
@@ -259,8 +269,8 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        (**self).not_ready().await
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
+        (**self).poll(cx)
     }
 
     #[inline]
@@ -291,11 +301,6 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        (**self).not_ready().await
-    }
-
-    #[inline]
     async fn shutdown(&self) {
         (**self).shutdown().await
     }
@@ -307,6 +312,11 @@ where
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         ctx.call_nowait(&**self, request).await
+    }
+
+    #[inline]
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
+        (**self).poll(cx)
     }
 }
 

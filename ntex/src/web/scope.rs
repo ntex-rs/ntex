@@ -1,11 +1,11 @@
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{cell::RefCell, fmt, rc::Rc, task::Context};
 
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::{chain_factory, dev::ServiceChainFactory, IntoServiceFactory};
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
-use crate::util::{join, select, Extensions};
+use crate::util::{join, Extensions};
 
 use super::app::Filter;
 use super::config::ServiceConfig;
@@ -495,10 +495,12 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        select(self.filter.not_ready(), self.routing.not_ready()).await;
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.filter.poll(cx)?;
+        self.routing.poll(cx)
     }
 
+    #[inline]
     async fn call(
         &self,
         req: WebRequest<Err>,

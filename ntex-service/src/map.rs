@@ -62,6 +62,7 @@ where
     type Error = A::Error;
 
     crate::forward_ready!(service);
+    crate::forward_poll!(service);
     crate::forward_shutdown!(service);
 
     #[inline]

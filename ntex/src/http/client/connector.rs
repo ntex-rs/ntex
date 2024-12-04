@@ -1,11 +1,11 @@
-use std::{fmt, time::Duration};
+use std::{fmt, task::Context, time::Duration};
 
 use ntex_h2::{self as h2};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::service::{apply_fn, boxed, Service, ServiceCtx};
 use crate::time::{Millis, Seconds};
-use crate::util::{join, select, timeout::TimeoutError, timeout::TimeoutService};
+use crate::util::{join, timeout::TimeoutError, timeout::TimeoutService};
 use crate::{http::Uri, io::IoBoxed};
 
 use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
@@ -285,12 +285,12 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.tcp_pool.poll(cx)?;
         if let Some(ref ssl_pool) = self.ssl_pool {
-            select(self.tcp_pool.not_ready(), ssl_pool.not_ready()).await;
-        } else {
-            self.tcp_pool.not_ready().await
+            ssl_pool.poll(cx)?;
         }
+        Ok(())
     }
 
     async fn shutdown(&self) {

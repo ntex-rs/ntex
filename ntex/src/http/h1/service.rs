@@ -1,4 +1,4 @@
-use std::{cell::Cell, cell::RefCell, error::Error, fmt, marker, rc::Rc};
+use std::{cell::Cell, cell::RefCell, error::Error, fmt, marker, rc::Rc, task::Context};
 
 use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, ServiceConfig};
@@ -6,7 +6,7 @@ use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
 use crate::io::{types, Filter, Io, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::{channel::oneshot, util::join, util::select, util::HashSet};
+use crate::{channel::oneshot, util::join, util::HashSet};
 
 use super::control::{Control, ControlAck};
 use super::default::DefaultControlService;
@@ -230,10 +230,14 @@ where
         })
     }
 
-    #[inline]
-    async fn not_ready(&self) {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         let cfg = self.config.as_ref();
-        select(cfg.control.not_ready(), cfg.service.not_ready()).await;
+        cfg.control
+            .poll(cx)
+            .map_err(|e| DispatchError::Control(Box::new(e)))?;
+        cfg.service
+            .poll(cx)
+            .map_err(|e| DispatchError::Service(Box::new(e)))
     }
 
     async fn shutdown(&self) {

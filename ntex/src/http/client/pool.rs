@@ -123,8 +123,8 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        self.connector.not_ready().await
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.connector.poll(cx)
     }
 
     async fn shutdown(&self) {

@@ -1,4 +1,4 @@
-use std::{fmt, future::poll_fn, future::Future, pin::Pin, task::Poll};
+use std::{fmt, task::Context};
 
 use ntex_bytes::{Pool, PoolRef};
 use ntex_net::Io;
@@ -170,27 +170,11 @@ impl Service<Connection> for StreamServiceImpl {
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        if self.conns.is_available() {
-            let mut futs: Vec<_> = self
-                .services
-                .iter()
-                .map(|s| Box::pin(s.not_ready()))
-                .collect();
-
-            ntex_util::future::select(
-                self.conns.unavailable(),
-                poll_fn(move |cx| {
-                    for f in &mut futs {
-                        if Pin::new(f).poll(cx).is_ready() {
-                            return Poll::Ready(());
-                        }
-                    }
-                    Poll::Pending
-                }),
-            )
-            .await;
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        for svc in &self.services {
+            svc.poll(cx)?;
         }
+        Ok(())
     }
 
     async fn shutdown(&self) {

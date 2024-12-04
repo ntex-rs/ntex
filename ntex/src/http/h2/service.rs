@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::{error::Error, fmt, future::poll_fn, io, marker, mem, rc::Rc};
+use std::{error::Error, fmt, future::poll_fn, io, marker, mem, rc::Rc, task::Context};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
@@ -227,8 +227,11 @@ where
     }
 
     #[inline]
-    async fn not_ready(&self) {
-        self.config.service.not_ready().await;
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.config
+            .service
+            .poll(cx)
+            .map_err(|e| DispatchError::Service(Box::new(e)))
     }
 
     #[inline]

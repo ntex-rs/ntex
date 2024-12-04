@@ -73,6 +73,7 @@ where
         ctx.call(&self.svc, req).await.map_err(Into::into)
     }
 
+    crate::forward_poll!(svc);
     crate::forward_ready!(svc);
     crate::forward_shutdown!(svc);
 }

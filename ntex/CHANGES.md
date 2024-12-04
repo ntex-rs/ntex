@@ -1,5 +1,9 @@
 # Changes
 
+## [2.10.0] - 2024-12-04
+
+* Use updated Service trait
+
 ## [2.9.0] - 2024-11-30
 
 * Fix handling unconsumed payload in h1 dispatcher #477

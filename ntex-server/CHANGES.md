@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.0] - 2024-12-04
+
+* Use updated Service trait
+
 ## [2.5.0] - 2024-11-04
 
 * Use updated Service trait

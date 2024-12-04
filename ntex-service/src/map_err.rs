@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomData};
+use std::{fmt, marker::PhantomData, task::Context};
 
 use super::{Service, ServiceCtx, ServiceFactory};
 
@@ -68,6 +68,11 @@ where
     }
 
     #[inline]
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.service.poll(cx).map_err(&self.f)
+    }
+
+    #[inline]
     async fn call(
         &self,
         req: R,
@@ -77,7 +82,6 @@ where
     }
 
     crate::forward_shutdown!(service);
-    crate::forward_notready!(service);
 }
 
 /// Factory for the `map_err` combinator, changing the type of a new

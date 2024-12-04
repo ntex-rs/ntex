@@ -11,11 +11,6 @@ macro_rules! forward_ready {
                 .await
                 .map_err(::core::convert::Into::into)
         }
-
-        #[inline]
-        async fn not_ready(&self) {
-            self.$field.not_ready().await
-        }
     };
     ($field:ident, $err:expr) => {
         #[inline]
@@ -25,21 +20,28 @@ macro_rules! forward_ready {
         ) -> Result<(), Self::Error> {
             ctx.ready(&self.$field).await.map_err($err)
         }
-
-        #[inline]
-        async fn not_ready(&self) {
-            self.$field.not_ready().await
-        }
     };
 }
 
 /// An implementation of [`not_ready`] that forwards not_ready call to a field.
 #[macro_export]
 macro_rules! forward_notready {
+    ($field:ident) => {};
+}
+
+/// An implementation of [`poll`] that forwards poll call to a field.
+#[macro_export]
+macro_rules! forward_poll {
     ($field:ident) => {
         #[inline]
-        async fn not_ready(&self) {
-            self.$field.not_ready().await
+        fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
+            self.$field.poll(cx).map_err(From::from)
+        }
+    };
+    ($field:ident, $err:expr) => {
+        #[inline]
+        fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
+            self.$field.poll(cx).map_err($err)
         }
     };
 }

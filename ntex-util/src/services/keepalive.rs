@@ -1,4 +1,4 @@
-use std::{cell::Cell, convert::Infallible, fmt, marker, time};
+use std::{cell::Cell, convert::Infallible, fmt, marker, task::Context, task::Poll, time};
 
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
@@ -119,22 +119,26 @@ where
         }
     }
 
-    async fn not_ready(&self) {
-        loop {
-            self.sleep.wait().await;
-
-            let now = now();
-            let expire = self.expire.get() + time::Duration::from(self.dur);
-            if expire <= now {
-                return;
-            } else {
-                let expire = expire - now;
-                self.sleep
-                    .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        match self.sleep.poll_elapsed(cx) {
+            Poll::Ready(_) => {
+                let now = now();
+                let expire = self.expire.get() + time::Duration::from(self.dur);
+                if expire <= now {
+                    Err((self.f)())
+                } else {
+                    let expire = expire - now;
+                    self.sleep
+                        .reset(Millis(expire.as_millis().try_into().unwrap_or(u32::MAX)));
+                    let _ = self.sleep.poll_elapsed(cx);
+                    Ok(())
+                }
             }
+            Poll::Pending => Ok(()),
         }
     }
 
+    #[inline]
     async fn call(&self, req: R, _: ServiceCtx<'_, Self>) -> Result<R, E> {
         self.expire.set(now());
         Ok(req)
@@ -162,13 +166,11 @@ mod tests {
 
         assert_eq!(service.call(1usize).await, Ok(1usize));
         assert!(lazy(|cx| service.poll_ready(cx)).await.is_ready());
-        assert!(!lazy(|cx| service.poll_not_ready(cx)).await.is_ready());
 
         sleep(Millis(500)).await;
         assert_eq!(
             lazy(|cx| service.poll_ready(cx)).await,
             Poll::Ready(Err(TestErr))
         );
-        assert!(lazy(|cx| service.poll_not_ready(cx)).await.is_ready());
     }
 }

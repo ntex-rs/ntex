@@ -59,24 +59,3 @@ where
     })
     .await
 }
-
-/// Waits for either one of two differently-typed futures to complete.
-pub(crate) async fn select<A, B>(fut1: A, fut2: B) -> A::Output
-where
-    A: Future,
-    B: Future<Output = A::Output>,
-{
-    let mut fut1 = pin::pin!(fut1);
-    let mut fut2 = pin::pin!(fut2);
-
-    poll_fn(|cx| {
-        if let Poll::Ready(item) = Pin::new(&mut fut1).poll(cx) {
-            return Poll::Ready(item);
-        }
-        if let Poll::Ready(item) = Pin::new(&mut fut2).poll(cx) {
-            return Poll::Ready(item);
-        }
-        Poll::Pending
-    })
-    .await
-}
