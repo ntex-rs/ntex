@@ -337,7 +337,7 @@ impl<F> Io<F> {
                     "Timeout",
                 ))),
                 Err(RecvError::Stop) => Err(Either::Right(io::Error::new(
-                    io::ErrorKind::Other,
+                    io::ErrorKind::UnexpectedEof,
                     "Dispatcher stopped",
                 ))),
                 Err(RecvError::WriteBackpressure) => {

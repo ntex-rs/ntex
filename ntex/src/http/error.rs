@@ -217,7 +217,7 @@ pub enum BlockingError<E: fmt::Debug> {
 impl From<crate::rt::JoinError> for PayloadError {
     fn from(_: crate::rt::JoinError) -> Self {
         PayloadError::Io(io::Error::new(
-            io::ErrorKind::Other,
+            io::ErrorKind::Interrupted,
             "Operation is canceled",
         ))
     }
@@ -228,7 +228,7 @@ impl From<BlockingError<io::Error>> for PayloadError {
         match err {
             BlockingError::Error(e) => PayloadError::Io(e),
             BlockingError::Canceled => PayloadError::Io(io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::Interrupted,
                 "Operation is canceled",
             )),
         }

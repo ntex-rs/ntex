@@ -187,14 +187,17 @@ async fn get_response(
                                             err
                                         );
                                         pl.set_error(
-                                            io::Error::new(io::ErrorKind::Other, err)
-                                                .into(),
+                                            io::Error::new(
+                                                io::ErrorKind::UnexpectedEof,
+                                                err,
+                                            )
+                                            .into(),
                                         );
                                     }
                                     _ => {
                                         pl.set_error(
                                             io::Error::new(
-                                                io::ErrorKind::Other,
+                                                io::ErrorKind::Unsupported,
                                                 "unexpected h2 message",
                                             )
                                             .into(),
@@ -216,7 +219,7 @@ async fn get_response(
             }
         }
         _ => Err(SendRequestError::Error(Box::new(io::Error::new(
-            io::ErrorKind::Other,
+            io::ErrorKind::Unsupported,
             "unexpected h2 message",
         )))),
     }

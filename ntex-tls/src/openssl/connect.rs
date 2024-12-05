@@ -51,11 +51,11 @@ impl<T: Address> SslConnector<T> {
         log::trace!("{}: SSL Handshake start for: {:?}", io.tag(), host);
 
         match openssl.configure() {
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e).into()),
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e).into()),
             Ok(config) => {
                 let ssl = config
                     .into_ssl(&host)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
                 let tag = io.tag();
                 match connect_io(io, ssl).await {
                     Ok(io) => {
@@ -64,7 +64,10 @@ impl<T: Address> SslConnector<T> {
                     }
                     Err(e) => {
                         log::trace!("{}: SSL Handshake error: {:?}", tag, e);
-                        Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)).into())
+                        Err(
+                            io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e))
+                                .into(),
+                        )
                     }
                 }
             }

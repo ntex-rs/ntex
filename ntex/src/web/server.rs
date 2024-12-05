@@ -467,7 +467,7 @@ where
                 Err(e)
             } else {
                 Err(io::Error::new(
-                    io::ErrorKind::Other,
+                    io::ErrorKind::InvalidInput,
                     "Cannot bind to address.",
                 ))
             }

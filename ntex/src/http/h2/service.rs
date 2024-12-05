@@ -408,7 +408,9 @@ where
             h2::MessageKind::Disconnect(err) => {
                 log::debug!("Connection is disconnected {:?}", err);
                 if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
-                    sender.set_error(io::Error::new(io::ErrorKind::Other, err).into());
+                    sender.set_error(
+                        io::Error::new(io::ErrorKind::UnexpectedEof, err).into(),
+                    );
                 }
                 return Ok(());
             }

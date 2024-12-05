@@ -117,7 +117,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                     Poll::Ready(Ok(Err(e))) => return Poll::Ready(Some(Err(Box::new(e)))),
                     Poll::Ready(Err(_)) => {
                         return Poll::Ready(Some(Err(Box::new(io::Error::new(
-                            io::ErrorKind::Other,
+                            io::ErrorKind::Interrupted,
                             "Canceled",
                         )))));
                     }
