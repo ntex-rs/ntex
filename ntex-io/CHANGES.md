@@ -1,5 +1,9 @@
 # Changes
 
+## [2.9.2] - 2024-12-05
+
+* Better error handling
+
 ## [2.9.1] - 2024-12-04
 
 * Check service readiness for every turn

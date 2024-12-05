@@ -80,6 +80,23 @@ impl IoState {
         }
     }
 
+    /// Get current io error
+    pub(super) fn error(&self) -> Option<io::Error> {
+        if let Some(err) = self.error.take() {
+            self.error
+                .set(Some(io::Error::new(err.kind(), format!("{}", err))));
+            Some(err)
+        } else {
+            None
+        }
+    }
+
+    /// Get current io result
+    pub(super) fn error_or_disconnected(&self) -> io::Error {
+        self.error()
+            .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Disconnected"))
+    }
+
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
         if err.is_some() {
             self.error.set(err);
@@ -257,19 +274,6 @@ impl<F> Io<F> {
     fn io_ref(&self) -> &IoRef {
         unsafe { &*self.0.get() }
     }
-
-    /// Get current io error
-    fn error(&self) -> Option<io::Error> {
-        self.st().error.take()
-    }
-
-    /// Get current io error
-    fn error_or_disconnected(&self) -> io::Error {
-        self.st()
-            .error
-            .take()
-            .unwrap_or_else(|| io::Error::new(io::ErrorKind::Other, "Disconnected"))
-    }
 }
 
 impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
@@ -423,7 +427,7 @@ impl<F> Io<F> {
         let mut flags = st.flags.get();
 
         if flags.is_stopped() {
-            Poll::Ready(Err(self.error_or_disconnected()))
+            Poll::Ready(Err(st.error_or_disconnected()))
         } else {
             st.dispatch_task.register(cx.waker());
 
@@ -511,7 +515,7 @@ impl<F> Io<F> {
             let st = self.st();
             let flags = st.flags.get();
             if flags.is_stopped() {
-                Err(RecvError::PeerGone(self.error()))
+                Err(RecvError::PeerGone(st.error()))
             } else if flags.contains(Flags::DSP_STOP) {
                 st.remove_flags(Flags::DSP_STOP);
                 Err(RecvError::Stop)
@@ -545,12 +549,12 @@ impl<F> Io<F> {
     /// otherwise wake up when size of write buffer is lower than
     /// buffer max size.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
+        let st = self.st();
         let flags = self.flags();
 
         if flags.is_stopped() {
-            Poll::Ready(Err(self.error_or_disconnected()))
+            Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            let st = self.st();
             let len = st.buffer.write_destination_size();
             if len > 0 {
                 if full {
@@ -575,7 +579,7 @@ impl<F> Io<F> {
         let flags = st.flags.get();
 
         if flags.is_stopped() {
-            if let Some(err) = self.error() {
+            if let Some(err) = st.error() {
                 Poll::Ready(Err(err))
             } else {
                 Poll::Ready(Ok(()))
@@ -611,7 +615,7 @@ impl<F> Io<F> {
         let st = self.st();
         let flags = st.flags.get();
         if flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
-            Poll::Ready(IoStatusUpdate::PeerGone(self.error()))
+            Poll::Ready(IoStatusUpdate::PeerGone(st.error()))
         } else if flags.contains(Flags::DSP_STOP) {
             st.remove_flags(Flags::DSP_STOP);
             Poll::Ready(IoStatusUpdate::Stop)
