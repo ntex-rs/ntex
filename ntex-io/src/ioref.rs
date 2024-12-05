@@ -191,7 +191,7 @@ impl IoRef {
         F: FnOnce(&mut BytesVec) -> R,
     {
         if self.0.flags.get().contains(Flags::IO_STOPPED) {
-            Err(io::Error::new(io::ErrorKind::Other, "Disconnected"))
+            Err(self.0.error_or_disconnected())
         } else {
             let result = self.0.buffer.with_write_source(self, f);
             self.0.filter().process_write_buf(self, &self.0.buffer, 0)?;

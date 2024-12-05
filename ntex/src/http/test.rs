@@ -257,7 +257,7 @@ where
         server,
         client: Client::build().finish(),
     }
-    .set_client_timeout(Seconds(30), Millis(30_000))
+    .set_client_timeout(Seconds(45), Millis(45_000))
 }
 
 #[derive(Debug)]

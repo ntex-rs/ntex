@@ -250,7 +250,9 @@ async fn handle_result<T, F>(
             ssl::ErrorCode::WANT_READ => {
                 let res = io.read_notify().await;
                 match res? {
-                    None => Err(io::Error::new(io::ErrorKind::Other, "disconnected")),
+                    None => {
+                        Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
+                    }
                     _ => Ok(None),
                 }
             }

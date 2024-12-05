@@ -360,7 +360,7 @@ pub fn bind_addr<S: net::ToSocketAddrs>(
             Err(e)
         } else {
             Err(io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidInput,
                 "Cannot bind to address.",
             ))
         }

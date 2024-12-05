@@ -54,7 +54,7 @@ impl WsTransport {
             Ok(())
         } else {
             self.insert_flags(Flags::PROTO_ERR);
-            Err(io::Error::new(io::ErrorKind::Other, err_message))
+            Err(io::Error::new(io::ErrorKind::InvalidData, err_message))
         }
     }
 }
@@ -96,7 +96,7 @@ impl FilterLayer for WsTransport {
                     self.codec.decode_vec(&mut src).map_err(|e| {
                         log::trace!("Failed to decode ws codec frames: {:?}", e);
                         self.insert_flags(Flags::PROTO_ERR);
-                        io::Error::new(io::ErrorKind::Other, e)
+                        io::Error::new(io::ErrorKind::InvalidData, e)
                     })? {
                     frame
                 } else {
@@ -123,14 +123,14 @@ impl FilterLayer for WsTransport {
                     Frame::Continuation(Item::FirstText(_)) => {
                         self.insert_flags(Flags::PROTO_ERR);
                         return Err(io::Error::new(
-                            io::ErrorKind::Other,
+                            io::ErrorKind::InvalidData,
                             "WebSocket Text continuation frames are not supported",
                         ));
                     }
                     Frame::Text(_) => {
                         self.insert_flags(Flags::PROTO_ERR);
                         return Err(io::Error::new(
-                            io::ErrorKind::Other,
+                            io::ErrorKind::InvalidData,
                             "WebSockets Text frames are not supported",
                         ));
                     }
