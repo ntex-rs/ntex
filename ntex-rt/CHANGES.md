@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.23] - 2024-12-10
+
+* Remove Unpin requirements for Arbiter::spawn()
+
 ## [0.4.22] - 2024-12-01
 
 * Depend on individual compio packages
