@@ -21,7 +21,7 @@ pub(super) static COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) enum ArbiterCommand {
     Stop,
-    Execute(Box<dyn Future<Output = ()> + Unpin + Send>),
+    Execute(Pin<Box<dyn Future<Output = ()> + Send>>),
     ExecuteFn(Box<dyn FnExec>),
 }
 
@@ -147,11 +147,11 @@ impl Arbiter {
     /// Send a future to the Arbiter's thread, and spawn it.
     pub fn spawn<F>(&self, future: F)
     where
-        F: Future<Output = ()> + Send + Unpin + 'static,
+        F: Future<Output = ()> + Send + 'static,
     {
         let _ = self
             .sender
-            .try_send(ArbiterCommand::Execute(Box::new(future)));
+            .try_send(ArbiterCommand::Execute(Box::pin(future)));
     }
 
     /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
