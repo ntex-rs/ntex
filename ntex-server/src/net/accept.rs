@@ -215,13 +215,13 @@ impl Accept {
                     for info in self.sockets.drain(..) {
                         info.sock.remove_source()
                     }
+                    log::info!("Accept loop has been stopped");
 
                     if let Some(rx) = rx {
                         thread::sleep(EXIT_TIMEOUT);
                         let _ = rx.send(());
                     }
 
-                    log::trace!("Accept loop has been stopped");
                     break;
                 }
             }
@@ -295,25 +295,25 @@ impl Accept {
                 Ok(cmd) => match cmd {
                     AcceptorCommand::Stop(rx) => {
                         if !self.backpressure {
-                            log::trace!("Stopping accept loop");
+                            log::info!("Stopping accept loop");
                             self.backpressure(true);
                         }
                         break Either::Right(Some(rx));
                     }
                     AcceptorCommand::Terminate => {
-                        log::trace!("Stopping accept loop");
+                        log::info!("Stopping accept loop");
                         self.backpressure(true);
                         break Either::Right(None);
                     }
                     AcceptorCommand::Pause => {
                         if !self.backpressure {
-                            log::trace!("Pausing accept loop");
+                            log::info!("Pausing accept loop");
                             self.backpressure(true);
                         }
                     }
                     AcceptorCommand::Resume => {
                         if self.backpressure {
-                            log::trace!("Resuming accept loop");
+                            log::info!("Resuming accept loop");
                             self.backpressure(false);
                         }
                     }
@@ -322,13 +322,14 @@ impl Accept {
                     }
                 },
                 Err(err) => {
+                    log::error!("Dropping accept loop");
                     break match err {
                         mpsc::TryRecvError::Empty => Either::Left(()),
                         mpsc::TryRecvError::Disconnected => {
                             self.backpressure(true);
                             Either::Right(None)
                         }
-                    }
+                    };
                 }
             }
         }

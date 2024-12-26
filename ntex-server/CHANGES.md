@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.1] - 2024-12-26
+
+* Tune shutdown logging
+
 ## [2.6.0] - 2024-12-04
 
 * Use updated Service trait

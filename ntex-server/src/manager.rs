@@ -262,10 +262,10 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         for tx in notify {
             let _ = tx.send(());
         }
+        sleep(STOP_DELAY).await;
 
         // stop system if server was spawned
         if self.mgr.0.cfg.stop_runtime {
-            sleep(STOP_DELAY).await;
             System::current().stop();
         }
     }
