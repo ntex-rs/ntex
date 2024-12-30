@@ -1,5 +1,9 @@
 # Changes
 
+## [2.4.0] - 2024-12-30
+
+* Enable rustls/std feature
+
 ## [2.3.0] - 2024-11-04
 
 * Use updated Service trait

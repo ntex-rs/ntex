@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   check:
-    name: Check for build failures
+    name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
           toolchain: stable
           components: clippy
       - run:
-          cargo test --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+          cargo clippy --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
   fmt:
     name: Rustfmt
