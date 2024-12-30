@@ -322,10 +322,10 @@ impl Accept {
                     }
                 },
                 Err(err) => {
-                    log::error!("Dropping accept loop");
                     break match err {
                         mpsc::TryRecvError::Empty => Either::Left(()),
                         mpsc::TryRecvError::Disconnected => {
+                            log::error!("Dropping accept loop");
                             self.backpressure(true);
                             Either::Right(None)
                         }

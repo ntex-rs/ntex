@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.2] - 2024-12-30
+
+* Fix error log
+
 ## [2.6.1] - 2024-12-26
 
 * Tune shutdown logging
