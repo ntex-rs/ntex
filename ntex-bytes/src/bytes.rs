@@ -3779,7 +3779,7 @@ impl<const N: usize> PartialEq<BytesMut> for [u8; N] {
     }
 }
 
-impl<'a, const N: usize> PartialEq<BytesMut> for &'a [u8; N] {
+impl<const N: usize> PartialEq<BytesMut> for &[u8; N] {
     fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
@@ -3878,7 +3878,7 @@ impl<const N: usize> PartialEq<Bytes> for [u8; N] {
     }
 }
 
-impl<'a, const N: usize> PartialEq<Bytes> for &'a [u8; N] {
+impl<const N: usize> PartialEq<Bytes> for &[u8; N] {
     fn eq(&self, other: &Bytes) -> bool {
         *other == *self
     }
@@ -4076,7 +4076,7 @@ impl<const N: usize> PartialEq<BytesVec> for [u8; N] {
     }
 }
 
-impl<'a, const N: usize> PartialEq<BytesVec> for &'a [u8; N] {
+impl<const N: usize> PartialEq<BytesVec> for &[u8; N] {
     fn eq(&self, other: &BytesVec) -> bool {
         *other == *self
     }

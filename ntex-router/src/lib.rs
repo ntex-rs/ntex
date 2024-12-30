@@ -42,7 +42,7 @@ impl ResourcePath for String {
     }
 }
 
-impl<'a> ResourcePath for &'a str {
+impl ResourcePath for &str {
     fn path(&self) -> &str {
         self
     }
@@ -54,7 +54,7 @@ impl ResourcePath for ntex_bytes::ByteString {
     }
 }
 
-impl<'a, T: ResourcePath> ResourcePath for &'a T {
+impl<T: ResourcePath> ResourcePath for &T {
     fn path(&self) -> &str {
         (*self).path()
     }
@@ -71,13 +71,13 @@ impl IntoPattern for String {
     }
 }
 
-impl<'a> IntoPattern for &'a String {
+impl IntoPattern for &String {
     fn patterns(&self) -> Vec<String> {
         vec![self.as_str().to_string()]
     }
 }
 
-impl<'a> IntoPattern for &'a str {
+impl IntoPattern for &str {
     fn patterns(&self) -> Vec<String> {
         vec![(*self).to_string()]
     }

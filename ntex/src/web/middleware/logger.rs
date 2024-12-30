@@ -400,7 +400,7 @@ pub(crate) struct FormatDisplay<'a>(
     &'a dyn Fn(&mut fmt::Formatter<'_>) -> Result<(), fmt::Error>,
 );
 
-impl<'a> fmt::Display for FormatDisplay<'a> {
+impl fmt::Display for FormatDisplay<'_> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         (self.0)(fmt)
     }

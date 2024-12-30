@@ -3,7 +3,7 @@ use std::fmt::{Formatter, LowerHex, Result, UpperHex};
 
 struct BytesRef<'a>(&'a [u8]);
 
-impl<'a> LowerHex for BytesRef<'a> {
+impl LowerHex for BytesRef<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         for b in self.0 {
             write!(f, "{b:02x}")?;
@@ -12,7 +12,7 @@ impl<'a> LowerHex for BytesRef<'a> {
     }
 }
 
-impl<'a> UpperHex for BytesRef<'a> {
+impl UpperHex for BytesRef<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         for b in self.0 {
             write!(f, "{b:02X}")?;

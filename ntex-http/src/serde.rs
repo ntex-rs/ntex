@@ -158,7 +158,7 @@ impl<'de> Deserialize<'de> for HeaderValue {
 
 struct HeaderValueVisitor;
 
-impl<'de> Visitor<'de> for HeaderValueVisitor {
+impl Visitor<'_> for HeaderValueVisitor {
     type Value = HeaderValue;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

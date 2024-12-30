@@ -29,7 +29,7 @@ pub trait ResponseError: fmt::Display + fmt::Debug {
     }
 }
 
-impl<'a, T: ResponseError> ResponseError for &'a T {
+impl<T: ResponseError> ResponseError for &T {
     fn error_response(&self) -> Response {
         (*self).error_response()
     }

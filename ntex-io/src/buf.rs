@@ -300,7 +300,7 @@ pub struct ReadBuf<'a> {
     pub(crate) need_write: Cell<bool>,
 }
 
-impl<'a> ReadBuf<'a> {
+impl ReadBuf<'_> {
     #[inline]
     /// Get io tag
     pub fn tag(&self) -> &'static str {
@@ -444,7 +444,7 @@ pub struct WriteBuf<'a> {
     pub(crate) need_write: Cell<bool>,
 }
 
-impl<'a> WriteBuf<'a> {
+impl WriteBuf<'_> {
     #[inline]
     /// Get io tag
     pub fn tag(&self) -> &'static str {
