@@ -87,7 +87,7 @@ impl ReadContext {
 
             // handle incoming data
             let total2 = buf.len();
-            let nbytes = if total2 > total { total2 - total } else { 0 };
+            let nbytes = total2.saturating_sub(total);
             let total = total2;
 
             if let Some(mut first_buf) = inner.buffer.get_read_source() {

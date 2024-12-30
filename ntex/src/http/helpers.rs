@@ -6,7 +6,7 @@ use crate::util::BytesMut;
 
 pub(crate) struct Writer<'a>(pub(crate) &'a mut BytesMut);
 
-impl<'a> io::Write for Writer<'a> {
+impl io::Write for Writer<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.extend_from_slice(buf);
         Ok(buf.len())

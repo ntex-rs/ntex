@@ -354,13 +354,13 @@ impl AsName for HeaderName {
     }
 }
 
-impl<'a> AsName for &'a HeaderName {
+impl AsName for &HeaderName {
     fn as_name(&self) -> Either<&HeaderName, &str> {
         Either::Left(self)
     }
 }
 
-impl<'a> AsName for &'a str {
+impl AsName for &str {
     fn as_name(&self) -> Either<&HeaderName, &str> {
         Either::Right(self)
     }
@@ -372,7 +372,7 @@ impl AsName for String {
     }
 }
 
-impl<'a> AsName for &'a String {
+impl AsName for &String {
     fn as_name(&self) -> Either<&HeaderName, &str> {
         Either::Right(self.as_str())
     }

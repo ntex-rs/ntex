@@ -24,7 +24,7 @@ pub struct PeerCertChain<'a>(pub Vec<CertificateDer<'a>>);
 
 pub(crate) struct Wrapper<'a, 'b>(&'a WriteBuf<'b>);
 
-impl<'a, 'b> io::Read for Wrapper<'a, 'b> {
+impl io::Read for Wrapper<'_, '_> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         self.0.with_read_buf(|buf| {
             buf.with_src(|buf| {
@@ -41,7 +41,7 @@ impl<'a, 'b> io::Read for Wrapper<'a, 'b> {
     }
 }
 
-impl<'a, 'b> io::Write for Wrapper<'a, 'b> {
+impl io::Write for Wrapper<'_, '_> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
         self.0.with_dst(|buf| buf.extend_from_slice(src));
         Ok(src.len())
