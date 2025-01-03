@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.24] - 2025-01-03
+
+* Relax runtime requirements
+
 ## [0.4.23] - 2024-12-10
 
 * Remove Unpin requirements for Arbiter::spawn()
