@@ -197,6 +197,12 @@ pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 /// ```
 #[proc_macro_attribute]
+#[cfg(any(
+    feature = "tokio",
+    feature = "async-std",
+    feature = "compio",
+    feature = "glommio"
+))]
 pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = syn::parse_macro_input!(item as syn::ItemFn);
     let attrs = &input.attrs;
@@ -223,6 +229,17 @@ pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
+#[proc_macro_attribute]
+#[cfg(not(any(
+    feature = "tokio",
+    feature = "async-std",
+    feature = "compio",
+    feature = "glommio"
+)))]
+pub fn rt_main(_: TokenStream, _: TokenStream) -> TokenStream {
+    panic!("Runtime must be selected '--feature=ntex/$runtime', available options are 'compio', 'tokio', 'async-std', 'glommio'");
+}
+
 /// Marks async test function to be executed by ntex runtime.
 ///
 /// ## Usage
@@ -234,6 +251,12 @@ pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
 /// }
 /// ```
 #[proc_macro_attribute]
+#[cfg(any(
+    feature = "tokio",
+    feature = "async-std",
+    feature = "compio",
+    feature = "glommio"
+))]
 pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(item as syn::ItemFn);
 
@@ -278,6 +301,17 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     result.into()
+}
+
+#[proc_macro_attribute]
+#[cfg(not(any(
+    feature = "tokio",
+    feature = "async-std",
+    feature = "compio",
+    feature = "glommio"
+)))]
+pub fn rt_test(_: TokenStream, _: TokenStream) -> TokenStream {
+    panic!("Runtime must be selected '--feature=ntex/$runtime', available options are 'compio', 'tokio', 'async-std', 'glommio'");
 }
 
 /// Marks async test function to be executed by ntex runtime.
