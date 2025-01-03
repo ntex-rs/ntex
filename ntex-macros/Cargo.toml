@@ -1,11 +1,27 @@
 [package]
 name = "ntex-macros"
-version = "0.1.3"
+version = "0.1.4"
 description = "ntex proc macros"
 readme = "README.md"
 authors = ["ntex contributors <team@ntex.rs>"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
+
+[features]
+
+default = []
+
+# glommio support
+glommio = []
+
+# tokio support
+tokio = []
+
+# compio support
+compio = []
+
+# async-std support
+async-std = []
 
 [lib]
 proc-macro = true

@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.10.0"
+version = "2.11.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -43,16 +43,16 @@ cookie = ["coo-kie", "coo-kie/percent-encode"]
 url = ["url-pkg"]
 
 # tokio runtime
-tokio = ["ntex-net/tokio"]
+tokio = ["ntex-net/tokio", "ntex-macros/tokio"]
 
 # glommio runtime
-glommio = ["ntex-net/glommio"]
+glommio = ["ntex-net/glommio", "ntex-macros/glommio"]
 
 # async-std runtime
-async-std = ["ntex-net/async-std"]
+async-std = ["ntex-net/async-std", "ntex-macros/async-std"]
 
 # compio runtime
-compio = ["ntex-net/compio"]
+compio = ["ntex-net/compio", "ntex-macros/compio"]
 
 # websocket support
 ws = ["dep:sha-1"]
