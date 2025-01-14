@@ -3,7 +3,7 @@
   <p><strong>Framework for composable network services.</strong> </p>
   <p>
 
-[![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg) 
+[![build status](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg) 
 [![crates.io](https://img.shields.io/crates/v/ntex.svg)](https://crates.io/crates/ntex) 
 [![Documentation](https://img.shields.io/docsrs/ntex/latest)](https://docs.rs/ntex) 
 [![Version](https://img.shields.io/badge/rustc-1.75+-lightgray.svg)](https://blog.rust-lang.org/2023/12/28/Rust-1.75.0.html) 
@@ -18,9 +18,9 @@
 
 | Platform         | Build Status |
 | ---------------- | ------------ |
-| Linux            | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg) |
-| macOS            | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28OSX%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/osx.yml/badge.svg) |
-| Windows          | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Windows%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/windows.yml/badge.svg) |
+| Linux            | [![build status](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg) |
+| macOS            | [![build status](https://github.com/ntex-rs/ntex/actions/workflows/osx.yml/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/osx.yml/badge.svg) |
+| Windows          | [![build status](https://github.com/ntex-rs/ntex/actions/workflows/windows.yml/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/windows.yml/badge.svg) |
 
 ## Usage
 
