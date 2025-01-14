@@ -20,7 +20,7 @@
 | ---------------- | ------------ |
 | Linux            | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Linux%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg) |
 | macOS            | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28OSX%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/osx.yml/badge.svg) |
-| Windows          | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Windows%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/windows.yml/badge.svg |
+| Windows          | [![build status](https://github.com/ntex-rs/ntex/workflows/CI%20%28Windows%29/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/windows.yml/badge.svg) |
 
 ## Usage
 
