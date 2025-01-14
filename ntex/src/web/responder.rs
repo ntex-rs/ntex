@@ -143,7 +143,7 @@ impl<Err: ErrorRenderer> Responder<Err> for String {
     }
 }
 
-impl<'a, Err: ErrorRenderer> Responder<Err> for &'a String {
+impl<Err: ErrorRenderer> Responder<Err> for &String {
     async fn respond_to(self, _: &HttpRequest) -> Response {
         Response::build(StatusCode::OK)
             .content_type("text/plain; charset=utf-8")

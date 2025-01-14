@@ -256,7 +256,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     }
 }
 
-impl<'a, S, Req> Service<Req> for &'a S
+impl<S, Req> Service<Req> for &S
 where
     S: Service<Req>,
 {
