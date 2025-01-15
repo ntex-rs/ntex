@@ -210,7 +210,7 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     #[allow(clippy::redundant_clone)]
-    async fn test_timeout_newservice() {
+    async fn test_timeout_middleware() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
 

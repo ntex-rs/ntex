@@ -83,8 +83,12 @@ mod test {
 
     #[ntex_macros::rt_test2]
     async fn on_drop() {
-        let mut dropped = false;
+        let f = OnDropFn::new(|| ());
+        assert!(format!("{:?}", f).contains("OnDropFn"));
+        f.cancel();
+        assert!(f.f.get().is_none());
 
+        let mut dropped = false;
         let mut f = pending::<()>().on_drop(|| {
             dropped = true;
         });
