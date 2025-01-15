@@ -1,3 +1,4 @@
+//! Either service allows to use different services for handling request
 use std::{fmt, task::Context};
 
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
@@ -147,5 +148,92 @@ where
             Either::Left(ref svc) => svc.poll(cx),
             Either::Right(ref svc) => svc.poll(cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ntex_service::{Pipeline, ServiceFactory};
+
+    use super::*;
+
+    #[derive(Copy, Clone, Debug, PartialEq)]
+    struct Svc1;
+    impl Service<()> for Svc1 {
+        type Response = &'static str;
+        type Error = ();
+
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<&'static str, ()> {
+            Ok("svc1")
+        }
+    }
+
+    #[derive(Clone)]
+    struct Svc1Factory;
+    impl ServiceFactory<(), &'static str> for Svc1Factory {
+        type Response = &'static str;
+        type Error = ();
+        type InitError = ();
+        type Service = Svc1;
+
+        async fn create(&self, _: &'static str) -> Result<Self::Service, Self::InitError> {
+            Ok(Svc1)
+        }
+    }
+
+    #[derive(Copy, Clone, Debug, PartialEq)]
+    struct Svc2;
+    impl Service<()> for Svc2 {
+        type Response = &'static str;
+        type Error = ();
+
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<&'static str, ()> {
+            Ok("svc2")
+        }
+    }
+
+    #[derive(Clone)]
+    struct Svc2Factory;
+    impl ServiceFactory<(), &'static str> for Svc2Factory {
+        type Response = &'static str;
+        type Error = ();
+        type InitError = ();
+        type Service = Svc2;
+
+        async fn create(&self, _: &'static str) -> Result<Self::Service, Self::InitError> {
+            Ok(Svc2)
+        }
+    }
+
+    type Either = EitherService<Svc1, Svc2>;
+    type EitherFactory<F> = EitherServiceFactory<F, Svc1Factory, Svc2Factory>;
+
+    #[ntex_macros::rt_test2]
+    async fn test_success() {
+        let svc = Pipeline::new(Either::left(Svc1).clone());
+        assert_eq!(svc.call(()).await, Ok("svc1"));
+        assert_eq!(svc.ready().await, Ok(()));
+        svc.shutdown().await;
+
+        let svc = Pipeline::new(Either::right(Svc2).clone());
+        assert_eq!(svc.call(()).await, Ok("svc2"));
+        assert_eq!(svc.ready().await, Ok(()));
+        svc.shutdown().await;
+
+        assert!(format!("{:?}", svc).contains("EitherService"));
+    }
+
+    #[ntex_macros::rt_test2]
+    async fn test_factory() {
+        let factory =
+            EitherFactory::new(|s: &&'static str| *s == "svc1", Svc1Factory, Svc2Factory)
+                .clone();
+        assert!(format!("{:?}", factory).contains("EitherServiceFactory"));
+
+        let svc = factory.pipeline("svc1").await.unwrap();
+        assert_eq!(svc.call(()).await, Ok("svc1"));
+
+        let svc = factory.pipeline("other").await.unwrap();
+        assert_eq!(svc.call(()).await, Ok("svc2"));
     }
 }
