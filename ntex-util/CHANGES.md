@@ -1,5 +1,9 @@
 # Changes
 
+## [2.9.0] - 2025-01-15
+
+* Add EitherService/EitherServiceFactory
+
 ## [2.8.0] - 2024-12-04
 
 * Use updated Service trait
