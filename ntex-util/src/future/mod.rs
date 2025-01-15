@@ -14,7 +14,7 @@ mod select;
 pub use self::either::Either;
 pub use self::join::{join, join_all};
 pub use self::lazy::{lazy, Lazy};
-pub use self::on_drop::{OnDropFn, OnDropFutureExt};
+pub use self::on_drop::{OnDropFn, OnDropFuture, OnDropFutureExt};
 pub use self::ready::Ready;
 pub use self::select::select;
 

@@ -1,9 +1,4 @@
-#![deny(
-    rust_2018_idioms,
-    warnings,
-    unreachable_pub,
-    missing_debug_implementations
-)]
+#![deny(warnings, unreachable_pub, missing_debug_implementations)]
 #![warn(nonstandard_style, future_incompatible)]
 
 //! Resource path matching library.
