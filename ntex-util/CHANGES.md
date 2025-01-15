@@ -4,6 +4,8 @@
 
 * Add EitherService/EitherServiceFactory
 
+* Add retry middleware
+
 * Add future on drop handler
 
 ## [2.8.0] - 2024-12-04

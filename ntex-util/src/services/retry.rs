@@ -1,5 +1,5 @@
 #![allow(async_fn_in_trait)]
-use ntex_service::{Service, ServiceCtx, Middleware};
+use ntex_service::{Middleware, Service, ServiceCtx};
 
 /// Trait defines retry policy
 pub trait Policy<Req, S: Service<Req>>: Sized + Clone {
@@ -126,5 +126,52 @@ where
 
     fn clone_request(&self, req: &R) -> Option<R> {
         Some(req.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, rc::Rc};
+
+    use ntex_service::{apply, fn_factory, Pipeline, ServiceFactory};
+
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct TestService(Rc<Cell<usize>>);
+
+    impl Service<()> for TestService {
+        type Response = ();
+        type Error = ();
+
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+            let cnt = self.0.get();
+            if cnt == 0 {
+                Ok(())
+            } else {
+                self.0.set(cnt - 1);
+                Err(())
+            }
+        }
+    }
+
+    #[ntex_macros::rt_test2]
+    async fn test_retry() {
+        let cnt = Rc::new(Cell::new(5));
+        let svc = Pipeline::new(
+            RetryService::new(DefaultRetryPolicy::default(), TestService(cnt.clone()))
+                .clone(),
+        );
+        assert_eq!(svc.call(()).await, Err(()));
+        assert_eq!(svc.ready().await, Ok(()));
+        svc.shutdown().await;
+        assert_eq!(cnt.get(), 1);
+
+        let factory = apply(
+            Retry::new(DefaultRetryPolicy::new(3)).clone(),
+            fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
+        );
+        let srv = factory.pipeline(&()).await.unwrap();
+        assert_eq!(srv.call(()).await, Ok(()));
     }
 }
