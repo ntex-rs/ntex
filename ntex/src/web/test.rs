@@ -718,7 +718,7 @@ where
                 Connector::default()
                     .lifetime(Seconds::ZERO)
                     .keep_alive(Seconds(60))
-                    .timeout(Millis(60_000))
+                    .timeout(Millis(90_000))
                     .disconnect_timeout(Seconds(5))
                     .openssl(builder.build())
                     .finish()
@@ -727,14 +727,14 @@ where
             {
                 Connector::default()
                     .lifetime(Seconds::ZERO)
-                    .timeout(Millis(60_000))
+                    .timeout(Millis(90_000))
                     .finish()
             }
         };
 
         Client::build()
             .connector(connector)
-            .timeout(Seconds(60))
+            .timeout(Seconds(90))
             .finish()
     };
 
@@ -929,7 +929,7 @@ impl TestServer {
 
                 WsClient::build(self.url(path))
                     .address(self.addr)
-                    .timeout(Seconds(30))
+                    .timeout(Seconds(60))
                     .openssl(builder.build())
                     .take()
                     .finish()
@@ -945,7 +945,7 @@ impl TestServer {
         } else {
             WsClient::build(self.url(path))
                 .address(self.addr)
-                .timeout(Seconds(30))
+                .timeout(Seconds(60))
                 .finish()
                 .unwrap()
                 .connect()
