@@ -199,6 +199,16 @@ impl IoRef {
         }
     }
 
+    #[doc(hidden)]
+    #[inline]
+    /// Get mut access to destination write buffer
+    pub fn with_write_dest_buf<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(Option<&mut BytesVec>) -> R,
+    {
+        self.0.buffer.with_write_destination(self, f)
+    }
+
     #[inline]
     /// Get mut access to source read buffer
     pub fn with_read_buf<F, R>(&self, f: F) -> R
@@ -559,6 +569,10 @@ mod tests {
 
         assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 8);
+        assert_eq!(
+            state.with_write_dest_buf(|b| b.map(|b| b.len()).unwrap_or(0)),
+            0
+        );
 
         // refs
         assert_eq!(Rc::strong_count(&in_bytes), 3);

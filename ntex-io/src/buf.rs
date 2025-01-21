@@ -218,12 +218,12 @@ impl Stack {
 
     pub(crate) fn with_write_destination<F, R>(&self, io: &IoRef, f: F) -> R
     where
-        F: FnOnce(&mut Option<BytesVec>) -> R,
+        F: FnOnce(Option<&mut BytesVec>) -> R,
     {
         let item = self.get_last_level();
         let mut wb = item.1.take();
 
-        let result = f(&mut wb);
+        let result = f(wb.as_mut());
 
         // check nested updates
         if item.1.take().is_some() {
