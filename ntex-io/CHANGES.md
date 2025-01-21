@@ -1,5 +1,9 @@
 # Changes
 
+## [2.9.3] - 2025-01-21
+
+* Allow to access io write destination buffer
+
 ## [2.9.2] - 2024-12-05
 
 * Better error handling
