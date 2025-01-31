@@ -1,5 +1,9 @@
 # Changes
 
+## [2.11.0] - 2025-01-31
+
+* Cpu affinity support for server
+
 ## [2.10.0] - 2024-12-04
 
 * Use updated Service trait

@@ -110,7 +110,7 @@ impl ServerBuilder {
         self
     }
 
-    /// Enable core affinity
+    /// Enable cpu affinity
     ///
     /// By default affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
