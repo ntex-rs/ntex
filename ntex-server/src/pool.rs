@@ -23,9 +23,14 @@ impl Default for WorkerPool {
 impl WorkerPool {
     /// Create new Server builder instance
     pub fn new() -> Self {
+        let num = core_affinity::get_core_ids()
+            .map(|v| v.len())
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get)
+            });
+
         WorkerPool {
-            num: std::thread::available_parallelism()
-                .map_or(2, std::num::NonZeroUsize::get),
+            num,
             no_signals: false,
             stop_runtime: false,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
