@@ -11,6 +11,7 @@ pub struct WorkerPool {
     pub(crate) no_signals: bool,
     pub(crate) stop_runtime: bool,
     pub(crate) shutdown_timeout: Millis,
+    pub(crate) affinity: bool,
 }
 
 impl Default for WorkerPool {
@@ -28,6 +29,7 @@ impl WorkerPool {
             no_signals: false,
             stop_runtime: false,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            affinity: false,
         }
     }
 
@@ -65,6 +67,14 @@ impl WorkerPool {
     /// By default shutdown timeout sets to 30 seconds.
     pub fn shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.shutdown_timeout = timeout.into();
+        self
+    }
+
+    /// Enable core affinity
+    ///
+    /// By default affinity is disabled.
+    pub fn enable_affinity(mut self) -> Self {
+        self.affinity = true;
         self
     }
 

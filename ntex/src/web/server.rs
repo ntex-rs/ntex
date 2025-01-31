@@ -310,6 +310,14 @@ where
         self
     }
 
+    /// Enable cpu affinity
+    ///
+    /// By default affinity is disabled.
+    pub fn enable_affinity(mut self) -> Self {
+        self.builder = self.builder.enable_affinity();
+        self
+    }
+
     /// Set io tag for web server
     pub fn tag(self, tag: &'static str) -> Self {
         self.config.lock().unwrap().tag = tag;

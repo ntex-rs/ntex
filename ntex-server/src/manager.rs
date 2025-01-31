@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 use async_channel::{unbounded, Receiver, Sender};
+use core_affinity::CoreId;
 use ntex_rt::System;
 use ntex_util::future::join_all;
 use ntex_util::time::{sleep, timeout, Millis};
@@ -69,9 +70,16 @@ impl<F: ServerConfiguration> ServerManager<F> {
         // handle cmd
         let _ = ntex_rt::spawn(handle_cmd(mgr.clone(), rx));
 
+        // Retrieve the IDs of all active CPU cores.
+        let mut cores = if cfg.affinity {
+            core_affinity::get_core_ids().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         // start workers
         for _ in 0..mgr.0.cfg.num {
-            start_worker(mgr.clone());
+            start_worker(mgr.clone(), cores.pop());
         }
 
         let srv = Server::new(tx, shared);
@@ -128,9 +136,16 @@ impl<F: ServerConfiguration> ServerManager<F> {
     }
 }
 
-fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>) {
+fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreId>) {
     let _ = ntex_rt::spawn(async move {
         let id = mgr.next_id();
+
+        if let Some(cid) = cid {
+            if core_affinity::set_for_current(cid) {
+                log::info!("Set affinity to {:?} for worker {:?}", cid, id);
+            }
+        }
+
         let mut wrk = Worker::start(id, mgr.factory());
 
         loop {
