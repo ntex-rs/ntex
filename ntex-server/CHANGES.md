@@ -1,5 +1,9 @@
 # Changes
 
+## [2.7.0] - 2025-01-31
+
+* Cpu affinity support for workers
+
 ## [2.6.2] - 2024-12-30
 
 * Fix error log

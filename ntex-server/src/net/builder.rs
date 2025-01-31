@@ -110,6 +110,14 @@ impl ServerBuilder {
         self
     }
 
+    /// Enable core affinity
+    ///
+    /// By default affinity is disabled.
+    pub fn enable_affinity(mut self) -> Self {
+        self.pool = self.pool.enable_affinity();
+        self
+    }
+
     /// Timeout for graceful workers shutdown.
     ///
     /// After receiving a stop signal, workers have this much time to finish
