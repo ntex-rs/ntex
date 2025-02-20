@@ -26,19 +26,35 @@ impl Filter for Sealed {
         self.0.process_read_buf(io, stack, idx, nbytes)
     }
 
-    fn process_write_buf(&self, io: &crate::IoRef, stack: &crate::buf::Stack, idx: usize) -> std::io::Result<()> {
+    fn process_write_buf(
+        &self,
+        io: &crate::IoRef,
+        stack: &crate::buf::Stack,
+        idx: usize,
+    ) -> std::io::Result<()> {
         self.0.process_write_buf(io, stack, idx)
     }
 
-    fn shutdown(&self, io: &crate::IoRef, stack: &crate::buf::Stack, idx: usize) -> std::io::Result<std::task::Poll<()>> {
+    fn shutdown(
+        &self,
+        io: &crate::IoRef,
+        stack: &crate::buf::Stack,
+        idx: usize,
+    ) -> std::io::Result<std::task::Poll<()>> {
         self.0.shutdown(io, stack, idx)
     }
 
-    fn poll_read_ready(&self, cx: &mut std::task::Context<'_>) -> std::task::Poll<crate::ReadStatus> {
+    fn poll_read_ready(
+        &self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<crate::ReadStatus> {
         self.0.poll_read_ready(cx)
     }
 
-    fn poll_write_ready(&self, cx: &mut std::task::Context<'_>) -> std::task::Poll<crate::WriteStatus> {
+    fn poll_write_ready(
+        &self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<crate::WriteStatus> {
         self.0.poll_write_ready(cx)
     }
 }
