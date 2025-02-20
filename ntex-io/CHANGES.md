@@ -1,5 +1,9 @@
 # Changes
 
+## [2.9.4] - 2025-02-20
+
+* Impl Filter for Sealed
+
 ## [2.9.3] - 2025-01-21
 
 * Allow to access io write destination buffer
