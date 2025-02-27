@@ -1,8 +1,8 @@
 # Changes
 
-## [2.9.4] - 2025-02-20
+## [2.10.0] - 2025-02-26
 
-* Impl Filter for Sealed
+* Impl Filter for Sealed #506
 
 ## [2.9.3] - 2025-01-21
 

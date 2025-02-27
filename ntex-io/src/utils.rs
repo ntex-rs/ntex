@@ -27,7 +27,7 @@ where
     S: ServiceFactory<IoBoxed, C>,
     C: Clone,
 {
-    chain_factory(fn_service(|io: Io<F>| Ready::Ok(IoBoxed::from(io))))
+    chain_factory(fn_service(|io: Io<F>| Ready::Ok(io.boxed())))
         .map_init_err(|_| panic!())
         .and_then(srv)
 }
