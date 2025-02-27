@@ -72,6 +72,7 @@ async fn test_listen() {
 #[ntex::test]
 #[cfg(unix)]
 async fn test_run() {
+    let _ = env_logger::try_init();
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 
@@ -80,8 +81,10 @@ async fn test_run() {
         sys.run(move || {
             let srv = build()
                 .backlog(100)
+                .workers(1)
                 .disable_signals()
                 .bind("test", addr, move |_| {
+                    compio_driver::enable_logging();
                     fn_service(|io: Io| async move {
                         io.send(Bytes::from_static(b"test"), &BytesCodec)
                             .await
