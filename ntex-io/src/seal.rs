@@ -1,6 +1,7 @@
-use std::{fmt, ops};
+use std::{any::Any, any::TypeId, fmt, io, ops, task::Context, task::Poll};
 
-use crate::{filter::Filter, Io};
+use crate::filter::{Filter, FilterReadStatus};
+use crate::{buf::Stack, Io, IoRef, ReadStatus, WriteStatus};
 
 /// Sealed filter type
 pub struct Sealed(pub(crate) Box<dyn Filter>);
@@ -12,49 +13,39 @@ impl fmt::Debug for Sealed {
 }
 
 impl Filter for Sealed {
-    fn query(&self, id: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
+    #[inline]
+    fn query(&self, id: TypeId) -> Option<Box<dyn Any>> {
         self.0.query(id)
     }
 
+    #[inline]
     fn process_read_buf(
         &self,
-        io: &crate::IoRef,
-        stack: &crate::buf::Stack,
+        io: &IoRef,
+        stack: &Stack,
         idx: usize,
         nbytes: usize,
-    ) -> std::io::Result<crate::filter::FilterReadStatus> {
+    ) -> io::Result<FilterReadStatus> {
         self.0.process_read_buf(io, stack, idx, nbytes)
     }
 
-    fn process_write_buf(
-        &self,
-        io: &crate::IoRef,
-        stack: &crate::buf::Stack,
-        idx: usize,
-    ) -> std::io::Result<()> {
+    #[inline]
+    fn process_write_buf(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<()> {
         self.0.process_write_buf(io, stack, idx)
     }
 
-    fn shutdown(
-        &self,
-        io: &crate::IoRef,
-        stack: &crate::buf::Stack,
-        idx: usize,
-    ) -> std::io::Result<std::task::Poll<()>> {
+    #[inline]
+    fn shutdown(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<Poll<()>> {
         self.0.shutdown(io, stack, idx)
     }
 
-    fn poll_read_ready(
-        &self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<crate::ReadStatus> {
+    #[inline]
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.0.poll_read_ready(cx)
     }
 
-    fn poll_write_ready(
-        &self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<crate::WriteStatus> {
+    #[inline]
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
         self.0.poll_write_ready(cx)
     }
 }

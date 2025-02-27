@@ -10,7 +10,7 @@ use ntex_util::{future::Either, task::LocalWaker, time::Seconds};
 use crate::buf::Stack;
 use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::flags::Flags;
-use crate::seal::Sealed;
+use crate::seal::{IoBoxed, Sealed};
 use crate::tasks::{ReadContext, WriteContext};
 use crate::timer::TimerHandle;
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
@@ -292,6 +292,12 @@ impl<F: Filter> Io<F> {
         state.0.filter.seal::<F>();
 
         Io(UnsafeCell::new(state), marker::PhantomData)
+    }
+
+    #[inline]
+    /// Convert current io stream into boxed version
+    pub fn boxed(self) -> IoBoxed {
+        self.seal().into()
     }
 
     #[inline]
