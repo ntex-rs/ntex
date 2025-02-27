@@ -11,6 +11,54 @@ impl fmt::Debug for Sealed {
     }
 }
 
+impl Filter for Sealed {
+    fn query(&self, id: std::any::TypeId) -> Option<Box<dyn std::any::Any>> {
+        self.0.query(id)
+    }
+
+    fn process_read_buf(
+        &self,
+        io: &crate::IoRef,
+        stack: &crate::buf::Stack,
+        idx: usize,
+        nbytes: usize,
+    ) -> std::io::Result<crate::filter::FilterReadStatus> {
+        self.0.process_read_buf(io, stack, idx, nbytes)
+    }
+
+    fn process_write_buf(
+        &self,
+        io: &crate::IoRef,
+        stack: &crate::buf::Stack,
+        idx: usize,
+    ) -> std::io::Result<()> {
+        self.0.process_write_buf(io, stack, idx)
+    }
+
+    fn shutdown(
+        &self,
+        io: &crate::IoRef,
+        stack: &crate::buf::Stack,
+        idx: usize,
+    ) -> std::io::Result<std::task::Poll<()>> {
+        self.0.shutdown(io, stack, idx)
+    }
+
+    fn poll_read_ready(
+        &self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<crate::ReadStatus> {
+        self.0.poll_read_ready(cx)
+    }
+
+    fn poll_write_ready(
+        &self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<crate::WriteStatus> {
+        self.0.poll_write_ready(cx)
+    }
+}
+
 #[derive(Debug)]
 /// Boxed `Io` object with erased filter type
 pub struct IoBoxed(Io<Sealed>);
@@ -22,12 +70,6 @@ impl IoBoxed {
     /// Current io object becomes closed.
     pub fn take(&mut self) -> Self {
         IoBoxed(self.0.take())
-    }
-}
-
-impl From<Io<Sealed>> for IoBoxed {
-    fn from(io: Io<Sealed>) -> Self {
-        Self(io)
     }
 }
 
@@ -43,5 +85,11 @@ impl ops::Deref for IoBoxed {
     #[inline]
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl From<IoBoxed> for Io<Sealed> {
+    fn from(value: IoBoxed) -> Self {
+        value.0
     }
 }
