@@ -140,13 +140,7 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
     let _ = ntex_rt::spawn(async move {
         let id = mgr.next_id();
 
-        if let Some(cid) = cid {
-            if core_affinity::set_for_current(cid) {
-                log::info!("Set affinity to {:?} for worker {:?}", cid, id);
-            }
-        }
-
-        let mut wrk = Worker::start(id, mgr.factory());
+        let mut wrk = Worker::start(id, mgr.factory(), cid);
 
         loop {
             match wrk.status() {
@@ -156,7 +150,7 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                     mgr.unavailable(wrk);
                     sleep(RESTART_DELAY).await;
                     if !mgr.stopping() {
-                        wrk = Worker::start(id, mgr.factory());
+                        wrk = Worker::start(id, mgr.factory(), cid);
                     } else {
                         return;
                     }
