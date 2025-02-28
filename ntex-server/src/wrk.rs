@@ -4,6 +4,7 @@ use std::{cmp, future::poll_fn, future::Future, hash, pin::Pin, sync::Arc};
 
 use async_broadcast::{self as bus, broadcast};
 use async_channel::{unbounded, Receiver, Sender};
+use core_affinity::CoreId;
 
 use ntex_rt::{spawn, Arbiter};
 use ntex_service::{Pipeline, PipelineBinding, Service, ServiceFactory};
@@ -77,7 +78,7 @@ pub struct WorkerStop(oneshot::Receiver<bool>);
 
 impl<T> Worker<T> {
     /// Start worker.
-    pub fn start<F>(id: WorkerId, cfg: F) -> Worker<T>
+    pub fn start<F>(id: WorkerId, cfg: F, cid: Option<CoreId>) -> Worker<T>
     where
         T: Send + 'static,
         F: ServerConfiguration<Item = T>,
@@ -87,6 +88,12 @@ impl<T> Worker<T> {
         let (avail, avail_tx) = WorkerAvailability::create();
 
         Arbiter::default().exec_fn(move || {
+            if let Some(cid) = cid {
+                if core_affinity::set_for_current(cid) {
+                    log::info!("Set affinity to {:?} for worker {:?}", cid, id);
+                }
+            }
+
             let _ = spawn(async move {
                 log::info!("Starting worker {:?}", id);
 
