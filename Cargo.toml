@@ -5,9 +5,11 @@ members = [
   "ntex-bytes",
   "ntex-codec",
   "ntex-io",
+  "ntex-iodriver",
   "ntex-http",
   "ntex-router",
   "ntex-rt",
+  "ntex-runtime",
   "ntex-net",
   "ntex-server",
   "ntex-service",
@@ -21,15 +23,25 @@ members = [
   "ntex-tokio",
 ]
 
+[workspace.package]
+authors = ["ntex contributors <team@ntex.rs>"]
+repository = "https://github.com/ntex-rs/ntex"
+documentation = "https://docs.rs/ntex/"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.75"
+
 [patch.crates-io]
 ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
 ntex-io = { path = "ntex-io" }
+ntex-iodriver = { path = "ntex-iodriver" }
 ntex-net = { path = "ntex-net" }
 ntex-http = { path = "ntex-http" }
 ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
+ntex-runtime = { path = "ntex-runtime" }
 ntex-server = { path = "ntex-server" }
 ntex-service = { path = "ntex-service" }
 ntex-tls = { path = "ntex-tls" }
@@ -41,8 +53,19 @@ ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
 
-compio-buf = { path = "../dev/compio/compio-buf", optional = true }
-compio-io = { path = "../dev/compio/compio-io", optional = true }
-compio-net = { path = "../dev/compio/compio-net", optional = true }
-compio-driver = { path = "../dev/compio/compio-driver", optional = true }
-compio-runtime = { path = "../dev/compio/compio-runtime", optional = true }
+[workspace.dependencies]
+async-task = "4.5.0"
+bitflags = "2"
+cfg_aliases = "0.2.1"
+cfg-if = "1.0.0"
+crossbeam-channel = "0.5.8"
+crossbeam-queue = "0.3.8"
+futures-util = "0.3.29"
+fxhash = "0.2"
+libc = "0.2.164"
+log = "0.4"
+scoped-tls = "1.0.1"
+slab = "0.4.9"
+socket2 = "0.5.6"
+windows-sys = "0.52.0"
+thiserror = "1"

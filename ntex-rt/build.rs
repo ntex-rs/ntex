@@ -9,6 +9,7 @@ fn main() {
             "CARGO_FEATURE_TOKIO" => features.insert("tokio"),
             "CARGO_FEATURE_GLOMMIO" => features.insert("glommio"),
             "CARGO_FEATURE_ASYNC_STD" => features.insert("async-std"),
+            "CARGO_FEATURE_DEFAULT_RT" => features.insert("default-rt"),
             _ => false,
         };
     }

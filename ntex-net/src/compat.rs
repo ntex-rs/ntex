@@ -7,9 +7,22 @@ pub use ntex_tokio::{from_tcp_stream, tcp_connect, tcp_connect_in};
 pub use ntex_tokio::{from_unix_stream, unix_connect, unix_connect_in};
 
 #[cfg(all(
+    feature = "default-rt",
+    not(feature = "tokio"),
+    not(feature = "async-std"),
+    not(feature = "compio"),
+    not(feature = "glommio")
+))]
+pub use crate::rt::{
+    from_tcp_stream, from_unix_stream, tcp_connect, tcp_connect_in, unix_connect,
+    unix_connect_in,
+};
+
+#[cfg(all(
     feature = "compio",
     not(feature = "tokio"),
     not(feature = "async-std"),
+    not(feature = "default-rt"),
     not(feature = "glommio")
 ))]
 pub use ntex_compio::{from_tcp_stream, tcp_connect, tcp_connect_in};
@@ -19,6 +32,7 @@ pub use ntex_compio::{from_tcp_stream, tcp_connect, tcp_connect_in};
     feature = "compio",
     not(feature = "tokio"),
     not(feature = "async-std"),
+    not(feature = "default-rt"),
     not(feature = "glommio")
 ))]
 pub use ntex_compio::{from_unix_stream, unix_connect, unix_connect_in};
@@ -27,6 +41,7 @@ pub use ntex_compio::{from_unix_stream, unix_connect, unix_connect_in};
     feature = "async-std",
     not(feature = "tokio"),
     not(feature = "compio"),
+    not(feature = "default-rt"),
     not(feature = "glommio")
 ))]
 pub use ntex_async_std::{from_tcp_stream, tcp_connect, tcp_connect_in};
@@ -36,6 +51,7 @@ pub use ntex_async_std::{from_tcp_stream, tcp_connect, tcp_connect_in};
     feature = "async-std",
     not(feature = "tokio"),
     not(feature = "compio"),
+    not(feature = "default-rt"),
     not(feature = "glommio")
 ))]
 pub use ntex_async_std::{from_unix_stream, unix_connect, unix_connect_in};
@@ -44,6 +60,7 @@ pub use ntex_async_std::{from_unix_stream, unix_connect, unix_connect_in};
     feature = "glommio",
     not(feature = "tokio"),
     not(feature = "compio"),
+    not(feature = "default-rt"),
     not(feature = "async-std")
 ))]
 pub use ntex_glommio::{from_tcp_stream, tcp_connect, tcp_connect_in};
@@ -53,6 +70,7 @@ pub use ntex_glommio::{from_tcp_stream, tcp_connect, tcp_connect_in};
     feature = "glommio",
     not(feature = "tokio"),
     not(feature = "compio"),
+    not(feature = "default-rt"),
     not(feature = "async-std")
 ))]
 pub use ntex_glommio::{from_unix_stream, unix_connect, unix_connect_in};
@@ -61,6 +79,7 @@ pub use ntex_glommio::{from_unix_stream, unix_connect, unix_connect_in};
     not(feature = "tokio"),
     not(feature = "compio"),
     not(feature = "async-std"),
+    not(feature = "default-rt"),
     not(feature = "glommio")
 ))]
 mod no_rt {
@@ -131,6 +150,7 @@ mod no_rt {
     not(feature = "tokio"),
     not(feature = "compio"),
     not(feature = "async-std"),
+    not(feature = "default-rt"),
     not(feature = "glommio")
 ))]
 pub use no_rt::*;
