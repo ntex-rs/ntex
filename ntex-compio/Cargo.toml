@@ -22,6 +22,7 @@ ntex-io = "2.5"
 ntex-util = "2"
 ntex-rt = "0.4"
 log = "0.4"
+slab = "0.4"
 
 compio-buf = "0.5"
 compio-io = "0.5"

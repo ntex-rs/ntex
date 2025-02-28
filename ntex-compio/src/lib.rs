@@ -4,6 +4,7 @@ use ntex_bytes::PoolRef;
 use ntex_io::Io;
 
 mod io;
+mod read;
 
 /// Tcp stream wrapper for compio TcpStream
 struct TcpStream(compio_net::TcpStream);
