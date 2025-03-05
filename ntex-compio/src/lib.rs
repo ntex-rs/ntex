@@ -1,10 +1,12 @@
+#![allow(unused_variables, dead_code)]
 use std::{io::Result, net, net::SocketAddr};
 
 use ntex_bytes::PoolRef;
 use ntex_io::Io;
 
-mod io;
-mod read;
+//mod io;
+mod driver;
+mod io2;
 
 /// Tcp stream wrapper for compio TcpStream
 struct TcpStream(compio_net::TcpStream);
@@ -31,8 +33,9 @@ pub async fn unix_connect<'a, P>(addr: P) -> Result<Io>
 where
     P: AsRef<std::path::Path> + 'a,
 {
-    let sock = compio_net::UnixStream::connect(addr).await?;
-    Ok(Io::new(UnixStream(sock)))
+    // let sock = compio_net::UnixStream::connect(addr).await?;
+    // Ok(Io::new(UnixStream(sock)))
+    todo!()
 }
 
 #[cfg(unix)]
@@ -41,8 +44,10 @@ pub async fn unix_connect_in<'a, P>(addr: P, pool: PoolRef) -> Result<Io>
 where
     P: AsRef<std::path::Path> + 'a,
 {
-    let sock = compio_net::UnixStream::connect(addr).await?;
-    Ok(Io::with_memory_pool(UnixStream(sock), pool))
+    // let sock = compio_net::UnixStream::connect(addr).await?;
+    // Ok(Io::with_memory_pool(UnixStream(sock), pool))
+
+    todo!()
 }
 
 /// Convert std TcpStream to tokio's TcpStream
@@ -54,7 +59,8 @@ pub fn from_tcp_stream(stream: net::TcpStream) -> Result<Io> {
 #[cfg(unix)]
 /// Convert std UnixStream to tokio's UnixStream
 pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io> {
-    Ok(Io::new(UnixStream(compio_net::UnixStream::from_std(
-        stream,
-    )?)))
+    //Ok(Io::new(UnixStream(compio_net::UnixStream::from_std(
+    //stream,
+    //)?)))
+    todo!()
 }

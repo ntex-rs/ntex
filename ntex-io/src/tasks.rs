@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt, future::poll_fn, io, task::Context, task::Poll};
+use std::{cell::Cell, fmt, future::poll_fn, io, task::Context, task::Poll, task::Waker};
 
 use ntex_bytes::{BufMut, BytesVec};
 use ntex_util::{future::lazy, future::select, future::Either, time::sleep, time::Sleep};
@@ -19,14 +19,24 @@ impl ReadContext {
         Self(io.clone(), Cell::new(None))
     }
 
+    pub fn clone(&self) -> Self {
+        Self(self.0.clone(), Cell::new(None))
+    }
+
     #[inline]
     /// Io tag
     pub fn tag(&self) -> &'static str {
         self.0.tag()
     }
 
+    #[inline]
+    /// Check readiness for read operations
+    pub fn poll_read_ready(&self, w: &Waker) -> Poll<ReadStatus> {
+        todo!()
+    }
+
     /// Wait when io get closed or preparing for close
-    async fn wait_for_close(&self) {
+    pub async fn wait_for_close(&self) {
         poll_fn(|cx| {
             let flags = self.0.flags();
 
@@ -223,6 +233,10 @@ pub struct WriteContextBuf {
 impl WriteContext {
     pub(crate) fn new(io: &IoRef) -> Self {
         Self(io.clone())
+    }
+
+    pub fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 
     #[inline]
