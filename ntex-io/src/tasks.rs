@@ -1,6 +1,6 @@
-use std::{cell::Cell, fmt, future::poll_fn, io, task::Context, task::Poll, task::Waker};
+use std::{cell::Cell, fmt, future::poll_fn, io, task::ready, task::Context, task::Poll};
 
-use ntex_bytes::{BufMut, BytesVec};
+use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_util::{future::lazy, future::select, future::Either, time::sleep, time::Sleep};
 
 use crate::{AsyncRead, AsyncWrite, Flags, IoRef, ReadStatus, WriteStatus};
@@ -31,8 +31,8 @@ impl ReadContext {
 
     #[inline]
     /// Check readiness for read operations
-    pub fn poll_read_ready(&self, w: &Waker) -> Poll<ReadStatus> {
-        todo!()
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
+        self.0.filter().poll_read_ready(cx)
     }
 
     /// Wait when io get closed or preparing for close
@@ -51,6 +51,111 @@ impl ReadContext {
             }
         })
         .await
+    }
+
+    #[inline]
+    /// Get io error
+    pub fn set_stopped(&self, e: Option<io::Error>) {
+        self.0 .0.io_stopped(e);
+    }
+
+    /// Get read buffer
+    pub fn with_buf<F>(&self, f: F) -> Poll<()>
+    where
+        F: FnOnce(&mut BytesVec) -> Poll<io::Result<usize>>,
+    {
+        let inner = &self.0 .0;
+        let (hw, lw) = self.0.memory_pool().read_params().unpack();
+        let result = inner.buffer.with_read_source(&self.0, |buf| {
+            // make sure we've got room
+            let remaining = buf.remaining_mut();
+            if remaining < lw {
+                buf.reserve(hw - remaining);
+            }
+
+            // call provided callback
+            f(buf)
+        });
+
+        // handle buffer changes
+        match result {
+            Poll::Ready(Ok(0)) => {
+                inner.io_stopped(None);
+                Poll::Ready(())
+            }
+            Poll::Ready(Ok(nbytes)) => {
+                let filter = self.0.filter();
+                let _ = filter
+                    .process_read_buf(&self.0, &inner.buffer, 0, nbytes)
+                    .and_then(|status| {
+                        if status.nbytes > 0 {
+                            // dest buffer has new data, wake up dispatcher
+                            if inner.buffer.read_destination_size() >= hw {
+                                log::trace!(
+                                    "{}: Io read buffer is too large {}, enable read back-pressure",
+                                    self.0.tag(),
+                                    nbytes
+                                );
+                                inner.insert_flags(Flags::BUF_R_READY | Flags::BUF_R_FULL);
+                            } else {
+                                inner.insert_flags(Flags::BUF_R_READY);
+
+                                if nbytes >= hw {
+                                    // read task is paused because of read back-pressure
+                                    // but there is no new data in top most read buffer
+                                    // so we need to wake up read task to read more data
+                                    // otherwise read task would sleep forever
+                                    inner.read_task.wake();
+                                }
+                            }
+                            log::trace!(
+                                "{}: New {} bytes available, wakeup dispatcher",
+                                self.0.tag(),
+                                nbytes
+                            );
+                            inner.dispatch_task.wake();
+                        } else {
+                            if nbytes >= hw {
+                                // read task is paused because of read back-pressure
+                                // but there is no new data in top most read buffer
+                                // so we need to wake up read task to read more data
+                                // otherwise read task would sleep forever
+                                inner.read_task.wake();
+                            }
+                            if inner.flags.get().contains(Flags::RD_NOTIFY) {
+                                // in case of "notify" we must wake up dispatch task
+                                // if we read any data from source
+                                inner.dispatch_task.wake();
+                            }
+                        }
+
+                        // while reading, filter wrote some data
+                        // in that case filters need to process write buffers
+                        // and potentialy wake write task
+                        if status.need_write {
+                            filter.process_write_buf(&self.0, &inner.buffer, 0)
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .map_err(|err| {
+                        inner.dispatch_task.wake();
+                        inner.io_stopped(Some(err));
+                        inner.insert_flags(Flags::BUF_R_READY);
+                    });
+                Poll::Pending
+            }
+            Poll::Ready(Err(e)) => {
+                inner.io_stopped(Some(e));
+                Poll::Ready(())
+            }
+            Poll::Pending => {
+                if inner.flags.get().contains(Flags::IO_STOPPING_FILTERS) {
+                    // shutdown_filters(&self.0);
+                }
+                Poll::Pending
+            }
+        }
     }
 
     /// Handle read io operations
@@ -250,6 +355,12 @@ impl WriteContext {
         poll_fn(|cx| self.0.filter().poll_write_ready(cx)).await
     }
 
+    #[inline]
+    /// Check readiness for write operations
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
+        self.0.filter().poll_write_ready(cx)
+    }
+
     /// Indicate that write io task is stopped
     fn close(&self, err: Option<io::Error>) {
         self.0 .0.io_stopped(err);
@@ -310,6 +421,86 @@ impl WriteContext {
             }
             return;
         }
+    }
+
+    /// Get write buffer
+    pub fn with_buf<F>(&self, f: F) -> Poll<()>
+    where
+        F: FnOnce(&BytesVec) -> Poll<io::Result<usize>>,
+    {
+        let inner = &self.0 .0;
+
+        // call provided callback
+        let result = inner.buffer.with_write_destination(&self.0, |buf| {
+            let buf = if let Some(buf) = buf {
+                buf
+            } else {
+                return Poll::Ready(Ok(0));
+            };
+            if buf.is_empty() {
+                return Poll::Ready(Ok(0));
+            }
+
+            let result = ready!(f(buf));
+            match result {
+                Ok(n) => {
+                    if n == 0 {
+                        log::trace!(
+                            "{}: Disconnected during flush, written {}",
+                            self.tag(),
+                            n
+                        );
+                        Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::WriteZero,
+                            "failed to write frame to transport",
+                        )))
+                    } else {
+                        if n == buf.len() {
+                            buf.clear();
+                            Poll::Ready(Ok(0))
+                        } else {
+                            buf.advance(n);
+                            Poll::Ready(Ok(buf.len()))
+                        }
+                    }
+                }
+                Err(e) => Poll::Ready(Err(e)),
+            }
+        });
+
+        let mut flags = inner.flags.get();
+
+        let result = match result {
+            Poll::Pending => {
+                flags.remove(Flags::WR_PAUSED);
+                Poll::Pending
+            }
+            Poll::Ready(Ok(len)) => {
+                // if write buffer is smaller than high watermark value, turn off back-pressure
+                if len == 0 {
+                    flags.insert(Flags::WR_PAUSED);
+
+                    if flags.is_waiting_for_write() {
+                        flags.waiting_for_write_is_done();
+                        inner.dispatch_task.wake();
+                    }
+                    return Poll::Ready(());
+                } else if flags.contains(Flags::BUF_W_BACKPRESSURE)
+                    && len < inner.pool.get().write_params_high() << 1
+                {
+                    flags.remove(Flags::BUF_W_BACKPRESSURE);
+                    inner.dispatch_task.wake();
+                }
+                Poll::Pending
+            }
+            Poll::Ready(Err(e)) => {
+                self.close(Some(e));
+                Poll::Ready(())
+            }
+        };
+
+        inner.flags.set(flags);
+        result
     }
 }
 

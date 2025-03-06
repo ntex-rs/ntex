@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 #[cfg(feature = "tokio")]
 use std::{io, sync::Arc};
-use std::{io::Read, net, sync::mpsc, thread, time};
+use std::{io::Read, io::Write, net, sync::mpsc, thread, time};
 
 use ntex::codec::BytesCodec;
 use ntex::io::Io;
@@ -102,6 +102,7 @@ async fn test_run() {
 
     let mut buf = [1u8; 4];
     let mut conn = net::TcpStream::connect(addr).unwrap();
+    conn.write(&b"test"[..]).unwrap();
     let _ = conn.read_exact(&mut buf);
     assert_eq!(buf, b"test"[..]);
 

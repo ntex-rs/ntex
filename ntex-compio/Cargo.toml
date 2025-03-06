@@ -21,6 +21,9 @@ ntex-bytes = "0.1"
 ntex-io = "2.5"
 ntex-util = "2"
 ntex-rt = "0.4"
+
+bitflags = "2"
+libc = "0.2.164"
 log = "0.4"
 slab = "0.4"
 
