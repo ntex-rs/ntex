@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 use std::task::{ready, Poll, Waker};
 use std::{cell::Cell, cell::RefCell, fmt, io, ptr, rc::Rc};
 
-use compio_driver::op::Interest;
-use compio_driver::{syscall, AsRawFd, BatchOperator, DriverApi};
+use compio_driver::op::{Handler, Interest};
+use compio_driver::{syscall, AsRawFd, DriverApi};
 use compio_net::TcpStream;
 use compio_runtime::Runtime;
 use slab::Slab;
@@ -57,7 +57,7 @@ impl CompioOps {
                 s
             } else {
                 let mut inner = None;
-                rt.driver().register_batcher(|api| {
+                rt.driver().register_handler(|api| {
                     let ops = Rc::new(CompioOpsInner {
                         api,
                         streams: RefCell::new(Slab::new()),
@@ -97,7 +97,7 @@ impl CompioOps {
     }
 }
 
-impl BatchOperator for CompioOpsBatcher {
+impl Handler for CompioOpsBatcher {
     fn readable(&mut self, id: usize) {
         log::debug!("FD is readable {:?}", id);
         self.feed.push_back((id, Change::Readable));
@@ -238,6 +238,19 @@ impl StreamCtl {
                 .api
                 .register(item.io.as_raw_fd(), Interest::Writable, self.id);
         }
+    }
+}
+
+impl Drop for StreamCtl {
+    fn drop(&mut self) {
+        log::debug!(
+            "Drop io ({}), {:?}",
+            self.id,
+            self.inner.streams.borrow()[self.id].io.peer_addr()
+        );
+
+        let item = self.inner.streams.borrow_mut().remove(self.id);
+        self.inner.api.unregister_all(item.io.as_raw_fd());
     }
 }
 

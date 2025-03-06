@@ -5,6 +5,7 @@ use ntex_bytes::PoolRef;
 use ntex_io::Io;
 
 //mod io;
+mod connect;
 mod driver;
 mod io2;
 
@@ -17,13 +18,13 @@ struct UnixStream(compio_net::UnixStream);
 
 /// Opens a TCP connection to a remote host.
 pub async fn tcp_connect(addr: SocketAddr) -> Result<Io> {
-    let sock = compio_net::TcpStream::connect(addr).await?;
+    let sock = connect::connect(addr).await?;
     Ok(Io::new(TcpStream(sock)))
 }
 
 /// Opens a TCP connection to a remote host and use specified memory pool.
 pub async fn tcp_connect_in(addr: SocketAddr, pool: PoolRef) -> Result<Io> {
-    let sock = compio_net::TcpStream::connect(addr).await?;
+    let sock = connect::connect(addr).await?;
     Ok(Io::with_memory_pool(TcpStream(sock), pool))
 }
 
