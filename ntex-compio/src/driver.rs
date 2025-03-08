@@ -3,7 +3,7 @@ use std::task::{ready, Poll, Waker};
 use std::{cell::Cell, cell::RefCell, fmt, io, ptr, rc::Rc};
 
 use compio_driver::op::{Handler, Interest};
-use compio_driver::{syscall, AsRawFd, DriverApi};
+use compio_driver::{syscall, AsRawFd, DriverApi, RawFd};
 use compio_net::TcpStream;
 use compio_runtime::Runtime;
 use slab::Slab;
@@ -24,11 +24,13 @@ pub(crate) struct StreamCtl {
 }
 
 struct TcpStreamItem {
-    io: TcpStream,
+    io: Option<TcpStream>,
+    fd: RawFd,
     read: ReadContext,
     write: WriteContext,
     flags: Cell<Flags>,
     waker: Cell<Option<Waker>>,
+    ref_count: usize,
 }
 
 #[derive(Clone)]
@@ -83,11 +85,13 @@ impl CompioOps {
         write: WriteContext,
     ) -> StreamCtl {
         let item = TcpStreamItem {
-            io,
             read,
             write,
+            fd: io.as_raw_fd(),
+            io: Some(io),
             flags: Cell::new(Flags::empty()),
             waker: Cell::new(None),
+            ref_count: 1,
         };
         let id = self.0.streams.borrow_mut().insert(item);
         StreamCtl {
@@ -109,6 +113,7 @@ impl Handler for CompioOpsBatcher {
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
+        log::debug!("FD is failed {:?}, err: {:?}", id, err);
         self.feed.push_back((id, Change::Error(err)));
     }
 
@@ -116,58 +121,61 @@ impl Handler for CompioOpsBatcher {
         if self.feed.is_empty() {
             return;
         }
-        log::debug!("Commit driver changes, num: {:?}", self.feed.len());
+        log::debug!("Commit changes, num: {:?}", self.feed.len());
 
-        let streams = self.inner.streams.borrow();
+        let streams = &self.inner.streams;
 
         for (id, change) in self.feed.drain(..) {
-            if let Some(item) = streams.get(id) {
-                match change {
-                    Change::Readable => {
-                        let result = item.read.with_buf(|buf| {
-                            let fd = item.io.as_raw_fd();
+            match change {
+                Change::Readable => {
+                    let item = streams
+                        .borrow()
+                        .get(id)
+                        .map(|item| (item.fd, item.read.clone()));
+                    if let Some((fd, read)) = item {
+                        let result = read.with_buf(|buf| {
                             let chunk = buf.chunk_mut();
                             let b = chunk.as_mut_ptr();
                             Poll::Ready(
                                 ready!(syscall!(break libc::read(fd, b as _, chunk.len())))
                                     .inspect(|size| {
                                         unsafe { buf.advance_mut(*size) };
-                                        log::debug!("BUF: {:?}", buf);
+                                        log::debug!("FD: {:?}, BUF: {:?}", fd, buf);
                                     }),
                             )
                         });
 
-                        if result.is_ready() {
-                            self.inner
-                                .api
-                                .unregister(item.io.as_raw_fd(), Interest::Readable);
+                        if result.is_pending() {
+                            self.inner.api.register(fd, id, Interest::Readable);
                         }
                     }
-                    Change::Writable => {
-                        let result = item.read.with_buf(|buf| {
+                }
+                Change::Writable => {
+                    let item = streams
+                        .borrow()
+                        .get(id)
+                        .map(|item| (item.fd, item.write.clone()));
+                    if let Some((fd, write)) = item {
+                        let result = write.with_buf(|buf| {
                             let slice = &buf[..];
                             syscall!(
-                                break libc::write(
-                                    item.io.as_raw_fd(),
-                                    slice.as_ptr() as _,
-                                    slice.len()
-                                )
+                                break libc::write(fd, slice.as_ptr() as _, slice.len())
                             )
                         });
 
                         if result.is_ready() {
-                            self.inner
-                                .api
-                                .unregister(item.io.as_raw_fd(), Interest::Writable);
+                            self.inner.api.unregister(fd, Interest::Writable);
                         }
                     }
-                    Change::Error(err) => {
+                }
+                Change::Error(err) => {
+                    if let Some(item) = streams.borrow().get(id) {
                         item.read.set_stopped(Some(err));
                         let mut flags = item.flags.get();
                         if !flags.contains(Flags::ERROR) {
                             flags.insert(Flags::ERROR);
                             item.flags.set(flags);
-                            self.inner.api.unregister_all(item.io.as_raw_fd());
+                            self.inner.api.unregister_all(item.fd);
                         }
                     }
                 }
@@ -177,41 +185,55 @@ impl Handler for CompioOpsBatcher {
 }
 
 impl StreamCtl {
+    pub(crate) fn take_io(&self) -> Option<TcpStream> {
+        self.inner.streams.borrow_mut()[self.id].io.take()
+    }
+
+    pub(crate) fn with_io<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(Option<&TcpStream>) -> R,
+    {
+        f(self.inner.streams.borrow()[self.id].io.as_ref())
+    }
+
     pub(crate) fn register(&self, waker: &Waker) {
         self.inner.streams.borrow()[self.id]
             .waker
             .set(Some(waker.clone()));
     }
 
-    pub(crate) fn with_io<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&TcpStream) -> R,
-    {
-        f(&self.inner.streams.borrow()[self.id].io)
+    pub(crate) fn pause_all(&self) {
+        log::debug!(
+            "Pause all io ({}), {:?}",
+            self.id,
+            self.inner.streams.borrow()[self.id].fd
+        );
+        self.inner
+            .api
+            .unregister_all(self.inner.streams.borrow()[self.id].fd);
     }
 
     pub(crate) fn pause_read(&self) {
         log::debug!(
             "Pause io read ({}), {:?}",
             self.id,
-            self.inner.streams.borrow()[self.id].io.peer_addr()
+            self.inner.streams.borrow()[self.id].fd
         );
-        self.inner.api.unregister(
-            self.inner.streams.borrow()[self.id].io.as_raw_fd(),
-            Interest::Readable,
-        );
+        self.inner
+            .api
+            .unregister(self.inner.streams.borrow()[self.id].fd, Interest::Readable);
     }
 
     pub(crate) fn resume_read(&self) {
         log::debug!(
             "Resume io read ({}), {:?}",
             self.id,
-            self.inner.streams.borrow()[self.id].io.peer_addr()
+            self.inner.streams.borrow()[self.id].fd
         );
         self.inner.api.register(
-            self.inner.streams.borrow()[self.id].io.as_raw_fd(),
-            Interest::Readable,
+            self.inner.streams.borrow()[self.id].fd,
             self.id,
+            Interest::Readable,
         );
     }
 
@@ -219,24 +241,37 @@ impl StreamCtl {
         log::debug!(
             "Resume io write ({}), {:?}",
             self.id,
-            self.inner.streams.borrow()[self.id].io.peer_addr()
+            self.inner.streams.borrow()[self.id].fd
         );
         let item = &self.inner.streams.borrow()[self.id];
         let result = item.write.with_buf(|buf| {
             log::debug!("Writing io ({}), buf: {:?}", self.id, buf.len());
 
             let slice = &buf[..];
-            syscall!(
-                break libc::write(item.io.as_raw_fd(), slice.as_ptr() as _, slice.len())
-            )
+            syscall!(break libc::write(item.fd, slice.as_ptr() as _, slice.len()))
         });
 
         if result.is_pending() {
-            log::debug!("Write is pending ({})", self.id);
+            log::debug!(
+                "Write is pending ({}), {:?}",
+                self.id,
+                item.read.io().flags()
+            );
 
             self.inner
                 .api
-                .register(item.io.as_raw_fd(), Interest::Writable, self.id);
+                .register(item.fd, self.id, Interest::Writable);
+        }
+    }
+}
+
+impl Clone for StreamCtl {
+    fn clone(&self) -> StreamCtl {
+        let mut streams = self.inner.streams.borrow_mut();
+        streams[self.id].ref_count += 1;
+        Self {
+            id: self.id,
+            inner: self.inner.clone(),
         }
     }
 }
@@ -246,11 +281,18 @@ impl Drop for StreamCtl {
         log::debug!(
             "Drop io ({}), {:?}",
             self.id,
-            self.inner.streams.borrow()[self.id].io.peer_addr()
+            self.inner.streams.borrow()[self.id].fd
         );
 
-        let item = self.inner.streams.borrow_mut().remove(self.id);
-        self.inner.api.unregister_all(item.io.as_raw_fd());
+        let mut streams = self.inner.streams.borrow_mut();
+        streams[self.id].ref_count -= 1;
+
+        if streams[self.id].ref_count == 0 {
+            let item = streams.remove(self.id);
+            if item.io.is_some() {
+                self.inner.api.unregister_all(item.fd);
+            }
+        }
     }
 }
 

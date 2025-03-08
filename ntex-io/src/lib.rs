@@ -53,7 +53,9 @@ pub trait AsyncWrite {
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {
+    /// Read task is clear to proceed with read operation
     Ready,
+    /// Terminate read task
     Terminate,
 }
 

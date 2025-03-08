@@ -72,7 +72,6 @@ async fn test_listen() {
 #[ntex::test]
 #[cfg(unix)]
 async fn test_run() {
-    let _ = env_logger::try_init();
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
 

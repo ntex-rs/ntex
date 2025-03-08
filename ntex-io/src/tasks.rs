@@ -30,6 +30,12 @@ impl ReadContext {
     }
 
     #[inline]
+    /// Io tag
+    pub fn io(&self) -> IoRef {
+        self.0.clone()
+    }
+
+    #[inline]
     /// Check readiness for read operations
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         self.0.filter().poll_read_ready(cx)
@@ -151,7 +157,7 @@ impl ReadContext {
             }
             Poll::Pending => {
                 if inner.flags.get().contains(Flags::IO_STOPPING_FILTERS) {
-                    // shutdown_filters(&self.0);
+                    shutdown_filters(&self.0);
                 }
                 Poll::Pending
             }
@@ -281,18 +287,64 @@ impl ReadContext {
         }
     }
 
-    fn shutdown_filters(&self, cx: &mut Context<'_>) {
+    pub fn shutdown_filters(&self, cx: &mut Context<'_>) {
         let st = &self.0 .0;
-        let filter = self.0.filter();
 
-        match filter.shutdown(&self.0, &st.buffer, 0) {
+        if st.flags.get().contains(Flags::IO_STOPPING_FILTERS) {
+            let filter = self.0.filter();
+
+            match filter.shutdown(&self.0, &st.buffer, 0) {
+                Ok(Poll::Ready(())) => {
+                    st.dispatch_task.wake();
+                    st.insert_flags(Flags::IO_STOPPING);
+                }
+                Ok(Poll::Pending) => {
+                    let flags = st.flags.get();
+
+                    // check read buffer, if buffer is not consumed it is unlikely
+                    // that filter will properly complete shutdown
+                    if flags.contains(Flags::RD_PAUSED)
+                        || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
+                    {
+                        st.dispatch_task.wake();
+                        st.insert_flags(Flags::IO_STOPPING);
+                    } else {
+                        // filter shutdown timeout
+                        let timeout = self
+                            .1
+                            .take()
+                            .unwrap_or_else(|| sleep(st.disconnect_timeout.get()));
+                        if timeout.poll_elapsed(cx).is_ready() {
+                            st.dispatch_task.wake();
+                            st.insert_flags(Flags::IO_STOPPING);
+                        } else {
+                            self.1.set(Some(timeout));
+                        }
+                    }
+                }
+                Err(err) => {
+                    st.io_stopped(Some(err));
+                }
+            }
+            if let Err(err) = filter.process_write_buf(&self.0, &st.buffer, 0) {
+                st.io_stopped(Some(err));
+            }
+        }
+    }
+}
+
+fn shutdown_filters(io: &IoRef) {
+    let st = &io.0;
+    let flags = st.flags.get();
+
+    if !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
+        let filter = io.filter();
+        match filter.shutdown(io, &st.buffer, 0) {
             Ok(Poll::Ready(())) => {
                 st.dispatch_task.wake();
                 st.insert_flags(Flags::IO_STOPPING);
             }
             Ok(Poll::Pending) => {
-                let flags = st.flags.get();
-
                 // check read buffer, if buffer is not consumed it is unlikely
                 // that filter will properly complete shutdown
                 if flags.contains(Flags::RD_PAUSED)
@@ -300,25 +352,13 @@ impl ReadContext {
                 {
                     st.dispatch_task.wake();
                     st.insert_flags(Flags::IO_STOPPING);
-                } else {
-                    // filter shutdown timeout
-                    let timeout = self
-                        .1
-                        .take()
-                        .unwrap_or_else(|| sleep(st.disconnect_timeout.get()));
-                    if timeout.poll_elapsed(cx).is_ready() {
-                        st.dispatch_task.wake();
-                        st.insert_flags(Flags::IO_STOPPING);
-                    } else {
-                        self.1.set(Some(timeout));
-                    }
                 }
             }
             Err(err) => {
                 st.io_stopped(Some(err));
             }
         }
-        if let Err(err) = filter.process_write_buf(&self.0, &st.buffer, 0) {
+        if let Err(err) = filter.process_write_buf(io, &st.buffer, 0) {
             st.io_stopped(Some(err));
         }
     }
@@ -377,6 +417,62 @@ impl WriteContext {
             }
         })
         .await
+    }
+
+    /// Wait when io get closed or preparing for close
+    pub async fn wait_for_shutdown(&self, flush_buf: bool) {
+        let st = &self.0 .0;
+
+        // filter shutdown timeout
+        let mut timeout = None;
+
+        poll_fn(|cx| {
+            let flags = self.0.flags();
+
+            if flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
+                Poll::Ready(())
+            } else {
+                st.write_task.register(cx.waker());
+                if flags.contains(Flags::IO_STOPPING_FILTERS) {
+                    if timeout.is_none() {
+                        timeout = Some(sleep(st.disconnect_timeout.get()));
+                    }
+                    if timeout.as_ref().unwrap().poll_elapsed(cx).is_ready() {
+                        st.dispatch_task.wake();
+                        st.insert_flags(Flags::IO_STOPPING);
+                        return Poll::Ready(());
+                    }
+                }
+                Poll::Pending
+            }
+        })
+        .await;
+
+        if flush_buf {
+            if !self.0.flags().contains(Flags::WR_PAUSED) {
+                st.insert_flags(Flags::WR_TASK_WAIT);
+
+                poll_fn(|cx| {
+                    let flags = self.0.flags();
+
+                    if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
+                        Poll::Ready(())
+                    } else {
+                        st.write_task.register(cx.waker());
+
+                        if timeout.is_none() {
+                            timeout = Some(sleep(st.disconnect_timeout.get()));
+                        }
+                        if timeout.as_ref().unwrap().poll_elapsed(cx).is_ready() {
+                            Poll::Ready(())
+                        } else {
+                            Poll::Pending
+                        }
+                    }
+                })
+                .await;
+            }
+        }
     }
 
     /// Handle write io operations
@@ -442,6 +538,7 @@ impl WriteContext {
             }
 
             let result = ready!(f(buf));
+
             match result {
                 Ok(n) => {
                     if n == 0 {
@@ -480,18 +577,25 @@ impl WriteContext {
                 if len == 0 {
                     flags.insert(Flags::WR_PAUSED);
 
+                    if flags.is_task_waiting_for_write() {
+                        flags.task_waiting_for_write_is_done();
+                        inner.write_task.wake();
+                    }
+
                     if flags.is_waiting_for_write() {
                         flags.waiting_for_write_is_done();
                         inner.dispatch_task.wake();
                     }
-                    return Poll::Ready(());
+                    Poll::Ready(())
                 } else if flags.contains(Flags::BUF_W_BACKPRESSURE)
                     && len < inner.pool.get().write_params_high() << 1
                 {
                     flags.remove(Flags::BUF_W_BACKPRESSURE);
                     inner.dispatch_task.wake();
+                    Poll::Pending
+                } else {
+                    Poll::Pending
                 }
-                Poll::Pending
             }
             Poll::Ready(Err(e)) => {
                 self.close(Some(e));
