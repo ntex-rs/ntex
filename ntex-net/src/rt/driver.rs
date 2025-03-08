@@ -275,11 +275,7 @@ impl<T> StreamCtl<T> {
                 });
 
                 if result.is_pending() {
-                    log::debug!(
-                        "Write is pending ({}), {:?}",
-                        self.id,
-                        item.read.io().flags()
-                    );
+                    log::debug!("Write is pending ({}), {:?}", self.id, item.read.flags());
 
                     item.flags.insert(Flags::WR);
                     self.inner

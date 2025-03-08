@@ -2,6 +2,7 @@
 //! Some types differ by compilation target.
 
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+#![allow(clippy::type_complexity)]
 
 #[cfg(all(
     target_os = "linux",
