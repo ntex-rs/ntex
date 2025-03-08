@@ -114,8 +114,6 @@ webpki-roots = { version = "0.26", optional = true }
 brotli2 = { version = "0.3.2", optional = true }
 flate2 = { version = "1.0", optional = true }
 
-compio-driver = "*"
-
 [dev-dependencies]
 env_logger = "0.11"
 rand = "0.8"

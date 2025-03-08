@@ -69,7 +69,7 @@ libc = { workspace = true }
 cfg_aliases = { workspace = true }
 
 [features]
-default = ["io-uring"]
+default = ["polling"]
 polling = ["dep:polling"]
 
 io-uring-sqe128 = []

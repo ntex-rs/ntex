@@ -111,23 +111,38 @@ impl FdItem {
 }
 
 #[derive(Debug)]
-enum InterestChange {
-    Register(Interest),
-    Unregister(Interest),
-    UnregisterAll,
+enum Change {
+    Register {
+        fd: RawFd,
+        batch: usize,
+        user_data: usize,
+        int: Interest,
+    },
+    Unregister {
+        fd: RawFd,
+        batch: usize,
+        int: Interest,
+    },
+    UnregisterAll {
+        fd: RawFd,
+        batch: usize,
+    },
+    Blocking {
+        user_data: usize,
+    },
 }
 
-#[derive(Debug)]
-struct BatchChange {
-    fd: RawFd,
-    batch: usize,
-    user_data: usize,
-    interest: InterestChange,
-}
+// #[derive(Debug)]
+// struct BatchChange {
+//     fd: RawFd,
+//     batch: usize,
+//     user_data: usize,
+//     interest: InterestChange,
+// }
 
 pub struct DriverApi {
     batch: usize,
-    changes: Rc<RefCell<Vec<BatchChange>>>,
+    changes: Rc<RefCell<Vec<Change>>>,
 }
 
 impl DriverApi {
@@ -138,11 +153,11 @@ impl DriverApi {
             fd,
             user_data
         );
-        self.change(BatchChange {
+        self.change(Change::Register {
             fd,
-            user_data,
             batch: self.batch,
-            interest: InterestChange::Register(int),
+            user_data,
+            int,
         });
     }
 
@@ -153,24 +168,21 @@ impl DriverApi {
             fd,
             self.batch
         );
-        self.change(BatchChange {
+        self.change(Change::Unregister {
             fd,
-            user_data: 0,
             batch: self.batch,
-            interest: InterestChange::Unregister(int),
+            int,
         });
     }
 
     pub fn unregister_all(&self, fd: RawFd) {
-        self.change(BatchChange {
+        self.change(Change::UnregisterAll {
             fd,
-            user_data: 0,
             batch: self.batch,
-            interest: InterestChange::UnregisterAll,
         });
     }
 
-    fn change(&self, change: BatchChange) {
+    fn change(&self, change: Change) {
         self.changes.borrow_mut().push(change);
     }
 }
@@ -183,7 +195,7 @@ pub(crate) struct Driver {
     pool: AsyncifyPool,
     pool_completed: Arc<SegQueue<Entry>>,
     hid: Cell<usize>,
-    changes: Rc<RefCell<Vec<BatchChange>>>,
+    changes: Rc<RefCell<Vec<Change>>>,
     handlers: Cell<Option<Box<Vec<Box<dyn Handler>>>>>,
 }
 
@@ -236,7 +248,7 @@ impl Driver {
         registry: &mut HashMap<RawFd, FdItem>,
     ) -> io::Result<()> {
         if !renew_event.readable && !renew_event.writable {
-            //println!("DELETE - 2");
+            // crate::log(format!("DELETE - {:?}", fd.as_raw_fd()));
 
             if let Some(item) = registry.remove(&fd.as_raw_fd()) {
                 if !item.flags.contains(Flags::NEW) {
@@ -246,12 +258,12 @@ impl Driver {
         } else {
             if let Some(item) = registry.get(&fd.as_raw_fd()) {
                 if item.flags.contains(Flags::NEW) {
-                    //println!("ADD - 2 {:?}", fd.as_raw_fd());
+                    // crate::log(format!("ADD - {:?}", fd.as_raw_fd()));
                     unsafe { self.poll.add(&fd, renew_event)? };
                     return Ok(());
                 }
             }
-            //println!("MODIFY - 2");
+            // crate::log(format!("MODIFY - {:?} {:?}", fd.as_raw_fd(), renew_event));
             self.poll.modify(fd, renew_event)?;
         }
         Ok(())
@@ -266,7 +278,12 @@ impl Driver {
         let op_pin = op.as_op_pin();
         match op_pin.pre_submit()? {
             Decision::Completed(res) => Poll::Ready(Ok(res)),
-            Decision::Blocking => self.push_blocking(user_data),
+            Decision::Blocking => {
+                self.changes
+                    .borrow_mut()
+                    .push(Change::Blocking { user_data });
+                Poll::Pending
+            }
         }
     }
 
@@ -282,9 +299,10 @@ impl Driver {
         }
 
         let mut events = self.events.borrow_mut();
-        self.poll.wait(&mut events, timeout)?;
+        let res = self.poll.wait(&mut events, timeout);
+        res?;
 
-        if events.is_empty() && timeout != Some(Duration::ZERO) {
+        if events.is_empty() && timeout != Some(Duration::ZERO) && timeout.is_some() {
             return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
         }
         // println!("POLL, events: {:?}", events.len());
@@ -360,42 +378,55 @@ impl Driver {
         let mut registry = self.registry.borrow_mut();
 
         for change in &mut *changes {
-            let item = registry
-                .entry(change.fd)
-                .or_insert_with(|| FdItem::new(change.batch));
-            debug_assert!(item.batch == change.batch, "{:?} - {:?}", item, change);
-
-            match change.interest {
-                InterestChange::Register(int) => {
-                    item.register(change.user_data, int);
+            match change {
+                Change::Register {
+                    fd,
+                    batch,
+                    user_data,
+                    int,
+                } => {
+                    let item = registry.entry(*fd).or_insert_with(|| FdItem::new(*batch));
+                    item.register(*user_data, *int);
                 }
-                InterestChange::Unregister(int) => {
-                    item.unregister(int);
+                Change::Unregister { fd, batch, int } => {
+                    let item = registry.entry(*fd).or_insert_with(|| FdItem::new(*batch));
+                    item.unregister(*int);
                 }
-                InterestChange::UnregisterAll => {
+                Change::UnregisterAll { fd, batch } => {
+                    let item = registry.entry(*fd).or_insert_with(|| FdItem::new(*batch));
                     item.unregister_all();
                 }
+                _ => {}
             }
         }
 
         for change in changes.drain(..) {
-            let result = registry.get_mut(&change.fd).and_then(|item| {
-                if item.flags.contains(Flags::CHANGED) {
-                    item.flags.remove(Flags::CHANGED);
-                    Some((
-                        item.event(change.fd as usize),
-                        item.flags.contains(Flags::NEW),
-                    ))
-                } else {
+            let fd = match change {
+                Change::Register { fd, .. } => Some(fd),
+                Change::Unregister { fd, .. } => Some(fd),
+                Change::UnregisterAll { fd, .. } => Some(fd),
+                Change::Blocking { user_data } => {
+                    self.push_blocking(user_data);
                     None
                 }
-            });
-            if let Some((event, new)) = result {
-                self.renew(BorrowedFd::borrow_raw(change.fd), event, &mut registry)?;
+            };
 
-                if new {
-                    if let Some(item) = registry.get_mut(&change.fd) {
-                        item.flags.remove(Flags::NEW);
+            if let Some(fd) = fd {
+                let result = registry.get_mut(&fd).and_then(|item| {
+                    if item.flags.contains(Flags::CHANGED) {
+                        item.flags.remove(Flags::CHANGED);
+                        Some((item.event(fd as usize), item.flags.contains(Flags::NEW)))
+                    } else {
+                        None
+                    }
+                });
+                if let Some((event, new)) = result {
+                    self.renew(BorrowedFd::borrow_raw(fd), event, &mut registry)?;
+
+                    if new {
+                        if let Some(item) = registry.get_mut(&fd) {
+                            item.flags.remove(Flags::NEW);
+                        }
                     }
                 }
             }
@@ -404,7 +435,8 @@ impl Driver {
         Ok(())
     }
 
-    fn push_blocking(&self, user_data: usize) -> Poll<io::Result<usize>> {
+    fn push_blocking(&self, user_data: usize) {
+        // -> Poll<io::Result<usize>> {
         let poll = self.poll.clone();
         let completed = self.pool_completed.clone();
         let mut closure = move || {
@@ -419,7 +451,7 @@ impl Driver {
         };
         loop {
             match self.pool.dispatch(closure) {
-                Ok(()) => return Poll::Pending,
+                Ok(()) => return,
                 Err(e) => {
                     closure = e.0;
                     self.poll_blocking();
