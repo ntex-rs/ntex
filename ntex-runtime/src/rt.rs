@@ -317,7 +317,9 @@ impl Runtime {
                 io::ErrorKind::TimedOut | io::ErrorKind::Interrupted => {
                     log::debug!("expected error: {e}");
                 }
-                _ => panic!("{e:?}"),
+                _ => {
+                    panic!("{e:?}")
+                }
             },
         }
     }
