@@ -15,9 +15,12 @@ compile_error!(
 
 use std::{cell::Cell, io, task::Poll, task::Waker, time::Duration};
 
+#[cfg(unix)]
 mod key;
+#[cfg(unix)]
 pub use key::Key;
 
+#[cfg(unix)]
 pub mod op;
 #[cfg(unix)]
 #[cfg_attr(docsrs, doc(cfg(all())))]
@@ -25,7 +28,9 @@ mod unix;
 #[cfg(unix)]
 use unix::Overlapped;
 
+#[cfg(unix)]
 mod asyncify;
+#[cfg(unix)]
 pub use asyncify::*;
 
 mod driver_type;
@@ -217,12 +222,14 @@ impl<K, R> PushEntry<K, R> {
     }
 }
 
+#[cfg(unix)]
 /// Low-level actions of completion-based IO.
 /// It owns the operations to keep the driver safe.
 pub struct Proactor {
     driver: Driver,
 }
 
+#[cfg(unix)]
 impl Proactor {
     /// Create [`Proactor`] with 1024 entries.
     pub fn new() -> io::Result<Self> {
@@ -325,6 +332,7 @@ impl Proactor {
     }
 }
 
+#[cfg(unix)]
 impl AsRawFd for Proactor {
     fn as_raw_fd(&self) -> RawFd {
         self.driver.as_raw_fd()
@@ -332,6 +340,7 @@ impl AsRawFd for Proactor {
 }
 
 /// An completed entry returned from kernel.
+#[cfg(unix)]
 #[derive(Debug)]
 pub(crate) struct Entry {
     user_data: usize,
@@ -339,6 +348,7 @@ pub(crate) struct Entry {
     flags: u32,
 }
 
+#[cfg(unix)]
 impl Entry {
     pub(crate) fn new(user_data: usize, result: io::Result<usize>) -> Self {
         Self {
@@ -380,18 +390,21 @@ impl Entry {
     }
 }
 
+#[cfg(unix)]
 #[derive(Debug, Clone)]
 enum ThreadPoolBuilder {
     Create { limit: usize, recv_limit: Duration },
     Reuse(AsyncifyPool),
 }
 
+#[cfg(unix)]
 impl Default for ThreadPoolBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(unix)]
 impl ThreadPoolBuilder {
     pub fn new() -> Self {
         Self::Create {
@@ -409,6 +422,7 @@ impl ThreadPoolBuilder {
 }
 
 /// Builder for [`Proactor`].
+#[cfg(unix)]
 #[derive(Debug, Clone)]
 pub struct ProactorBuilder {
     capacity: u32,
@@ -416,12 +430,14 @@ pub struct ProactorBuilder {
     sqpoll_idle: Option<Duration>,
 }
 
+#[cfg(unix)]
 impl Default for ProactorBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(unix)]
 impl ProactorBuilder {
     /// Create the builder with default config.
     pub fn new() -> Self {
