@@ -53,8 +53,6 @@ ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
 
-compio-runtime = { path = "../dev/compio/compio-runtime", optional = true }
-
 [workspace.dependencies]
 async-task = "4.5.0"
 bitflags = "2"
