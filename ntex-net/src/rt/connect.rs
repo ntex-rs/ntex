@@ -32,7 +32,7 @@ pub(crate) async fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
     ConnectOps::current().connect(socket.as_raw_fd(), addr, sender)?;
 
     rx.await
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone").into())
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone"))
         .and_then(|item| item)?;
 
     Ok(TcpStream::from_socket(socket))
@@ -57,7 +57,7 @@ pub(crate) async fn connect_unix(path: impl AsRef<Path>) -> io::Result<UnixStrea
     ConnectOps::current().connect(socket.as_raw_fd(), addr, sender)?;
 
     rx.await
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone").into())
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone"))
         .and_then(|item| item)?;
 
     Ok(UnixStream::from_socket(socket))

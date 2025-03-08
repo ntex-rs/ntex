@@ -1,3 +1,4 @@
+#![allow(clippy::missing_safety_doc)]
 use std::{future::Future, io, mem, mem::MaybeUninit};
 
 use ntex_iodriver::{impl_raw_fd, op::CloseSocket, op::ShutdownSocket, syscall, AsRawFd};

@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
 use std::future::{ready, Future};
@@ -127,6 +128,7 @@ impl Runtime {
         RuntimeBuilder::new()
     }
 
+    #[allow(clippy::arc_with_non_send_sync)]
     fn with_builder(builder: &RuntimeBuilder) -> io::Result<Self> {
         Ok(Self {
             driver: builder.proactor_builder.build()?,

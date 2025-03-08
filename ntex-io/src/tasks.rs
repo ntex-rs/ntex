@@ -19,20 +19,16 @@ impl ReadContext {
         Self(io.clone(), Cell::new(None))
     }
 
-    pub fn clone(&self) -> Self {
-        Self(self.0.clone(), Cell::new(None))
-    }
-
     #[inline]
     /// Io tag
     pub fn tag(&self) -> &'static str {
         self.0.tag()
     }
 
-    #[inline]
-    /// Io tag
-    pub fn io(&self) -> IoRef {
-        self.0.clone()
+    #[doc(hidden)]
+    /// Io flags
+    pub fn flags(&self) -> crate::flags::Flags {
+        self.0.flags()
     }
 
     #[inline]
@@ -333,6 +329,12 @@ impl ReadContext {
     }
 }
 
+impl Clone for ReadContext {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), Cell::new(None))
+    }
+}
+
 fn shutdown_filters(io: &IoRef) {
     let st = &io.0;
     let flags = st.flags.get();
@@ -378,10 +380,6 @@ pub struct WriteContextBuf {
 impl WriteContext {
     pub(crate) fn new(io: &IoRef) -> Self {
         Self(io.clone())
-    }
-
-    pub fn clone(&self) -> Self {
-        Self(self.0.clone())
     }
 
     #[inline]
@@ -448,30 +446,28 @@ impl WriteContext {
         })
         .await;
 
-        if flush_buf {
-            if !self.0.flags().contains(Flags::WR_PAUSED) {
-                st.insert_flags(Flags::WR_TASK_WAIT);
+        if flush_buf && !self.0.flags().contains(Flags::WR_PAUSED) {
+            st.insert_flags(Flags::WR_TASK_WAIT);
 
-                poll_fn(|cx| {
-                    let flags = self.0.flags();
+            poll_fn(|cx| {
+                let flags = self.0.flags();
 
-                    if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
+                if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
+                    Poll::Ready(())
+                } else {
+                    st.write_task.register(cx.waker());
+
+                    if timeout.is_none() {
+                        timeout = Some(sleep(st.disconnect_timeout.get()));
+                    }
+                    if timeout.as_ref().unwrap().poll_elapsed(cx).is_ready() {
                         Poll::Ready(())
                     } else {
-                        st.write_task.register(cx.waker());
-
-                        if timeout.is_none() {
-                            timeout = Some(sleep(st.disconnect_timeout.get()));
-                        }
-                        if timeout.as_ref().unwrap().poll_elapsed(cx).is_ready() {
-                            Poll::Ready(())
-                        } else {
-                            Poll::Pending
-                        }
+                        Poll::Pending
                     }
-                })
-                .await;
-            }
+                }
+            })
+            .await;
         }
     }
 
@@ -551,14 +547,12 @@ impl WriteContext {
                             io::ErrorKind::WriteZero,
                             "failed to write frame to transport",
                         )))
+                    } else if n == buf.len() {
+                        buf.clear();
+                        Poll::Ready(Ok(0))
                     } else {
-                        if n == buf.len() {
-                            buf.clear();
-                            Poll::Ready(Ok(0))
-                        } else {
-                            buf.advance(n);
-                            Poll::Ready(Ok(buf.len()))
-                        }
+                        buf.advance(n);
+                        Poll::Ready(Ok(buf.len()))
                     }
                 }
                 Err(e) => Poll::Ready(Err(e)),
@@ -605,6 +599,12 @@ impl WriteContext {
 
         inner.flags.set(flags);
         result
+    }
+}
+
+impl Clone for WriteContext {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 

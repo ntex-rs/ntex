@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 pub use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
 use std::{cell::Cell, cell::RefCell, collections::HashMap, io, rc::Rc, sync::Arc};
@@ -366,13 +367,13 @@ impl Driver {
 
             match change.interest {
                 InterestChange::Register(int) => {
-                    let _ = item.register(change.user_data, int);
+                    item.register(change.user_data, int);
                 }
                 InterestChange::Unregister(int) => {
-                    let _ = item.unregister(int);
+                    item.unregister(int);
                 }
                 InterestChange::UnregisterAll => {
-                    let _ = item.unregister_all();
+                    item.unregister_all();
                 }
             }
         }
@@ -393,9 +394,9 @@ impl Driver {
                 self.renew(BorrowedFd::borrow_raw(change.fd), event, &mut registry)?;
 
                 if new {
-                    registry.get_mut(&change.fd).map(|item| {
+                    if let Some(item) = registry.get_mut(&change.fd) {
                         item.flags.remove(Flags::NEW);
-                    });
+                    }
                 }
             }
         }

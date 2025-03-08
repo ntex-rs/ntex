@@ -71,6 +71,7 @@ async fn test_listen() {
 
 #[ntex::test]
 #[cfg(unix)]
+#[allow(clippy::unused_io_amount)]
 async fn test_run() {
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
