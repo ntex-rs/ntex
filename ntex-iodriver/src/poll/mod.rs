@@ -302,7 +302,7 @@ impl Driver {
         let res = self.poll.wait(&mut events, timeout);
         res?;
 
-        if events.is_empty() && timeout != Some(Duration::ZERO) {
+        if events.is_empty() && timeout != Some(Duration::ZERO) && timeout != None {
             return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
         }
         // println!("POLL, events: {:?}", events.len());

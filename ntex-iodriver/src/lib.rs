@@ -13,7 +13,7 @@ compile_error!(
     "You must choose at least one of these features: [\"io-uring\", \"polling\"]"
 );
 
-use std::{io, task::Poll, task::Waker, time::Duration};
+use std::{cell::Cell, io, task::Poll, task::Waker, time::Duration};
 
 mod key;
 pub use key::Key;
@@ -31,23 +31,23 @@ pub use asyncify::*;
 mod driver_type;
 pub use driver_type::*;
 
-// thread_local! {
-//     static LOGGING: Cell<bool> = const { Cell::new(false) };
-// }
+thread_local! {
+    static LOGGING: Cell<bool> = const { Cell::new(false) };
+}
 
-// /// enable logging for thread
-// pub fn enable_logging() {
-//     LOGGING.with(|v| v.set(true));
-// }
+/// enable logging for thread
+pub fn enable_logging() {
+    LOGGING.with(|v| v.set(true));
+}
 
-// /// enable logging for thread
-// pub fn log<T: AsRef<str>>(s: T) {
-//     LOGGING.with(|_v| {
-//         if _v.get() {
-//             println!("{}", s.as_ref());
-//         }
-//     });
-// }
+/// enable logging for thread
+pub fn log<T: AsRef<str>>(s: T) {
+    LOGGING.with(|_v| {
+        //if _v.get() {
+        println!("{}", s.as_ref());
+        //}
+    });
+}
 
 cfg_if::cfg_if! {
     //if #[cfg(windows)] {
