@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 #[cfg(feature = "tokio")]
 use std::{io, sync::Arc};
-use std::{io::Read, net, sync::mpsc, thread, time};
+use std::{io::Read, io::Write, net, sync::mpsc, thread, time};
 
 use ntex::codec::BytesCodec;
 use ntex::io::Io;
@@ -71,6 +71,7 @@ async fn test_listen() {
 
 #[ntex::test]
 #[cfg(unix)]
+#[allow(clippy::unused_io_amount)]
 async fn test_run() {
     let addr = TestServer::unused_addr();
     let (tx, rx) = mpsc::channel();
@@ -80,6 +81,7 @@ async fn test_run() {
         sys.run(move || {
             let srv = build()
                 .backlog(100)
+                .workers(1)
                 .disable_signals()
                 .bind("test", addr, move |_| {
                     fn_service(|io: Io| async move {
@@ -99,6 +101,7 @@ async fn test_run() {
 
     let mut buf = [1u8; 4];
     let mut conn = net::TcpStream::connect(addr).unwrap();
+    conn.write(&b"test"[..]).unwrap();
     let _ = conn.read_exact(&mut buf);
     assert_eq!(buf, b"test"[..]);
 

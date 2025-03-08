@@ -53,7 +53,9 @@ pub trait AsyncWrite {
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {
+    /// Read task is clear to proceed with read operation
     Ready,
+    /// Terminate read task
     Terminate,
 }
 
@@ -75,7 +77,7 @@ pub trait FilterLayer: fmt::Debug + 'static {
 
     #[inline]
     /// Check readiness for read operations
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
+    fn poll_read_ready(&self, waker: &mut Context<'_>) -> Poll<ReadStatus> {
         Poll::Ready(ReadStatus::Ready)
     }
 
