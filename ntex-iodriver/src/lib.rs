@@ -45,6 +45,7 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(unix)]
 pub use sys::*;
 
 #[cfg(windows)]
