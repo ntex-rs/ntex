@@ -83,7 +83,6 @@ async fn test_run() {
                 .workers(1)
                 .disable_signals()
                 .bind("test", addr, move |_| {
-                    compio_driver::enable_logging();
                     fn_service(|io: Io| async move {
                         io.send(Bytes::from_static(b"test"), &BytesCodec)
                             .await

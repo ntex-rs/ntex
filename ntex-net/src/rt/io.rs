@@ -1,23 +1,34 @@
-use std::{any, future::poll_fn, task::Poll};
+use std::{any, future::poll_fn, io, task::Poll};
 
 use ntex_io::{
     types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
+use ntex_runtime::{net::TcpStream, net::UnixStream, spawn};
 
-use crate::driver::{CompioOps, StreamCtl};
+use super::driver::{CompioOps, StreamCtl};
 
-impl IoStream for crate::TcpStream {
+impl IoStream for super::TcpStream {
     fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let ctl = CompioOps::current().register(io, read.clone(), write.clone());
         let ctl2 = ctl.clone();
-        compio_runtime::spawn(async move { run(ctl, read, write).await }).detach();
+        spawn(async move { run(ctl, read, write).await }).detach();
 
         Some(Box::new(HandleWrapper(ctl2)))
     }
 }
 
-struct HandleWrapper(StreamCtl);
+impl IoStream for super::UnixStream {
+    fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
+        let io = self.0;
+        let ctl = CompioOps::current().register(io, read.clone(), write.clone());
+        spawn(async move { run(ctl, read, write).await }).detach();
+
+        None
+    }
+}
+
+struct HandleWrapper(StreamCtl<TcpStream>);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
@@ -31,16 +42,31 @@ impl Handle for HandleWrapper {
     }
 }
 
+trait Closable {
+    async fn close(self) -> io::Result<()>;
+}
+
+impl Closable for TcpStream {
+    async fn close(self) -> io::Result<()> {
+        TcpStream::close(self).await
+    }
+}
+
+impl Closable for UnixStream {
+    async fn close(self) -> io::Result<()> {
+        UnixStream::close(self).await
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Status {
     Shutdown,
     Terminate,
 }
 
-async fn run(ctl: StreamCtl, read: ReadContext, write: WriteContext) {
+async fn run<T: Closable>(ctl: StreamCtl<T>, read: ReadContext, write: WriteContext) {
     // Handle io read readiness
     let st = poll_fn(|cx| {
-        ctl.register(cx.waker());
         read.shutdown_filters(cx);
 
         let read_st = read.poll_ready(cx);
@@ -87,18 +113,16 @@ async fn run(ctl: StreamCtl, read: ReadContext, write: WriteContext) {
     })
     .await;
 
-    //println!("\n\nIO2 - 1 flags: {:?} {:?}", read.io().flags(), st);
-
     ctl.resume_write();
-
     if st == Status::Shutdown {
         write.wait_for_shutdown(true).await;
     } else {
         write.wait_for_shutdown(false).await;
     }
-    //println!("\n\nIO2 - 2 flags: {:?}", read.io().flags());
 
     ctl.pause_all();
     let io = ctl.take_io().unwrap();
     let result = io.close().await;
+
+    read.set_stopped(result.err());
 }

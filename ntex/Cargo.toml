@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.11.0"
+version = "2.12.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -53,6 +53,9 @@ async-std = ["ntex-net/async-std"]
 
 # compio runtime
 compio = ["ntex-net/compio"]
+
+# default ntex runtime
+default-rt = ["ntex-net/default-rt"]
 
 # websocket support
 ws = ["dep:sha-1"]

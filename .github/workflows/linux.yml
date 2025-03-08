@@ -54,6 +54,11 @@ jobs:
         run: |
           cargo test --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
+      - name: Run tests (default)
+        timeout-minutes: 40
+        run: |
+          cargo test --all --no-default-features --features="ntex/default-rt,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+
       - name: Run tests (async-std)
         timeout-minutes: 40
         continue-on-error: true

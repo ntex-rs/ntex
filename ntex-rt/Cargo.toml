@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "0.4.24"
+version = "0.4.25"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -29,6 +29,9 @@ tokio = ["tok-io"]
 # compio support
 compio = ["compio-driver", "compio-runtime"]
 
+# default ntex runtime
+default-rt = ["ntex-runtime", "ntex-iodriver"]
+
 # async-std support
 async-std = ["async_std/unstable"]
 
@@ -45,6 +48,9 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
     "rt",
     "net",
 ], optional = true }
+
+ntex-runtime = { version = "0.1", optional = true }
+ntex-iodriver = { version = "0.1", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 glomm-io = { version = "0.9", package = "glommio", optional = true }

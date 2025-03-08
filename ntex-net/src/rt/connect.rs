@@ -1,11 +1,10 @@
-use std::collections::VecDeque;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::{cell::RefCell, io, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, io, path::Path, rc::Rc, task::Poll};
 
-use compio_driver::op::{Handler, Interest};
-use compio_driver::{syscall, AsRawFd, DriverApi, RawFd};
-use compio_net::{Socket, TcpStream};
-use compio_runtime::Runtime;
+use ntex_iodriver::op::{Handler, Interest};
+use ntex_iodriver::{syscall, AsRawFd, DriverApi, RawFd};
+use ntex_runtime::net::{Socket, TcpStream, UnixStream};
+use ntex_runtime::Runtime;
 use ntex_util::channel::oneshot::{channel, Sender};
 use slab::Slab;
 use socket2::{Protocol, SockAddr, Type};
@@ -30,13 +29,38 @@ pub(crate) async fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
 
     let (sender, rx) = channel();
 
-    ConnectOps::current().connect(socket.as_raw_fd(), addr, sender);
+    ConnectOps::current().connect(socket.as_raw_fd(), addr, sender)?;
 
     rx.await
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone").into())
         .and_then(|item| item)?;
 
     Ok(TcpStream::from_socket(socket))
+}
+
+pub(crate) async fn connect_unix(path: impl AsRef<Path>) -> io::Result<UnixStream> {
+    let addr = SockAddr::unix(path)?;
+
+    #[cfg(windows)]
+    let socket = {
+        let new_addr = empty_unix_socket();
+        Socket::bind(&new_addr, Type::STREAM, None).await?
+    };
+    #[cfg(unix)]
+    let socket = {
+        use socket2::Domain;
+        Socket::new(Domain::UNIX, Type::STREAM, None).await?
+    };
+
+    let (sender, rx) = channel();
+
+    ConnectOps::current().connect(socket.as_raw_fd(), addr, sender)?;
+
+    rx.await
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone").into())
+        .and_then(|item| item)?;
+
+    Ok(UnixStream::from_socket(socket))
 }
 
 #[derive(Clone)]
@@ -56,7 +80,6 @@ struct ConnectOpsBatcher {
 
 struct Item {
     fd: RawFd,
-    addr: SockAddr,
     sender: Sender<io::Result<()>>,
 }
 
@@ -96,19 +119,19 @@ impl ConnectOps {
         fd: RawFd,
         addr: SockAddr,
         sender: Sender<io::Result<()>>,
-    ) -> usize {
+    ) -> io::Result<usize> {
         let result = syscall!(break libc::connect(fd, addr.as_ptr(), addr.len()));
 
-        let item = Item {
-            fd,
-            sender,
-            addr: addr.into(),
-        };
+        if let Poll::Ready(res) = result {
+            res?;
+        }
+
+        let item = Item { fd, sender };
         let id = self.0.connects.borrow_mut().insert(item);
 
         self.0.api.register(fd, id, Interest::Writable);
 
-        id
+        Ok(id)
     }
 }
 
@@ -160,10 +183,10 @@ impl Handler for ConnectOpsBatcher {
                         };
 
                         self.inner.api.unregister_all(item.fd);
-                        let res2 = item.sender.send(res);
+                        let _ = item.sender.send(res);
                     }
                     Change::Error(err) => {
-                        item.sender.send(Err(err));
+                        let _ = item.sender.send(Err(err));
                         self.inner.api.unregister_all(item.fd);
                     }
                 }
