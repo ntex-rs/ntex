@@ -45,12 +45,6 @@ url = ["url-pkg"]
 # tokio runtime
 tokio = ["ntex-net/tokio"]
 
-# glommio runtime
-glommio = ["ntex-net/glommio"]
-
-# async-std runtime
-async-std = ["ntex-net/async-std"]
-
 # compio runtime
 compio = ["ntex-net/compio"]
 

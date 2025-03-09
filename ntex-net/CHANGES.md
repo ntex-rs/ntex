@@ -1,5 +1,11 @@
 # Changes
 
+## [2.5.0] - 2025-03-10
+
+* Add ntex-runtime support
+
+* Drop glommio support
+
 ## [2.4.0] - 2024-09-25
 
 * Update to glommio v0.9

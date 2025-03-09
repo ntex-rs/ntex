@@ -502,128 +502,11 @@ mod asyncstd {
     }
 }
 
-#[allow(dead_code)]
-#[cfg(all(feature = "glommio", target_os = "linux"))]
-mod glommio {
-    use std::future::{poll_fn, Future};
-    use std::{pin::Pin, task::Context, task::Poll};
-
-    use futures_channel::oneshot::Canceled;
-    use glomm_io::task;
-
-    pub type JoinError = Canceled;
-
-    /// Runs the provided future, blocking the current thread until the future
-    /// completes.
-    pub fn block_on<F: Future<Output = ()>>(fut: F) {
-        let ex = glomm_io::LocalExecutor::default();
-        ex.run(async move {
-            let _ = fut.await;
-        })
-    }
-
-    /// Spawn a future on the current thread. This does not create a new Arbiter
-    /// or Arbiter address, it is simply a helper for spawning futures on the current
-    /// thread.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if ntex system is not running.
-    #[inline]
-    pub fn spawn<F>(mut f: F) -> JoinHandle<F::Output>
-    where
-        F: Future + 'static,
-        F::Output: 'static,
-    {
-        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
-        JoinHandle {
-            fut: Either::Left(
-                glomm_io::spawn_local(async move {
-                    if let Some(ptr) = ptr {
-                        glomm_io::executor().yield_now().await;
-                        let mut f = unsafe { Pin::new_unchecked(&mut f) };
-                        let result = poll_fn(|ctx| {
-                            let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
-                            let result = f.as_mut().poll(ctx);
-                            crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
-                            result
-                        })
-                        .await;
-                        crate::CB.with(|cb| (cb.borrow().3)(ptr));
-                        result
-                    } else {
-                        glomm_io::executor().yield_now().await;
-                        f.await
-                    }
-                })
-                .detach(),
-            ),
-        }
-    }
-
-    /// Executes a future on the current thread. This does not create a new Arbiter
-    /// or Arbiter address, it is simply a helper for executing futures on the current
-    /// thread.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if ntex system is not running.
-    #[inline]
-    pub fn spawn_fn<F, R>(f: F) -> JoinHandle<R::Output>
-    where
-        F: FnOnce() -> R + 'static,
-        R: Future + 'static,
-    {
-        spawn(async move { f().await })
-    }
-
-    pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        let fut = glomm_io::executor().spawn_blocking(f);
-        JoinHandle {
-            fut: Either::Right(Box::pin(async move { Ok(fut.await) })),
-        }
-    }
-
-    enum Either<T1, T2> {
-        Left(T1),
-        Right(T2),
-    }
-
-    /// Blocking operation completion future. It resolves with results
-    /// of blocking function execution.
-    #[allow(clippy::type_complexity)]
-    pub struct JoinHandle<T> {
-        fut:
-            Either<task::JoinHandle<T>, Pin<Box<dyn Future<Output = Result<T, Canceled>>>>>,
-    }
-
-    impl<T> Future for JoinHandle<T> {
-        type Output = Result<T, Canceled>;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            match self.fut {
-                Either::Left(ref mut f) => match Pin::new(f).poll(cx) {
-                    Poll::Pending => Poll::Pending,
-                    Poll::Ready(res) => Poll::Ready(res.ok_or(Canceled)),
-                },
-                Either::Right(ref mut f) => Pin::new(f).poll(cx),
-            }
-        }
-    }
-}
-
 #[cfg(feature = "tokio")]
 pub use self::tokio::*;
 
 #[cfg(feature = "async-std")]
 pub use self::asyncstd::*;
-
-#[cfg(feature = "glommio")]
-pub use self::glommio::*;
 
 #[cfg(feature = "compio")]
 pub use self::compio::*;
@@ -636,8 +519,7 @@ pub use self::default_rt::*;
     not(feature = "tokio"),
     not(feature = "async-std"),
     not(feature = "compio"),
-    not(feature = "default-rt"),
-    not(feature = "glommio")
+    not(feature = "default-rt")
 ))]
 mod no_rt {
     use std::task::{Context, Poll};
@@ -701,7 +583,6 @@ mod no_rt {
     not(feature = "tokio"),
     not(feature = "async-std"),
     not(feature = "compio"),
-    not(feature = "default-rt"),
-    not(feature = "glommio")
+    not(feature = "default-rt")
 ))]
 pub use self::no_rt::*;

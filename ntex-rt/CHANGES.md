@@ -1,5 +1,11 @@
 # Changes
 
+## [0.4.25] - 2025-03-10
+
+* Add "ntex-runtime" support
+
+* Drop glommio support
+
 ## [0.4.24] - 2025-01-03
 
 * Relax runtime requirements

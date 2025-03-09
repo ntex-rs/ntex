@@ -1,5 +1,13 @@
 # Changes
 
+## [2.12.0] - 2025-03-10
+
+* Add "ntex-runtime" support
+
+* Drop glommio support
+
+* Drop async-std support
+
 ## [2.11.0] - 2025-01-31
 
 * Cpu affinity support for server
