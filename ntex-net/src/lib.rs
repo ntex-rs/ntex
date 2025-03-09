@@ -13,7 +13,6 @@ pub use self::compat::*;
     feature = "default-rt",
     not(feature = "tokio"),
     not(feature = "async-std"),
-    not(feature = "compio"),
-    not(feature = "glommio")
+    not(feature = "compio")
 ))]
 mod rt;

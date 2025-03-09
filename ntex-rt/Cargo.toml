@@ -20,9 +20,6 @@ path = "src/lib.rs"
 [features]
 default = []
 
-# glommio support
-glommio = ["glomm-io", "futures-channel"]
-
 # tokio support
 tokio = ["tok-io"]
 
@@ -51,7 +48,3 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
 
 ntex-runtime = { version = "0.1", optional = true }
 ntex-iodriver = { version = "0.1", optional = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-glomm-io = { version = "0.9", package = "glommio", optional = true }
-futures-channel = { version = "0.3", optional = true }

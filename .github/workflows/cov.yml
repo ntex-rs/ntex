@@ -36,7 +36,7 @@ jobs:
         run: cargo llvm-cov --no-report --all --no-default-features --features="ntex/default-rt,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
       - name: Generate coverage report
-        run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-compio|ntex-tokio|ntex-glommio|ntex-async-std"
+        run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-compio|ntex-tokio|ntex-async-std"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

@@ -19,7 +19,6 @@ members = [
 
   "ntex-async-std",
   "ntex-compio",
-  "ntex-glommio",
   "ntex-tokio",
 ]
 
@@ -49,7 +48,6 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 ntex-compio = { path = "ntex-compio" }
-ntex-glommio = { path = "ntex-glommio" }
 ntex-tokio = { path = "ntex-tokio" }
 ntex-async-std = { path = "ntex-async-std" }
 
