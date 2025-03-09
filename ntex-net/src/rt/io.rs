@@ -1,28 +1,30 @@
 use std::{any, future::poll_fn, io, task::Poll};
 
 use ntex_io::{
-    types, Handle, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
+    types, Handle, IoContext, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
 use ntex_runtime::{net::TcpStream, net::UnixStream, spawn};
 
-use super::driver::{CompioOps, StreamCtl};
+use super::driver::{Closable, CompioOps, StreamCtl};
 
 impl IoStream for super::TcpStream {
-    fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
+    fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
-        let ctl = CompioOps::current().register(io, read.clone(), write.clone());
+        let context = read.context();
+        let ctl = CompioOps::current().register(io, context.clone());
         let ctl2 = ctl.clone();
-        spawn(async move { run(ctl, read, write).await }).detach();
+        spawn(async move { run(ctl, context).await }).detach();
 
         Some(Box::new(HandleWrapper(ctl2)))
     }
 }
 
 impl IoStream for super::UnixStream {
-    fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
+    fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
-        let ctl = CompioOps::current().register(io, read.clone(), write.clone());
-        spawn(async move { run(ctl, read, write).await }).detach();
+        let context = read.context();
+        let ctl = CompioOps::current().register(io, context.clone());
+        spawn(async move { run(ctl, context).await }).detach();
 
         None
     }
@@ -40,10 +42,6 @@ impl Handle for HandleWrapper {
         }
         None
     }
-}
-
-trait Closable {
-    async fn close(self) -> io::Result<()>;
 }
 
 impl Closable for TcpStream {
@@ -64,24 +62,10 @@ enum Status {
     Terminate,
 }
 
-async fn run<T: Closable>(ctl: StreamCtl<T>, read: ReadContext, write: WriteContext) {
+async fn run<T: Closable>(ctl: StreamCtl<T>, context: IoContext) {
     // Handle io read readiness
     let st = poll_fn(|cx| {
-        read.shutdown_filters(cx);
-
-        let read_st = read.poll_ready(cx);
-        let write_st = write.poll_ready(cx);
-        //println!("\n\n");
-        //println!(
-        //    "IO2 read-st {:?}, write-st: {:?}, flags: {:?}",
-        //    read_st,
-        //    write_st,
-        //    read.io().flags()
-        //);
-        //println!("\n\n");
-
-        //let read = match read.poll_ready(cx) {
-        let read = match read_st {
+        let read = match context.poll_read_ready(cx) {
             Poll::Ready(ReadStatus::Ready) => {
                 ctl.resume_read();
                 Poll::Pending
@@ -93,7 +77,7 @@ async fn run<T: Closable>(ctl: StreamCtl<T>, read: ReadContext, write: WriteCont
             }
         };
 
-        let write = match write_st {
+        let write = match context.poll_write_ready(cx) {
             Poll::Ready(WriteStatus::Ready) => {
                 ctl.resume_write();
                 Poll::Pending
@@ -114,15 +98,10 @@ async fn run<T: Closable>(ctl: StreamCtl<T>, read: ReadContext, write: WriteCont
     .await;
 
     ctl.resume_write();
-    if st == Status::Shutdown {
-        write.wait_for_shutdown(true).await;
-    } else {
-        write.wait_for_shutdown(false).await;
-    }
+    context.shutdown(st == Status::Shutdown).await;
 
     ctl.pause_all();
-    let io = ctl.take_io().unwrap();
-    let result = io.close().await;
+    let result = ctl.close().await;
 
-    read.set_stopped(result.err());
+    context.stopped(result.err());
 }

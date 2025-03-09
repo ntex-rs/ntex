@@ -1,5 +1,9 @@
 # Changes
 
+## [2.11.0] - 2025-03-10
+
+* Add single io context
+
 ## [2.10.0] - 2025-02-26
 
 * Impl Filter for Sealed #506

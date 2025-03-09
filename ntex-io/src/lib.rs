@@ -29,7 +29,7 @@ pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::tasks::{ReadContext, WriteContext, WriteContextBuf};
+pub use self::tasks::{IoContext, ReadContext, WriteContext, WriteContextBuf};
 pub use self::timer::TimerHandle;
 pub use self::utils::{seal, Decoded};
 
@@ -77,7 +77,7 @@ pub trait FilterLayer: fmt::Debug + 'static {
 
     #[inline]
     /// Check readiness for read operations
-    fn poll_read_ready(&self, waker: &mut Context<'_>) -> Poll<ReadStatus> {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
         Poll::Ready(ReadStatus::Ready)
     }
 

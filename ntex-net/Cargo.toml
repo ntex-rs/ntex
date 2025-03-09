@@ -37,7 +37,7 @@ default-rt = ["ntex-rt/default-rt", "ntex-runtime", "ntex-iodriver", "slab", "so
 ntex-service = "3.3"
 ntex-bytes = "0.1"
 ntex-http = "0.1"
-ntex-io = "2.8"
+ntex-io = "2.11"
 ntex-rt = "0.4.25"
 ntex-util = "2.5"
 

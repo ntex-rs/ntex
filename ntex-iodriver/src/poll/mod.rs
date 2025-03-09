@@ -1,15 +1,14 @@
 #![allow(clippy::type_complexity)]
 pub use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
-use std::{cell::Cell, cell::RefCell, collections::HashMap, io, rc::Rc, sync::Arc};
+use std::{cell::Cell, cell::RefCell, io, rc::Rc, sync::Arc};
 use std::{num::NonZeroUsize, os::fd::BorrowedFd, pin::Pin, task::Poll, time::Duration};
 
 use crossbeam_queue::SegQueue;
+use nohash_hasher::IntMap;
 use polling::{Event, Events, Poller};
 
-use crate::{
-    op::Handler, op::Interest, syscall, AsyncifyPool, Entry, Key, ProactorBuilder,
-};
+use crate::{op::Handler, op::Interest, AsyncifyPool, Entry, Key, ProactorBuilder};
 
 pub(crate) mod op;
 
@@ -132,14 +131,6 @@ enum Change {
     },
 }
 
-// #[derive(Debug)]
-// struct BatchChange {
-//     fd: RawFd,
-//     batch: usize,
-//     user_data: usize,
-//     interest: InterestChange,
-// }
-
 pub struct DriverApi {
     batch: usize,
     changes: Rc<RefCell<Vec<Change>>>,
@@ -191,7 +182,7 @@ impl DriverApi {
 pub(crate) struct Driver {
     poll: Arc<Poller>,
     events: RefCell<Events>,
-    registry: RefCell<HashMap<RawFd, FdItem>>,
+    registry: RefCell<IntMap<RawFd, FdItem>>,
     pool: AsyncifyPool,
     pool_completed: Arc<SegQueue<Entry>>,
     hid: Cell<usize>,
@@ -212,7 +203,7 @@ impl Driver {
         Ok(Self {
             poll: Arc::new(Poller::new()?),
             events: RefCell::new(events),
-            registry: RefCell::new(HashMap::default()),
+            registry: RefCell::new(Default::default()),
             pool: builder.create_or_get_thread_pool(),
             pool_completed: Arc::new(SegQueue::new()),
             hid: Cell::new(0),
@@ -239,34 +230,6 @@ impl Driver {
 
     pub fn create_op<T: crate::sys::OpCode + 'static>(&self, op: T) -> Key<T> {
         Key::new(self.as_raw_fd(), op)
-    }
-
-    fn renew(
-        &self,
-        fd: BorrowedFd,
-        renew_event: Event,
-        registry: &mut HashMap<RawFd, FdItem>,
-    ) -> io::Result<()> {
-        if !renew_event.readable && !renew_event.writable {
-            // crate::log(format!("DELETE - {:?}", fd.as_raw_fd()));
-
-            if let Some(item) = registry.remove(&fd.as_raw_fd()) {
-                if !item.flags.contains(Flags::NEW) {
-                    self.poll.delete(fd)?;
-                }
-            }
-        } else {
-            if let Some(item) = registry.get(&fd.as_raw_fd()) {
-                if item.flags.contains(Flags::NEW) {
-                    // crate::log(format!("ADD - {:?}", fd.as_raw_fd()));
-                    unsafe { self.poll.add(&fd, renew_event)? };
-                    return Ok(());
-                }
-            }
-            // crate::log(format!("MODIFY - {:?} {:?}", fd.as_raw_fd(), renew_event));
-            self.poll.modify(fd, renew_event)?;
-        }
-        Ok(())
     }
 
     pub fn attach(&self, _fd: RawFd) -> io::Result<()> {
@@ -299,32 +262,33 @@ impl Driver {
         }
 
         let mut events = self.events.borrow_mut();
-        let res = self.poll.wait(&mut events, timeout);
-        res?;
+        self.poll.wait(&mut events, timeout)?;
 
-        if events.is_empty() && timeout != Some(Duration::ZERO) && timeout.is_some() {
-            return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
-        }
-        // println!("POLL, events: {:?}", events.len());
-
-        if !events.is_empty() {
+        if events.is_empty() {
+            if timeout.is_some() && timeout != Some(Duration::ZERO) {
+                return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
+            }
+        } else {
+            // println!("POLL, events: {:?}", events.len());
             let mut registry = self.registry.borrow_mut();
             let mut handlers = self.handlers.take().unwrap();
             for event in events.iter() {
-                let user_data = event.key;
-                let fd = user_data as RawFd;
-                log::debug!(
-                    "receive {} for {:?} {:?}",
-                    user_data,
-                    event,
-                    registry.get_mut(&fd)
-                );
+                let fd = event.key as RawFd;
+                log::debug!("Event {:?} for {:?}", event, registry.get(&fd));
 
                 if let Some(item) = registry.get_mut(&fd) {
-                    self.handle_batch_event(event, item, &mut handlers);
+                    if event.readable {
+                        if let Some(user_data) = item.user_data(Interest::Readable) {
+                            handlers[item.batch].readable(user_data)
+                        }
+                    }
+                    if event.writable {
+                        if let Some(user_data) = item.user_data(Interest::Writable) {
+                            handlers[item.batch].writable(user_data)
+                        }
+                    }
                 }
             }
-            drop(registry);
             self.handlers.set(Some(handlers));
         }
 
@@ -348,31 +312,12 @@ impl Driver {
         Ok(())
     }
 
-    fn handle_batch_event(
-        &self,
-        event: Event,
-        item: &mut FdItem,
-        handlers: &mut [Box<dyn Handler>],
-    ) {
-        if event.readable {
-            if let Some(user_data) = item.user_data(Interest::Readable) {
-                handlers[item.batch].readable(user_data)
-            }
-        }
-        if event.writable {
-            if let Some(user_data) = item.user_data(Interest::Writable) {
-                handlers[item.batch].writable(user_data)
-            }
-        }
-    }
-
     /// re-calc driver changes
     unsafe fn apply_changes(&self) -> io::Result<()> {
         let mut changes = self.changes.borrow_mut();
         if changes.is_empty() {
             return Ok(());
         }
-
         log::debug!("Apply driver changes, {:?}", changes.len());
 
         let mut registry = self.registry.borrow_mut();
@@ -412,20 +357,26 @@ impl Driver {
             };
 
             if let Some(fd) = fd {
-                let result = registry.get_mut(&fd).and_then(|item| {
+                if let Some(item) = registry.get_mut(&fd) {
                     if item.flags.contains(Flags::CHANGED) {
                         item.flags.remove(Flags::CHANGED);
-                        Some((item.event(fd as usize), item.flags.contains(Flags::NEW)))
-                    } else {
-                        None
-                    }
-                });
-                if let Some((event, new)) = result {
-                    self.renew(BorrowedFd::borrow_raw(fd), event, &mut registry)?;
 
-                    if new {
-                        if let Some(item) = registry.get_mut(&fd) {
+                        let new = item.flags.contains(Flags::NEW);
+                        let renew_event = item.event(fd as usize);
+
+                        if !renew_event.readable && !renew_event.writable {
+                            // crate::log(format!("DELETE - {:?}", fd.as_raw_fd()));
+                            registry.remove(&fd);
+                            if !new {
+                                self.poll.delete(BorrowedFd::borrow_raw(fd))?;
+                            }
+                        } else if new {
                             item.flags.remove(Flags::NEW);
+                            // crate::log(format!("ADD - {:?}", fd.as_raw_fd()));
+                            unsafe { self.poll.add(fd, renew_event)? };
+                        } else {
+                            // crate::log(format!("MODIFY - {:?} {:?}", fd.as_raw_fd(), renew_event));
+                            self.poll.modify(BorrowedFd::borrow_raw(fd), renew_event)?;
                         }
                     }
                 }
@@ -436,7 +387,6 @@ impl Driver {
     }
 
     fn push_blocking(&self, user_data: usize) {
-        // -> Poll<io::Result<usize>> {
         let poll = self.poll.clone();
         let completed = self.pool_completed.clone();
         let mut closure = move || {
@@ -449,30 +399,26 @@ impl Driver {
             completed.push(Entry::new(user_data, res));
             poll.notify().ok();
         };
-        loop {
-            match self.pool.dispatch(closure) {
-                Ok(()) => return,
-                Err(e) => {
-                    closure = e.0;
-                    self.poll_blocking();
-                }
-            }
+        while let Err(e) = self.pool.dispatch(closure) {
+            closure = e.0;
+            self.poll_blocking();
         }
     }
 
     fn poll_blocking(&self) -> bool {
         if self.pool_completed.is_empty() {
-            return false;
-        }
-
-        while let Some(entry) = self.pool_completed.pop() {
-            unsafe {
-                entry.notify();
+            false
+        } else {
+            while let Some(entry) = self.pool_completed.pop() {
+                unsafe {
+                    entry.notify();
+                }
             }
+            true
         }
-        true
     }
 
+    /// Get notification handle
     pub fn handle(&self) -> NotifyHandle {
         NotifyHandle::new(self.poll.clone())
     }
@@ -506,7 +452,7 @@ impl NotifyHandle {
         Self { poll }
     }
 
-    /// Notify the inner driver.
+    /// Notify the driver
     pub fn notify(&self) -> io::Result<()> {
         self.poll.notify()
     }

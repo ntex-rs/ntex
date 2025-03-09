@@ -34,6 +34,7 @@ cfg-if = { workspace = true }
 crossbeam-channel = { workspace = true }
 socket2 = { workspace = true }
 slab = { workspace = true }
+nohash-hasher = { workspace = true }
 
 # Windows specific dependencies
 [target.'cfg(windows)'.dependencies]

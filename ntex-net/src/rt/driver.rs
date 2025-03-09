@@ -6,7 +6,7 @@ use ntex_runtime::Runtime;
 use slab::Slab;
 
 use ntex_bytes::BufMut;
-use ntex_io::{ReadContext, WriteContext};
+use ntex_io::IoContext;
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -25,8 +25,7 @@ pub(crate) struct StreamCtl<T> {
 struct TcpStreamItem<T> {
     io: Option<T>,
     fd: RawFd,
-    read: ReadContext,
-    write: WriteContext,
+    context: IoContext,
     flags: Flags,
     ref_count: usize,
 }
@@ -78,15 +77,9 @@ impl<T: AsRawFd + 'static> CompioOps<T> {
         })
     }
 
-    pub(crate) fn register(
-        &self,
-        io: T,
-        read: ReadContext,
-        write: WriteContext,
-    ) -> StreamCtl<T> {
+    pub(crate) fn register(&self, io: T, context: IoContext) -> StreamCtl<T> {
         let item = TcpStreamItem {
-            read,
-            write,
+            context,
             fd: io.as_raw_fd(),
             io: Some(io),
             flags: Flags::empty(),
@@ -146,7 +139,7 @@ impl<T> Handler for CompioOpsBatcher<T> {
             match change {
                 Change::Readable => {
                     let item = &mut streams[id];
-                    let result = item.read.with_buf(|buf| {
+                    let result = item.context.with_read_buf(|buf| {
                         let chunk = buf.chunk_mut();
                         let b = chunk.as_mut_ptr();
                         Poll::Ready(
@@ -155,7 +148,12 @@ impl<T> Handler for CompioOpsBatcher<T> {
                             ))
                             .inspect(|size| {
                                 unsafe { buf.advance_mut(*size) };
-                                log::debug!("FD: {:?}, BUF: {:?}", item.fd, buf);
+                                log::debug!(
+                                    "FD: {:?}, SIZE: {:?}, BUF: {:?}",
+                                    item.fd,
+                                    size,
+                                    buf
+                                );
                             }),
                         )
                     });
@@ -167,7 +165,7 @@ impl<T> Handler for CompioOpsBatcher<T> {
                 }
                 Change::Writable => {
                     let item = &mut streams[id];
-                    let result = item.write.with_buf(|buf| {
+                    let result = item.context.with_write_buf(|buf| {
                         let slice = &buf[..];
                         syscall!(
                             break libc::write(item.fd, slice.as_ptr() as _, slice.len())
@@ -181,7 +179,7 @@ impl<T> Handler for CompioOpsBatcher<T> {
                 }
                 Change::Error(err) => {
                     if let Some(item) = streams.get_mut(id) {
-                        item.read.set_stopped(Some(err));
+                        item.context.stopped(Some(err));
                         if !item.flags.contains(Flags::ERROR) {
                             item.flags.insert(Flags::ERROR);
                             item.flags.remove(Flags::RD | Flags::WR);
@@ -211,9 +209,20 @@ impl<T> Handler for CompioOpsBatcher<T> {
     }
 }
 
+pub(crate) trait Closable {
+    async fn close(self) -> io::Result<()>;
+}
+
 impl<T> StreamCtl<T> {
-    pub(crate) fn take_io(&self) -> Option<T> {
-        self.with(|streams| streams[self.id].io.take())
+    pub(crate) async fn close(self) -> io::Result<()>
+    where
+        T: Closable,
+    {
+        if let Some(io) = self.with(|streams| streams[self.id].io.take()) {
+            io.close().await
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn with_io<F, R>(&self, f: F) -> R
@@ -267,7 +276,7 @@ impl<T> StreamCtl<T> {
 
             if !item.flags.contains(Flags::WR) {
                 log::debug!("Resume io write ({}), {:?}", self.id, item.fd);
-                let result = item.write.with_buf(|buf| {
+                let result = item.context.with_write_buf(|buf| {
                     log::debug!("Writing io ({}), buf: {:?}", self.id, buf.len());
 
                     let slice = &buf[..];
@@ -275,7 +284,11 @@ impl<T> StreamCtl<T> {
                 });
 
                 if result.is_pending() {
-                    log::debug!("Write is pending ({}), {:?}", self.id, item.read.flags());
+                    log::debug!(
+                        "Write is pending ({}), {:?}",
+                        self.id,
+                        item.context.flags()
+                    );
 
                     item.flags.insert(Flags::WR);
                     self.inner

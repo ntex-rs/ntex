@@ -289,12 +289,12 @@ mod default_rt {
     ///
     /// This function panics if ntex system is not running.
     #[inline]
-    pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
+    pub fn spawn<F>(f: F) -> Task<F::Output>
     where
         F: Future + 'static,
     {
         let ptr = crate::CB.with(|cb| (cb.borrow().0)());
-        let fut = ntex_runtime::spawn(async move {
+        let task = ntex_runtime::spawn(async move {
             if let Some(ptr) = ptr {
                 let mut f = std::pin::pin!(f);
                 let result = poll_fn(|ctx| {
@@ -311,7 +311,7 @@ mod default_rt {
             }
         });
 
-        JoinHandle { fut: Some(fut) }
+        Task { task: Some(task) }
     }
 
     /// Executes a future on the current thread. This does not create a new Arbiter
@@ -322,12 +322,41 @@ mod default_rt {
     ///
     /// This function panics if ntex system is not running.
     #[inline]
-    pub fn spawn_fn<F, R>(f: F) -> JoinHandle<R::Output>
+    pub fn spawn_fn<F, R>(f: F) -> Task<R::Output>
     where
         F: FnOnce() -> R + 'static,
         R: Future + 'static,
     {
         spawn(async move { f().await })
+    }
+
+    /// A spawned task.
+    pub struct Task<T> {
+        task: Option<ntex_runtime::Task<T>>,
+    }
+
+    impl<T> Task<T> {
+        pub fn is_finished(&self) -> bool {
+            if let Some(hnd) = &self.task {
+                hnd.is_finished()
+            } else {
+                true
+            }
+        }
+    }
+
+    impl<T> Drop for Task<T> {
+        fn drop(&mut self) {
+            self.task.take().unwrap().detach();
+        }
+    }
+
+    impl<T> Future for Task<T> {
+        type Output = T;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Pin::new(self.task.as_mut().unwrap()).poll(cx)
+        }
     }
 
     #[derive(Debug, Copy, Clone)]

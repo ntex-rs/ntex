@@ -33,7 +33,6 @@ ntex-iodriver = "0.1"
 async-task = { workspace = true }
 cfg-if = { workspace = true }
 crossbeam-queue = { workspace = true }
-futures-util = { workspace = true }
 scoped-tls = { workspace = true }
 fxhash = { workspace = true }
 log = { workspace = true }

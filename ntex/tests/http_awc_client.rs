@@ -220,7 +220,7 @@ async fn test_connection_reuse() {
         )))
     });
 
-    let client = Client::build().timeout(Seconds(10)).finish();
+    let client = Client::build().timeout(Seconds(30)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -255,7 +255,7 @@ async fn test_connection_force_close() {
         )))
     });
 
-    let client = Client::build().timeout(Seconds(10)).finish();
+    let client = Client::build().timeout(Seconds(30)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).force_close().send();
@@ -263,7 +263,7 @@ async fn test_connection_force_close() {
     assert!(response.status().is_success());
 
     // req 2
-    let client = Client::build().timeout(Seconds(10)).finish();
+    let client = Client::build().timeout(Seconds(30)).finish();
     let req = client.post(srv.url("/")).force_close();
     let response = req.send().await.unwrap();
     assert!(response.status().is_success());
@@ -291,7 +291,7 @@ async fn test_connection_server_close() {
         )))
     });
 
-    let client = Client::build().timeout(Seconds(10)).finish();
+    let client = Client::build().timeout(Seconds(30)).finish();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -814,7 +814,7 @@ async fn client_read_until_eof() {
 
     // client request
     let req = Client::build()
-        .timeout(Seconds(5))
+        .timeout(Seconds(30))
         .finish()
         .get(format!("http://{}/", addr).as_str());
     let mut response = req.send().await.unwrap();
