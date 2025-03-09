@@ -29,7 +29,7 @@ pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::tasks::{ReadContext, WriteContext, WriteContextBuf};
+pub use self::tasks::{IoContext, ReadContext, WriteContext, WriteContextBuf};
 pub use self::timer::TimerHandle;
 pub use self::utils::{seal, Decoded};
 
@@ -53,7 +53,9 @@ pub trait AsyncWrite {
 /// Status for read task
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ReadStatus {
+    /// Read task is clear to proceed with read operation
     Ready,
+    /// Terminate read task
     Terminate,
 }
 

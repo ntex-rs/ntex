@@ -25,6 +25,8 @@ bitflags::bitflags! {
 
         /// write task paused
         const WR_PAUSED           = 0b0000_0100_0000_0000;
+        /// wait for write completion task
+        const WR_TASK_WAIT        = 0b0000_1000_0000_0000;
 
         /// dispatcher is marked stopped
         const DSP_STOP            = 0b0001_0000_0000_0000;
@@ -38,12 +40,20 @@ impl Flags {
         self.intersects(Flags::IO_STOPPED)
     }
 
+    pub(crate) fn is_task_waiting_for_write(&self) -> bool {
+        self.contains(Flags::WR_TASK_WAIT)
+    }
+
     pub(crate) fn is_waiting_for_write(&self) -> bool {
         self.intersects(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE)
     }
 
     pub(crate) fn waiting_for_write_is_done(&mut self) {
         self.remove(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
+    }
+
+    pub(crate) fn task_waiting_for_write_is_done(&mut self) {
+        self.remove(Flags::WR_TASK_WAIT);
     }
 
     pub(crate) fn is_read_buf_ready(&self) -> bool {

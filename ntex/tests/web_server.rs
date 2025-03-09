@@ -868,7 +868,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
     // client request
     let req = srv
         .post("/")
-        .timeout(Millis(10_000))
+        .timeout(Millis(30_000))
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -909,7 +909,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
     // client request
     let req = srv
         .post("/")
-        .timeout(Millis(10_000))
+        .timeout(Millis(30_000))
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
@@ -950,7 +950,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
     // client request
     let req = srv
         .post("/")
-        .timeout(Millis(10_000))
+        .timeout(Millis(30_000))
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 

@@ -248,6 +248,161 @@ mod compio {
 }
 
 #[allow(dead_code)]
+#[cfg(feature = "default-rt")]
+mod default_rt {
+    use std::task::{ready, Context, Poll};
+    use std::{fmt, future::poll_fn, future::Future, pin::Pin};
+
+    use ntex_runtime::Runtime;
+
+    /// Runs the provided future, blocking the current thread until the future
+    /// completes.
+    pub fn block_on<F: Future<Output = ()>>(fut: F) {
+        log::info!(
+            "Starting compio runtime, driver {:?}",
+            ntex_iodriver::DriverType::current()
+        );
+        let rt = Runtime::new().unwrap();
+        rt.block_on(fut);
+    }
+
+    /// Spawns a blocking task.
+    ///
+    /// The task will be spawned onto a thread pool specifically dedicated
+    /// to blocking tasks. This is useful to prevent long-running synchronous
+    /// operations from blocking the main futures executor.
+    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + Sync + 'static,
+        T: Send + 'static,
+    {
+        JoinHandle {
+            fut: Some(ntex_runtime::spawn_blocking(f)),
+        }
+    }
+
+    /// Spawn a future on the current thread. This does not create a new Arbiter
+    /// or Arbiter address, it is simply a helper for spawning futures on the current
+    /// thread.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if ntex system is not running.
+    #[inline]
+    pub fn spawn<F>(f: F) -> Task<F::Output>
+    where
+        F: Future + 'static,
+    {
+        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
+        let task = ntex_runtime::spawn(async move {
+            if let Some(ptr) = ptr {
+                let mut f = std::pin::pin!(f);
+                let result = poll_fn(|ctx| {
+                    let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
+                    let result = f.as_mut().poll(ctx);
+                    crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
+                    result
+                })
+                .await;
+                crate::CB.with(|cb| (cb.borrow().3)(ptr));
+                result
+            } else {
+                f.await
+            }
+        });
+
+        Task { task: Some(task) }
+    }
+
+    /// Executes a future on the current thread. This does not create a new Arbiter
+    /// or Arbiter address, it is simply a helper for executing futures on the current
+    /// thread.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if ntex system is not running.
+    #[inline]
+    pub fn spawn_fn<F, R>(f: F) -> Task<R::Output>
+    where
+        F: FnOnce() -> R + 'static,
+        R: Future + 'static,
+    {
+        spawn(async move { f().await })
+    }
+
+    /// A spawned task.
+    pub struct Task<T> {
+        task: Option<ntex_runtime::Task<T>>,
+    }
+
+    impl<T> Task<T> {
+        pub fn is_finished(&self) -> bool {
+            if let Some(hnd) = &self.task {
+                hnd.is_finished()
+            } else {
+                true
+            }
+        }
+    }
+
+    impl<T> Drop for Task<T> {
+        fn drop(&mut self) {
+            self.task.take().unwrap().detach();
+        }
+    }
+
+    impl<T> Future for Task<T> {
+        type Output = T;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Pin::new(self.task.as_mut().unwrap()).poll(cx)
+        }
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    pub struct JoinError;
+
+    impl fmt::Display for JoinError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "JoinError")
+        }
+    }
+
+    impl std::error::Error for JoinError {}
+
+    pub struct JoinHandle<T> {
+        fut: Option<ntex_runtime::JoinHandle<T>>,
+    }
+
+    impl<T> JoinHandle<T> {
+        pub fn is_finished(&self) -> bool {
+            if let Some(hnd) = &self.fut {
+                hnd.is_finished()
+            } else {
+                true
+            }
+        }
+    }
+
+    impl<T> Drop for JoinHandle<T> {
+        fn drop(&mut self) {
+            self.fut.take().unwrap().detach();
+        }
+    }
+
+    impl<T> Future for JoinHandle<T> {
+        type Output = Result<T, JoinError>;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Ready(
+                ready!(Pin::new(self.fut.as_mut().unwrap()).poll(cx))
+                    .map_err(|_| JoinError),
+            )
+        }
+    }
+}
+
+#[allow(dead_code)]
 #[cfg(feature = "async-std")]
 mod asyncstd {
     use std::future::{poll_fn, Future};
@@ -473,11 +628,15 @@ pub use self::glommio::*;
 #[cfg(feature = "compio")]
 pub use self::compio::*;
 
+#[cfg(feature = "default-rt")]
+pub use self::default_rt::*;
+
 #[allow(dead_code)]
 #[cfg(all(
     not(feature = "tokio"),
     not(feature = "async-std"),
     not(feature = "compio"),
+    not(feature = "default-rt"),
     not(feature = "glommio")
 ))]
 mod no_rt {
@@ -542,6 +701,7 @@ mod no_rt {
     not(feature = "tokio"),
     not(feature = "async-std"),
     not(feature = "compio"),
+    not(feature = "default-rt"),
     not(feature = "glommio")
 ))]
 pub use self::no_rt::*;

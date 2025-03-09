@@ -1244,6 +1244,8 @@ mod tests {
                     sleep(Millis(50)).await;
                     if let DispatchItem::Item(msg) = msg {
                         Ok::<_, ()>(Some(msg.freeze()))
+                    } else if let DispatchItem::Disconnect(_) = msg {
+                        Ok::<_, ()>(None)
                     } else {
                         panic!()
                     }

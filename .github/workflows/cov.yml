@@ -26,15 +26,14 @@ jobs:
       - name: Clean coverage results
         run: cargo llvm-cov clean --workspace
 
-      - name: Code coverage (glommio)
-        continue-on-error: true
-        run: cargo llvm-cov --no-report --all --no-default-features --features="ntex/glommio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli" -- --skip test_unhandled_data
-
       - name: Code coverage (tokio)
         run: cargo llvm-cov --no-report --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
       - name: Code coverage (compio)
         run: cargo llvm-cov --no-report --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+
+      - name: Code coverage (default)
+        run: cargo llvm-cov --no-report --all --no-default-features --features="ntex/default-rt,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
       - name: Generate coverage report
         run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-compio|ntex-tokio|ntex-glommio|ntex-async-std"
