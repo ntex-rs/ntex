@@ -29,16 +29,12 @@ compio = ["compio-driver", "compio-runtime"]
 # default ntex runtime
 default-rt = ["ntex-runtime", "ntex-iodriver"]
 
-# async-std support
-async-std = ["async_std/unstable"]
-
 [dependencies]
 async-channel = "2"
 futures-core = "0.3"
 log = "0.4"
 oneshot = "0.1"
 
-async_std = { version = "1", package = "async-std", optional = true }
 compio-driver = { version = "0.6", optional = true }
 compio-runtime = { version = "0.6", optional = true }
 tok-io = { version = "1", package = "tokio", default-features = false, features = [

@@ -12,7 +12,6 @@ pub use self::compat::*;
 #[cfg(all(
     feature = "default-rt",
     not(feature = "tokio"),
-    not(feature = "async-std"),
     not(feature = "compio")
 ))]
 mod rt;

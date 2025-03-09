@@ -9,7 +9,6 @@ members = [
   "ntex-http",
   "ntex-router",
   "ntex-rt",
-  "ntex-runtime",
   "ntex-net",
   "ntex-server",
   "ntex-service",
@@ -17,9 +16,9 @@ members = [
   "ntex-macros",
   "ntex-util",
 
-  "ntex-async-std",
   "ntex-compio",
   "ntex-tokio",
+  "ntex-runtime",
 ]
 
 [workspace.package]
@@ -40,7 +39,6 @@ ntex-net = { path = "ntex-net" }
 ntex-http = { path = "ntex-http" }
 ntex-router = { path = "ntex-router" }
 ntex-rt = { path = "ntex-rt" }
-ntex-runtime = { path = "ntex-runtime" }
 ntex-server = { path = "ntex-server" }
 ntex-service = { path = "ntex-service" }
 ntex-tls = { path = "ntex-tls" }
@@ -49,7 +47,7 @@ ntex-util = { path = "ntex-util" }
 
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
-ntex-async-std = { path = "ntex-async-std" }
+ntex-runtime = { path = "ntex-runtime" }
 
 [workspace.dependencies]
 async-task = "4.5.0"

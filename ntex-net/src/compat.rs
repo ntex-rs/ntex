@@ -9,7 +9,6 @@ pub use ntex_tokio::{from_unix_stream, unix_connect, unix_connect_in};
 #[cfg(all(
     feature = "default-rt",
     not(feature = "tokio"),
-    not(feature = "async-std"),
     not(feature = "compio")
 ))]
 pub use crate::rt::{
@@ -20,7 +19,6 @@ pub use crate::rt::{
 #[cfg(all(
     feature = "compio",
     not(feature = "tokio"),
-    not(feature = "async-std"),
     not(feature = "default-rt")
 ))]
 pub use ntex_compio::{from_tcp_stream, tcp_connect, tcp_connect_in};
@@ -29,32 +27,13 @@ pub use ntex_compio::{from_tcp_stream, tcp_connect, tcp_connect_in};
     unix,
     feature = "compio",
     not(feature = "tokio"),
-    not(feature = "async-std"),
     not(feature = "default-rt")
 ))]
 pub use ntex_compio::{from_unix_stream, unix_connect, unix_connect_in};
 
 #[cfg(all(
-    feature = "async-std",
     not(feature = "tokio"),
     not(feature = "compio"),
-    not(feature = "default-rt")
-))]
-pub use ntex_async_std::{from_tcp_stream, tcp_connect, tcp_connect_in};
-
-#[cfg(all(
-    unix,
-    feature = "async-std",
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "default-rt")
-))]
-pub use ntex_async_std::{from_unix_stream, unix_connect, unix_connect_in};
-
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "async-std"),
     not(feature = "default-rt")
 ))]
 mod no_rt {
@@ -124,7 +103,6 @@ mod no_rt {
 #[cfg(all(
     not(feature = "tokio"),
     not(feature = "compio"),
-    not(feature = "async-std"),
     not(feature = "default-rt")
 ))]
 pub use no_rt::*;

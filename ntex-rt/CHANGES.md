@@ -6,6 +6,8 @@
 
 * Drop glommio support
 
+* Drop async-std support
+
 ## [0.4.24] - 2025-01-03
 
 * Relax runtime requirements

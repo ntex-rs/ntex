@@ -7,7 +7,6 @@ fn main() {
         let _ = match key.as_ref() {
             "CARGO_FEATURE_COMPIO" => features.insert("compio"),
             "CARGO_FEATURE_TOKIO" => features.insert("tokio"),
-            "CARGO_FEATURE_ASYNC_STD" => features.insert("async-std"),
             "CARGO_FEATURE_DEFAULT_RT" => features.insert("default-rt"),
             _ => false,
         };

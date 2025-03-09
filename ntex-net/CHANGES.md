@@ -6,6 +6,8 @@
 
 * Drop glommio support
 
+* Drop async-std support
+
 ## [2.4.0] - 2024-09-25
 
 * Update to glommio v0.9

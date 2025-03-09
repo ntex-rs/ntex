@@ -402,111 +402,8 @@ mod default_rt {
     }
 }
 
-#[allow(dead_code)]
-#[cfg(feature = "async-std")]
-mod asyncstd {
-    use std::future::{poll_fn, Future};
-    use std::{fmt, pin::Pin, task::ready, task::Context, task::Poll};
-
-    /// Runs the provided future, blocking the current thread until the future
-    /// completes.
-    pub fn block_on<F: Future<Output = ()>>(fut: F) {
-        async_std::task::block_on(fut);
-    }
-
-    /// Spawn a future on the current thread. This does not create a new Arbiter
-    /// or Arbiter address, it is simply a helper for spawning futures on the current
-    /// thread.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if ntex system is not running.
-    #[inline]
-    pub fn spawn<F>(mut f: F) -> JoinHandle<F::Output>
-    where
-        F: Future + 'static,
-    {
-        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
-        JoinHandle {
-            fut: async_std::task::spawn_local(async move {
-                if let Some(ptr) = ptr {
-                    let mut f = unsafe { Pin::new_unchecked(&mut f) };
-                    let result = poll_fn(|ctx| {
-                        let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
-                        let result = f.as_mut().poll(ctx);
-                        crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
-                        result
-                    })
-                    .await;
-                    crate::CB.with(|cb| (cb.borrow().3)(ptr));
-                    result
-                } else {
-                    f.await
-                }
-            }),
-        }
-    }
-
-    /// Executes a future on the current thread. This does not create a new Arbiter
-    /// or Arbiter address, it is simply a helper for executing futures on the current
-    /// thread.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if ntex system is not running.
-    #[inline]
-    pub fn spawn_fn<F, R>(f: F) -> JoinHandle<R::Output>
-    where
-        F: FnOnce() -> R + 'static,
-        R: Future + 'static,
-    {
-        spawn(async move { f().await })
-    }
-
-    /// Spawns a blocking task.
-    ///
-    /// The task will be spawned onto a thread pool specifically dedicated
-    /// to blocking tasks. This is useful to prevent long-running synchronous
-    /// operations from blocking the main futures executor.
-    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
-    {
-        JoinHandle {
-            fut: async_std::task::spawn_blocking(f),
-        }
-    }
-
-    #[derive(Debug, Copy, Clone)]
-    pub struct JoinError;
-
-    impl fmt::Display for JoinError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "JoinError")
-        }
-    }
-
-    impl std::error::Error for JoinError {}
-
-    pub struct JoinHandle<T> {
-        fut: async_std::task::JoinHandle<T>,
-    }
-
-    impl<T> Future for JoinHandle<T> {
-        type Output = Result<T, JoinError>;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Ready(Ok(ready!(Pin::new(&mut self.fut).poll(cx))))
-        }
-    }
-}
-
 #[cfg(feature = "tokio")]
 pub use self::tokio::*;
-
-#[cfg(feature = "async-std")]
-pub use self::asyncstd::*;
 
 #[cfg(feature = "compio")]
 pub use self::compio::*;
@@ -517,7 +414,6 @@ pub use self::default_rt::*;
 #[allow(dead_code)]
 #[cfg(all(
     not(feature = "tokio"),
-    not(feature = "async-std"),
     not(feature = "compio"),
     not(feature = "default-rt")
 ))]
@@ -581,7 +477,6 @@ mod no_rt {
 
 #[cfg(all(
     not(feature = "tokio"),
-    not(feature = "async-std"),
     not(feature = "compio"),
     not(feature = "default-rt")
 ))]
