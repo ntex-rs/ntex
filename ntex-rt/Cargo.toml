@@ -26,8 +26,8 @@ tokio = ["tok-io"]
 # compio support
 compio = ["compio-driver", "compio-runtime"]
 
-# default ntex runtime
-default-rt = ["ntex-runtime", "ntex-iodriver"]
+# neon runtime
+neon = ["ntex-neon"]
 
 [dependencies]
 async-channel = "2"
@@ -42,5 +42,4 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
     "net",
 ], optional = true }
 
-ntex-runtime = { version = "0.1", optional = true }
-ntex-iodriver = { version = "0.1", optional = true }
+ntex-neon = { version = "0.1", optional = true }

@@ -9,10 +9,10 @@ mod driver;
 mod io;
 
 /// Tcp stream wrapper for compio TcpStream
-struct TcpStream(ntex_runtime::net::TcpStream);
+struct TcpStream(ntex_neon::net::TcpStream);
 
 /// Tcp stream wrapper for compio UnixStream
-struct UnixStream(ntex_runtime::net::UnixStream);
+struct UnixStream(ntex_neon::net::UnixStream);
 
 /// Opens a TCP connection to a remote host.
 pub async fn tcp_connect(addr: SocketAddr) -> Result<Io> {
@@ -47,14 +47,14 @@ where
 /// Convert std TcpStream to tokio's TcpStream
 pub fn from_tcp_stream(stream: net::TcpStream) -> Result<Io> {
     stream.set_nodelay(true)?;
-    Ok(Io::new(TcpStream(ntex_runtime::net::TcpStream::from_std(
+    Ok(Io::new(TcpStream(ntex_neon::net::TcpStream::from_std(
         stream,
     )?)))
 }
 
 /// Convert std UnixStream to tokio's UnixStream
 pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io> {
-    Ok(Io::new(UnixStream(
-        ntex_runtime::net::UnixStream::from_std(stream)?,
-    )))
+    Ok(Io::new(UnixStream(ntex_neon::net::UnixStream::from_std(
+        stream,
+    )?)))
 }

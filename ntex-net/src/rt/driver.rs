@@ -1,8 +1,8 @@
 use std::{cell::Cell, collections::VecDeque, fmt, io, ptr, rc::Rc, task, task::Poll};
 
-use ntex_iodriver::op::{Handler, Interest};
-use ntex_iodriver::{syscall, AsRawFd, DriverApi, RawFd};
-use ntex_runtime::Runtime;
+use ntex_neon::driver::op::{Handler, Interest};
+use ntex_neon::driver::{AsRawFd, DriverApi, RawFd};
+use ntex_neon::{syscall, Runtime};
 use slab::Slab;
 
 use ntex_bytes::BufMut;

@@ -54,10 +54,10 @@ jobs:
         run: |
           cargo test --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
-      - name: Run tests (default)
+      - name: Run tests (neon)
         timeout-minutes: 40
         run: |
-          cargo test --all --no-default-features --features="ntex/default-rt,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+          cargo test --all --no-default-features --features="ntex/neon,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
 
       - name: Install cargo-cache
         continue-on-error: true

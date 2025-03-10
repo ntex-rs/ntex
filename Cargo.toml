@@ -5,10 +5,10 @@ members = [
   "ntex-bytes",
   "ntex-codec",
   "ntex-io",
-  "ntex-iodriver",
   "ntex-http",
   "ntex-router",
   "ntex-rt",
+  "ntex-neon",
   "ntex-net",
   "ntex-server",
   "ntex-service",
@@ -18,7 +18,6 @@ members = [
 
   "ntex-compio",
   "ntex-tokio",
-  "ntex-runtime",
 ]
 
 [workspace.package]
@@ -34,7 +33,7 @@ ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
 ntex-io = { path = "ntex-io" }
-ntex-iodriver = { path = "ntex-iodriver" }
+ntex-neon = { path = "ntex-neon" }
 ntex-net = { path = "ntex-net" }
 ntex-http = { path = "ntex-http" }
 ntex-router = { path = "ntex-router" }
@@ -47,7 +46,6 @@ ntex-util = { path = "ntex-util" }
 
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
-ntex-runtime = { path = "ntex-runtime" }
 
 [workspace.dependencies]
 async-task = "4.5.0"
@@ -60,6 +58,8 @@ futures-util = "0.3.29"
 fxhash = "0.2"
 libc = "0.2.164"
 log = "0.4"
+io-uring = "0.7.4"
+polling = "3.3.0"
 nohash-hasher = "0.2.0"
 scoped-tls = "1.0.1"
 slab = "0.4.9"

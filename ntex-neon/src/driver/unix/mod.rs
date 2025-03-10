@@ -3,7 +3,7 @@
 
 pub(crate) mod op;
 
-use crate::RawFd;
+use crate::driver::RawFd;
 
 /// The overlapped struct for unix needn't contain extra fields.
 pub(crate) struct Overlapped;

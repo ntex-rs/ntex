@@ -8,7 +8,9 @@ use crossbeam_queue::SegQueue;
 use nohash_hasher::IntMap;
 use polling::{Event, Events, Poller};
 
-use crate::{op::Handler, op::Interest, AsyncifyPool, Entry, Key, ProactorBuilder};
+use crate::driver::{
+    op::Handler, op::Interest, sys, AsyncifyPool, Entry, Key, ProactorBuilder,
+};
 
 pub(crate) mod op;
 
@@ -228,7 +230,7 @@ impl Driver {
         self.handlers.set(Some(handlers));
     }
 
-    pub fn create_op<T: crate::sys::OpCode + 'static>(&self, op: T) -> Key<T> {
+    pub fn create_op<T: sys::OpCode + 'static>(&self, op: T) -> Key<T> {
         Key::new(self.as_raw_fd(), op)
     }
 
@@ -236,7 +238,7 @@ impl Driver {
         Ok(())
     }
 
-    pub fn push(&self, op: &mut Key<dyn crate::sys::OpCode>) -> Poll<io::Result<usize>> {
+    pub fn push(&self, op: &mut Key<dyn sys::OpCode>) -> Poll<io::Result<usize>> {
         let user_data = op.user_data();
         let op_pin = op.as_op_pin();
         match op_pin.pre_submit()? {
@@ -390,7 +392,7 @@ impl Driver {
         let poll = self.poll.clone();
         let completed = self.pool_completed.clone();
         let mut closure = move || {
-            let mut op = unsafe { Key::<dyn crate::sys::OpCode>::new_unchecked(user_data) };
+            let mut op = unsafe { Key::<dyn sys::OpCode>::new_unchecked(user_data) };
             let op_pin = op.as_op_pin();
             let res = match op_pin.operate() {
                 Poll::Pending => unreachable!("this operation is not non-blocking"),

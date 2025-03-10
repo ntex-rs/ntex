@@ -48,8 +48,8 @@ tokio = ["ntex-net/tokio"]
 # compio runtime
 compio = ["ntex-net/compio"]
 
-# default ntex runtime
-default-rt = ["ntex-net/default-rt"]
+# neon runtime
+neon = ["ntex-net/neon"]
 
 # websocket support
 ws = ["dep:sha-1"]

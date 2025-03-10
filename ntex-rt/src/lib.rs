@@ -248,19 +248,19 @@ mod compio {
 }
 
 #[allow(dead_code)]
-#[cfg(feature = "default-rt")]
-mod default_rt {
+#[cfg(feature = "neon")]
+mod neon {
     use std::task::{ready, Context, Poll};
     use std::{fmt, future::poll_fn, future::Future, pin::Pin};
 
-    use ntex_runtime::Runtime;
+    use ntex_neon::Runtime;
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
         log::info!(
             "Starting compio runtime, driver {:?}",
-            ntex_iodriver::DriverType::current()
+            ntex_neon::driver::DriverType::current()
         );
         let rt = Runtime::new().unwrap();
         rt.block_on(fut);
@@ -277,7 +277,7 @@ mod default_rt {
         T: Send + 'static,
     {
         JoinHandle {
-            fut: Some(ntex_runtime::spawn_blocking(f)),
+            fut: Some(ntex_neon::spawn_blocking(f)),
         }
     }
 
@@ -294,7 +294,7 @@ mod default_rt {
         F: Future + 'static,
     {
         let ptr = crate::CB.with(|cb| (cb.borrow().0)());
-        let task = ntex_runtime::spawn(async move {
+        let task = ntex_neon::spawn(async move {
             if let Some(ptr) = ptr {
                 let mut f = std::pin::pin!(f);
                 let result = poll_fn(|ctx| {
@@ -332,7 +332,7 @@ mod default_rt {
 
     /// A spawned task.
     pub struct Task<T> {
-        task: Option<ntex_runtime::Task<T>>,
+        task: Option<ntex_neon::Task<T>>,
     }
 
     impl<T> Task<T> {
@@ -371,7 +371,7 @@ mod default_rt {
     impl std::error::Error for JoinError {}
 
     pub struct JoinHandle<T> {
-        fut: Option<ntex_runtime::JoinHandle<T>>,
+        fut: Option<ntex_neon::JoinHandle<T>>,
     }
 
     impl<T> JoinHandle<T> {
@@ -408,15 +408,11 @@ pub use self::tokio::*;
 #[cfg(feature = "compio")]
 pub use self::compio::*;
 
-#[cfg(feature = "default-rt")]
-pub use self::default_rt::*;
+#[cfg(feature = "neon")]
+pub use self::neon::*;
 
 #[allow(dead_code)]
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "default-rt")
-))]
+#[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
 mod no_rt {
     use std::task::{Context, Poll};
     use std::{fmt, future::Future, marker::PhantomData, pin::Pin};
@@ -475,9 +471,5 @@ mod no_rt {
     impl std::error::Error for JoinError {}
 }
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "default-rt")
-))]
+#[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
 pub use self::no_rt::*;

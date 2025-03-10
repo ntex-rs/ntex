@@ -1,7 +1,6 @@
 use std::{future::Future, io, pin::Pin, task::Context, task::Poll};
 
-use ntex_iodriver::{Key, OpCode, PushEntry};
-
+use crate::driver::{Key, OpCode, PushEntry};
 use crate::rt::Runtime;
 
 #[derive(Debug)]
