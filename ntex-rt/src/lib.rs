@@ -352,10 +352,10 @@ mod neon {
     }
 
     impl<T> Future for Task<T> {
-        type Output = T;
+        type Output = Result<T, JoinError>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Pin::new(self.task.as_mut().unwrap()).poll(cx)
+            Poll::Ready(Ok(ready!(Pin::new(self.task.as_mut().unwrap()).poll(cx))))
         }
     }
 
