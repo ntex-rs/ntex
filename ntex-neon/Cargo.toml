@@ -62,12 +62,12 @@ libc = { workspace = true }
 
 # Linux specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
-io-uring = { version = "0.7.0", optional = true }
-polling = { version = "3.3.0", optional = true }
+io-uring = { workspace = true, optional = true }
+polling = { workspace = true, optional = true }
 
 # Other platform dependencies
 [target.'cfg(all(not(target_os = "linux"), unix))'.dependencies]
-polling = "3.3.0"
+polling = { workspace = true }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
