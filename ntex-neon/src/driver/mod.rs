@@ -4,14 +4,14 @@
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 #![allow(clippy::type_complexity)]
 
-#[cfg(all(
-    target_os = "linux",
-    not(feature = "io-uring"),
-    not(feature = "polling")
-))]
-compile_error!(
-    "You must choose at least one of these features: [\"io-uring\", \"polling\"]"
-);
+// #[cfg(all(
+//     target_os = "linux",
+//     not(feature = "io-uring"),
+//     not(feature = "polling")
+// ))]
+// compile_error!(
+//     "You must choose at least one of these features: [\"io-uring\", \"polling\"]"
+// );
 
 #[cfg(unix)]
 use std::{io, task::Poll, task::Waker, time::Duration};
