@@ -59,6 +59,7 @@ windows-sys = { workspace = true, features = [
 crossbeam-channel = { workspace = true }
 crossbeam-queue = { workspace = true }
 libc = { workspace = true }
+polling = { workspace = true }
 
 # Linux specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
