@@ -28,7 +28,7 @@ compio = ["ntex-rt/compio", "ntex-compio"]
 neon = ["ntex-rt/neon", "ntex-neon/polling", "slab", "socket2"]
 
 # neon io-uring runtime
-neon-uring = ["ntex-rt/neon", "ntex-neon/io-uring", "slab", "socket2"]
+neon-uring = ["ntex-rt/neon", "ntex-neon/io-uring", "io-uring", "slab", "socket2"]
 
 [dependencies]
 ntex-service = "3.3"
@@ -48,6 +48,10 @@ libc = { workspace = true }
 thiserror = { workspace = true }
 slab = { workspace = true, optional = true }
 socket2 = { workspace = true, optional = true }
+
+# Linux specific dependencies
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { workspace = true, optional = true }
 
 [dev-dependencies]
 ntex = "2"

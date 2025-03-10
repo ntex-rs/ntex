@@ -8,9 +8,6 @@ use crate::{driver::op::*, syscall};
 pub trait Handler {
     /// Operation is completed
     fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<i32>);
-
-    /// All events are processed, process all updates
-    fn commit(&mut self);
 }
 
 impl<D, F> OpCode for Asyncify<F, D>

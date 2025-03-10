@@ -5,7 +5,7 @@ use ntex_io::{
 };
 use ntex_neon::{net::TcpStream, net::UnixStream, spawn};
 
-use super::driver::{Closable, StreamCtl, StreamOps};
+use super::driver::{Closable, StreamOps, StreamCtl};
 
 impl IoStream for super::TcpStream {
     fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {

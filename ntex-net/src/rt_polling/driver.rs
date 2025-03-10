@@ -19,10 +19,10 @@ bitflags::bitflags! {
 
 pub(crate) struct StreamCtl<T> {
     id: usize,
-    inner: Rc<CompioOpsInner<T>>,
+    inner: Rc<StreamOpsInner<T>>,
 }
 
-struct TcpStreamItem<T> {
+struct StreamItem<T> {
     io: Option<T>,
     fd: RawFd,
     context: IoContext,
@@ -30,7 +30,7 @@ struct TcpStreamItem<T> {
     ref_count: usize,
 }
 
-pub(crate) struct CompioOps<T>(Rc<CompioOpsInner<T>>);
+pub(crate) struct StreamOps<T>(Rc<StreamOpsInner<T>>);
 
 #[derive(Debug)]
 enum Change {
@@ -39,18 +39,18 @@ enum Change {
     Error(io::Error),
 }
 
-struct CompioOpsBatcher<T> {
+struct StreamOpsHandler<T> {
     feed: VecDeque<(usize, Change)>,
-    inner: Rc<CompioOpsInner<T>>,
+    inner: Rc<StreamOpsInner<T>>,
 }
 
-struct CompioOpsInner<T> {
+struct StreamOpsInner<T> {
     api: DriverApi,
     feed: Cell<Option<VecDeque<usize>>>,
-    streams: Cell<Option<Box<Slab<TcpStreamItem<T>>>>>,
+    streams: Cell<Option<Box<Slab<StreamItem<T>>>>>,
 }
 
-impl<T: AsRawFd + 'static> CompioOps<T> {
+impl<T: AsRawFd + 'static> StreamOps<T> {
     pub(crate) fn current() -> Self {
         Runtime::with_current(|rt| {
             if let Some(s) = rt.get::<Self>() {
@@ -58,19 +58,19 @@ impl<T: AsRawFd + 'static> CompioOps<T> {
             } else {
                 let mut inner = None;
                 rt.driver().register_handler(|api| {
-                    let ops = Rc::new(CompioOpsInner {
+                    let ops = Rc::new(StreamOpsInner {
                         api,
                         feed: Cell::new(Some(VecDeque::new())),
                         streams: Cell::new(Some(Box::new(Slab::new()))),
                     });
                     inner = Some(ops.clone());
-                    Box::new(CompioOpsBatcher {
+                    Box::new(StreamOpsHandler {
                         inner: ops,
                         feed: VecDeque::new(),
                     })
                 });
 
-                let s = CompioOps(inner.unwrap());
+                let s = StreamOps(inner.unwrap());
                 rt.insert(s.clone());
                 s
             }
@@ -78,7 +78,7 @@ impl<T: AsRawFd + 'static> CompioOps<T> {
     }
 
     pub(crate) fn register(&self, io: T, context: IoContext) -> StreamCtl<T> {
-        let item = TcpStreamItem {
+        let item = StreamItem {
             context,
             fd: io.as_raw_fd(),
             io: Some(io),
@@ -96,7 +96,7 @@ impl<T: AsRawFd + 'static> CompioOps<T> {
 
     fn with<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut Slab<TcpStreamItem<T>>) -> R,
+        F: FnOnce(&mut Slab<StreamItem<T>>) -> R,
     {
         let mut inner = self.0.streams.take().unwrap();
         let result = f(&mut inner);
@@ -105,13 +105,13 @@ impl<T: AsRawFd + 'static> CompioOps<T> {
     }
 }
 
-impl<T> Clone for CompioOps<T> {
+impl<T> Clone for StreamOps<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<T> Handler for CompioOpsBatcher<T> {
+impl<T> Handler for StreamOpsHandler<T> {
     fn readable(&mut self, id: usize) {
         log::debug!("FD is readable {:?}", id);
         self.feed.push_back((id, Change::Readable));
@@ -301,7 +301,7 @@ impl<T> StreamCtl<T> {
 
     fn with<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut Slab<TcpStreamItem<T>>) -> R,
+        F: FnOnce(&mut Slab<StreamItem<T>>) -> R,
     {
         let mut inner = self.inner.streams.take().unwrap();
         let result = f(&mut inner);

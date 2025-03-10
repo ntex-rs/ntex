@@ -18,6 +18,17 @@ pub use crate::rt_polling::{
 };
 
 #[cfg(all(
+    feature = "neon-uring",
+    not(feature = "neon"),
+    not(feature = "tokio"),
+    not(feature = "compio")
+))]
+pub use crate::rt_uring::{
+    from_tcp_stream, from_unix_stream, tcp_connect, tcp_connect_in, unix_connect,
+    unix_connect_in,
+};
+
+#[cfg(all(
     feature = "compio",
     not(feature = "tokio"),
     not(feature = "neon"),
@@ -104,5 +115,10 @@ mod no_rt {
     }
 }
 
-#[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
+#[cfg(all(
+    not(feature = "tokio"),
+    not(feature = "compio"),
+    not(feature = "neon"),
+    not(feature = "neon-uring")
+))]
 pub use no_rt::*;

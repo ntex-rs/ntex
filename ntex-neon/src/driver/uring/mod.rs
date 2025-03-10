@@ -41,7 +41,7 @@ pub trait OpCode {
 #[derive(Debug)]
 enum Change {
     Submit { entry: SEntry },
-    Cancel { user_data: u64 },
+    Cancel { user_data: u64, op_id: u64 },
 }
 
 pub struct DriverApi {
@@ -57,24 +57,21 @@ impl DriverApi {
             user_data,
             entry,
         );
-        self.change(Change::Submit {
+        self.changes.borrow_mut().push_back(Change::Submit {
             entry: entry.user_data(user_data as u64 | self.batch),
         });
     }
 
-    pub fn cancel(&self, user_data: u32) {
+    pub fn cancel(&self, user_data: u32, op_id: u32) {
         log::debug!(
             "Cancel operation batch: {:?} user-data: {:?}",
             self.batch,
             user_data
         );
-        self.change(Change::Cancel {
+        self.changes.borrow_mut().push_back(Change::Cancel {
+            op_id: op_id as u64 | self.batch,
             user_data: user_data as u64 | self.batch,
         });
-    }
-
-    fn change(&self, change: Change) {
-        self.changes.borrow_mut().push_back(change);
     }
 }
 
@@ -91,8 +88,7 @@ pub(crate) struct Driver {
 }
 
 impl Driver {
-    const CANCEL: u64 = u64::MAX;
-    const NOTIFY: u64 = u64::MAX - 1;
+    const NOTIFY: u64 = u64::MAX;
     const BATCH_MASK: u64 = 0xFFFF << 48;
     const DATA_MASK: u64 = 0xFFFF >> 16;
 
@@ -200,10 +196,10 @@ impl Driver {
                         break;
                     }
                 }
-                Change::Cancel { user_data } => {
-                    let entry = AsyncCancel::new(user_data).build().user_data(Self::CANCEL);
+                Change::Cancel { user_data, op_id } => {
+                    let entry = AsyncCancel::new(op_id).build().user_data(user_data);
                     if unsafe { squeue.push(&entry.user_data(user_data)) }.is_err() {
-                        changes.push_front(Change::Cancel { user_data });
+                        changes.push_front(Change::Cancel { user_data, op_id });
                         break;
                     }
                 }
@@ -263,7 +259,6 @@ impl Driver {
         for entry in cqueue {
             let user_data = entry.user_data();
             match user_data {
-                Self::CANCEL => {}
                 Self::NOTIFY => {
                     let flags = entry.flags();
                     debug_assert!(more(flags));
@@ -287,9 +282,6 @@ impl Driver {
                     handlers[batch].completed(user_data, entry.flags(), result);
                 }
             }
-        }
-        for handler in handlers.iter_mut() {
-            handler.commit();
         }
         self.handlers.set(Some(handlers));
         true
