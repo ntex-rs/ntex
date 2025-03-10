@@ -8,7 +8,8 @@ use std::{
 
 use async_task::{Runnable, Task};
 use crossbeam_queue::SegQueue;
-use ntex_iodriver::{
+
+use crate::driver::{
     op::Asyncify, AsRawFd, Key, NotifyHandle, OpCode, Proactor, ProactorBuilder, PushEntry,
     RawFd,
 };

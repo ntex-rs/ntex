@@ -1,9 +1,8 @@
 use std::{future::Future, io};
 
-use ntex_iodriver::impl_raw_fd;
 use socket2::{SockAddr, Socket as Socket2};
 
-use crate::net::Socket;
+use crate::{driver::impl_raw_fd, net::Socket};
 
 /// A Unix stream between two local sockets on Windows & WSL.
 ///

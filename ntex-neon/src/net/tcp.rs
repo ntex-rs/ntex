@@ -1,9 +1,8 @@
 use std::{future::Future, io, net::SocketAddr};
 
-use ntex_iodriver::impl_raw_fd;
 use socket2::Socket as Socket2;
 
-use crate::net::Socket;
+use crate::{driver::impl_raw_fd, net::Socket};
 
 /// A TCP stream between a local and a remote socket.
 ///

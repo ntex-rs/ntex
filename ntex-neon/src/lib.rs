@@ -3,6 +3,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 // #![warn(missing_docs)]
 
+pub mod driver;
 pub mod net;
 mod op;
 mod rt;

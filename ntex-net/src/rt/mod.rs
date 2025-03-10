@@ -9,10 +9,10 @@ mod driver;
 mod io;
 
 /// Tcp stream wrapper for compio TcpStream
-struct TcpStream(ntex_runtime::net::TcpStream);
+struct TcpStream(ntex_neon::net::TcpStream);
 
 /// Tcp stream wrapper for compio UnixStream
-struct UnixStream(ntex_runtime::net::UnixStream);
+struct UnixStream(ntex_neon::net::UnixStream);
 
 /// Opens a TCP connection to a remote host.
 pub async fn tcp_connect(addr: SocketAddr) -> Result<Io> {

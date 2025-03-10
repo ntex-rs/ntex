@@ -1,8 +1,9 @@
 #![allow(clippy::missing_safety_doc)]
 use std::{future::Future, io, mem, mem::MaybeUninit};
 
-use ntex_iodriver::{impl_raw_fd, op::CloseSocket, op::ShutdownSocket, syscall, AsRawFd};
 use socket2::{Domain, Protocol, SockAddr, Socket as Socket2, Type};
+
+use crate::driver::{impl_raw_fd, op::CloseSocket, op::ShutdownSocket, syscall, AsRawFd};
 
 #[derive(Debug)]
 pub struct Socket {
@@ -41,7 +42,7 @@ impl Socket {
             //
             // https://patchwork.kernel.org/project/linux-block/patch/f999615b-205c-49b7-b272-c4e42e45e09d@kernel.dk/#22949861
             if cfg!(not(all(target_os = "linux", feature = "io-uring")))
-                || ntex_iodriver::DriverType::is_polling()
+                || crate::driver::DriverType::is_polling()
             {
                 socket.set_nonblocking(true)?;
             }
@@ -97,7 +98,7 @@ impl Socket {
             ty |= libc::SOCK_CLOEXEC;
         }
 
-        let op = ntex_iodriver::op::CreateSocket::new(
+        let op = crate::driver::op::CreateSocket::new(
             domain.into(),
             ty,
             protocol.map(|p| p.into()).unwrap_or_default(),
@@ -116,10 +117,6 @@ impl Socket {
         let socket = Self::new(addr.domain(), ty, protocol).await?;
         socket.socket.bind(addr)?;
         Ok(socket)
-    }
-
-    pub fn listen(&self, backlog: i32) -> io::Result<()> {
-        self.socket.listen(backlog)
     }
 
     pub fn close(self) -> impl Future<Output = io::Result<()>> {
