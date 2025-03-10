@@ -1,6 +1,6 @@
 use std::net::Shutdown;
 
-use crate::op::*;
+use crate::driver::op::*;
 
 /// The interest to poll a file descriptor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

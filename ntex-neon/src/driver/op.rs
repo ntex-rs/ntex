@@ -7,9 +7,9 @@
 use std::{io, marker::PhantomPinned, mem::ManuallyDrop, net::Shutdown};
 
 #[cfg(unix)]
-pub use crate::sys::op::{CreateSocket, Interest};
+pub use super::sys::op::{CreateSocket, Interest};
 
-use crate::OwnedFd;
+use super::OwnedFd;
 
 pub trait Handler {
     /// Submitted interest

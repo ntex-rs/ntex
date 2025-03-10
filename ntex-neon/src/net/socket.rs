@@ -3,7 +3,8 @@ use std::{future::Future, io, mem, mem::MaybeUninit};
 
 use socket2::{Domain, Protocol, SockAddr, Socket as Socket2, Type};
 
-use crate::driver::{impl_raw_fd, op::CloseSocket, op::ShutdownSocket, syscall, AsRawFd};
+use crate::driver::{op::CloseSocket, op::ShutdownSocket, AsRawFd};
+use crate::{impl_raw_fd, syscall};
 
 #[derive(Debug)]
 pub struct Socket {

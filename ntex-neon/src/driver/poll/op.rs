@@ -1,9 +1,9 @@
 use std::{io, marker::Send, os::fd::FromRawFd, os::fd::RawFd, pin::Pin, task::Poll};
 
-pub use crate::unix::op::*;
+pub use crate::driver::unix::op::*;
 
 use super::{AsRawFd, Decision, OpCode};
-use crate::{op::*, syscall};
+use crate::{driver::op::*, syscall};
 
 impl<D, F> OpCode for Asyncify<F, D>
 where

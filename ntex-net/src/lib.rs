@@ -9,9 +9,5 @@ pub use ntex_rt::{spawn, spawn_blocking};
 
 pub use self::compat::*;
 
-#[cfg(all(
-    feature = "default-rt",
-    not(feature = "tokio"),
-    not(feature = "compio")
-))]
+#[cfg(all(feature = "neon", not(feature = "tokio"), not(feature = "compio")))]
 mod rt;

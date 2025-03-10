@@ -1,6 +1,6 @@
 use std::{io, marker::PhantomData, mem::MaybeUninit, pin::Pin, task::Waker};
 
-use crate::{OpCode, Overlapped, PushEntry, RawFd};
+use super::{OpCode, Overlapped, PushEntry, RawFd};
 
 /// An operation with other needed information. It should be allocated on the
 /// heap. The pointer to this struct is used as `user_data`, and on Windows, it

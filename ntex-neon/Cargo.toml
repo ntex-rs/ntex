@@ -29,11 +29,13 @@ targets = [
 
 [dependencies]
 async-task = { workspace = true }
+bitflags = { workspace = true }
 cfg-if = { workspace = true }
 crossbeam-queue = { workspace = true }
-scoped-tls = { workspace = true }
 fxhash = { workspace = true }
+nohash-hasher = { workspace = true }
 log = { workspace = true }
+scoped-tls = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
 
 # Windows specific dependencies

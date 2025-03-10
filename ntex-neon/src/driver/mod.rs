@@ -134,14 +134,14 @@ macro_rules! syscall {
 #[doc(hidden)]
 macro_rules! impl_raw_fd {
     ($t:ty, $it:ty, $inner:ident) => {
-        impl $crate::AsRawFd for $t {
-            fn as_raw_fd(&self) -> $crate::RawFd {
+        impl $crate::driver::AsRawFd for $t {
+            fn as_raw_fd(&self) -> $crate::driver::RawFd {
                 self.$inner.as_raw_fd()
             }
         }
         #[cfg(unix)]
         impl std::os::fd::FromRawFd for $t {
-            unsafe fn from_raw_fd(fd: $crate::RawFd) -> Self {
+            unsafe fn from_raw_fd(fd: $crate::driver::RawFd) -> Self {
                 Self {
                     $inner: std::os::fd::FromRawFd::from_raw_fd(fd),
                 }

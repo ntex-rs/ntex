@@ -3,7 +3,7 @@ use std::{any, future::poll_fn, io, task::Poll};
 use ntex_io::{
     types, Handle, IoContext, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
-use ntex_runtime::{net::TcpStream, net::UnixStream, spawn};
+use ntex_neon::{net::TcpStream, net::UnixStream, spawn};
 
 use super::driver::{Closable, CompioOps, StreamCtl};
 

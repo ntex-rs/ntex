@@ -248,8 +248,8 @@ mod compio {
 }
 
 #[allow(dead_code)]
-#[cfg(feature = "default-rt")]
-mod default_rt {
+#[cfg(feature = "neon")]
+mod neon {
     use std::task::{ready, Context, Poll};
     use std::{fmt, future::poll_fn, future::Future, pin::Pin};
 
@@ -408,15 +408,11 @@ pub use self::tokio::*;
 #[cfg(feature = "compio")]
 pub use self::compio::*;
 
-#[cfg(feature = "default-rt")]
-pub use self::default_rt::*;
+#[cfg(feature = "neon")]
+pub use self::neon::*;
 
 #[allow(dead_code)]
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "default-rt")
-))]
+#[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
 mod no_rt {
     use std::task::{Context, Poll};
     use std::{fmt, future::Future, marker::PhantomData, pin::Pin};
@@ -475,9 +471,5 @@ mod no_rt {
     impl std::error::Error for JoinError {}
 }
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "default-rt")
-))]
+#[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
 pub use self::no_rt::*;

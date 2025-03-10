@@ -2,7 +2,7 @@ use std::{future::Future, io};
 
 use socket2::{SockAddr, Socket as Socket2};
 
-use crate::{driver::impl_raw_fd, net::Socket};
+use crate::{impl_raw_fd, net::Socket};
 
 /// A Unix stream between two local sockets on Windows & WSL.
 ///

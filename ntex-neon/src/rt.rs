@@ -86,14 +86,14 @@ impl Runtime {
     /// This method will panic if there are no running [`Runtime`].
     pub fn with_current<T, F: FnOnce(&Self) -> T>(f: F) -> T {
         #[cold]
-        fn not_in_ntex_runtime() -> ! {
-            panic!("not in a ntex runtime")
+        fn not_in_neon_runtime() -> ! {
+            panic!("not in a neon runtime")
         }
 
         if CURRENT_RUNTIME.is_set() {
             CURRENT_RUNTIME.with(f)
         } else {
-            not_in_ntex_runtime()
+            not_in_neon_runtime()
         }
     }
 
