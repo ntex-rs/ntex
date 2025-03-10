@@ -4,26 +4,12 @@
 //! The operation itself doesn't perform anything.
 //! You need to pass them to [`crate::Proactor`], and poll the driver.
 
-use std::{io, marker::PhantomPinned, mem::ManuallyDrop, net::Shutdown};
+use std::{marker::PhantomPinned, mem::ManuallyDrop, net::Shutdown};
 
 #[cfg(unix)]
-pub use super::sys::op::{CreateSocket, Interest};
+pub use super::sys::op::{CreateSocket, Handler, Interest};
 
 use super::OwnedFd;
-
-pub trait Handler {
-    /// Submitted interest
-    fn readable(&mut self, id: usize);
-
-    /// Submitted interest
-    fn writable(&mut self, id: usize);
-
-    /// Operation submission has failed
-    fn error(&mut self, id: usize, err: io::Error);
-
-    /// All events are processed, process all updates
-    fn commit(&mut self);
-}
 
 /// Spawn a blocking function in the thread pool.
 pub struct Asyncify<F, D> {

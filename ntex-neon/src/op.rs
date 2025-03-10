@@ -15,7 +15,7 @@ impl<T: OpCode> OpFuture<T> {
 }
 
 impl<T: OpCode> Future for OpFuture<T> {
-    type Output = ((io::Result<usize>, T), u32);
+    type Output = (io::Result<usize>, T);
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let res = Runtime::with_current(|r| r.poll_task(cx, self.key.take().unwrap()));

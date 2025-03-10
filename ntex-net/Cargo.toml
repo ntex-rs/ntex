@@ -24,8 +24,11 @@ tokio = ["ntex-rt/tokio", "ntex-tokio"]
 # compio runtime
 compio = ["ntex-rt/compio", "ntex-compio"]
 
-# default ntex runtime
-neon = ["ntex-rt/neon", "ntex-neon", "slab", "socket2"]
+# neon runtime
+neon = ["ntex-rt/neon", "ntex-neon/polling", "slab", "socket2"]
+
+# neon io-uring runtime
+neon-uring = ["ntex-rt/neon", "ntex-neon/io-uring", "slab", "socket2"]
 
 [dependencies]
 ntex-service = "3.3"

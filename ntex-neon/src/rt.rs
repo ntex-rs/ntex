@@ -110,14 +110,6 @@ impl Runtime {
         }
     }
 
-    /// Attach a raw file descriptor/handle/socket to the runtime.
-    ///
-    /// You only need this when authoring your own high-level APIs. High-level
-    /// resources in this crate are attached automatically.
-    pub fn attach(&self, fd: RawFd) -> io::Result<()> {
-        self.driver.attach(fd)
-    }
-
     /// Block on the future till it completes.
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         CURRENT_RUNTIME.set(self, || {
@@ -176,7 +168,7 @@ impl Runtime {
         // It is safe to use `submit` here because the task is spawned immediately.
         unsafe {
             let fut = self.submit_with_flags(op);
-            self.spawn_unchecked(async move { fut.await.0 .1.into_inner() })
+            self.spawn_unchecked(async move { fut.await.1.into_inner() })
         }
     }
 
@@ -190,17 +182,13 @@ impl Runtime {
     fn submit_with_flags<T: OpCode + 'static>(
         &self,
         op: T,
-    ) -> impl Future<Output = ((io::Result<usize>, T), u32)> {
+    ) -> impl Future<Output = (io::Result<usize>, T)> {
         let fut = self.submit_raw(op);
 
         async move {
             match fut {
                 PushEntry::Pending(user_data) => OpFuture::new(user_data).await,
-                PushEntry::Ready(res) => {
-                    // submit_flags won't be ready immediately, if ready, it must be error without
-                    // flags
-                    (res, 0)
-                }
+                PushEntry::Ready(res) => res,
             }
         }
     }
@@ -213,7 +201,7 @@ impl Runtime {
         &self,
         cx: &mut Context,
         op: Key<T>,
-    ) -> PushEntry<Key<T>, ((io::Result<usize>, T), u32)> {
+    ) -> PushEntry<Key<T>, (io::Result<usize>, T)> {
         self.driver.pop(op).map_pending(|mut k| {
             self.driver.update_waker(&mut k, cx.waker().clone());
             k
@@ -415,7 +403,7 @@ pub fn spawn_blocking<T: Send + 'static>(
 /// This method doesn't create runtime. It tries to obtain the current runtime
 /// by [`Runtime::with_current`].
 pub async fn submit<T: OpCode + 'static>(op: T) -> (io::Result<usize>, T) {
-    submit_with_flags(op).await.0
+    submit_with_flags(op).await
 }
 
 /// Submit an operation to the current runtime, and return a future for it with
@@ -425,8 +413,6 @@ pub async fn submit<T: OpCode + 'static>(op: T) -> (io::Result<usize>, T) {
 ///
 /// This method doesn't create runtime. It tries to obtain the current runtime
 /// by [`Runtime::with_current`].
-pub async fn submit_with_flags<T: OpCode + 'static>(
-    op: T,
-) -> ((io::Result<usize>, T), u32) {
+pub async fn submit_with_flags<T: OpCode + 'static>(op: T) -> (io::Result<usize>, T) {
     Runtime::with_current(|r| r.submit_with_flags(op)).await
 }

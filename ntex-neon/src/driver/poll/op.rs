@@ -5,6 +5,20 @@ pub use crate::driver::unix::op::*;
 use super::{AsRawFd, Decision, OpCode};
 use crate::{driver::op::*, syscall};
 
+pub trait Handler {
+    /// Submitted interest
+    fn readable(&mut self, id: usize);
+
+    /// Submitted interest
+    fn writable(&mut self, id: usize);
+
+    /// Operation submission has failed
+    fn error(&mut self, id: usize, err: io::Error);
+
+    /// All events are processed, process all updates
+    fn commit(&mut self);
+}
+
 impl<D, F> OpCode for Asyncify<F, D>
 where
     D: Send + 'static,
