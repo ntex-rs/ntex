@@ -2,8 +2,6 @@
 
 ## [0.4.27] - 2025-03-14
 
-* Add Arbiter::spawn_with()
-
 * Add "neon" runtime support
 
 * Drop glommio support
