@@ -1,6 +1,6 @@
 # Changes
 
-## [0.4.26] - 2025-03-xx
+## [0.4.26] - 2025-03-12
 
 * Add "neon" runtime support
 

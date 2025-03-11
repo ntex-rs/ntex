@@ -8,9 +8,7 @@ use crossbeam_queue::SegQueue;
 use nohash_hasher::IntMap;
 use polling::{Event, Events, Poller};
 
-use crate::driver::{
-    op::Handler, op::Interest, sys, AsyncifyPool, Entry, Key, ProactorBuilder,
-};
+use crate::driver::{op::Interest, sys, AsyncifyPool, Entry, Key, ProactorBuilder};
 
 pub(crate) mod op;
 
@@ -187,9 +185,10 @@ pub(crate) struct Driver {
     registry: RefCell<IntMap<RawFd, FdItem>>,
     pool: AsyncifyPool,
     pool_completed: Arc<SegQueue<Entry>>,
+
     hid: Cell<usize>,
     changes: Rc<RefCell<Vec<Change>>>,
-    handlers: Cell<Option<Box<Vec<Box<dyn Handler>>>>>,
+    handlers: Cell<Option<Box<Vec<Box<dyn self::op::Handler>>>>>,
 }
 
 impl Driver {
@@ -216,7 +215,7 @@ impl Driver {
 
     pub fn register_handler<F>(&self, f: F)
     where
-        F: FnOnce(DriverApi) -> Box<dyn Handler>,
+        F: FnOnce(DriverApi) -> Box<dyn self::op::Handler>,
     {
         let id = self.hid.get();
         let mut handlers = self.handlers.take().unwrap_or_default();
@@ -232,10 +231,6 @@ impl Driver {
 
     pub fn create_op<T: sys::OpCode + 'static>(&self, op: T) -> Key<T> {
         Key::new(self.as_raw_fd(), op)
-    }
-
-    pub fn attach(&self, _fd: RawFd) -> io::Result<()> {
-        Ok(())
     }
 
     pub fn push(&self, op: &mut Key<dyn sys::OpCode>) -> Poll<io::Result<usize>> {

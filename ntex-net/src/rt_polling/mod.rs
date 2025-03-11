@@ -1,4 +1,3 @@
-#![allow(clippy::type_complexity)]
 use std::{io::Result, net, net::SocketAddr};
 
 use ntex_bytes::PoolRef;
@@ -8,10 +7,10 @@ mod connect;
 mod driver;
 mod io;
 
-/// Tcp stream wrapper for compio TcpStream
+/// Tcp stream wrapper for neon TcpStream
 struct TcpStream(ntex_neon::net::TcpStream);
 
-/// Tcp stream wrapper for compio UnixStream
+/// Tcp stream wrapper for neon UnixStream
 struct UnixStream(ntex_neon::net::UnixStream);
 
 /// Opens a TCP connection to a remote host.

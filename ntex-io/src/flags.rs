@@ -60,6 +60,10 @@ impl Flags {
         self.contains(Flags::BUF_R_READY)
     }
 
+    pub(crate) fn is_waiting_for_read(&self) -> bool {
+        self.contains(Flags::RD_NOTIFY)
+    }
+
     pub(crate) fn cannot_read(self) -> bool {
         self.intersects(Flags::RD_PAUSED | Flags::BUF_R_FULL)
     }

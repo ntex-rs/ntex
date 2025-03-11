@@ -4,26 +4,10 @@
 //! The operation itself doesn't perform anything.
 //! You need to pass them to [`crate::Proactor`], and poll the driver.
 
-use std::{io, marker::PhantomPinned, mem::ManuallyDrop, net::Shutdown};
+use std::{marker::PhantomPinned, net::Shutdown};
 
 #[cfg(unix)]
-pub use super::sys::op::{CreateSocket, Interest};
-
-use super::OwnedFd;
-
-pub trait Handler {
-    /// Submitted interest
-    fn readable(&mut self, id: usize);
-
-    /// Submitted interest
-    fn writable(&mut self, id: usize);
-
-    /// Operation submission has failed
-    fn error(&mut self, id: usize, err: io::Error);
-
-    /// All events are processed, process all updates
-    fn commit(&mut self);
-}
+pub use super::sys::op::*;
 
 /// Spawn a blocking function in the thread pool.
 pub struct Asyncify<F, D> {
@@ -57,19 +41,5 @@ impl<S> ShutdownSocket<S> {
     /// Create [`ShutdownSocket`].
     pub fn new(fd: S, how: Shutdown) -> Self {
         Self { fd, how }
-    }
-}
-
-/// Close socket fd.
-pub struct CloseSocket {
-    pub(crate) fd: ManuallyDrop<OwnedFd>,
-}
-
-impl CloseSocket {
-    /// Create [`CloseSocket`].
-    pub fn new(fd: OwnedFd) -> Self {
-        Self {
-            fd: ManuallyDrop::new(fd),
-        }
     }
 }

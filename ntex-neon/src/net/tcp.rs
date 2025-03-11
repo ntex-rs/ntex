@@ -1,4 +1,4 @@
-use std::{future::Future, io, net::SocketAddr};
+use std::{io, net::SocketAddr};
 
 use socket2::Socket as Socket2;
 
@@ -24,11 +24,6 @@ impl TcpStream {
     /// Creates new TcpStream from a std::net::TcpStream.
     pub fn from_socket(inner: Socket) -> Self {
         Self { inner }
-    }
-
-    /// Close the socket.
-    pub fn close(self) -> impl Future<Output = io::Result<()>> {
-        self.inner.close()
     }
 
     /// Returns the socket address of the remote peer of this TCP connection.

@@ -154,6 +154,7 @@ impl Arbiter {
             .try_send(ArbiterCommand::Execute(Box::pin(future)));
     }
 
+    #[rustfmt::skip]
     /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
     /// A future is created, and when resolved will contain the result of the function sent
     /// to the Arbiters thread.

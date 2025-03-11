@@ -37,33 +37,15 @@ pub use asyncify::*;
 mod driver_type;
 pub use driver_type::*;
 
-thread_local! {
-    static LOGGING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// enable logging for thread
-pub fn enable_logging() {
-    LOGGING.with(|v| v.set(true));
-}
-
-/// enable logging for thread
-pub fn log<T: AsRef<str>>(s: T) {
-    LOGGING.with(|_v| {
-        //if _v.get() {
-        println!("{}", s.as_ref());
-        //}
-    });
-}
-
 cfg_if::cfg_if! {
     //if #[cfg(windows)] {
     //    #[path = "iocp/mod.rs"]
     //    mod sys;
-    //} else if #[cfg(all(target_os = "linux", feature = "io-uring"))] {
-    //    #[path = "iour/mod.rs"]
-    //    mod sys;
     //} else
-    if #[cfg(unix)] {
+    if #[cfg(all(target_os = "linux", feature = "io-uring"))] {
+        #[path = "uring/mod.rs"]
+        mod sys;
+    } else if #[cfg(unix)] {
         #[path = "poll/mod.rs"]
         mod sys;
     }
@@ -248,17 +230,6 @@ impl Proactor {
         })
     }
 
-    /// Attach an fd to the driver.
-    ///
-    /// ## Platform specific
-    /// * IOCP: it will be attached to the completion port. An fd could only be
-    ///   attached to one driver, and could only be attached once, even if you
-    ///   `try_clone` it.
-    /// * io-uring & polling: it will do nothing but return `Ok(())`.
-    pub fn attach(&self, fd: RawFd) -> io::Result<()> {
-        self.driver.attach(fd)
-    }
-
     /// Cancel an operation with the pushed user-defined data.
     ///
     /// The cancellation is not reliable. The underlying operation may continue,
@@ -305,11 +276,10 @@ impl Proactor {
     /// # Panics
     /// This function will panic if the requested operation has not been
     /// completed.
-    pub fn pop<T>(&self, op: Key<T>) -> PushEntry<Key<T>, ((io::Result<usize>, T), u32)> {
+    pub fn pop<T>(&self, op: Key<T>) -> PushEntry<Key<T>, (io::Result<usize>, T)> {
         if op.has_result() {
-            let flags = op.flags();
             // SAFETY: completed.
-            PushEntry::Ready((unsafe { op.into_inner() }, flags))
+            PushEntry::Ready(unsafe { op.into_inner() })
         } else {
             PushEntry::Pending(op)
         }
@@ -327,7 +297,7 @@ impl Proactor {
 
     pub fn register_handler<F>(&self, f: F)
     where
-        F: FnOnce(DriverApi) -> Box<dyn op::Handler>,
+        F: FnOnce(DriverApi) -> Box<dyn sys::op::Handler>,
     {
         self.driver.register_handler(f)
     }
@@ -346,32 +316,17 @@ impl AsRawFd for Proactor {
 pub(crate) struct Entry {
     user_data: usize,
     result: io::Result<usize>,
-    flags: u32,
 }
 
 #[cfg(unix)]
 impl Entry {
     pub(crate) fn new(user_data: usize, result: io::Result<usize>) -> Self {
-        Self {
-            user_data,
-            result,
-            flags: 0,
-        }
-    }
-
-    #[cfg(all(target_os = "linux", feature = "io-uring"))]
-    // this method only used by in io-uring driver
-    pub(crate) fn set_flags(&mut self, flags: u32) {
-        self.flags = flags;
+        Self { user_data, result }
     }
 
     /// The user-defined data returned by [`Proactor::push`].
     pub fn user_data(&self) -> usize {
         self.user_data
-    }
-
-    pub fn flags(&self) -> u32 {
-        self.flags
     }
 
     /// The result of the operation.
@@ -383,7 +338,6 @@ impl Entry {
     pub unsafe fn notify(self) {
         let user_data = self.user_data();
         let mut op = Key::<()>::new_unchecked(user_data);
-        op.set_flags(self.flags());
         if op.set_result(self.into_result()) {
             // SAFETY: completed and cancelled.
             let _ = op.into_box();
@@ -428,7 +382,6 @@ impl ThreadPoolBuilder {
 pub struct ProactorBuilder {
     capacity: u32,
     pool_builder: ThreadPoolBuilder,
-    sqpoll_idle: Option<Duration>,
 }
 
 #[cfg(unix)]
@@ -445,7 +398,6 @@ impl ProactorBuilder {
         Self {
             capacity: 1024,
             pool_builder: ThreadPoolBuilder::new(),
-            sqpoll_idle: None,
         }
     }
 
@@ -494,19 +446,6 @@ impl ProactorBuilder {
     /// Create or reuse the thread pool from the config.
     pub fn create_or_get_thread_pool(&self) -> AsyncifyPool {
         self.pool_builder.create_or_reuse()
-    }
-
-    /// Set `io-uring` sqpoll idle milliseconds, when `sqpoll_idle` is set,
-    /// io-uring sqpoll feature will be enabled
-    ///
-    /// # Notes
-    ///
-    /// - Only effective when the `io-uring` feature is enabled
-    /// - `idle` must >= 1ms, otherwise will set sqpoll idle 0ms
-    /// - `idle` will be rounded down
-    pub fn sqpoll_idle(&mut self, idle: Duration) -> &mut Self {
-        self.sqpoll_idle = Some(idle);
-        self
     }
 
     /// Build the [`Proactor`].

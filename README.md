@@ -25,7 +25,7 @@
 ## Usage
 
 ntex supports multiple async runtimes, runtime must be selected as a feature. Available options are `compio`, `tokio`,
-`glommio` or `async-std`.
+`neon` or `neon-uring`.
 
 ```toml
 [dependencies]
