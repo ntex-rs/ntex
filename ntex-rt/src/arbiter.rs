@@ -157,7 +157,7 @@ impl Arbiter {
     /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
     /// A future is created, and when resolved will contain the result of the function sent
     /// to the Arbiters thread.
-    pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, oneshot::RecvError>>
+    pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, oneshot::RecvError>> + Send + 'static
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
