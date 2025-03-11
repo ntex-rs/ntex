@@ -1,6 +1,6 @@
 use std::{cell::Cell, collections::VecDeque, fmt, io, ptr, rc::Rc, task, task::Poll};
 
-use ntex_neon::driver::op::{Handler, Interest};
+use ntex_neon::driver::op::{CloseSocket, Handler, Interest};
 use ntex_neon::driver::{AsRawFd, DriverApi, RawFd};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
@@ -149,7 +149,8 @@ impl<T> Handler for StreamOpsHandler<T> {
                             .inspect(|size| {
                                 unsafe { buf.advance_mut(*size) };
                                 log::debug!(
-                                    "FD: {:?}, SIZE: {:?}, BUF: {:?}",
+                                    "{}: {:?}, SIZE: {:?}, BUF: {:?}",
+                                    item.context.tag(),
                                     item.fd,
                                     size,
                                     buf
@@ -193,10 +194,11 @@ impl<T> Handler for StreamOpsHandler<T> {
         // extra
         let mut feed = self.inner.feed.take().unwrap();
         for id in feed.drain(..) {
-            log::debug!("Drop io ({}), {:?}", id, streams[id].fd);
+            let item = &mut streams[id];
+            log::debug!("{}: Drop io ({}), {:?}", item.context.tag(), id, item.fd);
 
-            streams[id].ref_count -= 1;
-            if streams[id].ref_count == 0 {
+            item.ref_count -= 1;
+            if item.ref_count == 0 {
                 let item = streams.remove(id);
                 if item.io.is_some() {
                     self.inner.api.unregister_all(item.fd);
@@ -209,20 +211,17 @@ impl<T> Handler for StreamOpsHandler<T> {
     }
 }
 
-pub(crate) trait Closable {
-    async fn close(self) -> io::Result<()>;
-}
-
 impl<T> StreamCtl<T> {
-    pub(crate) async fn close(self) -> io::Result<()>
-    where
-        T: Closable,
-    {
-        if let Some(io) = self.with(|streams| streams[self.id].io.take()) {
-            io.close().await
-        } else {
-            Ok(())
+    pub(crate) async fn close(self) -> io::Result<()> {
+        let (io, fd) =
+            self.with(|streams| (streams[self.id].io.take(), streams[self.id].fd));
+        if let Some(io) = io {
+            let op = CloseSocket::from_raw_fd(fd);
+            let fut = ntex_neon::submit(op);
+            std::mem::forget(io);
+            fut.await.0?;
         }
+        Ok(())
     }
 
     pub(crate) fn with_io<F, R>(&self, f: F) -> R
@@ -237,7 +236,12 @@ impl<T> StreamCtl<T> {
             let item = &mut streams[self.id];
 
             if item.flags.intersects(Flags::RD | Flags::WR) {
-                log::debug!("Pause all io ({}), {:?}", self.id, item.fd);
+                log::debug!(
+                    "{}: Pause all io ({}), {:?}",
+                    item.context.tag(),
+                    self.id,
+                    item.fd
+                );
                 item.flags.remove(Flags::RD | Flags::WR);
                 self.inner.api.unregister_all(item.fd);
             }
@@ -248,7 +252,12 @@ impl<T> StreamCtl<T> {
         self.with(|streams| {
             let item = &mut streams[self.id];
 
-            log::debug!("Pause io read ({}), {:?}", self.id, item.fd);
+            log::debug!(
+                "{}: Pause io read ({}), {:?}",
+                item.context.tag(),
+                self.id,
+                item.fd
+            );
             if item.flags.contains(Flags::RD) {
                 item.flags.remove(Flags::RD);
                 self.inner.api.unregister(item.fd, Interest::Readable);
@@ -260,7 +269,12 @@ impl<T> StreamCtl<T> {
         self.with(|streams| {
             let item = &mut streams[self.id];
 
-            log::debug!("Resume io read ({}), {:?}", self.id, item.fd);
+            log::debug!(
+                "{}: Resume io read ({}), {:?}",
+                item.context.tag(),
+                self.id,
+                item.fd
+            );
             if !item.flags.contains(Flags::RD) {
                 item.flags.insert(Flags::RD);
                 self.inner
@@ -275,9 +289,19 @@ impl<T> StreamCtl<T> {
             let item = &mut streams[self.id];
 
             if !item.flags.contains(Flags::WR) {
-                log::debug!("Resume io write ({}), {:?}", self.id, item.fd);
+                log::debug!(
+                    "{}: Resume io write ({}), {:?}",
+                    item.context.tag(),
+                    self.id,
+                    item.fd
+                );
                 let result = item.context.with_write_buf(|buf| {
-                    log::debug!("Writing io ({}), buf: {:?}", self.id, buf.len());
+                    log::debug!(
+                        "{}: Writing io ({}), buf: {:?}",
+                        item.context.tag(),
+                        self.id,
+                        buf.len()
+                    );
 
                     let slice = &buf[..];
                     syscall!(break libc::write(item.fd, slice.as_ptr() as _, slice.len()))
@@ -285,7 +309,8 @@ impl<T> StreamCtl<T> {
 
                 if result.is_pending() {
                     log::debug!(
-                        "Write is pending ({}), {:?}",
+                        "{}: Write is pending ({}), {:?}",
+                        item.context.tag(),
                         self.id,
                         item.context.flags()
                     );
@@ -325,7 +350,12 @@ impl<T> Clone for StreamCtl<T> {
 impl<T> Drop for StreamCtl<T> {
     fn drop(&mut self) {
         if let Some(mut streams) = self.inner.streams.take() {
-            log::debug!("Drop io ({}), {:?}", self.id, streams[self.id].fd);
+            log::debug!(
+                "{}: Drop io ({}), {:?}",
+                streams[self.id].context.tag(),
+                self.id,
+                streams[self.id].fd
+            );
 
             streams[self.id].ref_count -= 1;
             if streams[self.id].ref_count == 0 {

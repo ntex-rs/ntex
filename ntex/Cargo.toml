@@ -51,6 +51,9 @@ compio = ["ntex-net/compio"]
 # neon runtime
 neon = ["ntex-net/neon"]
 
+# neon runtime
+neon-uring = ["ntex-net/neon-uring"]
+
 # websocket support
 ws = ["dep:sha-1"]
 

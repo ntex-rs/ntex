@@ -1,8 +1,8 @@
-use std::{io, marker::Send, os::fd::FromRawFd, os::fd::RawFd, pin::Pin, task::Poll};
+use std::{io, marker::Send, mem, os::fd::FromRawFd, os::fd::RawFd, pin::Pin, task::Poll};
 
 pub use crate::driver::unix::op::*;
 
-use super::{AsRawFd, Decision, OpCode};
+use super::{AsRawFd, Decision, OpCode, OwnedFd};
 use crate::{driver::op::*, syscall};
 
 pub trait Handler {
@@ -38,6 +38,20 @@ where
         let (res, data) = f();
         this.data = Some(data);
         Poll::Ready(res)
+    }
+}
+
+/// Close socket fd.
+pub struct CloseSocket {
+    pub(crate) fd: mem::ManuallyDrop<OwnedFd>,
+}
+
+impl CloseSocket {
+    /// Create [`CloseSocket`].
+    pub fn new(fd: OwnedFd) -> Self {
+        Self {
+            fd: mem::ManuallyDrop::new(fd),
+        }
     }
 }
 

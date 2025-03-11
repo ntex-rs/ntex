@@ -37,24 +37,6 @@ pub use asyncify::*;
 mod driver_type;
 pub use driver_type::*;
 
-thread_local! {
-    static LOGGING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// enable logging for thread
-pub fn enable_logging() {
-    LOGGING.with(|v| v.set(true));
-}
-
-/// enable logging for thread
-pub fn log<T: AsRef<str>>(s: T) {
-    LOGGING.with(|_v| {
-        //if _v.get() {
-        println!("{}", s.as_ref());
-        //}
-    });
-}
-
 cfg_if::cfg_if! {
     //if #[cfg(windows)] {
     //    #[path = "iocp/mod.rs"]

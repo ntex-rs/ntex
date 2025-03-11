@@ -1,10 +1,11 @@
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::{cell::RefCell, collections::VecDeque, io, path::Path, rc::Rc, task::Poll};
+use std::{cell::RefCell, io, path::Path, rc::Rc};
 
-use ntex_neon::driver::op::{Handler, Interest};
+use io_uring::{opcode, types::Fd};
+use ntex_neon::driver::op::Handler;
 use ntex_neon::driver::{AsRawFd, DriverApi, RawFd};
 use ntex_neon::net::{Socket, TcpStream, UnixStream};
-use ntex_neon::{syscall, Runtime};
+use ntex_neon::Runtime;
 use ntex_util::channel::oneshot::{channel, Sender};
 use slab::Slab;
 use socket2::{Protocol, SockAddr, Type};
@@ -29,7 +30,7 @@ pub(crate) async fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
 
     let (sender, rx) = channel();
 
-    ConnectOps::current().connect(socket.as_raw_fd(), addr, sender)?;
+    ConnectOps::current().connect(socket.as_raw_fd(), addr, sender);
 
     rx.await
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone"))
@@ -54,7 +55,7 @@ pub(crate) async fn connect_unix(path: impl AsRef<Path>) -> io::Result<UnixStrea
 
     let (sender, rx) = channel();
 
-    ConnectOps::current().connect(socket.as_raw_fd(), addr, sender)?;
+    ConnectOps::current().connect(socket.as_raw_fd(), addr, sender);
 
     rx.await
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone"))
@@ -73,19 +74,13 @@ enum Change {
     Error(io::Error),
 }
 
-struct ConnectOpsBatcher {
-    feed: VecDeque<(usize, Change)>,
+struct ConnectOpsHandler {
     inner: Rc<ConnectOpsInner>,
-}
-
-struct Item {
-    fd: RawFd,
-    sender: Sender<io::Result<()>>,
 }
 
 struct ConnectOpsInner {
     api: DriverApi,
-    connects: RefCell<Slab<Item>>,
+    ops: RefCell<Slab<Sender<io::Result<()>>>>,
 }
 
 impl ConnectOps {
@@ -98,13 +93,10 @@ impl ConnectOps {
                 rt.driver().register_handler(|api| {
                     let ops = Rc::new(ConnectOpsInner {
                         api,
-                        connects: RefCell::new(Slab::new()),
+                        ops: RefCell::new(Slab::new()),
                     });
                     inner = Some(ops.clone());
-                    Box::new(ConnectOpsBatcher {
-                        inner: ops,
-                        feed: VecDeque::new(),
-                    })
+                    Box::new(ConnectOpsHandler { inner: ops })
                 });
 
                 let s = ConnectOps(inner.unwrap());
@@ -119,78 +111,28 @@ impl ConnectOps {
         fd: RawFd,
         addr: SockAddr,
         sender: Sender<io::Result<()>>,
-    ) -> io::Result<usize> {
-        let result = syscall!(break libc::connect(fd, addr.as_ptr(), addr.len()));
+    ) -> usize {
+        let id = self.0.ops.borrow_mut().insert(sender);
+        self.0.api.submit(
+            id as u32,
+            opcode::Connect::new(Fd(fd), addr.as_ptr(), addr.len()).build(),
+        );
 
-        if let Poll::Ready(res) = result {
-            res?;
-        }
-
-        let item = Item { fd, sender };
-        let id = self.0.connects.borrow_mut().insert(item);
-
-        self.0.api.register(fd, id, Interest::Writable);
-
-        Ok(id)
+        id
     }
 }
 
-impl Handler for ConnectOpsBatcher {
-    fn readable(&mut self, id: usize) {
-        log::debug!("ConnectFD is readable {:?}", id);
-        self.feed.push_back((id, Change::Readable));
+impl Handler for ConnectOpsHandler {
+    fn canceled(&mut self, user_data: usize) {
+        log::debug!("Op is canceled {:?}", user_data);
+
+        self.inner.ops.borrow_mut().remove(user_data);
     }
 
-    fn writable(&mut self, id: usize) {
-        log::debug!("ConnectFD is writable {:?}", id);
-        self.feed.push_back((id, Change::Writable));
-    }
+    fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<i32>) {
+        log::debug!("Op is completed {:?} result: {:?}", user_data, result);
 
-    fn error(&mut self, id: usize, err: io::Error) {
-        self.feed.push_back((id, Change::Error(err)));
-    }
-
-    fn commit(&mut self) {
-        if self.feed.is_empty() {
-            return;
-        }
-        log::debug!("Commit connect driver changes, num: {:?}", self.feed.len());
-
-        let mut connects = self.inner.connects.borrow_mut();
-
-        for (id, change) in self.feed.drain(..) {
-            if connects.contains(id) {
-                let item = connects.remove(id);
-                match change {
-                    Change::Readable => unreachable!(),
-                    Change::Writable => {
-                        let mut err: libc::c_int = 0;
-                        let mut err_len =
-                            std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-
-                        let res = syscall!(libc::getsockopt(
-                            item.fd.as_raw_fd(),
-                            libc::SOL_SOCKET,
-                            libc::SO_ERROR,
-                            &mut err as *mut _ as *mut _,
-                            &mut err_len
-                        ));
-
-                        let res = if err == 0 {
-                            res.map(|_| ())
-                        } else {
-                            Err(io::Error::from_raw_os_error(err))
-                        };
-
-                        self.inner.api.unregister_all(item.fd);
-                        let _ = item.sender.send(res);
-                    }
-                    Change::Error(err) => {
-                        let _ = item.sender.send(Err(err));
-                        self.inner.api.unregister_all(item.fd);
-                    }
-                }
-            }
-        }
+        let tx = self.inner.ops.borrow_mut().remove(user_data);
+        let _ = tx.send(result.map(|_| ()));
     }
 }

@@ -1,11 +1,11 @@
-use std::{any, future::poll_fn, io, task::Poll};
+use std::{any, future::poll_fn, task::Poll};
 
 use ntex_io::{
     types, Handle, IoContext, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
-use ntex_neon::{net::TcpStream, net::UnixStream, spawn};
+use ntex_neon::{net::TcpStream, spawn};
 
-use super::driver::{Closable, StreamOps, StreamCtl};
+use super::driver::{StreamCtl, StreamOps};
 
 impl IoStream for super::TcpStream {
     fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
@@ -44,26 +44,14 @@ impl Handle for HandleWrapper {
     }
 }
 
-impl Closable for TcpStream {
-    async fn close(self) -> io::Result<()> {
-        TcpStream::close(self).await
-    }
-}
-
-impl Closable for UnixStream {
-    async fn close(self) -> io::Result<()> {
-        UnixStream::close(self).await
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Status {
     Shutdown,
     Terminate,
 }
 
-async fn run<T: Closable>(ctl: StreamCtl<T>, context: IoContext) {
-    // Handle io read readiness
+async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
+    // Handle io readiness
     let st = poll_fn(|cx| {
         let read = match context.poll_read_ready(cx) {
             Poll::Ready(ReadStatus::Ready) => {
@@ -79,6 +67,7 @@ async fn run<T: Closable>(ctl: StreamCtl<T>, context: IoContext) {
 
         let write = match context.poll_write_ready(cx) {
             Poll::Ready(WriteStatus::Ready) => {
+                log::debug!("{}: write ready", context.tag());
                 ctl.resume_write();
                 Poll::Pending
             }
@@ -97,11 +86,10 @@ async fn run<T: Closable>(ctl: StreamCtl<T>, context: IoContext) {
     })
     .await;
 
+    ctl.pause_read();
     ctl.resume_write();
     context.shutdown(st == Status::Shutdown).await;
 
-    ctl.pause_all();
     let result = ctl.close().await;
-
     context.stopped(result.err());
 }

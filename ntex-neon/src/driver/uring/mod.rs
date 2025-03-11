@@ -22,6 +22,9 @@ use crate::driver::{sys, AsyncifyPool, Entry, Key, ProactorBuilder};
 
 /// Abstraction of io-uring operations.
 pub trait OpCode {
+    /// Name of the operation
+    fn name(&self) -> &'static str;
+
     /// Call the operation in a blocking way. This method will only be called if
     /// [`create_entry`] returns [`OpEntry::Blocking`].
     fn call_blocking(self: Pin<&mut Self>) -> io::Result<usize> {
@@ -41,7 +44,7 @@ pub trait OpCode {
 #[derive(Debug)]
 enum Change {
     Submit { entry: SEntry },
-    Cancel { user_data: u64, op_id: u64 },
+    Cancel { op_id: u64 },
 }
 
 pub struct DriverApi {
@@ -53,7 +56,7 @@ impl DriverApi {
     pub fn submit(&self, user_data: u32, entry: SEntry) {
         log::debug!(
             "Submit operation batch: {:?} user-data: {:?} entry: {:?}",
-            self.batch,
+            self.batch >> Driver::BATCH,
             user_data,
             entry,
         );
@@ -62,15 +65,14 @@ impl DriverApi {
         });
     }
 
-    pub fn cancel(&self, user_data: u32, op_id: u32) {
+    pub fn cancel(&self, op_id: u32) {
         log::debug!(
             "Cancel operation batch: {:?} user-data: {:?}",
-            self.batch,
-            user_data
+            self.batch >> Driver::BATCH,
+            op_id
         );
         self.changes.borrow_mut().push_back(Change::Cancel {
             op_id: op_id as u64 | self.batch,
-            user_data: user_data as u64 | self.batch,
         });
     }
 }
@@ -89,8 +91,10 @@ pub(crate) struct Driver {
 
 impl Driver {
     const NOTIFY: u64 = u64::MAX;
-    const BATCH_MASK: u64 = 0xFFFF << 48;
-    const DATA_MASK: u64 = 0xFFFF >> 16;
+    const CANCEL: u64 = u64::MAX - 1;
+    const BATCH: u64 = 48;
+    const BATCH_MASK: u64 = 0xFFFF_0000_0000_0000;
+    const DATA_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
     pub fn new(builder: &ProactorBuilder) -> io::Result<Self> {
         log::trace!("New io-uring driver");
@@ -120,7 +124,7 @@ impl Driver {
             pool: builder.create_or_get_thread_pool(),
             pool_completed: Arc::new(SegQueue::new()),
 
-            hid: Cell::new(1 << 48),
+            hid: Cell::new(0),
             changes: Rc::new(RefCell::new(VecDeque::new())),
             handlers: Cell::new(Some(Box::new(Vec::new()))),
         })
@@ -134,7 +138,7 @@ impl Driver {
         let mut handlers = self.handlers.take().unwrap_or_default();
 
         let api = DriverApi {
-            batch: id,
+            batch: id << 48,
             changes: self.changes.clone(),
         };
         handlers.push(f(api));
@@ -155,9 +159,9 @@ impl Driver {
                 ring.submit_and_wait(1)
             }
         };
-        log::trace!("Submit result: {res:?}");
         match res {
             Ok(_) => {
+                // log::debug!("Submit result: {res:?} {:?}", timeout);
                 if ring.completion().is_empty() {
                     Err(io::ErrorKind::TimedOut.into())
                 } else {
@@ -165,7 +169,13 @@ impl Driver {
                 }
             }
             Err(e) => match e.raw_os_error() {
-                Some(libc::ETIME) => Err(io::ErrorKind::TimedOut.into()),
+                Some(libc::ETIME) => {
+                    if timeout.is_some() && timeout != Some(Duration::ZERO) {
+                        Err(io::ErrorKind::TimedOut.into())
+                    } else {
+                        Ok(())
+                    }
+                }
                 Some(libc::EBUSY) | Some(libc::EAGAIN) => {
                     Err(io::ErrorKind::Interrupted.into())
                 }
@@ -196,10 +206,10 @@ impl Driver {
                         break;
                     }
                 }
-                Change::Cancel { user_data, op_id } => {
-                    let entry = AsyncCancel::new(op_id).build().user_data(user_data);
-                    if unsafe { squeue.push(&entry.user_data(user_data)) }.is_err() {
-                        changes.push_front(Change::Cancel { user_data, op_id });
+                Change::Cancel { op_id } => {
+                    let entry = AsyncCancel::new(op_id).build().user_data(Self::CANCEL);
+                    if unsafe { squeue.push(&entry) }.is_err() {
+                        changes.push_front(Change::Cancel { op_id });
                         break;
                     }
                 }
@@ -215,12 +225,12 @@ impl Driver {
         timeout: Option<Duration>,
         f: F,
     ) -> io::Result<()> {
-        log::debug!("Start polling");
-
         self.poll_blocking();
-        let has_more = self.apply_changes();
 
-        if !self.poll_completions() || has_more {
+        let has_more = self.apply_changes();
+        let poll_result = self.poll_completions();
+
+        if !poll_result || has_more {
             if has_more {
                 self.submit_auto(Some(Duration::ZERO))?;
             } else {
@@ -235,7 +245,7 @@ impl Driver {
     }
 
     pub fn push(&self, op: &mut Key<dyn sys::OpCode>) -> Poll<io::Result<usize>> {
-        log::trace!("push RawOp");
+        log::trace!("Push op: {:?}", op.as_op_pin().name());
 
         let user_data = op.user_data();
         loop {
@@ -259,27 +269,28 @@ impl Driver {
         for entry in cqueue {
             let user_data = entry.user_data();
             match user_data {
+                Self::CANCEL => {}
                 Self::NOTIFY => {
                     let flags = entry.flags();
                     debug_assert!(more(flags));
                     self.notifier.clear().expect("cannot clear notifier");
                 }
                 _ => {
-                    let batch = (user_data & Self::BATCH_MASK) as usize;
+                    let batch = ((user_data & Self::BATCH_MASK) >> Self::BATCH) as usize;
                     let user_data = (user_data & Self::DATA_MASK) as usize;
 
                     let result = entry.result();
-                    let result = if result < 0 {
-                        let result = if result == -libc::ECANCELED {
-                            libc::ETIMEDOUT
-                        } else {
-                            -result
-                        };
-                        Err(io::Error::from_raw_os_error(result))
+
+                    if result == -libc::ECANCELED {
+                        handlers[batch].canceled(user_data);
                     } else {
-                        Ok(result as _)
-                    };
-                    handlers[batch].completed(user_data, entry.flags(), result);
+                        let result = if result < 0 {
+                            Err(io::Error::from_raw_os_error(result))
+                        } else {
+                            Ok(result as _)
+                        };
+                        handlers[batch].completed(user_data, entry.flags(), result);
+                    }
                 }
             }
         }

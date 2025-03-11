@@ -1,13 +1,13 @@
-use std::{cell::RefCell, collections::VecDeque, fmt, io, num::NonZeroU32, rc::Rc};
+use std::{cell::RefCell, fmt, io, mem, num::NonZeroU32, rc::Rc, task::Poll};
 
-use io_uring::{opcode, types::Fd};
+use io_uring::{opcode, squeue::Entry, types::Fd};
 use ntex_neon::driver::op::Handler;
 use ntex_neon::driver::{AsRawFd, DriverApi};
 use ntex_neon::Runtime;
 use ntex_util::channel::oneshot;
 use slab::Slab;
 
-use ntex_bytes::{BufMut, BytesVec};
+use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::IoContext;
 
 pub(crate) struct StreamCtl<T> {
@@ -36,10 +36,7 @@ enum Operation {
         context: IoContext,
     },
     Close {
-        tx: Option<oneshot::Sender<io::Result<()>>>,
-    },
-    Cancel {
-        id: u32,
+        tx: Option<oneshot::Sender<io::Result<i32>>>,
     },
     Nop,
 }
@@ -52,8 +49,13 @@ struct StreamOpsHandler<T> {
 
 struct StreamOpsInner<T> {
     api: DriverApi,
-    feed: RefCell<VecDeque<usize>>,
-    storage: RefCell<(Slab<StreamItem<T>>, Slab<Operation>)>,
+    feed: RefCell<Vec<usize>>,
+    storage: RefCell<StreamOpsStorage<T>>,
+}
+
+struct StreamOpsStorage<T> {
+    streams: Slab<StreamItem<T>>,
+    ops: Slab<Operation>,
 }
 
 impl<T: AsRawFd + 'static> StreamOps<T> {
@@ -64,13 +66,16 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
             } else {
                 let mut inner = None;
                 rt.driver().register_handler(|api| {
-                    let mut storage = Slab::new();
-                    storage.insert(Operation::Nop);
+                    let mut ops = Slab::new();
+                    ops.insert(Operation::Nop);
 
                     let ops = Rc::new(StreamOpsInner {
                         api,
-                        feed: RefCell::new(VecDeque::new()),
-                        storage: RefCell::new((Slab::new(), Slab::new())),
+                        feed: RefCell::new(Vec::new()),
+                        storage: RefCell::new(StreamOpsStorage {
+                            ops,
+                            streams: Slab::new(),
+                        }),
                     });
                     inner = Some(ops.clone());
                     Box::new(StreamOpsHandler { inner: ops })
@@ -92,18 +97,16 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
             rd_op: None,
             wr_op: None,
         };
-        self.with(|streams| {
-            let id = streams.0.insert(item);
-            StreamCtl {
-                id,
-                inner: self.0.clone(),
-            }
-        })
+        let id = self.0.storage.borrow_mut().streams.insert(item);
+        StreamCtl {
+            id,
+            inner: self.0.clone(),
+        }
     }
 
     fn with<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut (Slab<StreamItem<T>>, Slab<Operation>)) -> R,
+        F: FnOnce(&mut StreamOpsStorage<T>) -> R,
     {
         f(&mut *self.0.storage.borrow_mut())
     }
@@ -116,48 +119,208 @@ impl<T> Clone for StreamOps<T> {
 }
 
 impl<T> Handler for StreamOpsHandler<T> {
+    fn canceled(&mut self, user_data: usize) {
+        let mut storage = self.inner.storage.borrow_mut();
+
+        match storage.ops.remove(user_data) {
+            Operation::Recv { id, buf, context } => {
+                log::debug!("{}: Recv canceled {:?}", context.tag(), id,);
+                context.release_read_buf(buf);
+            }
+            Operation::Send { id, buf, context } => {
+                log::debug!("{}: Send canceled: {:?}", context.tag(), id);
+                context.release_write_buf(buf);
+            }
+            Operation::Nop | Operation::Close { .. } => {}
+        }
+    }
+
     fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<i32>) {
-        log::debug!("Op is completed {:?} result: {:?}", user_data, result);
+        let mut storage = self.inner.storage.borrow_mut();
 
-        // let mut storage = self.inner.storage.borrow_mut();
-        // for (id, flags, result) in self.feed.drain(..) {}
+        let op = storage.ops.remove(user_data);
+        match op {
+            Operation::Recv {
+                id,
+                mut buf,
+                context,
+            } => {
+                let result = result.map(|size| {
+                    unsafe { buf.advance_mut(size as usize) };
+                    size as usize
+                });
 
-        // // extra
-        // for id in self.inner.feed.borrow_mut().drain(..) {
-        //     log::debug!("Drop io ({}), {:?}", id, storage.0[id].fd);
+                // reset op reference
+                if let Some(item) = storage.streams.get_mut(id) {
+                    log::debug!(
+                        "{}: Recv completed {:?}, res: {:?}, buf({}): {:?}",
+                        context.tag(),
+                        item.fd,
+                        result,
+                        buf.remaining_mut(),
+                        buf,
+                    );
+                    item.rd_op.take();
+                }
 
-        //     storage.0[id].ref_count -= 1;
-        //     if storage.0[id].ref_count == 0 {
-        //         let item = storage.0.remove(id);
-        //         if item.io.is_some() {
-        //             // self.inner.api.unregister_all(item.fd);
-        //         }
-        //     }
-        // }
+                // set read buf
+                let tag = context.tag();
+                if context.set_read_buf(result, buf).is_pending() {
+                    if let Some((id, op)) = storage.recv(id, Some(context)) {
+                        self.inner.api.submit(id, op);
+                    }
+                } else {
+                    log::debug!("{}: Recv to pause", tag);
+                }
+            }
+            Operation::Send { id, buf, context } => {
+                // reset op reference
+                if let Some(item) = storage.streams.get_mut(id) {
+                    log::debug!(
+                        "{}: Send completed: {:?}, res: {:?}",
+                        context.tag(),
+                        item.fd,
+                        result
+                    );
+                    item.wr_op.take();
+                }
+
+                // set read buf
+                if context
+                    .set_write_buf(result.map(|size| size as usize), buf)
+                    .is_pending()
+                {
+                    if let Some((id, op)) = storage.send(id, Some(context)) {
+                        self.inner.api.submit(id, op);
+                    }
+                }
+            }
+            Operation::Close { tx } => {
+                if let Some(tx) = tx {
+                    let _ = tx.send(result);
+                }
+            }
+            Operation::Nop => {}
+        }
+
+        // extra
+        for id in self.inner.feed.borrow_mut().drain(..) {
+            storage.streams[id].ref_count -= 1;
+            if storage.streams[id].ref_count == 0 {
+                let mut item = storage.streams.remove(id);
+
+                log::debug!("{}: Drop io ({}), {:?}", item.context.tag(), id, item.fd);
+
+                if let Some(io) = item.io.take() {
+                    mem::forget(io);
+
+                    let id = storage.ops.insert(Operation::Close { tx: None });
+                    assert!(id < u32::MAX as usize);
+                    self.inner
+                        .api
+                        .submit(id as u32, opcode::Close::new(item.fd).build());
+                }
+            }
+        }
+    }
+}
+
+impl<T> StreamOpsStorage<T> {
+    fn recv(&mut self, id: usize, context: Option<IoContext>) -> Option<(u32, Entry)> {
+        let item = &mut self.streams[id];
+
+        if item.rd_op.is_none() {
+            if let Poll::Ready(mut buf) = item.context.get_read_buf() {
+                log::debug!(
+                    "{}: Recv resume ({}), {:?} - {:?} = {:?}",
+                    item.context.tag(),
+                    id,
+                    item.fd,
+                    buf,
+                    buf.remaining_mut()
+                );
+
+                let slice = buf.chunk_mut();
+                let op = opcode::Recv::new(item.fd, slice.as_mut_ptr(), slice.len() as u32)
+                    .build();
+
+                let op_id = self.ops.insert(Operation::Recv {
+                    id,
+                    buf,
+                    context: context.unwrap_or_else(|| item.context.clone()),
+                });
+                assert!(op_id < u32::MAX as usize);
+
+                item.rd_op = NonZeroU32::new(op_id as u32);
+                return Some((op_id as u32, op));
+            }
+        }
+        None
+    }
+
+    fn send(&mut self, id: usize, context: Option<IoContext>) -> Option<(u32, Entry)> {
+        let item = &mut self.streams[id];
+
+        if item.wr_op.is_none() {
+            if let Poll::Ready(buf) = item.context.get_write_buf() {
+                log::debug!(
+                    "{}: Send resume ({}), {:?} {:?}",
+                    item.context.tag(),
+                    id,
+                    item.fd,
+                    buf
+                );
+
+                let slice = buf.chunk();
+                let op =
+                    opcode::Send::new(item.fd, slice.as_ptr(), slice.len() as u32).build();
+
+                let op_id = self.ops.insert(Operation::Send {
+                    id,
+                    buf,
+                    context: context.unwrap_or_else(|| item.context.clone()),
+                });
+                assert!(op_id < u32::MAX as usize);
+
+                item.wr_op = NonZeroU32::new(op_id as u32);
+                return Some((op_id as u32, op));
+            }
+        }
+        None
     }
 }
 
 impl<T> StreamCtl<T> {
     pub(crate) async fn close(self) -> io::Result<()> {
-        let result = self.with(|streams| {
-            let item = &mut streams.0[self.id];
-            if let Some(io) = item.io.take() {
+        let result = {
+            let mut storage = self.inner.storage.borrow_mut();
+
+            let (io, fd) = {
+                let item = &mut storage.streams[self.id];
+                (item.io.take(), item.fd)
+            };
+            if let Some(io) = io {
+                mem::forget(io);
+
                 let (tx, rx) = oneshot::channel();
-                let id = streams.1.insert(Operation::Close { tx: Some(tx) });
+                let id = storage.ops.insert(Operation::Close { tx: Some(tx) });
                 assert!(id < u32::MAX as usize);
+
+                drop(storage);
                 self.inner
                     .api
-                    .submit(id as u32, opcode::Close::new(item.fd).build());
+                    .submit(id as u32, opcode::Close::new(fd).build());
                 Some(rx)
             } else {
                 None
             }
-        });
+        };
 
         if let Some(rx) = result {
             rx.await
                 .map_err(|_| io::Error::new(io::ErrorKind::Other, "gone"))
                 .and_then(|item| item)
+                .map(|_| ())
         } else {
             Ok(())
         }
@@ -167,87 +330,65 @@ impl<T> StreamCtl<T> {
     where
         F: FnOnce(Option<&T>) -> R,
     {
-        self.with(|streams| f(streams.0[self.id].io.as_ref()))
+        f(self.inner.storage.borrow().streams[self.id].io.as_ref())
     }
 
     pub(crate) fn resume_read(&self) {
-        self.with(|streams| {
-            let item = &mut streams.0[self.id];
-
-            if item.rd_op.is_none() {
-                log::debug!("Resume io read ({}), {:?}", self.id, item.fd);
-                let mut buf = item.context.get_read_buf();
-                let slice = buf.chunk_mut();
-                let op = opcode::Recv::new(item.fd, slice.as_mut_ptr(), slice.len() as u32)
-                    .build();
-
-                let id = streams.1.insert(Operation::Recv {
-                    buf,
-                    id: self.id,
-                    context: item.context.clone(),
-                });
-                assert!(id < u32::MAX as usize);
-
-                self.inner.api.submit(id as u32, op);
-            }
-        })
+        let result = self.inner.storage.borrow_mut().recv(self.id, None);
+        if let Some((id, op)) = result {
+            self.inner.api.submit(id, op);
+        }
     }
 
     pub(crate) fn resume_write(&self) {
-        self.with(|streams| {
-            let item = &mut streams.0[self.id];
-
-            if item.wr_op.is_none() {
-                log::debug!("Resume io write ({}), {:?}", self.id, item.fd);
-                //self.inner.api.unregister(item.fd, Interest::Readable);
-            }
-        })
+        let result = self.inner.storage.borrow_mut().send(self.id, None);
+        if let Some((id, op)) = result {
+            self.inner.api.submit(id, op);
+        }
     }
 
     pub(crate) fn pause_read(&self) {
-        self.with(|streams| {
-            let item = &mut streams.0[self.id];
-
-            if let Some(rd_op) = item.rd_op {
-                log::debug!("Pause io read ({}), {:?}", self.id, item.fd);
-                let id = streams.1.insert(Operation::Cancel { id: rd_op.get() });
-                assert!(id < u32::MAX as usize);
-                self.inner.api.cancel(id as u32, rd_op.get());
-            }
-        })
-    }
-
-    fn with<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut (Slab<StreamItem<T>>, Slab<Operation>)) -> R,
-    {
         let mut storage = self.inner.storage.borrow_mut();
-        f(&mut *storage)
+        let item = &mut storage.streams[self.id];
+
+        if let Some(rd_op) = item.rd_op {
+            log::debug!(
+                "{}: Recv to pause ({}), {:?}",
+                item.context.tag(),
+                self.id,
+                item.fd
+            );
+            self.inner.api.cancel(rd_op.get());
+        }
     }
 }
 
 impl<T> Clone for StreamCtl<T> {
     fn clone(&self) -> Self {
-        self.with(|streams| {
-            streams.0[self.id].ref_count += 1;
-            Self {
-                id: self.id,
-                inner: self.inner.clone(),
-            }
-        })
+        self.inner.storage.borrow_mut().streams[self.id].ref_count += 1;
+        Self {
+            id: self.id,
+            inner: self.inner.clone(),
+        }
     }
 }
 
 impl<T> Drop for StreamCtl<T> {
     fn drop(&mut self) {
-        if let Ok(storage) = &mut self.inner.storage.try_borrow_mut() {
-            log::debug!("Drop io ({}), {:?}", self.id, storage.0[self.id].fd);
+        if let Ok(mut storage) = self.inner.storage.try_borrow_mut() {
+            storage.streams[self.id].ref_count -= 1;
+            if storage.streams[self.id].ref_count == 0 {
+                let mut item = storage.streams.remove(self.id);
+                if let Some(io) = item.io.take() {
+                    log::debug!(
+                        "{}: Close io ({}), {:?}",
+                        item.context.tag(),
+                        self.id,
+                        item.fd
+                    );
+                    mem::forget(io);
 
-            storage.0[self.id].ref_count -= 1;
-            if storage.0[self.id].ref_count == 0 {
-                let item = storage.0.remove(self.id);
-                if item.io.is_some() {
-                    let id = storage.1.insert(Operation::Close { tx: None });
+                    let id = storage.ops.insert(Operation::Close { tx: None });
                     assert!(id < u32::MAX as usize);
                     self.inner
                         .api
@@ -255,7 +396,7 @@ impl<T> Drop for StreamCtl<T> {
                 }
             }
         } else {
-            self.inner.feed.borrow_mut().push_back(self.id);
+            self.inner.feed.borrow_mut().push(self.id);
         }
     }
 }
@@ -269,11 +410,10 @@ impl<T> PartialEq for StreamCtl<T> {
 
 impl<T: fmt::Debug> fmt::Debug for StreamCtl<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.with(|streams| {
-            f.debug_struct("StreamCtl")
-                .field("id", &self.id)
-                .field("io", &streams.0[self.id].io)
-                .finish()
-        })
+        let storage = self.inner.storage.borrow();
+        f.debug_struct("StreamCtl")
+            .field("id", &self.id)
+            .field("io", &storage.streams[self.id].io)
+            .finish()
     }
 }

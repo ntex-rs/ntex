@@ -1,11 +1,11 @@
-use std::{any, future::poll_fn, io, task::Poll};
+use std::{any, future::poll_fn, task::Poll};
 
 use ntex_io::{
     types, Handle, IoContext, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
-use ntex_neon::{net::TcpStream, net::UnixStream, spawn};
+use ntex_neon::{net::TcpStream, spawn};
 
-use super::driver::{Closable, StreamCtl, StreamOps};
+use super::driver::{StreamCtl, StreamOps};
 
 impl IoStream for super::TcpStream {
     fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
@@ -44,25 +44,13 @@ impl Handle for HandleWrapper {
     }
 }
 
-impl Closable for TcpStream {
-    async fn close(self) -> io::Result<()> {
-        TcpStream::close(self).await
-    }
-}
-
-impl Closable for UnixStream {
-    async fn close(self) -> io::Result<()> {
-        UnixStream::close(self).await
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Status {
     Shutdown,
     Terminate,
 }
 
-async fn run<T: Closable>(ctl: StreamCtl<T>, context: IoContext) {
+async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
     // Handle io read readiness
     let st = poll_fn(|cx| {
         let read = match context.poll_read_ready(cx) {
