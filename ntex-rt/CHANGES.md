@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.25] - 2025-03-11
+
+* Adds Send bound to arbiter exec (#514)
+
 ## [0.4.24] - 2025-01-03
 
 * Relax runtime requirements
