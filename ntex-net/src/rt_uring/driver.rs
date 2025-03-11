@@ -54,8 +54,8 @@ struct StreamOpsInner<T> {
 }
 
 struct StreamOpsStorage<T> {
-    streams: Slab<StreamItem<T>>,
     ops: Slab<Operation>,
+    streams: Slab<StreamItem<T>>,
 }
 
 impl<T: AsRawFd + 'static> StreamOps<T> {

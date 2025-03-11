@@ -259,7 +259,7 @@ mod neon {
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
         log::info!(
-            "Starting compio runtime, driver {:?}",
+            "Starting neon runtime, driver {:?}",
             ntex_neon::driver::DriverType::current()
         );
         let rt = Runtime::new().unwrap();

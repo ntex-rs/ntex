@@ -1,8 +1,8 @@
 # Changes
 
-## [2.5.0] - 2025-03-10
+## [2.5.0] - 2025-03-12
 
-* Add ntex-runtime support
+* Add neon runtime support
 
 * Drop glommio support
 
