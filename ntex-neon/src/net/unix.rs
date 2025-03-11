@@ -1,4 +1,4 @@
-use std::{future::Future, io};
+use std::io;
 
 use socket2::{SockAddr, Socket as Socket2};
 
@@ -25,12 +25,6 @@ impl UnixStream {
     /// Creates new TcpStream from a Socket.
     pub fn from_socket(inner: Socket) -> Self {
         Self { inner }
-    }
-
-    /// Close the socket. If the returned future is dropped before polling, the
-    /// socket won't be closed.
-    pub fn close(self) -> impl Future<Output = io::Result<()>> {
-        self.inner.close()
     }
 
     /// Returns the socket path of the remote peer of this connection.

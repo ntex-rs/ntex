@@ -160,14 +160,6 @@ impl<T: ?Sized> Key<T> {
         this.cancelled
     }
 
-    pub(crate) fn set_flags(&mut self, flags: u32) {
-        self.as_opaque_mut().flags = flags;
-    }
-
-    pub(crate) fn flags(&self) -> u32 {
-        self.as_opaque().flags
-    }
-
     /// Whether the op is completed.
     pub(crate) fn has_result(&self) -> bool {
         self.as_opaque().result.is_ready()

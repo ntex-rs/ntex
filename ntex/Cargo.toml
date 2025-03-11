@@ -51,6 +51,9 @@ compio = ["ntex-net/compio"]
 # neon runtime
 neon = ["ntex-net/neon"]
 
+# neon runtime
+neon-uring = ["ntex-net/neon-uring"]
+
 # websocket support
 ws = ["dep:sha-1"]
 
@@ -67,7 +70,7 @@ ntex-util = "2.8"
 ntex-bytes = "0.1.27"
 ntex-server = "2.7"
 ntex-h2 = "1.8.1"
-ntex-rt = "0.4.25"
+ntex-rt = "0.4.26"
 ntex-io = "2.11"
 ntex-net = "2.5"
 ntex-tls = "2.3"

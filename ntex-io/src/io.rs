@@ -437,7 +437,7 @@ impl<F> Io<F> {
         } else {
             st.dispatch_task.register(cx.waker());
 
-            let ready = flags.contains(Flags::BUF_R_READY);
+            let ready = flags.is_read_buf_ready();
             if flags.cannot_read() {
                 flags.cleanup_read_flags();
                 st.read_task.wake();
@@ -558,24 +558,28 @@ impl<F> Io<F> {
         let st = self.st();
         let flags = self.flags();
 
-        if flags.is_stopped() {
-            Poll::Ready(Err(st.error_or_disconnected()))
-        } else {
-            let len = st.buffer.write_destination_size();
-            if len > 0 {
-                if full {
-                    st.insert_flags(Flags::BUF_W_MUST_FLUSH);
-                    st.dispatch_task.register(cx.waker());
-                    return Poll::Pending;
-                } else if len >= st.pool.get().write_params_high() << 1 {
-                    st.insert_flags(Flags::BUF_W_BACKPRESSURE);
-                    st.dispatch_task.register(cx.waker());
-                    return Poll::Pending;
-                }
+        let len = st.buffer.write_destination_size();
+        if len > 0 {
+            if full {
+                st.insert_flags(Flags::BUF_W_MUST_FLUSH);
+                st.dispatch_task.register(cx.waker());
+                return if flags.is_stopped() {
+                    Poll::Ready(Err(st.error_or_disconnected()))
+                } else {
+                    Poll::Pending
+                };
+            } else if len >= st.pool.get().write_params_high() << 1 {
+                st.insert_flags(Flags::BUF_W_BACKPRESSURE);
+                st.dispatch_task.register(cx.waker());
+                return if flags.is_stopped() {
+                    Poll::Ready(Err(st.error_or_disconnected()))
+                } else {
+                    Poll::Pending
+                };
             }
-            st.remove_flags(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
-            Poll::Ready(Ok(()))
         }
+        st.remove_flags(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
+        Poll::Ready(Ok(()))
     }
 
     #[inline]

@@ -1,10 +1,9 @@
 #![allow(clippy::missing_safety_doc)]
-use std::{future::Future, io, mem, mem::MaybeUninit};
+use std::{io, mem::MaybeUninit};
 
 use socket2::{Domain, Protocol, SockAddr, Socket as Socket2, Type};
 
-use crate::driver::{op::CloseSocket, op::ShutdownSocket, AsRawFd};
-use crate::{impl_raw_fd, syscall};
+use crate::{driver::AsRawFd, impl_raw_fd, syscall};
 
 #[derive(Debug)]
 pub struct Socket {
@@ -118,22 +117,6 @@ impl Socket {
         let socket = Self::new(addr.domain(), ty, protocol).await?;
         socket.socket.bind(addr)?;
         Ok(socket)
-    }
-
-    pub fn close(self) -> impl Future<Output = io::Result<()>> {
-        let op = CloseSocket::from_raw_fd(self.as_raw_fd());
-        let fut = crate::submit(op);
-        mem::forget(self);
-        async move {
-            fut.await.0?;
-            Ok(())
-        }
-    }
-
-    pub async fn shutdown(&self) -> io::Result<()> {
-        let op = ShutdownSocket::new(self.as_raw_fd(), std::net::Shutdown::Write);
-        crate::submit(op).await.0?;
-        Ok(())
     }
 
     #[cfg(unix)]

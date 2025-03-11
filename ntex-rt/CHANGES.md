@@ -1,16 +1,22 @@
 # Changes
 
-## [0.4.26] - 2025-03-10
+## [0.4.27] - 2025-03-14
 
 * Add Arbiter::spawn_with()
 
-## [0.4.25] - 2025-03-10
-
-* Add "ntex-runtime" support
+* Add "neon" runtime support
 
 * Drop glommio support
 
 * Drop async-std support
+
+## [0.4.26] - 2025-03-12
+
+* Add Arbiter::spawn_with()
+
+## [0.4.25] - 2025-03-11
+
+* Adds Send bound to arbiter exec (#514)
 
 ## [0.4.24] - 2025-01-03
 

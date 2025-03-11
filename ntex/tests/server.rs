@@ -92,6 +92,7 @@ async fn test_run() {
                     })
                 })
                 .unwrap()
+                .set_tag("test", "SRV")
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())
