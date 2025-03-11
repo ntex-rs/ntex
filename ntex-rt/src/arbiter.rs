@@ -154,13 +154,17 @@ impl Arbiter {
             .try_send(ArbiterCommand::Execute(Box::pin(future)));
     }
 
+    #[rustfmt::skip]
     /// Send a function to the Arbiter's thread and spawns it's resulting future.
     /// This can be used to spawn non-send futures on the arbiter thread.
-    pub fn spawn_with<F, R, O>(&self, f: F) -> impl Future<Output = Result<O, oneshot::RecvError>> + Send + 'static
+    pub fn spawn_with<F, R, O>(
+        &self,
+        f: F
+    ) -> impl Future<Output = Result<O, oneshot::RecvError>> + Send + 'static
     where
         F: FnOnce() -> R + Send + 'static,
         R: Future<Output = O> + 'static,
-        O: Send + 'static
+        O: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
         let _ = self
