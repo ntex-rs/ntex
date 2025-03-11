@@ -21,9 +21,7 @@ pub use crate::rt_polling::{
     feature = "neon-uring",
     not(feature = "neon"),
     not(feature = "tokio"),
-    not(feature = "compio"),
-    target_os = "linux",
-    feature = "io-uring"
+    not(feature = "compio")
 ))]
 pub use crate::rt_uring::{
     from_tcp_stream, from_unix_stream, tcp_connect, tcp_connect_in, unix_connect,
