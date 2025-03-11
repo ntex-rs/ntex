@@ -22,8 +22,6 @@ mod rt_polling;
     feature = "neon-uring",
     not(feature = "neon"),
     not(feature = "tokio"),
-    not(feature = "compio"),
-    target_os = "linux",
-    feature = "io-uring"
+    not(feature = "compio")
 ))]
 mod rt_uring;
