@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.26] - 2025-03-10
+
+* Add Arbiter::spawn_with()
+
 ## [0.4.25] - 2025-03-10
 
 * Add "ntex-runtime" support
