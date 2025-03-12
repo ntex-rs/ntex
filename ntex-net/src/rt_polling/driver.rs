@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::VecDeque, fmt, io, ptr, rc::Rc, task, task::Poll};
+use std::{cell::Cell, collections::VecDeque, io, rc::Rc, task, task::Poll};
 
 use ntex_neon::driver::op::{CloseSocket, Handler, Interest};
 use ntex_neon::driver::{AsRawFd, DriverApi, RawFd};
@@ -370,23 +370,5 @@ impl<T> Drop for StreamCtl<T> {
             feed.push_back(self.id);
             self.inner.feed.set(Some(feed));
         }
-    }
-}
-
-impl<T> PartialEq for StreamCtl<T> {
-    #[inline]
-    fn eq(&self, other: &StreamCtl<T>) -> bool {
-        self.id == other.id && ptr::eq(&self.inner, &other.inner)
-    }
-}
-
-impl<T: fmt::Debug> fmt::Debug for StreamCtl<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.with(|streams| {
-            f.debug_struct("StreamCtl")
-                .field("id", &self.id)
-                .field("io", &streams[self.id].io)
-                .finish()
-        })
     }
 }

@@ -2,6 +2,8 @@
 
 ## [0.4.27] - 2025-03-14
 
+* Retrieves a list of all arbiters in the system
+
 * Add "neon" runtime support
 
 * Drop glommio support

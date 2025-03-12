@@ -1,21 +1,16 @@
 #![allow(clippy::let_underscore_future)]
 use std::any::{Any, TypeId};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{ready, Context, Poll};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
 use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, thread};
 
 use async_channel::{unbounded, Receiver, Sender};
-use futures_core::stream::Stream;
 
-use crate::system::System;
+use crate::system::{FnExec, System, SystemCommand};
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = const { RefCell::new(None) };
     static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
 );
-
-type ServerCommandRx = Pin<Box<dyn Stream<Item = SystemCommand>>>;
-type ArbiterCommandRx = Pin<Box<dyn Stream<Item = ArbiterCommand>>>;
 
 pub(super) static COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -31,13 +26,16 @@ pub(super) enum ArbiterCommand {
 /// When an Arbiter is created, it spawns a new OS thread, and
 /// hosts an event loop. Some Arbiter functions execute on the current thread.
 pub struct Arbiter {
+    id: usize,
+    pub(crate) sys_id: usize,
+    name: Arc<String>,
     sender: Sender<ArbiterCommand>,
     thread_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl fmt::Debug for Arbiter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Arbiter")
+        write!(f, "Arbiter({:?})", self.name.as_ref())
     }
 }
 
@@ -49,26 +47,20 @@ impl Default for Arbiter {
 
 impl Clone for Arbiter {
     fn clone(&self) -> Self {
-        Self::with_sender(self.sender.clone())
+        Self::with_sender(self.sys_id, self.id, self.name.clone(), self.sender.clone())
     }
 }
 
 impl Arbiter {
     #[allow(clippy::borrowed_box)]
-    pub(super) fn new_system() -> (Self, ArbiterController) {
+    pub(super) fn new_system(name: String) -> (Self, ArbiterController) {
         let (tx, rx) = unbounded();
 
-        let arb = Arbiter::with_sender(tx);
+        let arb = Arbiter::with_sender(0, 0, Arc::new(name), tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
-        (
-            arb,
-            ArbiterController {
-                stop: None,
-                rx: Box::pin(rx),
-            },
-        )
+        (arb, ArbiterController { rx, stop: None })
     }
 
     /// Returns the current thread's arbiter's address. If no Arbiter is present, then this
@@ -85,27 +77,37 @@ impl Arbiter {
         let _ = self.sender.try_send(ArbiterCommand::Stop);
     }
 
-    /// Spawn new thread and run event loop in spawned thread.
+    /// Spawn new thread and run runtime in spawned thread.
     /// Returns address of newly created arbiter.
     pub fn new() -> Arbiter {
+        let name = format!("ntex-rt:worker:{}", COUNT.load(Ordering::Relaxed) + 1);
+        Arbiter::with_name(name)
+    }
+
+    /// Spawn new thread and run runtime in spawned thread.
+    /// Returns address of newly created arbiter.
+    pub fn with_name(name: String) -> Arbiter {
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
-        let name = format!("ntex-rt:worker:{}", id);
         let sys = System::current();
+        let name2 = Arc::new(name.clone());
         let config = sys.config();
         let (arb_tx, arb_rx) = unbounded();
         let arb_tx2 = arb_tx.clone();
 
         let builder = if sys.config().stack_size > 0 {
             thread::Builder::new()
-                .name(name.clone())
+                .name(name)
                 .stack_size(sys.config().stack_size)
         } else {
-            thread::Builder::new().name(name.clone())
+            thread::Builder::new().name(name)
         };
+
+        let name = name2.clone();
+        let sys_id = sys.id();
 
         let handle = builder
             .spawn(move || {
-                let arb = Arbiter::with_sender(arb_tx);
+                let arb = Arbiter::with_sender(sys_id, id, name2, arb_tx);
 
                 let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
@@ -114,10 +116,13 @@ impl Arbiter {
 
                 config.block_on(async move {
                     // start arbiter controller
-                    let _ = crate::spawn(ArbiterController {
-                        stop: Some(stop),
-                        rx: Box::pin(arb_rx),
-                    });
+                    let _ = crate::spawn(
+                        ArbiterController {
+                            stop: Some(stop),
+                            rx: arb_rx,
+                        }
+                        .run(),
+                    );
                     ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
                     // register arbiter
@@ -139,9 +144,32 @@ impl Arbiter {
             });
 
         Arbiter {
+            id,
+            name,
+            sys_id,
             sender: arb_tx2,
             thread_handle: Some(handle),
         }
+    }
+
+    fn with_sender(sys_id: usize, id: usize, name: Arc<String>, sender: Sender<ArbiterCommand>) -> Self {
+        Self {
+            id,
+            sys_id,
+            name,
+            sender,
+            thread_handle: None,
+        }
+    }
+
+    /// Id of the arbiter
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// Name of the arbiter
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
     }
 
     /// Send a future to the Arbiter's thread, and spawn it.
@@ -255,13 +283,6 @@ impl Arbiter {
         })
     }
 
-    fn with_sender(sender: Sender<ArbiterCommand>) -> Self {
-        Self {
-            sender,
-            thread_handle: None,
-        }
-    }
-
     /// Wait for the event loop to stop by joining the underlying thread (if have Some).
     pub fn join(&mut self) -> thread::Result<()> {
         if let Some(thread_handle) = self.thread_handle.take() {
@@ -272,9 +293,17 @@ impl Arbiter {
     }
 }
 
+impl Eq for Arbiter {}
+
+impl PartialEq for Arbiter {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.sys_id == other.sys_id
+    }
+}
+
 pub(crate) struct ArbiterController {
     stop: Option<oneshot::Sender<i32>>,
-    rx: ArbiterCommandRx,
+    rx: Receiver<ArbiterCommand>,
 }
 
 impl Drop for ArbiterController {
@@ -290,115 +319,25 @@ impl Drop for ArbiterController {
     }
 }
 
-impl Future for ArbiterController {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+impl ArbiterController {
+    pub(super) async fn run(mut self) {
         loop {
-            match Pin::new(&mut self.rx).poll_next(cx) {
-                Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Ready(Some(item)) => match item {
-                    ArbiterCommand::Stop => {
-                        if let Some(stop) = self.stop.take() {
-                            let _ = stop.send(0);
-                        };
-                        return Poll::Ready(());
-                    }
-                    ArbiterCommand::Execute(fut) => {
-                        let _ = crate::spawn(fut);
-                    }
-                    ArbiterCommand::ExecuteFn(f) => {
-                        f.call_box();
-                    }
-                },
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(super) enum SystemCommand {
-    Exit(i32),
-    RegisterArbiter(usize, Arbiter),
-    UnregisterArbiter(usize),
-}
-
-pub(super) struct SystemArbiter {
-    stop: Option<oneshot::Sender<i32>>,
-    commands: ServerCommandRx,
-    arbiters: HashMap<usize, Arbiter>,
-}
-
-impl SystemArbiter {
-    pub(super) fn new(
-        stop: oneshot::Sender<i32>,
-        commands: Receiver<SystemCommand>,
-    ) -> Self {
-        SystemArbiter {
-            commands: Box::pin(commands),
-            stop: Some(stop),
-            arbiters: HashMap::new(),
-        }
-    }
-}
-
-impl fmt::Debug for SystemArbiter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SystemArbiter")
-            .field("arbiters", &self.arbiters)
-            .finish()
-    }
-}
-
-impl Future for SystemArbiter {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        loop {
-            let cmd = ready!(Pin::new(&mut self.commands).poll_next(cx));
-            log::debug!("Received system command: {:?}", cmd);
-            match cmd {
-                None => {
-                    log::debug!("System stopped");
-                    return Poll::Ready(());
+            match self.rx.recv().await {
+                Ok(ArbiterCommand::Stop) => {
+                    if let Some(stop) = self.stop.take() {
+                        let _ = stop.send(0);
+                    };
+                    break;
                 }
-                Some(cmd) => match cmd {
-                    SystemCommand::Exit(code) => {
-                        log::debug!("Stopping system with {} code", code);
-
-                        // stop arbiters
-                        for arb in self.arbiters.values() {
-                            arb.stop();
-                        }
-                        // stop event loop
-                        if let Some(stop) = self.stop.take() {
-                            let _ = stop.send(code);
-                        }
-                    }
-                    SystemCommand::RegisterArbiter(name, hnd) => {
-                        self.arbiters.insert(name, hnd);
-                    }
-                    SystemCommand::UnregisterArbiter(name) => {
-                        self.arbiters.remove(&name);
-                    }
-                },
+                Ok(ArbiterCommand::Execute(fut)) => {
+                    let _ = crate::spawn(fut);
+                }
+                Ok(ArbiterCommand::ExecuteFn(f)) => {
+                    f.call_box();
+                }
+                Err(_) => break,
             }
         }
-    }
-}
-
-pub(super) trait FnExec: Send + 'static {
-    fn call_box(self: Box<Self>);
-}
-
-impl<F> FnExec for F
-where
-    F: FnOnce() + Send + 'static,
-{
-    #[allow(clippy::boxed_local)]
-    fn call_box(self: Box<Self>) {
-        (*self)()
     }
 }
 

@@ -1,9 +1,9 @@
-use std::{future::Future, io, pin::Pin, sync::Arc};
+use std::{future::Future, io, marker::PhantomData, pin::Pin, rc::Rc, sync::Arc};
 
 use async_channel::unbounded;
 
-use crate::arbiter::{Arbiter, ArbiterController, SystemArbiter};
-use crate::{system::SystemConfig, System};
+use crate::arbiter::{Arbiter, ArbiterController};
+use crate::system::{System, SystemConfig, SystemSupport};
 
 /// Builder struct for a ntex runtime.
 ///
@@ -17,6 +17,8 @@ pub struct Builder {
     stop_on_panic: bool,
     /// New thread stack size
     stack_size: usize,
+    /// Arbiters ping interval
+    ping_interval: usize,
     /// Block on fn
     block_on: Option<Arc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>) + Sync + Send>>,
 }
@@ -28,6 +30,7 @@ impl Builder {
             stop_on_panic: false,
             stack_size: 0,
             block_on: None,
+            ping_interval: 1000,
         }
     }
 
@@ -49,6 +52,15 @@ impl Builder {
     /// Sets the size of the stack (in bytes) for the new thread.
     pub fn stack_size(mut self, size: usize) -> Self {
         self.stack_size = size;
+        self
+    }
+
+    /// Sets ping interval for spawned arbiters.
+    ///
+    /// Interval is in milliseconds. By default 1000 milliseconds is set.
+    /// To disable pings set value to zero.
+    pub fn ping_interval(mut self, interval: usize) -> Self {
+        self.ping_interval = interval;
         self
     }
 
@@ -74,18 +86,19 @@ impl Builder {
             stop_on_panic: self.stop_on_panic,
         };
 
-        let (arb, arb_controller) = Arbiter::new_system();
+        let (arb, controller) = Arbiter::new_system(self.name.clone());
         let system = System::construct(sys_sender, arb, config);
 
         // system arbiter
-        let arb = SystemArbiter::new(stop_tx, sys_receiver);
+        let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);
 
         // init system arbiter and run configuration method
         SystemRunner {
             stop,
-            arb,
-            arb_controller,
+            support,
+            controller,
             system,
+            _t: PhantomData,
         }
     }
 }
@@ -94,9 +107,10 @@ impl Builder {
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
     stop: oneshot::Receiver<i32>,
-    arb: SystemArbiter,
-    arb_controller: ArbiterController,
+    support: SystemSupport,
+    controller: ArbiterController,
     system: System,
+    _t: PhantomData<Rc<()>>,
 }
 
 impl SystemRunner {
@@ -113,15 +127,14 @@ impl SystemRunner {
 
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
-    #[inline]
     pub fn run<F>(self, f: F) -> io::Result<()>
     where
         F: FnOnce() -> io::Result<()> + 'static,
     {
         let SystemRunner {
+            controller,
             stop,
-            arb,
-            arb_controller,
+            support,
             system,
             ..
         } = self;
@@ -130,8 +143,8 @@ impl SystemRunner {
         system.config().block_on(async move {
             f()?;
 
-            let _ = crate::spawn(arb);
-            let _ = crate::spawn(arb_controller);
+            let _ = crate::spawn(support.run());
+            let _ = crate::spawn(controller.run());
             match stop.await {
                 Ok(code) => {
                     if code != 0 {
@@ -149,22 +162,21 @@ impl SystemRunner {
     }
 
     /// Execute a future and wait for result.
-    #[inline]
     pub fn block_on<F, R>(self, fut: F) -> R
     where
         F: Future<Output = R> + 'static,
         R: 'static,
     {
         let SystemRunner {
-            arb,
-            arb_controller,
+            controller,
+            support,
             system,
             ..
         } = self;
 
         system.config().block_on(async move {
-            let _ = crate::spawn(arb);
-            let _ = crate::spawn(arb_controller);
+            let _ = crate::spawn(support.run());
+            let _ = crate::spawn(controller.run());
             fut.await
         })
     }
@@ -177,16 +189,16 @@ impl SystemRunner {
         R: 'static,
     {
         let SystemRunner {
-            arb,
-            arb_controller,
+            controller,
+            support,
             ..
         } = self;
 
         // run loop
         tok_io::task::LocalSet::new()
             .run_until(async move {
-                let _ = crate::spawn(arb);
-                let _ = crate::spawn(arb_controller);
+                let _ = crate::spawn(support);
+                let _ = crate::spawn(controller);
                 fut.await
             })
             .await
