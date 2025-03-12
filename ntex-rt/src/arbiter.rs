@@ -5,7 +5,7 @@ use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, th
 
 use async_channel::{unbounded, Receiver, Sender};
 
-use crate::system::{FnExec, System, SystemCommand};
+use crate::system::{FnExec, Id, System, SystemCommand};
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = const { RefCell::new(None) };
@@ -107,7 +107,7 @@ impl Arbiter {
 
         let handle = builder
             .spawn(move || {
-                let arb = Arbiter::with_sender(sys_id, id, name2, arb_tx);
+                let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
 
                 let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
@@ -128,7 +128,7 @@ impl Arbiter {
                     // register arbiter
                     let _ = System::current()
                         .sys()
-                        .try_send(SystemCommand::RegisterArbiter(id, arb));
+                        .try_send(SystemCommand::RegisterArbiter(Id(id), arb));
 
                     // run loop
                     let _ = stop_rx.await;
@@ -137,7 +137,7 @@ impl Arbiter {
                 // unregister arbiter
                 let _ = System::current()
                     .sys()
-                    .try_send(SystemCommand::UnregisterArbiter(id));
+                    .try_send(SystemCommand::UnregisterArbiter(Id(id)));
             })
             .unwrap_or_else(|err| {
                 panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
@@ -146,7 +146,7 @@ impl Arbiter {
         Arbiter {
             id,
             name,
-            sys_id,
+            sys_id: sys_id.0,
             sender: arb_tx2,
             thread_handle: Some(handle),
         }
@@ -168,8 +168,8 @@ impl Arbiter {
     }
 
     /// Id of the arbiter
-    pub fn id(&self) -> usize {
-        self.id
+    pub fn id(&self) -> Id {
+        Id(self.id)
     }
 
     /// Name of the arbiter
@@ -203,11 +203,9 @@ impl Arbiter {
         let _ = self
             .sender
             .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
-                let fut = f();
-                let fut = Box::pin(async {
-                    let _ = tx.send(fut.await);
+                crate::spawn(async move {
+                    let _ = tx.send(f().await);
                 });
-                crate::spawn(fut);
             })));
         rx
     }

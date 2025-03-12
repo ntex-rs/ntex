@@ -1,7 +1,10 @@
+use std::collections::{HashMap, VecDeque};
 use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
-use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, rc::Rc};
+use std::time::{Duration, Instant};
+use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
 
 use async_channel::{Receiver, Sender};
+use futures_timer::Delay;
 
 use super::arbiter::Arbiter;
 use super::builder::{Builder, SystemRunner};
@@ -10,13 +13,18 @@ static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 thread_local!(
     static ARBITERS: RefCell<Arbiters> = RefCell::new(Arbiters::default());
+    static PINGS: RefCell<HashMap<Id, VecDeque<PingRecord>>> =
+        RefCell::new(HashMap::default());
 );
 
 #[derive(Default)]
 struct Arbiters {
-    all: HashMap<usize, Arbiter>,
+    all: HashMap<Id, Arbiter>,
     list: Vec<Arbiter>,
 }
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Id(pub(crate) usize);
 
 /// System is a runtime manager.
 #[derive(Clone, Debug)]
@@ -92,8 +100,8 @@ impl System {
     }
 
     /// System id
-    pub fn id(&self) -> usize {
-        self.id
+    pub fn id(&self) -> Id {
+        Id(self.id)
     }
 
     /// Stop the system
@@ -125,6 +133,22 @@ impl System {
         F: FnOnce(&[Arbiter]) -> R,
     {
         ARBITERS.with(|arbs| f(arbs.borrow().list.as_ref()))
+    }
+
+    /// Retrieves a list of last pings records for specified arbiter.
+    ///
+    /// This method should be called from the context where the system has been initialized
+    pub fn list_arbiter_pings<F, R>(id: Id, f: F) -> R
+    where
+        F: FnOnce(Option<&VecDeque<PingRecord>>) -> R,
+    {
+        PINGS.with(|pings| {
+            if let Some(recs) = pings.borrow().get(&id) {
+                f(Some(recs))
+            } else {
+                f(None)
+            }
+        })
     }
 
     pub(super) fn sys(&self) -> &Sender<SystemCommand> {
@@ -177,26 +201,26 @@ impl fmt::Debug for SystemConfig {
 #[derive(Debug)]
 pub(super) enum SystemCommand {
     Exit(i32),
-    RegisterArbiter(usize, Arbiter),
-    UnregisterArbiter(usize),
+    RegisterArbiter(Id, Arbiter),
+    UnregisterArbiter(Id),
 }
 
 pub(super) struct SystemSupport {
     stop: Option<oneshot::Sender<i32>>,
     commands: Receiver<SystemCommand>,
-    _ping_interval: usize,
+    ping_interval: Duration,
 }
 
 impl SystemSupport {
     pub(super) fn new(
         stop: oneshot::Sender<i32>,
         commands: Receiver<SystemCommand>,
-        _ping_interval: usize,
+        ping_interval: usize,
     ) -> Self {
         Self {
             commands,
-            _ping_interval,
             stop: Some(stop),
+            ping_interval: Duration::from_millis(ping_interval as u64),
         }
     }
 
@@ -226,12 +250,13 @@ impl SystemSupport {
                         let _ = stop.send(code);
                     }
                 }
-                Ok(SystemCommand::RegisterArbiter(name, hnd)) => {
+                Ok(SystemCommand::RegisterArbiter(id, hnd)) => {
+                    crate::spawn(ping_arbiter(hnd.clone(), self.ping_interval));
                     ARBITERS.with(move |arbs| {
                         let mut arbiters = arbs.borrow_mut();
-                        arbiters.all.insert(name, hnd.clone());
+                        arbiters.all.insert(id, hnd.clone());
                         arbiters.list.push(hnd);
-                    })
+                    });
                 }
                 Ok(SystemCommand::UnregisterArbiter(id)) => {
                     ARBITERS.with(move |arbs| {
@@ -253,6 +278,78 @@ impl SystemSupport {
             }
         }
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct PingRecord {
+    pub start: Instant,
+    pub ttl: Option<Duration>,
+}
+
+async fn ping_arbiter(arb: Arbiter, interval: Duration) {
+    loop {
+        Delay::new(interval).await;
+
+        // check if arbiter is still active
+        let is_alive = ARBITERS.with(|arbs| arbs.borrow().all.contains_key(&arb.id()));
+
+        if !is_alive {
+            PINGS.with(|pings| pings.borrow_mut().remove(&arb.id()));
+            break;
+        }
+
+        // calc ttl
+        let start = Instant::now();
+        PINGS.with(|pings| {
+            let mut p = pings.borrow_mut();
+            let recs = p.entry(arb.id()).or_default();
+            recs.push_front(PingRecord { start, ttl: None });
+            recs.truncate(10);
+        });
+
+        let result = arb
+            .spawn_with(|| async {
+                yield_to().await;
+            })
+            .await;
+
+        if result.is_err() {
+            break;
+        }
+
+        PINGS.with(|pings| {
+            pings
+                .borrow_mut()
+                .get_mut(&arb.id())
+                .unwrap()
+                .front_mut()
+                .unwrap()
+                .ttl = Some(Instant::now() - start);
+        });
+    }
+}
+
+async fn yield_to() {
+    use std::task::{Context, Poll};
+
+    struct Yield {
+        completed: bool,
+    }
+
+    impl Future for Yield {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.completed {
+                return Poll::Ready(());
+            }
+            self.completed = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+
+    Yield { completed: false }.await;
 }
 
 pub(super) trait FnExec: Send + 'static {

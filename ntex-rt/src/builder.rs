@@ -3,7 +3,7 @@ use std::{future::Future, io, marker::PhantomData, pin::Pin, rc::Rc, sync::Arc};
 use async_channel::unbounded;
 
 use crate::arbiter::{Arbiter, ArbiterController};
-use crate::system::{System, SystemConfig, SystemSupport};
+use crate::system::{System, SystemCommand, SystemConfig, SystemSupport};
 
 /// Builder struct for a ntex runtime.
 ///
@@ -87,7 +87,8 @@ impl Builder {
         };
 
         let (arb, controller) = Arbiter::new_system(self.name.clone());
-        let system = System::construct(sys_sender, arb, config);
+        let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
+        let system = System::construct(sys_sender, arb.clone(), config);
 
         // system arbiter
         let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);
@@ -254,6 +255,7 @@ mod tests {
         thread::spawn(move || {
             let runner = crate::System::build()
                 .stop_on_panic(true)
+                .ping_interval(25)
                 .block_on(|fut| {
                     let rt = tok_io::runtime::Builder::new_current_thread()
                         .enable_all()
@@ -282,6 +284,18 @@ mod tests {
             .unwrap();
         assert_eq!(id, id2);
 
+        let (tx, rx) = mpsc::channel();
+        sys.arbiter().spawn(async move {
+            futures_timer::Delay::new(std::time::Duration::from_millis(100)).await;
+
+            let recs = System::list_arbiter_pings(Arbiter::current().id(), |recs| {
+                recs.unwrap().clone()
+            });
+            let _ = tx.send(recs);
+        });
+        let recs = rx.recv().unwrap();
+
+        assert!(!recs.is_empty());
         sys.stop();
     }
 }
