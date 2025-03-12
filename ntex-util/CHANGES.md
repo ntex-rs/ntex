@@ -1,5 +1,11 @@
 # Changes
 
+## [2.10.0] - 2025-03-12
+
+* Add "Inplace" channel
+
+* Expose "yield_to" helper
+
 ## [2.9.0] - 2025-01-15
 
 * Add EitherService/EitherServiceFactory

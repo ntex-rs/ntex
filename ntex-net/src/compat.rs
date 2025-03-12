@@ -6,51 +6,18 @@ pub use ntex_tokio::{from_tcp_stream, tcp_connect, tcp_connect_in};
 #[cfg(all(unix, feature = "tokio"))]
 pub use ntex_tokio::{from_unix_stream, unix_connect, unix_connect_in};
 
-#[cfg(all(
-    feature = "neon",
-    not(feature = "neon-uring"),
-    not(feature = "tokio"),
-    not(feature = "compio")
-))]
-pub use crate::rt_polling::{
-    from_tcp_stream, from_unix_stream, tcp_connect, tcp_connect_in, unix_connect,
-    unix_connect_in,
-};
-
-#[cfg(all(
-    feature = "neon-uring",
-    not(feature = "neon"),
-    not(feature = "tokio"),
-    not(feature = "compio")
-))]
-pub use crate::rt_uring::{
-    from_tcp_stream, from_unix_stream, tcp_connect, tcp_connect_in, unix_connect,
-    unix_connect_in,
-};
-
-#[cfg(all(
-    feature = "compio",
-    not(feature = "tokio"),
-    not(feature = "neon"),
-    not(feature = "neon-uring")
-))]
+#[cfg(all(feature = "compio", not(feature = "tokio"), not(feature = "neon")))]
 pub use ntex_compio::{from_tcp_stream, tcp_connect, tcp_connect_in};
 
 #[cfg(all(
     unix,
     feature = "compio",
     not(feature = "tokio"),
-    not(feature = "neon"),
-    not(feature = "neon-uring")
+    not(feature = "neon")
 ))]
 pub use ntex_compio::{from_unix_stream, unix_connect, unix_connect_in};
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "neon"),
-    not(feature = "neon-uring")
-))]
+#[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
 mod no_rt {
     use ntex_io::Io;
 
@@ -115,10 +82,5 @@ mod no_rt {
     }
 }
 
-#[cfg(all(
-    not(feature = "tokio"),
-    not(feature = "compio"),
-    not(feature = "neon"),
-    not(feature = "neon-uring")
-))]
+#[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
 pub use no_rt::*;

@@ -1,8 +1,7 @@
 use std::{cell::RefCell, fmt, io, mem, num::NonZeroU32, rc::Rc, task::Poll};
 
 use io_uring::{opcode, squeue::Entry, types::Fd};
-use ntex_neon::driver::op::Handler;
-use ntex_neon::driver::{AsRawFd, DriverApi};
+use ntex_neon::driver::{op::Handler, AsRawFd, DriverApi};
 use ntex_neon::Runtime;
 use ntex_util::channel::oneshot;
 use slab::Slab;

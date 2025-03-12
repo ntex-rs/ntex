@@ -21,6 +21,8 @@ async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
 
 #[ntex::test]
 async fn web_ws() {
+    let _ = env_logger::try_init();
+
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
