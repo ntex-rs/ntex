@@ -121,11 +121,10 @@ impl System {
     ///
     /// This method should be called from the context where the system has been initialized
     pub fn list_arbiters<F, R>(f: F) -> R
-    where F: FnOnce(&[Arbiter]) -> R,
+    where
+        F: FnOnce(&[Arbiter]) -> R,
     {
-        ARBITERS.with(|arbs| {
-            f(arbs.borrow().list.as_ref())
-        })
+        ARBITERS.with(|arbs| f(arbs.borrow().list.as_ref()))
     }
 
     pub(super) fn sys(&self) -> &Sender<SystemCommand> {
@@ -185,18 +184,18 @@ pub(super) enum SystemCommand {
 pub(super) struct SystemSupport {
     stop: Option<oneshot::Sender<i32>>,
     commands: Receiver<SystemCommand>,
-    ping_interval: usize,
+    _ping_interval: usize,
 }
 
 impl SystemSupport {
     pub(super) fn new(
         stop: oneshot::Sender<i32>,
         commands: Receiver<SystemCommand>,
-        ping_interval: usize,
+        _ping_interval: usize,
     ) -> Self {
         Self {
             commands,
-            ping_interval,
+            _ping_interval,
             stop: Some(stop),
         }
     }
@@ -241,7 +240,7 @@ impl SystemSupport {
                             for (idx, arb) in arbiters.list.iter().enumerate() {
                                 if &hnd == arb {
                                     arbiters.list.remove(idx);
-                                    break
+                                    break;
                                 }
                             }
                         }

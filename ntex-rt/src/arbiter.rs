@@ -152,7 +152,12 @@ impl Arbiter {
         }
     }
 
-    fn with_sender(sys_id: usize, id: usize, name: Arc<String>, sender: Sender<ArbiterCommand>) -> Self {
+    fn with_sender(
+        sys_id: usize,
+        id: usize,
+        name: Arc<String>,
+        sender: Sender<ArbiterCommand>,
+    ) -> Self {
         Self {
             id,
             sys_id,
