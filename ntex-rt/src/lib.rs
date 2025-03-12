@@ -8,7 +8,7 @@ mod system;
 
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};
-pub use self::system::System;
+pub use self::system::{Id, PingRecord, System};
 
 thread_local! {
     static CB: RefCell<(TBefore, TEnter, TExit, TAfter)> = RefCell::new((
