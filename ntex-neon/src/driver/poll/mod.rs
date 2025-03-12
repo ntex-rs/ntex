@@ -362,17 +362,14 @@ impl Driver {
                         let renew_event = item.event(fd as usize);
 
                         if !renew_event.readable && !renew_event.writable {
-                            // crate::log(format!("DELETE - {:?}", fd.as_raw_fd()));
                             registry.remove(&fd);
                             if !new {
                                 self.poll.delete(BorrowedFd::borrow_raw(fd))?;
                             }
                         } else if new {
                             item.flags.remove(Flags::NEW);
-                            // crate::log(format!("ADD - {:?}", fd.as_raw_fd()));
                             unsafe { self.poll.add(fd, renew_event)? };
                         } else {
-                            // crate::log(format!("MODIFY - {:?} {:?}", fd.as_raw_fd(), renew_event));
                             self.poll.modify(BorrowedFd::borrow_raw(fd), renew_event)?;
                         }
                     }
