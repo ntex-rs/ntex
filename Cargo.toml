@@ -8,7 +8,6 @@ members = [
   "ntex-http",
   "ntex-router",
   "ntex-rt",
-  "ntex-neon",
   "ntex-net",
   "ntex-server",
   "ntex-service",
@@ -33,7 +32,6 @@ ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
 ntex-io = { path = "ntex-io" }
-ntex-neon = { path = "ntex-neon" }
 ntex-net = { path = "ntex-net" }
 ntex-http = { path = "ntex-http" }
 ntex-router = { path = "ntex-router" }
@@ -46,6 +44,8 @@ ntex-util = { path = "ntex-util" }
 
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
+
+ntex-neon = { git = "https://github.com/ntex-rs/neon.git" }
 
 [workspace.dependencies]
 async-task = "4.5.0"
