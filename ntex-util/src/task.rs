@@ -91,7 +91,6 @@ impl fmt::Debug for LocalWaker {
     }
 }
 
-#[doc(hidden)]
 /// Yields execution back to the current runtime.
 pub async fn yield_to() {
     use std::{future::Future, pin::Pin, task::Context, task::Poll};
