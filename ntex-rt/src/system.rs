@@ -127,7 +127,8 @@ impl System {
 
     /// Retrieves a list of all arbiters in the system.
     ///
-    /// This method should be called from the context where the system has been initialized
+    /// This method should be called from the thread where the system has been initialized,
+    /// typically the "main" thread.
     pub fn list_arbiters<F, R>(f: F) -> R
     where
         F: FnOnce(&[Arbiter]) -> R,
@@ -137,7 +138,8 @@ impl System {
 
     /// Retrieves a list of last pings records for specified arbiter.
     ///
-    /// This method should be called from the context where the system has been initialized
+    /// This method should be called from the thread where the system has been initialized,
+    /// typically the "main" thread.
     pub fn list_arbiter_pings<F, R>(id: Id, f: F) -> R
     where
         F: FnOnce(Option<&VecDeque<PingRecord>>) -> R,
@@ -282,8 +284,10 @@ impl SystemSupport {
 
 #[derive(Copy, Clone, Debug)]
 pub struct PingRecord {
+    /// Ping start time
     pub start: Instant,
-    pub ttl: Option<Duration>,
+    /// Round-trip time, if value is not set then ping is in process
+    pub rtt: Option<Duration>,
 }
 
 async fn ping_arbiter(arb: Arbiter, interval: Duration) {
@@ -303,7 +307,7 @@ async fn ping_arbiter(arb: Arbiter, interval: Duration) {
         PINGS.with(|pings| {
             let mut p = pings.borrow_mut();
             let recs = p.entry(arb.id()).or_default();
-            recs.push_front(PingRecord { start, ttl: None });
+            recs.push_front(PingRecord { start, rtt: None });
             recs.truncate(10);
         });
 
@@ -324,7 +328,7 @@ async fn ping_arbiter(arb: Arbiter, interval: Duration) {
                 .unwrap()
                 .front_mut()
                 .unwrap()
-                .ttl = Some(Instant::now() - start);
+                .rtt = Some(Instant::now() - start);
         });
     }
 }

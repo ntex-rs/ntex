@@ -57,7 +57,7 @@ impl Builder {
 
     /// Sets ping interval for spawned arbiters.
     ///
-    /// Interval is in milliseconds. By default 1000 milliseconds is set.
+    /// Interval is in milliseconds. By default 5000 milliseconds is set.
     /// To disable pings set value to zero.
     pub fn ping_interval(mut self, interval: usize) -> Self {
         self.ping_interval = interval;
