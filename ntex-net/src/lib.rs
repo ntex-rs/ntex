@@ -8,20 +8,22 @@ pub mod connect;
 pub use ntex_io::Io;
 pub use ntex_rt::{spawn, spawn_blocking};
 
-pub use self::compat::*;
-
-#[cfg(all(
-    feature = "neon",
-    not(feature = "neon-uring"),
-    not(feature = "tokio"),
-    not(feature = "compio")
-))]
-mod rt_polling;
-
-#[cfg(all(
-    feature = "neon-uring",
-    not(feature = "neon"),
-    not(feature = "tokio"),
-    not(feature = "compio")
-))]
-mod rt_uring;
+cfg_if::cfg_if! {
+    if #[cfg(all(feature = "neon", target_os = "linux", feature = "io-uring"))] {
+        #[path = "rt_uring/mod.rs"]
+        mod rt_impl;
+        pub use self::rt_impl::{
+            from_tcp_stream, from_unix_stream, tcp_connect, tcp_connect_in, unix_connect,
+            unix_connect_in,
+        };
+    } else if #[cfg(all(unix, feature = "neon"))] {
+        #[path = "rt_polling/mod.rs"]
+        mod rt_impl;
+        pub use self::rt_impl::{
+            from_tcp_stream, from_unix_stream, tcp_connect, tcp_connect_in, unix_connect,
+            unix_connect_in,
+        };
+    } else {
+        pub use self::compat::*;
+    }
+}

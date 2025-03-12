@@ -77,5 +77,6 @@ windows-sys = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
 cfg_aliases = { workspace = true }
 
 [features]
-default = ["polling"]
+default = []
 polling = ["dep:polling"]
+io-uring = ["dep:io-uring"]
