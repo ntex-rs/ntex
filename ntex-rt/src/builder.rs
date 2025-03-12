@@ -197,8 +197,8 @@ impl SystemRunner {
         // run loop
         tok_io::task::LocalSet::new()
             .run_until(async move {
-                let _ = crate::spawn(support);
-                let _ = crate::spawn(controller);
+                let _ = crate::spawn(support.run());
+                let _ = crate::spawn(controller.run());
                 fut.await
             })
             .await
