@@ -58,6 +58,8 @@ fn ssl_acceptor() -> SslAcceptor {
 
 #[ntex::test]
 async fn test_h2() -> io::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let srv = test_server(move || {
         HttpService::build()
             .h2(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish()))
@@ -72,6 +74,8 @@ async fn test_h2() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h1() -> io::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let srv = test_server(move || {
         let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
         builder
@@ -94,6 +98,8 @@ async fn test_h1() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h2_1() -> io::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let srv = test_server(move || {
         HttpService::build()
             .finish(|req: Request| {
@@ -112,6 +118,8 @@ async fn test_h2_1() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h2_body() -> io::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let data = "HELLOWORLD".to_owned().repeat(64 * 1024);
     let mut srv = test_server(move || {
         HttpService::build()
@@ -139,6 +147,8 @@ async fn test_h2_body() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_h2_content_length() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let srv = test_server(move || {
         HttpService::build()
             .h2(|req: Request| async move {
@@ -182,6 +192,8 @@ async fn test_h2_content_length() {
 
 #[ntex::test]
 async fn test_h2_headers() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let data = STR.repeat(10);
     let data2 = data.clone();
 
@@ -245,6 +257,8 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 
 #[ntex::test]
 async fn test_h2_body2() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| async { Ok::<_, io::Error>(Response::Ok().body(STR)) })
@@ -262,6 +276,8 @@ async fn test_h2_body2() {
 
 #[ntex::test]
 async fn test_h2_head_empty() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let mut srv = test_server(move || {
         HttpService::build()
             .finish(|_| async { Ok::<_, io::Error>(Response::Ok().body(STR)) })
@@ -285,6 +301,8 @@ async fn test_h2_head_empty() {
 
 #[ntex::test]
 async fn test_h2_head_binary() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| async {
@@ -312,6 +330,8 @@ async fn test_h2_head_binary() {
 /// Server must send content-length, but no payload
 #[ntex::test]
 async fn test_h2_head_binary2() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let srv = test_server(move || {
         HttpService::build()
             .h2(|_| async { Ok::<_, io::Error>(Response::Ok().body(STR)) })
@@ -330,6 +350,8 @@ async fn test_h2_head_binary2() {
 
 #[ntex::test]
 async fn test_h2_body_length() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| async {
@@ -352,6 +374,8 @@ async fn test_h2_body_length() {
 
 #[ntex::test]
 async fn test_h2_body_chunked_explicit() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| {
@@ -380,6 +404,8 @@ async fn test_h2_body_chunked_explicit() {
 
 #[ntex::test]
 async fn test_h2_response_http_error_handling() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(fn_service(|_| {
@@ -404,6 +430,8 @@ async fn test_h2_response_http_error_handling() {
 
 #[ntex::test]
 async fn test_h2_service_error() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let mut srv = test_server(move || {
         HttpService::build()
             .h2(|_| {
@@ -434,6 +462,8 @@ impl Drop for SetOnDrop {
 
 #[ntex::test]
 async fn test_h2_client_drop() -> io::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
 
@@ -463,6 +493,8 @@ async fn test_h2_client_drop() -> io::Result<()> {
 
 #[ntex::test]
 async fn test_ssl_handshake_timeout() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     use std::io::Read;
 
     let srv = test_server(move || {
@@ -481,6 +513,8 @@ async fn test_ssl_handshake_timeout() {
 
 #[ntex::test]
 async fn test_ws_transport() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let mut srv = test_server(|| {
         HttpService::build()
             .h1_control(|req: h1::Control<_, _>| async move {
@@ -537,6 +571,8 @@ async fn test_ws_transport() {
 
 #[ntex::test]
 async fn test_h2_graceful_shutdown() -> io::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
 
