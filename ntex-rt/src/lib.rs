@@ -258,11 +258,9 @@ mod neon {
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
-        log::info!(
-            "Starting neon runtime, driver {:?}",
-            ntex_neon::driver::DriverType::current()
-        );
         let rt = Runtime::new().unwrap();
+        log::info!("Starting neon runtime, driver {:?}", rt.driver().tp().name());
+
         rt.block_on(fut);
     }
 
