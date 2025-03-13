@@ -59,31 +59,25 @@ struct StreamOpsStorage<T> {
 
 impl<T: AsRawFd + 'static> StreamOps<T> {
     pub(crate) fn current() -> Self {
-        Runtime::with_current(|rt| {
-            if let Some(s) = rt.get::<Self>() {
-                s
-            } else {
-                let mut inner = None;
-                rt.driver().register(|api| {
-                    let mut ops = Slab::new();
-                    ops.insert(Operation::Nop);
+        Runtime::value(|rt| {
+            let mut inner = None;
+            rt.driver().register(|api| {
+                let mut ops = Slab::new();
+                ops.insert(Operation::Nop);
 
-                    let ops = Rc::new(StreamOpsInner {
-                        api,
-                        feed: RefCell::new(Vec::new()),
-                        storage: RefCell::new(StreamOpsStorage {
-                            ops,
-                            streams: Slab::new(),
-                        }),
-                    });
-                    inner = Some(ops.clone());
-                    Box::new(StreamOpsHandler { inner: ops })
+                let ops = Rc::new(StreamOpsInner {
+                    api,
+                    feed: RefCell::new(Vec::new()),
+                    storage: RefCell::new(StreamOpsStorage {
+                        ops,
+                        streams: Slab::new(),
+                    }),
                 });
+                inner = Some(ops.clone());
+                Box::new(StreamOpsHandler { inner: ops })
+            });
 
-                let s = StreamOps(inner.unwrap());
-                rt.insert(s.clone());
-                s
-            }
+            StreamOps(inner.unwrap())
         })
     }
 

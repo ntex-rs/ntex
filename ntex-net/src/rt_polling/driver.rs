@@ -52,28 +52,22 @@ struct StreamOpsInner<T> {
 
 impl<T: AsRawFd + 'static> StreamOps<T> {
     pub(crate) fn current() -> Self {
-        Runtime::with_current(|rt| {
-            if let Some(s) = rt.get::<Self>() {
-                s
-            } else {
-                let mut inner = None;
-                rt.driver().register(|api| {
-                    let ops = Rc::new(StreamOpsInner {
-                        api,
-                        feed: Cell::new(Some(VecDeque::new())),
-                        streams: Cell::new(Some(Box::new(Slab::new()))),
-                    });
-                    inner = Some(ops.clone());
-                    Box::new(StreamOpsHandler {
-                        inner: ops,
-                        feed: VecDeque::new(),
-                    })
+        Runtime::value(|rt| {
+            let mut inner = None;
+            rt.driver().register(|api| {
+                let ops = Rc::new(StreamOpsInner {
+                    api,
+                    feed: Cell::new(Some(VecDeque::new())),
+                    streams: Cell::new(Some(Box::new(Slab::new()))),
                 });
+                inner = Some(ops.clone());
+                Box::new(StreamOpsHandler {
+                    inner: ops,
+                    feed: VecDeque::new(),
+                })
+            });
 
-                let s = StreamOps(inner.unwrap());
-                rt.insert(s.clone());
-                s
-            }
+            StreamOps(inner.unwrap())
         })
     }
 
