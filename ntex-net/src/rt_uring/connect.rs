@@ -85,24 +85,17 @@ struct ConnectOpsInner {
 
 impl ConnectOps {
     pub(crate) fn current() -> Self {
-        Runtime::with_current(|rt| {
-            if let Some(s) = rt.get::<Self>() {
-                s
-            } else {
-                let mut inner = None;
-                rt.driver().register(|api| {
-                    let ops = Rc::new(ConnectOpsInner {
-                        api,
-                        ops: RefCell::new(Slab::new()),
-                    });
-                    inner = Some(ops.clone());
-                    Box::new(ConnectOpsHandler { inner: ops })
+        Runtime::value(|rt| {
+            let mut inner = None;
+            rt.driver().register(|api| {
+                let ops = Rc::new(ConnectOpsInner {
+                    api,
+                    ops: RefCell::new(Slab::new()),
                 });
-
-                let s = ConnectOps(inner.unwrap());
-                rt.insert(s.clone());
-                s
-            }
+                inner = Some(ops.clone());
+                Box::new(ConnectOpsHandler { inner: ops })
+            });
+            ConnectOps(inner.unwrap())
         })
     }
 
