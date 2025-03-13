@@ -1,6 +1,6 @@
 use std::{cell::Cell, collections::VecDeque, io, rc::Rc, task, task::Poll};
 
-use ntex_neon::driver::op::{CloseSocket, Handler, Interest};
+use ntex_neon::driver::op::{close_socket, Handler, Interest};
 use ntex_neon::driver::{AsRawFd, DriverApi, RawFd};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
@@ -57,7 +57,7 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
                 s
             } else {
                 let mut inner = None;
-                rt.driver().register_handler(|api| {
+                rt.driver().register(|api| {
                     let ops = Rc::new(StreamOpsInner {
                         api,
                         feed: Cell::new(Some(VecDeque::new())),
@@ -216,10 +216,8 @@ impl<T> StreamCtl<T> {
         let (io, fd) =
             self.with(|streams| (streams[self.id].io.take(), streams[self.id].fd));
         if let Some(io) = io {
-            let op = CloseSocket::from_raw_fd(fd);
-            let fut = ntex_neon::submit(op);
             std::mem::forget(io);
-            fut.await.0?;
+            close_socket(fd).await?;
         }
         Ok(())
     }

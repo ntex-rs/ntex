@@ -258,11 +258,12 @@ mod neon {
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
+        let rt = Runtime::new().unwrap();
         log::info!(
             "Starting neon runtime, driver {:?}",
-            ntex_neon::driver::DriverType::current()
+            rt.driver().tp().name()
         );
-        let rt = Runtime::new().unwrap();
+
         rt.block_on(fut);
     }
 
@@ -376,17 +377,7 @@ mod neon {
 
     impl<T> JoinHandle<T> {
         pub fn is_finished(&self) -> bool {
-            if let Some(hnd) = &self.fut {
-                hnd.is_finished()
-            } else {
-                true
-            }
-        }
-    }
-
-    impl<T> Drop for JoinHandle<T> {
-        fn drop(&mut self) {
-            self.fut.take().unwrap().detach();
+            false
         }
     }
 
@@ -396,7 +387,8 @@ mod neon {
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             Poll::Ready(
                 ready!(Pin::new(self.fut.as_mut().unwrap()).poll(cx))
-                    .map_err(|_| JoinError),
+                    .map_err(|_| JoinError)
+                    .and_then(|result| result.map_err(|_| JoinError)),
             )
         }
     }

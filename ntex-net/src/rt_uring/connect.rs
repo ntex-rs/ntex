@@ -90,7 +90,7 @@ impl ConnectOps {
                 s
             } else {
                 let mut inner = None;
-                rt.driver().register_handler(|api| {
+                rt.driver().register(|api| {
                     let ops = Rc::new(ConnectOpsInner {
                         api,
                         ops: RefCell::new(Slab::new()),
