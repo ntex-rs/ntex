@@ -64,7 +64,7 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
                 s
             } else {
                 let mut inner = None;
-                rt.driver().register_handler(|api| {
+                rt.driver().register(|api| {
                     let mut ops = Slab::new();
                     ops.insert(Operation::Nop);
 

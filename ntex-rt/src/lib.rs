@@ -376,17 +376,7 @@ mod neon {
 
     impl<T> JoinHandle<T> {
         pub fn is_finished(&self) -> bool {
-            if let Some(hnd) = &self.fut {
-                hnd.is_finished()
-            } else {
-                true
-            }
-        }
-    }
-
-    impl<T> Drop for JoinHandle<T> {
-        fn drop(&mut self) {
-            self.fut.take().unwrap().detach();
+            false
         }
     }
 
@@ -396,7 +386,8 @@ mod neon {
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             Poll::Ready(
                 ready!(Pin::new(self.fut.as_mut().unwrap()).poll(cx))
-                    .map_err(|_| JoinError),
+                    .map_err(|_| JoinError)
+                    .and_then(|result| result.map_err(|_| JoinError)),
             )
         }
     }
