@@ -701,6 +701,7 @@ where
             Ok(())
         })
     });
+    thread::sleep(std::time::Duration::from_millis(25));
 
     let (system, server, addr) = rx.recv().unwrap();
 

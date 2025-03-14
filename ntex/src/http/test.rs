@@ -8,10 +8,10 @@ use coo_kie::{Cookie, CookieJar};
 use crate::io::Filter;
 use crate::io::Io;
 use crate::server::Server;
+use crate::service::ServiceFactory;
 #[cfg(feature = "ws")]
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
-use crate::{rt::System, service::ServiceFactory};
-use crate::{time::Millis, time::Seconds, util::Bytes};
+use crate::{rt::System, time::Millis, time::Seconds, util::Bytes};
 
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
 use super::error::{HttpError, PayloadError};
@@ -248,6 +248,7 @@ where
             Ok(())
         })
     });
+    thread::sleep(std::time::Duration::from_millis(25));
 
     let (system, server, addr) = rx.recv().unwrap();
 
