@@ -75,12 +75,12 @@ impl ConnectOps {
 
 impl Handler for ConnectOpsBatcher {
     fn readable(&mut self, id: usize) {
-        log::debug!("ConnectFD is readable {:?}", id);
+        log::debug!("connect-fd is readable {:?}", id);
         self.feed.push_back((id, Change::Readable));
     }
 
     fn writable(&mut self, id: usize) {
-        log::debug!("ConnectFD is writable {:?}", id);
+        log::debug!("connect-fd is writable {:?}", id);
         self.feed.push_back((id, Change::Writable));
     }
 

@@ -60,6 +60,9 @@ ws = ["dep:sha-1"]
 # brotli2 support
 brotli = ["dep:brotli2"]
 
+# disable [ntex::test] logging configuration
+no-test-logging = []
+
 [dependencies]
 ntex-codec = "0.6"
 ntex-http = "0.1.13"

@@ -197,7 +197,7 @@ impl<T: Address> Future for TcpConnectorResponse<T> {
                     Poll::Ready(Ok(sock)) => {
                         let req = this.req.take().unwrap();
                         log::trace!(
-                            "{}: TCP connector - successfully connected to connecting to {:?} - {:?}",
+                            "{}: TCP connector - successfully connected to {:?} - {:?}",
                             this.tag,
                             req.host(),
                             sock.query::<types::PeerAddr>().get()
