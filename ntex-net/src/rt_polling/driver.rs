@@ -281,19 +281,19 @@ impl<T> StreamCtl<T> {
 
     pub(crate) fn resume_read(&self) {
         self.with(|streams| {
-            let item = &mut streams[self.id];
-
-            log::debug!(
-                "{}: Resume io read ({}), {:?}",
-                item.context.tag(),
-                self.id,
-                item.fd
-            );
-            if !item.flags.intersects(Flags::RD | Flags::ERROR) {
-                item.flags.insert(Flags::RD);
-                self.inner
-                    .api
-                    .register(item.fd, self.id, Interest::Readable);
+            if let Some(item) = streams.get_mut(self.id) {
+                log::debug!(
+                    "{}: Resume io read ({}), {:?}",
+                    item.context.tag(),
+                    self.id,
+                    item.fd
+                );
+                if !item.flags.intersects(Flags::RD | Flags::ERROR) {
+                    item.flags.insert(Flags::RD);
+                    self.inner
+                        .api
+                        .register(item.fd, self.id, Interest::Readable);
+                }
             }
         })
     }
