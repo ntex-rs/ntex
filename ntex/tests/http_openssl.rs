@@ -1,5 +1,5 @@
 #![cfg(feature = "openssl")]
-use std::{env, io, sync::atomic::AtomicUsize, sync::atomic::Ordering, sync::Arc};
+use std::{io, sync::atomic::AtomicUsize, sync::atomic::Ordering, sync::Arc};
 
 use futures_util::stream::{once, Stream, StreamExt};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
