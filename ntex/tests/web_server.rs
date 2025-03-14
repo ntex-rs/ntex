@@ -81,8 +81,6 @@ impl Stream for TestBody {
 
 #[ntex::test]
 async fn test_body() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server(|| {
         App::new().service(
             web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
@@ -99,8 +97,6 @@ async fn test_body() {
 
 #[ntex::test]
 async fn test_body_gzip() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
@@ -131,8 +127,6 @@ async fn test_body_gzip() {
 
 #[ntex::test]
 async fn test_body_gzip2() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
@@ -162,8 +156,6 @@ async fn test_body_gzip2() {
 
 #[ntex::test]
 async fn test_body_encoding_override() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
@@ -223,8 +215,6 @@ async fn test_body_encoding_override() {
 
 #[ntex::test]
 async fn test_body_gzip_large() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = STR.repeat(10);
     let srv_data = data.clone();
 
@@ -258,8 +248,6 @@ async fn test_body_gzip_large() {
 
 #[ntex::test]
 async fn test_body_gzip_large_random() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(70_000)
@@ -298,8 +286,6 @@ async fn test_body_gzip_large_random() {
 
 #[ntex::test]
 async fn test_body_chunked_implicit() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Gzip))
@@ -334,8 +320,6 @@ async fn test_body_chunked_implicit() {
 
 #[ntex::test]
 async fn test_body_br_streaming() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new().wrap(Compress::new(ContentEncoding::Br)).service(
             web::resource("/").route(web::to(move || async {
@@ -366,8 +350,6 @@ async fn test_body_br_streaming() {
 
 #[ntex::test]
 async fn test_head_binary() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new().service(
             web::resource("/")
@@ -392,8 +374,6 @@ async fn test_head_binary() {
 
 #[ntex::test]
 async fn test_no_chunking() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move || async {
             HttpResponse::Ok()
@@ -414,8 +394,6 @@ async fn test_no_chunking() {
 
 #[ntex::test]
 async fn test_body_deflate() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::new(ContentEncoding::Deflate))
@@ -446,8 +424,6 @@ async fn test_body_deflate() {
 
 #[ntex::test]
 async fn test_body_brotli() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new().wrap(Compress::new(ContentEncoding::Br)).service(
             web::resource("/")
@@ -477,8 +453,6 @@ async fn test_body_brotli() {
 
 #[ntex::test]
 async fn test_encoding() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new()
             .wrap(Compress::default())
@@ -506,8 +480,6 @@ async fn test_encoding() {
 
 #[ntex::test]
 async fn test_gzip_encoding() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
@@ -533,8 +505,6 @@ async fn test_gzip_encoding() {
 
 #[ntex::test]
 async fn test_gzip_encoding_large() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = STR.repeat(10);
     let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
@@ -561,8 +531,6 @@ async fn test_gzip_encoding_large() {
 
 #[ntex::test]
 async fn test_reading_gzip_encoding_large_random() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(60_000)
@@ -595,8 +563,6 @@ async fn test_reading_gzip_encoding_large_random() {
 
 #[ntex::test]
 async fn test_reading_deflate_encoding() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
@@ -622,8 +588,6 @@ async fn test_reading_deflate_encoding() {
 
 #[ntex::test]
 async fn test_reading_deflate_encoding_large() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = STR.repeat(10);
     let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
@@ -650,8 +614,6 @@ async fn test_reading_deflate_encoding_large() {
 
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
@@ -684,8 +646,6 @@ async fn test_reading_deflate_encoding_large_random() {
 
 #[ntex::test]
 async fn test_brotli_encoding() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
@@ -711,8 +671,6 @@ async fn test_brotli_encoding() {
 
 #[ntex::test]
 async fn test_brotli_encoding_large() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(320_000)
@@ -749,8 +707,6 @@ async fn test_brotli_encoding_large() {
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_brotli_encoding_large_openssl() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     // load ssl keys
     use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 
@@ -793,8 +749,6 @@ async fn test_brotli_encoding_large_openssl() {
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_brotli_encoding_large_openssl_h1() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     // load ssl keys
     use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 
@@ -837,8 +791,6 @@ async fn test_brotli_encoding_large_openssl_h1() {
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_brotli_encoding_large_openssl_h2() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     // load ssl keys
     use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 
@@ -893,8 +845,6 @@ async fn test_brotli_encoding_large_openssl_h2() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
@@ -934,8 +884,6 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h1() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
@@ -977,8 +925,6 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h2() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let data = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
@@ -1019,8 +965,6 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
 
 #[ntex::test]
 async fn test_server_cookies() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     use ntex::http::header::SET_COOKIE;
     use ntex::http::HttpMessage;
 
@@ -1068,8 +1012,6 @@ async fn test_server_cookies() {
 
 #[ntex::test]
 async fn test_slow_request() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     use std::net;
 
     let srv = test::server_with(test::config().client_timeout(Seconds(1)), || {
@@ -1091,8 +1033,6 @@ async fn test_slow_request() {
 
 #[ntex::test]
 async fn test_custom_error() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     #[derive(Error, Debug)]
     #[error("TestError")]
     struct TestError;
@@ -1163,8 +1103,6 @@ async fn test_custom_error() {
 
 #[ntex::test]
 async fn test_web_server() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
@@ -1207,8 +1145,6 @@ async fn test_web_server() {
 /// Websocket connection, no ws handler and response contains payload
 #[ntex::test]
 async fn web_no_ws_with_response_payload() {
-    let _ = env_logger::builder().is_test(true).try_init();
-
     let srv = test::server_with(test::config().h1(), || {
         App::new()
             .service(web::resource("/").route(web::get().to(move || async {
