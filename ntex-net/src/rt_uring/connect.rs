@@ -20,9 +20,11 @@ struct ConnectOpsHandler {
     inner: Rc<ConnectOpsInner>,
 }
 
+type Operations = RefCell<Slab<(Box<SockAddr>, Sender<io::Result<()>>)>>;
+
 struct ConnectOpsInner {
     api: DriverApi,
-    ops: RefCell<Slab<Sender<io::Result<()>>>>,
+    ops: Operations,
 }
 
 impl ConnectOps {
@@ -47,10 +49,17 @@ impl ConnectOps {
         addr: SockAddr,
         sender: Sender<io::Result<()>>,
     ) -> io::Result<()> {
-        let id = self.0.ops.borrow_mut().insert(sender);
+        let addr2 = addr.clone();
+        let mut ops = self.0.ops.borrow_mut();
+
+        // addr must be stable, neon submits ops at the end of rt turn
+        let addr = Box::new(addr);
+        let (addr_ptr, addr_len) = (addr.as_ref().as_ptr(), addr.len());
+
+        let id = ops.insert((addr, sender));
         self.0.api.submit(
             id as u32,
-            opcode::Connect::new(Fd(fd), addr.as_ptr(), addr.len()).build(),
+            opcode::Connect::new(Fd(fd), addr_ptr, addr_len).build(),
         );
 
         Ok(())
@@ -59,15 +68,20 @@ impl ConnectOps {
 
 impl Handler for ConnectOpsHandler {
     fn canceled(&mut self, user_data: usize) {
-        log::debug!("Op is canceled {:?}", user_data);
+        log::debug!("connect-op is canceled {:?}", user_data);
 
         self.inner.ops.borrow_mut().remove(user_data);
     }
 
     fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<i32>) {
-        log::debug!("Op is completed {:?} result: {:?}", user_data, result);
+        let (addr, tx) = self.inner.ops.borrow_mut().remove(user_data);
+        log::debug!(
+            "connect-op is completed {:?} result: {:?}, addr: {:?}",
+            user_data,
+            result,
+            addr.as_socket()
+        );
 
-        let tx = self.inner.ops.borrow_mut().remove(user_data);
         let _ = tx.send(result.map(|_| ()));
     }
 }

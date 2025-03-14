@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.1] - 2025-03-14
+
+* Fix socket connect for io-uring driver
+
 ## [2.5.0] - 2025-03-12
 
 * Add neon runtime support

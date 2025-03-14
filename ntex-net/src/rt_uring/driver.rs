@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, io, mem, num::NonZeroU32, os, rc::Rc, task::Poll};
+use std::{cell::RefCell, io, mem, num::NonZeroU32, os, rc::Rc, task::Poll};
 
 use io_uring::{opcode, squeue::Entry, types::Fd};
 use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
@@ -390,22 +390,5 @@ impl<T> Drop for StreamCtl<T> {
         } else {
             self.inner.feed.borrow_mut().push(self.id);
         }
-    }
-}
-
-impl<T> PartialEq for StreamCtl<T> {
-    #[inline]
-    fn eq(&self, other: &StreamCtl<T>) -> bool {
-        self.id == other.id && std::ptr::eq(&self.inner, &other.inner)
-    }
-}
-
-impl<T: fmt::Debug> fmt::Debug for StreamCtl<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let storage = self.inner.storage.borrow();
-        f.debug_struct("StreamCtl")
-            .field("id", &self.id)
-            .field("io", &storage.streams[self.id].io)
-            .finish()
     }
 }
