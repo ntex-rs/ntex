@@ -156,6 +156,8 @@ impl<T> Handler for StreamOpsHandler<T> {
                     if result.is_pending() {
                         item.flags.insert(Flags::RD);
                         self.inner.api.register(item.fd, id, Interest::Readable);
+                    } else {
+                        item.flags.remove(Flags::RD);
                     }
                 }
                 Change::Writable => {
@@ -170,6 +172,8 @@ impl<T> Handler for StreamOpsHandler<T> {
                     if result.is_pending() {
                         item.flags.insert(Flags::WR);
                         self.inner.api.register(item.fd, id, Interest::Writable);
+                    } else {
+                        item.flags.remove(Flags::WR);
                     }
                 }
                 Change::Error(err) => {
