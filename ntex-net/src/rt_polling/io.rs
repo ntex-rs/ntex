@@ -3,7 +3,8 @@ use std::{any, future::poll_fn, task::Poll};
 use ntex_io::{
     types, Handle, IoContext, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
 };
-use ntex_neon::{net::TcpStream, spawn};
+use ntex_rt::spawn;
+use socket2::Socket;
 
 use super::driver::{StreamCtl, StreamOps};
 
@@ -13,7 +14,7 @@ impl IoStream for super::TcpStream {
         let context = read.context();
         let ctl = StreamOps::current().register(io, context.clone());
         let ctl2 = ctl.clone();
-        spawn(async move { run(ctl, context).await }).detach();
+        spawn(async move { run(ctl, context).await });
 
         Some(Box::new(HandleWrapper(ctl2)))
     }
@@ -24,19 +25,19 @@ impl IoStream for super::UnixStream {
         let io = self.0;
         let context = read.context();
         let ctl = StreamOps::current().register(io, context.clone());
-        spawn(async move { run(ctl, context).await }).detach();
+        spawn(async move { run(ctl, context).await });
 
         None
     }
 }
 
-struct HandleWrapper(StreamCtl<TcpStream>);
+struct HandleWrapper(StreamCtl<Socket>);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
             let addr = self.0.with_io(|io| io.and_then(|io| io.peer_addr().ok()));
-            if let Some(addr) = addr {
+            if let Some(addr) = addr.and_then(|addr| addr.as_socket()) {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
         }
