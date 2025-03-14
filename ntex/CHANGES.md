@@ -1,5 +1,9 @@
 # Changes
 
+## [2.12.1] - 2025-03-14
+
+* Allow to disable test logging (no-test-logging features)
+
 ## [2.12.0] - 2025-03-12
 
 * Add neon runtime support
