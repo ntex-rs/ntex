@@ -193,14 +193,17 @@ impl<T> Handler for StreamOpsHandler<T> {
         let mut feed = self.inner.feed.take().unwrap();
         for id in feed.drain(..) {
             let item = &mut streams[id];
-            log::debug!("{}: Drop io ({}), {:?}", item.context.tag(), id, item.fd);
-
             item.ref_count -= 1;
             if item.ref_count == 0 {
                 let item = streams.remove(id);
-                if item.io.is_some() {
-                    self.inner.api.unregister_all(item.fd);
-                }
+                log::debug!(
+                    "{}: Drop io ({}), {:?}, has-io: {}",
+                    item.context.tag(),
+                    id,
+                    item.fd,
+                    item.io.is_some()
+                );
+                self.inner.api.unregister_all(item.fd);
             }
         }
 
@@ -350,19 +353,17 @@ impl<T> Clone for StreamCtl<T> {
 impl<T> Drop for StreamCtl<T> {
     fn drop(&mut self) {
         if let Some(mut streams) = self.inner.streams.take() {
-            log::debug!(
-                "{}: Drop io ({}), {:?}",
-                streams[self.id].context.tag(),
-                self.id,
-                streams[self.id].fd
-            );
-
             streams[self.id].ref_count -= 1;
             if streams[self.id].ref_count == 0 {
                 let item = streams.remove(self.id);
-                if item.io.is_some() {
-                    self.inner.api.unregister_all(item.fd);
-                }
+                log::debug!(
+                    "{}: Drop io ({}), {:?}, has-io: {}",
+                    item.context.tag(),
+                    self.id,
+                    item.fd,
+                    item.io.is_some()
+                );
+                self.inner.api.unregister_all(item.fd);
             }
             self.inner.streams.set(Some(streams));
         } else {
