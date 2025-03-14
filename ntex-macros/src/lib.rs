@@ -262,6 +262,7 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             #(#attrs)*
             fn #name() #ret {
+                ntex::util::enable_test_logging();
                 ntex::rt::System::new("test")
                     .block_on(async { #body })
             }
@@ -271,6 +272,7 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
             #[test]
             #(#attrs)*
             fn #name() #ret {
+                ntex::util::enable_test_logging();
                 ntex::rt::System::new("test")
                     .block_on(async { #body })
             }

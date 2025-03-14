@@ -4,6 +4,8 @@
 
 * Add neon runtime support
 
+* Check test server availability before using it
+
 * Drop glommio support
 
 * Drop async-std support

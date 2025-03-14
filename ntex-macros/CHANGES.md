@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.4] - 2025-03-14
+
+* Enable env_logger for test macro
+
 ## [0.1.2] - 2021-02-25
 
 * Export runtime from ntex crate

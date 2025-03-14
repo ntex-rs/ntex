@@ -251,6 +251,9 @@ where
 
     let (system, server, addr) = rx.recv().unwrap();
 
+    // wait for server
+    thread::sleep(std::time::Duration::from_millis(50));
+
     TestServer {
         addr,
         system,

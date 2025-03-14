@@ -123,4 +123,14 @@ pub mod util {
     #[doc(hidden)]
     #[deprecated]
     pub use std::task::ready;
+
+    #[doc(hidden)]
+    pub fn enable_test_logging() {
+        if std::env::var("NTEX_NO_TEST_LOG").is_err() {
+            if std::env::var("RUST_LOG").is_err() {
+                std::env::set_var("RUST_LOG", "trace");
+            }
+            let _ = env_logger::builder().is_test(true).try_init();
+        }
+    }
 }
