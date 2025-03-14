@@ -132,48 +132,54 @@ impl<T> Handler for StreamOpsHandler<T> {
         for (id, change) in self.feed.drain(..) {
             match change {
                 Change::Readable => {
-                    let item = &mut streams[id];
-                    let result = item.context.with_read_buf(|buf| {
-                        let chunk = buf.chunk_mut();
-                        let b = chunk.as_mut_ptr();
-                        Poll::Ready(
-                            task::ready!(syscall!(
-                                break libc::read(item.fd, b as _, chunk.len())
-                            ))
-                            .inspect(|size| {
-                                unsafe { buf.advance_mut(*size) };
-                                log::debug!(
-                                    "{}: {:?}, SIZE: {:?}, BUF: {:?}",
-                                    item.context.tag(),
-                                    item.fd,
-                                    size,
-                                    buf
-                                );
-                            }),
-                        )
-                    });
+                    if let Some(item) = streams.get_mut(id) {
+                        let result = item.context.with_read_buf(|buf| {
+                            let chunk = buf.chunk_mut();
+                            let b = chunk.as_mut_ptr();
+                            Poll::Ready(
+                                task::ready!(syscall!(
+                                    break libc::read(item.fd, b as _, chunk.len())
+                                ))
+                                .inspect(|size| {
+                                    unsafe { buf.advance_mut(*size) };
+                                    log::debug!(
+                                        "{}: {:?}, SIZE: {:?}, BUF: {:?}",
+                                        item.context.tag(),
+                                        item.fd,
+                                        size,
+                                        buf,
+                                    );
+                                }),
+                            )
+                        });
 
-                    if result.is_pending() {
-                        item.flags.insert(Flags::RD);
-                        self.inner.api.register(item.fd, id, Interest::Readable);
-                    } else {
-                        item.flags.remove(Flags::RD);
+                        if result.is_pending() {
+                            item.flags.insert(Flags::RD);
+                            self.inner.api.register(item.fd, id, Interest::Readable);
+                        } else {
+                            item.flags.remove(Flags::RD);
+                        }
                     }
                 }
                 Change::Writable => {
-                    let item = &mut streams[id];
-                    let result = item.context.with_write_buf(|buf| {
-                        let slice = &buf[..];
-                        syscall!(
-                            break libc::write(item.fd, slice.as_ptr() as _, slice.len())
-                        )
-                    });
+                    if let Some(item) = streams.get_mut(id) {
+                        let result = item.context.with_write_buf(|buf| {
+                            let slice = &buf[..];
+                            syscall!(
+                                break libc::write(
+                                    item.fd,
+                                    slice.as_ptr() as _,
+                                    slice.len()
+                                )
+                            )
+                        });
 
-                    if result.is_pending() {
-                        item.flags.insert(Flags::WR);
-                        self.inner.api.register(item.fd, id, Interest::Writable);
-                    } else {
-                        item.flags.remove(Flags::WR);
+                        if result.is_pending() {
+                            item.flags.insert(Flags::WR);
+                            self.inner.api.register(item.fd, id, Interest::Writable);
+                        } else {
+                            item.flags.remove(Flags::WR);
+                        }
                     }
                 }
                 Change::Error(err) => {
@@ -203,7 +209,9 @@ impl<T> Handler for StreamOpsHandler<T> {
                     item.fd,
                     item.io.is_some()
                 );
-                self.inner.api.unregister_all(item.fd);
+                if item.io.is_some() {
+                    self.inner.api.unregister_all(item.fd);
+                }
             }
         }
 
@@ -363,7 +371,9 @@ impl<T> Drop for StreamCtl<T> {
                     item.fd,
                     item.io.is_some()
                 );
-                self.inner.api.unregister_all(item.fd);
+                if item.io.is_some() {
+                    self.inner.api.unregister_all(item.fd);
+                }
             }
             self.inner.streams.set(Some(streams));
         } else {
