@@ -118,10 +118,16 @@ impl<T> Handler for StreamOpsHandler<T> {
             Operation::Recv { id, buf, context } => {
                 log::debug!("{}: Recv canceled {:?}", context.tag(), id,);
                 context.release_read_buf(buf);
+                if let Some(item) = storage.streams.get_mut(id) {
+                    item.rd_op.take();
+                }
             }
             Operation::Send { id, buf, context } => {
                 log::debug!("{}: Send canceled: {:?}", context.tag(), id);
                 context.release_write_buf(buf);
+                if let Some(item) = storage.streams.get_mut(id) {
+                    item.wr_op.take();
+                }
             }
             Operation::Nop | Operation::Close { .. } => {}
         }
