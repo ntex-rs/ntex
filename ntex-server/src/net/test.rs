@@ -68,9 +68,7 @@ where
     let (system, addr, server) = rx.recv().unwrap();
 
     // wait for server
-    while net::TcpStream::connect(addr).is_err() {
-        thread::sleep(std::time::Duration::from_millis(25));
-    }
+    thread::sleep(std::time::Duration::from_millis(50));
 
     TestServer {
         addr,
