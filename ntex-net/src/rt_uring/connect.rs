@@ -20,9 +20,11 @@ struct ConnectOpsHandler {
     inner: Rc<ConnectOpsInner>,
 }
 
+type Operations = RefCell<Slab<(Box<SockAddr>, Sender<io::Result<()>>)>>;
+
 struct ConnectOpsInner {
     api: DriverApi,
-    ops: RefCell<Slab<(Box<SockAddr>, Sender<io::Result<()>>)>>,
+    ops: Operations,
 }
 
 impl ConnectOps {
