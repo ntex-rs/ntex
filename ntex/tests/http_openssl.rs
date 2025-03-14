@@ -617,4 +617,3 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
     assert_eq!(count.load(Ordering::Relaxed), 0);
     Ok(())
 }
-
