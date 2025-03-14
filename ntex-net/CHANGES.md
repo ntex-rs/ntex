@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.3] - 2025-03-14
+
+* Fix operation cancelation handling for poll driver
+
 ## [2.5.2] - 2025-03-14
 
 * Fix operation cancelation handling for io-uring driver
