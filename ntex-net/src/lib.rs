@@ -27,3 +27,6 @@ cfg_if::cfg_if! {
         pub use self::compat::*;
     }
 }
+
+#[cfg(all(unix, feature = "neon"))]
+mod helpers;

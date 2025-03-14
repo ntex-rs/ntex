@@ -1,7 +1,7 @@
+use std::os::fd::{AsRawFd, RawFd};
 use std::{cell::Cell, collections::VecDeque, io, rc::Rc, task, task::Poll};
 
-use ntex_neon::driver::op::{Handler, Interest};
-use ntex_neon::driver::{AsRawFd, DriverApi, RawFd};
+use ntex_neon::driver::{DriverApi, Handler, Interest};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
 
@@ -215,9 +215,7 @@ impl<T> StreamCtl<T> {
             ntex_rt::spawn_blocking(move || syscall!(libc::close(fd)))
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                .and_then(|result| {
-                    result.map_err(|_| io::Error::other("Thread pool panic"))
-                })?;
+                .and_then(crate::helpers::pool_io_err)?;
         }
         Ok(())
     }

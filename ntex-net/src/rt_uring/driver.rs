@@ -1,8 +1,7 @@
-use std::{cell::RefCell, fmt, io, mem, num::NonZeroU32, rc::Rc, task::Poll};
+use std::{cell::RefCell, fmt, io, mem, num::NonZeroU32, os, rc::Rc, task::Poll};
 
 use io_uring::{opcode, squeue::Entry, types::Fd};
-use ntex_neon::driver::{op::Handler, AsRawFd, DriverApi};
-use ntex_neon::Runtime;
+use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
 use ntex_util::channel::oneshot;
 use slab::Slab;
 
@@ -57,7 +56,7 @@ struct StreamOpsStorage<T> {
     streams: Slab<StreamItem<T>>,
 }
 
-impl<T: AsRawFd + 'static> StreamOps<T> {
+impl<T: os::fd::AsRawFd + 'static> StreamOps<T> {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
