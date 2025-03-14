@@ -726,6 +726,27 @@ impl IoContext {
     where
         F: FnOnce(&mut BytesVec) -> Poll<io::Result<usize>>,
     {
+        let result = self.with_read_buf_inner(f);
+
+        // check read readiness
+        if result.is_pending() {
+            if let Some(waker) = self.0 .0.read_task.take() {
+                let mut cx = Context::from_waker(&waker);
+
+                if let Poll::Ready(ReadStatus::Ready) =
+                    self.0.filter().poll_read_ready(&mut cx)
+                {
+                    return Poll::Pending;
+                }
+            }
+        }
+        result
+    }
+
+    fn with_read_buf_inner<F>(&self, f: F) -> Poll<()>
+    where
+        F: FnOnce(&mut BytesVec) -> Poll<io::Result<usize>>,
+    {
         let inner = &self.0 .0;
         let (hw, lw) = self.0.memory_pool().read_params().unpack();
         let result = inner.buffer.with_read_source(&self.0, |buf| {
@@ -817,8 +838,33 @@ impl IoContext {
         }
     }
 
-    /// Get write buffer
     pub fn with_write_buf<F>(&self, f: F) -> Poll<()>
+    where
+        F: FnOnce(&BytesVec) -> Poll<io::Result<usize>>,
+    {
+        let result = self.with_write_buf_inner(f);
+
+        // check write readiness
+        if result.is_pending() {
+            let inner = &self.0 .0;
+            if let Some(waker) = inner.write_task.take() {
+                let ready = self
+                    .0
+                    .filter()
+                    .poll_write_ready(&mut Context::from_waker(&waker));
+                if !matches!(
+                    ready,
+                    Poll::Ready(WriteStatus::Ready | WriteStatus::Shutdown)
+                ) {
+                    return Poll::Ready(());
+                }
+            }
+        }
+        result
+    }
+
+    /// Get write buffer
+    fn with_write_buf_inner<F>(&self, f: F) -> Poll<()>
     where
         F: FnOnce(&BytesVec) -> Poll<io::Result<usize>>,
     {
