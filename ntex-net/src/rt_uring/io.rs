@@ -68,7 +68,6 @@ async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
 
         let write = match context.poll_write_ready(cx) {
             Poll::Ready(WriteStatus::Ready) => {
-                log::debug!("{}: write ready", context.tag());
                 ctl.resume_write();
                 Poll::Pending
             }
