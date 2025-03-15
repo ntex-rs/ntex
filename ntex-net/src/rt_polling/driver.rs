@@ -149,6 +149,13 @@ impl<T> Handler for StreamOpsHandler<T> {
                 Change::Writable => {
                     let item = &mut streams[id];
                     let result = item.context.with_write_buf(|buf| {
+                        log::debug!(
+                            "{}: writing {:?} SIZE: {:?}, BUF: {:?}",
+                            item.context.tag(),
+                            item.fd,
+                            buf.len(),
+                            buf,
+                        );
                         let slice = &buf[..];
                         syscall!(
                             break libc::write(item.fd, slice.as_ptr() as _, slice.len())
@@ -156,6 +163,11 @@ impl<T> Handler for StreamOpsHandler<T> {
                     });
 
                     if item.io.is_some() && result.is_pending() {
+                        log::debug!(
+                            "{}: want write {:?}",
+                            item.context.tag(),
+                            item.fd,
+                        );
                         self.inner.api.register(item.fd, id, Interest::Writable);
                     }
                 }
@@ -198,16 +210,17 @@ impl<T> Handler for StreamOpsHandler<T> {
 fn close(id: usize, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Result<i32>> {
     api.unregister_all(fd);
     ntex_rt::spawn_blocking(move || {
-        syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
+        //syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
         syscall!(libc::close(fd))
     })
 }
 
 impl<T> StreamCtl<T> {
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
-        let (io, fd) =
-            self.with(|streams| (streams[self.id].io.take(), streams[self.id].fd));
+        let (context, io, fd) =
+            self.with(|streams| (streams[self.id].context.clone(), streams[self.id].io.take(), streams[self.id].fd));
         let fut = if let Some(io) = io {
+            log::debug!("{}: Closing ({}), {:?}", context.tag(), self.id, fd);
             std::mem::forget(io);
             Some(close(self.id, fd, &self.inner.api))
         } else {
@@ -299,12 +312,6 @@ impl<T> StreamCtl<T> {
         self.with(|streams| {
             let item = &mut streams[self.id];
 
-            log::debug!(
-                "{}: Resume io write ({}), {:?}",
-                item.context.tag(),
-                self.id,
-                item.fd
-            );
             let result = item.context.with_write_buf(|buf| {
                 log::debug!(
                     "{}: Writing io ({}), buf: {:?}",
