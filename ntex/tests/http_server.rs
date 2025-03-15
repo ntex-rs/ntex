@@ -405,6 +405,36 @@ async fn test_http1_handle_not_consumed_payload() {
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
+/// Handle payload errors (keep-alive, disconnects)
+#[ntex::test]
+async fn test_http1_handle_payload_errors() {
+    let count = Arc::new(AtomicUsize::new(0));
+    let count2 = count.clone();
+
+    let srv = test_server(move || {
+        let count = count2.clone();
+        HttpService::build().h1(move |mut req: Request| {
+            let count = count.clone();
+            async move {
+                let mut pl = req.take_payload();
+                let result = pl.recv().await;
+                if result.unwrap().is_err() {
+                    count.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok::<_, io::Error>(Response::Ok().finish())
+            }
+        })
+    });
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ =
+        stream.write_all(b"GET /test/tests/test HTTP/1.1\r\ncontent-length: 99999\r\n\r\n");
+    sleep(Millis(250)).await;
+    drop(stream);
+    sleep(Millis(250)).await;
+    assert_eq!(count.load(Ordering::Acquire), 1);
+}
+
 #[ntex::test]
 async fn test_content_length() {
     let srv = test_server(|| {
@@ -714,7 +744,7 @@ async fn test_h1_client_drop() -> io::Result<()> {
                 let _st = SetOnDrop(count);
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_11);
-                sleep(Seconds(100)).await;
+                sleep(Millis(500)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             }
         })
@@ -722,7 +752,7 @@ async fn test_h1_client_drop() -> io::Result<()> {
 
     let result = timeout(Millis(100), srv.request(Method::GET, "/").send()).await;
     assert!(result.is_err());
-    sleep(Millis(250)).await;
+    sleep(Millis(1000)).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }

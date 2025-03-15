@@ -1,5 +1,9 @@
 # Changes
 
+## [2.12.2] - 2025-03-15
+
+* http: Allow to run publish future to completion in case error
+
 ## [2.12.1] - 2025-03-14
 
 * Allow to disable test logging (no-test-logging features)

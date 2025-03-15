@@ -1,5 +1,5 @@
 //! HTTP/1 protocol dispatcher
-use std::{error, future, io, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{error, future, io, marker, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::{PipelineCall, Service};
@@ -144,7 +144,18 @@ where
                         inner.send_response(res, body)
                     }
                     Poll::Ready(Err(err)) => inner.control(Control::err(err)),
-                    Poll::Pending => ready!(inner.poll_request(cx)),
+                    Poll::Pending => {
+                        // state changed because of error.
+                        // spawn current publish future to runtime
+                        // so it could complete error handling
+                        let st = ready!(inner.poll_request(cx));
+                        if let State::CallPublish { fut } =
+                            mem::replace(&mut *this.st, State::ReadRequest)
+                        {
+                            crate::rt::spawn(fut);
+                        }
+                        st
+                    }
                 },
                 // handle control service responses
                 State::CallControl { fut } => match Pin::new(fut).poll(cx) {

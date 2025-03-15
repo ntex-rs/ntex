@@ -3,8 +3,7 @@ use std::rc::{Rc, Weak};
 use std::task::{Context, Poll};
 use std::{cell::RefCell, collections::VecDeque, pin::Pin};
 
-use crate::http::error::PayloadError;
-use crate::{task::LocalWaker, util::Bytes, util::Stream};
+use crate::{http::error::PayloadError, task::LocalWaker, util::Bytes, util::Stream};
 
 /// max buffer size 32k
 const MAX_BUFFER_SIZE: usize = 32_768;
@@ -119,7 +118,7 @@ impl PayloadSender {
         // we check only if Payload (other side) is alive,
         // otherwise always return true (consume payload)
         if let Some(shared) = self.inner.upgrade() {
-            if shared.borrow().need_read {
+            if shared.borrow().flags.contains(Flags::NEED_READ) {
                 PayloadStatus::Read
             } else {
                 shared.borrow_mut().io_task.register(cx.waker());
@@ -131,12 +130,20 @@ impl PayloadSender {
     }
 }
 
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+    struct Flags: u8 {
+        const EOF       = 0b0000_0001;
+        const ERROR     = 0b0000_0010;
+        const NEED_READ = 0b0000_0100;
+    }
+}
+
 #[derive(Debug)]
 struct Inner {
     len: usize,
-    eof: bool,
+    flags: Flags,
     err: Option<PayloadError>,
-    need_read: bool,
     items: VecDeque<Bytes>,
     task: LocalWaker,
     io_task: LocalWaker,
@@ -144,12 +151,16 @@ struct Inner {
 
 impl Inner {
     fn new(eof: bool) -> Self {
+        let flags = if eof {
+            Flags::EOF | Flags::NEED_READ
+        } else {
+            Flags::NEED_READ
+        };
         Inner {
-            eof,
+            flags,
             len: 0,
             err: None,
             items: VecDeque::new(),
-            need_read: true,
             task: LocalWaker::new(),
             io_task: LocalWaker::new(),
         }
@@ -157,18 +168,23 @@ impl Inner {
 
     fn set_error(&mut self, err: PayloadError) {
         self.err = Some(err);
+        self.flags.insert(Flags::ERROR);
         self.task.wake()
     }
 
     fn feed_eof(&mut self) {
-        self.eof = true;
+        self.flags.insert(Flags::EOF);
         self.task.wake()
     }
 
     fn feed_data(&mut self, data: Bytes) {
         self.len += data.len();
         self.items.push_back(data);
-        self.need_read = self.len < MAX_BUFFER_SIZE;
+        if self.len < MAX_BUFFER_SIZE {
+            self.flags.insert(Flags::NEED_READ);
+        } else {
+            self.flags.remove(Flags::NEED_READ);
+        }
         self.task.wake();
     }
 
@@ -178,19 +194,25 @@ impl Inner {
     ) -> Poll<Option<Result<Bytes, PayloadError>>> {
         if let Some(data) = self.items.pop_front() {
             self.len -= data.len();
-            self.need_read = self.len < MAX_BUFFER_SIZE;
+            if self.len < MAX_BUFFER_SIZE {
+                self.flags.insert(Flags::NEED_READ);
+            } else {
+                self.flags.remove(Flags::NEED_READ);
+            }
 
-            if self.need_read && !self.eof {
+            if self.flags.contains(Flags::NEED_READ)
+                && !self.flags.intersects(Flags::EOF | Flags::ERROR)
+            {
                 self.task.register(cx.waker());
             }
             self.io_task.wake();
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.err.take() {
             Poll::Ready(Some(Err(err)))
-        } else if self.eof {
+        } else if self.flags.intersects(Flags::EOF | Flags::ERROR) {
             Poll::Ready(None)
         } else {
-            self.need_read = true;
+            self.flags.insert(Flags::NEED_READ);
             self.task.register(cx.waker());
             self.io_task.wake();
             Poll::Pending
