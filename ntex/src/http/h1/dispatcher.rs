@@ -149,10 +149,12 @@ where
                         // spawn current publish future to runtime
                         // so it could complete error handling
                         let st = ready!(inner.poll_request(cx));
-                        if let State::CallPublish { fut } =
-                            mem::replace(&mut *this.st, State::ReadRequest)
-                        {
-                            crate::rt::spawn(fut);
+                        if inner.payload.is_some() {
+                            if let State::CallPublish { fut } =
+                                mem::replace(&mut *this.st, State::ReadRequest)
+                            {
+                                crate::rt::spawn(fut);
+                            }
                         }
                         st
                     }
@@ -350,7 +352,7 @@ where
                 .io
                 .encode(Message::Item((msg, body.size())), &self.codec)
                 .map_err(|err| {
-                    if let Some(mut payload) = self.payload.take() {
+                    if let Some(ref mut payload) = self.payload {
                         payload.1.set_error(PayloadError::Incomplete(None));
                     }
                     err
@@ -449,7 +451,7 @@ where
     }
 
     fn set_payload_error(&mut self, err: PayloadError) {
-        if let Some(mut payload) = self.payload.take() {
+        if let Some(ref mut payload) = self.payload {
             payload.1.set_error(err);
         }
     }
