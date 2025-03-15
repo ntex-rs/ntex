@@ -163,9 +163,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                     if let Some(item) = streams.get_mut(id) {
                         item.context.stopped(Some(err));
                         if let Some(_) = item.io.take() {
-                            let fd = item.fd;
-                            self.inner.api.unregister_all(fd);
-                            ntex_rt::spawn_blocking(move || syscall!(libc::close(fd)));
+                            close(id, item.fd, &self.inner.api);
                         }
                     }
                 }
@@ -187,9 +185,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                     item.io.is_some()
                 );
                 if item.io.is_some() {
-                    let fd = item.fd;
-                    self.inner.api.unregister_all(fd);
-                    ntex_rt::spawn_blocking(move || syscall!(libc::close(fd)));
+                    close(id, item.fd, &self.inner.api);
                 }
             }
         }
@@ -199,15 +195,21 @@ impl<T> Handler for StreamOpsHandler<T> {
     }
 }
 
+fn close(id: usize, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Result<i32>> {
+    api.unregister_all(fd);
+    ntex_rt::spawn_blocking(move || {
+        syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
+        syscall!(libc::close(fd))
+    })
+}
+
 impl<T> StreamCtl<T> {
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
         let (io, fd) =
             self.with(|streams| (streams[self.id].io.take(), streams[self.id].fd));
         let fut = if let Some(io) = io {
             std::mem::forget(io);
-
-            self.inner.api.unregister_all(fd);
-            Some(ntex_rt::spawn_blocking(move || syscall!(libc::close(fd))))
+            Some(close(self.id, fd, &self.inner.api))
         } else {
             None
         };
@@ -360,16 +362,14 @@ impl<T> Drop for StreamCtl<T> {
             if streams[self.id].ref_count == 0 {
                 let item = streams.remove(self.id);
                 log::debug!(
-                    "{}: Drop io ({}), {:?}, has-io: {}",
+                    "{}:  Drop io ({}), {:?}, has-io: {}",
                     item.context.tag(),
                     self.id,
                     item.fd,
                     item.io.is_some()
                 );
                 if item.io.is_some() {
-                    let fd = item.fd;
-                    self.inner.api.unregister_all(fd);
-                    ntex_rt::spawn_blocking(move || syscall!(libc::close(fd)));
+                    close(self.id, item.fd, &self.inner.api);
                 }
             }
             self.inner.streams.set(Some(streams));
