@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.4] - 2025-03-15
+
+* Close FD in various case for poll driver
+
 ## [2.5.3] - 2025-03-14
 
 * Fix operation cancelation handling for poll driver

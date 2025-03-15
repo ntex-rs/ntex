@@ -1,5 +1,5 @@
 use std::os::fd::{AsRawFd, RawFd};
-use std::{cell::Cell, collections::VecDeque, io, rc::Rc, task, task::Poll};
+use std::{cell::Cell, collections::VecDeque, future::Future, io, rc::Rc, task};
 
 use ntex_neon::driver::{DriverApi, Handler, Interest};
 use ntex_neon::{syscall, Runtime};
@@ -125,7 +125,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                     let result = item.context.with_read_buf(|buf| {
                         let chunk = buf.chunk_mut();
                         let b = chunk.as_mut_ptr();
-                        Poll::Ready(
+                        task::Poll::Ready(
                             task::ready!(syscall!(
                                 break libc::read(item.fd, b as _, chunk.len())
                             ))
@@ -142,7 +142,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                         )
                     });
 
-                    if result.is_pending() {
+                    if item.io.is_some() && result.is_pending() {
                         self.inner.api.register(item.fd, id, Interest::Readable);
                     }
                 }
@@ -155,14 +155,18 @@ impl<T> Handler for StreamOpsHandler<T> {
                         )
                     });
 
-                    if result.is_pending() {
+                    if item.io.is_some() && result.is_pending() {
                         self.inner.api.register(item.fd, id, Interest::Writable);
                     }
                 }
                 Change::Error(err) => {
                     if let Some(item) = streams.get_mut(id) {
                         item.context.stopped(Some(err));
-                        self.inner.api.unregister_all(item.fd);
+                        if let Some(_) = item.io.take() {
+                            let fd = item.fd;
+                            self.inner.api.unregister_all(fd);
+                            ntex_rt::spawn_blocking(move || syscall!(libc::close(fd)));
+                        }
                     }
                 }
             }
@@ -183,7 +187,9 @@ impl<T> Handler for StreamOpsHandler<T> {
                     item.io.is_some()
                 );
                 if item.io.is_some() {
-                    self.inner.api.unregister_all(item.fd);
+                    let fd = item.fd;
+                    self.inner.api.unregister_all(fd);
+                    ntex_rt::spawn_blocking(move || syscall!(libc::close(fd)));
                 }
             }
         }
@@ -194,18 +200,25 @@ impl<T> Handler for StreamOpsHandler<T> {
 }
 
 impl<T> StreamCtl<T> {
-    pub(crate) async fn close(self) -> io::Result<()> {
+    pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
         let (io, fd) =
             self.with(|streams| (streams[self.id].io.take(), streams[self.id].fd));
-        if let Some(io) = io {
+        let fut = if let Some(io) = io {
             std::mem::forget(io);
 
-            ntex_rt::spawn_blocking(move || syscall!(libc::close(fd)))
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                .and_then(crate::helpers::pool_io_err)?;
+            self.inner.api.unregister_all(fd);
+            Some(ntex_rt::spawn_blocking(move || syscall!(libc::close(fd))))
+        } else {
+            None
+        };
+        async move {
+            if let Some(fut) = fut {
+                fut.await
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                    .and_then(crate::helpers::pool_io_err)?;
+            }
+            Ok(())
         }
-        Ok(())
     }
 
     pub(crate) fn with_io<F, R>(&self, f: F) -> R
@@ -257,7 +270,7 @@ impl<T> StreamCtl<T> {
             let result = item.context.with_read_buf(|buf| {
                 let chunk = buf.chunk_mut();
                 let b = chunk.as_mut_ptr();
-                Poll::Ready(
+                task::Poll::Ready(
                     task::ready!(syscall!(break libc::read(item.fd, b as _, chunk.len())))
                         .inspect(|size| {
                             unsafe { buf.advance_mut(*size) };
@@ -272,7 +285,7 @@ impl<T> StreamCtl<T> {
                 )
             });
 
-            if result.is_pending() {
+            if item.io.is_some() && result.is_pending() {
                 self.inner
                     .api
                     .register(item.fd, self.id, Interest::Readable);
@@ -302,7 +315,7 @@ impl<T> StreamCtl<T> {
                 syscall!(break libc::write(item.fd, slice.as_ptr() as _, slice.len()))
             });
 
-            if result.is_pending() {
+            if item.io.is_some() && result.is_pending() {
                 log::debug!(
                     "{}: Write is pending ({}), {:?}",
                     item.context.tag(),
@@ -354,7 +367,9 @@ impl<T> Drop for StreamCtl<T> {
                     item.io.is_some()
                 );
                 if item.io.is_some() {
-                    self.inner.api.unregister_all(item.fd);
+                    let fd = item.fd;
+                    self.inner.api.unregister_all(fd);
+                    ntex_rt::spawn_blocking(move || syscall!(libc::close(fd)));
                 }
             }
             self.inner.streams.set(Some(streams));
