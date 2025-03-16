@@ -229,7 +229,6 @@ mod tests {
     async fn test_connect() {
         let server = ntex::server::test_server(|| {
             ntex_service::fn_service(|_| async {
-                ntex_util::time::sleep(ntex_util::time::Millis(100)).await;
                 Ok::<_, ()>(()) })
         });
 
@@ -244,7 +243,6 @@ mod tests {
         let result = srv.connect(format!("{}", server.addr())).await;
         assert!(result.is_ok());
 
-        println!("1-----------------------------------------");
         let msg = Connect::new(format!("{}", server.addr())).set_addrs(vec![
             format!("127.0.0.1:{}", server.addr().port() - 1)
                 .parse()
@@ -253,11 +251,9 @@ mod tests {
         ]);
         let result = crate::connect::connect(msg).await;
         assert!(result.is_ok());
-        println!("2-----------------------------------------");
 
         let msg = Connect::new(server.addr());
         let result = crate::connect::connect(msg).await;
         assert!(result.is_ok());
-        println!("3-----------------------------------------");
     }
 }

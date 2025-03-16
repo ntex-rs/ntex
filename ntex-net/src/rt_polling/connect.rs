@@ -68,7 +68,6 @@ impl ConnectOps {
         let id = self.0.connects.borrow_mut().insert(item);
 
         self.0.api.register(fd, id, Interest::Writable);
-
         Ok(id)
     }
 }

@@ -210,7 +210,7 @@ impl<T> Handler for StreamOpsHandler<T> {
 fn close(id: usize, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Result<i32>> {
     api.unregister_all(fd);
     ntex_rt::spawn_blocking(move || {
-        //syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
+        syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
         syscall!(libc::close(fd))
     })
 }
