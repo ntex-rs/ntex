@@ -1,7 +1,5 @@
 use std::{future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
 
-#[cfg(feature = "brotli")]
-use brotli2::write::BrotliDecoder;
 use flate2::write::{GzDecoder, ZlibDecoder};
 
 use super::Writer;
@@ -27,10 +25,6 @@ where
     #[inline]
     pub fn new(stream: S, encoding: ContentEncoding) -> Decoder<S> {
         let decoder = match encoding {
-            #[cfg(feature = "brotli")]
-            ContentEncoding::Br => Some(ContentDecoder::Br(Box::new(BrotliDecoder::new(
-                Writer::new(),
-            )))),
             ContentEncoding::Deflate => Some(ContentDecoder::Deflate(Box::new(
                 ZlibDecoder::new(Writer::new()),
             ))),
@@ -137,25 +131,11 @@ where
 enum ContentDecoder {
     Deflate(Box<ZlibDecoder<Writer>>),
     Gzip(Box<GzDecoder<Writer>>),
-    #[cfg(feature = "brotli")]
-    Br(Box<BrotliDecoder<Writer>>),
 }
 
 impl ContentDecoder {
     fn feed_eof(&mut self) -> io::Result<Option<Bytes>> {
         match self {
-            #[cfg(feature = "brotli")]
-            ContentDecoder::Br(ref mut decoder) => match decoder.flush() {
-                Ok(()) => {
-                    let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
-                }
-                Err(e) => Err(e),
-            },
             ContentDecoder::Gzip(ref mut decoder) => match decoder.try_finish() {
                 Ok(_) => {
                     let b = decoder.get_mut().take();
@@ -183,19 +163,6 @@ impl ContentDecoder {
 
     fn feed_data(&mut self, data: Bytes) -> io::Result<Option<Bytes>> {
         match self {
-            #[cfg(feature = "brotli")]
-            ContentDecoder::Br(ref mut decoder) => match decoder.write_all(&data) {
-                Ok(_) => {
-                    decoder.flush()?;
-                    let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
-                }
-                Err(e) => Err(e),
-            },
             ContentDecoder::Gzip(ref mut decoder) => match decoder.write_all(&data) {
                 Ok(_) => {
                     decoder.flush()?;

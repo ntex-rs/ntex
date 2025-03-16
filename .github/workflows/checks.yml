@@ -12,7 +12,7 @@ jobs:
         with:
           toolchain: stable
       - run:
-          cargo check --tests --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+          cargo check --tests --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
   clippy:
     name: Clippy
@@ -24,7 +24,7 @@ jobs:
           toolchain: stable
           components: clippy
       - run:
-          cargo clippy --tests --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+          cargo clippy --tests --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
   fmt:
     name: Rustfmt
