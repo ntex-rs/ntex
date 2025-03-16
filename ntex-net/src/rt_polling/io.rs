@@ -88,9 +88,5 @@ async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
 
     ctl.resume_write();
     context.shutdown(st == Status::Shutdown).await;
-
-    ctl.pause_all();
-    let result = ctl.close().await;
-
-    context.stopped(result.err());
+    context.stopped(ctl.close().await.err());
 }
