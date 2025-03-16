@@ -228,8 +228,7 @@ mod tests {
     #[ntex::test]
     async fn test_connect() {
         let server = ntex::server::test_server(|| {
-            ntex_service::fn_service(|_| async {
-                Ok::<_, ()>(()) })
+            ntex_service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
         let srv = Connector::default().tag("T").memory_pool(PoolId::P5);

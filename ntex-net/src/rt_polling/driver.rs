@@ -163,11 +163,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                     });
 
                     if item.io.is_some() && result.is_pending() {
-                        log::debug!(
-                            "{}: want write {:?}",
-                            item.context.tag(),
-                            item.fd,
-                        );
+                        log::debug!("{}: want write {:?}", item.context.tag(), item.fd,);
                         self.inner.api.register(item.fd, id, Interest::Writable);
                     }
                 }
@@ -217,10 +213,10 @@ fn close(id: usize, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Resul
 
 impl<T> StreamCtl<T> {
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
-        let (context, io, fd) =
-            self.with(|streams| (streams[self.id].context.clone(), streams[self.id].io.take(), streams[self.id].fd));
+        let (io, fd) =
+            self.with(|streams| (streams[self.id].io.take(), streams[self.id].fd));
         let fut = if let Some(io) = io {
-            log::debug!("{}: Closing ({}), {:?}", context.tag(), self.id, fd);
+            log::debug!("Closing ({}), {:?}", self.id, fd);
             std::mem::forget(io);
             Some(close(self.id, fd, &self.inner.api))
         } else {
