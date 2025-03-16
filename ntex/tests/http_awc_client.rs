@@ -5,13 +5,12 @@ use std::sync::Arc;
 
 use coo_kie::Cookie;
 use flate2::{read::GzDecoder, write::GzEncoder, write::ZlibEncoder, Compression};
-use futures_util::stream::once;
 use rand::Rng;
 
-use ntex::http::client::error::{JsonPayloadError, SendRequestError};
+use ntex::http::client::error::SendRequestError;
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
-use ntex::http::{header, HttpMessage, HttpService, Method};
+use ntex::http::{header, HttpMessage, HttpService};
 use ntex::service::{chain_factory, map_config};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
