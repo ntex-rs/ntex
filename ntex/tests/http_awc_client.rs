@@ -3,7 +3,6 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use brotli2::write::BrotliEncoder;
 use coo_kie::Cookie;
 use flate2::{read::GzDecoder, write::GzEncoder, write::ZlibEncoder, Compression};
 use futures_util::stream::once;
@@ -532,126 +531,6 @@ async fn test_client_gzip_encoding_large_random() {
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from(data));
-}
-
-#[ntex::test]
-async fn test_client_brotli_encoding() {
-    let srv = test::server(|| {
-        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
-            let mut e = BrotliEncoder::new(Vec::new(), 5);
-            e.write_all(&data).unwrap();
-            let data = e.finish().unwrap();
-            HttpResponse::Ok()
-                .header("content-encoding", "br")
-                .body(data)
-        })))
-    });
-
-    // client request
-    let mut response = srv.post("/").send_body(STR).await.unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
-}
-
-#[ntex::test]
-async fn test_client_brotli_encoding_large_random() {
-    let data = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(70_000)
-        .map(char::from)
-        .collect::<String>();
-
-    let srv = test::server(|| {
-        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
-            let mut e = BrotliEncoder::new(Vec::new(), 5);
-            e.write_all(&data).unwrap();
-            let data = e.finish().unwrap();
-            HttpResponse::Ok()
-                .header("content-encoding", "br")
-                .body(data)
-        })))
-    });
-
-    // client request
-    let mut response = srv.post("/").send_body(data.clone()).await.unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes.len(), data.len());
-    assert_eq!(bytes, Bytes::from(data.clone()));
-
-    // frozen request
-    let request = srv.post("/").timeout(Seconds(30)).freeze().unwrap();
-    assert_eq!(request.get_method(), Method::POST);
-    assert_eq!(request.get_uri(), srv.url("/").as_str());
-    let mut response = request.send_body(data.clone()).await.unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes.len(), data.len());
-    assert_eq!(bytes, Bytes::from(data.clone()));
-
-    // extra header
-    let mut response = request
-        .extra_header("x-test2", "222")
-        .send_body(data.clone())
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes.len(), data.len());
-    assert_eq!(bytes, Bytes::from(data.clone()));
-
-    // client stream request
-    let mut response = srv
-        .post("/")
-        .send_stream(once(Ready::Ok::<_, JsonPayloadError>(Bytes::from(
-            data.clone(),
-        ))))
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes.len(), data.len());
-    assert_eq!(bytes, Bytes::from(data.clone()));
-
-    // frozen request
-    let request = srv.post("/").timeout(Seconds(30)).freeze().unwrap();
-    let mut response = request
-        .send_stream(once(Ready::Ok::<_, JsonPayloadError>(Bytes::from(
-            data.clone(),
-        ))))
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes.len(), data.len());
-    assert_eq!(bytes, Bytes::from(data.clone()));
-
-    let mut response = request
-        .extra_header("x-test2", "222")
-        .send_stream(once(Ready::Ok::<_, JsonPayloadError>(Bytes::from(
-            data.clone(),
-        ))))
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes.len(), data.len());
-    assert_eq!(bytes, Bytes::from(data.clone()));
 }
 
 #[ntex::test]

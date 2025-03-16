@@ -47,22 +47,22 @@ jobs:
       - name: Run tests (tokio)
         timeout-minutes: 40
         run: |
-          cargo test --all --no-fail-fast --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+          cargo test --all --no-fail-fast --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (compio)
         timeout-minutes: 40
         run: |
-          cargo test --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+          cargo test --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (neon)
         timeout-minutes: 40
         run: |
-          cargo test --all --no-default-features --features="ntex/neon,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+          cargo test --all --no-default-features --features="ntex/neon,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (neon-uring)
         timeout-minutes: 40
         run: |
-          cargo test --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws,ntex/brotli"
+          cargo test --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Install cargo-cache
         continue-on-error: true

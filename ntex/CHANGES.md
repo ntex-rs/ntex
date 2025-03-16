@@ -4,6 +4,8 @@
 
 * http: Allow to run publish future to completion in case error
 
+* http: Remove brotli support
+
 ## [2.12.1] - 2025-03-14
 
 * Allow to disable test logging (no-test-logging features)

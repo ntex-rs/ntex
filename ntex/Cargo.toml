@@ -18,7 +18,7 @@ edition = "2021"
 rust-version = "1.75"
 
 [package.metadata.docs.rs]
-features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "brotli", "ntex-tls/rustls-ring"]
+features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/rustls-ring"]
 
 [lib]
 name = "ntex"
@@ -56,9 +56,6 @@ neon-uring = ["ntex-net/neon", "ntex-net/io-uring"]
 
 # websocket support
 ws = ["dep:sha-1"]
-
-# brotli2 support
-brotli = ["dep:brotli2"]
 
 # disable [ntex::test] logging configuration
 no-test-logging = []
@@ -112,7 +109,6 @@ tls-rustls = { version = "0.23", package = "rustls", optional = true, default-fe
 webpki-roots = { version = "0.26", optional = true }
 
 # compression
-brotli2 = { version = "0.3.2", optional = true }
 flate2 = { version = "1.0", optional = true }
 
 [dev-dependencies]
