@@ -701,10 +701,6 @@ where
             Ok(())
         })
     });
-    // wait for server
-    if std::env::var("GITHUB_ACTIONS") == Ok("true".to_string()) {
-        thread::sleep(std::time::Duration::from_millis(350));
-    }
 
     let (system, server, addr) = rx.recv().unwrap();
 
