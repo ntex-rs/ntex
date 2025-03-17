@@ -54,7 +54,19 @@ enum Status {
 async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
     // Handle io readiness
     let st = poll_fn(|cx| {
-        let read = match context.poll_read_ready(cx) {
+        let read_st = context.poll_read_ready(cx);
+        let write_st = context.poll_write_ready(cx);
+
+        // log::debug!(
+        //     "{}: io ctl read: {:?} write: {:?}, flags: {:?}",
+        //     context.tag(),
+        //     read_st,
+        //     write_st,
+        //     context.flags()
+        // );
+
+        //let read = match context.poll_read_ready(cx) {
+        let read = match read_st {
             Poll::Ready(ReadStatus::Ready) => {
                 ctl.resume_read();
                 Poll::Pending
@@ -66,7 +78,8 @@ async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
             }
         };
 
-        let write = match context.poll_write_ready(cx) {
+        // let write = match context.poll_write_ready(cx) {
+        let write = match write_st {
             Poll::Ready(WriteStatus::Ready) => {
                 ctl.resume_write();
                 Poll::Pending
