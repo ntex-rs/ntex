@@ -1,5 +1,11 @@
 # Changes
 
+## [2.5.5] - 2025-03-17
+
+* Add check for required io-uring opcodes
+
+* Handle io-uring cancelation
+
 ## [2.5.4] - 2025-03-15
 
 * Close FD in various case for poll driver
