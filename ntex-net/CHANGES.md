@@ -1,6 +1,6 @@
 # Changes
 
-## [2.5.5] - 2025-03-xx
+## [2.5.5] - 2025-03-17
 
 * Add check for required io-uring opcodes
 
