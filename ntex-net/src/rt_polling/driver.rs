@@ -132,11 +132,10 @@ impl<T> Handler for StreamOpsHandler<T> {
                             .inspect(|size| {
                                 unsafe { buf.advance_mut(*size) };
                                 log::debug!(
-                                    "{}: {:?}, SIZE: {:?}, BUF: {:?}",
+                                    "{}: {:?}, SIZE: {:?}",
                                     item.context.tag(),
                                     item.fd,
-                                    size,
-                                    buf,
+                                    size
                                 );
                             }),
                         )
@@ -150,11 +149,10 @@ impl<T> Handler for StreamOpsHandler<T> {
                     let item = &mut streams[id];
                     let result = item.context.with_write_buf(|buf| {
                         log::debug!(
-                            "{}: writing {:?} SIZE: {:?}, BUF: {:?}",
+                            "{}: writing {:?} SIZE: {:?}",
                             item.context.tag(),
                             item.fd,
-                            buf.len(),
-                            buf,
+                            buf.len()
                         );
                         let slice = &buf[..];
                         syscall!(
@@ -286,11 +284,10 @@ impl<T> StreamCtl<T> {
                         .inspect(|size| {
                             unsafe { buf.advance_mut(*size) };
                             log::debug!(
-                                "{}: {:?}, SIZE: {:?}, BUF: {:?}",
+                                "{}: {:?}, SIZE: {:?}",
                                 item.context.tag(),
                                 item.fd,
-                                size,
-                                buf,
+                                size
                             );
                         }),
                 )
