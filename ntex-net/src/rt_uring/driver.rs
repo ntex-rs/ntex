@@ -61,6 +61,16 @@ impl<T: os::fd::AsRawFd + 'static> StreamOps<T> {
         Runtime::value(|rt| {
             let mut inner = None;
             rt.driver().register(|api| {
+                if !api.is_supported(opcode::Recv::CODE) {
+                    panic!("opcode::Recv is required for io-uring support");
+                }
+                if !api.is_supported(opcode::Send::CODE) {
+                    panic!("opcode::Send is required for io-uring support");
+                }
+                if !api.is_supported(opcode::Close::CODE) {
+                    panic!("opcode::Close is required for io-uring support");
+                }
+
                 let mut ops = Slab::new();
                 ops.insert(Operation::Nop);
 

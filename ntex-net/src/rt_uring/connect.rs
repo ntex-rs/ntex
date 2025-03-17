@@ -32,6 +32,10 @@ impl ConnectOps {
         Runtime::value(|rt| {
             let mut inner = None;
             rt.driver().register(|api| {
+                if !api.is_supported(opcode::Connect::CODE) {
+                    panic!("opcode::Connect is required for io-uring support");
+                }
+
                 let ops = Rc::new(ConnectOpsInner {
                     api,
                     ops: RefCell::new(Slab::new()),
