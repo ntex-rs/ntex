@@ -59,16 +59,18 @@ where
                 .workers(1)
                 .disable_signals()
                 .run();
-            tx.send((system, local_addr, server))
-                .expect("Failed to send Server to TestServer");
+
+            ntex_rt::spawn(async move {
+                ntex_util::time::sleep(ntex_util::time::Millis(75)).await;
+                tx.send((system, local_addr, server))
+                    .expect("Failed to send Server to TestServer");
+            });
+
             Ok(())
         })
     });
 
     let (system, addr, server) = rx.recv().unwrap();
-
-    // wait for server
-    thread::sleep(std::time::Duration::from_millis(50));
 
     TestServer {
         addr,

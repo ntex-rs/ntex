@@ -11,7 +11,7 @@ use crate::server::Server;
 use crate::service::ServiceFactory;
 #[cfg(feature = "ws")]
 use crate::ws::{error::WsClientError, WsClient, WsConnection};
-use crate::{rt::System, time::Millis, time::Seconds, util::Bytes};
+use crate::{rt::System, time::sleep, time::Millis, time::Seconds, util::Bytes};
 
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
 use super::error::{HttpError, PayloadError};
@@ -244,7 +244,11 @@ where
                 .workers(1)
                 .disable_signals()
                 .run();
-            tx.send((system, srv, local_addr)).unwrap();
+
+            crate::rt::spawn(async move {
+                sleep(Millis(75)).await;
+                tx.send((system, srv, local_addr)).unwrap();
+            });
             Ok(())
         })
     });

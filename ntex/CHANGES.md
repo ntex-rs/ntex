@@ -1,5 +1,9 @@
 # Changes
 
+## [2.12.3] - 2025-03-xx
+
+* http: Add delay for test server availability, could cause connect race
+
 ## [2.12.2] - 2025-03-15
 
 * http: Allow to run publish future to completion in case error
