@@ -8,18 +8,18 @@ use tls_openssl::ssl::{self, SslFiletype, SslMethod};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    //std::env::set_var("RUST_LOG", "trace");
-    //env_logger::init();
+    std::env::set_var("RUST_LOG", "trace");
+    let _ = env_logger::try_init();
 
     println!("Started openssl web server: 127.0.0.1:8443");
 
     // load ssl keys
     let mut builder = ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
     builder
-        .set_private_key_file("../tests/key.pem", SslFiletype::PEM)
+        .set_private_key_file("./examples/key.pem", SslFiletype::PEM)
         .unwrap();
     builder
-        .set_certificate_chain_file("../tests/cert.pem")
+        .set_certificate_chain_file("./examples/cert.pem")
         .unwrap();
 
     // h2 alpn config

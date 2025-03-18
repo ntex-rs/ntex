@@ -13,9 +13,8 @@ async fn main() -> io::Result<()> {
     println!("Started openssl echp server: 127.0.0.1:8443");
 
     // load ssl keys
-    let cert_file =
-        &mut BufReader::new(File::open("../ntex-tls/examples/cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("../ntex-tls/examples/key.pem").unwrap());
+    let cert_file = &mut BufReader::new(File::open("../examples/cert.pem").unwrap());
+    let key_file = &mut BufReader::new(File::open("../examples/key.pem").unwrap());
     let keys = rustls_pemfile::private_key(key_file).unwrap().unwrap();
     let cert_chain = rustls_pemfile::certs(cert_file)
         .collect::<Result<Vec<_>, _>>()
