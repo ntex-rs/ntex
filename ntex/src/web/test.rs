@@ -697,7 +697,10 @@ where
             .set_tag("test", "WEB-SRV")
             .run();
 
-            tx.send((System::current(), srv, local_addr)).unwrap();
+            crate::rt::spawn(async move {
+                sleep(Millis(75)).await;
+                tx.send((System::current(), srv, local_addr)).unwrap();
+            });
             Ok(())
         })
     });

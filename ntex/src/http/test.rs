@@ -244,6 +244,11 @@ where
                 .workers(1)
                 .disable_signals()
                 .run();
+
+            crate::rt::spawn(async move {
+                sleep(Millis(75)).await;
+                tx.send((System::current(), srv, local_addr)).unwrap();
+            });
             tx.send((system, srv, local_addr)).unwrap();
             Ok(())
         })
