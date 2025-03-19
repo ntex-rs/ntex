@@ -1,7 +1,7 @@
 use std::os::fd::{AsRawFd, RawFd};
 use std::{cell::Cell, collections::VecDeque, future::Future, io, rc::Rc, task};
 
-use ntex_neon::driver::{DriverApi, Handler, Interest};
+use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
 
@@ -9,7 +9,7 @@ use ntex_bytes::BufMut;
 use ntex_io::IoContext;
 
 pub(crate) struct StreamCtl<T> {
-    id: usize,
+    id: u32,
     inner: Rc<StreamOpsInner<T>>,
 }
 
@@ -24,8 +24,7 @@ pub(crate) struct StreamOps<T>(Rc<StreamOpsInner<T>>);
 
 #[derive(Debug)]
 enum Change {
-    Readable,
-    Writable,
+    Event(Event),
     Error(io::Error),
 }
 
@@ -36,7 +35,7 @@ struct StreamOpsHandler<T> {
 
 struct StreamOpsInner<T> {
     api: DriverApi,
-    feed: Cell<Option<VecDeque<usize>>>,
+    feed: Cell<Option<VecDeque<u32>>>,
     streams: Cell<Option<Box<Slab<StreamItem<T>>>>>,
 }
 
@@ -62,19 +61,23 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
     }
 
     pub(crate) fn register(&self, io: T, context: IoContext) -> StreamCtl<T> {
+        let fd = io.as_raw_fd();
         let item = StreamItem {
+            fd,
             context,
-            fd: io.as_raw_fd(),
             io: Some(io),
             ref_count: 1,
         };
-        self.with(|streams| {
-            let id = streams.insert(item);
+        let stream = self.with(move |streams| {
+            let id = streams.insert(item) as u32;
             StreamCtl {
                 id,
                 inner: self.0.clone(),
             }
-        })
+        });
+
+        self.0.api.attach(fd, stream.id, None);
+        stream
     }
 
     fn with<F, R>(&self, f: F) -> R
@@ -95,14 +98,9 @@ impl<T> Clone for StreamOps<T> {
 }
 
 impl<T> Handler for StreamOpsHandler<T> {
-    fn readable(&mut self, id: usize) {
+    fn event(&mut self, id: usize, event: Event) {
         log::debug!("FD is readable {:?}", id);
-        self.feed.push_back((id, Change::Readable));
-    }
-
-    fn writable(&mut self, id: usize) {
-        log::debug!("FD is writable {:?}", id);
-        self.feed.push_back((id, Change::Writable));
+        self.feed.push_back((id, Change::Event(event)));
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
@@ -120,56 +118,75 @@ impl<T> Handler for StreamOpsHandler<T> {
 
         for (id, change) in self.feed.drain(..) {
             match change {
-                Change::Readable => {
+                Change::Event(ev) => {
                     let item = &mut streams[id];
-                    let result = item.context.with_read_buf(|buf| {
-                        let chunk = buf.chunk_mut();
-                        let b = chunk.as_mut_ptr();
-                        task::Poll::Ready(
-                            task::ready!(syscall!(
-                                break libc::read(item.fd, b as _, chunk.len())
-                            ))
-                            .inspect(|size| {
-                                unsafe { buf.advance_mut(*size) };
-                                log::debug!(
-                                    "{}: {:?}, SIZE: {:?}",
-                                    item.context.tag(),
-                                    item.fd,
-                                    size
-                                );
-                            }),
-                        )
-                    });
+                    let mut renew_ev = Event::new(0, false, false).with_interrupt();
+                    if ev.readable {
+                        let result = item.context.with_read_buf(|buf| {
+                            let chunk = buf.chunk_mut();
+                            let b = chunk.as_mut_ptr();
+                            task::Poll::Ready(
+                                task::ready!(syscall!(
+                                    break libc::read(item.fd, b as _, chunk.len())
+                                ))
+                                .inspect(|size| {
+                                    unsafe { buf.advance_mut(*size) };
+                                    log::debug!(
+                                        "{}: {:?}, SIZE: {:?}",
+                                        item.context.tag(),
+                                        item.fd,
+                                        size
+                                    );
+                                }),
+                            )
+                        });
 
-                    if item.io.is_some() && result.is_pending() {
-                        self.inner.api.register(item.fd, id, Interest::Readable);
+                        if item.io.is_some() && result.is_pending() {
+                            if item.context.is_read_ready() {
+                                renew_ev.readable = true;
+                            }
+                        }
                     }
-                }
-                Change::Writable => {
-                    let item = &mut streams[id];
-                    let result = item.context.with_write_buf(|buf| {
-                        log::debug!(
-                            "{}: writing {:?} SIZE: {:?}",
-                            item.context.tag(),
-                            item.fd,
-                            buf.len()
-                        );
-                        let slice = &buf[..];
-                        syscall!(
-                            break libc::write(item.fd, slice.as_ptr() as _, slice.len())
-                        )
-                    });
+                    if ev.writable {
+                        let result = item.context.with_write_buf(|buf| {
+                            log::debug!(
+                                "{}: writing {:?} SIZE: {:?}",
+                                item.context.tag(),
+                                item.fd,
+                                buf.len()
+                            );
+                            let slice = &buf[..];
+                            syscall!(
+                                break libc::write(
+                                    item.fd,
+                                    slice.as_ptr() as _,
+                                    slice.len()
+                                )
+                            )
+                        });
 
-                    if item.io.is_some() && result.is_pending() {
-                        log::debug!("{}: want write {:?}", item.context.tag(), item.fd,);
-                        self.inner.api.register(item.fd, id, Interest::Writable);
+                        if item.io.is_some() && result.is_pending() {
+                            if item.context.is_write_ready() {
+                                renew_ev.writable = true;
+                            }
+                        }
+                    }
+
+                    if ev.is_interrupt() {
+                        item.context.stopped(None);
+                        if let Some(_) = item.io.take() {
+                            close(id as u32, item.fd, &self.inner.api);
+                        }
+                        continue;
+                    } else {
+                        self.inner.api.modify(item.fd, id as u32, renew_ev);
                     }
                 }
                 Change::Error(err) => {
                     if let Some(item) = streams.get_mut(id) {
                         item.context.stopped(Some(err));
                         if let Some(_) = item.io.take() {
-                            close(id, item.fd, &self.inner.api);
+                            close(id as u32, item.fd, &self.inner.api);
                         }
                     }
                 }
@@ -179,10 +196,10 @@ impl<T> Handler for StreamOpsHandler<T> {
         // extra
         let mut feed = self.inner.feed.take().unwrap();
         for id in feed.drain(..) {
-            let item = &mut streams[id];
+            let item = &mut streams[id as usize];
             item.ref_count -= 1;
             if item.ref_count == 0 {
-                let item = streams.remove(id);
+                let item = streams.remove(id as usize);
                 log::debug!(
                     "{}: Drop io ({}), {:?}, has-io: {}",
                     item.context.tag(),
@@ -201,8 +218,8 @@ impl<T> Handler for StreamOpsHandler<T> {
     }
 }
 
-fn close(id: usize, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Result<i32>> {
-    api.unregister_all(fd);
+fn close(id: u32, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Result<i32>> {
+    api.detach(fd, id);
     ntex_rt::spawn_blocking(move || {
         syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
         syscall!(libc::close(fd))
@@ -211,10 +228,10 @@ fn close(id: usize, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Resul
 
 impl<T> StreamCtl<T> {
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
-        let (io, fd) =
-            self.with(|streams| (streams[self.id].io.take(), streams[self.id].fd));
+        let id = self.id as usize;
+        let (io, fd) = self.with(|streams| (streams[id].io.take(), streams[id].fd));
         let fut = if let Some(io) = io {
-            log::debug!("Closing ({}), {:?}", self.id, fd);
+            log::debug!("Closing ({}), {:?}", id, fd);
             std::mem::forget(io);
             Some(close(self.id, fd, &self.inner.api))
         } else {
@@ -234,53 +251,32 @@ impl<T> StreamCtl<T> {
     where
         F: FnOnce(Option<&T>) -> R,
     {
-        self.with(|streams| f(streams[self.id].io.as_ref()))
+        self.with(|streams| f(streams[self.id as usize].io.as_ref()))
     }
 
-    pub(crate) fn pause_all(&self) {
+    pub(crate) fn modify(&self, readable: bool, writable: bool) {
         self.with(|streams| {
-            let item = &mut streams[self.id];
+            let item = &mut streams[self.id as usize];
 
             log::debug!(
-                "{}: Pause all io ({}), {:?}",
+                "{}: Modify interest ({}), {:?} read: {:?}, write: {:?}",
                 item.context.tag(),
                 self.id,
-                item.fd
-            );
-            self.inner.api.unregister_all(item.fd);
-        })
-    }
-
-    pub(crate) fn pause_read(&self) {
-        self.with(|streams| {
-            let item = &mut streams[self.id];
-
-            log::debug!(
-                "{}: Pause io read ({}), {:?}",
-                item.context.tag(),
-                self.id,
-                item.fd
-            );
-            self.inner.api.unregister(item.fd, Interest::Readable);
-        })
-    }
-
-    pub(crate) fn resume_read(&self) {
-        self.with(|streams| {
-            let item = &mut streams[self.id];
-
-            log::debug!(
-                "{}: Resume io read ({}), {:?}",
-                item.context.tag(),
-                self.id,
-                item.fd
+                item.fd,
+                readable,
+                writable
             );
 
-            let result = item.context.with_read_buf(|buf| {
-                let chunk = buf.chunk_mut();
-                let b = chunk.as_mut_ptr();
-                task::Poll::Ready(
-                    task::ready!(syscall!(break libc::read(item.fd, b as _, chunk.len())))
+            let mut event = Event::new(0, false, false).with_interrupt();
+
+            if readable {
+                let result = item.context.with_read_buf(|buf| {
+                    let chunk = buf.chunk_mut();
+                    let b = chunk.as_mut_ptr();
+                    task::Poll::Ready(
+                        task::ready!(syscall!(
+                            break libc::read(item.fd, b as _, chunk.len())
+                        ))
                         .inspect(|size| {
                             unsafe { buf.advance_mut(*size) };
                             log::debug!(
@@ -290,45 +286,37 @@ impl<T> StreamCtl<T> {
                                 size
                             );
                         }),
-                )
-            });
+                    )
+                });
 
-            if item.io.is_some() && result.is_pending() {
-                self.inner
-                    .api
-                    .register(item.fd, self.id, Interest::Readable);
+                if item.io.is_some() && result.is_pending() {
+                    if item.context.is_read_ready() {
+                        event.readable = true;
+                    }
+                }
             }
-        })
-    }
 
-    pub(crate) fn resume_write(&self) {
-        self.with(|streams| {
-            let item = &mut streams[self.id];
+            if writable {
+                let result = item.context.with_write_buf(|buf| {
+                    log::debug!(
+                        "{}: Writing io ({}), buf: {:?}",
+                        item.context.tag(),
+                        self.id,
+                        buf.len()
+                    );
 
-            let result = item.context.with_write_buf(|buf| {
-                log::debug!(
-                    "{}: Writing io ({}), buf: {:?}",
-                    item.context.tag(),
-                    self.id,
-                    buf.len()
-                );
+                    let slice = &buf[..];
+                    syscall!(break libc::write(item.fd, slice.as_ptr() as _, slice.len()))
+                });
 
-                let slice = &buf[..];
-                syscall!(break libc::write(item.fd, slice.as_ptr() as _, slice.len()))
-            });
-
-            if item.io.is_some() && result.is_pending() {
-                log::debug!(
-                    "{}: Write is pending ({}), {:?}",
-                    item.context.tag(),
-                    self.id,
-                    item.context.flags()
-                );
-
-                self.inner
-                    .api
-                    .register(item.fd, self.id, Interest::Writable);
+                if item.io.is_some() && result.is_pending() {
+                    if item.context.is_write_ready() {
+                        event.writable = true;
+                    }
+                }
             }
+
+            self.inner.api.modify(item.fd, self.id as u32, event);
         })
     }
 
@@ -346,7 +334,7 @@ impl<T> StreamCtl<T> {
 impl<T> Clone for StreamCtl<T> {
     fn clone(&self) -> Self {
         self.with(|streams| {
-            streams[self.id].ref_count += 1;
+            streams[self.id as usize].ref_count += 1;
             Self {
                 id: self.id,
                 inner: self.inner.clone(),
@@ -358,9 +346,10 @@ impl<T> Clone for StreamCtl<T> {
 impl<T> Drop for StreamCtl<T> {
     fn drop(&mut self) {
         if let Some(mut streams) = self.inner.streams.take() {
-            streams[self.id].ref_count -= 1;
-            if streams[self.id].ref_count == 0 {
-                let item = streams.remove(self.id);
+            let id = self.id as usize;
+            streams[id].ref_count -= 1;
+            if streams[id].ref_count == 0 {
+                let item = streams.remove(id);
                 log::debug!(
                     "{}:  Drop io ({}), {:?}, has-io: {}",
                     item.context.tag(),

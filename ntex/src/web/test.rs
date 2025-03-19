@@ -698,7 +698,7 @@ where
             .run();
 
             crate::rt::spawn(async move {
-                sleep(Millis(75)).await;
+                sleep(Millis(125)).await;
                 tx.send((System::current(), srv, local_addr)).unwrap();
             });
             Ok(())

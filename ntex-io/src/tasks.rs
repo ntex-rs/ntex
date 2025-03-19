@@ -722,28 +722,36 @@ impl IoContext {
     }
 
     /// Get read buffer
-    pub fn with_read_buf<F>(&self, f: F) -> Poll<()>
-    where
-        F: FnOnce(&mut BytesVec) -> Poll<io::Result<usize>>,
-    {
-        let result = self.with_read_buf_inner(f);
-
+    pub fn is_read_ready(&self) -> bool {
         // check read readiness
-        if result.is_pending() {
-            if let Some(waker) = self.0 .0.read_task.take() {
-                let mut cx = Context::from_waker(&waker);
+        if let Some(waker) = self.0 .0.read_task.take() {
+            let mut cx = Context::from_waker(&waker);
 
-                if let Poll::Ready(ReadStatus::Ready) =
-                    self.0.filter().poll_read_ready(&mut cx)
-                {
-                    return Poll::Pending;
-                }
+            if let Poll::Ready(ReadStatus::Ready) = self.0.filter().poll_read_ready(&mut cx)
+            {
+                return true;
             }
         }
-        result
+        false
     }
 
-    fn with_read_buf_inner<F>(&self, f: F) -> Poll<()>
+    pub fn is_write_ready(&self) -> bool {
+        if let Some(waker) = self.0 .0.write_task.take() {
+            let ready = self
+                .0
+                .filter()
+                .poll_write_ready(&mut Context::from_waker(&waker));
+            if !matches!(
+                ready,
+                Poll::Ready(WriteStatus::Ready | WriteStatus::Shutdown)
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn with_read_buf<F>(&self, f: F) -> Poll<()>
     where
         F: FnOnce(&mut BytesVec) -> Poll<io::Result<usize>>,
     {
@@ -838,33 +846,8 @@ impl IoContext {
         }
     }
 
-    pub fn with_write_buf<F>(&self, f: F) -> Poll<()>
-    where
-        F: FnOnce(&BytesVec) -> Poll<io::Result<usize>>,
-    {
-        let result = self.with_write_buf_inner(f);
-
-        // check write readiness
-        if result.is_pending() {
-            let inner = &self.0 .0;
-            if let Some(waker) = inner.write_task.take() {
-                let ready = self
-                    .0
-                    .filter()
-                    .poll_write_ready(&mut Context::from_waker(&waker));
-                if !matches!(
-                    ready,
-                    Poll::Ready(WriteStatus::Ready | WriteStatus::Shutdown)
-                ) {
-                    return Poll::Ready(());
-                }
-            }
-        }
-        result
-    }
-
     /// Get write buffer
-    fn with_write_buf_inner<F>(&self, f: F) -> Poll<()>
+    pub fn with_write_buf<F>(&self, f: F) -> Poll<()>
     where
         F: FnOnce(&BytesVec) -> Poll<io::Result<usize>>,
     {

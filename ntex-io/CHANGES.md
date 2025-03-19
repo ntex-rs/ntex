@@ -1,5 +1,9 @@
 # Changes
 
+## [2.11.1] - 2025-03-20
+
+* Add readiness check support
+
 ## [2.11.0] - 2025-03-10
 
 * Add single io context
