@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.6] - 2025-03-20
+
+* Redesign neon poll support
+
 ## [2.5.5] - 2025-03-17
 
 * Add check for required io-uring opcodes
