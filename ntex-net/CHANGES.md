@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.7] - 2025-03-21
+
+* Simplify neon poll impl
+
 ## [2.5.6] - 2025-03-20
 
 * Redesign neon poll support
