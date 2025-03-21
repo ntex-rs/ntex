@@ -1,5 +1,5 @@
 use std::os::fd::{AsRawFd, RawFd};
-use std::{cell::RefCell, collections::VecDeque, io, rc::Rc, task::Poll};
+use std::{cell::RefCell, io, rc::Rc, task::Poll};
 
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
@@ -17,7 +17,6 @@ enum Change {
 }
 
 struct ConnectOpsBatcher {
-    feed: VecDeque<(usize, Change)>,
     inner: Rc<ConnectOpsInner>,
 }
 
@@ -41,10 +40,7 @@ impl ConnectOps {
                     connects: RefCell::new(Slab::new()),
                 });
                 inner = Some(ops.clone());
-                Box::new(ConnectOpsBatcher {
-                    inner: ops,
-                    feed: VecDeque::new(),
-                })
+                Box::new(ConnectOpsBatcher { inner: ops })
             });
 
             ConnectOps(inner.unwrap())
@@ -74,55 +70,42 @@ impl ConnectOps {
 impl Handler for ConnectOpsBatcher {
     fn event(&mut self, id: usize, event: Event) {
         log::debug!("connect-fd is readable {:?}", id);
-        self.feed.push_back((id, Change::Event(event)));
-    }
-
-    fn error(&mut self, id: usize, err: io::Error) {
-        self.feed.push_back((id, Change::Error(err)));
-    }
-
-    fn commit(&mut self) {
-        if self.feed.is_empty() {
-            return;
-        }
-        log::debug!("Commit connect driver changes, num: {:?}", self.feed.len());
 
         let mut connects = self.inner.connects.borrow_mut();
 
-        for (id, change) in self.feed.drain(..) {
-            if connects.contains(id) {
-                let item = connects.remove(id);
-                match change {
-                    Change::Event(event) => {
-                        if event.writable {
-                            let mut err: libc::c_int = 0;
-                            let mut err_len =
-                                std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        if connects.contains(id) {
+            let item = connects.remove(id);
+            if event.writable {
+                let mut err: libc::c_int = 0;
+                let mut err_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
 
-                            let res = syscall!(libc::getsockopt(
-                                item.fd.as_raw_fd(),
-                                libc::SOL_SOCKET,
-                                libc::SO_ERROR,
-                                &mut err as *mut _ as *mut _,
-                                &mut err_len
-                            ));
+                let res = syscall!(libc::getsockopt(
+                    item.fd.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_ERROR,
+                    &mut err as *mut _ as *mut _,
+                    &mut err_len
+                ));
 
-                            let res = if err == 0 {
-                                res.map(|_| ())
-                            } else {
-                                Err(io::Error::from_raw_os_error(err))
-                            };
+                let res = if err == 0 {
+                    res.map(|_| ())
+                } else {
+                    Err(io::Error::from_raw_os_error(err))
+                };
 
-                            self.inner.api.detach(item.fd, id as u32);
-                            let _ = item.sender.send(res);
-                        }
-                    }
-                    Change::Error(err) => {
-                        let _ = item.sender.send(Err(err));
-                        self.inner.api.detach(item.fd, id as u32);
-                    }
-                }
+                self.inner.api.detach(item.fd, id as u32);
+                let _ = item.sender.send(res);
             }
+        }
+    }
+
+    fn error(&mut self, id: usize, err: io::Error) {
+        let mut connects = self.inner.connects.borrow_mut();
+
+        if connects.contains(id) {
+            let item = connects.remove(id);
+            let _ = item.sender.send(Err(err));
+            self.inner.api.detach(item.fd, id as u32);
         }
     }
 }
