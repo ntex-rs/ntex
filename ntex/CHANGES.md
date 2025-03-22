@@ -1,6 +1,8 @@
 # Changes
 
-## [2.12.3] - 2025-03-xx
+## [2.12.3] - 2025-03-22
+
+* web: Export web::app_service::AppService #534
 
 * http: Add delay for test server availability, could cause connect race
 
