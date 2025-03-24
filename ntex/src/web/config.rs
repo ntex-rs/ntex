@@ -124,6 +124,26 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
         self.external.push(rdef);
         self
     }
+
+    /// Creates a new instance of [`ServiceConfig`] for use in custom application configurations.
+    ///
+    /// This is an alternative constructor to [`ServiceConfig::new()`], intended for
+    /// external crates and libraries that require access to [`ServiceConfig`] outside the crate scope.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use ntex::web::ServiceConfig;
+    ///
+    /// let config = ServiceConfig::register();
+    /// ```
+    pub fn register() -> Self {
+        Self {
+            services: Vec::new(),
+            state: Extensions::new(),
+            external: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
