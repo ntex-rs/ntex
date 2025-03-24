@@ -133,9 +133,9 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     /// # Examples
     ///
     /// ```rust
-    /// use ntex::web::ServiceConfig;
+    /// use ntex::web::{ServiceConfig, DefaultError};
     ///
-    /// let config = ServiceConfig::register();
+    /// let config: ServiceConfig<DefaultError>  = ServiceConfig::register();
     /// ```
     pub fn register() -> Self {
         Self {
