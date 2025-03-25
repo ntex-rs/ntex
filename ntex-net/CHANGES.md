@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.8] - 2025-03-25
+
+* Update neon runtime
+
 ## [2.5.7] - 2025-03-21
 
 * Simplify neon poll impl
