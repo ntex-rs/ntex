@@ -27,8 +27,8 @@ compio = ["ntex-rt/compio", "ntex-compio"]
 # neon runtime
 neon = ["ntex-rt/neon", "ntex-neon", "slab", "socket2"]
 
-polling = ["ntex-neon/polling", "dep:polling"]
-io-uring = ["ntex-neon/io-uring", "dep:io-uring"]
+polling = ["ntex-neon/polling", "dep:polling", "socket2"]
+io-uring = ["ntex-neon/io-uring", "dep:io-uring", "socket2"]
 
 [dependencies]
 ntex-service = "3.3"
