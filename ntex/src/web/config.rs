@@ -68,7 +68,7 @@ pub struct ServiceConfig<Err = DefaultError> {
 }
 
 impl<Err: ErrorRenderer> ServiceConfig<Err> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             services: Vec::new(),
             state: Extensions::new(),
@@ -123,26 +123,6 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
         *rdef.name_mut() = name.as_ref().to_string();
         self.external.push(rdef);
         self
-    }
-
-    /// Creates a new instance of [`ServiceConfig`] for use in custom application configurations.
-    ///
-    /// This is an alternative constructor to [`ServiceConfig::new()`], intended for
-    /// external crates and libraries that require access to [`ServiceConfig`] outside the crate scope.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use ntex::web::{ServiceConfig, DefaultError};
-    ///
-    /// let config: ServiceConfig<DefaultError>  = ServiceConfig::register();
-    /// ```
-    pub fn register() -> Self {
-        Self {
-            services: Vec::new(),
-            state: Extensions::new(),
-            external: Vec::new(),
-        }
     }
 }
 
@@ -227,8 +207,8 @@ mod tests {
     }
 
     #[test]
-    fn test_service_config_register() {
-        let cfg: ServiceConfig<DefaultError> = ServiceConfig::register();
+    fn test_new_service_config() {
+        let cfg: ServiceConfig<DefaultError> = ServiceConfig::new();
         assert!(cfg.services.is_empty());
         assert!(cfg.external.is_empty());
     }
