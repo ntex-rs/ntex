@@ -1,5 +1,9 @@
 # Changes
 
+## [0.4.29] - 2025-03-26
+
+* Add Arbiter::get_value() helper method
+
 ## [0.4.27] - 2025-03-14
 
 * Add srbiters pings ttl
