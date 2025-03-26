@@ -286,6 +286,25 @@ impl Arbiter {
         })
     }
 
+    /// Get a type previously inserted to this runtime or create new one.
+    pub fn get_value<T, F>(f: F) -> T
+    where
+        T: Clone + 'static,
+        F: FnOnce() -> T,
+    {
+        STORAGE.with(move |cell| {
+            let mut st = cell.borrow_mut();
+            if let Some(boxed) = st.get(&TypeId::of::<T>()) {
+                if let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>() {
+                    return val.clone();
+                }
+            }
+            let val = f();
+            st.insert(TypeId::of::<T>(), Box::new(val.clone()));
+            val
+        })
+    }
+
     /// Wait for the event loop to stop by joining the underlying thread (if have Some).
     pub fn join(&mut self) -> thread::Result<()> {
         if let Some(thread_handle) = self.thread_handle.take() {
@@ -355,6 +374,7 @@ mod tests {
         assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
         assert!(Arbiter::get_mut_item::<&'static str, _, _>(|s| *s == "test"));
         assert!(Arbiter::contains_item::<&'static str>());
+        assert!(Arbiter::get_value(|| 64u64) == 64);
         assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
     }
 }
