@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Mutex};
 use std::{io, io::Read, io::Write, net};
 
 use futures_util::future::{self, FutureExt};
@@ -761,12 +761,18 @@ async fn test_h1_client_drop() -> io::Result<()> {
 async fn test_h1_gracefull_shutdown() {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
+    let (tx, rx) = ::oneshot::channel();
+    let tx = Arc::new(Mutex::new(Some(tx)));
 
     let srv = test_server(move || {
+        let tx = tx.clone();
         let count = count2.clone();
         HttpService::build().h1(move |_: Request| {
             let count = count.clone();
             count.fetch_add(1, Ordering::Relaxed);
+            if count.load(Ordering::Relaxed) == 2 {
+                let _ = tx.lock().unwrap().take().unwrap().send(());
+            }
             async move {
                 sleep(Millis(1000)).await;
                 count.fetch_sub(1, Ordering::Relaxed);
@@ -781,7 +787,7 @@ async fn test_h1_gracefull_shutdown() {
     let mut stream2 = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream2.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
 
-    sleep(Millis(150)).await;
+    let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 2);
 
     let (tx, rx) = oneshot::channel();
@@ -789,8 +795,6 @@ async fn test_h1_gracefull_shutdown() {
         srv.stop().await;
         let _ = tx.send(());
     });
-    sleep(Millis(150)).await;
-    assert_eq!(count.load(Ordering::Relaxed), 2);
 
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
@@ -800,12 +804,18 @@ async fn test_h1_gracefull_shutdown() {
 async fn test_h1_gracefull_shutdown_2() {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
+    let (tx, rx) = ::oneshot::channel();
+    let tx = Arc::new(Mutex::new(Some(tx)));
 
     let srv = test_server(move || {
+        let tx = tx.clone();
         let count = count2.clone();
         HttpService::build().finish(move |_: Request| {
             let count = count.clone();
             count.fetch_add(1, Ordering::Relaxed);
+            if count.load(Ordering::Relaxed) == 2 {
+                let _ = tx.lock().unwrap().take().unwrap().send(());
+            }
             async move {
                 sleep(Millis(1000)).await;
                 count.fetch_sub(1, Ordering::Relaxed);
@@ -820,17 +830,14 @@ async fn test_h1_gracefull_shutdown_2() {
     let mut stream2 = net::TcpStream::connect(srv.addr()).unwrap();
     let _ = stream2.write_all(b"GET /index.html HTTP/1.1\r\n\r\n");
 
-    sleep(Millis(150)).await;
-    assert_eq!(count.load(Ordering::Relaxed), 2);
+    let _ = rx.await;
+    assert_eq!(count.load(Ordering::Acquire), 2);
 
     let (tx, rx) = oneshot::channel();
     rt::spawn(async move {
         srv.stop().await;
         let _ = tx.send(());
     });
-    sleep(Millis(150)).await;
-    assert_eq!(count.load(Ordering::Relaxed), 2);
-
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
