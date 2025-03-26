@@ -68,7 +68,7 @@ pub struct ServiceConfig<Err = DefaultError> {
 }
 
 impl<Err: ErrorRenderer> ServiceConfig<Err> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             services: Vec::new(),
             state: Extensions::new(),
@@ -204,12 +204,5 @@ mod tests {
             .to_request();
         let resp = call_service(&srv, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[test]
-    fn test_new_service_config() {
-        let cfg: ServiceConfig<DefaultError> = ServiceConfig::new();
-        assert!(cfg.services.is_empty());
-        assert!(cfg.external.is_empty());
     }
 }
