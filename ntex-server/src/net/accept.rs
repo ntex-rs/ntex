@@ -401,7 +401,7 @@ impl Accept {
                             self.backpressure(true);
                             return false;
                         } else {
-                            println!("------- SENT ACCEPTED");
+                            log::debug!("------- SENT ACCEPTED");
                         }
                     }
                     Ok(None) => return true,
