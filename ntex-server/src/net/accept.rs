@@ -203,12 +203,14 @@ impl Accept {
                 }
             }
 
-            println!("------- ACCEPTING");
-            for event in events.iter() {
-                println!("------- ACCEPTED {:?}", event);
-                let readd = self.accept(event.key);
+            println!("------- ACCEPTING: {:?}", events.len());
+            for idx in 0..self.sockets.len() {
+                if !self.sockets[idx].registered.get() {
+                    continue;
+                }
+                let readd = self.accept(idx);
                 if readd {
-                    self.add_source(event.key);
+                    self.add_source(idx);
                 }
             }
 
