@@ -198,7 +198,7 @@ impl Accept {
         log::trace!("Starting server accept loop");
 
         let _ = self.tx.take().unwrap().send(());
-        
+
         // Create storage for events
         let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
 
