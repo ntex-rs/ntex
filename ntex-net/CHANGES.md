@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.9] - 2025-03-27
+
+* Handle closed sockets
+
 ## [2.5.8] - 2025-03-25
 
 * Update neon runtime

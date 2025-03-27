@@ -70,7 +70,6 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
 
     pub(crate) fn register(&self, io: T, context: IoContext) -> StreamCtl<T> {
         let fd = io.as_raw_fd();
-        let tag = context.tag();
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
                 fd,
