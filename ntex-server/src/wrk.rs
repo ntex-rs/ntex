@@ -260,7 +260,7 @@ where
     T: Send + 'static,
     F: ServiceFactory<T> + 'static,
 {
-    //println!("------- start worker {:?}", wrk.id);
+    println!("------- start worker {:?}", wrk.id);
 
     loop {
         //println!("------- run worker {:?}", wrk.id);

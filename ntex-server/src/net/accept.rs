@@ -193,6 +193,7 @@ impl Accept {
         let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
 
         loop {
+            println!("------- ACCEPT LOOP");
             if let Err(e) = self.poller.wait(&mut events, None) {
                 if e.kind() == io::ErrorKind::Interrupted {
                     continue;
@@ -202,6 +203,7 @@ impl Accept {
             }
 
             for event in events.iter() {
+                println!("------- ACCEPTED {:?}", event);
                 let readd = self.accept(event.key);
                 if readd {
                     self.add_source(event.key);
@@ -378,6 +380,7 @@ impl Accept {
     }
 
     fn accept(&mut self, token: usize) -> bool {
+        println!("------- ACCEPTING 1 {:?}", token);
         loop {
             if let Some(info) = self.sockets.get_mut(token) {
                 let item = info.sock.accept();
