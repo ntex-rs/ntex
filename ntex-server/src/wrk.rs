@@ -4,8 +4,8 @@ use std::{cmp, future::poll_fn, future::Future, hash, pin::Pin, sync::Arc};
 
 use async_broadcast::{self as bus, broadcast};
 use async_channel::{unbounded, Receiver, Sender};
-use core_affinity::CoreId;
 use atomic_waker::AtomicWaker;
+use core_affinity::CoreId;
 
 use ntex_rt::{spawn, Arbiter};
 use ntex_service::{Pipeline, PipelineBinding, Service, ServiceFactory};

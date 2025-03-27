@@ -156,7 +156,7 @@ async fn test_form() {
     assert!(response.status().is_success());
 }
 
-//#[ntex::test]
+#[ntex::test]
 async fn test_timeout() {
     let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(|| async {
