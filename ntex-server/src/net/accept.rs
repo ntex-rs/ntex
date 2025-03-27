@@ -197,20 +197,24 @@ impl Accept {
     fn poll(&mut self) {
         log::trace!("Starting server accept loop");
 
-        let _ = self.tx.take().unwrap().send(());
-
         // Create storage for events
         let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
 
+        let mut timeout = Some(Duration::ZERO);
         loop {
             println!("------- ACCEPT LOOP");
-            if let Err(e) = self.poller.wait(&mut events, None) {
+            if let Err(e) = self.poller.wait(&mut events, timeout) {
                 println!("------- ACCEPT LOOP ERR: {:?}", e);
                 if e.kind() == io::ErrorKind::Interrupted {
                     continue;
                 } else {
                     panic!("Cannot wait for events in poller: {}", e)
                 }
+            }
+
+            if timeout.is_some() {
+                timeout = None;
+                let _ = self.tx.take().unwrap().send(());
             }
 
             println!("------- ACCEPTING: {:?}", events.len());
