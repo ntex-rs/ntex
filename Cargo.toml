@@ -46,6 +46,7 @@ ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
 ntex-neon = { git = "https://github.com/ntex-rs/neon.git", branch = "iour-fix" }
+#ntex-neon = { path = "../dev/neon" }
 
 [workspace.dependencies]
 async-task = "4.5.0"

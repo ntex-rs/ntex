@@ -49,7 +49,7 @@ async fn connect_inner(
 
     let (sender, rx) = channel();
 
-    crate::rt_impl::connect::ConnectOps::current().connect(fd, addr, sender)?;
+    crate::rt_impl::connect::ConnectOps::current().connect("-", fd, addr, sender)?;
 
     rx.await
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone"))

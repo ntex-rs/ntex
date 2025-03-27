@@ -184,8 +184,10 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 if self.next > self.workers.len() {
                     self.next = self.workers.len() - 1;
                 }
+                println!("--------- SENDING ITEM");
                 match self.workers[self.next].send(item) {
                     Ok(()) => {
+                        println!("--------- ITEM SENT");
                         self.next = (self.next + 1) % self.workers.len();
                         break;
                     }

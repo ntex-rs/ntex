@@ -5,6 +5,7 @@ use std::{cmp, future::poll_fn, future::Future, hash, pin::Pin, sync::Arc};
 use async_broadcast::{self as bus, broadcast};
 use async_channel::{unbounded, Receiver, Sender};
 use core_affinity::CoreId;
+use atomic_waker::AtomicWaker;
 
 use ntex_rt::{spawn, Arbiter};
 use ntex_service::{Pipeline, PipelineBinding, Service, ServiceFactory};
@@ -39,6 +40,7 @@ pub struct Worker<T> {
     id: WorkerId,
     tx1: Sender<T>,
     tx2: Sender<Shutdown>,
+    waker: Arc<AtomicWaker>,
     avail: WorkerAvailability,
     failed: Arc<AtomicBool>,
 }
@@ -85,6 +87,8 @@ impl<T> Worker<T> {
     {
         let (tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
+        let waker = Arc::new(AtomicWaker::new());
+        let waker2 = waker.clone();
         let (avail, avail_tx) = WorkerAvailability::create();
 
         Arbiter::default().exec_fn(move || {
@@ -100,7 +104,7 @@ impl<T> Worker<T> {
                 log::debug!("Creating server instance in {:?}", id);
                 let factory = cfg.create().await;
 
-                match create(id, rx1, rx2, factory, avail_tx).await {
+                match create(id, rx1, waker2, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {
                         log::debug!("Server instance has been created in {:?}", id);
                         run_worker(svc, wrk).await;
@@ -117,6 +121,7 @@ impl<T> Worker<T> {
             id,
             tx1,
             tx2,
+            waker,
             avail,
             failed: Arc::new(AtomicBool::new(false)),
         }
@@ -132,6 +137,7 @@ impl<T> Worker<T> {
     /// Returns `Ok` if message got accepted by the worker.
     /// Otherwise return message back as `Err`
     pub fn send(&self, msg: T) -> Result<(), T> {
+        self.waker.wake();
         self.tx1.try_send(msg).map_err(|msg| msg.into_inner())
     }
 
@@ -177,6 +183,7 @@ impl<T> Clone for Worker<T> {
             id: self.id,
             tx1: self.tx1.clone(),
             tx2: self.tx2.clone(),
+            waker: self.waker.clone(),
             avail: self.avail.clone(),
             failed: self.failed.clone(),
         }
@@ -244,6 +251,7 @@ struct WorkerSt<T, F: ServiceFactory<T>> {
     rx: Receiver<T>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     factory: F,
+    waker: Arc<AtomicWaker>,
     availability: WorkerAvailabilityTx,
 }
 
@@ -258,6 +266,8 @@ where
         //println!("------- run worker {:?}", wrk.id);
         let mut recv = std::pin::pin!(wrk.rx.recv());
         let fut = poll_fn(|cx| {
+            wrk.waker.register(cx.waker());
+
             match svc.poll_ready(cx) {
                 Poll::Ready(res) => {
                     res?;
@@ -265,14 +275,14 @@ where
                 }
                 Poll::Pending => {
                     wrk.availability.set(false);
-                    return Poll::Pending
+                    return Poll::Pending;
                 }
             }
 
-            //println!("------- waiting socket {:?}", wrk.id);
+            println!("------- waiting socket {:?}", wrk.id);
             match ready!(recv.as_mut().poll(cx)) {
                 Ok(item) => {
-                    //println!("------- got {:?}", wrk.id);
+                    println!("------- got {:?}", wrk.id);
 
                     let fut = svc.call(item);
                     let _ = spawn(async move {
@@ -281,7 +291,7 @@ where
                     Poll::Ready(Ok::<_, F::Error>(true))
                 }
                 Err(_) => {
-                    //println!("------- failed {:?}", wrk.id);
+                    println!("------- failed {:?}", wrk.id);
 
                     log::error!("Server is gone");
                     Poll::Ready(Ok(false))
@@ -350,6 +360,7 @@ async fn stop_svc<T, F>(
 async fn create<T, F>(
     id: WorkerId,
     rx: Receiver<T>,
+    waker: Arc<AtomicWaker>,
     stop: Receiver<Shutdown>,
     factory: Result<F, ()>,
     availability: WorkerAvailabilityTx,
@@ -379,6 +390,7 @@ where
         WorkerSt {
             id,
             rx,
+            waker,
             factory,
             availability,
             stop: Box::pin(stop),

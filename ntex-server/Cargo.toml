@@ -24,6 +24,7 @@ ntex-util = "2.8"
 
 async-channel = "2"
 async-broadcast = "0.7"
+atomic-waker = "1.1"
 core_affinity = "0.8"
 polling = "3.3"
 log = "0.4"
