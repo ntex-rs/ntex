@@ -442,7 +442,6 @@ async fn test_h2_client_drop() -> io::Result<()> {
         let count = count2.clone();
         HttpService::build()
             .h2(move |req: Request| {
-                println!("HANDLE H2");
                 let count = count.clone();
                 async move {
                     let _st = SetOnDrop(count);
@@ -458,7 +457,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
 
     let result = timeout(Millis(250), srv.srequest(Method::GET, "/").send()).await;
     assert!(result.is_err());
-    sleep(Millis(250)).await;
+    sleep(Millis(150)).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }
