@@ -1,13 +1,11 @@
-use std::{
-    future::poll_fn, io, io::Write, pin::Pin, task::Context, task::Poll, time::Instant,
-};
+use std::{future::poll_fn, io, io::Write, pin::Pin, task, task::Poll, time::Instant};
 
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::error::PayloadError;
-use crate::http::h1;
 use crate::http::header::{HeaderMap, HeaderValue, HOST};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::{Payload, PayloadStream};
+use crate::http::{h1, Version};
 use crate::io::{IoBoxed, RecvError};
 use crate::time::{timeout_checked, Millis};
 use crate::util::{ready, BufMut, Bytes, BytesMut, Stream};
@@ -101,7 +99,13 @@ where
             Ok((head, Payload::None))
         }
         _ => {
-            let pl: PayloadStream = Box::pin(PlStream::new(io, codec, created, pool));
+            let pl: PayloadStream = Box::pin(PlStream::new(
+                io,
+                codec,
+                created,
+                pool,
+                head.version == Version::HTTP_10,
+            ));
             Ok((head, pl.into()))
         }
     }
@@ -137,6 +141,7 @@ pub(super) struct PlStream {
     io: Option<IoBoxed>,
     codec: h1::ClientPayloadCodec,
     created: Instant,
+    http_10: bool,
     pool: Option<Acquired>,
 }
 
@@ -146,12 +151,14 @@ impl PlStream {
         codec: h1::ClientCodec,
         created: Instant,
         pool: Option<Acquired>,
+        http_10: bool,
     ) -> Self {
         PlStream {
             io: Some(io),
             codec: codec.into_payload_codec(),
             created,
             pool,
+            http_10,
         }
     }
 }
@@ -161,41 +168,46 @@ impl Stream for PlStream {
 
     fn poll_next(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        cx: &mut task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
         loop {
-            return Poll::Ready(Some(
-                match ready!(this.io.as_ref().unwrap().poll_recv(&this.codec, cx)) {
-                    Ok(chunk) => {
-                        if let Some(chunk) = chunk {
-                            Ok(chunk)
-                        } else {
-                            release_connection(
-                                this.io.take().unwrap(),
-                                !this.codec.keepalive(),
-                                this.created,
-                                this.pool.take(),
-                            );
-                            return Poll::Ready(None);
-                        }
+            let item = ready!(this.io.as_ref().unwrap().poll_recv(&this.codec, cx));
+            return Poll::Ready(Some(match item {
+                Ok(chunk) => {
+                    if let Some(chunk) = chunk {
+                        Ok(chunk)
+                    } else {
+                        release_connection(
+                            this.io.take().unwrap(),
+                            !this.codec.keepalive(),
+                            this.created,
+                            this.pool.take(),
+                        );
+                        return Poll::Ready(None);
                     }
-                    Err(RecvError::KeepAlive) => {
-                        Err(io::Error::new(io::ErrorKind::TimedOut, "Keep-alive").into())
+                }
+                Err(RecvError::KeepAlive) => {
+                    Err(io::Error::new(io::ErrorKind::TimedOut, "Keep-alive").into())
+                }
+                Err(RecvError::Stop) => {
+                    Err(io::Error::new(io::ErrorKind::Other, "Dispatcher stopped").into())
+                }
+                Err(RecvError::WriteBackpressure) => {
+                    ready!(this.io.as_ref().unwrap().poll_flush(cx, false))?;
+                    continue;
+                }
+                Err(RecvError::Decoder(err)) => Err(err),
+                Err(RecvError::PeerGone(Some(err))) => {
+                    Err(PayloadError::Incomplete(Some(err)))
+                }
+                Err(RecvError::PeerGone(None)) => {
+                    if this.http_10 {
+                        return Poll::Ready(None);
                     }
-                    Err(RecvError::Stop) => {
-                        Err(io::Error::new(io::ErrorKind::Other, "Dispatcher stopped")
-                            .into())
-                    }
-                    Err(RecvError::WriteBackpressure) => {
-                        ready!(this.io.as_ref().unwrap().poll_flush(cx, false))?;
-                        continue;
-                    }
-                    Err(RecvError::Decoder(err)) => Err(err),
-                    Err(RecvError::PeerGone(Some(err))) => Err(err.into()),
-                    Err(RecvError::PeerGone(None)) => return Poll::Ready(None),
-                },
-            ));
+                    Err(PayloadError::Incomplete(None))
+                }
+            }));
         }
     }
 }

@@ -387,8 +387,8 @@ impl Future for ReadBody {
         let this = self.get_mut();
 
         loop {
-            return match Pin::new(&mut this.stream).poll_next(cx)? {
-                Poll::Ready(Some(chunk)) => {
+            return match Pin::new(&mut this.stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
                     if this.limit > 0 && (this.buf.len() + chunk.len()) > this.limit {
                         Poll::Ready(Err(PayloadError::Overflow))
                     } else {
@@ -397,6 +397,7 @@ impl Future for ReadBody {
                     }
                 }
                 Poll::Ready(None) => Poll::Ready(Ok(this.buf.split().freeze())),
+                Poll::Ready(Some(Err(err))) => Poll::Ready(Err(err)),
                 Poll::Pending => {
                     if this.timeout.poll_elapsed(cx).is_ready() {
                         Poll::Ready(Err(PayloadError::Incomplete(Some(
