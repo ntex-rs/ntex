@@ -82,7 +82,7 @@ mod route;
 mod scope;
 mod server;
 mod service;
-mod stack;
+pub mod stack;
 pub mod test;
 pub mod types;
 mod util;
