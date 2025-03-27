@@ -42,7 +42,6 @@ tls_rust = { version = "0.23", package = "rustls", default-features = false, opt
 
 [dev-dependencies]
 ntex = { version = "2", features = ["openssl", "rustls"] }
-env_logger = "0.11"
 rustls-pemfile = "2"
 webpki-roots = "0.26"
 tls_rust = { version = "0.23", package = "rustls", features = ["ring", "std"], default-features = false }
