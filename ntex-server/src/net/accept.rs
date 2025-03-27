@@ -92,12 +92,14 @@ impl AcceptLoop {
 
     /// Start accept loop
     pub fn start(mut self, socks: Vec<(Token, Listener)>, srv: Server) {
+        let (tx, rx_start) = oneshot::channel();
         let (rx, poll) = self
             .inner
             .take()
             .expect("AcceptLoop cannot be used multiple times");
 
         Accept::start(
+            tx,
             rx,
             poll,
             socks,
@@ -105,6 +107,8 @@ impl AcceptLoop {
             self.notify.clone(),
             self.status_handler.take(),
         );
+
+        let _ = rx_start.recv();
     }
 }
 
@@ -121,6 +125,7 @@ impl fmt::Debug for AcceptLoop {
 struct Accept {
     poller: Arc<Poller>,
     rx: mpsc::Receiver<AcceptorCommand>,
+    tx: Option<oneshot::Sender<()>>,
     sockets: Vec<ServerSocketInfo>,
     srv: Server,
     notify: AcceptNotify,
@@ -131,6 +136,7 @@ struct Accept {
 
 impl Accept {
     fn start(
+        tx: oneshot::Sender<()>,
         rx: mpsc::Receiver<AcceptorCommand>,
         poller: Arc<Poller>,
         socks: Vec<(Token, Listener)>,
@@ -145,11 +151,12 @@ impl Accept {
             .name("ntex-server accept loop".to_owned())
             .spawn(move || {
                 System::set_current(sys);
-                Accept::new(rx, poller, socks, srv, notify, status_handler).poll()
+                Accept::new(tx, rx, poller, socks, srv, notify, status_handler).poll()
             });
     }
 
     fn new(
+        tx: oneshot::Sender<()>,
         rx: mpsc::Receiver<AcceptorCommand>,
         poller: Arc<Poller>,
         socks: Vec<(Token, Listener)>,
@@ -175,6 +182,7 @@ impl Accept {
             notify,
             srv,
             status_handler,
+            tx: Some(tx),
             backpressure: true,
             backlog: VecDeque::new(),
         }
@@ -189,6 +197,8 @@ impl Accept {
     fn poll(&mut self) {
         log::trace!("Starting server accept loop");
 
+        let _ = self.tx.take().unwrap().send(());
+        
         // Create storage for events
         let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
 
