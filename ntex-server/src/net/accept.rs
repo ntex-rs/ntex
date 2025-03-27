@@ -195,6 +195,7 @@ impl Accept {
         loop {
             println!("------- ACCEPT LOOP");
             if let Err(e) = self.poller.wait(&mut events, None) {
+                println!("------- ACCEPT LOOP ERR: {:?}", e);
                 if e.kind() == io::ErrorKind::Interrupted {
                     continue;
                 } else {
@@ -202,6 +203,7 @@ impl Accept {
                 }
             }
 
+            println!("------- ACCEPTING");
             for event in events.iter() {
                 println!("------- ACCEPTED {:?}", event);
                 let readd = self.accept(event.key);
