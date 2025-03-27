@@ -190,7 +190,13 @@ impl<T> Handler for StreamOpsHandler<T> {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(item) = streams.get_mut(id) {
-                log::debug!("FD is failed ({}) {:?}, err: {:?}", id, item.fd, err);
+                log::debug!(
+                    "{}: FD is failed ({}) {:?}, err: {:?}",
+                    item.tag(),
+                    id,
+                    item.fd,
+                    err
+                );
                 item.context.stopped(Some(err));
                 if item.io.take().is_some() {
                     close(id as u32, item, &self.inner.api);

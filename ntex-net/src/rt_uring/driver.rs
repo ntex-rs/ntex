@@ -33,6 +33,12 @@ struct StreamItem<T> {
     wr_op: Option<NonZeroU32>,
 }
 
+impl<T> StreamItem<T> {
+    fn tag(&self) -> &'static str {
+        self.context.tag()
+    }
+}
+
 enum Operation {
     Recv {
         id: usize,
@@ -249,7 +255,7 @@ impl<T> Handler for StreamOpsHandler<T> {
             if storage.streams[id].ref_count == 0 {
                 let mut item = storage.streams.remove(id);
 
-                log::debug!("{}: Drop io ({}), {:?}", item.context.tag(), id, item.fd);
+                log::debug!("{}: Drop io ({}), {:?}", item.tag(), id, item.fd);
 
                 if let Some(io) = item.io.take() {
                     mem::forget(io);
@@ -273,7 +279,7 @@ impl<T> StreamOpsStorage<T> {
             if let Poll::Ready(mut buf) = item.context.get_read_buf() {
                 log::debug!(
                     "{}: Recv resume ({}), {:?} rem: {:?}",
-                    item.context.tag(),
+                    item.tag(),
                     id,
                     item.fd,
                     buf.remaining_mut()
@@ -306,7 +312,7 @@ impl<T> StreamOpsStorage<T> {
             if let Poll::Ready(buf) = item.context.get_write_buf() {
                 log::debug!(
                     "{}: Send resume ({}), {:?} len: {:?}",
-                    item.context.tag(),
+                    item.tag(),
                     id,
                     item.fd,
                     buf.len()
@@ -396,12 +402,7 @@ impl<T> StreamCtl<T> {
 
         if let Some(rd_op) = item.rd_op {
             if !item.flags.contains(Flags::RD_CANCELING) {
-                log::debug!(
-                    "{}: Recv to pause ({}), {:?}",
-                    item.context.tag(),
-                    self.id,
-                    item.fd
-                );
+                log::debug!("{}: Recv to pause ({}), {:?}", item.tag(), self.id, item.fd);
                 item.flags.insert(Flags::RD_CANCELING);
                 self.inner.api.cancel(rd_op.get());
             }
@@ -426,12 +427,7 @@ impl<T> Drop for StreamCtl<T> {
             if storage.streams[self.id].ref_count == 0 {
                 let mut item = storage.streams.remove(self.id);
                 if let Some(io) = item.io.take() {
-                    log::debug!(
-                        "{}: Close io ({}), {:?}",
-                        item.context.tag(),
-                        self.id,
-                        item.fd
-                    );
+                    log::debug!("{}: Close io ({}), {:?}", item.tag(), self.id, item.fd);
                     mem::forget(io);
 
                     let id = storage.ops.insert(Operation::Close { tx: None });
