@@ -16,8 +16,9 @@ pub(crate) struct StreamCtl<T> {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug)]
     struct Flags: u8 {
-        const RD = 0b0000_0001;
-        const WR = 0b0000_0010;
+        const RD     = 0b0000_0001;
+        const WR     = 0b0000_0010;
+        const CLOSED = 0b0000_0100;
     }
 }
 
@@ -100,19 +101,22 @@ impl<T> Clone for StreamOps<T> {
 
 impl<T> Handler for StreamOpsHandler<T> {
     fn event(&mut self, id: usize, ev: Event) {
-        log::debug!("FD event {:?} event: {:?}", id, ev);
-
         self.inner.with(|streams| {
             if !streams.contains(id) {
                 return;
             }
             let item = &mut streams[id];
+            log::debug!("{}: FD event {:?} event: {:?}", item.tag(), id, ev);
+
+            if item.flags.contains(Flags::CLOSED) {
+                return;
+            }
 
             // handle HUP
             if ev.is_interrupt() {
                 item.context.stopped(None);
                 if item.io.take().is_some() {
-                    close(id as u32, item.fd, &self.inner.api);
+                    close(id as u32, item, &self.inner.api);
                 }
                 return;
             }
@@ -165,7 +169,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                     let item = &mut streams[id as usize];
                     item.ref_count -= 1;
                     if item.ref_count == 0 {
-                        let item = streams.remove(id as usize);
+                        let mut item = streams.remove(id as usize);
                         log::debug!(
                             "{}: Drop ({}), {:?}, has-io: {}",
                             item.tag(),
@@ -174,7 +178,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                             item.io.is_some()
                         );
                         if item.io.is_some() {
-                            close(id, item.fd, &self.inner.api);
+                            close(id, &mut item, &self.inner.api);
                         }
                     }
                 }
@@ -186,10 +190,16 @@ impl<T> Handler for StreamOpsHandler<T> {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(item) = streams.get_mut(id) {
-                log::debug!("FD is failed ({}) {:?}, err: {:?}", id, item.fd, err);
+                log::debug!(
+                    "{}: FD is failed ({}) {:?}, err: {:?}",
+                    item.tag(),
+                    id,
+                    item.fd,
+                    err
+                );
                 item.context.stopped(Some(err));
                 if item.io.take().is_some() {
-                    close(id as u32, item.fd, &self.inner.api);
+                    close(id as u32, item, &self.inner.api);
                 }
             }
         })
@@ -208,7 +218,13 @@ impl<T> StreamOpsInner<T> {
     }
 }
 
-fn close(id: u32, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Result<i32>> {
+fn close<T>(
+    id: u32,
+    item: &mut StreamItem<T>,
+    api: &DriverApi,
+) -> ntex_rt::JoinHandle<io::Result<i32>> {
+    let fd = item.fd;
+    item.flags.insert(Flags::CLOSED);
     api.detach(fd, id);
     ntex_rt::spawn_blocking(move || {
         syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
@@ -219,16 +235,16 @@ fn close(id: u32, fd: RawFd, api: &DriverApi) -> ntex_rt::JoinHandle<io::Result<
 impl<T> StreamCtl<T> {
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
         let id = self.id as usize;
-        let (io, fd) = self
-            .inner
-            .with(|streams| (streams[id].io.take(), streams[id].fd));
-        let fut = if let Some(io) = io {
-            log::debug!("Closing ({}), {:?}", id, fd);
-            std::mem::forget(io);
-            Some(close(self.id, fd, &self.inner.api))
-        } else {
-            None
-        };
+        let fut = self.inner.with(|streams| {
+            let item = &mut streams[id];
+            if let Some(io) = item.io.take() {
+                log::debug!("{}: Closing ({}), {:?}", item.tag(), id, item.fd);
+                std::mem::forget(io);
+                Some(close(self.id, item, &self.inner.api))
+            } else {
+                None
+            }
+        });
         async move {
             if let Some(fut) = fut {
                 fut.await
@@ -336,7 +352,7 @@ impl<T> Drop for StreamCtl<T> {
             let id = self.id as usize;
             streams[id].ref_count -= 1;
             if streams[id].ref_count == 0 {
-                let item = streams.remove(id);
+                let mut item = streams.remove(id);
                 log::debug!(
                     "{}:  Drop io ({}), {:?}, has-io: {}",
                     item.tag(),
@@ -345,7 +361,7 @@ impl<T> Drop for StreamCtl<T> {
                     item.io.is_some()
                 );
                 if item.io.is_some() {
-                    close(self.id, item.fd, &self.inner.api);
+                    close(self.id, &mut item, &self.inner.api);
                 }
             }
             self.inner.streams.set(Some(streams));

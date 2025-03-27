@@ -55,7 +55,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
 
         let no_signals = cfg.no_signals;
         let shared = Arc::new(ServerShared {
-            paused: AtomicBool::new(true),
+            paused: AtomicBool::new(false),
         });
         let mgr = ServerManager(Rc::new(Inner {
             cfg,
@@ -212,7 +212,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         match upd {
             Update::Available(worker) => {
                 self.workers.push(worker);
-                if self.workers.len() == 1 {
+                if !self.workers.is_empty() {
                     self.mgr.resume();
                 } else {
                     self.workers.sort();

@@ -99,10 +99,10 @@ impl<T> Worker<T> {
 
                 log::debug!("Creating server instance in {:?}", id);
                 let factory = cfg.create().await;
-                log::debug!("Server instance has been created in {:?}", id);
 
                 match create(id, rx1, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {
+                        log::debug!("Server instance has been created in {:?}", id);
                         run_worker(svc, wrk).await;
                     }
                     Err(e) => {
@@ -241,7 +241,7 @@ impl WorkerAvailabilityTx {
 /// Worker accepts message via unbounded channel and starts processing.
 struct WorkerSt<T, F: ServiceFactory<T>> {
     id: WorkerId,
-    rx: Pin<Box<dyn Stream<Item = T>>>,
+    rx: Receiver<T>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     factory: F,
     availability: WorkerAvailabilityTx,
@@ -253,20 +253,36 @@ where
     F: ServiceFactory<T> + 'static,
 {
     loop {
+        let mut recv = std::pin::pin!(wrk.rx.recv());
         let fut = poll_fn(|cx| {
-            ready!(svc.poll_ready(cx)?);
-
-            if let Some(item) = ready!(Pin::new(&mut wrk.rx).poll_next(cx)) {
-                let fut = svc.call(item);
-                let _ = spawn(async move {
-                    let _ = fut.await;
-                });
+            match svc.poll_ready(cx) {
+                Poll::Ready(res) => {
+                    res?;
+                    wrk.availability.set(true);
+                }
+                Poll::Pending => {
+                    wrk.availability.set(false);
+                    return Poll::Pending;
+                }
             }
-            Poll::Ready(Ok::<(), F::Error>(()))
+
+            match ready!(recv.as_mut().poll(cx)) {
+                Ok(item) => {
+                    let fut = svc.call(item);
+                    let _ = spawn(async move {
+                        let _ = fut.await;
+                    });
+                    Poll::Ready(Ok::<_, F::Error>(true))
+                }
+                Err(_) => {
+                    log::error!("Server is gone");
+                    Poll::Ready(Ok(false))
+                }
+            }
         });
 
         match select(fut, stream_recv(&mut wrk.stop)).await {
-            Either::Left(Ok(())) => continue,
+            Either::Left(Ok(true)) => continue,
             Either::Left(Err(_)) => {
                 let _ = ntex_rt::spawn(async move {
                     svc.shutdown().await;
@@ -285,7 +301,7 @@ where
                 stop_svc(wrk.id, svc, timeout, Some(result)).await;
                 return;
             }
-            Either::Right(None) => {
+            Either::Left(Ok(false)) | Either::Right(None) => {
                 stop_svc(wrk.id, svc, STOP_TIMEOUT, None).await;
                 return;
             }
@@ -336,8 +352,6 @@ where
 {
     availability.set(false);
     let factory = factory?;
-
-    let rx = Box::pin(rx);
     let mut stop = Box::pin(stop);
 
     let svc = match select(factory.create(()), stream_recv(&mut stop)).await {
@@ -356,9 +370,9 @@ where
         svc,
         WorkerSt {
             id,
+            rx,
             factory,
             availability,
-            rx: Box::pin(rx),
             stop: Box::pin(stop),
         },
     ))

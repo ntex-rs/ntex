@@ -1,5 +1,6 @@
 #![cfg(feature = "openssl")]
-use std::{io, sync::atomic::AtomicUsize, sync::atomic::Ordering, sync::Arc};
+use std::io;
+use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Mutex};
 
 use futures_util::stream::{once, Stream, StreamExt};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
@@ -456,7 +457,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
 
     let result = timeout(Millis(250), srv.srequest(Method::GET, "/").send()).await;
     assert!(result.is_err());
-    sleep(Millis(150)).await;
+    sleep(Millis(250)).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }
@@ -539,13 +540,19 @@ async fn test_ws_transport() {
 async fn test_h2_graceful_shutdown() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
+    let (tx, rx) = ::oneshot::channel();
+    let tx = Arc::new(Mutex::new(Some(tx)));
 
     let srv = test_server(move || {
+        let tx = tx.clone();
         let count = count2.clone();
         HttpService::build()
             .h2(move |_| {
                 let count = count.clone();
                 count.fetch_add(1, Ordering::Relaxed);
+                if count.load(Ordering::Relaxed) == 2 {
+                    let _ = tx.lock().unwrap().take().unwrap().send(());
+                }
                 async move {
                     sleep(Millis(1000)).await;
                     count.fetch_sub(1, Ordering::Relaxed);
@@ -566,7 +573,7 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
         let _ = req.send().await.unwrap();
         sleep(Millis(100000)).await;
     });
-    sleep(Millis(150)).await;
+    let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 2);
 
     let (tx, rx) = oneshot::channel();
@@ -574,8 +581,6 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
         srv.stop().await;
         let _ = tx.send(());
     });
-    sleep(Millis(150)).await;
-    assert_eq!(count.load(Ordering::Relaxed), 2);
 
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 0);

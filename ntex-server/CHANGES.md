@@ -1,5 +1,9 @@
 # Changes
 
+## [2.7.2] - 2025-03-27
+
+* Handle paused state
+
 ## [2.7.1] - 2025-02-28
 
 * Fix set core affinity out of worker start #508

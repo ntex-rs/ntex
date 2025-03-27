@@ -508,19 +508,21 @@ async fn test_client_gzip_encoding_large() {
 async fn test_client_gzip_encoding_large_random() {
     let data = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
-        .take(100_000)
+        .take(1_048_500)
         .map(char::from)
         .collect::<String>();
 
     let srv = test::server(|| {
-        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
-            let mut e = GzEncoder::new(Vec::new(), Compression::default());
-            e.write_all(&data).unwrap();
-            let data = e.finish().unwrap();
-            HttpResponse::Ok()
-                .header("content-encoding", "gzip")
-                .body(data)
-        })))
+        App::new()
+            .state(web::types::PayloadConfig::default().limit(1_048_576))
+            .service(web::resource("/").route(web::to(|data: Bytes| async move {
+                let mut e = GzEncoder::new(Vec::new(), Compression::default());
+                e.write_all(&data).unwrap();
+                let data = e.finish().unwrap();
+                HttpResponse::Ok()
+                    .header("content-encoding", "gzip")
+                    .body(data)
+            })))
     });
 
     // client request
@@ -528,7 +530,7 @@ async fn test_client_gzip_encoding_large_random() {
     assert!(response.status().is_success());
 
     // read response
-    let bytes = response.body().await.unwrap();
+    let bytes = response.body().limit(1_048_576).await.unwrap();
     assert_eq!(bytes, Bytes::from(data));
 }
 

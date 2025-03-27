@@ -114,6 +114,7 @@ flate2 = { version = "1.0", optional = true }
 [dev-dependencies]
 rand = "0.8"
 time = "0.3"
+oneshot = "0.1"
 futures-util = "0.3"
 tls-openssl = { version = "0.10", package = "openssl" }
 tls-rustls = { version = "0.23", package = "rustls", features = ["ring", "std"], default-features = false }
