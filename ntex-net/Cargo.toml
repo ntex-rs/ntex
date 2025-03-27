@@ -40,7 +40,7 @@ ntex-util = "2.5"
 
 ntex-tokio = { version = "0.5.3", optional = true }
 ntex-compio = { version = "0.2.4", optional = true }
-ntex-neon = { version = "0.1.11", optional = true }
+ntex-neon = { version = "0.1.13", optional = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
@@ -57,4 +57,3 @@ polling = { workspace = true, optional = true }
 
 [dev-dependencies]
 ntex = "2"
-env_logger = "0.11"

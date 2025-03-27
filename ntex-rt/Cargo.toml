@@ -43,6 +43,3 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
 ], optional = true }
 
 ntex-neon = { version = "0.1.11", optional = true }
-
-[dev-dependencies]
-env_logger = "0.11"
