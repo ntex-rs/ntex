@@ -202,9 +202,7 @@ impl Accept {
 
         let mut timeout = Some(Duration::ZERO);
         loop {
-            println!("------- ACCEPT LOOP");
             if let Err(e) = self.poller.wait(&mut events, timeout) {
-                println!("------- ACCEPT LOOP ERR: {:?}", e);
                 if e.kind() == io::ErrorKind::Interrupted {
                     continue;
                 } else {
@@ -217,14 +215,12 @@ impl Accept {
                 let _ = self.tx.take().unwrap().send(());
             }
 
-            println!("------- ACCEPTING: {:?}", events.len());
             for idx in 0..self.sockets.len() {
-                if !self.sockets[idx].registered.get() {
-                    println!("------- ACCEPTING NOT REGISTEREED: {:?}", idx);
-                }
-                let readd = self.accept(idx);
-                if readd {
-                    self.add_source(idx);
+                if self.sockets[idx].registered.get() {
+                    let readd = self.accept(idx);
+                    if readd {
+                        self.add_source(idx);
+                    }
                 }
             }
 
@@ -398,26 +394,19 @@ impl Accept {
     }
 
     fn accept(&mut self, token: usize) -> bool {
-        println!("------- ACCEPTING 1 {:?}", token);
         loop {
             if let Some(info) = self.sockets.get_mut(token) {
-                let item = info.sock.accept();
-                println!("------- ACCEPTING {:?}", item);
-                //match info.sock.accept() {
-                match item {
+                match info.sock.accept() {
                     Ok(Some(io)) => {
                         let msg = Connection {
                             io,
                             token: info.token,
                         };
-                        println!("------- ACCEPTED {:?}", msg);
                         if let Err(msg) = self.srv.process(msg) {
                             log::trace!("Server is unavailable");
                             self.backlog.push_back(msg);
                             self.backpressure(true);
                             return false;
-                        } else {
-                            log::debug!("------- SENT ACCEPTED");
                         }
                     }
                     Ok(None) => return true,

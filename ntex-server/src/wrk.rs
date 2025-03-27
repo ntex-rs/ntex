@@ -260,10 +260,7 @@ where
     T: Send + 'static,
     F: ServiceFactory<T> + 'static,
 {
-    println!("------- start worker {:?}", wrk.id);
-
     loop {
-        //println!("------- run worker {:?}", wrk.id);
         let mut recv = std::pin::pin!(wrk.rx.recv());
         let fut = poll_fn(|cx| {
             wrk.waker.register(cx.waker());
@@ -279,11 +276,8 @@ where
                 }
             }
 
-            println!("------- waiting socket {:?}", wrk.id);
             match ready!(recv.as_mut().poll(cx)) {
                 Ok(item) => {
-                    println!("------- got {:?}", wrk.id);
-
                     let fut = svc.call(item);
                     let _ = spawn(async move {
                         let _ = fut.await;
@@ -291,8 +285,6 @@ where
                     Poll::Ready(Ok::<_, F::Error>(true))
                 }
                 Err(_) => {
-                    println!("------- failed {:?}", wrk.id);
-
                     log::error!("Server is gone");
                     Poll::Ready(Ok(false))
                 }

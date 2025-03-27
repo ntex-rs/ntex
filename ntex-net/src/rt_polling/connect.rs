@@ -62,9 +62,7 @@ impl ConnectOps {
         let item = Item { fd, sender };
         let id = self.0.connects.borrow_mut().insert(item);
 
-        self.0
-            .api
-            .attach("-", fd, id as u32, Some(Event::writable(0)));
+        self.0.api.attach(fd, id as u32, Some(Event::writable(0)));
         Ok(id)
     }
 }
@@ -95,7 +93,7 @@ impl Handler for ConnectOpsBatcher {
                     Err(io::Error::from_raw_os_error(err))
                 };
 
-                self.inner.api.detach("-", item.fd, id as u32);
+                self.inner.api.detach(item.fd, id as u32);
                 let _ = item.sender.send(res);
             }
         }
@@ -107,7 +105,7 @@ impl Handler for ConnectOpsBatcher {
         if connects.contains(id) {
             let item = connects.remove(id);
             let _ = item.sender.send(Err(err));
-            self.inner.api.detach("-", item.fd, id as u32);
+            self.inner.api.detach(item.fd, id as u32);
         }
     }
 }

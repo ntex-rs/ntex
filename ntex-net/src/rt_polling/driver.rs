@@ -86,7 +86,6 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
         });
 
         self.0.api.attach(
-            tag,
             fd,
             stream.id,
             Some(Event::new(0, false, false).with_interrupt()),
@@ -163,9 +162,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                 renew_ev.writable = true;
             }
 
-            self.inner
-                .api
-                .modify(item.tag(), item.fd, id as u32, renew_ev);
+            self.inner.api.modify(item.fd, id as u32, renew_ev);
 
             // delayed drops
             if self.inner.delayd_drop.get() {
@@ -223,7 +220,7 @@ fn close<T>(
 ) -> ntex_rt::JoinHandle<io::Result<i32>> {
     let fd = item.fd;
     item.flags.insert(Flags::CLOSED);
-    api.detach(item.tag(), fd, id);
+    api.detach(fd, id);
     ntex_rt::spawn_blocking(move || {
         syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
         syscall!(libc::close(fd))
@@ -327,7 +324,7 @@ impl<T> StreamCtl<T> {
                 }
             }
 
-            self.inner.api.modify(item.tag(), item.fd, self.id, event);
+            self.inner.api.modify(item.fd, self.id, event);
         })
     }
 }
