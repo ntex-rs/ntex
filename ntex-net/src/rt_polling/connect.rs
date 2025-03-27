@@ -22,7 +22,6 @@ struct ConnectOpsBatcher {
 
 struct Item {
     fd: RawFd,
-    tag: &'static str,
     sender: Sender<io::Result<()>>,
 }
 
@@ -50,7 +49,6 @@ impl ConnectOps {
 
     pub(crate) fn connect(
         &self,
-        tag: &'static str,
         fd: RawFd,
         addr: SockAddr,
         sender: Sender<io::Result<()>>,
@@ -61,12 +59,12 @@ impl ConnectOps {
             res?;
         }
 
-        let item = Item { tag, fd, sender };
+        let item = Item { fd, sender };
         let id = self.0.connects.borrow_mut().insert(item);
 
         self.0
             .api
-            .attach(tag, fd, id as u32, Some(Event::writable(0)));
+            .attach("-", fd, id as u32, Some(Event::writable(0)));
         Ok(id)
     }
 }
@@ -97,7 +95,7 @@ impl Handler for ConnectOpsBatcher {
                     Err(io::Error::from_raw_os_error(err))
                 };
 
-                self.inner.api.detach(item.tag, item.fd, id as u32);
+                self.inner.api.detach("-", item.fd, id as u32);
                 let _ = item.sender.send(res);
             }
         }
@@ -109,7 +107,7 @@ impl Handler for ConnectOpsBatcher {
         if connects.contains(id) {
             let item = connects.remove(id);
             let _ = item.sender.send(Err(err));
-            self.inner.api.detach(item.tag, item.fd, id as u32);
+            self.inner.api.detach("-", item.fd, id as u32);
         }
     }
 }
