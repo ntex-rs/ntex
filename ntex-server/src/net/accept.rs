@@ -220,7 +220,7 @@ impl Accept {
             println!("------- ACCEPTING: {:?}", events.len());
             for idx in 0..self.sockets.len() {
                 if !self.sockets[idx].registered.get() {
-                    continue;
+                    println!("------- ACCEPTING NOT REGISTEREED: {:?}", idx);
                 }
                 let readd = self.accept(idx);
                 if readd {
