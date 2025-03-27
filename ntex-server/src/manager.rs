@@ -55,7 +55,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
 
         let no_signals = cfg.no_signals;
         let shared = Arc::new(ServerShared {
-            paused: AtomicBool::new(true),
+            paused: AtomicBool::new(false),
         });
         let mgr = ServerManager(Rc::new(Inner {
             cfg,

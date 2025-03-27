@@ -40,6 +40,7 @@ impl<T> Server<T> {
     /// Send item to worker pool
     pub fn process(&self, item: T) -> Result<(), T> {
         if self.shared.paused.load(Ordering::Acquire) {
+            println!("--------- PAUSED");
             Err(item)
         } else if let Err(e) = self.cmd.try_send(ServerCommand::Item(item)) {
             match e.into_inner() {
