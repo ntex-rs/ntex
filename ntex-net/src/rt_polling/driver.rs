@@ -234,7 +234,7 @@ fn close<T>(
         api.detach(fd, id);
         Some(ntex_rt::spawn_blocking(move || {
             if !error {
-                syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
+                syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
             }
             syscall!(libc::close(fd))
         }))
