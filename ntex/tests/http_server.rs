@@ -723,11 +723,12 @@ async fn test_h1_service_error() {
     assert_eq!(bytes, Bytes::from_static(b"error"));
 }
 
-struct SetOnDrop(Arc<AtomicUsize>);
+struct SetOnDrop(Arc<AtomicUsize>, Option<::oneshot::Sender<()>>);
 
 impl Drop for SetOnDrop {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::Relaxed);
+        let _ = self.1.take().unwrap().send(());
     }
 }
 
@@ -735,13 +736,17 @@ impl Drop for SetOnDrop {
 async fn test_h1_client_drop() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
+    let (tx, rx) = ::oneshot::channel();
+    let tx = Arc::new(Mutex::new(Some(tx)));
 
     let srv = test_server(move || {
+        let tx = tx.clone();
         let count = count2.clone();
         HttpService::build().h1(move |req: Request| {
+            let tx = tx.clone();
             let count = count.clone();
             async move {
-                let _st = SetOnDrop(count);
+                let _st = SetOnDrop(count, tx.lock().unwrap().take());
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_11);
                 sleep(Millis(500)).await;
@@ -752,7 +757,7 @@ async fn test_h1_client_drop() -> io::Result<()> {
 
     let result = timeout(Millis(100), srv.request(Method::GET, "/").send()).await;
     assert!(result.is_err());
-    sleep(Millis(1000)).await;
+    let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }
