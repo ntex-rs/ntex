@@ -55,7 +55,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
 
         let no_signals = cfg.no_signals;
         let shared = Arc::new(ServerShared {
-            paused: AtomicBool::new(false),
+            paused: AtomicBool::new(true),
         });
         let mgr = ServerManager(Rc::new(Inner {
             cfg,
@@ -139,7 +139,6 @@ impl<F: ServerConfiguration> ServerManager<F> {
 fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreId>) {
     let _ = ntex_rt::spawn(async move {
         let id = mgr.next_id();
-
         let mut wrk = Worker::start(id, mgr.factory(), cid);
 
         loop {
@@ -212,10 +211,9 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         match upd {
             Update::Available(worker) => {
                 self.workers.push(worker);
-                if !self.workers.is_empty() {
+                self.workers.sort();
+                if self.workers.len() == 1 {
                     self.mgr.resume();
-                } else {
-                    self.workers.sort();
                 }
             }
             Update::Unavailable(worker) => {
@@ -234,6 +232,9 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 if let Err(item) = self.workers[0].send(item) {
                     self.backlog.push_back(item);
                     self.workers.remove(0);
+                    if self.workers.is_empty() {
+                        self.mgr.pause();
+                    }
                     break;
                 }
             }

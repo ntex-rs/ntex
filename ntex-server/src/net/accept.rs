@@ -203,14 +203,10 @@ impl Accept {
         let mut timeout = Some(Duration::ZERO);
         loop {
             if let Err(e) = self.poller.wait(&mut events, timeout) {
-                if e.kind() == io::ErrorKind::Interrupted {
-                    continue;
-                } else {
+                if e.kind() != io::ErrorKind::Interrupted {
                     panic!("Cannot wait for events in poller: {}", e)
                 }
-            }
-
-            if timeout.is_some() {
+            } else if timeout.is_some() {
                 timeout = None;
                 let _ = self.tx.take().unwrap().send(());
             }

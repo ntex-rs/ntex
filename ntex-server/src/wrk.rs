@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{ready, Context, Poll};
 use std::{cmp, future::poll_fn, future::Future, hash, pin::Pin, sync::Arc};
 
-use async_broadcast::{self as bus, broadcast};
 use async_channel::{unbounded, Receiver, Sender};
+use atomic_waker::AtomicWaker;
 use core_affinity::CoreId;
 
 use ntex_rt::{spawn, Arbiter};
@@ -151,10 +151,8 @@ impl<T> Worker<T> {
         if self.failed.load(Ordering::Acquire) {
             WorkerStatus::Failed
         } else {
-            // cleanup updates
-            while self.avail.notify.try_recv().is_ok() {}
-
-            if self.avail.notify.recv_direct().await.is_err() {
+            self.avail.wait_for_update().await;
+            if self.avail.failed() {
                 self.failed.store(true, Ordering::Release);
             }
             self.status()
@@ -196,43 +194,76 @@ impl Future for WorkerStop {
 
 #[derive(Debug, Clone)]
 struct WorkerAvailability {
-    notify: bus::Receiver<()>,
-    available: Arc<AtomicBool>,
+    inner: Arc<Inner>,
 }
 
 #[derive(Debug, Clone)]
 struct WorkerAvailabilityTx {
-    notify: bus::Sender<()>,
-    available: Arc<AtomicBool>,
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    waker: AtomicWaker,
+    updated: AtomicBool,
+    available: AtomicBool,
+    failed: AtomicBool,
 }
 
 impl WorkerAvailability {
     fn create() -> (Self, WorkerAvailabilityTx) {
-        let (mut tx, rx) = broadcast(16);
-        tx.set_overflow(true);
+        let inner = Arc::new(Inner {
+            waker: AtomicWaker::new(),
+            updated: AtomicBool::new(false),
+            available: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+        });
 
         let avail = WorkerAvailability {
-            notify: rx,
-            available: Arc::new(AtomicBool::new(false)),
+            inner: inner.clone(),
         };
-        let avail_tx = WorkerAvailabilityTx {
-            notify: tx,
-            available: avail.available.clone(),
-        };
+        let avail_tx = WorkerAvailabilityTx { inner };
         (avail, avail_tx)
     }
 
+    fn failed(&self) -> bool {
+        self.inner.failed.load(Ordering::Acquire)
+    }
+
     fn available(&self) -> bool {
-        self.available.load(Ordering::Acquire)
+        self.inner.available.load(Ordering::Acquire)
+    }
+
+    async fn wait_for_update(&self) {
+        poll_fn(|cx| {
+            if self.inner.updated.load(Ordering::Acquire) {
+                self.inner.updated.store(false, Ordering::Release);
+                Poll::Ready(())
+            } else {
+                self.inner.waker.register(cx.waker());
+                Poll::Pending
+            }
+        })
+        .await;
     }
 }
 
 impl WorkerAvailabilityTx {
     fn set(&self, val: bool) {
-        let old = self.available.swap(val, Ordering::Release);
-        if !old && val {
-            let _ = self.notify.try_broadcast(());
+        let old = self.inner.available.swap(val, Ordering::Release);
+        if old != val {
+            self.inner.updated.store(true, Ordering::Release);
+            self.inner.waker.wake();
         }
+    }
+}
+
+impl Drop for WorkerAvailabilityTx {
+    fn drop(&mut self) {
+        self.inner.failed.store(true, Ordering::Release);
+        self.inner.updated.store(true, Ordering::Release);
+        self.inner.available.store(false, Ordering::Release);
+        self.inner.waker.wake();
     }
 }
 
@@ -256,9 +287,12 @@ where
         let mut recv = std::pin::pin!(wrk.rx.recv());
         let fut = poll_fn(|cx| {
             match svc.poll_ready(cx) {
-                Poll::Ready(res) => {
-                    res?;
+                Poll::Ready(Ok(())) => {
                     wrk.availability.set(true);
+                }
+                Poll::Ready(Err(err)) => {
+                    wrk.availability.set(false);
+                    return Poll::Ready(Err(err));
                 }
                 Poll::Pending => {
                     wrk.availability.set(false);
@@ -287,7 +321,6 @@ where
                 let _ = ntex_rt::spawn(async move {
                     svc.shutdown().await;
                 });
-                wrk.availability.set(false);
             }
             Either::Right(Some(Shutdown { timeout, result })) => {
                 wrk.availability.set(false);
@@ -302,6 +335,7 @@ where
                 return;
             }
             Either::Left(Ok(false)) | Either::Right(None) => {
+                wrk.availability.set(false);
                 stop_svc(wrk.id, svc, STOP_TIMEOUT, None).await;
                 return;
             }
@@ -311,7 +345,6 @@ where
         loop {
             match select(wrk.factory.create(()), stream_recv(&mut wrk.stop)).await {
                 Either::Left(Ok(service)) => {
-                    wrk.availability.set(true);
                     svc = Pipeline::new(service).bind();
                     break;
                 }
