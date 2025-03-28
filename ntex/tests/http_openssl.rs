@@ -438,25 +438,22 @@ impl Drop for SetOnDrop {
 async fn test_h2_client_drop() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
-    let (tx, _rx) = ::oneshot::channel();
+    let (tx, rx) = ::oneshot::channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
-    let (tx2, rx2) = ::oneshot::channel();
-    let tx2 = Arc::new(Mutex::new(Some(tx2)));
 
     let srv = test_server(move || {
         let tx = tx.clone();
-        let tx2 = tx2.clone();
         let count = count2.clone();
         HttpService::build()
             .h2(move |req: Request| {
-                let tx = tx.clone();
-                let _ = tx2.lock().unwrap().take().unwrap().send(());
-                let count = count.clone();
+                let st = SetOnDrop(count.clone(), tx.clone());
                 async move {
-                    let _st = SetOnDrop(count, tx);
                     assert!(req.peer_addr().is_some());
                     assert_eq!(req.version(), Version::HTTP_2);
-                    sleep(Seconds(100)).await;
+                    sleep(Seconds(30)).await;
+                    drop(st);
+                    panic!();
+                    #[allow(unreachable_code)]
                     Ok::<_, io::Error>(Response::Ok().finish())
                 }
             })
@@ -464,13 +461,9 @@ async fn test_h2_client_drop() -> io::Result<()> {
             .map_err(|_| ())
     });
 
-    let task = rt::spawn(timeout(Millis(150), srv.srequest(Method::GET, "/").send()));
-    let _ = rx2.await;
-
-    let result = task.await.unwrap();
+    let result = timeout(Millis(150), srv.srequest(Method::GET, "/").send()).await;
     assert!(result.is_err());
-    //let _ = _rx.await;
-    sleep(Millis(150)).await;
+    let _ = timeout(Millis(1000), rx).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }
