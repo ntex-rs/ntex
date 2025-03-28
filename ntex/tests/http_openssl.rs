@@ -452,8 +452,6 @@ async fn test_h2_client_drop() -> io::Result<()> {
                     assert_eq!(req.version(), Version::HTTP_2);
                     sleep(Seconds(30)).await;
                     drop(st);
-                    panic!();
-                    #[allow(unreachable_code)]
                     Ok::<_, io::Error>(Response::Ok().finish())
                 }
             })
