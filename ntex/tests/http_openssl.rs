@@ -446,13 +446,12 @@ async fn test_h2_client_drop() -> io::Result<()> {
         let count = count2.clone();
         HttpService::build()
             .h2(move |req: Request| {
-                let tx = tx.clone();
-                let count = count.clone();
+                let st = SetOnDrop(count.clone(), tx.clone());
                 async move {
-                    let _st = SetOnDrop(count, tx);
                     assert!(req.peer_addr().is_some());
                     assert_eq!(req.version(), Version::HTTP_2);
-                    sleep(Seconds(100)).await;
+                    sleep(Seconds(30)).await;
+                    drop(st);
                     Ok::<_, io::Error>(Response::Ok().finish())
                 }
             })
@@ -460,9 +459,9 @@ async fn test_h2_client_drop() -> io::Result<()> {
             .map_err(|_| ())
     });
 
-    let result = timeout(Millis(250), srv.srequest(Method::GET, "/").send()).await;
+    let result = timeout(Millis(150), srv.srequest(Method::GET, "/").send()).await;
     assert!(result.is_err());
-    let _ = rx.await;
+    let _ = timeout(Millis(1500), rx).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }
