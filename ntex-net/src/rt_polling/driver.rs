@@ -178,7 +178,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                             item.fd,
                             item.io.is_some()
                         );
-                        if item.io.is_some() {
+                        if item.io.take().is_some() {
                             close(id, &mut item, &self.inner.api, false);
                         }
                     }
@@ -371,7 +371,7 @@ impl<T> Drop for StreamCtl<T> {
                     item.fd,
                     item.io.is_some()
                 );
-                if item.io.is_some() {
+                if item.io.take().is_some() {
                     close(self.id, &mut item, &self.inner.api, true);
                 }
             }
