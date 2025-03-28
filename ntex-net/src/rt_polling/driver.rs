@@ -115,8 +115,8 @@ impl<T> Handler for StreamOpsHandler<T> {
 
             // handle HUP
             if ev.is_interrupt() {
-                item.context.stopped(None);
                 if item.io.take().is_some() {
+                    item.context.stopped(None);
                     close(id as u32, item, &self.inner.api, true);
                 }
                 return;
@@ -200,8 +200,8 @@ impl<T> Handler for StreamOpsHandler<T> {
                         err
                     );
                     item.flags.insert(Flags::ERROR);
-                    item.context.stopped(Some(err));
                     if item.io.take().is_some() {
+                        item.context.stopped(Some(err));
                         close(id as u32, item, &self.inner.api, true);
                     }
                 }
