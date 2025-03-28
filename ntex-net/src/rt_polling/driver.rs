@@ -18,7 +18,8 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD     = 0b0000_0001;
         const WR     = 0b0000_0010;
-        const CLOSED = 0b0000_0100;
+        const ERROR  = 0b0000_0100;
+        const CLOSED = 0b0000_1000;
     }
 }
 
@@ -116,7 +117,7 @@ impl<T> Handler for StreamOpsHandler<T> {
             if ev.is_interrupt() {
                 item.context.stopped(None);
                 if item.io.take().is_some() {
-                    close(id as u32, item, &self.inner.api);
+                    close(id as u32, item, &self.inner.api, true);
                 }
                 return;
             }
@@ -178,7 +179,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                             item.io.is_some()
                         );
                         if item.io.is_some() {
-                            close(id, &mut item, &self.inner.api);
+                            close(id, &mut item, &self.inner.api, false);
                         }
                     }
                 }
@@ -190,16 +191,19 @@ impl<T> Handler for StreamOpsHandler<T> {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(item) = streams.get_mut(id) {
-                log::debug!(
-                    "{}: FD is failed ({}) {:?}, err: {:?}",
-                    item.tag(),
-                    id,
-                    item.fd,
-                    err
-                );
-                item.context.stopped(Some(err));
-                if item.io.take().is_some() {
-                    close(id as u32, item, &self.inner.api);
+                if !item.flags.contains(Flags::ERROR) {
+                    log::debug!(
+                        "{}: FD is failed ({}) {:?}, err: {:?}",
+                        item.tag(),
+                        id,
+                        item.fd,
+                        err
+                    );
+                    item.flags.insert(Flags::ERROR);
+                    item.context.stopped(Some(err));
+                    if item.io.take().is_some() {
+                        close(id as u32, item, &self.inner.api, true);
+                    }
                 }
             }
         })
@@ -222,14 +226,21 @@ fn close<T>(
     id: u32,
     item: &mut StreamItem<T>,
     api: &DriverApi,
-) -> ntex_rt::JoinHandle<io::Result<i32>> {
-    let fd = item.fd;
-    item.flags.insert(Flags::CLOSED);
-    api.detach(fd, id);
-    ntex_rt::spawn_blocking(move || {
-        syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
-        syscall!(libc::close(fd))
-    })
+    error: bool,
+) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
+    if !item.flags.contains(Flags::CLOSED) {
+        let fd = item.fd;
+        item.flags.insert(Flags::CLOSED);
+        api.detach(fd, id);
+        Some(ntex_rt::spawn_blocking(move || {
+            if !error {
+                syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
+            }
+            syscall!(libc::close(fd))
+        }))
+    } else {
+        None
+    }
 }
 
 impl<T> StreamCtl<T> {
@@ -240,13 +251,13 @@ impl<T> StreamCtl<T> {
             if let Some(io) = item.io.take() {
                 log::debug!("{}: Closing ({}), {:?}", item.tag(), id, item.fd);
                 std::mem::forget(io);
-                Some(close(self.id, item, &self.inner.api))
+                Some(close(self.id, item, &self.inner.api, false))
             } else {
                 None
             }
         });
         async move {
-            if let Some(fut) = fut {
+            if let Some(Some(fut)) = fut {
                 fut.await
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
                     .and_then(crate::helpers::pool_io_err)?;
@@ -361,7 +372,7 @@ impl<T> Drop for StreamCtl<T> {
                     item.io.is_some()
                 );
                 if item.io.is_some() {
-                    close(self.id, &mut item, &self.inner.api);
+                    close(self.id, &mut item, &self.inner.api, true);
                 }
             }
             self.inner.streams.set(Some(streams));
