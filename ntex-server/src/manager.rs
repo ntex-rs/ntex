@@ -180,7 +180,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     fn process(&mut self, mut item: F::Item) {
         loop {
             if !self.workers.is_empty() {
-                if self.next > self.workers.len() {
+                if self.next >= self.workers.len() {
                     self.next = self.workers.len() - 1;
                 }
                 match self.workers[self.next].send(item) {

@@ -1,5 +1,5 @@
 use std::os::fd::{AsRawFd, RawFd};
-use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task, task::Poll};
+use std::{cell::Cell, cell::RefCell, future::Future, io, mem, rc::Rc, task, task::Poll};
 
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
@@ -18,7 +18,6 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD     = 0b0000_0001;
         const WR     = 0b0000_0010;
-        const CLOSED = 0b0000_0100;
     }
 }
 
@@ -106,18 +105,15 @@ impl<T> Handler for StreamOpsHandler<T> {
                 return;
             }
             let item = &mut streams[id];
-            log::debug!("{}: FD event {:?} event: {:?}", item.tag(), id, ev);
-
-            if item.flags.contains(Flags::CLOSED) {
+            if item.io.is_none() {
                 return;
             }
+            log::debug!("{}: FD event {:?} event: {:?}", item.tag(), id, ev);
 
             // handle HUP
             if ev.is_interrupt() {
                 item.context.stopped(None);
-                if item.io.take().is_some() {
-                    close(id as u32, item, &self.inner.api);
-                }
+                close(id as u32, item, &self.inner.api, None, true);
                 return;
             }
 
@@ -177,9 +173,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                             item.fd,
                             item.io.is_some()
                         );
-                        if item.io.is_some() {
-                            close(id, &mut item, &self.inner.api);
-                        }
+                        close(id, &mut item, &self.inner.api, None, true);
                     }
                 }
                 self.inner.delayd_drop.set(false);
@@ -197,10 +191,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                     item.fd,
                     err
                 );
-                item.context.stopped(Some(err));
-                if item.io.take().is_some() {
-                    close(id as u32, item, &self.inner.api);
-                }
+                close(id as u32, item, &self.inner.api, Some(err), false);
             }
         })
     }
@@ -222,14 +213,26 @@ fn close<T>(
     id: u32,
     item: &mut StreamItem<T>,
     api: &DriverApi,
-) -> ntex_rt::JoinHandle<io::Result<i32>> {
-    let fd = item.fd;
-    item.flags.insert(Flags::CLOSED);
-    api.detach(fd, id);
-    ntex_rt::spawn_blocking(move || {
-        syscall!(libc::shutdown(fd, libc::SHUT_RDWR))?;
-        syscall!(libc::close(fd))
-    })
+    error: Option<io::Error>,
+    shutdown: bool,
+) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
+    if let Some(io) = item.io.take() {
+        log::debug!("{}: Closing ({}), {:?}", item.tag(), id, item.fd);
+        mem::forget(io);
+        if let Some(err) = error {
+            item.context.stopped(Some(err));
+        }
+        let fd = item.fd;
+        api.detach(fd, id);
+        Some(ntex_rt::spawn_blocking(move || {
+            if shutdown {
+                let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
+            }
+            syscall!(libc::close(fd))
+        }))
+    } else {
+        None
+    }
 }
 
 impl<T> StreamCtl<T> {
@@ -237,13 +240,7 @@ impl<T> StreamCtl<T> {
         let id = self.id as usize;
         let fut = self.inner.with(|streams| {
             let item = &mut streams[id];
-            if let Some(io) = item.io.take() {
-                log::debug!("{}: Closing ({}), {:?}", item.tag(), id, item.fd);
-                std::mem::forget(io);
-                Some(close(self.id, item, &self.inner.api))
-            } else {
-                None
-            }
+            close(self.id, item, &self.inner.api, None, false)
         });
         async move {
             if let Some(fut) = fut {
@@ -360,9 +357,7 @@ impl<T> Drop for StreamCtl<T> {
                     item.fd,
                     item.io.is_some()
                 );
-                if item.io.is_some() {
-                    close(self.id, &mut item, &self.inner.api);
-                }
+                close(self.id, &mut item, &self.inner.api, None, true);
             }
             self.inner.streams.set(Some(streams));
         } else {
