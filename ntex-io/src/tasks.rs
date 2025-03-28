@@ -537,7 +537,9 @@ impl IoContext {
                                 self.0.tag(),
                                 nbytes
                             );
-                            inner.dispatch_task.wake();
+                            if !inner.dispatch_task.wake_checked() {
+                                log::error!("Dispatcher waker is not registered");
+                            }
                         } else {
                             if nbytes >= hw {
                                 // read task is paused because of read back-pressure
@@ -735,22 +737,6 @@ impl IoContext {
         false
     }
 
-    pub fn is_write_ready(&self) -> bool {
-        if let Some(waker) = self.0 .0.write_task.take() {
-            let ready = self
-                .0
-                .filter()
-                .poll_write_ready(&mut Context::from_waker(&waker));
-            if !matches!(
-                ready,
-                Poll::Ready(WriteStatus::Ready | WriteStatus::Shutdown)
-            ) {
-                return true;
-            }
-        }
-        false
-    }
-
     pub fn with_read_buf<F>(&self, f: F) -> Poll<()>
     where
         F: FnOnce(&mut BytesVec) -> Poll<io::Result<usize>>,
@@ -803,7 +789,9 @@ impl IoContext {
                                 self.0.tag(),
                                 nbytes
                             );
-                            inner.dispatch_task.wake();
+                            if !inner.dispatch_task.wake_checked() {
+                                log::error!("Dispatcher waker is not registered");
+                            }
                         } else {
                             if nbytes >= hw {
                                 // read task is paused because of read back-pressure

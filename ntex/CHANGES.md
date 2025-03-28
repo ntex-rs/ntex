@@ -1,5 +1,11 @@
 # Changes
 
+## [2.12.4] - 2025-03-28
+
+* http: Return PayloadError::Incomplete on server disconnect
+
+* web: Expose WebStack for external wrapper support in downstream crates #542
+
 ## [2.12.3] - 2025-03-22
 
 * web: Export web::app_service::AppService #534

@@ -112,6 +112,8 @@ mod tokio {
     ///
     /// This function panics if ntex system is not running.
     #[inline]
+    #[doc(hidden)]
+    #[deprecated]
     pub fn spawn_fn<F, R>(f: F) -> tok_io::task::JoinHandle<R::Output>
     where
         F: FnOnce() -> R + 'static,
@@ -196,6 +198,8 @@ mod compio {
     ///
     /// This function panics if ntex system is not running.
     #[inline]
+    #[doc(hidden)]
+    #[deprecated]
     pub fn spawn_fn<F, R>(f: F) -> JoinHandle<R::Output>
     where
         F: FnOnce() -> R + 'static,
@@ -323,6 +327,8 @@ mod neon {
     ///
     /// This function panics if ntex system is not running.
     #[inline]
+    #[doc(hidden)]
+    #[deprecated]
     pub fn spawn_fn<F, R>(f: F) -> Task<R::Output>
     where
         F: FnOnce() -> R + 'static,
@@ -377,7 +383,7 @@ mod neon {
 
     impl<T> JoinHandle<T> {
         pub fn is_finished(&self) -> bool {
-            false
+            self.fut.is_none()
         }
     }
 
