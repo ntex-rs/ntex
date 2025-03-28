@@ -105,11 +105,10 @@ impl<T> Handler for StreamOpsHandler<T> {
                 return;
             }
             let item = &mut streams[id];
-            log::debug!("{}: FD event {:?} event: {:?}", item.tag(), id, ev);
-
             if item.io.is_none() {
                 return;
             }
+            log::debug!("{}: FD event {:?} event: {:?}", item.tag(), id, ev);
 
             // handle HUP
             if ev.is_interrupt() {
