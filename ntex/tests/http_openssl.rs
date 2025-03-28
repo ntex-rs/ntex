@@ -438,15 +438,19 @@ impl Drop for SetOnDrop {
 async fn test_h2_client_drop() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
-    let (tx, rx) = ::oneshot::channel();
+    let (tx, _rx) = ::oneshot::channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
+    let (tx2, rx2) = ::oneshot::channel();
+    let tx2 = Arc::new(Mutex::new(Some(tx2)));
 
     let srv = test_server(move || {
         let tx = tx.clone();
+        let tx2 = tx2.clone();
         let count = count2.clone();
         HttpService::build()
             .h2(move |req: Request| {
                 let tx = tx.clone();
+                let _ = tx2.lock().unwrap().take().unwrap().send(());
                 let count = count.clone();
                 async move {
                     let _st = SetOnDrop(count, tx);
@@ -460,9 +464,13 @@ async fn test_h2_client_drop() -> io::Result<()> {
             .map_err(|_| ())
     });
 
-    let result = timeout(Millis(250), srv.srequest(Method::GET, "/").send()).await;
+    let task = rt::spawn(timeout(Millis(150), srv.srequest(Method::GET, "/").send()));
+    let _ = rx2.await;
+
+    let result = task.await.unwrap();
     assert!(result.is_err());
-    let _ = rx.await;
+    //let _ = _rx.await;
+    sleep(Millis(150)).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }
