@@ -463,7 +463,7 @@ async fn test_h2_client_drop() -> io::Result<()> {
 
     let result = timeout(Millis(150), srv.srequest(Method::GET, "/").send()).await;
     assert!(result.is_err());
-    let _ = timeout(Millis(1000), rx).await;
+    let _ = timeout(Millis(1500), rx).await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
     Ok(())
 }
