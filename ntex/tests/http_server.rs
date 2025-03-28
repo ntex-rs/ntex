@@ -749,13 +749,13 @@ async fn test_h1_client_drop() -> io::Result<()> {
                 let _st = SetOnDrop(count, tx.lock().unwrap().take());
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_11);
-                sleep(Millis(500)).await;
+                sleep(Millis(50000)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             }
         })
     });
 
-    let result = timeout(Millis(100), srv.request(Method::GET, "/").send()).await;
+    let result = timeout(Millis(1500), srv.request(Method::GET, "/").send()).await;
     assert!(result.is_err());
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
