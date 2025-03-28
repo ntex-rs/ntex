@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{ready, Context, Poll};
 use std::{cmp, future::poll_fn, future::Future, hash, pin::Pin, sync::Arc};
 
-use async_broadcast::{self as bus, broadcast};
 use async_channel::{unbounded, Receiver, Sender};
+use atomic_waker::AtomicWaker;
 use core_affinity::CoreId;
 
 use ntex_rt::{spawn, Arbiter};
@@ -151,10 +151,8 @@ impl<T> Worker<T> {
         if self.failed.load(Ordering::Acquire) {
             WorkerStatus::Failed
         } else {
-            // cleanup updates
-            while self.avail.notify.try_recv().is_ok() {}
-
-            if self.avail.notify.recv_direct().await.is_err() {
+            self.avail.wait_for_update().await;
+            if self.avail.failed() {
                 self.failed.store(true, Ordering::Release);
             }
             self.status()
@@ -196,43 +194,76 @@ impl Future for WorkerStop {
 
 #[derive(Debug, Clone)]
 struct WorkerAvailability {
-    notify: bus::Receiver<()>,
-    available: Arc<AtomicBool>,
+    inner: Arc<Inner>,
 }
 
 #[derive(Debug, Clone)]
 struct WorkerAvailabilityTx {
-    notify: bus::Sender<()>,
-    available: Arc<AtomicBool>,
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    waker: AtomicWaker,
+    updated: AtomicBool,
+    available: AtomicBool,
+    failed: AtomicBool,
 }
 
 impl WorkerAvailability {
     fn create() -> (Self, WorkerAvailabilityTx) {
-        let (mut tx, rx) = broadcast(16);
-        tx.set_overflow(true);
+        let inner = Arc::new(Inner {
+            waker: AtomicWaker::new(),
+            updated: AtomicBool::new(false),
+            available: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+        });
 
         let avail = WorkerAvailability {
-            notify: rx,
-            available: Arc::new(AtomicBool::new(false)),
+            inner: inner.clone(),
         };
-        let avail_tx = WorkerAvailabilityTx {
-            notify: tx,
-            available: avail.available.clone(),
-        };
+        let avail_tx = WorkerAvailabilityTx { inner };
         (avail, avail_tx)
     }
 
+    fn failed(&self) -> bool {
+        self.inner.failed.load(Ordering::Acquire)
+    }
+
     fn available(&self) -> bool {
-        self.available.load(Ordering::Acquire)
+        self.inner.available.load(Ordering::Acquire)
+    }
+
+    async fn wait_for_update(&self) {
+        poll_fn(|cx| {
+            if self.inner.updated.load(Ordering::Acquire) {
+                self.inner.updated.store(false, Ordering::Release);
+                Poll::Ready(())
+            } else {
+                self.inner.waker.register(cx.waker());
+                Poll::Pending
+            }
+        })
+        .await;
     }
 }
 
 impl WorkerAvailabilityTx {
     fn set(&self, val: bool) {
-        let old = self.available.swap(val, Ordering::Release);
-        if !old && val {
-            let _ = self.notify.try_broadcast(());
+        let old = self.inner.available.swap(val, Ordering::Release);
+        if old != val {
+            self.inner.updated.store(true, Ordering::Release);
+            self.inner.waker.wake();
         }
+    }
+}
+
+impl Drop for WorkerAvailabilityTx {
+    fn drop(&mut self) {
+        self.inner.failed.store(true, Ordering::Release);
+        self.inner.updated.store(true, Ordering::Release);
+        self.inner.available.store(false, Ordering::Release);
+        self.inner.waker.wake();
     }
 }
 

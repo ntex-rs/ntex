@@ -1,5 +1,9 @@
 # Changes
 
+## [2.7.3] - 2025-03-28
+
+* Better worker availability handling
+
 ## [2.7.2] - 2025-03-27
 
 * Handle paused state
