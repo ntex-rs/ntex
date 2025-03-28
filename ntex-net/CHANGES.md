@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.10] - 2025-03-28
+
+* Better closed sockets handling
+
 ## [2.5.9] - 2025-03-27
 
 * Handle closed sockets

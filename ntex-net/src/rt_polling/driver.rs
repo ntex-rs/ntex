@@ -1,5 +1,5 @@
 use std::os::fd::{AsRawFd, RawFd};
-use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task, task::Poll};
+use std::{cell::Cell, cell::RefCell, future::Future, io, mem, rc::Rc, task, task::Poll};
 
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
@@ -18,8 +18,6 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD     = 0b0000_0001;
         const WR     = 0b0000_0010;
-        const ERROR  = 0b0000_0100;
-        const CLOSED = 0b0000_1000;
     }
 }
 
@@ -109,16 +107,14 @@ impl<T> Handler for StreamOpsHandler<T> {
             let item = &mut streams[id];
             log::debug!("{}: FD event {:?} event: {:?}", item.tag(), id, ev);
 
-            if item.flags.contains(Flags::CLOSED) {
+            if item.io.is_none() {
                 return;
             }
 
             // handle HUP
             if ev.is_interrupt() {
-                if item.io.take().is_some() {
-                    item.context.stopped(None);
-                    close(id as u32, item, &self.inner.api, true);
-                }
+                item.context.stopped(None);
+                close(id as u32, item, &self.inner.api, None, true);
                 return;
             }
 
@@ -178,9 +174,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                             item.fd,
                             item.io.is_some()
                         );
-                        if item.io.take().is_some() {
-                            close(id, &mut item, &self.inner.api, false);
-                        }
+                        close(id, &mut item, &self.inner.api, None, true);
                     }
                 }
                 self.inner.delayd_drop.set(false);
@@ -191,20 +185,14 @@ impl<T> Handler for StreamOpsHandler<T> {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(item) = streams.get_mut(id) {
-                if !item.flags.contains(Flags::ERROR) {
-                    log::debug!(
-                        "{}: FD is failed ({}) {:?}, err: {:?}",
-                        item.tag(),
-                        id,
-                        item.fd,
-                        err
-                    );
-                    item.flags.insert(Flags::ERROR);
-                    if item.io.take().is_some() {
-                        item.context.stopped(Some(err));
-                        close(id as u32, item, &self.inner.api, true);
-                    }
-                }
+                log::debug!(
+                    "{}: FD is failed ({}) {:?}, err: {:?}",
+                    item.tag(),
+                    id,
+                    item.fd,
+                    err
+                );
+                close(id as u32, item, &self.inner.api, Some(err), false);
             }
         })
     }
@@ -226,15 +214,20 @@ fn close<T>(
     id: u32,
     item: &mut StreamItem<T>,
     api: &DriverApi,
-    error: bool,
+    error: Option<io::Error>,
+    shutdown: bool,
 ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
-    if !item.flags.contains(Flags::CLOSED) {
+    if let Some(io) = item.io.take() {
+        log::debug!("{}: Closing ({}), {:?}", item.tag(), id, item.fd);
+        mem::forget(io);
+        if let Some(err) = error {
+            item.context.stopped(Some(err));
+        }
         let fd = item.fd;
-        item.flags.insert(Flags::CLOSED);
         api.detach(fd, id);
         Some(ntex_rt::spawn_blocking(move || {
-            if !error {
-                syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
+            if shutdown {
+                let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
             }
             syscall!(libc::close(fd))
         }))
@@ -248,16 +241,10 @@ impl<T> StreamCtl<T> {
         let id = self.id as usize;
         let fut = self.inner.with(|streams| {
             let item = &mut streams[id];
-            if let Some(io) = item.io.take() {
-                log::debug!("{}: Closing ({}), {:?}", item.tag(), id, item.fd);
-                std::mem::forget(io);
-                Some(close(self.id, item, &self.inner.api, false))
-            } else {
-                None
-            }
+            close(self.id, item, &self.inner.api, None, false)
         });
         async move {
-            if let Some(Some(fut)) = fut {
+            if let Some(fut) = fut {
                 fut.await
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
                     .and_then(crate::helpers::pool_io_err)?;
@@ -371,9 +358,7 @@ impl<T> Drop for StreamCtl<T> {
                     item.fd,
                     item.io.is_some()
                 );
-                if item.io.take().is_some() {
-                    close(self.id, &mut item, &self.inner.api, true);
-                }
+                close(self.id, &mut item, &self.inner.api, None, true);
             }
             self.inner.streams.set(Some(streams));
         } else {
