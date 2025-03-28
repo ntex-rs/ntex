@@ -155,7 +155,6 @@ impl<T> Worker<T> {
             if self.avail.failed() {
                 self.failed.store(true, Ordering::Release);
             }
-            println!("-------- update status {:?}", self.status());
             self.status()
         }
     }
@@ -238,7 +237,6 @@ impl WorkerAvailability {
     async fn wait_for_update(&self) {
         poll_fn(|cx| {
             if self.inner.updated.load(Ordering::Acquire) {
-                println!("-------- status updated");
                 self.inner.updated.store(false, Ordering::Release);
                 Poll::Ready(())
             } else {
@@ -290,16 +288,13 @@ where
         let fut = poll_fn(|cx| {
             match svc.poll_ready(cx) {
                 Poll::Ready(Ok(())) => {
-                    println!("-------- status updated: ready");
                     wrk.availability.set(true);
                 }
                 Poll::Ready(Err(err)) => {
-                    println!("-------- status updated: failed");
                     wrk.availability.set(false);
                     return Poll::Ready(Err(err));
                 }
                 Poll::Pending => {
-                    println!("-------- status updated: pending");
                     wrk.availability.set(false);
                     return Poll::Pending;
                 }

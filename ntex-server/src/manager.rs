@@ -208,10 +208,8 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 
     fn update_workers(&mut self, upd: Update<F::Item>) {
-        println!("======== UPDATE WORKERS ===================== {:?}", self.workers.len());
         match upd {
             Update::Available(worker) => {
-                println!("======== UPDATE WORKERS: avail");
                 self.workers.push(worker);
                 self.workers.sort();
                 if self.workers.len() == 1 {
@@ -219,7 +217,6 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 }
             }
             Update::Unavailable(worker) => {
-                println!("======== UPDATE WORKERS: not-avail {:?}", self.workers.len());
                 if let Ok(idx) = self.workers.binary_search(&worker) {
                     self.workers.remove(idx);
                 }
