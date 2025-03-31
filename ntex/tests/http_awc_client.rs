@@ -682,15 +682,18 @@ async fn client_read_until_eof() {
         for stream in lst.incoming() {
             if let Ok(mut stream) = stream {
                 let mut b = [0; 1000];
-                let _ = stream.read(&mut b).unwrap();
-                let _ = stream
+                log::debug!("Reading request");
+                let res = stream.read(&mut b).unwrap();
+                log::debug!("Read {:?}", res);
+                let res = stream
                     .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
+                log::debug!("Sent {:?}", res);
             } else {
                 break;
             }
         }
     });
-    sleep(Millis(300)).await;
+    sleep(Millis(500)).await;
 
     // client request
     let req = Client::build()

@@ -46,7 +46,10 @@ ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
 ntex-neon = { git = "https://github.com/ntex-rs/neon.git" }
+polling = { git = "https://github.com/fafhrd91/polling.git" }
+
 #ntex-neon = { path = "../dev/neon" }
+#polling = { path = "../dev/polling" }
 
 [workspace.dependencies]
 async-channel = "2"

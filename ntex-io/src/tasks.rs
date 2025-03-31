@@ -739,19 +739,11 @@ impl IoContext {
 
     pub fn with_read_buf<F>(&self, f: F) -> Poll<()>
     where
-        F: FnOnce(&mut BytesVec) -> Poll<io::Result<usize>>,
+        F: FnOnce(&mut BytesVec, usize, usize) -> Poll<io::Result<usize>>,
     {
         let inner = &self.0 .0;
         let (hw, lw) = self.0.memory_pool().read_params().unpack();
-        let result = inner.buffer.with_read_source(&self.0, |buf| {
-            // make sure we've got room
-            let remaining = buf.remaining_mut();
-            if remaining < lw {
-                buf.reserve(hw - remaining);
-            }
-
-            f(buf)
-        });
+        let result = inner.buffer.with_read_source(&self.0, |buf| f(buf, hw, lw));
 
         // handle buffer changes
         match result {

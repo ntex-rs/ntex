@@ -34,7 +34,7 @@ io-uring = ["ntex-neon/io-uring", "dep:io-uring", "socket2"]
 ntex-service = "3.3"
 ntex-bytes = "0.1"
 ntex-http = "0.1"
-ntex-io = "2.11.1"
+ntex-io = "2.11.2"
 ntex-rt = "0.4.25"
 ntex-util = "2.5"
 
@@ -57,3 +57,4 @@ polling = { workspace = true, optional = true }
 
 [dev-dependencies]
 ntex = "2"
+oneshot = "0.1"
