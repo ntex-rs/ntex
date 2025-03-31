@@ -68,6 +68,7 @@ pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io> {
     )?)))
 }
 
+#[cfg(all(target_os = "linux", feature = "neon"))]
 #[cfg(test)]
 mod tests {
     use ntex::{io::Io, time::sleep, time::Millis, util::PoolId};
@@ -97,7 +98,7 @@ mod tests {
                          Hello World Hello World Hello World Hello World Hello World \
                          Hello World Hello World Hello World Hello World Hello World";
 
-    // #[ntex::test]
+    #[ntex::test]
     async fn idle_disconnect() {
         PoolId::P5.set_read_params(24, 12);
         let (tx, rx) = ::oneshot::channel();

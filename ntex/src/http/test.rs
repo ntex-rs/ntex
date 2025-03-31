@@ -252,8 +252,6 @@ where
             Ok(())
         })
     });
-    thread::sleep(std::time::Duration::from_millis(150));
-
     let (system, server, addr) = rx.recv().unwrap();
 
     TestServer {

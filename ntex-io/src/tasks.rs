@@ -670,7 +670,6 @@ impl IoContext {
         // set buffer back
         let result = match result {
             Ok(0) => {
-                // log::debug!("{}: WROTE ALL {:?}", self.0.tag(), inner.buffer.write_destination_size());
                 self.0.memory_pool().release_write_buf(buf);
                 Ok(inner.buffer.write_destination_size())
             }
@@ -680,7 +679,6 @@ impl IoContext {
                     self.0.memory_pool().release_write_buf(b);
                 }
                 let l = buf.len();
-                // log::debug!("{}: WROTE SOME {:?}", self.0.tag(), l);
                 inner.buffer.set_write_destination(buf);
                 Ok(l)
             }
@@ -782,7 +780,7 @@ impl IoContext {
                                 nbytes
                             );
                             if !inner.dispatch_task.wake_checked() {
-                                log::error!("Dispatcher waker is not registered");
+                                log::error!("Dispatcher waker is not registered, bytes: {:?}, flags: {:?}", status.nbytes, inner.flags.get());
                             }
                         } else {
                             if nbytes >= hw {
