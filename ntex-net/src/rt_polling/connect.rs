@@ -34,7 +34,7 @@ impl ConnectOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 let ops = Rc::new(ConnectOpsInner {
                     api,
                     connects: RefCell::new(Slab::new()),

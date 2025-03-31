@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "2.5.10"
+version = "2.5.11"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -40,7 +40,7 @@ ntex-util = "2.5"
 
 ntex-tokio = { version = "0.5.3", optional = true }
 ntex-compio = { version = "0.2.4", optional = true }
-ntex-neon = { version = "0.1.15", optional = true }
+ntex-neon = { version = "0.1.16", optional = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }

@@ -42,4 +42,4 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
     "net",
 ], optional = true }
 
-ntex-neon = { version = "0.1.14", optional = true }
+ntex-neon = { version = "0.1.15", optional = true }

@@ -52,7 +52,7 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     feed: RefCell::new(Vec::new()),
