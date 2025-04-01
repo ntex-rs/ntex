@@ -1,7 +1,7 @@
 use std::os::fd::RawFd;
 use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task::Poll};
 
-use ntex_neon::driver::{DriverApi, Event, Handler, PollMode};
+use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
 
@@ -48,7 +48,7 @@ impl StreamOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.register_handler(|api| {
+            rt.driver().register(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     feed: RefCell::new(Vec::new()),
@@ -84,8 +84,7 @@ impl StreamOps {
         self.0.api.attach(
             fd,
             stream.id,
-            Event::new(0, false, false).with_interrupt(),
-            PollMode::Oneshot,
+            Some(Event::new(0, false, false).with_interrupt()),
         );
         stream
     }
@@ -142,9 +141,7 @@ impl Handler for StreamOpsHandler {
             }
 
             if !item.flags.contains(Flags::CLOSED | Flags::FAILED) {
-                self.inner
-                    .api
-                    .modify(item.fd, id as u32, renew, PollMode::Oneshot);
+                self.inner.api.modify(item.fd, id as u32, renew);
             }
 
             // delayed drops
@@ -374,9 +371,7 @@ impl StreamCtl {
             }
 
             if changed && !item.flags.contains(Flags::CLOSED | Flags::FAILED) {
-                self.inner
-                    .api
-                    .modify(item.fd, self.id, event, PollMode::Oneshot);
+                self.inner.api.modify(item.fd, self.id, event);
             }
             true
         })
