@@ -124,6 +124,10 @@ impl<T: os::fd::AsRawFd + 'static> StreamOps<T> {
         }
     }
 
+    pub(crate) fn active_ops() -> usize {
+        Self::current().with(|st| st.streams.len())
+    }
+
     fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut StreamOpsStorage<T>) -> R,

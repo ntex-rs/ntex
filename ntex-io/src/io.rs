@@ -98,17 +98,19 @@ impl IoState {
     }
 
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
-        if err.is_some() {
-            self.error.set(err);
+        if !self.flags.get().contains(Flags::IO_STOPPED) {
+            if err.is_some() {
+                self.error.set(err);
+            }
+            self.read_task.wake();
+            self.write_task.wake();
+            self.dispatch_task.wake();
+            self.notify_disconnect();
+            self.handle.take();
+            self.insert_flags(
+                Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
+            );
         }
-        self.read_task.wake();
-        self.write_task.wake();
-        self.dispatch_task.wake();
-        self.notify_disconnect();
-        self.handle.take();
-        self.insert_flags(
-            Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
-        );
     }
 
     /// Gracefully shutdown read and write io tasks

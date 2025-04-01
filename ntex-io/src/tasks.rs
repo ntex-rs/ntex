@@ -537,9 +537,7 @@ impl IoContext {
                                 self.0.tag(),
                                 nbytes
                             );
-                            if !inner.dispatch_task.wake_checked() {
-                                log::error!("Dispatcher waker is not registered");
-                            }
+                            inner.dispatch_task.wake();
                         } else {
                             if nbytes >= hw {
                                 // read task is paused because of read back-pressure
@@ -779,11 +777,7 @@ impl IoContext {
                                 self.0.tag(),
                                 nbytes
                             );
-                            if !inner.dispatch_task.wake_checked() {
-                                log::error!(
-                                    "{}: Dispatcher waker is not registered, bytes: {:?}, flags: {:?}",
-                                    self.0.tag(), status.nbytes, self.flags());
-                            }
+                            inner.dispatch_task.wake();
                         } else {
                             if nbytes >= hw {
                                 // read task is paused because of read back-pressure
