@@ -85,6 +85,10 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
         })
     }
 
+    pub(crate) fn active_ops() -> usize {
+        Self::current().0.with(|streams| streams.len())
+    }
+
     pub(crate) fn register(&self, io: T, context: IoContext) -> StreamCtl<T> {
         let fd = io.as_raw_fd();
         let stream = self.0.with(move |streams| {

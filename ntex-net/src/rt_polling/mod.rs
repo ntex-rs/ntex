@@ -68,6 +68,12 @@ pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io> {
     )?)))
 }
 
+#[doc(hidden)]
+/// Get number of active Io objects
+pub fn active_stream_ops() -> usize {
+    self::driver::StreamOps::<socket2::Socket>::active_ops()
+}
+
 #[cfg(all(target_os = "linux", feature = "neon"))]
 #[cfg(test)]
 mod tests {
