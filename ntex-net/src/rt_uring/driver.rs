@@ -77,7 +77,7 @@ impl<T: os::fd::AsRawFd + 'static> StreamOps<T> {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 if !api.is_supported(opcode::Recv::CODE) {
                     panic!("opcode::Recv is required for io-uring support");
                 }

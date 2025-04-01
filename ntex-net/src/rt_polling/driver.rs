@@ -1,7 +1,7 @@
 use std::os::fd::{AsRawFd, RawFd};
 use std::{cell::Cell, cell::RefCell, future::Future, io, mem, rc::Rc, task, task::Poll};
 
-use ntex_neon::driver::{DriverApi, Event, Handler};
+use ntex_neon::driver::{DriverApi, Event, Handler, PollMode};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
 
@@ -52,7 +52,7 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     feed: RefCell::new(Vec::new()),
@@ -86,7 +86,8 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
         self.0.api.attach(
             fd,
             stream.id,
-            Some(Event::new(0, false, false).with_interrupt()),
+            Event::new(0, false, false).with_interrupt(),
+            PollMode::Oneshot,
         );
         stream
     }
@@ -157,7 +158,9 @@ impl<T> Handler for StreamOpsHandler<T> {
                 renew_ev.writable = true;
             }
 
-            self.inner.api.modify(item.fd, id as u32, renew_ev);
+            self.inner
+                .api
+                .modify(item.fd, id as u32, renew_ev, PollMode::Oneshot);
 
             // delayed drops
             if self.inner.delayd_drop.get() {
@@ -326,7 +329,9 @@ impl<T> StreamCtl<T> {
                 }
             }
 
-            self.inner.api.modify(item.fd, self.id, event);
+            self.inner
+                .api
+                .modify(item.fd, self.id, event, PollMode::Oneshot);
         })
     }
 }

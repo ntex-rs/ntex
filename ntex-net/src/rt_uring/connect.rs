@@ -31,7 +31,7 @@ impl ConnectOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 if !api.is_supported(opcode::Connect::CODE) {
                     panic!("opcode::Connect is required for io-uring support");
                 }
