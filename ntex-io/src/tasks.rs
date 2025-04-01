@@ -780,7 +780,9 @@ impl IoContext {
                                 nbytes
                             );
                             if !inner.dispatch_task.wake_checked() {
-                                log::error!("Dispatcher waker is not registered, bytes: {:?}, flags: {:?}", status.nbytes, inner.flags.get());
+                                log::error!(
+                                    "{}: Dispatcher waker is not registered, bytes: {:?}, flags: {:?}",
+                                    self.0.tag(), status.nbytes, self.flags());
                             }
                         } else {
                             if nbytes >= hw {
