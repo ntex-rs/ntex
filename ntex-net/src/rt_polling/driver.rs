@@ -84,7 +84,7 @@ impl StreamOps {
         self.0.api.attach(
             fd,
             stream.id,
-            Event::new(0, false, false).with_interrupt(),
+            Event::new(0, false, false),
             PollMode::Oneshot,
         );
         stream
@@ -110,17 +110,20 @@ impl Handler for StreamOpsHandler {
 
             log::trace!("{}: Event ({:?}): {:?}", item.tag(), item.fd, ev);
 
+            let mut changed = false;
             let mut flags = item.flags;
-            let mut renew = Event::new(0, false, false).with_interrupt();
+            let mut renew = Event::new(0, false, false);
             if ev.readable {
                 let res = item.read(&mut flags);
                 if res.is_pending() && item.context.is_read_ready() {
+                    changed = true;
                     renew.readable = true;
                     flags.insert(Flags::RD);
                 } else {
                     flags.remove(Flags::RD);
                 }
             } else if flags.contains(Flags::RD) {
+                changed = true;
                 renew.readable = true;
             }
 
@@ -130,12 +133,14 @@ impl Handler for StreamOpsHandler {
                     syscall!(break libc::write(item.fd, buf[..].as_ptr() as _, buf.len()))
                 });
                 if result.is_pending() {
+                    changed = true;
                     renew.writable = true;
                     flags.insert(Flags::WR);
                 } else {
                     flags.remove(Flags::WR);
                 }
             } else if flags.contains(Flags::WR) {
+                changed = true;
                 renew.writable = true;
             }
             item.flags = flags;
@@ -146,7 +151,7 @@ impl Handler for StreamOpsHandler {
                 return;
             }
 
-            if !item.flags.contains(Flags::CLOSED | Flags::FAILED) {
+            if changed && !item.flags.contains(Flags::CLOSED | Flags::FAILED) {
                 self.inner
                     .api
                     .modify(item.fd, id as u32, renew, PollMode::Oneshot);
@@ -330,7 +335,7 @@ impl StreamCtl {
 
             let mut flags = item.flags;
             let mut changed = false;
-            let mut event = Event::new(0, false, false).with_interrupt();
+            let mut event = Event::new(0, false, false);
 
             if rd {
                 if flags.contains(Flags::RD) {
@@ -356,7 +361,7 @@ impl StreamCtl {
                         log::trace!(
                             "{}: Writing ({}), buf: {:?}",
                             item.tag(),
-                            self.id,
+                            item.fd,
                             buf.len()
                         );
                         syscall!(
