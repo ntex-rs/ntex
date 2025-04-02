@@ -128,7 +128,7 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
             };
             let io = io.add_filter(filter);
 
-            log::debug!("Accepting tls connection");
+            log::trace!("Accepting tls connection");
             loop {
                 let result = io.with_buf(|buf| {
                     let filter = io.filter();

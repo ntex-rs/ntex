@@ -31,7 +31,7 @@ impl ConnectOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 if !api.is_supported(opcode::Connect::CODE) {
                     panic!("opcode::Connect is required for io-uring support");
                 }
@@ -72,14 +72,14 @@ impl ConnectOps {
 
 impl Handler for ConnectOpsHandler {
     fn canceled(&mut self, user_data: usize) {
-        log::debug!("connect-op is canceled {:?}", user_data);
+        log::trace!("connect-op is canceled {:?}", user_data);
 
         self.inner.ops.borrow_mut().remove(user_data);
     }
 
     fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<i32>) {
         let (addr, tx) = self.inner.ops.borrow_mut().remove(user_data);
-        log::debug!(
+        log::trace!(
             "connect-op is completed {:?} result: {:?}, addr: {:?}",
             user_data,
             result,

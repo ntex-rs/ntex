@@ -246,12 +246,12 @@ impl IoRef {
             if cur_hnd.is_set() {
                 let hnd = timer::update(cur_hnd, timeout, self);
                 if hnd != cur_hnd {
-                    log::debug!("{}: Update timer {:?}", self.tag(), timeout);
+                    log::trace!("{}: Update timer {:?}", self.tag(), timeout);
                     self.0.timeout.set(hnd);
                 }
                 hnd
             } else {
-                log::debug!("{}: Start timer {:?}", self.tag(), timeout);
+                log::trace!("{}: Start timer {:?}", self.tag(), timeout);
                 let hnd = timer::register(timeout, self);
                 self.0.timeout.set(hnd);
                 hnd
@@ -270,7 +270,7 @@ impl IoRef {
     pub fn stop_timer(&self) {
         let hnd = self.0.timeout.get();
         if hnd.is_set() {
-            log::debug!("{}: Stop timer", self.tag());
+            log::trace!("{}: Stop timer", self.tag());
             self.0.timeout.set(timer::TimerHandle::ZERO);
             timer::unregister(hnd, self)
         }

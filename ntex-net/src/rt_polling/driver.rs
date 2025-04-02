@@ -1,7 +1,7 @@
 use std::os::fd::RawFd;
 use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task::Poll};
 
-use ntex_neon::driver::{DriverApi, Event, Handler};
+use ntex_neon::driver::{DriverApi, Event, Handler, PollMode};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
 
@@ -48,7 +48,7 @@ impl StreamOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     feed: RefCell::new(Vec::new()),
@@ -84,7 +84,8 @@ impl StreamOps {
         self.0.api.attach(
             fd,
             stream.id,
-            Some(Event::new(0, false, false).with_interrupt()),
+            Event::new(0, false, false).with_interrupt(),
+            PollMode::Oneshot,
         );
         stream
     }
@@ -103,36 +104,41 @@ impl Handler for StreamOpsHandler {
                 return;
             }
             let item = &mut streams[id];
+            if item.flags.contains(Flags::CLOSED) {
+                return;
+            }
 
-            log::debug!("{}: FD event {:?} event: {:?}", item.tag(), id, ev);
+            log::trace!("{}: Event ({:?}): {:?}", item.tag(), item.fd, ev);
 
+            let mut flags = item.flags;
             let mut renew = Event::new(0, false, false).with_interrupt();
             if ev.readable {
-                let res = item.read();
+                let res = item.read(&mut flags);
                 if res.is_pending() && item.context.is_read_ready() {
                     renew.readable = true;
-                    item.flags.insert(Flags::RD);
+                    flags.insert(Flags::RD);
                 } else {
-                    item.flags.remove(Flags::RD);
+                    flags.remove(Flags::RD);
                 }
-            } else if item.flags.contains(Flags::RD) {
+            } else if flags.contains(Flags::RD) {
                 renew.readable = true;
             }
 
             if ev.writable {
                 let result = item.context.with_write_buf(|buf| {
-                    log::debug!("{}: write {:?} s: {:?}", item.tag(), item.fd, buf.len());
+                    log::trace!("{}: write {:?} s: {:?}", item.tag(), item.fd, buf.len());
                     syscall!(break libc::write(item.fd, buf[..].as_ptr() as _, buf.len()))
                 });
                 if result.is_pending() {
                     renew.writable = true;
-                    item.flags.insert(Flags::WR);
+                    flags.insert(Flags::WR);
                 } else {
-                    item.flags.remove(Flags::WR);
+                    flags.remove(Flags::WR);
                 }
-            } else if item.flags.contains(Flags::WR) {
+            } else if flags.contains(Flags::WR) {
                 renew.writable = true;
             }
+            item.flags = flags;
 
             // handle HUP
             if ev.is_interrupt() {
@@ -141,7 +147,9 @@ impl Handler for StreamOpsHandler {
             }
 
             if !item.flags.contains(Flags::CLOSED | Flags::FAILED) {
-                self.inner.api.modify(item.fd, id as u32, renew);
+                self.inner
+                    .api
+                    .modify(item.fd, id as u32, renew, PollMode::Oneshot);
             }
 
             // delayed drops
@@ -151,7 +159,7 @@ impl Handler for StreamOpsHandler {
                     item.ref_count -= 1;
                     if item.ref_count == 0 {
                         let mut item = streams.remove(id as usize);
-                        log::debug!(
+                        log::trace!(
                             "{}: Drop ({:?}), flags: {:?}",
                             item.tag(),
                             item.fd,
@@ -168,10 +176,9 @@ impl Handler for StreamOpsHandler {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(item) = streams.get_mut(id) {
-                log::debug!(
-                    "{}: FD is failed ({}) {:?}, err: {:?}",
+                log::trace!(
+                    "{}: FD is failed ({:?}) err: {:?}",
                     item.tag(),
-                    id,
                     item.fd,
                     err
                 );
@@ -198,9 +205,8 @@ impl StreamItem {
         self.context.tag()
     }
 
-    fn read(&mut self) -> Poll<()> {
-        let mut flags = self.flags;
-        let result = self.context.with_read_buf(|buf, hw, lw| {
+    fn read(&mut self, flags: &mut Flags) -> Poll<()> {
+        self.context.with_read_buf(|buf, hw, lw| {
             // prev call result is 0
             if flags.contains(Flags::RDSH) {
                 return Poll::Ready(Ok(0));
@@ -228,7 +234,7 @@ impl StreamItem {
                     }
                 }
 
-                log::debug!(
+                log::trace!(
                     "{}: read fd ({:?}), s: {:?}, cap: {:?}, result: {:?}",
                     self.tag(),
                     self.fd,
@@ -262,9 +268,7 @@ impl StreamItem {
                     }
                 };
             }
-        });
-        self.flags = flags;
-        result
+        })
     }
 
     fn close(
@@ -275,7 +279,7 @@ impl StreamItem {
         shutdown: bool,
     ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
         if !self.flags.contains(Flags::CLOSED) {
-            log::debug!("{}: Closing ({}), {:?}", self.tag(), id, self.fd);
+            log::trace!("{}: Closing ({}), {:?}", self.tag(), self.fd, self.fd);
             self.flags.insert(Flags::CLOSED);
             self.context.stopped(error);
 
@@ -316,7 +320,7 @@ impl StreamCtl {
                 return false;
             }
 
-            log::debug!(
+            log::trace!(
                 "{}: Modify interest ({:?}) rd: {:?}, wr: {:?}",
                 item.tag(),
                 item.fd,
@@ -324,31 +328,32 @@ impl StreamCtl {
                 wr
             );
 
+            let mut flags = item.flags;
             let mut changed = false;
             let mut event = Event::new(0, false, false).with_interrupt();
 
             if rd {
-                if item.flags.contains(Flags::RD) {
+                if flags.contains(Flags::RD) {
                     event.readable = true;
                 } else {
-                    let res = item.read();
+                    let res = item.read(&mut flags);
                     if res.is_pending() && item.context.is_read_ready() {
                         changed = true;
                         event.readable = true;
-                        item.flags.insert(Flags::RD);
+                        flags.insert(Flags::RD);
                     }
                 }
-            } else if item.flags.contains(Flags::RD) {
+            } else if flags.contains(Flags::RD) {
                 changed = true;
-                item.flags.remove(Flags::RD);
+                flags.remove(Flags::RD);
             }
 
             if wr {
-                if item.flags.contains(Flags::WR) {
+                if flags.contains(Flags::WR) {
                     event.writable = true;
                 } else {
                     let result = item.context.with_write_buf(|buf| {
-                        log::debug!(
+                        log::trace!(
                             "{}: Writing ({}), buf: {:?}",
                             item.tag(),
                             self.id,
@@ -362,16 +367,19 @@ impl StreamCtl {
                     if result.is_pending() {
                         changed = true;
                         event.writable = true;
-                        item.flags.insert(Flags::WR);
+                        flags.insert(Flags::WR);
                     }
                 }
-            } else if item.flags.contains(Flags::WR) {
+            } else if flags.contains(Flags::WR) {
                 changed = true;
-                item.flags.remove(Flags::WR);
+                flags.remove(Flags::WR);
             }
+            item.flags = flags;
 
-            if changed && !item.flags.contains(Flags::CLOSED | Flags::FAILED) {
-                self.inner.api.modify(item.fd, self.id, event);
+            if changed && !flags.contains(Flags::CLOSED | Flags::FAILED) {
+                self.inner
+                    .api
+                    .modify(item.fd, self.id, event, PollMode::Oneshot);
             }
             true
         })
@@ -397,8 +405,8 @@ impl Drop for StreamCtl {
             streams[id].ref_count -= 1;
             if streams[id].ref_count == 0 {
                 let mut item = streams.remove(id);
-                log::debug!(
-                    "{}:  Drop io ({:?}), flags: {:?}",
+                log::trace!(
+                    "{}: Drop io ({:?}), flags: {:?}",
                     item.tag(),
                     item.fd,
                     item.flags

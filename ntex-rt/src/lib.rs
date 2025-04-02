@@ -265,7 +265,7 @@ mod neon {
         let rt = Runtime::new().unwrap();
         log::info!(
             "Starting neon runtime, driver {:?}",
-            rt.driver().tp().name()
+            rt.driver_type().name()
         );
 
         rt.block_on(fut);

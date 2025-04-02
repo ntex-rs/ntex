@@ -1,7 +1,7 @@
 use std::os::fd::{AsRawFd, RawFd};
 use std::{cell::RefCell, io, rc::Rc, task::Poll};
 
-use ntex_neon::driver::{DriverApi, Event, Handler};
+use ntex_neon::driver::{DriverApi, Event, Handler, PollMode};
 use ntex_neon::{syscall, Runtime};
 use ntex_util::channel::oneshot::Sender;
 use slab::Slab;
@@ -34,7 +34,7 @@ impl ConnectOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 let ops = Rc::new(ConnectOpsInner {
                     api,
                     connects: RefCell::new(Slab::new()),
@@ -62,14 +62,16 @@ impl ConnectOps {
         let item = Item { fd, sender };
         let id = self.0.connects.borrow_mut().insert(item);
 
-        self.0.api.attach(fd, id as u32, Some(Event::writable(0)));
+        self.0
+            .api
+            .attach(fd, id as u32, Event::writable(0), PollMode::Oneshot);
         Ok(id)
     }
 }
 
 impl Handler for ConnectOpsBatcher {
     fn event(&mut self, id: usize, event: Event) {
-        log::debug!("connect-fd is readable {:?}", id);
+        log::trace!("connect-fd is readable {:?}", id);
 
         let mut connects = self.inner.connects.borrow_mut();
         if connects.contains(id) {

@@ -535,8 +535,8 @@ impl<F> Io<F> {
             } else {
                 match self.poll_read_ready(cx) {
                     Poll::Pending | Poll::Ready(Ok(Some(()))) => {
-                        if log::log_enabled!(log::Level::Debug) && decoded.remains != 0 {
-                            log::debug!(
+                        if log::log_enabled!(log::Level::Trace) && decoded.remains != 0 {
+                            log::trace!(
                                 "{}: Not enough data to decode next frame",
                                 self.tag()
                             );

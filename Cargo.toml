@@ -45,7 +45,7 @@ ntex-util = { path = "ntex-util" }
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
-#ntex-neon = { git = "https://github.com/ntex-rs/neon.git" }
+ntex-neon = { git = "https://github.com/ntex-rs/neon.git" }
 #ntex-neon = { path = "../dev/neon" }
 
 [workspace.dependencies]
