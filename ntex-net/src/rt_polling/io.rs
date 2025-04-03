@@ -87,10 +87,8 @@ async fn run(ctl: StreamCtl, context: IoContext) {
             Poll::Pending => Poll::Pending,
         };
 
-        if modify {
-            if !ctl.modify(readable, writable) {
-                return Poll::Ready(Status::Terminate);
-            }
+        if modify && !ctl.modify(readable, writable) {
+            return Poll::Ready(Status::Terminate);
         }
 
         if read.is_pending() && write.is_pending() {
@@ -103,10 +101,8 @@ async fn run(ctl: StreamCtl, context: IoContext) {
     })
     .await;
 
-    if st != Status::Terminate {
-        if ctl.modify(false, true) {
-            context.shutdown(st == Status::Shutdown).await;
-        }
+    if st != Status::Terminate && ctl.modify(false, true) {
+        context.shutdown(st == Status::Shutdown).await;
     }
     context.stopped(ctl.close().await.err());
 }
