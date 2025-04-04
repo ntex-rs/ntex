@@ -83,7 +83,7 @@ impl StreamOps {
 
         self.0
             .api
-            .attach(fd, stream.id, Some(Event::new(0, false, false)));
+            .attach(fd, stream.id, Event::new(0, false, false));
         stream
     }
 }
@@ -111,8 +111,7 @@ impl Handler for StreamOpsHandler {
             let mut flags = item.flags;
             let mut renew = Event::new(0, false, false);
             if ev.readable {
-                let res = item.read(&mut flags);
-                if res.is_pending() && item.context.is_read_ready() {
+                if item.read(&mut flags).is_pending() && item.can_read() {
                     changed = true;
                     renew.readable = true;
                     flags.insert(Flags::RD);
@@ -148,7 +147,8 @@ impl Handler for StreamOpsHandler {
                 return;
             }
 
-            if changed && !item.flags.contains(Flags::CLOSED | Flags::FAILED) {
+            // register Event in driver
+            if changed && !item.flags.intersects(Flags::CLOSED | Flags::FAILED) {
                 self.inner.api.modify(item.fd, id as u32, renew);
             }
 
@@ -205,11 +205,15 @@ impl StreamItem {
         self.context.tag()
     }
 
+    fn can_read(&self) -> bool {
+        self.context.is_read_ready()
+    }
+
     fn read(&mut self, flags: &mut Flags) -> Poll<()> {
         self.context.with_read_buf(|buf, hw, lw| {
             // prev call result is 0
             if flags.contains(Flags::RDSH) {
-                return Poll::Ready(Ok(0));
+                return (0, Poll::Ready(Ok(())));
             }
 
             let mut total = 0;
@@ -235,7 +239,7 @@ impl StreamItem {
                 }
 
                 log::trace!(
-                    "{}: read fd ({:?}), s: {:?}, cap: {:?}, result: {:?}",
+                    "{}: Read fd ({:?}), s: {:?}, cap: {:?}, result: {:?}",
                     self.tag(),
                     self.fd,
                     total,
@@ -246,26 +250,15 @@ impl StreamItem {
                 return match result {
                     Poll::Ready(Err(err)) => {
                         flags.insert(Flags::FAILED);
-                        if total > 0 {
-                            self.context.stopped(Some(err));
-                            Poll::Ready(Ok(total))
-                        } else {
-                            Poll::Ready(Err(err))
-                        }
+                        (total, Poll::Ready(Err(err)))
                     }
                     Poll::Ready(Ok(size)) => {
                         if size == 0 {
                             flags.insert(Flags::RDSH);
                         }
-                        Poll::Ready(Ok(total))
+                        (total, Poll::Ready(Ok(())))
                     }
-                    Poll::Pending => {
-                        if total > 0 {
-                            Poll::Ready(Ok(total))
-                        } else {
-                            Poll::Pending
-                        }
-                    }
+                    Poll::Pending => (total, Poll::Pending),
                 };
             }
         })
@@ -316,7 +309,7 @@ impl StreamCtl {
     pub(crate) fn modify(&self, rd: bool, wr: bool) -> bool {
         self.inner.with(|streams| {
             let item = &mut streams[self.id as usize];
-            if item.flags.contains(Flags::CLOSED) {
+            if item.flags.intersects(Flags::CLOSED | Flags::FAILED) {
                 return false;
             }
 
@@ -335,13 +328,10 @@ impl StreamCtl {
             if rd {
                 if flags.contains(Flags::RD) {
                     event.readable = true;
-                } else {
-                    let res = item.read(&mut flags);
-                    if res.is_pending() && item.context.is_read_ready() {
-                        changed = true;
-                        event.readable = true;
-                        flags.insert(Flags::RD);
-                    }
+                } else if item.read(&mut flags).is_pending() && item.can_read() {
+                    changed = true;
+                    event.readable = true;
+                    flags.insert(Flags::RD);
                 }
             } else if flags.contains(Flags::RD) {
                 changed = true;
@@ -376,7 +366,7 @@ impl StreamCtl {
             }
             item.flags = flags;
 
-            if changed && !flags.contains(Flags::CLOSED | Flags::FAILED) {
+            if changed && !flags.intersects(Flags::CLOSED | Flags::FAILED) {
                 self.inner.api.modify(item.fd, self.id, event);
             }
             true

@@ -62,7 +62,7 @@ impl ConnectOps {
         let item = Item { fd, sender };
         let id = self.0.connects.borrow_mut().insert(item);
 
-        self.0.api.attach(fd, id as u32, Some(Event::writable(0)));
+        self.0.api.attach(fd, id as u32, Event::writable(0));
         Ok(id)
     }
 }
