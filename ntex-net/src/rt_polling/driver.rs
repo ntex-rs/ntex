@@ -111,7 +111,7 @@ impl Handler for StreamOpsHandler {
             let mut flags = item.flags;
             let mut renew = Event::new(0, false, false);
             if ev.readable {
-                if item.read(&mut flags).is_pending() && item.can_read() {
+                if item.can_read() && item.read(&mut flags).is_pending() {
                     changed = true;
                     renew.readable = true;
                     flags.insert(Flags::RD);
@@ -328,7 +328,7 @@ impl StreamCtl {
             if rd {
                 if flags.contains(Flags::RD) {
                     event.readable = true;
-                } else if item.read(&mut flags).is_pending() && item.can_read() {
+                } else if item.can_read() && item.read(&mut flags).is_pending() {
                     changed = true;
                     event.readable = true;
                     flags.insert(Flags::RD);
