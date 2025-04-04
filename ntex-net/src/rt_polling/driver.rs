@@ -107,19 +107,16 @@ impl Handler for StreamOpsHandler {
 
             log::trace!("{}: Event ({:?}): {:?}", item.tag(), item.fd, ev);
 
-            let mut changed = false;
             let mut flags = item.flags;
             let mut renew = Event::new(0, false, false);
             if ev.readable {
-                if item.can_read() && item.read(&mut flags).is_pending() {
-                    changed = true;
+                if item.read(&mut flags).is_pending() && item.can_read() {
                     renew.readable = true;
                     flags.insert(Flags::RD);
                 } else {
                     flags.remove(Flags::RD);
                 }
             } else if flags.contains(Flags::RD) {
-                changed = true;
                 renew.readable = true;
             }
 
@@ -129,14 +126,12 @@ impl Handler for StreamOpsHandler {
                     syscall!(break libc::write(item.fd, buf[..].as_ptr() as _, buf.len()))
                 });
                 if result.is_pending() {
-                    changed = true;
                     renew.writable = true;
                     flags.insert(Flags::WR);
                 } else {
                     flags.remove(Flags::WR);
                 }
             } else if flags.contains(Flags::WR) {
-                changed = true;
                 renew.writable = true;
             }
             item.flags = flags;
@@ -148,7 +143,7 @@ impl Handler for StreamOpsHandler {
             }
 
             // register Event in driver
-            if changed && !item.flags.intersects(Flags::CLOSED | Flags::FAILED) {
+            if !item.flags.intersects(Flags::CLOSED | Flags::FAILED) {
                 self.inner.api.modify(item.fd, id as u32, renew);
             }
 
@@ -322,19 +317,16 @@ impl StreamCtl {
             );
 
             let mut flags = item.flags;
-            let mut changed = false;
             let mut event = Event::new(0, false, false);
 
             if rd {
                 if flags.contains(Flags::RD) {
                     event.readable = true;
-                } else if item.can_read() && item.read(&mut flags).is_pending() {
-                    changed = true;
+                } else if item.read(&mut flags).is_pending() {
                     event.readable = true;
                     flags.insert(Flags::RD);
                 }
             } else if flags.contains(Flags::RD) {
-                changed = true;
                 flags.remove(Flags::RD);
             }
 
@@ -355,21 +347,21 @@ impl StreamCtl {
                     });
 
                     if result.is_pending() {
-                        changed = true;
                         event.writable = true;
                         flags.insert(Flags::WR);
                     }
                 }
             } else if flags.contains(Flags::WR) {
-                changed = true;
                 flags.remove(Flags::WR);
             }
             item.flags = flags;
 
-            if changed && !flags.intersects(Flags::CLOSED | Flags::FAILED) {
+            if !flags.intersects(Flags::CLOSED | Flags::FAILED) {
                 self.inner.api.modify(item.fd, self.id, event);
+                true
+            } else {
+                false
             }
-            true
         })
     }
 }
