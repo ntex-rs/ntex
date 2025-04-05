@@ -197,99 +197,6 @@ impl StreamOpsInner {
     }
 }
 
-impl StreamItem {
-    fn tag(&self) -> &'static str {
-        self.context.tag()
-    }
-
-    fn can_read(&self) -> bool {
-        self.context.is_read_ready()
-    }
-
-    fn read(&mut self, flags: &mut Flags, id: u32, api: &DriverApi) -> Poll<()> {
-        let mut close = false;
-
-        let result = self.context.with_read_buf(|buf, hw, lw| {
-            let mut total = 0;
-            loop {
-                // make sure we've got room
-                if buf.remaining_mut() < lw {
-                    buf.reserve(hw);
-                }
-
-                let chunk = buf.chunk_mut();
-                let chunk_len = chunk.len();
-                let chunk_ptr = chunk.as_mut_ptr();
-
-                let result =
-                    syscall!(break libc::read(self.fd, chunk_ptr as _, chunk.len()));
-                if let Poll::Ready(Ok(size)) = result {
-                    unsafe { buf.advance_mut(size) };
-                    total += size;
-                    if size == chunk_len {
-                        continue;
-                    }
-                }
-
-                log::trace!(
-                    "{}: Read fd ({:?}), s: {:?}, cap: {:?}, result: {:?}",
-                    self.tag(),
-                    self.fd,
-                    total,
-                    buf.remaining_mut(),
-                    result
-                );
-
-                return match result {
-                    Poll::Ready(Err(err)) => {
-                        close = true;
-                        (total, Poll::Ready(Err(err)))
-                    }
-                    Poll::Ready(Ok(size)) => {
-                        if size == 0 {
-                            close = true;
-                        }
-                        (total, Poll::Ready(Ok(())))
-                    }
-                    Poll::Pending => (total, Poll::Pending),
-                };
-            }
-        });
-
-        if close {
-            self.close(id, api, None, false);
-        }
-        result
-    }
-
-    fn close(
-        &mut self,
-        id: u32,
-        api: &DriverApi,
-        error: Option<io::Error>,
-        shutdown: bool,
-    ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
-        if !self.flags.contains(Flags::CLOSED) {
-            log::trace!("{}: Closing ({}), {:?}", self.tag(), self.fd, self.fd);
-            self.flags.insert(Flags::CLOSED);
-            if !self.context.is_stopped() {
-                self.context.stopped(error);
-            }
-
-            let fd = self.fd;
-            api.detach(fd, id);
-            Some(ntex_rt::spawn_blocking(move || {
-                if shutdown {
-                    let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
-                }
-                syscall!(libc::close(fd))
-            }))
-        } else {
-            None
-        }
-    }
-}
-
 impl StreamCtl {
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
         let id = self.id as usize;
@@ -402,6 +309,101 @@ impl Drop for StreamCtl {
         } else {
             self.inner.delayd_drop.set(true);
             self.inner.feed.borrow_mut().push(self.id);
+        }
+    }
+}
+
+impl StreamItem {
+    fn tag(&self) -> &'static str {
+        self.context.tag()
+    }
+
+    fn can_read(&self) -> bool {
+        self.context.is_read_ready()
+    }
+
+    fn read(&mut self, flags: &mut Flags, id: u32, api: &DriverApi) -> Poll<()> {
+        let mut close = false;
+
+        let result = self.context.with_read_buf(|buf, hw, lw| {
+            let mut total = 0;
+            loop {
+                // make sure we've got room
+                if buf.remaining_mut() < lw {
+                    buf.reserve(hw);
+                }
+
+                let chunk = buf.chunk_mut();
+                let chunk_len = chunk.len();
+                let chunk_ptr = chunk.as_mut_ptr();
+
+                assert!(chunk_len != 0);
+
+                let result =
+                    syscall!(break libc::read(self.fd, chunk_ptr as _, chunk.len()));
+                if let Poll::Ready(Ok(size)) = result {
+                    unsafe { buf.advance_mut(size) };
+                    total += size;
+                    if size == chunk_len {
+                        continue;
+                    }
+                }
+
+                log::trace!(
+                    "{}: Read fd ({:?}), s: {:?}, cap: {:?}, result: {:?}",
+                    self.tag(),
+                    self.fd,
+                    total,
+                    buf.remaining_mut(),
+                    result
+                );
+
+                return match result {
+                    Poll::Ready(Err(err)) => {
+                        close = true;
+                        (total, Poll::Ready(Err(err)))
+                    }
+                    Poll::Ready(Ok(size)) => {
+                        if size == 0 {
+                            close = true;
+                        }
+                        (total, Poll::Ready(Ok(())))
+                    }
+                    Poll::Pending => (total, Poll::Pending),
+                };
+            }
+        });
+
+        if close {
+            self.close(id, api, None, false);
+        }
+        result
+    }
+
+    fn close(
+        &mut self,
+        id: u32,
+        api: &DriverApi,
+        error: Option<io::Error>,
+        shutdown: bool,
+    ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
+        if !self.flags.contains(Flags::CLOSED) {
+            log::trace!("{}: Closing ({}), {:?}", self.tag(), self.fd, self.fd);
+            self.flags.insert(Flags::CLOSED);
+            if !self.context.is_stopped() {
+                self.context.stopped(error);
+            }
+
+            let fd = self.fd;
+            api.detach(fd, id);
+            Some(ntex_rt::spawn_blocking(move || {
+                if shutdown {
+                    let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
+                }
+                syscall!(libc::close(fd))
+            }))
+        } else {
+            None
         }
     }
 }
