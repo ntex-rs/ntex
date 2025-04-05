@@ -337,11 +337,8 @@ impl StreamItem {
                 let chunk_len = chunk.len();
                 let chunk_ptr = chunk.as_mut_ptr();
 
-                assert!(chunk_len != 0);
-
-                let result =
-                    syscall!(break libc::read(self.fd, chunk_ptr as _, chunk.len()));
-                if let Poll::Ready(Ok(size)) = result {
+                let res = syscall!(break libc::read(self.fd, chunk_ptr as _, chunk_len));
+                if let Poll::Ready(Ok(size)) = res {
                     unsafe { buf.advance_mut(size) };
                     total += size;
                     if size == chunk_len {
@@ -350,15 +347,15 @@ impl StreamItem {
                 }
 
                 log::trace!(
-                    "{}: Read fd ({:?}), s: {:?}, cap: {:?}, result: {:?}",
+                    "{}: Read fd ({:?}), size: {:?}, cap: {:?}, result: {:?}",
                     self.tag(),
                     self.fd,
                     total,
                     buf.remaining_mut(),
-                    result
+                    res
                 );
 
-                return match result {
+                return match res {
                     Poll::Ready(Err(err)) => {
                         close = true;
                         (total, Poll::Ready(Err(err)))
