@@ -104,6 +104,7 @@ fn clone_mut() {
     assert_eq!(buf1, "hello");
 }
 
+#[allow(clippy::sliced_string_as_bytes)]
 #[test]
 fn fmt_write() {
     use std::fmt::Write;

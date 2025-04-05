@@ -34,7 +34,7 @@ impl ConnectOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 let ops = Rc::new(ConnectOpsInner {
                     api,
                     connects: RefCell::new(Slab::new()),
@@ -62,17 +62,16 @@ impl ConnectOps {
         let item = Item { fd, sender };
         let id = self.0.connects.borrow_mut().insert(item);
 
-        self.0.api.attach(fd, id as u32, Some(Event::writable(0)));
+        self.0.api.attach(fd, id as u32, Event::writable(0));
         Ok(id)
     }
 }
 
 impl Handler for ConnectOpsBatcher {
     fn event(&mut self, id: usize, event: Event) {
-        log::debug!("connect-fd is readable {:?}", id);
+        log::trace!("connect-fd is readable {:?}", id);
 
         let mut connects = self.inner.connects.borrow_mut();
-
         if connects.contains(id) {
             let item = connects.remove(id);
             if event.writable {

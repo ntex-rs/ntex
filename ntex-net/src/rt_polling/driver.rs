@@ -1,5 +1,5 @@
-use std::os::fd::{AsRawFd, RawFd};
-use std::{cell::Cell, cell::RefCell, future::Future, io, mem, rc::Rc, task, task::Poll};
+use std::os::fd::RawFd;
+use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task::Poll};
 
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
@@ -8,9 +8,9 @@ use slab::Slab;
 use ntex_bytes::BufMut;
 use ntex_io::IoContext;
 
-pub(crate) struct StreamCtl<T> {
+pub(crate) struct StreamCtl {
     id: u32,
-    inner: Rc<StreamOpsInner<T>>,
+    inner: Rc<StreamOpsInner>,
 }
 
 bitflags::bitflags! {
@@ -18,41 +18,35 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD     = 0b0000_0001;
         const WR     = 0b0000_0010;
+        const CLOSED = 0b0001_0000;
     }
 }
 
-struct StreamItem<T> {
-    io: Option<T>,
+struct StreamItem {
     fd: RawFd,
     flags: Flags,
     ref_count: u16,
     context: IoContext,
 }
 
-pub(crate) struct StreamOps<T>(Rc<StreamOpsInner<T>>);
+pub(crate) struct StreamOps(Rc<StreamOpsInner>);
 
-struct StreamOpsHandler<T> {
-    inner: Rc<StreamOpsInner<T>>,
+struct StreamOpsHandler {
+    inner: Rc<StreamOpsInner>,
 }
 
-struct StreamOpsInner<T> {
+struct StreamOpsInner {
     api: DriverApi,
     delayd_drop: Cell<bool>,
     feed: RefCell<Vec<u32>>,
-    streams: Cell<Option<Box<Slab<StreamItem<T>>>>>,
+    streams: Cell<Option<Box<Slab<StreamItem>>>>,
 }
 
-impl<T> StreamItem<T> {
-    fn tag(&self) -> &'static str {
-        self.context.tag()
-    }
-}
-
-impl<T: AsRawFd + 'static> StreamOps<T> {
+impl StreamOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     feed: RefCell::new(Vec::new()),
@@ -67,13 +61,15 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
         })
     }
 
-    pub(crate) fn register(&self, io: T, context: IoContext) -> StreamCtl<T> {
-        let fd = io.as_raw_fd();
+    pub(crate) fn active_ops() -> usize {
+        Self::current().0.with(|streams| streams.len())
+    }
+
+    pub(crate) fn register(&self, fd: RawFd, context: IoContext) -> StreamCtl {
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
                 fd,
                 context,
-                io: Some(io),
                 ref_count: 1,
                 flags: Flags::empty(),
             };
@@ -83,81 +79,75 @@ impl<T: AsRawFd + 'static> StreamOps<T> {
             }
         });
 
-        self.0.api.attach(
-            fd,
-            stream.id,
-            Some(Event::new(0, false, false).with_interrupt()),
-        );
+        self.0
+            .api
+            .attach(fd, stream.id, Event::new(0, false, false));
         stream
     }
 }
 
-impl<T> Clone for StreamOps<T> {
+impl Clone for StreamOps {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<T> Handler for StreamOpsHandler<T> {
+impl Handler for StreamOpsHandler {
     fn event(&mut self, id: usize, ev: Event) {
         self.inner.with(|streams| {
             if !streams.contains(id) {
                 return;
             }
             let item = &mut streams[id];
-            if item.io.is_none() {
-                return;
-            }
-            log::debug!("{}: FD event {:?} event: {:?}", item.tag(), id, ev);
-
-            // handle HUP
-            if ev.is_interrupt() {
-                item.context.stopped(None);
-                close(id as u32, item, &self.inner.api, None, true);
+            if item.flags.contains(Flags::CLOSED) {
                 return;
             }
 
-            let mut renew_ev = Event::new(0, false, false).with_interrupt();
+            log::trace!("{}: Event ({:?}): {:?}", item.tag(), item.fd, ev);
 
+            let mut flags = item.flags;
+            let mut renew = Event::new(0, false, false);
             if ev.readable {
-                let res = item.context.with_read_buf(|buf| {
-                    let chunk = buf.chunk_mut();
-                    let result = task::ready!(syscall!(
-                        break libc::read(item.fd, chunk.as_mut_ptr() as _, chunk.len())
-                    ));
-                    if let Ok(size) = result {
-                        log::debug!("{}: data {:?}, s: {:?}", item.tag(), item.fd, size);
-                        unsafe { buf.advance_mut(size) };
-                    }
-                    Poll::Ready(result)
-                });
-
-                if res.is_pending() && item.context.is_read_ready() {
-                    renew_ev.readable = true;
-                    item.flags.insert(Flags::RD);
+                if item
+                    .read(&mut flags, id as u32, &self.inner.api)
+                    .is_pending()
+                    && item.can_read()
+                {
+                    renew.readable = true;
+                    flags.insert(Flags::RD);
                 } else {
-                    item.flags.remove(Flags::RD);
+                    flags.remove(Flags::RD);
                 }
-            } else if item.flags.contains(Flags::RD) {
-                renew_ev.readable = true;
+            } else if flags.contains(Flags::RD) {
+                renew.readable = true;
             }
 
             if ev.writable {
                 let result = item.context.with_write_buf(|buf| {
-                    log::debug!("{}: write {:?} s: {:?}", item.tag(), item.fd, buf.len());
+                    log::trace!("{}: write {:?} s: {:?}", item.tag(), item.fd, buf.len());
                     syscall!(break libc::write(item.fd, buf[..].as_ptr() as _, buf.len()))
                 });
                 if result.is_pending() {
-                    renew_ev.writable = true;
-                    item.flags.insert(Flags::WR);
+                    renew.writable = true;
+                    flags.insert(Flags::WR);
                 } else {
-                    item.flags.remove(Flags::WR);
+                    flags.remove(Flags::WR);
                 }
-            } else if item.flags.contains(Flags::WR) {
-                renew_ev.writable = true;
+            } else if flags.contains(Flags::WR) {
+                renew.writable = true;
+            }
+            item.flags = flags;
+
+            // handle HUP
+            if ev.is_interrupt() {
+                item.close(id as u32, &self.inner.api, None, false);
+                return;
             }
 
-            self.inner.api.modify(item.fd, id as u32, renew_ev);
+            // register Event in driver
+            if !item.flags.contains(Flags::CLOSED) {
+                self.inner.api.modify(item.fd, id as u32, renew);
+            }
 
             // delayed drops
             if self.inner.delayd_drop.get() {
@@ -166,14 +156,13 @@ impl<T> Handler for StreamOpsHandler<T> {
                     item.ref_count -= 1;
                     if item.ref_count == 0 {
                         let mut item = streams.remove(id as usize);
-                        log::debug!(
-                            "{}: Drop ({}), {:?}, has-io: {}",
+                        log::trace!(
+                            "{}: Drop ({:?}), flags: {:?}",
                             item.tag(),
-                            id,
                             item.fd,
-                            item.io.is_some()
+                            item.flags
                         );
-                        close(id, &mut item, &self.inner.api, None, true);
+                        item.close(id, &self.inner.api, None, true);
                     }
                 }
                 self.inner.delayd_drop.set(false);
@@ -184,23 +173,22 @@ impl<T> Handler for StreamOpsHandler<T> {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(item) = streams.get_mut(id) {
-                log::debug!(
-                    "{}: FD is failed ({}) {:?}, err: {:?}",
+                log::trace!(
+                    "{}: FD is failed ({:?}) err: {:?}",
                     item.tag(),
-                    id,
                     item.fd,
                     err
                 );
-                close(id as u32, item, &self.inner.api, Some(err), false);
+                item.close(id as u32, &self.inner.api, Some(err), false);
             }
         })
     }
 }
 
-impl<T> StreamOpsInner<T> {
+impl StreamOpsInner {
     fn with<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut Slab<StreamItem<T>>) -> R,
+        F: FnOnce(&mut Slab<StreamItem>) -> R,
     {
         let mut streams = self.streams.take().unwrap();
         let result = f(&mut streams);
@@ -209,39 +197,12 @@ impl<T> StreamOpsInner<T> {
     }
 }
 
-fn close<T>(
-    id: u32,
-    item: &mut StreamItem<T>,
-    api: &DriverApi,
-    error: Option<io::Error>,
-    shutdown: bool,
-) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
-    if let Some(io) = item.io.take() {
-        log::debug!("{}: Closing ({}), {:?}", item.tag(), id, item.fd);
-        mem::forget(io);
-        if let Some(err) = error {
-            item.context.stopped(Some(err));
-        }
-        let fd = item.fd;
-        api.detach(fd, id);
-        Some(ntex_rt::spawn_blocking(move || {
-            if shutdown {
-                let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
-            }
-            syscall!(libc::close(fd))
-        }))
-    } else {
-        None
-    }
-}
-
-impl<T> StreamCtl<T> {
+impl StreamCtl {
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
         let id = self.id as usize;
-        let fut = self.inner.with(|streams| {
-            let item = &mut streams[id];
-            close(self.id, item, &self.inner.api, None, false)
-        });
+        let fut = self
+            .inner
+            .with(|streams| streams[id].close(self.id, &self.inner.api, None, true));
         async move {
             if let Some(fut) = fut {
                 fut.await
@@ -252,66 +213,44 @@ impl<T> StreamCtl<T> {
         }
     }
 
-    pub(crate) fn with_io<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(Option<&T>) -> R,
-    {
-        self.inner
-            .with(|streams| f(streams[self.id as usize].io.as_ref()))
-    }
-
-    pub(crate) fn modify(&self, rd: bool, wr: bool) {
+    pub(crate) fn modify(&self, rd: bool, wr: bool) -> bool {
         self.inner.with(|streams| {
             let item = &mut streams[self.id as usize];
+            if item.flags.contains(Flags::CLOSED) {
+                return false;
+            }
 
-            log::debug!(
-                "{}: Modify interest ({}), {:?} rd: {:?}, wr: {:?}",
+            log::trace!(
+                "{}: Modify interest ({:?}) rd: {:?}, wr: {:?}",
                 item.tag(),
-                self.id,
                 item.fd,
                 rd,
                 wr
             );
 
-            let mut event = Event::new(0, false, false).with_interrupt();
+            let mut flags = item.flags;
+            let mut event = Event::new(0, false, false);
 
             if rd {
-                if item.flags.contains(Flags::RD) {
+                if flags.contains(Flags::RD) {
                     event.readable = true;
-                } else {
-                    let res = item.context.with_read_buf(|buf| {
-                        let chunk = buf.chunk_mut();
-                        let result = task::ready!(syscall!(
-                            break libc::read(item.fd, chunk.as_mut_ptr() as _, chunk.len())
-                        ));
-                        if let Ok(size) = result {
-                            log::debug!(
-                                "{}: read {:?}, s: {:?}",
-                                item.tag(),
-                                item.fd,
-                                size
-                            );
-                            unsafe { buf.advance_mut(size) };
-                        }
-                        Poll::Ready(result)
-                    });
-
-                    if res.is_pending() && item.context.is_read_ready() {
-                        event.readable = true;
-                        item.flags.insert(Flags::RD);
-                    }
+                } else if item.read(&mut flags, self.id, &self.inner.api).is_pending() {
+                    event.readable = true;
+                    flags.insert(Flags::RD);
                 }
+            } else if flags.contains(Flags::RD) {
+                flags.remove(Flags::RD);
             }
 
             if wr {
-                if item.flags.contains(Flags::WR) {
+                if flags.contains(Flags::WR) {
                     event.writable = true;
                 } else {
                     let result = item.context.with_write_buf(|buf| {
-                        log::debug!(
+                        log::trace!(
                             "{}: Writing ({}), buf: {:?}",
                             item.tag(),
-                            self.id,
+                            item.fd,
                             buf.len()
                         );
                         syscall!(
@@ -321,17 +260,25 @@ impl<T> StreamCtl<T> {
 
                     if result.is_pending() {
                         event.writable = true;
-                        item.flags.insert(Flags::WR);
+                        flags.insert(Flags::WR);
                     }
                 }
+            } else if flags.contains(Flags::WR) {
+                flags.remove(Flags::WR);
             }
+            item.flags = flags;
 
-            self.inner.api.modify(item.fd, self.id, event);
+            if !flags.contains(Flags::CLOSED) {
+                self.inner.api.modify(item.fd, self.id, event);
+                true
+            } else {
+                false
+            }
         })
     }
 }
 
-impl<T> Clone for StreamCtl<T> {
+impl Clone for StreamCtl {
     fn clone(&self) -> Self {
         self.inner.with(|streams| {
             streams[self.id as usize].ref_count += 1;
@@ -343,26 +290,125 @@ impl<T> Clone for StreamCtl<T> {
     }
 }
 
-impl<T> Drop for StreamCtl<T> {
+impl Drop for StreamCtl {
     fn drop(&mut self) {
         if let Some(mut streams) = self.inner.streams.take() {
             let id = self.id as usize;
             streams[id].ref_count -= 1;
             if streams[id].ref_count == 0 {
                 let mut item = streams.remove(id);
-                log::debug!(
-                    "{}:  Drop io ({}), {:?}, has-io: {}",
+                log::trace!(
+                    "{}: Drop io ({:?}), flags: {:?}",
                     item.tag(),
-                    self.id,
                     item.fd,
-                    item.io.is_some()
+                    item.flags
                 );
-                close(self.id, &mut item, &self.inner.api, None, true);
+                item.close(self.id, &self.inner.api, None, true);
             }
             self.inner.streams.set(Some(streams));
         } else {
             self.inner.delayd_drop.set(true);
             self.inner.feed.borrow_mut().push(self.id);
+        }
+    }
+}
+
+impl StreamItem {
+    fn tag(&self) -> &'static str {
+        self.context.tag()
+    }
+
+    fn can_read(&self) -> bool {
+        self.context.is_read_ready()
+    }
+
+    fn read(&mut self, flags: &mut Flags, id: u32, api: &DriverApi) -> Poll<()> {
+        let mut close = false;
+
+        let result = self.context.with_read_buf(|buf, hw, lw| {
+            let mut total = 0;
+            loop {
+                // make sure we've got room
+                if buf.remaining_mut() < lw {
+                    buf.reserve(hw);
+                }
+
+                let chunk = buf.chunk_mut();
+                let chunk_len = chunk.len();
+                let chunk_ptr = chunk.as_mut_ptr();
+
+                let res = syscall!(break libc::read(self.fd, chunk_ptr as _, chunk_len));
+                if let Poll::Ready(Ok(size)) = res {
+                    unsafe { buf.advance_mut(size) };
+                    total += size;
+                    if size == chunk_len {
+                        continue;
+                    }
+                }
+
+                log::trace!(
+                    "{}: Read fd ({:?}), size: {:?}, cap: {:?}, result: {:?}",
+                    self.tag(),
+                    self.fd,
+                    total,
+                    buf.remaining_mut(),
+                    res
+                );
+
+                return match res {
+                    Poll::Ready(Err(err)) => {
+                        close = true;
+                        (total, Poll::Ready(Err(err)))
+                    }
+                    Poll::Ready(Ok(size)) => {
+                        if size == 0 {
+                            close = true;
+                        }
+                        (total, Poll::Ready(Ok(())))
+                    }
+                    Poll::Pending => (total, Poll::Pending),
+                };
+            }
+        });
+
+        if close {
+            flags.insert(Flags::CLOSED);
+            self.close(id, api, None, false);
+        }
+        result
+    }
+
+    fn close(
+        &mut self,
+        id: u32,
+        api: &DriverApi,
+        error: Option<io::Error>,
+        shutdown: bool,
+    ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
+        if !self.flags.contains(Flags::CLOSED) {
+            log::trace!(
+                "{}: Closing ({}) sh: {:?}, flags: {:?}, ctx: {:?}",
+                self.tag(),
+                self.fd,
+                shutdown,
+                self.flags,
+                self.context.flags()
+            );
+            self.flags.insert(Flags::CLOSED);
+            if !self.context.is_stopped() {
+                self.context.stopped(error);
+            }
+
+            let fd = self.fd;
+            api.detach(fd, id);
+            Some(ntex_rt::spawn_blocking(move || {
+                if shutdown {
+                    let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
+                }
+                syscall!(libc::close(fd))
+            }))
+        } else {
+            None
         }
     }
 }

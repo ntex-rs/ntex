@@ -107,12 +107,12 @@ pub(super) trait MessageType: Sized {
                 };
                 match name {
                     header::CONTENT_LENGTH if content_length.is_some() || chunked => {
-                        log::debug!("multiple Content-Length not allowed");
+                        log::trace!("multiple Content-Length not allowed");
                         return Err(DecodeError::Header);
                     }
                     header::CONTENT_LENGTH => match value.to_str() {
                         Ok(s) if s.trim_start().starts_with('+') => {
-                            log::debug!("illegal Content-Length: {:?}", s);
+                            log::trace!("illegal Content-Length: {:?}", s);
                             return Err(DecodeError::Header);
                         }
                         Ok(s) => {
@@ -121,18 +121,18 @@ pub(super) trait MessageType: Sized {
                                 // headers have been processed to prevent request smuggling issues
                                 content_length = Some(len);
                             } else {
-                                log::debug!("illegal Content-Length: {:?}", s);
+                                log::trace!("illegal Content-Length: {:?}", s);
                                 return Err(DecodeError::Header);
                             }
                         }
                         Err(_) => {
-                            log::debug!("illegal Content-Length: {:?}", value);
+                            log::trace!("illegal Content-Length: {:?}", value);
                             return Err(DecodeError::Header);
                         }
                     },
                     // transfer-encoding
                     header::TRANSFER_ENCODING if seen_te => {
-                        log::debug!("Transfer-Encoding header usage is not allowed");
+                        log::trace!("Transfer-Encoding header usage is not allowed");
                         return Err(DecodeError::Header);
                     }
                     header::TRANSFER_ENCODING if version == Version::HTTP_11 => {
@@ -144,7 +144,7 @@ pub(super) trait MessageType: Sized {
                             } else if s.eq_ignore_ascii_case("identity") {
                                 // allow silently since multiple TE headers are already checked
                             } else {
-                                log::debug!("illegal Transfer-Encoding: {:?}", s);
+                                log::trace!("illegal Transfer-Encoding: {:?}", s);
                                 return Err(DecodeError::Header);
                             }
                         } else {
@@ -266,7 +266,7 @@ impl MessageType for Request {
         // disallow HTTP/1.0 POST requests that do not contain a Content-Length headers
         // see https://datatracker.ietf.org/doc/html/rfc1945#section-7.2.2
         if ver == Version::HTTP_10 && method == Method::POST && length.is_none() {
-            log::debug!("no Content-Length specified for HTTP/1.0 POST request");
+            log::trace!("no Content-Length specified for HTTP/1.0 POST request");
             return Err(DecodeError::Header);
         }
 
@@ -682,7 +682,7 @@ impl ChunkedState {
                 Poll::Ready(Ok(ChunkedState::Size))
             }
             None => {
-                log::debug!("chunk size would overflow u64");
+                log::trace!("chunk size would overflow u64");
                 Poll::Ready(Err(DecodeError::InvalidInput(
                     "Invalid chunk size line: Size is too big",
                 )))

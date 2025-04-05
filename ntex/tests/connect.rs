@@ -1,9 +1,8 @@
 use std::{io, rc::Rc};
 
-use ntex::codec::BytesCodec;
-use ntex::connect::Connect;
 use ntex::io::{types::PeerAddr, Io};
 use ntex::service::{chain_factory, fn_service, Pipeline, ServiceFactory};
+use ntex::{codec::BytesCodec, connect::Connect};
 use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
 
 #[cfg(feature = "rustls")]

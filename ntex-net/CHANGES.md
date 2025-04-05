@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.11] - 2025-04-05
+
+* Various improvements for polling driver
+
 ## [2.5.10] - 2025-03-28
 
 * Better closed sockets handling

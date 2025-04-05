@@ -77,7 +77,7 @@ impl<T: os::fd::AsRawFd + 'static> StreamOps<T> {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 if !api.is_supported(opcode::Recv::CODE) {
                     panic!("opcode::Recv is required for io-uring support");
                 }
@@ -124,6 +124,10 @@ impl<T: os::fd::AsRawFd + 'static> StreamOps<T> {
         }
     }
 
+    pub(crate) fn active_ops() -> usize {
+        Self::current().with(|st| st.streams.len())
+    }
+
     fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut StreamOpsStorage<T>) -> R,
@@ -144,7 +148,7 @@ impl<T> Handler for StreamOpsHandler<T> {
 
         match storage.ops.remove(user_data) {
             Operation::Recv { id, buf, context } => {
-                log::debug!("{}: Recv canceled {:?}", context.tag(), id);
+                log::trace!("{}: Recv canceled {:?}", context.tag(), id);
                 context.release_read_buf(buf);
                 if let Some(item) = storage.streams.get_mut(id) {
                     item.rd_op.take();
@@ -160,7 +164,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                 }
             }
             Operation::Send { id, buf, context } => {
-                log::debug!("{}: Send canceled: {:?}", context.tag(), id);
+                log::trace!("{}: Send canceled: {:?}", context.tag(), id);
                 context.release_write_buf(buf);
                 if let Some(item) = storage.streams.get_mut(id) {
                     item.wr_op.take();
@@ -196,7 +200,7 @@ impl<T> Handler for StreamOpsHandler<T> {
 
                 // reset op reference
                 if let Some(item) = storage.streams.get_mut(id) {
-                    log::debug!(
+                    log::trace!(
                         "{}: Recv completed {:?}, res: {:?}, buf({})",
                         context.tag(),
                         item.fd,
@@ -213,13 +217,13 @@ impl<T> Handler for StreamOpsHandler<T> {
                         self.inner.api.submit(id, op);
                     }
                 } else {
-                    log::debug!("{}: Recv to pause", tag);
+                    log::trace!("{}: Recv to pause", tag);
                 }
             }
             Operation::Send { id, buf, context } => {
                 // reset op reference
                 let fd = if let Some(item) = storage.streams.get_mut(id) {
-                    log::debug!(
+                    log::trace!(
                         "{}: Send completed: {:?}, res: {:?}, buf({})",
                         context.tag(),
                         item.fd,
@@ -235,7 +239,7 @@ impl<T> Handler for StreamOpsHandler<T> {
                 // set read buf
                 let result = context.set_write_buf(result.map(|size| size as usize), buf);
                 if result.is_pending() {
-                    log::debug!("{}: Need to send more: {:?}", context.tag(), fd);
+                    log::trace!("{}: Need to send more: {:?}", context.tag(), fd);
                     if let Some((id, op)) = storage.send(id, Some(context)) {
                         self.inner.api.submit(id, op);
                     }
@@ -255,7 +259,7 @@ impl<T> Handler for StreamOpsHandler<T> {
             if storage.streams[id].ref_count == 0 {
                 let mut item = storage.streams.remove(id);
 
-                log::debug!("{}: Drop io ({}), {:?}", item.tag(), id, item.fd);
+                log::trace!("{}: Drop io ({}), {:?}", item.tag(), id, item.fd);
 
                 if let Some(io) = item.io.take() {
                     mem::forget(io);
@@ -277,7 +281,7 @@ impl<T> StreamOpsStorage<T> {
 
         if item.rd_op.is_none() {
             if let Poll::Ready(mut buf) = item.context.get_read_buf() {
-                log::debug!(
+                log::trace!(
                     "{}: Recv resume ({}), {:?} rem: {:?}",
                     item.tag(),
                     id,
@@ -310,7 +314,7 @@ impl<T> StreamOpsStorage<T> {
 
         if item.wr_op.is_none() {
             if let Poll::Ready(buf) = item.context.get_write_buf() {
-                log::debug!(
+                log::trace!(
                     "{}: Send resume ({}), {:?} len: {:?}",
                     item.tag(),
                     id,
@@ -402,7 +406,7 @@ impl<T> StreamCtl<T> {
 
         if let Some(rd_op) = item.rd_op {
             if !item.flags.contains(Flags::RD_CANCELING) {
-                log::debug!("{}: Recv to pause ({}), {:?}", item.tag(), self.id, item.fd);
+                log::trace!("{}: Recv to pause ({}), {:?}", item.tag(), self.id, item.fd);
                 item.flags.insert(Flags::RD_CANCELING);
                 self.inner.api.cancel(rd_op.get());
             }
@@ -427,7 +431,7 @@ impl<T> Drop for StreamCtl<T> {
             if storage.streams[self.id].ref_count == 0 {
                 let mut item = storage.streams.remove(self.id);
                 if let Some(io) = item.io.take() {
-                    log::debug!("{}: Close io ({}), {:?}", item.tag(), self.id, item.fd);
+                    log::trace!("{}: Close io ({}), {:?}", item.tag(), self.id, item.fd);
                     mem::forget(io);
 
                     let id = storage.ops.insert(Operation::Close { tx: None });

@@ -965,7 +965,7 @@ impl From<String> for Bytes {
     fn from(src: String) -> Bytes {
         if src.is_empty() {
             Bytes::new()
-        } else if src.bytes().len() <= INLINE_CAP {
+        } else if src.len() <= INLINE_CAP {
             Bytes {
                 inner: Inner::from_slice_inline(src.as_bytes()),
             }

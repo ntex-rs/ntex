@@ -1,4 +1,4 @@
-use std::{any, future::poll_fn, task::Poll};
+use std::{any, future::poll_fn, mem, os::fd::AsRawFd, task::Poll};
 
 use ntex_io::{
     types, Handle, IoContext, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
@@ -12,11 +12,10 @@ impl IoStream for super::TcpStream {
     fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let context = read.context();
-        let ctl = StreamOps::current().register(io, context.clone());
-        let ctl2 = ctl.clone();
+        let ctl = StreamOps::current().register(io.as_raw_fd(), context.clone());
         spawn(async move { run(ctl, context).await });
 
-        Some(Box::new(HandleWrapper(ctl2)))
+        Some(Box::new(HandleWrapper(Some(io))))
     }
 }
 
@@ -24,24 +23,31 @@ impl IoStream for super::UnixStream {
     fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let context = read.context();
-        let ctl = StreamOps::current().register(io, context.clone());
+        let ctl = StreamOps::current().register(io.as_raw_fd(), context.clone());
         spawn(async move { run(ctl, context).await });
+        mem::forget(io);
 
         None
     }
 }
 
-struct HandleWrapper(StreamCtl<Socket>);
+struct HandleWrapper(Option<Socket>);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            let addr = self.0.with_io(|io| io.and_then(|io| io.peer_addr().ok()));
+            let addr = self.0.as_ref().unwrap().peer_addr().ok();
             if let Some(addr) = addr.and_then(|addr| addr.as_socket()) {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
         }
         None
+    }
+}
+
+impl Drop for HandleWrapper {
+    fn drop(&mut self) {
+        mem::forget(self.0.take());
     }
 }
 
@@ -51,7 +57,7 @@ enum Status {
     Terminate,
 }
 
-async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
+async fn run(ctl: StreamCtl, context: IoContext) {
     // Handle io read readiness
     let st = poll_fn(|cx| {
         let mut modify = false;
@@ -81,8 +87,8 @@ async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
             Poll::Pending => Poll::Pending,
         };
 
-        if modify {
-            ctl.modify(readable, writable);
+        if modify && !ctl.modify(readable, writable) {
+            return Poll::Ready(Status::Terminate);
         }
 
         if read.is_pending() && write.is_pending() {
@@ -95,7 +101,10 @@ async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
     })
     .await;
 
-    ctl.modify(false, true);
-    context.shutdown(st == Status::Shutdown).await;
-    context.stopped(ctl.close().await.err());
+    if st != Status::Terminate && ctl.modify(false, true) {
+        context.shutdown(st == Status::Shutdown).await;
+    }
+    if !context.is_stopped() {
+        context.stopped(ctl.close().await.err());
+    }
 }

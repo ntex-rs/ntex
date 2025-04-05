@@ -543,7 +543,7 @@ where
             if self.flags.contains(Flags::KA_ENABLED)
                 && !self.flags.contains(Flags::KA_TIMEOUT)
             {
-                log::debug!(
+                log::trace!(
                     "{}: Start keep-alive timer {:?}",
                     self.shared.io.tag(),
                     self.cfg.keepalive_timeout()

@@ -116,7 +116,7 @@ impl Parser {
                 return Err(ProtocolError::InvalidLength(length));
             }
             OpCode::Close if length > 125 => {
-                log::debug!("Received close frame with payload length exceeding 125. Morphing to protocol close frame.");
+                log::trace!("Received close frame with payload length exceeding 125. Morphing to protocol close frame.");
                 return Ok(Some((true, OpCode::Close, None)));
             }
             _ => (),

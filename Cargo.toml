@@ -46,6 +46,8 @@ ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
 [workspace.dependencies]
+ntex-polling = "3.7.4"
+
 async-channel = "2"
 async-task = "4.5.0"
 atomic-waker = "1.1"

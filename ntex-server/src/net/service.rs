@@ -114,7 +114,7 @@ impl ServiceFactory<Connection> for StreamService {
         for info in &self.services {
             match info.factory.create(()).await {
                 Ok(svc) => {
-                    log::debug!("Constructed server service for {:?}", info.tokens);
+                    log::trace!("Constructed server service for {:?}", info.tokens);
                     services.push(svc);
                     let idx = services.len() - 1;
                     for (token, tag) in &info.tokens {

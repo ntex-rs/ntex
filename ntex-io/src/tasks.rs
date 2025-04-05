@@ -395,6 +395,12 @@ impl IoContext {
         self.0 .0.io_stopped(e);
     }
 
+    #[inline]
+    /// Check if Io stopped
+    pub fn is_stopped(&self) -> bool {
+        self.0.flags().is_stopped()
+    }
+
     /// Wait when io get closed or preparing for close
     pub async fn shutdown(&self, flush_buf: bool) {
         let st = &self.0 .0;
@@ -537,9 +543,7 @@ impl IoContext {
                                 self.0.tag(),
                                 nbytes
                             );
-                            if !inner.dispatch_task.wake_checked() {
-                                log::error!("Dispatcher waker is not registered");
-                            }
+                            inner.dispatch_task.wake();
                         } else {
                             if nbytes >= hw {
                                 // read task is paused because of read back-pressure
@@ -670,7 +674,6 @@ impl IoContext {
         // set buffer back
         let result = match result {
             Ok(0) => {
-                // log::debug!("{}: WROTE ALL {:?}", self.0.tag(), inner.buffer.write_destination_size());
                 self.0.memory_pool().release_write_buf(buf);
                 Ok(inner.buffer.write_destination_size())
             }
@@ -680,7 +683,6 @@ impl IoContext {
                     self.0.memory_pool().release_write_buf(b);
                 }
                 let l = buf.len();
-                // log::debug!("{}: WROTE SOME {:?}", self.0.tag(), l);
                 inner.buffer.set_write_destination(buf);
                 Ok(l)
             }
@@ -739,60 +741,29 @@ impl IoContext {
 
     pub fn with_read_buf<F>(&self, f: F) -> Poll<()>
     where
-        F: FnOnce(&mut BytesVec) -> Poll<io::Result<usize>>,
+        F: FnOnce(&mut BytesVec, usize, usize) -> (usize, Poll<io::Result<()>>),
     {
         let inner = &self.0 .0;
         let (hw, lw) = self.0.memory_pool().read_params().unpack();
-        let result = inner.buffer.with_read_source(&self.0, |buf| {
-            // make sure we've got room
-            let remaining = buf.remaining_mut();
-            if remaining < lw {
-                buf.reserve(hw - remaining);
-            }
-
-            f(buf)
-        });
+        let (nbytes, result) = inner.buffer.with_read_source(&self.0, |buf| f(buf, hw, lw));
 
         // handle buffer changes
-        match result {
-            Poll::Ready(Ok(0)) => {
-                inner.io_stopped(None);
-                Poll::Ready(())
-            }
-            Poll::Ready(Ok(nbytes)) => {
-                let filter = self.0.filter();
-                let _ = filter
-                    .process_read_buf(&self.0, &inner.buffer, 0, nbytes)
-                    .and_then(|status| {
-                        if status.nbytes > 0 {
-                            // dest buffer has new data, wake up dispatcher
-                            if inner.buffer.read_destination_size() >= hw {
-                                log::trace!(
-                                    "{}: Io read buffer is too large {}, enable read back-pressure",
-                                    self.0.tag(),
-                                    nbytes
-                                );
-                                inner.insert_flags(Flags::BUF_R_READY | Flags::BUF_R_FULL);
-                            } else {
-                                inner.insert_flags(Flags::BUF_R_READY);
-
-                                if nbytes >= hw {
-                                    // read task is paused because of read back-pressure
-                                    // but there is no new data in top most read buffer
-                                    // so we need to wake up read task to read more data
-                                    // otherwise read task would sleep forever
-                                    inner.read_task.wake();
-                                }
-                            }
+        let st_res = if nbytes > 0 {
+            let filter = self.0.filter();
+            match filter.process_read_buf(&self.0, &inner.buffer, 0, nbytes) {
+                Ok(status) => {
+                    if status.nbytes > 0 {
+                        // dest buffer has new data, wake up dispatcher
+                        if inner.buffer.read_destination_size() >= hw {
                             log::trace!(
-                                "{}: New {} bytes available, wakeup dispatcher",
+                                "{}: Io read buffer is too large {}, enable read back-pressure",
                                 self.0.tag(),
                                 nbytes
                             );
-                            if !inner.dispatch_task.wake_checked() {
-                                log::error!("Dispatcher waker is not registered");
-                            }
+                            inner.insert_flags(Flags::BUF_R_READY | Flags::BUF_R_FULL);
                         } else {
+                            inner.insert_flags(Flags::BUF_R_READY);
+
                             if nbytes >= hw {
                                 // read task is paused because of read back-pressure
                                 // but there is no new data in top most read buffer
@@ -800,36 +771,70 @@ impl IoContext {
                                 // otherwise read task would sleep forever
                                 inner.read_task.wake();
                             }
-                            if inner.flags.get().is_waiting_for_read() {
-                                // in case of "notify" we must wake up dispatch task
-                                // if we read any data from source
-                                inner.dispatch_task.wake();
-                            }
                         }
-
-                        // while reading, filter wrote some data
-                        // in that case filters need to process write buffers
-                        // and potentialy wake write task
-                        if status.need_write {
-                            filter.process_write_buf(&self.0, &inner.buffer, 0)
-                        } else {
-                            Ok(())
-                        }
-                    })
-                    .map_err(|err| {
+                        log::trace!(
+                            "{}: New {} bytes available, wakeup dispatcher",
+                            self.0.tag(),
+                            nbytes
+                        );
                         inner.dispatch_task.wake();
-                        inner.io_stopped(Some(err));
-                        inner.insert_flags(Flags::BUF_R_READY);
-                    });
-                Poll::Pending
+                    } else {
+                        if nbytes >= hw {
+                            // read task is paused because of read back-pressure
+                            // but there is no new data in top most read buffer
+                            // so we need to wake up read task to read more data
+                            // otherwise read task would sleep forever
+                            inner.read_task.wake();
+                        }
+                        if inner.flags.get().is_waiting_for_read() {
+                            // in case of "notify" we must wake up dispatch task
+                            // if we read any data from source
+                            inner.dispatch_task.wake();
+                        }
+                    }
+
+                    // while reading, filter wrote some data
+                    // in that case filters need to process write buffers
+                    // and potentialy wake write task
+                    if status.need_write {
+                        filter.process_write_buf(&self.0, &inner.buffer, 0)
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(err) => {
+                    inner.insert_flags(Flags::BUF_R_READY);
+                    Err(err)
+                }
+            }
+        } else {
+            Ok(())
+        };
+
+        match result {
+            Poll::Ready(Ok(_)) => {
+                if let Err(e) = st_res {
+                    inner.io_stopped(Some(e));
+                    Poll::Ready(())
+                } else if nbytes == 0 {
+                    inner.io_stopped(None);
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
             }
             Poll::Ready(Err(e)) => {
                 inner.io_stopped(Some(e));
                 Poll::Ready(())
             }
             Poll::Pending => {
-                self.shutdown_filters();
-                Poll::Pending
+                if let Err(e) = st_res {
+                    inner.io_stopped(Some(e));
+                    Poll::Ready(())
+                } else {
+                    self.shutdown_filters();
+                    Poll::Pending
+                }
             }
         }
     }
