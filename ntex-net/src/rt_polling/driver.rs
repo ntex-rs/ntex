@@ -19,7 +19,6 @@ bitflags::bitflags! {
         const RD     = 0b0000_0001;
         const WR     = 0b0000_0010;
         const RDSH   = 0b0000_0100;
-        const FAILED = 0b0000_1000;
         const CLOSED = 0b0001_0000;
     }
 }
@@ -110,7 +109,11 @@ impl Handler for StreamOpsHandler {
             let mut flags = item.flags;
             let mut renew = Event::new(0, false, false);
             if ev.readable {
-                if item.read(&mut flags).is_pending() && item.can_read() {
+                if item
+                    .read(&mut flags, id as u32, &self.inner.api)
+                    .is_pending()
+                    && item.can_read()
+                {
                     renew.readable = true;
                     flags.insert(Flags::RD);
                 } else {
@@ -143,7 +146,7 @@ impl Handler for StreamOpsHandler {
             }
 
             // register Event in driver
-            if !item.flags.intersects(Flags::CLOSED | Flags::FAILED) {
+            if !item.flags.intersects(Flags::CLOSED) {
                 self.inner.api.modify(item.fd, id as u32, renew);
             }
 
@@ -204,8 +207,10 @@ impl StreamItem {
         self.context.is_read_ready()
     }
 
-    fn read(&mut self, flags: &mut Flags) -> Poll<()> {
-        self.context.with_read_buf(|buf, hw, lw| {
+    fn read(&mut self, flags: &mut Flags, id: u32, api: &DriverApi) -> Poll<()> {
+        let mut close = false;
+
+        let result = self.context.with_read_buf(|buf, hw, lw| {
             // prev call result is 0
             if flags.contains(Flags::RDSH) {
                 return (0, Poll::Ready(Ok(())));
@@ -244,19 +249,24 @@ impl StreamItem {
 
                 return match result {
                     Poll::Ready(Err(err)) => {
-                        flags.insert(Flags::FAILED);
+                        close = true;
                         (total, Poll::Ready(Err(err)))
                     }
                     Poll::Ready(Ok(size)) => {
                         if size == 0 {
-                            flags.insert(Flags::RDSH);
+                            close = true;
                         }
                         (total, Poll::Ready(Ok(())))
                     }
                     Poll::Pending => (total, Poll::Pending),
                 };
             }
-        })
+        });
+
+        if close {
+            self.close(id, api, None, false);
+        }
+        result
     }
 
     fn close(
@@ -304,7 +314,7 @@ impl StreamCtl {
     pub(crate) fn modify(&self, rd: bool, wr: bool) -> bool {
         self.inner.with(|streams| {
             let item = &mut streams[self.id as usize];
-            if item.flags.intersects(Flags::CLOSED | Flags::FAILED) {
+            if item.flags.intersects(Flags::CLOSED) {
                 return false;
             }
 
@@ -322,7 +332,7 @@ impl StreamCtl {
             if rd {
                 if flags.contains(Flags::RD) {
                     event.readable = true;
-                } else if item.read(&mut flags).is_pending() {
+                } else if item.read(&mut flags, self.id, &self.inner.api).is_pending() {
                     event.readable = true;
                     flags.insert(Flags::RD);
                 }
@@ -356,7 +366,7 @@ impl StreamCtl {
             }
             item.flags = flags;
 
-            if !flags.intersects(Flags::CLOSED | Flags::FAILED) {
+            if !flags.intersects(Flags::CLOSED) {
                 self.inner.api.modify(item.fd, self.id, event);
                 true
             } else {
