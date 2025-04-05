@@ -145,7 +145,7 @@ impl Handler for StreamOpsHandler {
             }
 
             // register Event in driver
-            if !item.flags.intersects(Flags::CLOSED) {
+            if !item.flags.contains(Flags::CLOSED) {
                 self.inner.api.modify(item.fd, id as u32, renew);
             }
 
@@ -216,7 +216,7 @@ impl StreamCtl {
     pub(crate) fn modify(&self, rd: bool, wr: bool) -> bool {
         self.inner.with(|streams| {
             let item = &mut streams[self.id as usize];
-            if item.flags.intersects(Flags::CLOSED) {
+            if item.flags.contains(Flags::CLOSED) {
                 return false;
             }
 
@@ -372,6 +372,7 @@ impl StreamItem {
         });
 
         if close {
+            flags.insert(Flags::CLOSED);
             self.close(id, api, None, false);
         }
         result
