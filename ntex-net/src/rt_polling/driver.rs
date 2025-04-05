@@ -337,7 +337,7 @@ impl StreamItem {
                 let chunk_len = chunk.len();
                 let chunk_ptr = chunk.as_mut_ptr();
 
-                // assert!(chunk_len != 0);
+                assert!(chunk_len != 0);
 
                 let result =
                     syscall!(break libc::read(self.fd, chunk_ptr as _, chunk.len()));
