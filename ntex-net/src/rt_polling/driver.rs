@@ -385,7 +385,14 @@ impl StreamItem {
         shutdown: bool,
     ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
         if !self.flags.contains(Flags::CLOSED) {
-            log::trace!("{}: Closing ({}), {:?}", self.tag(), self.fd, self.fd);
+            log::trace!(
+                "{}: Closing ({}) sh: {:?}, flags: {:?}, ctx: {:?}",
+                self.tag(),
+                self.fd,
+                shutdown,
+                self.flags,
+                self.context.flags()
+            );
             self.flags.insert(Flags::CLOSED);
             if !self.context.is_stopped() {
                 self.context.stopped(error);
