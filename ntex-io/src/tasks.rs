@@ -395,6 +395,12 @@ impl IoContext {
         self.0 .0.io_stopped(e);
     }
 
+    #[inline]
+    /// Check if Io stopped
+    pub fn is_stopped(&self) -> bool {
+        self.0.flags().is_stopped()
+    }
+
     /// Wait when io get closed or preparing for close
     pub async fn shutdown(&self, flush_buf: bool) {
         let st = &self.0 .0;

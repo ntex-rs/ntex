@@ -46,7 +46,7 @@ impl StreamOps {
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
-            rt.driver().register(|api| {
+            rt.register_handler(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     feed: RefCell::new(Vec::new()),
@@ -213,9 +213,8 @@ impl StreamItem {
             let mut total = 0;
             loop {
                 // make sure we've got room
-                let remaining = buf.remaining_mut();
-                if remaining < lw {
-                    buf.reserve(hw - remaining);
+                if buf.remaining_mut() < lw {
+                    buf.reserve(hw);
                 }
 
                 let chunk = buf.chunk_mut();
@@ -227,9 +226,9 @@ impl StreamItem {
                 if let Poll::Ready(Ok(size)) = result {
                     unsafe { buf.advance_mut(size) };
                     total += size;
-                    //if size == chunk_len {
-                    //    continue;
-                    //}
+                    if size == chunk_len {
+                        continue;
+                    }
                 }
 
                 log::trace!(
@@ -273,7 +272,9 @@ impl StreamItem {
         if !self.flags.contains(Flags::CLOSED) {
             log::trace!("{}: Closing ({}), {:?}", self.tag(), self.fd, self.fd);
             self.flags.insert(Flags::CLOSED);
-            self.context.stopped(error);
+            if !self.context.is_stopped() {
+                self.context.stopped(error);
+            }
 
             let fd = self.fd;
             api.detach(fd, id);
