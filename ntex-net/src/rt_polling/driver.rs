@@ -18,7 +18,6 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD     = 0b0000_0001;
         const WR     = 0b0000_0010;
-        const RDSH   = 0b0000_0100;
         const CLOSED = 0b0001_0000;
     }
 }
@@ -211,11 +210,6 @@ impl StreamItem {
         let mut close = false;
 
         let result = self.context.with_read_buf(|buf, hw, lw| {
-            // prev call result is 0
-            if flags.contains(Flags::RDSH) {
-                return (0, Poll::Ready(Ok(())));
-            }
-
             let mut total = 0;
             loop {
                 // make sure we've got room
@@ -233,9 +227,9 @@ impl StreamItem {
                 if let Poll::Ready(Ok(size)) = result {
                     unsafe { buf.advance_mut(size) };
                     total += size;
-                    if size == chunk_len {
-                        continue;
-                    }
+                    //if size == chunk_len {
+                    //    continue;
+                    //}
                 }
 
                 log::trace!(
@@ -366,7 +360,7 @@ impl StreamCtl {
             }
             item.flags = flags;
 
-            if !flags.intersects(Flags::CLOSED) {
+            if !flags.contains(Flags::CLOSED) {
                 self.inner.api.modify(item.fd, self.id, event);
                 true
             } else {
