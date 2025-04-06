@@ -412,7 +412,9 @@ impl StreamItem {
                 if shutdown {
                     let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
                 }
-                syscall!(libc::close(fd))
+                syscall!(libc::close(fd)).inspect_err(|err| {
+                    log::error!("Cannot close file descriptor ({:?}), {:?}", fd, err);
+                })
             }))
         } else {
             None

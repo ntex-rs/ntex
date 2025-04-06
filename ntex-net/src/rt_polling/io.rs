@@ -34,9 +34,15 @@ struct HandleWrapper(Option<Socket>);
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            let addr = self.0.as_ref().unwrap().peer_addr().ok();
-            if let Some(addr) = addr.and_then(|addr| addr.as_socket()) {
-                return Some(Box::new(types::PeerAddr(addr)));
+            match self.0.as_ref().unwrap().peer_addr() {
+                Ok(addr) => {
+                    if let Some(addr) = addr.as_socket() {
+                        return Some(Box::new(types::PeerAddr(addr)));
+                    }
+                }
+                Err(err) => {
+                    log::error!("Cannot get peer addr: {:?}", err);
+                }
             }
         }
         None
