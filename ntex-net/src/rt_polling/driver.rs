@@ -99,7 +99,7 @@ impl Handler for StreamOpsHandler {
                 return;
             }
             let item = &mut streams[id];
-            if item.is_closed() {
+            if !item.is_open() {
                 return;
             }
             log::trace!("{}: Event ({:?}): {:?}", item.tag(), item.fd, ev);
@@ -117,7 +117,7 @@ impl Handler for StreamOpsHandler {
                 renew.readable = true;
             }
 
-            if ev.writable && item.is_closed() {
+            if ev.writable && item.is_open() {
                 if item.write(id as u32, &self.inner.api).is_pending() {
                     renew.writable = true;
                     item.insert_flag(Flags::WR);
@@ -136,7 +136,7 @@ impl Handler for StreamOpsHandler {
             }
 
             // register Event in driver
-            if !item.is_closed() {
+            if item.is_open() {
                 self.inner.api.modify(item.fd, id as u32, renew);
             }
 
@@ -200,7 +200,7 @@ impl StreamCtl {
     pub(crate) fn modify(&self, rd: bool, wr: bool) -> bool {
         self.inner.with(|streams| {
             let item = &mut streams[self.id as usize];
-            if item.is_closed() {
+            if !item.is_open() {
                 return false;
             }
 
@@ -225,7 +225,7 @@ impl StreamCtl {
                 item.remove_flag(Flags::RD);
             }
 
-            if wr && !item.is_closed() {
+            if wr && item.is_open() {
                 if item.contains_flag(Flags::WR) {
                     event.writable = true;
                 } else if item.write(self.id, &self.inner.api).is_pending() {
@@ -236,7 +236,7 @@ impl StreamCtl {
                 item.remove_flag(Flags::WR);
             }
 
-            if !item.is_closed() {
+            if item.is_open() {
                 self.inner.api.modify(item.fd, self.id, event);
                 true
             } else {
@@ -286,8 +286,8 @@ impl StreamItem {
         self.context.tag()
     }
 
-    fn is_closed(&self) -> bool {
-        self.flags.get().contains(Flags::CLOSED)
+    fn is_open(&self) -> bool {
+        !self.flags.get().contains(Flags::CLOSED)
     }
 
     fn can_read(&self) -> bool {
@@ -393,7 +393,7 @@ impl StreamItem {
         // error: Option<io::Error>,
         shutdown: bool,
     ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
-        if !self.is_closed() {
+        if self.is_open() {
             log::trace!(
                 "{}: Closing ({}) sh: {:?}, flags: {:?}, ctx: {:?}",
                 self.tag(),
