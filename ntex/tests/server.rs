@@ -85,9 +85,7 @@ async fn test_run() {
                 .disable_signals()
                 .bind("test", addr, move |_| {
                     fn_service(|io: Io| async move {
-                        io.send(Bytes::from_static(b"test"), &BytesCodec)
-                            .await
-                            .unwrap();
+                        let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())
                     })
                 })

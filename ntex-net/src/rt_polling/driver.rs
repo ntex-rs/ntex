@@ -203,13 +203,13 @@ impl StreamCtl {
             if !item.is_open() {
                 return false;
             }
-
             log::trace!(
-                "{}: Modify ({:?}) rd: {:?}, wr: {:?}",
+                "{}: Modify ({:?}) rd: {:?}, wr: {:?}, flags: {:?}",
                 item.tag(),
                 item.fd,
                 rd,
-                wr
+                wr,
+                item.flags.get()
             );
 
             let mut event = Event::new(0, false, false);
@@ -390,16 +390,14 @@ impl StreamItem {
         &mut self,
         id: u32,
         api: &DriverApi,
-        // error: Option<io::Error>,
         shutdown: bool,
     ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
         if self.is_open() {
             log::trace!(
-                "{}: Closing ({}) sh: {:?}, flags: {:?}, ctx: {:?}",
+                "{}: Closing ({}) sh: {:?}, ctx: {:?}",
                 self.tag(),
                 self.fd,
                 shutdown,
-                self.flags,
                 self.context.flags()
             );
             self.insert_flag(Flags::CLOSED);
