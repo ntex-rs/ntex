@@ -1,14 +1,12 @@
 use std::{any, future::poll_fn, mem, os::fd::AsRawFd, task::Poll};
 
-use ntex_io::{
-    types, Handle, IoContext, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
-};
+use ntex_io::{types, Handle, ReadContext, ReadStatus, WriteContext, WriteStatus};
 use ntex_rt::spawn;
 use socket2::Socket;
 
 use super::driver::{StreamCtl, StreamOps};
 
-impl IoStream for super::TcpStream {
+impl ntex_io::IoStream for super::TcpStream {
     fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let context = read.context();
@@ -19,7 +17,7 @@ impl IoStream for super::TcpStream {
     }
 }
 
-impl IoStream for super::UnixStream {
+impl ntex_io::IoStream for super::UnixStream {
     fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let context = read.context();
@@ -57,7 +55,7 @@ enum Status {
     Terminate,
 }
 
-async fn run(ctl: StreamCtl, context: IoContext) {
+async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     // Handle io read readiness
     let st = poll_fn(|cx| {
         let mut modify = false;

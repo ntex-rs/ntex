@@ -1,12 +1,11 @@
 use std::os::fd::RawFd;
 use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task::Poll};
 
+use ntex_bytes::BufMut;
+use ntex_io::IoContext;
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
-
-use ntex_bytes::BufMut;
-use ntex_io::IoContext;
 
 pub(crate) struct StreamCtl {
     id: u32,
@@ -98,58 +97,63 @@ impl Handler for StreamOpsHandler {
             if !streams.contains(id) {
                 return;
             }
-            let item = &mut streams[id];
-            if !item.is_open() {
+            let io = &mut streams[id];
+            log::trace!(
+                "{}: Event ({:?},open:{}): {:?}",
+                io.tag(),
+                io.fd,
+                io.is_open(),
+                ev
+            );
+            if !io.is_open() {
                 return;
             }
-            log::trace!("{}: Event ({:?}): {:?}", item.tag(), item.fd, ev);
-
-            let mut renew = Event::new(0, false, false).with_interrupt();
+            let mut renew = Event::new(0, false, false);
 
             if ev.readable {
-                if item.read(id as u32, &self.inner.api).is_pending() && item.can_read() {
+                if io.read(id as u32, &self.inner.api).is_pending() && io.can_read() {
                     renew.readable = true;
-                    item.insert_flag(Flags::RD);
+                    io.insert_flag(Flags::RD);
                 } else {
-                    item.remove_flag(Flags::RD);
+                    io.remove_flag(Flags::RD);
                 }
-            } else if item.contains_flag(Flags::RD) {
+            } else if io.contains_flag(Flags::RD) {
                 renew.readable = true;
             }
 
-            if ev.writable && item.is_open() {
-                if item.write(id as u32, &self.inner.api).is_pending() {
+            if ev.writable && io.is_open() {
+                if io.write(id as u32, &self.inner.api).is_pending() {
                     renew.writable = true;
-                    item.insert_flag(Flags::WR);
+                    io.insert_flag(Flags::WR);
                 } else {
-                    item.remove_flag(Flags::WR);
+                    io.remove_flag(Flags::WR);
                 }
-            } else if item.contains_flag(Flags::WR) {
+            } else if io.contains_flag(Flags::WR) {
                 renew.writable = true;
             }
 
             // handle HUP
             if ev.is_interrupt() {
-                item.context.stopped(None);
-                item.close(id as u32, &self.inner.api, false);
+                io.context.stopped(None);
+                io.close(id as u32, &self.inner.api, false);
                 return;
             }
 
             // register Event in driver
-            if item.is_open() {
-                self.inner.api.modify(item.fd, id as u32, renew);
+            if io.is_open() {
+                self.inner.api.modify(io.fd, id as u32, renew);
             }
 
             // delayed drops
             if self.inner.delayd_drop.get() {
                 self.inner.delayd_drop.set(false);
                 for id in self.inner.feed.borrow_mut().drain(..) {
-                    let item = &mut streams[id as usize];
-                    item.ref_count -= 1;
-                    if item.ref_count == 0 {
-                        let mut item = streams.remove(id as usize);
-                        item.close(id, &self.inner.api, true);
-                        log::trace!("{}: Drop ({:?})", item.tag(), item.fd);
+                    let io = &mut streams[id as usize];
+                    io.ref_count -= 1;
+                    if io.ref_count == 0 {
+                        let mut io = streams.remove(id as usize);
+                        io.close(id, &self.inner.api, true);
+                        log::trace!("{}: Drop ({:?})", io.tag(), io.fd);
                     }
                 }
             }
@@ -158,12 +162,12 @@ impl Handler for StreamOpsHandler {
 
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
-            if let Some(item) = streams.get_mut(id) {
-                log::trace!("{}: Failed ({:?}) err: {:?}", item.tag(), item.fd, err);
-                if !item.context.is_stopped() {
-                    item.context.stopped(Some(err));
+            if let Some(io) = streams.get_mut(id) {
+                log::trace!("{}: Failed ({:?}) err: {:?}", io.tag(), io.fd, err);
+                if !io.context.is_stopped() {
+                    io.context.stopped(Some(err));
                 }
-                item.close(id as u32, &self.inner.api, false);
+                io.close(id as u32, &self.inner.api, false);
             }
         })
     }
@@ -199,45 +203,45 @@ impl StreamCtl {
 
     pub(crate) fn modify(&self, rd: bool, wr: bool) -> bool {
         self.inner.with(|streams| {
-            let item = &mut streams[self.id as usize];
-            if !item.is_open() {
-                return false;
-            }
+            let io = &mut streams[self.id as usize];
             log::trace!(
                 "{}: Modify ({:?}) rd: {:?}, wr: {:?}, flags: {:?}",
-                item.tag(),
-                item.fd,
+                io.tag(),
+                io.fd,
                 rd,
                 wr,
-                item.flags.get()
+                io.flags.get()
             );
 
+            if !io.is_open() {
+                return false;
+            }
             let mut event = Event::new(0, false, false);
 
             if rd {
-                if item.contains_flag(Flags::RD) {
+                if io.contains_flag(Flags::RD) {
                     event.readable = true;
-                } else if item.read(self.id, &self.inner.api).is_pending() {
+                } else if io.read(self.id, &self.inner.api).is_pending() {
                     event.readable = true;
-                    item.insert_flag(Flags::RD);
+                    io.insert_flag(Flags::RD);
                 }
             } else {
-                item.remove_flag(Flags::RD);
+                io.remove_flag(Flags::RD);
             }
 
-            if wr && item.is_open() {
-                if item.contains_flag(Flags::WR) {
+            if wr && io.is_open() {
+                if io.contains_flag(Flags::WR) {
                     event.writable = true;
-                } else if item.write(self.id, &self.inner.api).is_pending() {
+                } else if io.write(self.id, &self.inner.api).is_pending() {
                     event.writable = true;
-                    item.insert_flag(Flags::WR);
+                    io.insert_flag(Flags::WR);
                 }
             } else {
-                item.remove_flag(Flags::WR);
+                io.remove_flag(Flags::WR);
             }
 
-            if item.is_open() {
-                self.inner.api.modify(item.fd, self.id, event);
+            if io.is_open() {
+                self.inner.api.modify(io.fd, self.id, event);
                 true
             } else {
                 false
@@ -264,14 +268,14 @@ impl Drop for StreamCtl {
             let id = self.id as usize;
             streams[id].ref_count -= 1;
             if streams[id].ref_count == 0 {
-                let mut item = streams.remove(id);
+                let mut io = streams.remove(id);
                 log::trace!(
                     "{}: Drop io ({:?}), flags: {:?}",
-                    item.tag(),
-                    item.fd,
-                    item.flags
+                    io.tag(),
+                    io.fd,
+                    io.flags.get()
                 );
-                item.close(self.id, &self.inner.api, true);
+                io.close(self.id, &self.inner.api, true);
             }
             self.inner.streams.set(Some(streams));
         } else {
