@@ -104,7 +104,9 @@ async fn run(ctl: StreamCtl, context: IoContext) {
     if st != Status::Terminate && ctl.modify(false, true) {
         context.shutdown(st == Status::Shutdown).await;
     }
+
+    let res = ctl.close().await;
     if !context.is_stopped() {
-        context.stopped(ctl.close().await.err());
+        context.stopped(res.err());
     }
 }
