@@ -1,12 +1,11 @@
 use std::os::fd::RawFd;
 use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task::Poll};
 
+use ntex_bytes::BufMut;
+use ntex_io::IoContext;
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
-
-use ntex_bytes::BufMut;
-use ntex_io::IoContext;
 
 pub(crate) struct StreamCtl {
     id: u32,
@@ -98,88 +97,66 @@ impl Handler for StreamOpsHandler {
             if !streams.contains(id) {
                 return;
             }
-            let item = &mut streams[id];
-            if item.flags.contains(Flags::CLOSED) {
-                return;
-            }
-
-            log::trace!("{}: Event ({:?}): {:?}", item.tag(), item.fd, ev);
-
-            let mut flags = item.flags;
+            let io = &mut streams[id];
             let mut renew = Event::new(0, false, false);
+
+            log::trace!("{}: Event ({:?}): {:?}", io.tag(), io.fd, ev);
+
             if ev.readable {
-                if item
-                    .read(&mut flags, id as u32, &self.inner.api)
-                    .is_pending()
-                    && item.can_read()
-                {
+                if io.read(id as u32, &self.inner.api).is_pending() && io.can_read() {
                     renew.readable = true;
-                    flags.insert(Flags::RD);
+                    io.flags.insert(Flags::RD);
                 } else {
-                    flags.remove(Flags::RD);
+                    io.flags.remove(Flags::RD);
                 }
-            } else if flags.contains(Flags::RD) {
+            } else if io.flags.contains(Flags::RD) {
                 renew.readable = true;
             }
 
             if ev.writable {
-                let result = item.context.with_write_buf(|buf| {
-                    log::trace!("{}: write {:?} s: {:?}", item.tag(), item.fd, buf.len());
-                    syscall!(break libc::write(item.fd, buf[..].as_ptr() as _, buf.len()))
-                });
-                if result.is_pending() {
+                if io.write(id as u32, &self.inner.api).is_pending() {
                     renew.writable = true;
-                    flags.insert(Flags::WR);
+                    io.flags.insert(Flags::WR);
                 } else {
-                    flags.remove(Flags::WR);
+                    io.flags.remove(Flags::WR);
                 }
-            } else if flags.contains(Flags::WR) {
+            } else if io.flags.contains(Flags::WR) {
                 renew.writable = true;
             }
-            item.flags = flags;
 
             // handle HUP
             if ev.is_interrupt() {
-                item.close(id as u32, &self.inner.api, None, false);
+                io.context.stopped(None);
                 return;
             }
 
             // register Event in driver
-            if !item.flags.contains(Flags::CLOSED) {
-                self.inner.api.modify(item.fd, id as u32, renew);
-            }
+            self.inner.api.modify(io.fd, id as u32, renew);
 
             // delayed drops
             if self.inner.delayd_drop.get() {
+                self.inner.delayd_drop.set(false);
                 for id in self.inner.feed.borrow_mut().drain(..) {
-                    let item = &mut streams[id as usize];
-                    item.ref_count -= 1;
-                    if item.ref_count == 0 {
-                        let mut item = streams.remove(id as usize);
-                        log::trace!(
-                            "{}: Drop ({:?}), flags: {:?}",
-                            item.tag(),
-                            item.fd,
-                            item.flags
-                        );
-                        item.close(id, &self.inner.api, None, true);
+                    let io = &mut streams[id as usize];
+                    io.ref_count -= 1;
+                    if io.ref_count == 0 {
+                        let mut io = streams.remove(id as usize);
+                        io.close(id, &self.inner.api, true);
+                        log::trace!("{}: Drop ({:?})", io.tag(), io.fd);
                     }
                 }
-                self.inner.delayd_drop.set(false);
             }
         });
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
-            if let Some(item) = streams.get_mut(id) {
-                log::trace!(
-                    "{}: FD is failed ({:?}) err: {:?}",
-                    item.tag(),
-                    item.fd,
-                    err
-                );
-                item.close(id as u32, &self.inner.api, Some(err), false);
+            if let Some(io) = streams.get_mut(id) {
+                log::trace!("{}: Failed ({:?}) err: {:?}", io.tag(), io.fd, err);
+                if !io.context.is_stopped() {
+                    io.context.stopped(Some(err));
+                }
+                io.close(id as u32, &self.inner.api, false);
             }
         })
     }
@@ -202,7 +179,7 @@ impl StreamCtl {
         let id = self.id as usize;
         let fut = self
             .inner
-            .with(|streams| streams[id].close(self.id, &self.inner.api, None, true));
+            .with(|streams| streams[id].close(self.id, &self.inner.api, true));
         async move {
             if let Some(fut) = fut {
                 fut.await
@@ -213,67 +190,42 @@ impl StreamCtl {
         }
     }
 
-    pub(crate) fn modify(&self, rd: bool, wr: bool) -> bool {
+    pub(crate) fn modify(&self, rd: bool, wr: bool) {
         self.inner.with(|streams| {
-            let item = &mut streams[self.id as usize];
-            if item.flags.contains(Flags::CLOSED) {
-                return false;
-            }
-
+            let io = &mut streams[self.id as usize];
+            let mut event = Event::new(0, false, false);
             log::trace!(
-                "{}: Modify interest ({:?}) rd: {:?}, wr: {:?}",
-                item.tag(),
-                item.fd,
+                "{}: Modify ({:?}) rd: {:?}, wr: {:?}, f: {:?}",
+                io.tag(),
+                io.fd,
                 rd,
-                wr
+                wr,
+                io.flags
             );
 
-            let mut flags = item.flags;
-            let mut event = Event::new(0, false, false);
-
             if rd {
-                if flags.contains(Flags::RD) {
+                if io.flags.contains(Flags::RD) {
                     event.readable = true;
-                } else if item.read(&mut flags, self.id, &self.inner.api).is_pending() {
+                } else if io.read(self.id, &self.inner.api).is_pending() {
                     event.readable = true;
-                    flags.insert(Flags::RD);
+                    io.flags.insert(Flags::RD);
                 }
-            } else if flags.contains(Flags::RD) {
-                flags.remove(Flags::RD);
+            } else {
+                io.flags.remove(Flags::RD);
             }
 
             if wr {
-                if flags.contains(Flags::WR) {
+                if io.flags.contains(Flags::WR) {
                     event.writable = true;
-                } else {
-                    let result = item.context.with_write_buf(|buf| {
-                        log::trace!(
-                            "{}: Writing ({}), buf: {:?}",
-                            item.tag(),
-                            item.fd,
-                            buf.len()
-                        );
-                        syscall!(
-                            break libc::write(item.fd, buf[..].as_ptr() as _, buf.len())
-                        )
-                    });
-
-                    if result.is_pending() {
-                        event.writable = true;
-                        flags.insert(Flags::WR);
-                    }
+                } else if io.write(self.id, &self.inner.api).is_pending() {
+                    event.writable = true;
+                    io.flags.insert(Flags::WR);
                 }
-            } else if flags.contains(Flags::WR) {
-                flags.remove(Flags::WR);
-            }
-            item.flags = flags;
-
-            if !flags.contains(Flags::CLOSED) {
-                self.inner.api.modify(item.fd, self.id, event);
-                true
             } else {
-                false
+                io.flags.remove(Flags::WR);
             }
+
+            self.inner.api.modify(io.fd, self.id, event);
         })
     }
 }
@@ -296,14 +248,9 @@ impl Drop for StreamCtl {
             let id = self.id as usize;
             streams[id].ref_count -= 1;
             if streams[id].ref_count == 0 {
-                let mut item = streams.remove(id);
-                log::trace!(
-                    "{}: Drop io ({:?}), flags: {:?}",
-                    item.tag(),
-                    item.fd,
-                    item.flags
-                );
-                item.close(self.id, &self.inner.api, None, true);
+                let mut io = streams.remove(id);
+                log::trace!("{}: Drop io ({:?}), flags: {:?}", io.tag(), io.fd, io.flags);
+                io.close(self.id, &self.inner.api, true);
             }
             self.inner.streams.set(Some(streams));
         } else {
@@ -322,10 +269,20 @@ impl StreamItem {
         self.context.is_read_ready()
     }
 
-    fn read(&mut self, flags: &mut Flags, id: u32, api: &DriverApi) -> Poll<()> {
-        let mut close = false;
+    fn write(&mut self, id: u32, api: &DriverApi) -> Poll<()> {
+        self.context.with_write_buf(|buf| {
+            log::trace!(
+                "{}: Writing ({}), buf: {:?}",
+                self.tag(),
+                self.fd,
+                buf.len()
+            );
+            syscall!(break libc::write(self.fd, buf[..].as_ptr() as _, buf.len()))
+        })
+    }
 
-        let result = self.context.with_read_buf(|buf, hw, lw| {
+    fn read(&mut self, id: u32, api: &DriverApi) -> Poll<()> {
+        self.context.with_read_buf(|buf, hw, lw| {
             let mut total = 0;
             loop {
                 // make sure we've got room
@@ -356,48 +313,29 @@ impl StreamItem {
                 );
 
                 return match res {
-                    Poll::Ready(Err(err)) => {
-                        close = true;
-                        (total, Poll::Ready(Err(err)))
-                    }
-                    Poll::Ready(Ok(size)) => {
-                        if size == 0 {
-                            close = true;
-                        }
-                        (total, Poll::Ready(Ok(())))
-                    }
+                    Poll::Ready(Err(err)) => (total, Poll::Ready(Err(err))),
+                    Poll::Ready(Ok(size)) => (total, Poll::Ready(Ok(()))),
                     Poll::Pending => (total, Poll::Pending),
                 };
             }
-        });
-
-        if close {
-            flags.insert(Flags::CLOSED);
-            self.close(id, api, None, false);
-        }
-        result
+        })
     }
 
     fn close(
         &mut self,
         id: u32,
         api: &DriverApi,
-        error: Option<io::Error>,
         shutdown: bool,
     ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
         if !self.flags.contains(Flags::CLOSED) {
+            self.flags.insert(Flags::CLOSED);
             log::trace!(
-                "{}: Closing ({}) sh: {:?}, flags: {:?}, ctx: {:?}",
+                "{}: Closing ({}) sh: {:?}, ctx: {:?}",
                 self.tag(),
                 self.fd,
                 shutdown,
-                self.flags,
                 self.context.flags()
             );
-            self.flags.insert(Flags::CLOSED);
-            if !self.context.is_stopped() {
-                self.context.stopped(error);
-            }
 
             let fd = self.fd;
             api.detach(fd, id);
@@ -405,7 +343,9 @@ impl StreamItem {
                 if shutdown {
                     let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
                 }
-                syscall!(libc::close(fd))
+                syscall!(libc::close(fd)).inspect_err(|err| {
+                    log::error!("Cannot close file descriptor ({:?}), {:?}", fd, err);
+                })
             }))
         } else {
             None
