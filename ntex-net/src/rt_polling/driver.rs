@@ -183,12 +183,6 @@ impl StreamCtl {
             .with(|streams| f(streams[self.id as usize].io.as_ref()))
     }
 
-    pub(crate) fn close(self) -> impl Future<Output = io::Result<i32>> {
-        let id = self.id as usize;
-        self.inner
-            .with(|streams| streams[id].close(self.id, &self.inner.api))
-    }
-
     pub(crate) fn shutdown(self) -> impl Future<Output = io::Result<()>> {
         let id = self.id as usize;
         self.inner
