@@ -67,6 +67,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
         let mut modify = false;
         let mut readable = false;
         let mut writable = false;
+
         let read = match context.poll_read_ready(cx) {
             Poll::Ready(ReadStatus::Ready) => {
                 modify = true;
@@ -91,8 +92,8 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
             Poll::Pending => Poll::Pending,
         };
 
-        if modify && !ctl.modify(readable, writable) {
-            return Poll::Ready(Status::Terminate);
+        if modify {
+            ctl.modify(readable, writable);
         }
 
         if read.is_pending() && write.is_pending() {
@@ -105,7 +106,9 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     })
     .await;
 
-    if st != Status::Terminate && ctl.modify(false, true) {
+    // write buf
+    if st != Status::Terminate {
+        ctl.modify(false, true);
         context.shutdown(st == Status::Shutdown).await;
     }
 

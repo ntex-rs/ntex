@@ -23,7 +23,7 @@ bitflags::bitflags! {
 
 struct StreamItem {
     fd: RawFd,
-    flags: Cell<Flags>,
+    flags: Flags,
     ref_count: u16,
     context: IoContext,
 }
@@ -70,7 +70,7 @@ impl StreamOps {
                 fd,
                 context,
                 ref_count: 1,
-                flags: Cell::new(Flags::empty()),
+                flags: Flags::empty(),
             };
             StreamCtl {
                 id: streams.insert(item) as u32,
@@ -98,51 +98,40 @@ impl Handler for StreamOpsHandler {
                 return;
             }
             let io = &mut streams[id];
-            log::trace!(
-                "{}: Event ({:?},open:{}): {:?}",
-                io.tag(),
-                io.fd,
-                io.is_open(),
-                ev
-            );
-            if !io.is_open() {
-                return;
-            }
             let mut renew = Event::new(0, false, false);
+
+            log::trace!("{}: Event ({:?}): {:?}", io.tag(), io.fd, ev);
 
             if ev.readable {
                 if io.read(id as u32, &self.inner.api).is_pending() && io.can_read() {
                     renew.readable = true;
-                    io.insert_flag(Flags::RD);
+                    io.flags.insert(Flags::RD);
                 } else {
-                    io.remove_flag(Flags::RD);
+                    io.flags.remove(Flags::RD);
                 }
-            } else if io.contains_flag(Flags::RD) {
+            } else if io.flags.contains(Flags::RD) {
                 renew.readable = true;
             }
 
-            if ev.writable && io.is_open() {
+            if ev.writable {
                 if io.write(id as u32, &self.inner.api).is_pending() {
                     renew.writable = true;
-                    io.insert_flag(Flags::WR);
+                    io.flags.insert(Flags::WR);
                 } else {
-                    io.remove_flag(Flags::WR);
+                    io.flags.remove(Flags::WR);
                 }
-            } else if io.contains_flag(Flags::WR) {
+            } else if io.flags.contains(Flags::WR) {
                 renew.writable = true;
             }
 
             // handle HUP
             if ev.is_interrupt() {
                 io.context.stopped(None);
-                io.close(id as u32, &self.inner.api, false);
                 return;
             }
 
             // register Event in driver
-            if io.is_open() {
-                self.inner.api.modify(io.fd, id as u32, renew);
-            }
+            self.inner.api.modify(io.fd, id as u32, renew);
 
             // delayed drops
             if self.inner.delayd_drop.get() {
@@ -201,51 +190,42 @@ impl StreamCtl {
         }
     }
 
-    pub(crate) fn modify(&self, rd: bool, wr: bool) -> bool {
+    pub(crate) fn modify(&self, rd: bool, wr: bool) {
         self.inner.with(|streams| {
             let io = &mut streams[self.id as usize];
+            let mut event = Event::new(0, false, false);
             log::trace!(
-                "{}: Modify ({:?}) rd: {:?}, wr: {:?}, flags: {:?}",
+                "{}: Modify ({:?}) rd: {:?}, wr: {:?}, f: {:?}",
                 io.tag(),
                 io.fd,
                 rd,
                 wr,
-                io.flags.get()
+                io.flags
             );
 
-            if !io.is_open() {
-                return false;
-            }
-            let mut event = Event::new(0, false, false);
-
             if rd {
-                if io.contains_flag(Flags::RD) {
+                if io.flags.contains(Flags::RD) {
                     event.readable = true;
                 } else if io.read(self.id, &self.inner.api).is_pending() {
                     event.readable = true;
-                    io.insert_flag(Flags::RD);
+                    io.flags.insert(Flags::RD);
                 }
             } else {
-                io.remove_flag(Flags::RD);
+                io.flags.remove(Flags::RD);
             }
 
-            if wr && io.is_open() {
-                if io.contains_flag(Flags::WR) {
+            if wr {
+                if io.flags.contains(Flags::WR) {
                     event.writable = true;
                 } else if io.write(self.id, &self.inner.api).is_pending() {
                     event.writable = true;
-                    io.insert_flag(Flags::WR);
+                    io.flags.insert(Flags::WR);
                 }
             } else {
-                io.remove_flag(Flags::WR);
+                io.flags.remove(Flags::WR);
             }
 
-            if io.is_open() {
-                self.inner.api.modify(io.fd, self.id, event);
-                true
-            } else {
-                false
-            }
+            self.inner.api.modify(io.fd, self.id, event);
         })
     }
 }
@@ -269,12 +249,7 @@ impl Drop for StreamCtl {
             streams[id].ref_count -= 1;
             if streams[id].ref_count == 0 {
                 let mut io = streams.remove(id);
-                log::trace!(
-                    "{}: Drop io ({:?}), flags: {:?}",
-                    io.tag(),
-                    io.fd,
-                    io.flags.get()
-                );
+                log::trace!("{}: Drop io ({:?}), flags: {:?}", io.tag(), io.fd, io.flags);
                 io.close(self.id, &self.inner.api, true);
             }
             self.inner.streams.set(Some(streams));
@@ -290,55 +265,24 @@ impl StreamItem {
         self.context.tag()
     }
 
-    fn is_open(&self) -> bool {
-        !self.flags.get().contains(Flags::CLOSED)
-    }
-
     fn can_read(&self) -> bool {
         self.context.is_read_ready()
     }
 
-    fn contains_flag(&self, f: Flags) -> bool {
-        self.flags.get().contains(f)
-    }
-
-    fn insert_flag(&self, f: Flags) {
-        let mut flags = self.flags.get();
-        flags.insert(f);
-        self.flags.set(flags);
-    }
-
-    fn remove_flag(&self, f: Flags) {
-        let mut flags = self.flags.get();
-        flags.remove(f);
-        self.flags.set(flags);
-    }
-
     fn write(&mut self, id: u32, api: &DriverApi) -> Poll<()> {
-        let mut close = false;
-        let result = self.context.with_write_buf(|buf| {
+        self.context.with_write_buf(|buf| {
             log::trace!(
                 "{}: Writing ({}), buf: {:?}",
                 self.tag(),
                 self.fd,
                 buf.len()
             );
-            let res =
-                syscall!(break libc::write(self.fd, buf[..].as_ptr() as _, buf.len()));
-            close = matches!(res, Poll::Ready(Err(_)));
-            res
-        });
-
-        if close {
-            self.close(id, api, false);
-        }
-        result
+            syscall!(break libc::write(self.fd, buf[..].as_ptr() as _, buf.len()))
+        })
     }
 
     fn read(&mut self, id: u32, api: &DriverApi) -> Poll<()> {
-        let mut close = false;
-
-        let result = self.context.with_read_buf(|buf, hw, lw| {
+        self.context.with_read_buf(|buf, hw, lw| {
             let mut total = 0;
             loop {
                 // make sure we've got room
@@ -369,25 +313,12 @@ impl StreamItem {
                 );
 
                 return match res {
-                    Poll::Ready(Err(err)) => {
-                        close = true;
-                        (total, Poll::Ready(Err(err)))
-                    }
-                    Poll::Ready(Ok(size)) => {
-                        if size == 0 {
-                            close = true;
-                        }
-                        (total, Poll::Ready(Ok(())))
-                    }
+                    Poll::Ready(Err(err)) => (total, Poll::Ready(Err(err))),
+                    Poll::Ready(Ok(size)) => (total, Poll::Ready(Ok(()))),
                     Poll::Pending => (total, Poll::Pending),
                 };
             }
-        });
-
-        if close {
-            self.close(id, api, false);
-        }
-        result
+        })
     }
 
     fn close(
@@ -396,7 +327,8 @@ impl StreamItem {
         api: &DriverApi,
         shutdown: bool,
     ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
-        if self.is_open() {
+        if !self.flags.contains(Flags::CLOSED) {
+            self.flags.insert(Flags::CLOSED);
             log::trace!(
                 "{}: Closing ({}) sh: {:?}, ctx: {:?}",
                 self.tag(),
@@ -404,7 +336,6 @@ impl StreamItem {
                 shutdown,
                 self.context.flags()
             );
-            self.insert_flag(Flags::CLOSED);
 
             let fd = self.fd;
             api.detach(fd, id);
