@@ -428,13 +428,15 @@ impl IoContext {
         })
         .await;
 
-        if flush_buf && !self.0.flags().contains(Flags::WR_PAUSED) {
+        if flush_buf && !st.flags.get().contains(Flags::WR_PAUSED) {
             st.insert_flags(Flags::WR_TASK_WAIT);
 
             poll_fn(|cx| {
-                let flags = self.0.flags();
-
-                if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
+                if st
+                    .flags
+                    .get()
+                    .intersects(Flags::WR_PAUSED | Flags::IO_STOPPED)
+                {
                     Poll::Ready(())
                 } else {
                     st.write_task.register(cx.waker());
@@ -628,23 +630,20 @@ impl IoContext {
 
         // if write buffer is smaller than high watermark value, turn off back-pressure
         let len = inner.buffer.write_destination_size();
-        let mut flags = inner.flags.get();
-
         if len == 0 {
+            let mut flags = inner.flags.get();
             if flags.is_waiting_for_write() {
                 flags.waiting_for_write_is_done();
                 inner.dispatch_task.wake();
             }
             flags.insert(Flags::WR_PAUSED);
             inner.flags.set(flags);
-        } else if flags.contains(Flags::BUF_W_BACKPRESSURE)
+        } else if inner.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
             && len < inner.pool.get().write_params_high() << 1
         {
-            flags.remove(Flags::BUF_W_BACKPRESSURE);
-            inner.flags.set(flags);
+            inner.remove_flags(Flags::BUF_W_BACKPRESSURE);
             inner.dispatch_task.wake();
         }
-        inner.flags.set(flags);
     }
 
     /// Set write buffer
@@ -689,9 +688,10 @@ impl IoContext {
             Err(e) => Err(e),
         };
 
-        let mut flags = inner.flags.get();
         match result {
             Ok(0) => {
+                let mut flags = inner.flags.get();
+
                 // all data has been written
                 flags.insert(Flags::WR_PAUSED);
 
@@ -709,11 +709,10 @@ impl IoContext {
             }
             Ok(len) => {
                 // if write buffer is smaller than high watermark value, turn off back-pressure
-                if flags.contains(Flags::BUF_W_BACKPRESSURE)
+                if inner.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
                     && len < inner.pool.get().write_params_high() << 1
                 {
-                    flags.remove(Flags::BUF_W_BACKPRESSURE);
-                    inner.flags.set(flags);
+                    inner.remove_flags(Flags::BUF_W_BACKPRESSURE);
                     inner.dispatch_task.wake();
                 }
                 Poll::Pending
@@ -873,14 +872,14 @@ impl IoContext {
             }
         });
 
-        let mut flags = inner.flags.get();
-
-        let result = match result {
+        match result {
             Poll::Pending => {
-                flags.remove(Flags::WR_PAUSED);
+                inner.remove_flags(Flags::WR_PAUSED);
                 Poll::Pending
             }
             Poll::Ready(Ok(0)) => {
+                let mut flags = inner.flags.get();
+
                 // all data has been written
                 flags.insert(Flags::WR_PAUSED);
 
@@ -893,58 +892,56 @@ impl IoContext {
                     flags.waiting_for_write_is_done();
                     inner.dispatch_task.wake();
                 }
+                inner.flags.set(flags);
                 Poll::Ready(())
             }
             Poll::Ready(Ok(len)) => {
                 // if write buffer is smaller than high watermark value, turn off back-pressure
-                if flags.contains(Flags::BUF_W_BACKPRESSURE)
+                if inner.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
                     && len < inner.pool.get().write_params_high() << 1
                 {
-                    flags.remove(Flags::BUF_W_BACKPRESSURE);
+                    inner.remove_flags(Flags::BUF_W_BACKPRESSURE);
                     inner.dispatch_task.wake();
                 }
                 Poll::Pending
             }
             Poll::Ready(Err(e)) => {
-                self.0 .0.io_stopped(Some(e));
+                inner.io_stopped(Some(e));
                 Poll::Ready(())
             }
-        };
-
-        inner.flags.set(flags);
-        result
+        }
     }
 
     fn shutdown_filters(&self) {
         let io = &self.0;
         let st = &self.0 .0;
-        if st.flags.get().contains(Flags::IO_STOPPING_FILTERS) {
-            let flags = st.flags.get();
-
-            if !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
-                let filter = io.filter();
-                match filter.shutdown(io, &st.buffer, 0) {
-                    Ok(Poll::Ready(())) => {
+        let flags = st.flags.get();
+        if flags.contains(Flags::IO_STOPPING_FILTERS)
+            && !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
+        {
+            let filter = io.filter();
+            match filter.shutdown(io, &st.buffer, 0) {
+                Ok(Poll::Ready(())) => {
+                    st.dispatch_task.wake();
+                    st.insert_flags(Flags::IO_STOPPING);
+                }
+                Ok(Poll::Pending) => {
+                    // check read buffer, if buffer is not consumed it is unlikely
+                    // that filter will properly complete shutdown
+                    let flags = st.flags.get();
+                    if flags.contains(Flags::RD_PAUSED)
+                        || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
+                    {
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
                     }
-                    Ok(Poll::Pending) => {
-                        // check read buffer, if buffer is not consumed it is unlikely
-                        // that filter will properly complete shutdown
-                        if flags.contains(Flags::RD_PAUSED)
-                            || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
-                        {
-                            st.dispatch_task.wake();
-                            st.insert_flags(Flags::IO_STOPPING);
-                        }
-                    }
-                    Err(err) => {
-                        st.io_stopped(Some(err));
-                    }
                 }
-                if let Err(err) = filter.process_write_buf(io, &st.buffer, 0) {
+                Err(err) => {
                     st.io_stopped(Some(err));
                 }
+            }
+            if let Err(err) = filter.process_write_buf(io, &st.buffer, 0) {
+                st.io_stopped(Some(err));
             }
         }
     }
