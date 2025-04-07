@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.12] - 2025-04-07
+
+* Fix leak in poll driver
+
 ## [2.5.11] - 2025-04-05
 
 * Various improvements for polling driver

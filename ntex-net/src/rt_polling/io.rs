@@ -94,12 +94,17 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     .await;
 
     // write buf
-    if st != Status::Terminate {
-        ctl.modify(false, true);
-        context.shutdown(st == Status::Shutdown).await;
-    }
+    ctl.modify(false, true);
+    context.shutdown(st == Status::Shutdown).await;
 
+    let err = ctl.shutdown().await.err();
+    log::trace!(
+        "{}: Shutdown, err: {:?}, fl: {:?}",
+        context.tag(),
+        err,
+        context.flags()
+    );
     if !context.is_stopped() {
-        context.stopped(None);
+        context.stopped(err);
     }
 }

@@ -1,3 +1,4 @@
+#![allow(clippy::let_underscore_future)]
 use std::os::fd::{AsRawFd, RawFd};
 use std::{cell::Cell, cell::RefCell, future::Future, io, mem, rc::Rc, task::Poll};
 
@@ -25,7 +26,7 @@ struct StreamItem {
     fd: RawFd,
     flags: Flags,
     ref_count: u16,
-    context: IoContext,
+    context: Option<IoContext>,
     io: Option<Socket>,
 }
 
@@ -70,10 +71,10 @@ impl StreamOps {
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
                 fd,
-                context,
+                io: Some(io),
                 ref_count: 1,
                 flags: Flags::empty(),
-                io: Some(io),
+                context: Some(context),
             };
             StreamCtl {
                 id: streams.insert(item) as u32,
@@ -97,6 +98,9 @@ impl Clone for StreamOps {
 impl Handler for StreamOpsHandler {
     fn event(&mut self, id: usize, ev: Event) {
         self.inner.with(|streams| {
+            if !streams.contains(id) {
+                return;
+            }
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false);
 
@@ -125,7 +129,7 @@ impl Handler for StreamOpsHandler {
             }
 
             if ev.is_interrupt() {
-                io.context.stopped(None);
+                io.context.as_ref().inspect(|ctx| ctx.stopped(None));
             } else {
                 self.inner.api.modify(io.fd, id as u32, renew);
             }
@@ -138,7 +142,7 @@ impl Handler for StreamOpsHandler {
                     io.ref_count -= 1;
                     if io.ref_count == 0 {
                         let mut io = streams.remove(id as usize);
-                        io.close(id, &self.inner.api, true);
+                        let _ = io.close(id, &self.inner.api);
                         log::trace!("{}: Drop ({:?})", io.tag(), io.fd);
                     }
                 }
@@ -150,10 +154,12 @@ impl Handler for StreamOpsHandler {
         self.inner.with(|streams| {
             if let Some(io) = streams.get_mut(id) {
                 log::trace!("{}: Failed ({:?}) err: {:?}", io.tag(), io.fd, err);
-                if !io.context.is_stopped() {
-                    io.context.stopped(Some(err));
+                if let Some(ref ctx) = io.context {
+                    if !ctx.is_stopped() {
+                        ctx.stopped(Some(err));
+                    }
                 }
-                io.close(id as u32, &self.inner.api, false);
+                let _ = io.close(id as u32, &self.inner.api);
             }
         })
     }
@@ -180,19 +186,10 @@ impl StreamCtl {
             .with(|streams| f(streams[self.id as usize].io.as_ref()))
     }
 
-    pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
+    pub(crate) fn shutdown(self) -> impl Future<Output = io::Result<()>> {
         let id = self.id as usize;
-        let fut = self
-            .inner
-            .with(|streams| streams[id].close(self.id, &self.inner.api, true));
-        async move {
-            if let Some(fut) = fut {
-                fut.await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                    .and_then(crate::helpers::pool_io_err)?;
-            }
-            Ok(())
-        }
+        self.inner
+            .with(|streams| streams[id].shutdown(self.id, &self.inner.api))
     }
 
     pub(crate) fn modify(&self, rd: bool, wr: bool) {
@@ -248,7 +245,7 @@ impl Drop for StreamCtl {
             if streams[id].ref_count == 0 {
                 let mut io = streams.remove(id);
                 log::trace!("{}: Drop io ({:?}), flags: {:?}", io.tag(), io.fd, io.flags);
-                io.close(self.id, &self.inner.api, true);
+                let _ = io.close(self.id, &self.inner.api);
             }
             self.inner.streams.set(Some(streams));
         } else {
@@ -260,83 +257,121 @@ impl Drop for StreamCtl {
 
 impl StreamItem {
     fn tag(&self) -> &'static str {
-        self.context.tag()
+        self.context
+            .as_ref()
+            .map(|ctx| ctx.tag())
+            .unwrap_or_default()
     }
 
     fn can_read(&self) -> bool {
-        self.context.is_read_ready()
+        self.context
+            .as_ref()
+            .map(|ctx| ctx.is_read_ready())
+            .unwrap_or_default()
     }
 
     fn write(&mut self, id: u32, api: &DriverApi) -> Poll<()> {
-        self.context.with_write_buf(|buf| {
-            log::trace!(
-                "{}: Writing ({}), buf: {:?}",
-                self.tag(),
-                self.fd,
-                buf.len()
-            );
-            syscall!(break libc::write(self.fd, buf[..].as_ptr() as _, buf.len()))
-        })
+        if let Some(ref ctx) = self.context {
+            ctx.with_write_buf(|buf| {
+                log::trace!(
+                    "{}: Writing ({}), buf: {:?}",
+                    self.tag(),
+                    self.fd,
+                    buf.len()
+                );
+                syscall!(break libc::write(self.fd, buf[..].as_ptr() as _, buf.len()))
+            })
+        } else {
+            Poll::Ready(())
+        }
     }
 
     fn read(&mut self, id: u32, api: &DriverApi) -> Poll<()> {
-        self.context.with_read_buf(|buf, hw, lw| {
-            let mut total = 0;
-            loop {
-                // make sure we've got room
-                if buf.remaining_mut() < lw {
-                    buf.reserve(hw);
-                }
-
-                let chunk = buf.chunk_mut();
-                let chunk_len = chunk.len();
-                let chunk_ptr = chunk.as_mut_ptr();
-
-                let res = syscall!(break libc::read(self.fd, chunk_ptr as _, chunk_len));
-                if let Poll::Ready(Ok(size)) = res {
-                    unsafe { buf.advance_mut(size) };
-                    total += size;
-                    if size == chunk_len {
-                        continue;
+        if let Some(ref ctx) = self.context {
+            ctx.with_read_buf(|buf, hw, lw| {
+                let mut total = 0;
+                loop {
+                    // make sure we've got room
+                    if buf.remaining_mut() < lw {
+                        buf.reserve(hw);
                     }
+
+                    let chunk = buf.chunk_mut();
+                    let chunk_len = chunk.len();
+                    let chunk_ptr = chunk.as_mut_ptr();
+
+                    let res =
+                        syscall!(break libc::read(self.fd, chunk_ptr as _, chunk_len));
+                    if let Poll::Ready(Ok(size)) = res {
+                        unsafe { buf.advance_mut(size) };
+                        total += size;
+                        if size == chunk_len {
+                            continue;
+                        }
+                    }
+
+                    log::trace!(
+                        "{}: Read fd ({:?}), size: {:?}, cap: {:?}, result: {:?}",
+                        self.tag(),
+                        self.fd,
+                        total,
+                        buf.remaining_mut(),
+                        res
+                    );
+
+                    return match res {
+                        Poll::Ready(Err(err)) => (total, Poll::Ready(Err(err))),
+                        Poll::Ready(Ok(size)) => (total, Poll::Ready(Ok(()))),
+                        Poll::Pending => (total, Poll::Pending),
+                    };
                 }
-
-                log::trace!(
-                    "{}: Read fd ({:?}), size: {:?}, cap: {:?}, result: {:?}",
-                    self.tag(),
-                    self.fd,
-                    total,
-                    buf.remaining_mut(),
-                    res
-                );
-
-                return match res {
-                    Poll::Ready(Err(err)) => (total, Poll::Ready(Err(err))),
-                    Poll::Ready(Ok(size)) => (total, Poll::Ready(Ok(()))),
-                    Poll::Pending => (total, Poll::Pending),
-                };
-            }
-        })
+            })
+        } else {
+            Poll::Ready(())
+        }
     }
 
-    fn close(
+    fn shutdown(
         &mut self,
         id: u32,
         api: &DriverApi,
-        shutdown: bool,
-    ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
-        if let Some(io) = self.io.take() {
-            mem::forget(io);
-            log::trace!(
-                "{}: Closing ({}) sh: {:?}, ctx: {:?}",
-                self.tag(),
-                self.fd,
-                shutdown,
-                self.context.flags()
-            );
+    ) -> impl Future<Output = io::Result<()>> {
+        let fut = if let Some(ctx) = self.context.take() {
+            let fd = self.fd;
+            Some(ntex_rt::spawn_blocking(move || {
+                syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
+            }))
+        } else {
+            None
+        };
 
+        async move {
+            if let Some(fut) = fut {
+                fut.await
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                    .and_then(crate::helpers::pool_io_err)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn close(&mut self, id: u32, api: &DriverApi) -> impl Future<Output = io::Result<i32>> {
+        let fut = if let Some(io) = self.io.take() {
+            mem::forget(io);
             let fd = self.fd;
             api.detach(fd, id);
+            log::trace!("{}: Closing ({})", self.tag(), fd);
+
+            let shutdown = if let Some(ctx) = self.context.take() {
+                if !ctx.is_stopped() {
+                    ctx.stopped(None);
+                }
+                true
+            } else {
+                false
+            };
+
             Some(ntex_rt::spawn_blocking(move || {
                 if shutdown {
                     let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
@@ -347,6 +382,16 @@ impl StreamItem {
             }))
         } else {
             None
+        };
+
+        async move {
+            if let Some(fut) = fut {
+                fut.await
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                    .and_then(|res| crate::helpers::pool_io_err(res.map(|_| 0)))
+            } else {
+                Ok(0i32)
+            }
         }
     }
 }
