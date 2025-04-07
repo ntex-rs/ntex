@@ -98,6 +98,9 @@ impl Clone for StreamOps {
 impl Handler for StreamOpsHandler {
     fn event(&mut self, id: usize, ev: Event) {
         self.inner.with(|streams| {
+            if !streams.contains(id) {
+                return
+            }
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false);
 
@@ -357,10 +360,11 @@ impl StreamItem {
         let fut = if let Some(io) = self.io.take() {
             mem::forget(io);
             let fd = self.fd;
+            api.detach(fd, id);
             log::trace!("{}: Closing ({})", self.tag(), fd);
 
             let shutdown = if let Some(ctx) = self.context.take() {
-                if ctx.is_stopped() {
+                if !ctx.is_stopped() {
                     ctx.stopped(None);
                 }
                 true
@@ -368,7 +372,6 @@ impl StreamItem {
                 false
             };
 
-            api.detach(fd, id);
             Some(ntex_rt::spawn_blocking(move || {
                 if shutdown {
                     let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
