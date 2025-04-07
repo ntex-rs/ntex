@@ -1,5 +1,4 @@
-use std::os::fd::RawFd;
-use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task::Poll};
+use std::{cell::Cell, future::Future, io, os::fd::RawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::IoContext;
@@ -24,7 +23,6 @@ bitflags::bitflags! {
 struct StreamItem {
     fd: RawFd,
     flags: Flags,
-    ref_count: u16,
     context: IoContext,
 }
 
@@ -36,8 +34,6 @@ struct StreamOpsHandler {
 
 struct StreamOpsInner {
     api: DriverApi,
-    delayd_drop: Cell<bool>,
-    feed: RefCell<Vec<u32>>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
 }
 
@@ -48,8 +44,6 @@ impl StreamOps {
             rt.register_handler(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
-                    feed: RefCell::new(Vec::new()),
-                    delayd_drop: Cell::new(false),
                     streams: Cell::new(Some(Box::new(Slab::new()))),
                 });
                 inner = Some(ops.clone());
@@ -69,7 +63,6 @@ impl StreamOps {
             let item = StreamItem {
                 fd,
                 context,
-                ref_count: 1,
                 flags: Flags::empty(),
             };
             StreamCtl {
@@ -132,20 +125,6 @@ impl Handler for StreamOpsHandler {
 
             // register Event in driver
             self.inner.api.modify(io.fd, id as u32, renew);
-
-            // delayed drops
-            if self.inner.delayd_drop.get() {
-                self.inner.delayd_drop.set(false);
-                for id in self.inner.feed.borrow_mut().drain(..) {
-                    let io = &mut streams[id as usize];
-                    io.ref_count -= 1;
-                    if io.ref_count == 0 {
-                        let mut io = streams.remove(id as usize);
-                        io.close(id, &self.inner.api, true);
-                        log::trace!("{}: Drop ({:?})", io.tag(), io.fd);
-                    }
-                }
-            }
         });
     }
 
@@ -230,33 +209,13 @@ impl StreamCtl {
     }
 }
 
-impl Clone for StreamCtl {
-    fn clone(&self) -> Self {
-        self.inner.with(|streams| {
-            streams[self.id as usize].ref_count += 1;
-            Self {
-                id: self.id,
-                inner: self.inner.clone(),
-            }
-        })
-    }
-}
-
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        if let Some(mut streams) = self.inner.streams.take() {
-            let id = self.id as usize;
-            streams[id].ref_count -= 1;
-            if streams[id].ref_count == 0 {
-                let mut io = streams.remove(id);
-                log::trace!("{}: Drop io ({:?}), flags: {:?}", io.tag(), io.fd, io.flags);
-                io.close(self.id, &self.inner.api, true);
-            }
-            self.inner.streams.set(Some(streams));
-        } else {
-            self.inner.delayd_drop.set(true);
-            self.inner.feed.borrow_mut().push(self.id);
-        }
+        self.inner.with(|streams| {
+            let mut io = streams.remove(self.id as usize);
+            io.close(self.id, &self.inner.api, true);
+            log::trace!("{}: Drop io ({:?}), flags: {:?}", io.tag(), io.fd, io.flags);
+        })
     }
 }
 
