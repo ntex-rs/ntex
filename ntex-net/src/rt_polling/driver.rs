@@ -8,7 +8,7 @@ use slab::Slab;
 
 pub(crate) struct StreamCtl {
     id: u32,
-    inner: Rc<StreamOpsInner>,
+    ops: Rc<StreamOpsInner>,
 }
 
 bitflags::bitflags! {
@@ -29,7 +29,7 @@ struct StreamItem {
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
 
 struct StreamOpsHandler {
-    inner: Rc<StreamOpsInner>,
+    ops: Rc<StreamOpsInner>,
 }
 
 struct StreamOpsInner {
@@ -47,7 +47,7 @@ impl StreamOps {
                     streams: Cell::new(Some(Box::new(Slab::new()))),
                 });
                 inner = Some(ops.clone());
-                Box::new(StreamOpsHandler { inner: ops })
+                Box::new(StreamOpsHandler { ops })
             });
 
             StreamOps(inner.unwrap())
@@ -67,7 +67,7 @@ impl StreamOps {
             };
             StreamCtl {
                 id: streams.insert(item) as u32,
-                inner: self.0.clone(),
+                ops: self.0.clone(),
             }
         });
 
@@ -86,17 +86,13 @@ impl Clone for StreamOps {
 
 impl Handler for StreamOpsHandler {
     fn event(&mut self, id: usize, ev: Event) {
-        self.inner.with(|streams| {
-            if !streams.contains(id) {
-                return;
-            }
+        self.ops.with(|streams| {
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false);
-
             log::trace!("{}: Event ({:?}): {:?}", io.tag(), io.fd, ev);
 
             if ev.readable {
-                if io.read(id as u32, &self.inner.api).is_pending() && io.can_read() {
+                if io.read(id as u32, &self.ops.api).is_pending() && io.can_read() {
                     renew.readable = true;
                     io.flags.insert(Flags::RD);
                 } else {
@@ -107,7 +103,7 @@ impl Handler for StreamOpsHandler {
             }
 
             if ev.writable {
-                if io.write(id as u32, &self.inner.api).is_pending() {
+                if io.write(id as u32, &self.ops.api).is_pending() {
                     renew.writable = true;
                     io.flags.insert(Flags::WR);
                 } else {
@@ -117,25 +113,22 @@ impl Handler for StreamOpsHandler {
                 renew.writable = true;
             }
 
-            // handle HUP
             if ev.is_interrupt() {
                 io.context.stopped(None);
-                return;
+            } else {
+                self.ops.api.modify(io.fd, id as u32, renew);
             }
-
-            // register Event in driver
-            self.inner.api.modify(io.fd, id as u32, renew);
         });
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
-        self.inner.with(|streams| {
+        self.ops.with(|streams| {
             if let Some(io) = streams.get_mut(id) {
                 log::trace!("{}: Failed ({:?}) err: {:?}", io.tag(), io.fd, err);
                 if !io.context.is_stopped() {
                     io.context.stopped(Some(err));
                 }
-                io.close(id as u32, &self.inner.api, false);
+                io.close(id as u32, &self.ops.api, false);
             }
         })
     }
@@ -157,8 +150,8 @@ impl StreamCtl {
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
         let id = self.id as usize;
         let fut = self
-            .inner
-            .with(|streams| streams[id].close(self.id, &self.inner.api, true));
+            .ops
+            .with(|st| st[id].close(self.id, &self.ops.api, true));
         async move {
             if let Some(fut) = fut {
                 fut.await
@@ -169,23 +162,17 @@ impl StreamCtl {
         }
     }
 
-    pub(crate) fn modify(&self, rd: bool, wr: bool) {
-        self.inner.with(|streams| {
+    /// Register IO interest
+    pub(crate) fn register(&self, rd: bool, wr: bool) {
+        self.ops.with(|streams| {
             let io = &mut streams[self.id as usize];
             let mut event = Event::new(0, false, false);
-            log::trace!(
-                "{}: Modify ({:?}) rd: {:?}, wr: {:?}, f: {:?}",
-                io.tag(),
-                io.fd,
-                rd,
-                wr,
-                io.flags
-            );
+            log::trace!("{}: Mod ({:?}) rd: {:?}, wr: {:?}", io.tag(), io.fd, rd, wr);
 
             if rd {
                 if io.flags.contains(Flags::RD) {
                     event.readable = true;
-                } else if io.read(self.id, &self.inner.api).is_pending() {
+                } else if io.read(self.id, &self.ops.api).is_pending() {
                     event.readable = true;
                     io.flags.insert(Flags::RD);
                 }
@@ -196,7 +183,7 @@ impl StreamCtl {
             if wr {
                 if io.flags.contains(Flags::WR) {
                     event.writable = true;
-                } else if io.write(self.id, &self.inner.api).is_pending() {
+                } else if io.write(self.id, &self.ops.api).is_pending() {
                     event.writable = true;
                     io.flags.insert(Flags::WR);
                 }
@@ -204,17 +191,17 @@ impl StreamCtl {
                 io.flags.remove(Flags::WR);
             }
 
-            self.inner.api.modify(io.fd, self.id, event);
+            self.ops.api.modify(io.fd, self.id, event);
         })
     }
 }
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        self.inner.with(|streams| {
+        self.ops.with(|streams| {
             let mut io = streams.remove(self.id as usize);
-            io.close(self.id, &self.inner.api, true);
-            log::trace!("{}: Drop io ({:?}), flags: {:?}", io.tag(), io.fd, io.flags);
+            io.close(self.id, &self.ops.api, true);
+            log::trace!("{}: Drop ({:?}), flags: {:?}", io.tag(), io.fd, io.flags);
         })
     }
 }

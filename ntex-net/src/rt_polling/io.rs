@@ -93,7 +93,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
         };
 
         if modify {
-            ctl.modify(readable, writable);
+            ctl.register(readable, writable);
         }
 
         if read.is_pending() && write.is_pending() {
@@ -108,7 +108,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
 
     // write buf
     if st != Status::Terminate {
-        ctl.modify(false, true);
+        ctl.register(false, true);
         context.shutdown(st == Status::Shutdown).await;
     }
 
