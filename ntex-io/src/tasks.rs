@@ -915,36 +915,33 @@ impl IoContext {
     fn shutdown_filters(&self) {
         let io = &self.0;
         let st = &self.0 .0;
-        if st.flags.get().contains(Flags::IO_STOPPING_FILTERS) {
-            if !st
-                .flags
-                .get()
-                .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
-            {
-                let filter = io.filter();
-                match filter.shutdown(io, &st.buffer, 0) {
-                    Ok(Poll::Ready(())) => {
+        let flags = st.flags.get();
+        if flags.contains(Flags::IO_STOPPING_FILTERS)
+            && !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
+        {
+            let filter = io.filter();
+            match filter.shutdown(io, &st.buffer, 0) {
+                Ok(Poll::Ready(())) => {
+                    st.dispatch_task.wake();
+                    st.insert_flags(Flags::IO_STOPPING);
+                }
+                Ok(Poll::Pending) => {
+                    // check read buffer, if buffer is not consumed it is unlikely
+                    // that filter will properly complete shutdown
+                    let flags = st.flags.get();
+                    if flags.contains(Flags::RD_PAUSED)
+                        || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
+                    {
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
                     }
-                    Ok(Poll::Pending) => {
-                        // check read buffer, if buffer is not consumed it is unlikely
-                        // that filter will properly complete shutdown
-                        let flags = st.flags.get();
-                        if flags.contains(Flags::RD_PAUSED)
-                            || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
-                        {
-                            st.dispatch_task.wake();
-                            st.insert_flags(Flags::IO_STOPPING);
-                        }
-                    }
-                    Err(err) => {
-                        st.io_stopped(Some(err));
-                    }
                 }
-                if let Err(err) = filter.process_write_buf(io, &st.buffer, 0) {
+                Err(err) => {
                     st.io_stopped(Some(err));
                 }
+            }
+            if let Err(err) = filter.process_write_buf(io, &st.buffer, 0) {
+                st.io_stopped(Some(err));
             }
         }
     }
