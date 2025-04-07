@@ -1,11 +1,12 @@
-use std::os::fd::RawFd;
-use std::{cell::Cell, cell::RefCell, future::Future, io, rc::Rc, task::Poll};
+use std::os::fd::{AsRawFd, RawFd};
+use std::{cell::Cell, cell::RefCell, future::Future, io, mem, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::IoContext;
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
+use socket2::Socket;
 
 pub(crate) struct StreamCtl {
     id: u32,
@@ -17,7 +18,6 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD     = 0b0000_0001;
         const WR     = 0b0000_0010;
-        const CLOSED = 0b0001_0000;
     }
 }
 
@@ -26,6 +26,7 @@ struct StreamItem {
     flags: Flags,
     ref_count: u16,
     context: IoContext,
+    io: Option<Socket>,
 }
 
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
@@ -64,13 +65,15 @@ impl StreamOps {
         Self::current().0.with(|streams| streams.len())
     }
 
-    pub(crate) fn register(&self, fd: RawFd, context: IoContext) -> StreamCtl {
+    pub(crate) fn register(&self, io: Socket, context: IoContext) -> StreamCtl {
+        let fd = io.as_raw_fd();
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
                 fd,
                 context,
                 ref_count: 1,
                 flags: Flags::empty(),
+                io: Some(io),
             };
             StreamCtl {
                 id: streams.insert(item) as u32,
@@ -94,9 +97,6 @@ impl Clone for StreamOps {
 impl Handler for StreamOpsHandler {
     fn event(&mut self, id: usize, ev: Event) {
         self.inner.with(|streams| {
-            if !streams.contains(id) {
-                return;
-            }
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false);
 
@@ -124,14 +124,11 @@ impl Handler for StreamOpsHandler {
                 renew.writable = true;
             }
 
-            // handle HUP
             if ev.is_interrupt() {
                 io.context.stopped(None);
-                return;
+            } else {
+                self.inner.api.modify(io.fd, id as u32, renew);
             }
-
-            // register Event in driver
-            self.inner.api.modify(io.fd, id as u32, renew);
 
             // delayed drops
             if self.inner.delayd_drop.get() {
@@ -175,6 +172,14 @@ impl StreamOpsInner {
 }
 
 impl StreamCtl {
+    pub(crate) fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(Option<&Socket>) -> R,
+    {
+        self.inner
+            .with(|streams| f(streams[self.id as usize].io.as_ref()))
+    }
+
     pub(crate) fn close(self) -> impl Future<Output = io::Result<()>> {
         let id = self.id as usize;
         let fut = self
@@ -194,14 +199,7 @@ impl StreamCtl {
         self.inner.with(|streams| {
             let io = &mut streams[self.id as usize];
             let mut event = Event::new(0, false, false);
-            log::trace!(
-                "{}: Modify ({:?}) rd: {:?}, wr: {:?}, f: {:?}",
-                io.tag(),
-                io.fd,
-                rd,
-                wr,
-                io.flags
-            );
+            log::trace!("{}: Mod ({:?}) rd: {:?}, wr: {:?}", io.tag(), io.fd, rd, wr,);
 
             if rd {
                 if io.flags.contains(Flags::RD) {
@@ -327,8 +325,8 @@ impl StreamItem {
         api: &DriverApi,
         shutdown: bool,
     ) -> Option<ntex_rt::JoinHandle<io::Result<i32>>> {
-        if !self.flags.contains(Flags::CLOSED) {
-            self.flags.insert(Flags::CLOSED);
+        if let Some(io) = self.io.take() {
+            mem::forget(io);
             log::trace!(
                 "{}: Closing ({}) sh: {:?}, ctx: {:?}",
                 self.tag(),
