@@ -335,7 +335,6 @@ impl StreamItem {
     ) -> impl Future<Output = io::Result<()>> {
         let fut = if let Some(ctx) = self.context.take() {
             let fd = self.fd;
-            api.detach(fd, id);
             Some(ntex_rt::spawn_blocking(move || {
                 syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
             }))
@@ -357,10 +356,10 @@ impl StreamItem {
     fn close(&mut self, id: u32, api: &DriverApi) -> impl Future<Output = io::Result<i32>> {
         let fut = if let Some(io) = self.io.take() {
             mem::forget(io);
-
             let fd = self.fd;
+            log::trace!("{}: Closing ({})", self.tag(), fd);
+
             let shutdown = if let Some(ctx) = self.context.take() {
-                api.detach(fd, id);
                 if ctx.is_stopped() {
                     ctx.stopped(None);
                 }
@@ -368,8 +367,8 @@ impl StreamItem {
             } else {
                 false
             };
-            log::trace!("{}: Closing ({}) sh: {:?}", self.tag(), self.fd, shutdown);
 
+            api.detach(fd, id);
             Some(ntex_rt::spawn_blocking(move || {
                 if shutdown {
                     let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
