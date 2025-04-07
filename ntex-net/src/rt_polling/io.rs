@@ -99,8 +99,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
         context.shutdown(st == Status::Shutdown).await;
     }
 
-    let res = ctl.close().await;
     if !context.is_stopped() {
-        context.stopped(res.err());
+        context.stopped(None);
     }
 }
