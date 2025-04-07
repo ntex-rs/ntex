@@ -99,7 +99,7 @@ impl Handler for StreamOpsHandler {
     fn event(&mut self, id: usize, ev: Event) {
         self.inner.with(|streams| {
             if !streams.contains(id) {
-                return
+                return;
             }
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false);
