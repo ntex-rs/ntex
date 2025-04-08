@@ -72,7 +72,7 @@ ntex-server = "2.7.4"
 ntex-h2 = "1.8.6"
 ntex-rt = "0.4.27"
 ntex-io = "2.11"
-ntex-net = "2.5.10"
+ntex-net = "2.5.13"
 ntex-tls = "2.3"
 
 base64 = "0.22"
