@@ -1,4 +1,4 @@
-use std::{fmt, task::Context};
+use std::{fmt, sync::Arc, task::Context};
 
 use ntex_bytes::{Pool, PoolRef};
 use ntex_net::Io;
@@ -8,7 +8,7 @@ use ntex_util::{future::join_all, services::Counter, HashMap};
 use crate::ServerConfiguration;
 
 use super::accept::{AcceptNotify, AcceptorCommand};
-use super::factory::{FactoryServiceType, NetService, OnWorkerStart};
+use super::factory::{FactoryServiceType, NetService, OnAccept, OnWorkerStart};
 use super::{socket::Connection, Token, MAX_CONNS_COUNTER};
 
 pub(super) type BoxService = boxed::BoxService<Io, (), ()>;
@@ -18,6 +18,7 @@ pub struct StreamServer {
     notify: AcceptNotify,
     services: Vec<FactoryServiceType>,
     on_worker_start: Vec<Box<dyn OnWorkerStart + Send>>,
+    on_accept: Option<Box<dyn OnAccept + Send>>,
 }
 
 impl StreamServer {
@@ -25,10 +26,12 @@ impl StreamServer {
         notify: AcceptNotify,
         services: Vec<FactoryServiceType>,
         on_worker_start: Vec<Box<dyn OnWorkerStart + Send>>,
+        on_accept: Option<Box<dyn OnAccept + Send>>,
     ) -> Self {
         Self {
             notify,
             services,
+            on_accept,
             on_worker_start,
         }
     }
@@ -60,7 +63,10 @@ impl ServerConfiguration for StreamServer {
             services.extend(svc.create().await?);
         }
 
-        Ok(StreamService { services })
+        Ok(StreamService {
+            services,
+            on_accept: self.on_accept.as_ref().map(|f| f.clone_fn()),
+        })
     }
 
     /// Server is paused
@@ -91,14 +97,23 @@ impl Clone for StreamServer {
         Self {
             notify: self.notify.clone(),
             services: self.services.iter().map(|s| s.clone_factory()).collect(),
+            on_accept: self.on_accept.as_ref().map(|f| f.clone_fn()),
             on_worker_start: self.on_worker_start.iter().map(|f| f.clone_fn()).collect(),
         }
     }
 }
 
-#[derive(Debug)]
 pub struct StreamService {
     services: Vec<NetService>,
+    on_accept: Option<Box<dyn OnAccept + Send>>,
+}
+
+impl fmt::Debug for StreamService {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StreamService")
+            .field("services", &self.services)
+            .finish()
+    }
 }
 
 impl ServiceFactory<Connection> for StreamService {
@@ -120,7 +135,13 @@ impl ServiceFactory<Connection> for StreamService {
                     for (token, tag) in &info.tokens {
                         tokens.insert(
                             *token,
-                            (idx, *tag, info.pool.pool(), info.pool.pool_ref()),
+                            (
+                                idx,
+                                *tag,
+                                info.name.clone(),
+                                info.pool.pool(),
+                                info.pool.pool_ref(),
+                            ),
                         );
                     }
                 }
@@ -135,15 +156,26 @@ impl ServiceFactory<Connection> for StreamService {
             tokens,
             services,
             conns: MAX_CONNS_COUNTER.with(|conns| conns.clone()),
+            on_accept: self.on_accept.as_ref().map(|f| f.clone_fn()),
         })
     }
 }
 
-#[derive(Debug)]
 pub struct StreamServiceImpl {
-    tokens: HashMap<Token, (usize, &'static str, Pool, PoolRef)>,
+    tokens: HashMap<Token, (usize, &'static str, Arc<str>, Pool, PoolRef)>,
     services: Vec<BoxService>,
     conns: Counter,
+    on_accept: Option<Box<dyn OnAccept + Send>>,
+}
+
+impl fmt::Debug for StreamServiceImpl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StreamServiceImpl")
+            .field("tokens", &self.tokens)
+            .field("services", &self.services)
+            .field("conns", &self.conns)
+            .finish()
+    }
 }
 
 impl Service<Connection> for StreamServiceImpl {
@@ -156,7 +188,7 @@ impl Service<Connection> for StreamServiceImpl {
         }
         for (idx, svc) in self.services.iter().enumerate() {
             if ctx.ready(svc).await.is_err() {
-                for (idx_, tag, _, _) in self.tokens.values() {
+                for (idx_, tag, _, _, _) in self.tokens.values() {
                     if idx == *idx_ {
                         log::error!("{}: Service readiness has failed", tag);
                         break;
@@ -186,8 +218,16 @@ impl Service<Connection> for StreamServiceImpl {
     }
 
     async fn call(&self, con: Connection, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
-        if let Some((idx, tag, _, pool)) = self.tokens.get(&con.token) {
-            let stream: Io<_> = con.io.try_into().map_err(|e| {
+        if let Some((idx, tag, name, _, pool)) = self.tokens.get(&con.token) {
+            let mut io = con.io;
+            if let Some(ref f) = self.on_accept {
+                match f.run(name.clone(), io).await {
+                    Ok(st) => io = st,
+                    Err(_) => return Err(()),
+                }
+            }
+
+            let stream: Io<_> = io.try_into().map_err(|e| {
                 log::error!("Cannot convert to an async io stream: {}", e);
             })?;
 

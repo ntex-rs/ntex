@@ -163,6 +163,7 @@ impl ServiceConfig {
                 Entry {
                     idx,
                     pool: PoolId::DEFAULT,
+                    name: s.name.clone(),
                     tokens: s
                         .sockets
                         .iter()
@@ -221,6 +222,7 @@ impl FactoryService for ConfiguredService {
                     for entry in names.values() {
                         if entry.idx == services.len() {
                             res.push(NetService {
+                                name: std::sync::Arc::from(entry.name.clone()),
                                 pool: entry.pool,
                                 tokens: entry.tokens.clone(),
                                 factory: svc,
@@ -245,6 +247,7 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 struct Entry {
     idx: usize,
     pool: PoolId,
+    name: String,
     tokens: Vec<(Token, &'static str)>,
 }
 

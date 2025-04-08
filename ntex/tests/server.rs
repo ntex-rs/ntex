@@ -1,8 +1,8 @@
 #![allow(clippy::let_underscore_future)]
 
-#[cfg(feature = "tokio")]
+#[cfg(any(feature = "tokio", feature = "neon"))]
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-#[cfg(feature = "tokio")]
+#[cfg(any(feature = "tokio", feature = "neon"))]
 use std::{io, sync::Arc};
 use std::{io::Read, io::Write, net, sync::mpsc, thread, time};
 
@@ -313,6 +313,50 @@ fn test_panic_in_worker() {
     thread::sleep(time::Duration::from_millis(500));
     assert_eq!(counter.load(Relaxed), 3);
 
+    sys.stop();
+    let _ = h.join();
+}
+
+#[test]
+#[cfg(feature = "neon")]
+fn test_on_accept() {
+    let addr = TestServer::unused_addr();
+    let (tx, rx) = mpsc::channel();
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let h = thread::spawn(move || {
+        let num = num2.clone();
+        let sys = ntex::rt::System::new("test");
+        sys.run(move || {
+            let srv = build()
+                .disable_signals()
+                .bind("test", addr, move |_| {
+                    fn_service(|io: Io| async move {
+                        let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
+                        Ok::<_, ()>(())
+                    })
+                })
+                .unwrap()
+                .on_accept(move |name, io| {
+                    if name.as_ref() == "test" {
+                        let _ = num.fetch_add(1, Relaxed);
+                    }
+                    Ready::Ok::<_, io::Error>(io)
+                })
+                .workers(1)
+                .run();
+            let _ = tx.send((srv, ntex::rt::System::current()));
+            Ok(())
+        })
+    });
+    let (_, sys) = rx.recv().unwrap();
+
+    assert!(net::TcpStream::connect(addr).is_ok());
+    assert!(net::TcpStream::connect(addr).is_ok());
+    assert!(net::TcpStream::connect(addr).is_ok());
+    thread::sleep(time::Duration::from_millis(250));
+    assert_eq!(num.load(Relaxed), 3);
     sys.stop();
     let _ = h.join();
 }

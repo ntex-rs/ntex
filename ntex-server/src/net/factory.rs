@@ -1,17 +1,18 @@
-use std::{fmt, future::Future, marker::PhantomData};
+use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
 use ntex_bytes::PoolId;
 use ntex_net::Io;
 use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::{BoxFuture, Ready};
 
-use super::{Config, Token};
+use super::{socket::Stream, Config, Token};
 
 pub(super) type BoxServerService = boxed::BoxServiceFactory<(), Io, (), (), ()>;
 pub(crate) type FactoryServiceType = Box<dyn FactoryService>;
 
 #[derive(Debug)]
 pub(crate) struct NetService {
+    pub(crate) name: Arc<str>,
     pub(crate) tokens: Vec<(Token, &'static str)>,
     pub(crate) factory: BoxServerService,
     pub(crate) pool: PoolId,
@@ -33,7 +34,10 @@ pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerServ
 where
     S: ServiceFactory<Io> + 'static,
 {
-    boxed::factory(ServerServiceFactory { name, factory })
+    boxed::factory(ServerServiceFactory {
+        name: Arc::from(name),
+        factory,
+    })
 }
 
 pub(crate) fn create_factory_service<F, R>(
@@ -108,6 +112,7 @@ where
             Ok(vec![NetService {
                 tokens,
                 factory,
+                name: Arc::from(name),
                 pool: cfg.get_pool_id(),
             }])
         })
@@ -115,7 +120,7 @@ where
 }
 
 struct ServerServiceFactory<S> {
-    name: String,
+    name: Arc<str>,
     factory: S,
 }
 
@@ -148,9 +153,6 @@ where
     type Response = ();
     type Error = ();
 
-    ntex_service::forward_notready!(inner);
-    ntex_service::forward_shutdown!(inner);
-
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
         ctx.ready(&self.inner).await.map_err(|_| ())
     }
@@ -158,6 +160,8 @@ where
     async fn call(&self, req: Io, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
         ctx.call(&self.inner, req).await.map(|_| ()).map_err(|_| ())
     }
+
+    ntex_service::forward_shutdown!(inner);
 }
 
 // SAFETY: Send cannot be provided authomatically because of E and R params
@@ -206,6 +210,58 @@ where
         Box::pin(async move {
             (f)().await.map_err(|e| {
                 log::error!("On worker start callback failed: {}", e);
+            })
+        })
+    }
+}
+
+pub(crate) trait OnAccept {
+    fn clone_fn(&self) -> Box<dyn OnAccept + Send>;
+
+    fn run(&self, name: Arc<str>, stream: Stream)
+        -> BoxFuture<'static, Result<Stream, ()>>;
+}
+
+pub(super) struct OnAcceptWrapper<F, R, E> {
+    pub(super) f: F,
+    pub(super) _t: PhantomData<(R, E)>,
+}
+
+unsafe impl<F, R, E> Send for OnAcceptWrapper<F, R, E> where F: Send {}
+
+impl<F, R, E> OnAcceptWrapper<F, R, E>
+where
+    F: Fn(Arc<str>, Stream) -> R + Send + Clone + 'static,
+    R: Future<Output = Result<Stream, E>> + 'static,
+    E: fmt::Display + 'static,
+{
+    pub(super) fn create(f: F) -> Box<dyn OnAccept + Send> {
+        Box::new(Self { f, _t: PhantomData })
+    }
+}
+
+impl<F, R, E> OnAccept for OnAcceptWrapper<F, R, E>
+where
+    F: Fn(Arc<str>, Stream) -> R + Send + Clone + 'static,
+    R: Future<Output = Result<Stream, E>> + 'static,
+    E: fmt::Display + 'static,
+{
+    fn clone_fn(&self) -> Box<dyn OnAccept + Send> {
+        Box::new(Self {
+            f: self.f.clone(),
+            _t: PhantomData,
+        })
+    }
+
+    fn run(
+        &self,
+        name: Arc<str>,
+        stream: Stream,
+    ) -> BoxFuture<'static, Result<Stream, ()>> {
+        let f = self.f.clone();
+        Box::pin(async move {
+            (f)(name, stream).await.map_err(|e| {
+                log::error!("On accept callback failed: {}", e);
             })
         })
     }
