@@ -1,5 +1,4 @@
-use std::os::fd::{AsRawFd, RawFd};
-use std::{cell::RefCell, io, rc::Rc, task::Poll};
+use std::{cell::RefCell, io, os::fd::RawFd, rc::Rc, task::Poll};
 
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
@@ -72,14 +71,14 @@ impl Handler for ConnectOpsBatcher {
         log::trace!("connect-fd is readable {:?}", id);
 
         let mut connects = self.inner.connects.borrow_mut();
-        if connects.contains(id) {
-            let item = connects.remove(id);
+        if let Some(item) = connects.get(id) {
             if event.writable {
+                let item = connects.remove(id);
                 let mut err: libc::c_int = 0;
                 let mut err_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
 
                 let res = syscall!(libc::getsockopt(
-                    item.fd.as_raw_fd(),
+                    item.fd,
                     libc::SOL_SOCKET,
                     libc::SO_ERROR,
                     &mut err as *mut _ as *mut _,
@@ -94,6 +93,10 @@ impl Handler for ConnectOpsBatcher {
 
                 self.inner.api.detach(item.fd, id as u32);
                 let _ = item.sender.send(res);
+            } else if !item.sender.is_canceled() {
+                self.inner
+                    .api
+                    .attach(item.fd, id as u32, Event::writable(0));
             }
         }
     }

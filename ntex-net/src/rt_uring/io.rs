@@ -1,15 +1,12 @@
 use std::{any, future::poll_fn, task::Poll};
 
-use ntex_io::{
-    types, Handle, IoContext, IoStream, ReadContext, ReadStatus, WriteContext, WriteStatus,
-};
+use ntex_io::{types, Handle, IoContext, ReadContext, ReadStatus, WriteStatus};
 use ntex_rt::spawn;
-use socket2::Socket;
 
 use super::driver::{StreamCtl, StreamOps};
 
-impl IoStream for super::TcpStream {
-    fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
+impl ntex_io::IoStream for super::TcpStream {
+    fn start(self, read: ReadContext, _: ntex_io::WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let context = read.context();
         let ctl = StreamOps::current().register(io, context.clone());
@@ -20,8 +17,8 @@ impl IoStream for super::TcpStream {
     }
 }
 
-impl IoStream for super::UnixStream {
-    fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
+impl ntex_io::IoStream for super::UnixStream {
+    fn start(self, read: ReadContext, _: ntex_io::WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let context = read.context();
         let ctl = StreamOps::current().register(io, context.clone());
@@ -31,12 +28,12 @@ impl IoStream for super::UnixStream {
     }
 }
 
-struct HandleWrapper(StreamCtl<Socket>);
+struct HandleWrapper(StreamCtl);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            let addr = self.0.with_io(|io| io.and_then(|io| io.peer_addr().ok()));
+            let addr = self.0.with_io(|io| io.peer_addr().ok());
             if let Some(addr) = addr.and_then(|addr| addr.as_socket()) {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
@@ -51,12 +48,12 @@ enum Status {
     Terminate,
 }
 
-async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
+async fn run(ctl: StreamCtl, ctx: IoContext) {
     // Handle io readiness
     let st = poll_fn(|cx| {
-        let read = match context.poll_read_ready(cx) {
+        let read = match ctx.poll_read_ready(cx) {
             Poll::Ready(ReadStatus::Ready) => {
-                ctl.resume_read();
+                ctl.resume_read(&ctx);
                 Poll::Pending
             }
             Poll::Ready(ReadStatus::Terminate) => Poll::Ready(()),
@@ -66,9 +63,9 @@ async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
             }
         };
 
-        let write = match context.poll_write_ready(cx) {
+        let write = match ctx.poll_write_ready(cx) {
             Poll::Ready(WriteStatus::Ready) => {
-                ctl.resume_write();
+                ctl.resume_write(&ctx);
                 Poll::Pending
             }
             Poll::Ready(WriteStatus::Shutdown) => Poll::Ready(Status::Shutdown),
@@ -87,9 +84,9 @@ async fn run<T>(ctl: StreamCtl<T>, context: IoContext) {
     .await;
 
     ctl.pause_read();
-    ctl.resume_write();
-    context.shutdown(st == Status::Shutdown).await;
+    ctl.resume_write(&ctx);
+    ctx.shutdown(st == Status::Shutdown).await;
 
-    let result = ctl.close().await;
-    context.stopped(result.err());
+    let result = ctl.shutdown().await;
+    ctx.stopped(result.err());
 }
