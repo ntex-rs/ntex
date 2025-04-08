@@ -1,6 +1,6 @@
 #![allow(clippy::let_underscore_future)]
 use std::os::fd::{AsRawFd, RawFd};
-use std::{cell::Cell, cell::RefCell, future::Future, io, mem, rc::Rc, task::Poll};
+use std::{cell::Cell, cell::RefCell, io, mem, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::IoContext;
@@ -184,10 +184,28 @@ impl StreamCtl {
         self.inner.with(|streams| f(&streams[self.id as usize].io))
     }
 
-    pub(crate) fn shutdown(self) -> impl Future<Output = io::Result<()>> {
-        let id = self.id as usize;
+    pub(crate) async fn shutdown(self) -> io::Result<()> {
         self.inner
-            .with(|streams| streams[id].shutdown(self.id, &self.inner.api))
+            .with(|streams| {
+                let item = &mut streams[self.id as usize];
+                let fut = item.context.take().map(|ctx| {
+                    let fd = item.fd();
+                    ntex_rt::spawn_blocking(move || {
+                        syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
+                    })
+                });
+
+                async move {
+                    if let Some(fut) = fut {
+                        fut.await
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                            .and_then(crate::helpers::pool_io_err)
+                    } else {
+                        Ok(())
+                    }
+                }
+            })
+            .await
     }
 
     /// Modify poll interest for the stream
@@ -313,29 +331,6 @@ impl StreamItem {
             }
         } else {
             false
-        }
-    }
-
-    fn shutdown(
-        &mut self,
-        id: u32,
-        api: &DriverApi,
-    ) -> impl Future<Output = io::Result<()>> {
-        let fut = self.context.take().map(|ctx| {
-            let fd = self.fd();
-            ntex_rt::spawn_blocking(move || {
-                syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
-            })
-        });
-
-        async move {
-            if let Some(fut) = fut {
-                fut.await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                    .and_then(crate::helpers::pool_io_err)
-            } else {
-                Ok(())
-            }
         }
     }
 }

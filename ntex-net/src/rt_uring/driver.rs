@@ -1,5 +1,4 @@
-use std::os::fd::AsRawFd;
-use std::{cell::Cell, future::Future, io, mem, num::NonZeroU32, rc::Rc, task::Poll};
+use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use io_uring::{opcode, squeue::Entry, types::Fd};
 use ntex_bytes::{Buf, BufMut, BytesVec};
@@ -326,25 +325,23 @@ impl StreamItem {
 }
 
 impl StreamCtl {
-    pub(crate) fn shutdown(self) -> impl Future<Output = io::Result<()>> {
-        let fut = self.inner.with(|storage| {
-            let (tx, rx) = oneshot::channel();
-            let item = &mut storage.streams[self.id];
-            let id = storage.ops.insert(Operation::Shutdown { tx: Some(tx) });
+    pub(crate) async fn shutdown(&self) -> io::Result<()> {
+        self.inner
+            .with(|storage| {
+                let (tx, rx) = oneshot::channel();
+                let item = &mut storage.streams[self.id];
+                let id = storage.ops.insert(Operation::Shutdown { tx: Some(tx) });
 
-            self.inner.api.submit(
-                id as u32,
-                opcode::Shutdown::new(item.fd(), libc::SHUT_RDWR).build(),
-            );
-            rx
-        });
-
-        async move {
-            fut.await
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "gone"))
-                .and_then(|item| item)
-                .map(|_| ())
-        }
+                self.inner.api.submit(
+                    id as u32,
+                    opcode::Shutdown::new(item.fd(), libc::SHUT_RDWR).build(),
+                );
+                rx
+            })
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "gone"))
+            .and_then(|item| item)
+            .map(|_| ())
     }
 
     pub(crate) fn with_io<F, R>(&self, f: F) -> R
