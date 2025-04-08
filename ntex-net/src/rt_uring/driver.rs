@@ -145,7 +145,7 @@ impl Handler for StreamOpsHandler {
                     if item.flags.contains(Flags::RD_REISSUE) {
                         item.flags.remove(Flags::RD_REISSUE);
 
-                        let result = st.recv(id, &ctx);
+                        let result = st.recv(id, ctx);
                         if let Some((id, op)) = result {
                             self.inner.api.submit(id, op);
                         }
@@ -161,7 +161,7 @@ impl Handler for StreamOpsHandler {
                     if item.flags.contains(Flags::WR_REISSUE) {
                         item.flags.remove(Flags::WR_REISSUE);
 
-                        let result = st.send(id, &ctx);
+                        let result = st.send(id, ctx);
                         if let Some((id, op)) = result {
                             self.inner.api.submit(id, op);
                         }
@@ -176,25 +176,32 @@ impl Handler for StreamOpsHandler {
         self.inner.with(|st| {
             match st.ops.remove(user_data) {
                 Operation::Recv { id, mut buf, ctx } => {
-                    let mut total = 0;
-                    let res = Poll::Ready(res.map(|size| {
-                        unsafe { buf.advance_mut(size) };
-                        total = size;
-                    }));
-
                     // reset op reference
                     if let Some(item) = st.streams.get_mut(id) {
                         item.rd_op.take();
                         log::trace!("{}: Recv({:?}) res: {res:?}", ctx.tag(), item.fd());
                     }
 
-                    // set read buf
-                    if ctx.release_read_buf(total, buf, res) && ctx.is_read_ready() {
-                        if let Some((id, op)) = st.recv(id, &ctx) {
+                    // handle WouldBlock
+                    if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
+                        if let Some((id, op)) = st.recv(id, ctx) {
                             self.inner.api.submit(id, op);
                         }
                     } else {
-                        log::trace!("{}: Recv to pause", ctx.tag());
+                        let mut total = 0;
+                        let res = Poll::Ready(res.map(|size| {
+                            unsafe { buf.advance_mut(size) };
+                            total = size;
+                        }));
+
+                        // set read buf
+                        if ctx.release_read_buf(total, buf, res) && ctx.is_read_ready() {
+                            if let Some((id, op)) = st.recv(id, ctx) {
+                                self.inner.api.submit(id, op);
+                            }
+                        } else {
+                            log::trace!("{}: Recv to pause", ctx.tag());
+                        }
                     }
                 }
                 Operation::Send { id, buf, ctx } => {
@@ -206,7 +213,7 @@ impl Handler for StreamOpsHandler {
 
                     // set read buf
                     if ctx.release_write_buf(buf, Poll::Ready(res)) {
-                        if let Some((id, op)) = st.send(id, &ctx) {
+                        if let Some((id, op)) = st.send(id, ctx) {
                             self.inner.api.submit(id, op);
                         }
                     }
@@ -247,7 +254,7 @@ impl StreamOpsStorage {
         (self.ops.insert(Operation::Nop) as u32, entry)
     }
 
-    fn recv(&mut self, id: usize, ctx: &IoContext) -> Option<(u32, Entry)> {
+    fn recv(&mut self, id: usize, ctx: IoContext) -> Option<(u32, Entry)> {
         let item = &mut self.streams[id];
 
         if item.rd_op.is_none() {
@@ -261,11 +268,7 @@ impl StreamOpsStorage {
 
             let slice = buf.chunk_mut();
             let op = opcode::Recv::new(fd, slice.as_mut_ptr(), slice.len() as u32).build();
-            let op_id = self.ops.insert(Operation::Recv {
-                id,
-                buf,
-                ctx: ctx.clone(),
-            }) as u32;
+            let op_id = self.ops.insert(Operation::Recv { id, buf, ctx }) as u32;
             item.rd_op = NonZeroU32::new(op_id);
             return Some((op_id, op));
         } else if item.flags.contains(Flags::RD_CANCELING) {
@@ -274,7 +277,7 @@ impl StreamOpsStorage {
         None
     }
 
-    fn send(&mut self, id: usize, ctx: &IoContext) -> Option<(u32, Entry)> {
+    fn send(&mut self, id: usize, ctx: IoContext) -> Option<(u32, Entry)> {
         let item = &mut self.streams[id];
 
         if item.wr_op.is_none() {
@@ -284,11 +287,7 @@ impl StreamOpsStorage {
 
                 let slice = buf.chunk();
                 let op = opcode::Send::new(fd, slice.as_ptr(), slice.len() as u32).build();
-                let op_id = self.ops.insert(Operation::Send {
-                    id,
-                    buf,
-                    ctx: ctx.clone(),
-                }) as u32;
+                let op_id = self.ops.insert(Operation::Send { id, buf, ctx }) as u32;
                 item.wr_op = NonZeroU32::new(op_id);
                 return Some((op_id, op));
             }
@@ -353,7 +352,7 @@ impl StreamCtl {
 
     pub(crate) fn resume_read(&self, ctx: &IoContext) {
         self.inner.with(|storage| {
-            let result = storage.recv(self.id, ctx);
+            let result = storage.recv(self.id, ctx.clone());
             if let Some((id, op)) = result {
                 self.inner.api.submit(id, op);
             }
@@ -362,7 +361,7 @@ impl StreamCtl {
 
     pub(crate) fn resume_write(&self, ctx: &IoContext) {
         self.inner.with(|storage| {
-            let result = storage.send(self.id, ctx);
+            let result = storage.send(self.id, ctx.clone());
             if let Some((id, op)) = result {
                 self.inner.api.submit(id, op);
             }
