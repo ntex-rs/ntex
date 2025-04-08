@@ -1,6 +1,4 @@
-#![allow(clippy::let_underscore_future)]
-use std::os::fd::{AsRawFd, RawFd};
-use std::{cell::Cell, cell::RefCell, io, mem, rc::Rc, task::Poll};
+use std::{cell::Cell, cell::RefCell, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::IoContext;
@@ -272,7 +270,7 @@ impl Drop for StreamCtl {
 }
 
 impl StreamItem {
-    fn fd(&self) -> RawFd {
+    fn fd(&self) -> os::fd::RawFd {
         self.io.as_raw_fd()
     }
 
