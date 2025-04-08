@@ -33,7 +33,7 @@ struct HandleWrapper(StreamCtl);
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            let addr = self.0.with(|io| io.and_then(|io| io.peer_addr().ok()));
+            let addr = self.0.with(|io| io.peer_addr().ok());
             if let Some(addr) = addr.and_then(|addr| addr.as_socket()) {
                 return Some(Box::new(types::PeerAddr(addr)));
             }

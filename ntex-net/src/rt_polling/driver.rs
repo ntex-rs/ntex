@@ -23,11 +23,10 @@ bitflags::bitflags! {
 }
 
 struct StreamItem {
-    fd: RawFd,
+    io: Socket,
     flags: Flags,
-    ref_count: u16,
+    ref_count: u8,
     context: Option<IoContext>,
-    io: Option<Socket>,
 }
 
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
@@ -44,6 +43,7 @@ struct StreamOpsInner {
 }
 
 impl StreamOps {
+    /// Get `StreamOps` instance from the current runtime, or create new one
     pub(crate) fn current() -> Self {
         Runtime::value(|rt| {
             let mut inner = None;
@@ -62,16 +62,17 @@ impl StreamOps {
         })
     }
 
+    /// Number of active streams
     pub(crate) fn active_ops() -> usize {
         Self::current().0.with(|streams| streams.len())
     }
 
+    /// Register new stream
     pub(crate) fn register(&self, io: Socket, context: IoContext) -> StreamCtl {
         let fd = io.as_raw_fd();
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
-                fd,
-                io: Some(io),
+                io,
                 ref_count: 1,
                 flags: Flags::empty(),
                 context: Some(context),
@@ -104,7 +105,7 @@ impl Handler for StreamOpsHandler {
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false);
 
-            log::trace!("{}: Event ({:?}): {:?}", io.tag(), io.fd, ev);
+            log::trace!("{}: Event ({:?}): {:?}", io.tag(), io.fd(), ev);
 
             if ev.readable {
                 if io.read(id as u32, &self.inner.api).is_pending() && io.can_read() {
@@ -131,7 +132,7 @@ impl Handler for StreamOpsHandler {
             if ev.is_interrupt() {
                 io.context.as_ref().inspect(|ctx| ctx.stopped(None));
             } else {
-                self.inner.api.modify(io.fd, id as u32, renew);
+                self.inner.api.modify(io.fd(), id as u32, renew);
             }
 
             // delayed drops
@@ -141,9 +142,7 @@ impl Handler for StreamOpsHandler {
                     let io = &mut streams[id as usize];
                     io.ref_count -= 1;
                     if io.ref_count == 0 {
-                        let mut io = streams.remove(id as usize);
-                        let _ = io.close(id, &self.inner.api);
-                        log::trace!("{}: Drop ({:?})", io.tag(), io.fd);
+                        let _ = close(streams, id, &self.inner.api);
                     }
                 }
             }
@@ -153,13 +152,13 @@ impl Handler for StreamOpsHandler {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(io) = streams.get_mut(id) {
-                log::trace!("{}: Failed ({:?}) err: {:?}", io.tag(), io.fd, err);
+                log::trace!("{}: Failed ({:?}) err: {:?}", io.tag(), io.fd(), err);
                 if let Some(ref ctx) = io.context {
                     if !ctx.is_stopped() {
                         ctx.stopped(Some(err));
                     }
                 }
-                let _ = io.close(id as u32, &self.inner.api);
+                close(streams, id as u32, &self.inner.api);
             }
         })
     }
@@ -180,10 +179,9 @@ impl StreamOpsInner {
 impl StreamCtl {
     pub(crate) fn with<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(Option<&Socket>) -> R,
+        F: FnOnce(&Socket) -> R,
     {
-        self.inner
-            .with(|streams| f(streams[self.id as usize].io.as_ref()))
+        self.inner.with(|streams| f(&streams[self.id as usize].io))
     }
 
     pub(crate) fn shutdown(self) -> impl Future<Output = io::Result<()>> {
@@ -192,11 +190,18 @@ impl StreamCtl {
             .with(|streams| streams[id].shutdown(self.id, &self.inner.api))
     }
 
+    /// Modify poll interest for the stream
     pub(crate) fn modify(&self, rd: bool, wr: bool) {
         self.inner.with(|streams| {
             let io = &mut streams[self.id as usize];
             let mut event = Event::new(0, false, false);
-            log::trace!("{}: Mod ({:?}) rd: {:?}, wr: {:?}", io.tag(), io.fd, rd, wr,);
+            log::trace!(
+                "{}: Mod ({:?}) rd: {:?}, wr: {:?}",
+                io.tag(),
+                io.fd(),
+                rd,
+                wr,
+            );
 
             if rd {
                 if io.flags.contains(Flags::RD) {
@@ -220,7 +225,7 @@ impl StreamCtl {
                 io.flags.remove(Flags::WR);
             }
 
-            self.inner.api.modify(io.fd, self.id, event);
+            self.inner.api.modify(io.fd(), self.id, event);
         })
     }
 }
@@ -239,13 +244,12 @@ impl Clone for StreamCtl {
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
+        // It is possible that drop happens while `StreamOps` handling event
         if let Some(mut streams) = self.inner.streams.take() {
             let id = self.id as usize;
             streams[id].ref_count -= 1;
             if streams[id].ref_count == 0 {
-                let mut io = streams.remove(id);
-                log::trace!("{}: Drop io ({:?}), flags: {:?}", io.tag(), io.fd, io.flags);
-                let _ = io.close(self.id, &self.inner.api);
+                close(&mut streams, self.id, &self.inner.api);
             }
             self.inner.streams.set(Some(streams));
         } else {
@@ -256,6 +260,10 @@ impl Drop for StreamCtl {
 }
 
 impl StreamItem {
+    fn fd(&self) -> RawFd {
+        self.io.as_raw_fd()
+    }
+
     fn tag(&self) -> &'static str {
         self.context
             .as_ref()
@@ -276,10 +284,10 @@ impl StreamItem {
                 log::trace!(
                     "{}: Writing ({}), buf: {:?}",
                     self.tag(),
-                    self.fd,
+                    self.fd(),
                     buf.len()
                 );
-                syscall!(break libc::write(self.fd, buf[..].as_ptr() as _, buf.len()))
+                syscall!(break libc::write(self.fd(), buf[..].as_ptr() as _, buf.len()))
             })
         } else {
             Poll::Ready(())
@@ -301,7 +309,7 @@ impl StreamItem {
                     let chunk_ptr = chunk.as_mut_ptr();
 
                     let res =
-                        syscall!(break libc::read(self.fd, chunk_ptr as _, chunk_len));
+                        syscall!(break libc::read(self.fd(), chunk_ptr as _, chunk_len));
                     if let Poll::Ready(Ok(size)) = res {
                         unsafe { buf.advance_mut(size) };
                         total += size;
@@ -313,7 +321,7 @@ impl StreamItem {
                     log::trace!(
                         "{}: Read fd ({:?}), size: {:?}, cap: {:?}, result: {:?}",
                         self.tag(),
-                        self.fd,
+                        self.fd(),
                         total,
                         buf.remaining_mut(),
                         res
@@ -336,14 +344,12 @@ impl StreamItem {
         id: u32,
         api: &DriverApi,
     ) -> impl Future<Output = io::Result<()>> {
-        let fut = if let Some(ctx) = self.context.take() {
-            let fd = self.fd;
-            Some(ntex_rt::spawn_blocking(move || {
+        let fut = self.context.take().map(|ctx| {
+            let fd = self.fd();
+            ntex_rt::spawn_blocking(move || {
                 syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
-            }))
-        } else {
-            None
-        };
+            })
+        });
 
         async move {
             if let Some(fut) = fut {
@@ -355,43 +361,32 @@ impl StreamItem {
             }
         }
     }
+}
 
-    fn close(&mut self, id: u32, api: &DriverApi) -> impl Future<Output = io::Result<i32>> {
-        let fut = if let Some(io) = self.io.take() {
-            mem::forget(io);
-            let fd = self.fd;
-            api.detach(fd, id);
-            log::trace!("{}: Closing ({})", self.tag(), fd);
-
-            let shutdown = if let Some(ctx) = self.context.take() {
-                if !ctx.is_stopped() {
-                    ctx.stopped(None);
-                }
-                true
-            } else {
-                false
-            };
-
-            Some(ntex_rt::spawn_blocking(move || {
-                if shutdown {
-                    let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
-                }
-                syscall!(libc::close(fd)).inspect_err(|err| {
-                    log::error!("Cannot close file descriptor ({:?}), {:?}", fd, err);
-                })
-            }))
-        } else {
-            None
-        };
-
-        async move {
-            if let Some(fut) = fut {
-                fut.await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                    .and_then(|res| crate::helpers::pool_io_err(res.map(|_| 0)))
-            } else {
-                Ok(0i32)
+fn close(st: &mut Slab<StreamItem>, id: u32, api: &DriverApi) {
+    let mut item = st.remove(id as usize);
+    let fd = item.fd();
+    let shutdown = item
+        .context
+        .take()
+        .map(|ctx| {
+            if !ctx.is_stopped() {
+                ctx.stopped(None);
             }
+            true
+        })
+        .unwrap_or_default();
+
+    log::trace!("{}: Close ({:?}), flags: {:?}", item.tag(), fd, item.flags);
+
+    api.detach(fd, id);
+    mem::forget(item.io);
+    ntex_rt::spawn_blocking(move || {
+        if shutdown {
+            let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
         }
-    }
+        syscall!(libc::close(fd)).inspect_err(|err| {
+            log::error!("Cannot close file descriptor ({:?}), {:?}", fd, err);
+        })
+    });
 }
