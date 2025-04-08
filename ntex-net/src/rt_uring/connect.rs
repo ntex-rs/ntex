@@ -77,7 +77,7 @@ impl Handler for ConnectOpsHandler {
         self.inner.ops.borrow_mut().remove(user_data);
     }
 
-    fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<i32>) {
+    fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<usize>) {
         let (addr, tx) = self.inner.ops.borrow_mut().remove(user_data);
         log::trace!(
             "connect-op is completed {:?} result: {:?}, addr: {:?}",

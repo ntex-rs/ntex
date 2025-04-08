@@ -105,10 +105,10 @@ impl Handler for StreamOpsHandler {
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false);
 
-            log::trace!("{}: Event ({:?}): {:?}", io.tag(), io.fd(), ev);
+            log::trace!("{}: Event ({:?}): {ev:?}", io.tag(), io.fd());
 
             if ev.readable {
-                if io.read(id as u32, &self.inner.api).is_pending() && io.can_read() {
+                if io.read(id as u32, &self.inner.api) && io.can_read() {
                     renew.readable = true;
                     io.flags.insert(Flags::RD);
                 } else {
@@ -119,7 +119,7 @@ impl Handler for StreamOpsHandler {
             }
 
             if ev.writable {
-                if io.write(id as u32, &self.inner.api).is_pending() {
+                if io.write(id as u32, &self.inner.api) {
                     renew.writable = true;
                     io.flags.insert(Flags::WR);
                 } else {
@@ -142,7 +142,7 @@ impl Handler for StreamOpsHandler {
                     let io = &mut streams[id as usize];
                     io.ref_count -= 1;
                     if io.ref_count == 0 {
-                        let _ = close(streams, id, &self.inner.api);
+                        close(streams, id, &self.inner.api);
                     }
                 }
             }
@@ -152,7 +152,7 @@ impl Handler for StreamOpsHandler {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(io) = streams.get_mut(id) {
-                log::trace!("{}: Failed ({:?}) err: {:?}", io.tag(), io.fd(), err);
+                log::trace!("{}: Failed ({:?}) err: {err:?}", io.tag(), io.fd());
                 if let Some(ref ctx) = io.context {
                     if !ctx.is_stopped() {
                         ctx.stopped(Some(err));
@@ -195,18 +195,12 @@ impl StreamCtl {
         self.inner.with(|streams| {
             let io = &mut streams[self.id as usize];
             let mut event = Event::new(0, false, false);
-            log::trace!(
-                "{}: Mod ({:?}) rd: {:?}, wr: {:?}",
-                io.tag(),
-                io.fd(),
-                rd,
-                wr,
-            );
+            log::trace!("{}: Mod ({:?}) rd: {rd:?}, wr: {wr:?}", io.tag(), io.fd());
 
             if rd {
                 if io.flags.contains(Flags::RD) {
                     event.readable = true;
-                } else if io.read(self.id, &self.inner.api).is_pending() {
+                } else if io.read(self.id, &self.inner.api) {
                     event.readable = true;
                     io.flags.insert(Flags::RD);
                 }
@@ -217,7 +211,7 @@ impl StreamCtl {
             if wr {
                 if io.flags.contains(Flags::WR) {
                     event.writable = true;
-                } else if io.write(self.id, &self.inner.api).is_pending() {
+                } else if io.write(self.id, &self.inner.api) {
                     event.writable = true;
                     io.flags.insert(Flags::WR);
                 }
@@ -278,64 +272,47 @@ impl StreamItem {
             .unwrap_or_default()
     }
 
-    fn write(&mut self, id: u32, api: &DriverApi) -> Poll<()> {
+    fn write(&mut self, id: u32, api: &DriverApi) -> bool {
         if let Some(ref ctx) = self.context {
-            ctx.with_write_buf(|buf| {
-                log::trace!(
-                    "{}: Writing ({}), buf: {:?}",
-                    self.tag(),
-                    self.fd(),
-                    buf.len()
-                );
-                syscall!(break libc::write(self.fd(), buf[..].as_ptr() as _, buf.len()))
-            })
-        } else {
-            Poll::Ready(())
+            if let Some(buf) = ctx.get_write_buf() {
+                let fd = self.fd();
+                log::trace!("{}: Write ({fd:?}), buf: {:?}", ctx.tag(), buf.len());
+                let res = syscall!(break libc::write(fd, buf[..].as_ptr() as _, buf.len()));
+                return ctx.release_write_buf(buf, res);
+            }
         }
+        false
     }
 
-    fn read(&mut self, id: u32, api: &DriverApi) -> Poll<()> {
+    fn read(&mut self, id: u32, api: &DriverApi) -> bool {
         if let Some(ref ctx) = self.context {
-            ctx.with_read_buf(|buf, hw, lw| {
-                let mut total = 0;
-                loop {
-                    // make sure we've got room
-                    if buf.remaining_mut() < lw {
-                        buf.reserve(hw);
-                    }
+            let (mut buf, hw, lw) = ctx.get_read_buf();
 
-                    let chunk = buf.chunk_mut();
-                    let chunk_len = chunk.len();
-                    let chunk_ptr = chunk.as_mut_ptr();
-
-                    let res =
-                        syscall!(break libc::read(self.fd(), chunk_ptr as _, chunk_len));
-                    if let Poll::Ready(Ok(size)) = res {
-                        unsafe { buf.advance_mut(size) };
-                        total += size;
-                        if size == chunk_len {
-                            continue;
-                        }
-                    }
-
-                    log::trace!(
-                        "{}: Read fd ({:?}), size: {:?}, cap: {:?}, result: {:?}",
-                        self.tag(),
-                        self.fd(),
-                        total,
-                        buf.remaining_mut(),
-                        res
-                    );
-
-                    return match res {
-                        Poll::Ready(Err(err)) => (total, Poll::Ready(Err(err))),
-                        Poll::Ready(Ok(size)) => (total, Poll::Ready(Ok(()))),
-                        Poll::Pending => (total, Poll::Pending),
-                    };
+            let fd = self.fd();
+            let mut total = 0;
+            loop {
+                // make sure we've got room
+                if buf.remaining_mut() < lw {
+                    buf.reserve(hw);
                 }
-            })
+                let chunk = buf.chunk_mut();
+                let chunk_len = chunk.len();
+                let chunk_ptr = chunk.as_mut_ptr();
+
+                let res = syscall!(break libc::read(fd, chunk_ptr as _, chunk_len));
+                if let Poll::Ready(Ok(size)) = res {
+                    unsafe { buf.advance_mut(size) };
+                    total += size;
+                    if size == chunk_len {
+                        continue;
+                    }
+                }
+
+                log::trace!("{}: Read ({fd:?}), s: {total:?}, res: {res:?}", self.tag());
+                return ctx.release_read_buf(total, buf, res.map(|res| res.map(|_| ())));
+            }
         } else {
-            Poll::Ready(())
+            false
         }
     }
 
@@ -377,7 +354,7 @@ fn close(st: &mut Slab<StreamItem>, id: u32, api: &DriverApi) {
         })
         .unwrap_or_default();
 
-    log::trace!("{}: Close ({:?}), flags: {:?}", item.tag(), fd, item.flags);
+    log::trace!("{}: Close ({fd:?}), flags: {:?}", item.tag(), item.flags);
 
     api.detach(fd, id);
     mem::forget(item.io);
@@ -386,7 +363,7 @@ fn close(st: &mut Slab<StreamItem>, id: u32, api: &DriverApi) {
             let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
         }
         syscall!(libc::close(fd)).inspect_err(|err| {
-            log::error!("Cannot close file descriptor ({:?}), {:?}", fd, err);
+            log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
         })
     });
 }
