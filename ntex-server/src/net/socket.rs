@@ -5,6 +5,25 @@ use ntex_net::{self as rt, Io};
 use super::Token;
 
 #[derive(Debug)]
+pub enum Stream {
+    Tcp(net::TcpStream),
+    #[cfg(unix)]
+    Uds(std::os::unix::net::UnixStream),
+}
+
+impl TryFrom<Stream> for Io {
+    type Error = io::Error;
+
+    fn try_from(sock: Stream) -> Result<Self, Self::Error> {
+        match sock {
+            Stream::Tcp(stream) => rt::from_tcp_stream(stream),
+            #[cfg(unix)]
+            Stream::Uds(stream) => rt::from_unix_stream(stream),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Connection {
     pub(crate) io: Stream,
     pub(crate) token: Token,
@@ -155,25 +174,6 @@ mod listener_impl {
             match *self {
                 Listener::Tcp(ref lst) => lst.as_raw_socket(),
             }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum Stream {
-    Tcp(net::TcpStream),
-    #[cfg(unix)]
-    Uds(std::os::unix::net::UnixStream),
-}
-
-impl TryFrom<Stream> for Io {
-    type Error = io::Error;
-
-    fn try_from(sock: Stream) -> Result<Self, Self::Error> {
-        match sock {
-            Stream::Tcp(stream) => rt::from_tcp_stream(stream),
-            #[cfg(unix)]
-            Stream::Uds(stream) => rt::from_unix_stream(stream),
         }
     }
 }

@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.0] - 2025-04-08
+
+* Add ServerBuilder::on_accept() callback
+
 ## [2.7.3] - 2025-03-28
 
 * Better worker availability handling

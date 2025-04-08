@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, io, net};
+use std::{fmt, future::Future, io, net, sync::Arc};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -10,8 +10,9 @@ use crate::{Server, WorkerPool};
 
 use super::accept::AcceptLoop;
 use super::config::{Config, ServiceConfig};
-use super::factory::{self, FactoryServiceType, OnWorkerStart, OnWorkerStartWrapper};
-use super::{socket::Listener, Connection, ServerStatus, StreamServer, Token};
+use super::factory::{self, FactoryServiceType};
+use super::factory::{OnAccept, OnAcceptWrapper, OnWorkerStart, OnWorkerStartWrapper};
+use super::{socket::Listener, Connection, ServerStatus, Stream, StreamServer, Token};
 
 /// Streaming service builder
 ///
@@ -23,6 +24,7 @@ pub struct ServerBuilder {
     services: Vec<FactoryServiceType>,
     sockets: Vec<(Token, String, Listener)>,
     on_worker_start: Vec<Box<dyn OnWorkerStart + Send>>,
+    on_accept: Option<Box<dyn OnAccept + Send>>,
     accept: AcceptLoop,
     pool: WorkerPool,
 }
@@ -52,6 +54,7 @@ impl ServerBuilder {
             token: Token(0),
             services: Vec::new(),
             sockets: Vec::new(),
+            on_accept: None,
             on_worker_start: Vec::new(),
             accept: AcceptLoop::default(),
             backlog: 2048,
@@ -198,6 +201,19 @@ impl ServerBuilder {
         self
     }
 
+    /// Register on-accept callback function.
+    ///
+    /// This function get called with accepted stream.
+    pub fn on_accept<F, R, E>(mut self, f: F) -> Self
+    where
+        F: Fn(Arc<str>, Stream) -> R + Send + Clone + 'static,
+        R: Future<Output = Result<Stream, E>> + 'static,
+        E: fmt::Display + 'static,
+    {
+        self.on_accept = Some(OnAcceptWrapper::create(f));
+        self
+    }
+
     /// Add new service to the server.
     pub fn bind<F, U, N, R>(mut self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
@@ -328,6 +344,7 @@ impl ServerBuilder {
                 self.accept.notify(),
                 self.services,
                 self.on_worker_start,
+                self.on_accept,
             );
             let svc = self.pool.run(srv);
 
