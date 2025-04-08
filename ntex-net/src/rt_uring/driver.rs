@@ -350,18 +350,18 @@ impl StreamCtl {
         self.inner.with(|storage| f(&storage.streams[self.id].io))
     }
 
-    pub(crate) fn resume_read(&self, ctx: IoContext) {
+    pub(crate) fn resume_read(&self, ctx: &IoContext) {
         self.inner.with(|storage| {
-            let result = storage.recv(self.id, ctx);
+            let result = storage.recv(self.id, ctx.clone());
             if let Some((id, op)) = result {
                 self.inner.api.submit(id, op);
             }
         })
     }
 
-    pub(crate) fn resume_write(&self, ctx: IoContext) {
+    pub(crate) fn resume_write(&self, ctx: &IoContext) {
         self.inner.with(|storage| {
-            let result = storage.send(self.id, ctx);
+            let result = storage.send(self.id, ctx.clone());
             if let Some((id, op)) = result {
                 self.inner.api.submit(id, op);
             }

@@ -53,7 +53,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     let st = poll_fn(|cx| {
         let read = match ctx.poll_read_ready(cx) {
             Poll::Ready(ReadStatus::Ready) => {
-                ctl.resume_read(ctx.clone());
+                ctl.resume_read(&ctx);
                 Poll::Pending
             }
             Poll::Ready(ReadStatus::Terminate) => Poll::Ready(()),
@@ -65,7 +65,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
 
         let write = match ctx.poll_write_ready(cx) {
             Poll::Ready(WriteStatus::Ready) => {
-                ctl.resume_write(ctx.clone());
+                ctl.resume_write(&ctx);
                 Poll::Pending
             }
             Poll::Ready(WriteStatus::Shutdown) => Poll::Ready(Status::Shutdown),
@@ -84,7 +84,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     .await;
 
     ctl.pause_read();
-    ctl.resume_write(ctx.clone());
+    ctl.resume_write(&ctx);
     ctx.shutdown(st == Status::Shutdown).await;
 
     let result = ctl.shutdown().await;

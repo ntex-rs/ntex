@@ -76,11 +76,14 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
             }
             Poll::Ready(WriteStatus::Shutdown) => Poll::Ready(Status::Shutdown),
             Poll::Ready(WriteStatus::Terminate) => Poll::Ready(Status::Terminate),
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                modify = true;
+                Poll::Pending
+            }
         };
 
         if modify {
-            ctl.modify(readable, writable);
+            ctl.interest(readable, writable);
         }
 
         if read.is_pending() && write.is_pending() {
@@ -94,7 +97,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     .await;
 
     // write buf
-    ctl.modify(false, true);
+    ctl.interest(false, true);
     context.shutdown(st == Status::Shutdown).await;
 
     let err = ctl.shutdown().await.err();
