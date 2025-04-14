@@ -24,8 +24,6 @@ use crate::channel::bstream::Receiver;
 
 pub type Payload = Receiver<super::error::PayloadError>;
 
-const MAX_BUFFER_SIZE: usize = 32_768;
-
 #[derive(Debug)]
 /// Codec message
 pub enum Message<T> {

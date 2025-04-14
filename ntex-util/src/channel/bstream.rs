@@ -60,6 +60,8 @@ pub struct Receiver<E> {
 
 impl<E> Receiver<E> {
     /// Set max stream size
+    ///
+    /// By default max buffer size is set to 32Kb
     #[inline]
     pub fn max_size(&self, size: usize) {
         self.inner.max_size.set(size);
