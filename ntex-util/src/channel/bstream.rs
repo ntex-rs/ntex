@@ -126,7 +126,6 @@ pub struct Sender<E> {
 impl<E> Drop for Sender<E> {
     fn drop(&mut self) {
         if let Some(shared) = self.inner.upgrade() {
-            debug_assert!(!shared.flags.get().intersects(Flags::EOF | Flags::ERROR));
             shared.insert_flag(Flags::EOF);
         }
     }
