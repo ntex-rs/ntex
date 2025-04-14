@@ -73,12 +73,36 @@ impl<E> Receiver<E> {
     #[inline]
     /// Read next available bytes chunk
     pub async fn read(&self) -> Option<Result<Bytes, E>> {
-        poll_fn(|cx| self.inner.readany(cx)).await
+        poll_fn(|cx| self.poll_read(cx)).await
     }
 
     #[inline]
     pub fn poll_read(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, E>>> {
-        self.inner.readany(cx)
+        if let Some(data) = self.inner.items.borrow_mut().pop_front() {
+            let len = self.inner.len.get() - data.len();
+            self.inner.len.set(len);
+            let need_read = if len < self.inner.max_size.get() {
+                self.inner.insert_flag(Flags::NEED_READ);
+                true
+            } else {
+                self.inner.remove_flag(Flags::NEED_READ);
+                false
+            };
+            if need_read {
+                self.inner.rx_task.register(cx.waker());
+                self.inner.tx_task.wake();
+            }
+            Poll::Ready(Some(Ok(data)))
+        } else if let Some(err) = self.inner.err.take() {
+            Poll::Ready(Some(Err(err)))
+        } else if self.inner.flags.get().intersects(Flags::EOF | Flags::ERROR) {
+            Poll::Ready(None)
+        } else {
+            self.inner.insert_flag(Flags::NEED_READ);
+            self.inner.rx_task.register(cx.waker());
+            self.inner.tx_task.wake();
+            Poll::Pending
+        }
     }
 }
 
@@ -89,7 +113,7 @@ impl<E> Stream for Receiver<E> {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, E>>> {
-        self.inner.readany(cx)
+        self.poll_read(cx)
     }
 }
 
@@ -102,7 +126,8 @@ pub struct Sender<E> {
 impl<E> Drop for Sender<E> {
     fn drop(&mut self) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.insert_flag(Flags::SENDER_GONE);
+            debug_assert!(shared.flags.get().intersects(Flags::EOF | Flags::ERROR));
+            shared.insert_flag(Flags::EOF);
         }
     }
 }
@@ -217,36 +242,6 @@ impl<E> Inner<E> {
             self.remove_flag(Flags::NEED_READ);
         }
         self.rx_task.wake();
-    }
-
-    fn readany(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, E>>> {
-        if let Some(data) = self.items.borrow_mut().pop_front() {
-            let len = self.len.get() - data.len();
-            self.len.set(len);
-            if len < self.max_size.get() {
-                self.insert_flag(Flags::NEED_READ);
-            } else {
-                self.remove_flag(Flags::NEED_READ);
-            }
-
-            let flags = self.flags.get();
-            if flags.contains(Flags::NEED_READ)
-                && !flags.intersects(Flags::EOF | Flags::ERROR)
-            {
-                self.rx_task.register(cx.waker());
-            }
-            self.tx_task.wake();
-            Poll::Ready(Some(Ok(data)))
-        } else if let Some(err) = self.err.take() {
-            Poll::Ready(Some(Err(err)))
-        } else if self.flags.get().intersects(Flags::EOF | Flags::ERROR | Flags::SENDER_GONE) {
-            Poll::Ready(None)
-        } else {
-            self.insert_flag(Flags::NEED_READ);
-            self.rx_task.register(cx.waker());
-            self.tx_task.wake();
-            Poll::Pending
-        }
     }
 
     fn unread_data(&self, data: Bytes) {
