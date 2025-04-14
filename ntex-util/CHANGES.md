@@ -2,7 +2,7 @@
 
 ## [2.11.0] - 2025-04-14
 
-* Add "ByteStream" channel
+* Add bytes channel
 
 ## [2.10.0] - 2025-03-12
 
