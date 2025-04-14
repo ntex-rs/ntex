@@ -1,6 +1,7 @@
 //! HTTP/1 protocol dispatcher
 use std::{error, future, io, marker, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
+use crate::channel::bstream;
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::{PipelineCall, Service};
 use crate::time::Seconds;
@@ -13,7 +14,6 @@ use crate::http::{self, config::DispatcherConfig, request::Request, response::Re
 
 use super::control::{Control, ControlAck, ControlFlags, ControlResult};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::payload::{Payload, PayloadSender, PayloadStatus};
 use super::{codec::Codec, Message, ProtocolError};
 
 bitflags::bitflags! {
@@ -73,7 +73,7 @@ struct DispatcherInner<F, C, S, B> {
     flags: Flags,
     codec: Codec,
     config: Rc<DispatcherConfig<S, C>>,
-    payload: Option<(PayloadDecoder, PayloadSender)>,
+    payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
     read_remains: u32,
     read_consumed: u32,
     read_max_timeout: Seconds,
@@ -279,12 +279,12 @@ where
                 match pl {
                     PayloadType::None => (),
                     PayloadType::Payload(decoder) => {
-                        let (ps, pl) = Payload::create(false);
+                        let (ps, pl) = bstream::channel(false);
                         req.replace_payload(http::Payload::H1(pl));
                         self.payload = Some((decoder, ps));
                     }
                     PayloadType::Stream(decoder) => {
-                        let (ps, pl) = Payload::create(false);
+                        let (ps, pl) = bstream::channel(false);
                         req.replace_payload(http::Payload::H1(pl));
                         self.payload = Some((decoder, ps));
                     }
@@ -482,8 +482,8 @@ where
             return Poll::Ready(Ok(()));
         };
 
-        match self.payload.as_mut().unwrap().1.poll_data_required(cx) {
-            PayloadStatus::Read => {
+        match self.payload.as_ref().unwrap().1.poll_ready(cx) {
+            bstream::Status::Read => {
                 // read request payload
                 let mut updated = false;
                 loop {
@@ -568,7 +568,7 @@ where
                     Poll::Pending
                 }
             }
-            PayloadStatus::Pause => {
+            bstream::Status::Pause => {
                 // stop payload timer
                 if self.flags.contains(Flags::READ_PL_TIMEOUT) {
                     self.flags.remove(Flags::READ_PL_TIMEOUT);
@@ -576,7 +576,7 @@ where
                 }
                 Poll::Pending
             }
-            PayloadStatus::Dropped => {
+            bstream::Status::Dropped => {
                 // service call is not interested in payload
                 // wait until future completes and then close
                 // connection

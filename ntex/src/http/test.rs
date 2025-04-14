@@ -4,6 +4,7 @@ use std::{net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use crate::channel::bstream;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
 use crate::io::Io;
@@ -131,8 +132,7 @@ impl TestRequest {
 
     /// Set request payload
     pub fn set_payload<B: Into<Bytes>>(&mut self, data: B) -> &mut Self {
-        let mut payload = crate::http::h1::Payload::empty();
-        payload.unread_data(data.into());
+        let payload = bstream::empty(Some(data.into()));
         parts(&mut self.0).payload = Some(payload.into());
         self
     }
@@ -149,7 +149,7 @@ impl TestRequest {
         let mut req = if let Some(pl) = inner.payload {
             Request::with_payload(pl)
         } else {
-            Request::with_payload(crate::http::h1::Payload::empty().into())
+            Request::with_payload(bstream::empty(None).into())
         };
 
         let head = req.head_mut();

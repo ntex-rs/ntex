@@ -1,6 +1,8 @@
 //! Communication primitives
 
 mod cell;
+
+pub mod bstream;
 pub mod condition;
 pub mod inplace;
 pub mod mpsc;

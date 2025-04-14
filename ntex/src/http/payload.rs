@@ -75,7 +75,7 @@ impl Payload {
     ) -> Poll<Option<Result<Bytes, PayloadError>>> {
         match self {
             Payload::None => Poll::Ready(None),
-            Payload::H1(ref mut pl) => pl.readany(cx),
+            Payload::H1(ref mut pl) => pl.poll_read(cx),
             Payload::H2(ref mut pl) => pl.poll_read(cx),
             Payload::Stream(ref mut pl) => Pin::new(pl).poll_next(cx),
         }
@@ -98,11 +98,14 @@ mod tests {
     #[test]
     fn payload_debug() {
         assert!(format!("{:?}", Payload::None).contains("Payload::None"));
-        assert!(format!("{:?}", Payload::H1(h1::Payload::create(false).1))
-            .contains("Payload::H1"));
         assert!(format!(
             "{:?}",
-            Payload::Stream(Box::pin(h1::Payload::create(false).1))
+            Payload::H1(crate::channel::bstream::channel(false).1)
+        )
+        .contains("Payload::H1"));
+        assert!(format!(
+            "{:?}",
+            Payload::Stream(Box::pin(crate::channel::bstream::channel(false).1))
         )
         .contains("Payload::Stream"));
     }

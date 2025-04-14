@@ -1,5 +1,9 @@
 # Changes
 
+## [2.11.0] - 2025-04-14
+
+* Add "ByteStream" channel
+
 ## [2.10.0] - 2025-03-12
 
 * Add "Inplace" channel

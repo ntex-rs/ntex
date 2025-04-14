@@ -4,8 +4,8 @@ use coo_kie::{Cookie, CookieJar};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderName, HeaderValue};
-use crate::http::{h1, Payload, ResponseHead, StatusCode, Version};
-use crate::util::Bytes;
+use crate::http::{Payload, ResponseHead, StatusCode, Version};
+use crate::{channel::bstream, util::Bytes};
 
 use super::ClientResponse;
 
@@ -74,9 +74,7 @@ impl TestResponse {
 
     /// Set response's payload
     pub fn set_payload<B: Into<Bytes>>(mut self, data: B) -> Self {
-        let mut payload = h1::Payload::empty();
-        payload.unread_data(data.into());
-        self.payload = Some(payload.into());
+        self.payload = Some(bstream::empty(Some(data.into())).into());
         self
     }
 
@@ -111,7 +109,7 @@ impl TestResponse {
         if let Some(pl) = self.payload {
             ClientResponse::new(head, pl, Default::default())
         } else {
-            ClientResponse::new(head, h1::Payload::empty().into(), Default::default())
+            ClientResponse::new(head, bstream::empty(None).into(), Default::default())
         }
     }
 }

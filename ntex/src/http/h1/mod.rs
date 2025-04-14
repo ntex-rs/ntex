@@ -7,7 +7,6 @@ mod decoder;
 mod default;
 mod dispatcher;
 mod encoder;
-mod payload;
 mod service;
 
 pub mod control;
@@ -17,10 +16,13 @@ pub use self::codec::Codec;
 pub use self::control::{Control, ControlAck};
 pub use self::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 pub use self::default::DefaultControlService;
-pub use self::payload::Payload;
 pub use self::service::{H1Service, H1ServiceHandler};
 
 pub(super) use self::dispatcher::Dispatcher;
+
+use crate::channel::bstream::Receiver;
+
+pub type Payload = Receiver<super::error::PayloadError>;
 
 const MAX_BUFFER_SIZE: usize = 32_768;
 

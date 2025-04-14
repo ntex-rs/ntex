@@ -1,5 +1,9 @@
 # Changes
 
+## [2.13.0] - 2025-xx-xx
+
+* Use `ntex_util::channel::bstream` instead of h1 payload
+
 ## [2.12.4] - 2025-03-28
 
 * http: Return PayloadError::Incomplete on server disconnect
