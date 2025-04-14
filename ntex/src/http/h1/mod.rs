@@ -19,7 +19,6 @@ pub use self::default::DefaultControlService;
 pub use self::service::{H1Service, H1ServiceHandler};
 
 pub(super) use self::dispatcher::Dispatcher;
-
 use crate::channel::bstream::Receiver;
 
 pub type Payload = Receiver<super::error::PayloadError>;
