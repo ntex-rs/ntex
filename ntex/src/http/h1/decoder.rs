@@ -10,9 +10,8 @@ use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::request::Request;
 use crate::util::{Buf, Bytes, BytesMut};
 
-use super::MAX_BUFFER_SIZE;
-
 const MAX_HEADERS: usize = 96;
+const MAX_BUFFER_SIZE: usize = 32_768;
 
 #[derive(Debug)]
 /// Incoming messagd decoder
