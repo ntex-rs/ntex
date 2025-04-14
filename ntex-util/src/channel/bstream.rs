@@ -48,11 +48,8 @@ pub fn empty<E>(data: Option<Bytes>) -> Receiver<E> {
 
 /// Buffered stream of byte chunks
 ///
-/// Payload stores chunks in a vector. First chunk can be received with
-/// `.readany()` method. Payload stream is not thread safe. Payload does not
-/// notify current task when new data is available.
-///
-/// Payload stream can be used as `Response` body stream.
+/// Payload stores chunks in a vector. Chunks can be received with
+/// `.read()` method.
 #[derive(Debug)]
 pub struct Receiver<E> {
     inner: Rc<Inner<E>>,
@@ -74,6 +71,7 @@ impl<E> Receiver<E> {
     }
 
     #[inline]
+    /// Read next available bytes chunk
     pub async fn read(&self) -> Option<Result<Bytes, E>> {
         poll_fn(|cx| self.inner.readany(cx)).await
     }
@@ -241,7 +239,7 @@ impl<E> Inner<E> {
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.err.take() {
             Poll::Ready(Some(Err(err)))
-        } else if self.flags.get().intersects(Flags::EOF | Flags::ERROR) {
+        } else if self.flags.get().intersects(Flags::EOF | Flags::ERROR | Flags::SENDER_GONE) {
             Poll::Ready(None)
         } else {
             self.insert_flag(Flags::NEED_READ);
