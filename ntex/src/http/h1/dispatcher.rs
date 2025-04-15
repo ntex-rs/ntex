@@ -279,12 +279,12 @@ where
                 match pl {
                     PayloadType::None => (),
                     PayloadType::Payload(decoder) => {
-                        let (ps, pl) = bstream::channel(false);
+                        let (ps, pl) = bstream::channel();
                         req.replace_payload(http::Payload::H1(pl));
                         self.payload = Some((decoder, ps));
                     }
                     PayloadType::Stream(decoder) => {
-                        let (ps, pl) = bstream::channel(false);
+                        let (ps, pl) = bstream::channel();
                         req.replace_payload(http::Payload::H1(pl));
                         self.payload = Some((decoder, ps));
                     }

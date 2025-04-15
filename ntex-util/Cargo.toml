@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "2.11.0"
+version = "2.11.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
