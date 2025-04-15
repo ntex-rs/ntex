@@ -98,14 +98,13 @@ mod tests {
     #[test]
     fn payload_debug() {
         assert!(format!("{:?}", Payload::None).contains("Payload::None"));
+        assert!(
+            format!("{:?}", Payload::H1(crate::channel::bstream::channel().1))
+                .contains("Payload::H1")
+        );
         assert!(format!(
             "{:?}",
-            Payload::H1(crate::channel::bstream::channel(false).1)
-        )
-        .contains("Payload::H1"));
-        assert!(format!(
-            "{:?}",
-            Payload::Stream(Box::pin(crate::channel::bstream::channel(false).1))
+            Payload::Stream(Box::pin(crate::channel::bstream::channel().1))
         )
         .contains("Payload::Stream"));
     }

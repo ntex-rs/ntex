@@ -24,8 +24,23 @@ pub enum Status {
 ///
 /// This method construct two objects responsible for bytes stream
 /// generation.
-pub fn channel<E>(eof: bool) -> (Sender<E>, Receiver<E>) {
-    let inner = Rc::new(Inner::new(eof));
+pub fn channel<E>() -> (Sender<E>, Receiver<E>) {
+    let inner = Rc::new(Inner::new(false));
+
+    (
+        Sender {
+            inner: Rc::downgrade(&inner),
+        },
+        Receiver { inner },
+    )
+}
+
+/// Create closed bytes stream.
+///
+/// This method construct two objects responsible for bytes stream
+/// generation.
+pub fn eof<E>() -> (Sender<E>, Receiver<E>) {
+    let inner = Rc::new(Inner::new(true));
 
     (
         Sender {
@@ -269,12 +284,17 @@ mod tests {
     use super::*;
 
     #[ntex_macros::rt_test2]
+    async fn test_eof() {
+        let (_, rx) = eof::<()>();
+        assert!(rx.read().await.is_none());
+    }
+
+    #[ntex_macros::rt_test2]
     async fn test_unread_data() {
-        let (_, payload) = channel::<()>(false);
+        let (_, payload) = channel::<()>();
 
         payload.put(Bytes::from("data"));
         assert_eq!(payload.inner.len.get(), 4);
-
         assert_eq!(
             Bytes::from("data"),
             poll_fn(|cx| payload.poll_read(cx)).await.unwrap().unwrap()
