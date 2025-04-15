@@ -284,6 +284,12 @@ mod tests {
     use super::*;
 
     #[ntex_macros::rt_test2]
+    async fn test_eof() {
+        let (_, rx) = eof::<()>();
+        assert!(rx.read().await.is_none());
+    }
+
+    #[ntex_macros::rt_test2]
     async fn test_unread_data() {
         let (_, payload) = channel::<()>();
 
