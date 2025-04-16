@@ -169,6 +169,11 @@ impl<E> Sender<E> {
     }
 
     /// Check stream readiness
+    pub async fn ready(&self) -> Status {
+        poll_fn(|cx| self.poll_ready(cx)).await
+    }
+
+    /// Check stream readiness
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Status {
         // we check only if Payload (other side) is alive,
         // otherwise always return true (consume payload)

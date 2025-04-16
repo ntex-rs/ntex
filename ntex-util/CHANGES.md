@@ -1,5 +1,9 @@
 # Changes
 
+## [2.11.2] - 2025-04-16
+
+* Add bstream::Sender::ready() helper
+
 ## [2.11.1] - 2025-04-15
 
 * By default create open byte stream
