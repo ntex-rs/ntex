@@ -483,7 +483,7 @@ where
         };
 
         match self.payload.as_ref().unwrap().1.poll_ready(cx) {
-            bstream::Status::Read => {
+            Poll::Ready(bstream::Status::Ready) => {
                 // read request payload
                 let mut updated = false;
                 loop {
@@ -568,7 +568,7 @@ where
                     Poll::Pending
                 }
             }
-            bstream::Status::Pause => {
+            Poll::Pending => {
                 // stop payload timer
                 if self.flags.contains(Flags::READ_PL_TIMEOUT) {
                     self.flags.remove(Flags::READ_PL_TIMEOUT);
@@ -576,7 +576,7 @@ where
                 }
                 Poll::Pending
             }
-            bstream::Status::Dropped => {
+            Poll::Ready(bstream::Status::Dropped) => {
                 // service call is not interested in payload
                 // wait until future completes and then close
                 // connection
