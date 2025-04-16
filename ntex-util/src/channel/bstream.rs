@@ -13,9 +13,7 @@ const MAX_BUFFER_SIZE: usize = 32_768;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Stream is ready
-    Read,
-    /// Stream is paused
-    Pause,
+    Ready,
     /// Receiver side is dropped
     Dropped,
 }
@@ -174,18 +172,18 @@ impl<E> Sender<E> {
     }
 
     /// Check stream readiness
-    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Status {
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Status> {
         // we check only if Payload (other side) is alive,
         // otherwise always return true (consume payload)
         if let Some(shared) = self.inner.upgrade() {
             if shared.flags.get().contains(Flags::NEED_READ) {
-                Status::Read
+                Poll::Ready(Status::Ready)
             } else {
                 shared.tx_task.register(cx.waker());
-                Status::Pause
+                Poll::Pending
             }
         } else {
-            Status::Dropped
+            Poll::Ready(Status::Dropped)
         }
     }
 }
