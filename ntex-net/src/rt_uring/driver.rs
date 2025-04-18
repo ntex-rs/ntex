@@ -4,7 +4,7 @@ use io_uring::{opcode, squeue::Entry, types::Fd};
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::IoContext;
 use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
-use ntex_util::channel::oneshot;
+use ntex_util::channel::pool;
 use slab::Slab;
 use socket2::Socket;
 
@@ -44,11 +44,12 @@ enum Operation {
         ctx: IoContext,
     },
     Shutdown {
-        tx: Option<oneshot::Sender<io::Result<()>>>,
+        tx: Option<pool::Sender<io::Result<()>>>,
     },
     Nop,
 }
 
+#[derive(Clone)]
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
 
 struct StreamOpsHandler {
@@ -61,6 +62,7 @@ struct StreamOpsInner {
     feed: Cell<Option<Box<Vec<usize>>>>,
     delayd_drop: Cell<bool>,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
+    pool: pool::Pool<io::Result<()>>,
 }
 
 struct StreamOpsStorage {
@@ -93,6 +95,7 @@ impl StreamOps {
                     api,
                     feed: Cell::new(Some(Box::new(Vec::new()))),
                     delayd_drop: Cell::new(false),
+                    pool: pool::new(),
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
                         streams: Slab::new(),
@@ -127,9 +130,9 @@ impl StreamOps {
     }
 }
 
-impl Clone for StreamOps {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
+impl Operation {
+    fn shutdown(tx: pool::Sender<io::Result<()>>) -> Self {
+        Operation::Shutdown { tx: Some(tx) }
     }
 }
 
@@ -195,7 +198,7 @@ impl Handler for StreamOpsHandler {
                         }));
 
                         // set read buf
-                        if ctx.release_read_buf(total, buf, res) && ctx.is_read_ready() {
+                        if ctx.release_read_buf(total, buf, res) {
                             if let Some((id, op)) = st.recv(id, ctx) {
                                 self.inner.api.submit(id, op);
                             }
@@ -246,9 +249,8 @@ impl Handler for StreamOpsHandler {
 impl StreamOpsStorage {
     fn close(&mut self, id: usize) -> (u32, Entry) {
         let item = self.streams.remove(id);
-        let fd = item.fd();
-        let entry = opcode::Close::new(fd).build();
-        log::trace!("{}: Close ({fd:?})", item.tag());
+        let entry = opcode::Close::new(item.fd()).build();
+        log::trace!("{}: Close ({:?})", item.tag(), item.fd());
 
         mem::forget(item.io);
         (self.ops.insert(Operation::Nop) as u32, entry)
@@ -327,12 +329,10 @@ impl StreamCtl {
     pub(crate) async fn shutdown(&self) -> io::Result<()> {
         self.inner
             .with(|storage| {
-                let (tx, rx) = oneshot::channel();
+                let (tx, rx) = self.inner.pool.channel();
                 let item = &mut storage.streams[self.id];
-                let id = storage.ops.insert(Operation::Shutdown { tx: Some(tx) });
-
                 self.inner.api.submit(
-                    id as u32,
+                    storage.ops.insert(Operation::shutdown(tx)) as u32,
                     opcode::Shutdown::new(item.fd(), libc::SHUT_RDWR).build(),
                 );
                 rx
@@ -340,7 +340,6 @@ impl StreamCtl {
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "gone"))
             .and_then(|item| item)
-            .map(|_| ())
     }
 
     pub(crate) fn with_io<F, R>(&self, f: F) -> R
