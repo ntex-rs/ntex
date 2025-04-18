@@ -106,7 +106,7 @@ impl Handler for StreamOpsHandler {
             log::trace!("{}: Event ({:?}): {ev:?}", io.tag(), io.fd());
 
             if ev.readable {
-                if io.read(id as u32, &self.inner.api) && io.can_read() {
+                if io.read(id as u32, &self.inner.api) {
                     renew.readable = true;
                     io.flags.insert(Flags::RD);
                 } else {
@@ -278,13 +278,6 @@ impl StreamItem {
         self.context
             .as_ref()
             .map(|ctx| ctx.tag())
-            .unwrap_or_default()
-    }
-
-    fn can_read(&self) -> bool {
-        self.context
-            .as_ref()
-            .map(|ctx| ctx.is_read_ready())
             .unwrap_or_default()
     }
 
