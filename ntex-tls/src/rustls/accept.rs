@@ -86,13 +86,6 @@ impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
         Ok(())
     }
 
-    #[inline]
-    async fn not_ready(&self) {
-        if self.conns.is_available() {
-            self.conns.unavailable().await
-        }
-    }
-
     async fn call(
         &self,
         io: Io<F>,

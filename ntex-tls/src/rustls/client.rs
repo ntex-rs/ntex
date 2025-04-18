@@ -1,10 +1,9 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::io::{self, Read as IoRead, Write as IoWrite};
-use std::{any, cell::RefCell, future::poll_fn, sync::Arc, task::Poll};
+use std::{any, cell::RefCell, future::poll_fn, sync::Arc, task::ready, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::{types, Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
-use ntex_util::ready;
 use tls_rust::{pki_types::ServerName, ClientConfig, ClientConnection};
 
 use super::{PeerCert, PeerCertChain, Wrapper};

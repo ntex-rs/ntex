@@ -1,4 +1,5 @@
-use std::{future::poll_fn, io, io::Write, pin::Pin, task, task::Poll, time::Instant};
+use std::task::{ready, Poll};
+use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::error::PayloadError;
@@ -8,7 +9,7 @@ use crate::http::payload::{Payload, PayloadStream};
 use crate::http::{h1, Version};
 use crate::io::{IoBoxed, RecvError};
 use crate::time::{timeout_checked, Millis};
-use crate::util::{ready, BufMut, Bytes, BytesMut, Stream};
+use crate::util::{BufMut, Bytes, BytesMut, Stream};
 
 use super::connection::{Connection, ConnectionType};
 use super::error::{ConnectError, SendRequestError};

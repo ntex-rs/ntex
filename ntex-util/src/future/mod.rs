@@ -2,7 +2,6 @@
 use std::{future::poll_fn, future::Future, mem, pin::Pin, task::Context, task::Poll};
 
 pub use futures_core::{Stream, TryFuture};
-pub use futures_sink::Sink;
 
 mod either;
 mod join;
@@ -28,19 +27,6 @@ where
     S: Stream + Unpin,
 {
     poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
-}
-
-#[doc(hidden)]
-#[deprecated]
-/// A future that completes after the given item has been fully processed
-/// into the sink, including flushing.
-pub async fn sink_write<S, I>(sink: &mut S, item: I) -> Result<(), S::Error>
-where
-    S: Sink<I> + Unpin,
-{
-    poll_fn(|cx| Pin::new(&mut *sink).poll_ready(cx)).await?;
-    Pin::new(&mut *sink).start_send(item)?;
-    poll_fn(|cx| Pin::new(&mut *sink).poll_flush(cx)).await
 }
 
 enum MaybeDone<F>

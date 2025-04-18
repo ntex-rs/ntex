@@ -1,11 +1,10 @@
 //! HTTP/1 protocol dispatcher
-use std::{error, future, io, marker, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::task::{ready, Context, Poll};
+use std::{error, future, io, marker, mem, pin::Pin, rc::Rc};
 
-use crate::channel::bstream;
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
 use crate::service::{PipelineCall, Service};
-use crate::time::Seconds;
-use crate::util::{ready, Either};
+use crate::{channel::bstream, time::Seconds, util::Either};
 
 use crate::http::body::{BodySize, MessageBody, ResponseBody};
 use crate::http::error::{PayloadError, ResponseError};

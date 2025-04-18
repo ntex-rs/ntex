@@ -1,4 +1,5 @@
-use std::{future::Future, io, io::Read, io::Write, pin::Pin, task::Context, task::Poll};
+use std::task::{ready, Context, Poll};
+use std::{future::Future, io, io::Read, io::Write, pin::Pin};
 
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
@@ -12,7 +13,7 @@ use ntex::http::header::{
 };
 use ntex::http::{body::Body, client, ConnectionType, Method, StatusCode};
 use ntex::time::{sleep, Millis, Seconds, Sleep};
-use ntex::util::{ready, Bytes, Ready, Stream};
+use ntex::util::{Bytes, Ready, Stream};
 
 use ntex::web::{self, middleware::Compress, test};
 use ntex::web::{App, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};
