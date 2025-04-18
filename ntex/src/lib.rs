@@ -121,6 +121,10 @@ pub mod util {
     pub use ntex_util::{future::*, services::*, HashMap, HashSet};
 
     #[doc(hidden)]
+    #[deprecated]
+    pub use std::task::ready;
+
+    #[doc(hidden)]
     pub fn enable_test_logging() {
         #[cfg(not(feature = "no-test-logging"))]
         if std::env::var("NTEX_NO_TEST_LOG").is_err() {

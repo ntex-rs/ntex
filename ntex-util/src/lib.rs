@@ -12,3 +12,7 @@ pub use ntex_rt::spawn;
 
 pub type HashMap<K, V> = std::collections::HashMap<K, V, fxhash::FxBuildHasher>;
 pub type HashSet<V> = std::collections::HashSet<V, fxhash::FxBuildHasher>;
+
+#[doc(hidden)]
+#[deprecated]
+pub use std::task::ready;
