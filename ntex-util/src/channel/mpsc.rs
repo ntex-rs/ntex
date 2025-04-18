@@ -4,7 +4,6 @@ use std::future::poll_fn;
 use std::{fmt, panic::UnwindSafe, pin::Pin, task::Context, task::Poll};
 
 use futures_core::{FusedStream, Stream};
-use futures_sink::Sink;
 
 use super::cell::Cell;
 use crate::task::LocalWaker;
@@ -73,36 +72,6 @@ impl<T> Clone for Sender<T> {
         Sender {
             shared: self.shared.clone(),
         }
-    }
-}
-
-impl<T> Sink<T> for Sender<T> {
-    type Error = SendError<T>;
-
-    fn poll_ready(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), SendError<T>> {
-        self.send(item)
-    }
-
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Result<(), SendError<T>>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_close(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Result<(), Self::Error>> {
-        self.close();
-        Poll::Ready(Ok(()))
     }
 }
 
@@ -277,20 +246,6 @@ mod tests {
         assert!(format!("{:?}", err).contains("SendError"));
         assert!(format!("{}", err).contains("send failed because receiver is gone"));
         assert_eq!(err.into_inner(), "test");
-    }
-
-    #[ntex_macros::rt_test2]
-    async fn test_sink() {
-        let (mut tx, mut rx) = channel();
-        lazy(|cx| {
-            assert!(Pin::new(&mut tx).poll_ready(cx).is_ready());
-            assert!(Pin::new(&mut tx).start_send("test").is_ok());
-            assert!(Pin::new(&mut tx).poll_flush(cx).is_ready());
-            assert!(Pin::new(&mut tx).poll_close(cx).is_ready());
-        })
-        .await;
-        assert_eq!(stream_recv(&mut rx).await.unwrap(), "test");
-        assert_eq!(stream_recv(&mut rx).await, None);
     }
 
     #[ntex_macros::rt_test2]

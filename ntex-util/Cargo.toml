@@ -25,7 +25,6 @@ log = "0.4"
 slab = "0.4"
 futures-timer = "3.0"
 futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
-futures-sink = { version = "0.3", default-features = false, features = ["alloc"] }
 pin-project-lite = "0.2"
 
 [dev-dependencies]

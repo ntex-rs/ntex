@@ -50,16 +50,6 @@ impl<S> Pipeline<S> {
             .await
     }
 
-    #[doc(hidden)]
-    #[deprecated]
-    /// Returns when the pipeline is not able to process requests.
-    pub async fn not_ready<R>(&self)
-    where
-        S: Service<R>,
-    {
-        std::future::pending().await
-    }
-
     #[inline]
     /// Wait for service readiness and then create future object
     /// that resolves to service result.
@@ -246,14 +236,6 @@ where
             State::Readiness(ref mut fut) => Pin::new(fut).poll(cx),
             State::Shutdown(_) => panic!("Pipeline is shutding down"),
         }
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    /// Returns when the pipeline is not able to process requests.
-    pub fn poll_not_ready(&self, _: &mut Context<'_>) -> Poll<()> {
-        Poll::Pending
     }
 
     #[inline]

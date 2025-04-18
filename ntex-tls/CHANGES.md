@@ -1,5 +1,9 @@
 # Changes
 
+## [2.4.1] - 2025-04-18
+
+* Fix deprecated code
+
 ## [2.4.0] - 2024-12-30
 
 * Enable rustls/std feature

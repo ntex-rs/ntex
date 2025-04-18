@@ -1,6 +1,8 @@
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
+use std::{
+    cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc, task::ready,
+};
 
 use ntex_h2::{self as h2};
 
@@ -8,7 +10,7 @@ use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::service::{Pipeline, PipelineCall, Service, ServiceCtx};
 use crate::time::{now, Seconds};
-use crate::util::{ready, ByteString, HashMap, HashSet};
+use crate::util::{ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker};
 
 use super::connection::{Connection, ConnectionType};
