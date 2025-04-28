@@ -50,19 +50,10 @@ pub trait AsyncWrite {
     async fn shutdown(&mut self) -> IoResult<()>;
 }
 
-/// Status for read task
+/// Filter ready state
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ReadStatus {
-    /// Read task is clear to proceed with read operation
-    Ready,
-    /// Terminate read task
-    Terminate,
-}
-
-/// Status for write task
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum WriteStatus {
-    /// Write task is clear to proceed with write operation
+pub enum Readiness {
+    /// Io task is clear to proceed with io operations
     Ready,
     /// Initiate graceful io shutdown operation
     Shutdown,
@@ -77,14 +68,14 @@ pub trait FilterLayer: fmt::Debug + 'static {
 
     #[inline]
     /// Check readiness for read operations
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
-        Poll::Ready(ReadStatus::Ready)
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        Poll::Ready(Readiness::Ready)
     }
 
     #[inline]
     /// Check readiness for write operations
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
-        Poll::Ready(WriteStatus::Ready)
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        Poll::Ready(Readiness::Ready)
     }
 
     /// Process read buffer
@@ -115,6 +106,15 @@ pub trait IoStream {
 
 pub trait Handle {
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
+}
+
+/// Status for read task
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum IoTaskStatus {
+    /// More io ops
+    Io,
+    /// Pause io task
+    Pause,
 }
 
 /// Io status

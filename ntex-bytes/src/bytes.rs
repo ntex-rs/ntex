@@ -2876,6 +2876,16 @@ impl InnerVec {
 
     fn truncate(&mut self, len: usize) {
         unsafe {
+            // try to reclaim the buffer. This is possible if the current
+            // handle is the only outstanding handle pointing to the buffer.
+            if len == 0 {
+                let inner = self.as_inner();
+                if inner.is_unique() && inner.offset != SHARED_VEC_SIZE as u32 {
+                    inner.offset = SHARED_VEC_SIZE as u32;
+                    println!("444444444444 ---- RECLAIM {:?}", self.capacity());
+                }
+            }
+
             if len <= self.len() {
                 self.set_len(len);
             }

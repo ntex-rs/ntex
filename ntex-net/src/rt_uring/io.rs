@@ -1,6 +1,6 @@
 use std::{any, future::poll_fn, task::Poll};
 
-use ntex_io::{types, Handle, IoContext, ReadContext, ReadStatus, WriteStatus};
+use ntex_io::{types, Handle, IoContext, ReadContext, Readiness};
 use ntex_rt::spawn;
 
 use super::driver::{StreamCtl, StreamOps};
@@ -52,11 +52,13 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     // Handle io readiness
     let st = poll_fn(|cx| {
         let read = match ctx.poll_read_ready(cx) {
-            Poll::Ready(ReadStatus::Ready) => {
+            Poll::Ready(Readiness::Ready) => {
                 ctl.resume_read(&ctx);
                 Poll::Pending
             }
-            Poll::Ready(ReadStatus::Terminate) => Poll::Ready(()),
+            Poll::Ready(Readiness::Shutdown) | Poll::Ready(Readiness::Terminate) => {
+                Poll::Ready(())
+            }
             Poll::Pending => {
                 ctl.pause_read();
                 Poll::Pending
@@ -64,12 +66,12 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
         };
 
         let write = match ctx.poll_write_ready(cx) {
-            Poll::Ready(WriteStatus::Ready) => {
+            Poll::Ready(Readiness::Ready) => {
                 ctl.resume_write(&ctx);
                 Poll::Pending
             }
-            Poll::Ready(WriteStatus::Shutdown) => Poll::Ready(Status::Shutdown),
-            Poll::Ready(WriteStatus::Terminate) => Poll::Ready(Status::Terminate),
+            Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
+            Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
             Poll::Pending => Poll::Pending,
         };
 

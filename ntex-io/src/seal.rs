@@ -1,7 +1,7 @@
 use std::{any::Any, any::TypeId, fmt, io, ops, task::Context, task::Poll};
 
 use crate::filter::{Filter, FilterReadStatus};
-use crate::{buf::Stack, Io, IoRef, ReadStatus, WriteStatus};
+use crate::{buf::Stack, Io, IoRef, Readiness};
 
 /// Sealed filter type
 pub struct Sealed(pub(crate) Box<dyn Filter>);
@@ -40,12 +40,12 @@ impl Filter for Sealed {
     }
 
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.0.poll_read_ready(cx)
     }
 
     #[inline]
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.0.poll_write_ready(cx)
     }
 }

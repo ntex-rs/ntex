@@ -73,11 +73,11 @@ mod tests {
         assert!(NullFilter.shutdown(&ioref, &stack, 0).unwrap().is_ready());
         assert_eq!(
             std::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
-            crate::ReadStatus::Terminate
+            crate::Readiness::Terminate
         );
         assert_eq!(
             std::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
-            crate::WriteStatus::Terminate
+            crate::Readiness::Terminate
         );
         assert!(NullFilter.process_write_buf(&ioref, &stack, 0).is_ok());
         assert_eq!(

@@ -1,7 +1,7 @@
 use std::{cell::Cell, cell::RefCell, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
-use ntex_io::IoContext;
+use ntex_io::{IoContext, IoTaskStatus};
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{syscall, Runtime};
 use slab::Slab;
@@ -106,18 +106,21 @@ impl Handler for StreamOpsHandler {
             log::trace!("{}: Event ({:?}): {ev:?}", io.tag(), io.fd());
 
             if ev.readable {
-                if io.read(id as u32, &self.inner.api) {
-                    renew.readable = true;
-                    io.flags.insert(Flags::RD);
-                } else {
-                    io.flags.remove(Flags::RD);
+                match io.read(id as u32, &self.inner.api) {
+                    IoTaskStatus::Io => {
+                        renew.readable = true;
+                        io.flags.insert(Flags::RD);
+                    }
+                    IoTaskStatus::Pause => {
+                        io.flags.remove(Flags::RD);
+                    }
                 }
             } else if io.flags.contains(Flags::RD) {
                 renew.readable = true;
             }
 
             if ev.writable {
-                if io.write(id as u32, &self.inner.api) {
+                if io.write(id as u32, &self.inner.api) == IoTaskStatus::Io {
                     renew.writable = true;
                     io.flags.insert(Flags::WR);
                 } else {
@@ -216,7 +219,7 @@ impl StreamCtl {
             if rd {
                 if io.flags.contains(Flags::RD) {
                     event.readable = true;
-                } else if io.read(self.id, &self.inner.api) {
+                } else if io.read(self.id, &self.inner.api) == IoTaskStatus::Io {
                     event.readable = true;
                     io.flags.insert(Flags::RD);
                 }
@@ -227,7 +230,7 @@ impl StreamCtl {
             if wr {
                 if io.flags.contains(Flags::WR) {
                     event.writable = true;
-                } else if io.write(self.id, &self.inner.api) {
+                } else if io.write(self.id, &self.inner.api) == IoTaskStatus::Io {
                     event.writable = true;
                     io.flags.insert(Flags::WR);
                 }
@@ -281,7 +284,7 @@ impl StreamItem {
             .unwrap_or_default()
     }
 
-    fn write(&mut self, id: u32, api: &DriverApi) -> bool {
+    fn write(&mut self, id: u32, api: &DriverApi) -> IoTaskStatus {
         if let Some(ref ctx) = self.context {
             if let Some(buf) = ctx.get_write_buf() {
                 let fd = self.fd();
@@ -290,10 +293,10 @@ impl StreamItem {
                 return ctx.release_write_buf(buf, res);
             }
         }
-        false
+        IoTaskStatus::Pause
     }
 
-    fn read(&mut self, id: u32, api: &DriverApi) -> bool {
+    fn read(&mut self, id: u32, api: &DriverApi) -> IoTaskStatus {
         if let Some(ref ctx) = self.context {
             let (mut buf, hw, lw) = ctx.get_read_buf();
 
@@ -302,6 +305,7 @@ impl StreamItem {
             loop {
                 // make sure we've got room
                 if buf.remaining_mut() < lw {
+                    println!("-- driver reserve");
                     buf.reserve(hw);
                 }
                 let chunk = buf.chunk_mut();
@@ -321,7 +325,7 @@ impl StreamItem {
                 return ctx.release_read_buf(total, buf, res.map(|res| res.map(|_| ())));
             }
         } else {
-            false
+            IoTaskStatus::Pause
         }
     }
 }

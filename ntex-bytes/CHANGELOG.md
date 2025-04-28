@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.28] (2025-04-28)
+
+* Reclaim BytesVec on truncate
+
 ## [0.1.27] (2024-04-08)
 
 * Move more code under mpool feature

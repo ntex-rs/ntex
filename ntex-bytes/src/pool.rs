@@ -298,7 +298,8 @@ impl PoolRef {
     #[doc(hidden)]
     #[inline]
     pub fn get_read_buf(self) -> BytesVec {
-        if let Some(buf) = self.0.read_cache.borrow_mut().pop() {
+        if let Some(mut buf) = self.0.read_cache.borrow_mut().pop() {
+            buf.clear();
             buf
         } else {
             BytesVec::with_capacity_in(self.0.read_wm.get().high as usize, self)
@@ -319,13 +320,12 @@ impl PoolRef {
     #[doc(hidden)]
     #[inline]
     /// Release read buffer, buf must be allocated from this pool
-    pub fn release_read_buf(self, mut buf: BytesVec) {
+    pub fn release_read_buf(self, buf: BytesVec) {
         let cap = buf.capacity();
         let (hw, lw) = self.0.read_wm.get().unpack();
         if cap > lw && cap <= hw {
             let v = &mut self.0.read_cache.borrow_mut();
             if v.len() < CACHE_SIZE {
-                buf.clear();
                 v.push(buf);
             }
         }
@@ -334,7 +334,8 @@ impl PoolRef {
     #[doc(hidden)]
     #[inline]
     pub fn get_write_buf(self) -> BytesVec {
-        if let Some(buf) = self.0.write_cache.borrow_mut().pop() {
+        if let Some(mut buf) = self.0.write_cache.borrow_mut().pop() {
+            buf.clear();
             buf
         } else {
             BytesVec::with_capacity_in(self.0.write_wm.get().high as usize, self)
@@ -355,13 +356,12 @@ impl PoolRef {
     #[doc(hidden)]
     #[inline]
     /// Release write buffer, buf must be allocated from this pool
-    pub fn release_write_buf(self, mut buf: BytesVec) {
+    pub fn release_write_buf(self, buf: BytesVec) {
         let cap = buf.capacity();
         let (hw, lw) = self.0.write_wm.get().unpack();
         if cap > lw && cap <= hw {
             let v = &mut self.0.write_cache.borrow_mut();
             if v.len() < CACHE_SIZE {
-                buf.clear();
                 v.push(buf);
             }
         }

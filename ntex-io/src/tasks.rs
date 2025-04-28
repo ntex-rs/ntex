@@ -3,7 +3,7 @@ use std::{cell::Cell, fmt, future::poll_fn, io, task::Context, task::Poll};
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_util::{future::lazy, future::select, future::Either, time::sleep, time::Sleep};
 
-use crate::{AsyncRead, AsyncWrite, Flags, IoRef, ReadStatus, WriteStatus};
+use crate::{AsyncRead, AsyncWrite, Flags, IoRef, IoTaskStatus, Readiness};
 
 /// Context for io read task
 pub struct ReadContext(IoRef, Cell<Option<Sleep>>);
@@ -59,7 +59,7 @@ impl ReadContext {
 
         loop {
             let result = poll_fn(|cx| self.0.filter().poll_read_ready(cx)).await;
-            if result == ReadStatus::Terminate {
+            if result == Readiness::Terminate {
                 log::trace!("{}: Read task is instructed to shutdown", self.tag());
                 break;
             }
@@ -239,7 +239,7 @@ impl WriteContext {
     }
 
     /// Check readiness for write operations
-    async fn ready(&self) -> WriteStatus {
+    async fn ready(&self) -> Readiness {
         poll_fn(|cx| self.0.filter().poll_write_ready(cx)).await
     }
 
@@ -273,7 +273,7 @@ impl WriteContext {
 
         loop {
             match self.ready().await {
-                WriteStatus::Ready => {
+                Readiness::Ready => {
                     // write io stream
                     match select(io.write(&mut buf), self.when_stopped()).await {
                         Either::Left(Ok(_)) => continue,
@@ -281,7 +281,7 @@ impl WriteContext {
                         Either::Right(_) => return,
                     }
                 }
-                WriteStatus::Shutdown => {
+                Readiness::Shutdown => {
                     log::trace!("{}: Write task is instructed to shutdown", self.tag());
 
                     let fut = async {
@@ -296,7 +296,7 @@ impl WriteContext {
                         Either::Right(res) => self.close(res.err()),
                     }
                 }
-                WriteStatus::Terminate => {
+                Readiness::Terminate => {
                     log::trace!("{}: Write task is instructed to terminate", self.tag());
                     self.close(io.shutdown().await.err());
                 }
@@ -378,14 +378,14 @@ impl IoContext {
 
     #[inline]
     /// Check readiness for read operations
-    pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
+    pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.shutdown_filters();
         self.0.filter().poll_read_ready(cx)
     }
 
     #[inline]
     /// Check readiness for write operations
-    pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
+    pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.0.filter().poll_write_ready(cx)
     }
 
@@ -408,7 +408,6 @@ impl IoContext {
 
         poll_fn(|cx| {
             let flags = self.0.flags();
-
             if flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
                 Poll::Ready(())
             } else {
@@ -432,15 +431,11 @@ impl IoContext {
             st.insert_flags(Flags::WR_TASK_WAIT);
 
             poll_fn(|cx| {
-                if st
-                    .flags
-                    .get()
-                    .intersects(Flags::WR_PAUSED | Flags::IO_STOPPED)
-                {
+                let flags = st.flags.get();
+                if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
                     Poll::Ready(())
                 } else {
                     st.write_task.register(cx.waker());
-
                     if timeout.is_none() {
                         timeout = Some(sleep(st.disconnect_timeout.get()));
                     }
@@ -456,32 +451,22 @@ impl IoContext {
     }
 
     /// Get read buffer
-    pub fn is_read_ready(&self) -> bool {
-        // check read readiness
-        if let Some(waker) = self.0 .0.read_task.take() {
-            let mut cx = Context::from_waker(&waker);
-
-            if let Poll::Ready(ReadStatus::Ready) = self.0.filter().poll_read_ready(&mut cx)
-            {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Get read buffer
     pub fn get_read_buf(&self) -> (BytesVec, usize, usize) {
         let inner = &self.0 .0;
+        println!("------- FLAGS: {:?} {:?}", inner.flags.get(), inner.buffer);
 
         let buf = if inner.flags.get().is_read_buf_ready() {
             // read buffer is still not read by dispatcher
             // we cannot touch it
             inner.pool.get().get_read_buf()
         } else {
-            inner
-                .buffer
-                .get_read_source()
-                .unwrap_or_else(|| inner.pool.get().get_read_buf())
+            let b = inner.buffer.get_read_source();
+            println!(
+                "========== {:?}",
+                b.as_ref().map(|b| (b.capacity(), b.remaining_mut()))
+            );
+
+            b.unwrap_or_else(|| inner.pool.get().get_read_buf())
         };
 
         // make sure we've got room
@@ -495,8 +480,11 @@ impl IoContext {
         nbytes: usize,
         buf: BytesVec,
         result: Poll<io::Result<()>>,
-    ) -> bool {
+    ) -> IoTaskStatus {
         let inner = &self.0 .0;
+        let orig_size = inner.buffer.read_destination_size();
+        let hw = self.0.memory_pool().read_params().unpack().0;
+
         if let Some(mut first_buf) = inner.buffer.get_read_source() {
             first_buf.extend_from_slice(&buf);
             inner.buffer.set_read_source(&self.0, first_buf);
@@ -504,20 +492,22 @@ impl IoContext {
             inner.buffer.set_read_source(&self.0, buf);
         }
 
-        let hw = self.0.memory_pool().read_params().unpack().0;
-
         // handle buffer changes
         let st_res = if nbytes > 0 {
-            let filter = self.0.filter();
-            match filter.process_read_buf(&self.0, &inner.buffer, 0, nbytes) {
+            match self
+                .0
+                .filter()
+                .process_read_buf(&self.0, &inner.buffer, 0, nbytes)
+            {
                 Ok(status) => {
-                    if status.nbytes > 0 {
+                    let buffer_size = inner.buffer.read_destination_size();
+                    if buffer_size.saturating_sub(orig_size) > 0 {
                         // dest buffer has new data, wake up dispatcher
-                        if inner.buffer.read_destination_size() >= hw {
+                        if buffer_size >= hw {
                             log::trace!(
                                 "{}: Io read buffer is too large {}, enable read back-pressure",
-                                self.0.tag(),
-                                nbytes
+                                self.tag(),
+                                buffer_size
                             );
                             inner.insert_flags(Flags::BUF_R_READY | Flags::BUF_R_FULL);
                         } else {
@@ -525,12 +515,12 @@ impl IoContext {
                         }
                         log::trace!(
                             "{}: New {} bytes available, wakeup dispatcher",
-                            self.0.tag(),
-                            nbytes
+                            self.tag(),
+                            buffer_size
                         );
                         inner.dispatch_task.wake();
                     } else {
-                        if nbytes >= hw {
+                        if buffer_size >= hw {
                             // read task is paused because of read back-pressure
                             // but there is no new data in top most read buffer
                             // so we need to wake up read task to read more data
@@ -548,7 +538,7 @@ impl IoContext {
                     // in that case filters need to process write buffers
                     // and potentialy wake write task
                     if status.need_write {
-                        filter.process_write_buf(&self.0, &inner.buffer, 0)
+                        self.0.filter().process_write_buf(&self.0, &inner.buffer, 0)
                     } else {
                         Ok(())
                     }
@@ -566,25 +556,25 @@ impl IoContext {
             Poll::Ready(Ok(_)) => {
                 if let Err(e) = st_res {
                     inner.io_stopped(Some(e));
-                    false
+                    IoTaskStatus::Pause
                 } else if nbytes == 0 {
                     inner.io_stopped(None);
-                    false
+                    IoTaskStatus::Pause
                 } else {
-                    true
+                    IoTaskStatus::Io
                 }
             }
             Poll::Ready(Err(e)) => {
                 inner.io_stopped(Some(e));
-                false
+                IoTaskStatus::Pause
             }
             Poll::Pending => {
                 if let Err(e) = st_res {
                     inner.io_stopped(Some(e));
-                    false
+                    IoTaskStatus::Pause
                 } else {
                     self.shutdown_filters();
-                    true
+                    IoTaskStatus::Io
                 }
             }
         }
@@ -592,9 +582,7 @@ impl IoContext {
 
     /// Get write buffer
     pub fn get_write_buf(&self) -> Option<BytesVec> {
-        let inner = &self.0 .0;
-
-        inner.buffer.get_write_destination().and_then(|buf| {
+        self.0 .0.buffer.get_write_destination().and_then(|buf| {
             if buf.is_empty() {
                 None
             } else {
@@ -608,7 +596,7 @@ impl IoContext {
         &self,
         mut buf: BytesVec,
         result: Poll<io::Result<usize>>,
-    ) -> bool {
+    ) -> IoTaskStatus {
         let result = match result {
             Poll::Ready(Ok(0)) => {
                 log::trace!("{}: Disconnected during flush", self.tag());
@@ -667,7 +655,7 @@ impl IoContext {
                     inner.dispatch_task.wake();
                 }
                 inner.flags.set(flags);
-                false
+                IoTaskStatus::Pause
             }
             Ok(len) => {
                 // if write buffer is smaller than high watermark value, turn off back-pressure
@@ -677,11 +665,11 @@ impl IoContext {
                     inner.remove_flags(Flags::BUF_W_BACKPRESSURE);
                     inner.dispatch_task.wake();
                 }
-                true
+                IoTaskStatus::Io
             }
             Err(e) => {
                 inner.io_stopped(Some(e));
-                false
+                IoTaskStatus::Pause
             }
         }
     }
@@ -693,8 +681,7 @@ impl IoContext {
         if flags.contains(Flags::IO_STOPPING_FILTERS)
             && !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
         {
-            let filter = io.filter();
-            match filter.shutdown(io, &st.buffer, 0) {
+            match io.filter().shutdown(io, &st.buffer, 0) {
                 Ok(Poll::Ready(())) => {
                     st.dispatch_task.wake();
                     st.insert_flags(Flags::IO_STOPPING);
@@ -714,7 +701,7 @@ impl IoContext {
                     st.io_stopped(Some(err));
                 }
             }
-            if let Err(err) = filter.process_write_buf(io, &st.buffer, 0) {
+            if let Err(err) = io.filter().process_write_buf(io, &st.buffer, 0) {
                 st.io_stopped(Some(err));
             }
         }
