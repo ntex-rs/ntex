@@ -1,6 +1,6 @@
 use std::{any, io, task::Context, task::Poll};
 
-use crate::{buf::Stack, FilterLayer, Flags, IoRef, ReadStatus, WriteStatus};
+use crate::{buf::Stack, FilterLayer, Flags, IoRef, Readiness};
 
 #[derive(Debug)]
 /// Default `Io` filter
@@ -31,6 +31,23 @@ impl NullFilter {
     }
 }
 
+impl Readiness {
+    fn merge(res1: Poll<Readiness>, res2: Poll<Readiness>) -> Poll<Readiness> {
+        match res1 {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Readiness::Ready) => res2,
+            Poll::Ready(Readiness::Terminate) => Poll::Ready(Readiness::Terminate),
+            Poll::Ready(Readiness::Shutdown) => {
+                if res2 == Poll::Ready(Readiness::Terminate) {
+                    Poll::Ready(Readiness::Terminate)
+                } else {
+                    Poll::Ready(Readiness::Shutdown)
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct FilterReadStatus {
     pub nbytes: usize,
@@ -55,10 +72,10 @@ pub trait Filter: 'static {
     fn shutdown(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<Poll<()>>;
 
     /// Check readiness for read operations
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus>;
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
     /// Check readiness for write operations
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus>;
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
 impl Filter for Base {
@@ -73,39 +90,39 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let flags = self.0.flags();
 
         if flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
-            Poll::Ready(ReadStatus::Terminate)
+            Poll::Ready(Readiness::Terminate)
         } else {
             self.0 .0.read_task.register(cx.waker());
 
             if flags.intersects(Flags::IO_STOPPING_FILTERS) {
-                Poll::Ready(ReadStatus::Ready)
+                Poll::Ready(Readiness::Ready)
             } else if flags.cannot_read() {
                 Poll::Pending
             } else {
-                Poll::Ready(ReadStatus::Ready)
+                Poll::Ready(Readiness::Ready)
             }
         }
     }
 
     #[inline]
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let flags = self.0.flags();
 
         if flags.is_stopped() {
-            Poll::Ready(WriteStatus::Terminate)
+            Poll::Ready(Readiness::Terminate)
         } else {
             self.0 .0.write_task.register(cx.waker());
 
             if flags.contains(Flags::IO_STOPPING) {
-                Poll::Ready(WriteStatus::Shutdown)
+                Poll::Ready(Readiness::Shutdown)
             } else if flags.contains(Flags::WR_PAUSED) {
                 Poll::Pending
             } else {
-                Poll::Ready(WriteStatus::Ready)
+                Poll::Ready(Readiness::Ready)
             }
         }
     }
@@ -212,34 +229,13 @@ where
     }
 
     #[inline]
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<ReadStatus> {
-        let res1 = self.0.poll_read_ready(cx);
-        let res2 = self.1.poll_read_ready(cx);
-
-        match res1 {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(ReadStatus::Ready) => res2,
-            Poll::Ready(ReadStatus::Terminate) => Poll::Ready(ReadStatus::Terminate),
-        }
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        Readiness::merge(self.0.poll_read_ready(cx), self.1.poll_read_ready(cx))
     }
 
     #[inline]
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<WriteStatus> {
-        let res1 = self.0.poll_write_ready(cx);
-        let res2 = self.1.poll_write_ready(cx);
-
-        match res1 {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(WriteStatus::Ready) => res2,
-            Poll::Ready(WriteStatus::Terminate) => Poll::Ready(WriteStatus::Terminate),
-            Poll::Ready(WriteStatus::Shutdown) => {
-                if res2 == Poll::Ready(WriteStatus::Terminate) {
-                    Poll::Ready(WriteStatus::Terminate)
-                } else {
-                    Poll::Ready(WriteStatus::Shutdown)
-                }
-            }
-        }
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        Readiness::merge(self.0.poll_write_ready(cx), self.1.poll_write_ready(cx))
     }
 }
 
@@ -250,13 +246,13 @@ impl Filter for NullFilter {
     }
 
     #[inline]
-    fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<ReadStatus> {
-        Poll::Ready(ReadStatus::Terminate)
+    fn poll_read_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
+        Poll::Ready(Readiness::Terminate)
     }
 
     #[inline]
-    fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<WriteStatus> {
-        Poll::Ready(WriteStatus::Terminate)
+    fn poll_write_ready(&self, _: &mut Context<'_>) -> Poll<Readiness> {
+        Poll::Ready(Readiness::Terminate)
     }
 
     #[inline]

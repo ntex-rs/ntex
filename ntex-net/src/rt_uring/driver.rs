@@ -2,7 +2,7 @@ use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::P
 
 use io_uring::{opcode, squeue::Entry, types::Fd};
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::IoContext;
+use ntex_io::{IoContext, IoTaskStatus};
 use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
 use ntex_util::channel::pool;
 use slab::Slab;
@@ -198,7 +198,7 @@ impl Handler for StreamOpsHandler {
                         }));
 
                         // set read buf
-                        if ctx.release_read_buf(total, buf, res) {
+                        if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
                             if let Some((id, op)) = st.recv(id, ctx) {
                                 self.inner.api.submit(id, op);
                             }
@@ -215,7 +215,7 @@ impl Handler for StreamOpsHandler {
                     }
 
                     // set read buf
-                    if ctx.release_write_buf(buf, Poll::Ready(res)) {
+                    if ctx.release_write_buf(buf, Poll::Ready(res)) == IoTaskStatus::Io {
                         if let Some((id, op)) = st.send(id, ctx) {
                             self.inner.api.submit(id, op);
                         }
