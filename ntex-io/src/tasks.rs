@@ -453,20 +453,16 @@ impl IoContext {
     /// Get read buffer
     pub fn get_read_buf(&self) -> (BytesVec, usize, usize) {
         let inner = &self.0 .0;
-        println!("------- FLAGS: {:?} {:?}", inner.flags.get(), inner.buffer);
 
         let buf = if inner.flags.get().is_read_buf_ready() {
             // read buffer is still not read by dispatcher
             // we cannot touch it
             inner.pool.get().get_read_buf()
         } else {
-            let b = inner.buffer.get_read_source();
-            println!(
-                "========== {:?}",
-                b.as_ref().map(|b| (b.capacity(), b.remaining_mut()))
-            );
-
-            b.unwrap_or_else(|| inner.pool.get().get_read_buf())
+            inner
+                .buffer
+                .get_read_source()
+                .unwrap_or_else(|| inner.pool.get().get_read_buf())
         };
 
         // make sure we've got room

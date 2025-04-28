@@ -305,7 +305,6 @@ impl StreamItem {
             loop {
                 // make sure we've got room
                 if buf.remaining_mut() < lw {
-                    println!("-- driver reserve");
                     buf.reserve(hw);
                 }
                 let chunk = buf.chunk_mut();
