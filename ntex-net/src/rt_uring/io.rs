@@ -85,10 +85,23 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     })
     .await;
 
-    ctl.pause_read();
-    ctl.resume_write(&ctx);
-    ctx.shutdown(st == Status::Shutdown).await;
+    if !ctx.is_stopped() {
+        poll_fn(|cx| {
+            ctl.resume_read(&ctx);
+            ctl.resume_write(&ctx);
+            log::error!("{}: Shutting down context {}", ctx.tag(), ctx.ob_id());
+
+            ctx.shutdown(st == Status::Shutdown, cx)
+        })
+        .await;
+    }
 
     let result = ctl.shutdown().await;
-    ctx.stopped(result.err());
+    log::error!(
+        "{}: Shutting down socket {} - {:?}",
+        ctx.tag(),
+        ctx.ob_id(),
+        result
+    );
+    ctx.stop(result.err());
 }

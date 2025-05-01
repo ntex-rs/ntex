@@ -131,7 +131,7 @@ impl Handler for StreamOpsHandler {
             }
 
             if ev.is_interrupt() {
-                io.context.as_ref().inspect(|ctx| ctx.stopped(None));
+                io.context.as_ref().inspect(|ctx| ctx.stop(None));
             } else {
                 self.inner.api.modify(io.fd(), id as u32, renew);
             }
@@ -156,7 +156,7 @@ impl Handler for StreamOpsHandler {
                 log::trace!("{}: Failed ({:?}) err: {err:?}", io.tag(), io.fd());
                 if let Some(ref ctx) = io.context {
                     if !ctx.is_stopped() {
-                        ctx.stopped(Some(err));
+                        ctx.stop(Some(err));
                     }
                 }
                 close(streams, id as u32, &self.inner.api);
@@ -337,7 +337,7 @@ fn close(st: &mut Slab<StreamItem>, id: u32, api: &DriverApi) {
         .take()
         .map(|ctx| {
             if !ctx.is_stopped() {
-                ctx.stopped(None);
+                ctx.stop(None);
             }
             true
         })

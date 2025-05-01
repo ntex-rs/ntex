@@ -98,9 +98,13 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     })
     .await;
 
-    // write buf
-    ctl.interest(false, true);
-    context.shutdown(st == Status::Shutdown).await;
+    if !context.is_stopped() {
+        poll_fn(|cx| {
+            ctl.interest(true, true);
+            context.shutdown(st == Status::Shutdown, cx)
+        })
+        .await;
+    }
 
     let err = ctl.shutdown().await.err();
     log::trace!(
@@ -110,6 +114,6 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
         context.flags()
     );
     if !context.is_stopped() {
-        context.stopped(err);
+        context.stop(err);
     }
 }
