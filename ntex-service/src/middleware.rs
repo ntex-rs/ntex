@@ -3,11 +3,12 @@ use std::{fmt, marker::PhantomData, rc::Rc};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply middleware to a service.
-pub fn apply<T, S, R, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, C>
+pub fn apply<Mid, SvcFact, MidReq, Req, Cfg, ISvcFact>(t: Mid, factory: ISvcFact) -> ApplyMiddleware<Mid, SvcFact, Req, Cfg>
 where
-    S: ServiceFactory<R, C>,
-    T: Middleware<S::Service>,
-    U: IntoServiceFactory<S, R, C>,
+    SvcFact: ServiceFactory<Req, Cfg>,
+    Mid: Middleware<SvcFact::Service>,
+    Mid::Service: Service<MidReq>,
+    ISvcFact: IntoServiceFactory<SvcFact, Req, Cfg>,
 {
     ApplyMiddleware::new(t, factory.into_factory())
 }
@@ -17,7 +18,7 @@ where
 ///
 /// Middleware wraps inner service and runs during
 /// inbound and/or outbound processing in the request/response lifecycle.
-/// It may modify request and/or response.
+/// It may modify or transform the request and/or response.
 ///
 /// For example, timeout middleware:
 ///
@@ -82,6 +83,13 @@ where
 ///     }
 /// }
 /// ```
+/// 
+/// Middlewares can also transform request and response types:
+/// 
+/// ```rust
+/// 
+/// 
+/// ```
 pub trait Middleware<S> {
     /// The middleware `Service` value created by this factory
     type Service;
@@ -102,22 +110,22 @@ where
 }
 
 /// `Apply` middleware to a service factory.
-pub struct ApplyMiddleware<T, S, C>(Rc<(T, S)>, PhantomData<C>);
+pub struct ApplyMiddleware<T, S, R, C>(Rc<(T, S)>, PhantomData<(C, R)>);
 
-impl<T, S, C> ApplyMiddleware<T, S, C> {
+impl<T, S, R, C> ApplyMiddleware<T, S, R, C> {
     /// Create new `ApplyMiddleware` service factory instance
     pub(crate) fn new(mw: T, svc: S) -> Self {
         Self(Rc::new((mw, svc)), PhantomData)
     }
 }
 
-impl<T, S, C> Clone for ApplyMiddleware<T, S, C> {
+impl<T, S, R, C> Clone for ApplyMiddleware<T, S, R, C> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), PhantomData)
     }
 }
 
-impl<T, S, C> fmt::Debug for ApplyMiddleware<T, S, C>
+impl<T, S, R, C> fmt::Debug for ApplyMiddleware<T, S, R, C>
 where
     T: fmt::Debug,
     S: fmt::Debug,
@@ -130,20 +138,20 @@ where
     }
 }
 
-impl<T, S, R, C> ServiceFactory<R, C> for ApplyMiddleware<T, S, C>
+impl<Mid, SvcFact, Req, MidReq, Cfg> ServiceFactory<MidReq, Cfg> for ApplyMiddleware<Mid, SvcFact, Req, Cfg>
 where
-    S: ServiceFactory<R, C>,
-    T: Middleware<S::Service>,
-    T::Service: Service<R>,
+    SvcFact: ServiceFactory<Req, Cfg>,
+    Mid: Middleware<SvcFact::Service>,
+    Mid::Service: Service<MidReq>,
 {
-    type Response = <T::Service as Service<R>>::Response;
-    type Error = <T::Service as Service<R>>::Error;
+    type Response = <Mid::Service as Service<MidReq>>::Response;
+    type Error = <Mid::Service as Service<MidReq>>::Error;
 
-    type Service = T::Service;
-    type InitError = S::InitError;
+    type Service = Mid::Service;
+    type InitError = SvcFact::InitError;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
         Ok(self.0 .0.create(self.0 .1.create(cfg).await?))
     }
 }

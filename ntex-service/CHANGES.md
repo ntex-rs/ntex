@@ -1,5 +1,9 @@
 # Changes
 
+## [3.4.1] - 2025-05-02
+
+* Allow Middlewares to transform request type on chain factories.
+
 ## [3.4.0] - 2024-12-04
 
 * Added Service::poll() method
