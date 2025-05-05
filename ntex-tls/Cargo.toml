@@ -29,7 +29,7 @@ rustls-ring = ["tls_rust", "tls_rust/ring", "tls_rust/std"]
 ntex-bytes = "0.1"
 ntex-io = "2.3"
 ntex-util = "2.5"
-ntex-service = "3.4"
+ntex-service = "3.5"
 ntex-net = "2"
 
 log = "0.4"
