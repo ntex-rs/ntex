@@ -200,7 +200,12 @@ impl<SvcFact: ServiceFactory<Req, Cfg>, Req, Cfg> ServiceChainFactory<SvcFact, R
     where
         Self: Sized,
         F: IntoServiceFactory<U, SvcFact::Response, Cfg>,
-        U: ServiceFactory<SvcFact::Response, Cfg, Error = SvcFact::Error, InitError = SvcFact::InitError>,
+        U: ServiceFactory<
+            SvcFact::Response,
+            Cfg,
+            Error = SvcFact::Error,
+            InitError = SvcFact::InitError,
+        >,
     {
         ServiceChainFactory {
             factory: AndThenFactory::new(self.factory, factory.into_factory()),
@@ -211,7 +216,10 @@ impl<SvcFact: ServiceFactory<Req, Cfg>, Req, Cfg> ServiceChainFactory<SvcFact, R
     /// Apply middleware to current service factory.
     ///
     /// Short version of `apply(middleware, chain_factory(...))`
-    pub fn apply<Mid, MidReq>(self, tr: Mid) -> ServiceChainFactory<ApplyMiddleware<Mid, SvcFact, Req, Cfg>, MidReq, Cfg>
+    pub fn apply<Mid, MidReq>(
+        self,
+        tr: Mid,
+    ) -> ServiceChainFactory<ApplyMiddleware<Mid, SvcFact, Req, Cfg>, MidReq, Cfg>
     where
         Mid: Middleware<SvcFact::Service>,
         Mid::Service: Service<MidReq>,
@@ -247,7 +255,10 @@ impl<SvcFact: ServiceFactory<Req, Cfg>, Req, Cfg> ServiceChainFactory<SvcFact, R
     ///
     /// Note that this function consumes the receiving factory and returns a
     /// wrapped version of it.
-    pub fn then<F, U>(self, factory: F) -> ServiceChainFactory<ThenFactory<SvcFact, U>, Req, Cfg>
+    pub fn then<F, U>(
+        self,
+        factory: F,
+    ) -> ServiceChainFactory<ThenFactory<SvcFact, U>, Req, Cfg>
     where
         Self: Sized,
         Cfg: Clone,
@@ -312,7 +323,10 @@ impl<SvcFact: ServiceFactory<Req, Cfg>, Req, Cfg> ServiceChainFactory<SvcFact, R
     }
 
     /// Create and return a new service value asynchronously and wrap into a container
-    pub async fn pipeline(&self, cfg: Cfg) -> Result<Pipeline<SvcFact::Service>, SvcFact::InitError>
+    pub async fn pipeline(
+        &self,
+        cfg: Cfg,
+    ) -> Result<Pipeline<SvcFact::Service>, SvcFact::InitError>
     where
         Self: Sized,
     {

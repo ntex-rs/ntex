@@ -131,7 +131,8 @@ where
     }
 }
 
-impl<Mid, SvcFact, Req, MidReq, Cfg> ServiceFactory<MidReq, Cfg> for ApplyMiddleware<Mid, SvcFact, Req, Cfg>
+impl<Mid, SvcFact, Req, MidReq, Cfg> ServiceFactory<MidReq, Cfg>
+    for ApplyMiddleware<Mid, SvcFact, Req, Cfg>
 where
     SvcFact: ServiceFactory<Req, Cfg>,
     Mid: Middleware<SvcFact::Service>,
