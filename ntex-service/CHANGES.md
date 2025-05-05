@@ -1,6 +1,6 @@
 # Changes
 
-## [3.4.1] - 2025-05-02
+## [3.5] - 2025-05-02
 
 * Allow Middlewares to transform request type on chain factories.
 

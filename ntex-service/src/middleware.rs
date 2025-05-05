@@ -3,12 +3,12 @@ use std::{fmt, marker::PhantomData, rc::Rc};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply middleware to a service.
-pub fn apply<Mid, SvcFact, MidReq, Req, Cfg, ISvcFact>(t: Mid, factory: ISvcFact) -> ApplyMiddleware<Mid, SvcFact, Req, Cfg>
+pub fn apply<T, S, MidReq, Req, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, Req, C>
 where
-    SvcFact: ServiceFactory<Req, Cfg>,
-    Mid: Middleware<SvcFact::Service>,
-    Mid::Service: Service<MidReq>,
-    ISvcFact: IntoServiceFactory<SvcFact, Req, Cfg>,
+    S: ServiceFactory<Req, C>,
+    T: Middleware<S::Service>,
+    T::Service: Service<MidReq>,
+    U: IntoServiceFactory<S, Req, C>,
 {
     ApplyMiddleware::new(t, factory.into_factory())
 }
@@ -82,13 +82,6 @@ where
 ///         }
 ///     }
 /// }
-/// ```
-/// 
-/// Middlewares can also transform request and response types:
-/// 
-/// ```rust
-/// 
-/// 
 /// ```
 pub trait Middleware<S> {
     /// The middleware `Service` value created by this factory
