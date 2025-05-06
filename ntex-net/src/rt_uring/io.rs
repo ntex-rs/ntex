@@ -97,11 +97,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     }
 
     let result = ctl.shutdown().await;
-    log::error!(
-        "{}: Shutting down socket {} - {:?}",
-        ctx.tag(),
-        ctx.ob_id(),
-        result
-    );
-    ctx.stop(result.err());
+    if !ctx.is_stopped() {
+        ctx.stop(result.err());
+    }
 }

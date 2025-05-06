@@ -107,12 +107,6 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     }
 
     let err = ctl.shutdown().await.err();
-    log::trace!(
-        "{}: Shutdown, err: {:?}, fl: {:?}",
-        context.tag(),
-        err,
-        context.flags()
-    );
     if !context.is_stopped() {
         context.stop(err);
     }

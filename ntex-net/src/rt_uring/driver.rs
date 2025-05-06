@@ -147,9 +147,7 @@ impl Handler for StreamOpsHandler {
                     item.flags.remove(Flags::RD_CANCELING);
                     if item.flags.contains(Flags::RD_REISSUE) {
                         item.flags.remove(Flags::RD_REISSUE);
-
-                        let result = st.recv(id, ctx);
-                        if let Some((id, op)) = result {
+                        if let Some((id, op)) = st.recv(id, ctx) {
                             self.inner.api.submit(id, op);
                         }
                     }
@@ -163,9 +161,7 @@ impl Handler for StreamOpsHandler {
                     item.flags.remove(Flags::WR_CANCELING);
                     if item.flags.contains(Flags::WR_REISSUE) {
                         item.flags.remove(Flags::WR_REISSUE);
-
-                        let result = st.send(id, ctx);
-                        if let Some((id, op)) = result {
+                        if let Some((id, op)) = st.send(id, ctx) {
                             self.inner.api.submit(id, op);
                         }
                     }
@@ -187,6 +183,7 @@ impl Handler for StreamOpsHandler {
 
                     // handle WouldBlock
                     if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
+                        log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), ctx.ob_id());
                         if let Some((id, op)) = st.recv(id, ctx) {
                             self.inner.api.submit(id, op);
                         }
