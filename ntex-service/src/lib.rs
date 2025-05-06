@@ -31,7 +31,7 @@ pub use self::ctx::ServiceCtx;
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
-pub use self::middleware::{apply, Identity, Middleware, Stack};
+pub use self::middleware::{apply, apply_transforming, Identity, Middleware, Stack};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall};
 
 #[allow(unused_variables)]

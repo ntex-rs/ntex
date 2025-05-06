@@ -2,8 +2,19 @@ use std::{fmt, marker::PhantomData, rc::Rc};
 
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
-/// Apply middleware to a service.
-pub fn apply<T, S, MidReq, Req, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, Req, C>
+/// Apply middleware to a service that doens't transform the request type.
+pub fn apply<T, S, Req, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, Req, C>
+where
+    S: ServiceFactory<Req, C>,
+    T: Middleware<S::Service>,
+    T::Service: Service<Req>,
+    U: IntoServiceFactory<S, Req, C>,
+{
+    ApplyMiddleware::new(t, factory.into_factory())
+}
+
+/// Apply middleware to a service that transforms the request type.
+pub fn apply_transforming<T, S, MidReq, Req, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, MidReq, C>
 where
     S: ServiceFactory<Req, C>,
     T: Middleware<S::Service>,
