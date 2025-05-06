@@ -213,10 +213,27 @@ impl<SvcFact: ServiceFactory<Req, Cfg>, Req, Cfg> ServiceChainFactory<SvcFact, R
         }
     }
 
-    /// Apply middleware to current service factory.
+    /// Apply middleware to current service factory without transforming the request type.
     ///
     /// Short version of `apply(middleware, chain_factory(...))`
-    pub fn apply<Mid, MidReq>(
+    pub fn apply<Mid>(
+        self,
+        tr: Mid,
+    ) -> ServiceChainFactory<ApplyMiddleware<Mid, SvcFact, Req, Cfg>, Req, Cfg>
+    where
+        Mid: Middleware<SvcFact::Service>,
+        Mid::Service: Service<Req>,
+    {
+        ServiceChainFactory {
+            factory: ApplyMiddleware::new(tr, self.factory),
+            _t: PhantomData,
+        }
+    }
+
+    /// Apply middleware to current service factory that transforms transforming the request type.
+    ///
+    /// Short version of `apply(middleware, chain_factory(...))`
+    pub fn apply_transforming<Mid, MidReq>(
         self,
         tr: Mid,
     ) -> ServiceChainFactory<ApplyMiddleware<Mid, SvcFact, Req, Cfg>, MidReq, Cfg>
