@@ -183,7 +183,7 @@ impl Handler for StreamOpsHandler {
 
                     // handle WouldBlock
                     if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
-                        log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), ctx.ob_id());
+                        log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), res, ctx.ob_id());
                         if let Some((id, op)) = st.recv(id, ctx) {
                             self.inner.api.submit(id, op);
                         }
