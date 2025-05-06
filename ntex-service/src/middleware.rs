@@ -14,7 +14,10 @@ where
 }
 
 /// Apply middleware to a service that transforms the request type.
-pub fn apply_transforming<T, S, MidReq, Req, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, MidReq, C>
+pub fn apply_transforming<T, S, MidReq, Req, C, U>(
+    t: T,
+    factory: U,
+) -> ApplyMiddleware<T, S, MidReq, C>
 where
     S: ServiceFactory<Req, C>,
     T: Middleware<S::Service>,
