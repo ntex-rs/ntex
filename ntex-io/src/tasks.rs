@@ -385,6 +385,7 @@ impl IoContext {
     #[inline]
     /// Check readiness for read operations
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
+        self.shutdown_filters();
         self.0.filter().poll_read_ready(cx)
     }
 
@@ -412,7 +413,7 @@ impl IoContext {
 
         let flags = self.0.flags();
         if !flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
-            st.read_task.register(cx.waker());
+            st.write_task.register(cx.waker());
             return Poll::Pending;
         }
 
@@ -421,7 +422,7 @@ impl IoContext {
                 return Poll::Ready(());
             }
             st.insert_flags(Flags::WR_TASK_WAIT);
-            st.read_task.register(cx.waker());
+            st.write_task.register(cx.waker());
             Poll::Pending
         } else {
             Poll::Ready(())
@@ -655,7 +656,7 @@ impl IoContext {
         {
             match io.filter().shutdown(io, &st.buffer, 0) {
                 Ok(Poll::Ready(())) => {
-                    st.read_task.wake();
+                    st.write_task.wake();
                     st.dispatch_task.wake();
                     st.insert_flags(Flags::IO_STOPPING);
                 }
@@ -666,7 +667,7 @@ impl IoContext {
                     if flags.contains(Flags::RD_PAUSED)
                         || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
                     {
-                        st.read_task.wake();
+                        st.write_task.wake();
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
                     }
