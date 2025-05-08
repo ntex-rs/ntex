@@ -99,15 +99,16 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     .await;
 
     if !context.is_stopped() {
+        let flush = st == Status::Shutdown;
         poll_fn(|cx| {
             ctl.interest(true, true);
-            context.shutdown(st == Status::Shutdown, cx)
+            context.shutdown(flush, cx)
         })
         .await;
     }
 
-    let err = ctl.shutdown().await.err();
+    let result = ctl.shutdown().await;
     if !context.is_stopped() {
-        context.stop(err);
+        context.stop(result.err());
     }
 }

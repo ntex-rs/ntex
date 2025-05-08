@@ -364,8 +364,9 @@ impl IoContext {
         Self(io.clone())
     }
 
+    #[doc(hidden)]
     #[inline]
-    pub fn ob_id(&self) -> usize {
+    pub fn id(&self) -> usize {
         self.0 .0.as_ref() as *const _ as usize
     }
 
@@ -384,7 +385,6 @@ impl IoContext {
     #[inline]
     /// Check readiness for read operations
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        self.shutdown_filters();
         self.0.filter().poll_read_ready(cx)
     }
 
@@ -413,22 +413,15 @@ impl IoContext {
         let flags = self.0.flags();
         if !flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
             st.read_task.register(cx.waker());
-            st.write_task.register(cx.waker());
-            if flags.contains(Flags::IO_STOPPING_FILTERS) {
-                self.shutdown_filters();
-            }
             return Poll::Pending;
         }
 
         if flush && !flags.contains(Flags::IO_STOPPED) {
-            st.insert_flags(Flags::WR_TASK_WAIT);
-
             if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
                 return Poll::Ready(());
-            } else {
-                st.read_task.register(cx.waker());
-                st.write_task.register(cx.waker());
             }
+            st.insert_flags(Flags::WR_TASK_WAIT);
+            st.read_task.register(cx.waker());
             Poll::Pending
         } else {
             Poll::Ready(())

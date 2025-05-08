@@ -86,12 +86,11 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     .await;
 
     if !ctx.is_stopped() {
+        let flush = st == Status::Shutdown;
         poll_fn(|cx| {
             ctl.resume_read(&ctx);
             ctl.resume_write(&ctx);
-            log::error!("{}: Shutting down context {}", ctx.tag(), ctx.ob_id());
-
-            ctx.shutdown(st == Status::Shutdown, cx)
+            ctx.shutdown(flush, cx)
         })
         .await;
     }

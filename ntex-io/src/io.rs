@@ -99,7 +99,7 @@ impl IoState {
 
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
         if !self.flags.get().is_stopped() {
-            log::error!(
+            log::trace!(
                 "{}: {} Io error {:?} flags: {:?}",
                 self.tag.get(),
                 self as *const _ as usize,
@@ -122,8 +122,9 @@ impl IoState {
             );
             if !self.dispatch_task.wake_checked() {
                 log::trace!(
-                    "{}: Dispatcher is not registered, flags: {:?}",
+                    "{}: {} Dispatcher is not registered, flags: {:?}",
                     self.tag.get(),
+                    self as *const _ as usize,
                     self.flags.get()
                 );
             }
