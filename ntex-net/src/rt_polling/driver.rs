@@ -38,6 +38,8 @@ struct StreamOpsInner {
     delayd_drop: Cell<bool>,
     feed: RefCell<Vec<u32>>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
+    lw: usize,
+    hw: usize,
 }
 
 impl StreamOps {
@@ -51,6 +53,8 @@ impl StreamOps {
                     feed: RefCell::new(Vec::new()),
                     delayd_drop: Cell::new(false),
                     streams: Cell::new(Some(Box::new(Slab::new()))),
+                    lw: 1024,
+                    hw: 1024 * 16,
                 });
                 inner = Some(ops.clone());
                 Box::new(StreamOpsHandler { inner: ops })
@@ -106,7 +110,7 @@ impl Handler for StreamOpsHandler {
             log::trace!("{}: Event ({:?}): {ev:?}", io.tag(), io.fd());
 
             if ev.readable {
-                match io.read(id as u32, &self.inner.api) {
+                match io.read(id as u32, &self.inner.api, self.inner.lw, self.inner.hw) {
                     IoTaskStatus::Io => {
                         renew.readable = true;
                         io.flags.insert(Flags::RD);
@@ -219,7 +223,9 @@ impl StreamCtl {
             if rd {
                 if io.flags.contains(Flags::RD) {
                     event.readable = true;
-                } else if io.read(self.id, &self.inner.api) == IoTaskStatus::Io {
+                } else if io.read(self.id, &self.inner.api, self.inner.lw, self.inner.hw)
+                    == IoTaskStatus::Io
+                {
                     event.readable = true;
                     io.flags.insert(Flags::RD);
                 }
@@ -296,9 +302,9 @@ impl StreamItem {
         IoTaskStatus::Pause
     }
 
-    fn read(&mut self, id: u32, api: &DriverApi) -> IoTaskStatus {
+    fn read(&mut self, id: u32, api: &DriverApi, lw: usize, hw: usize) -> IoTaskStatus {
         if let Some(ref ctx) = self.context {
-            let (mut buf, hw, lw) = ctx.get_read_buf();
+            let mut buf = ctx.get_read_buf();
 
             let fd = self.fd();
             let mut total = 0;

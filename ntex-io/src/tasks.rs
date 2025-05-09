@@ -430,10 +430,10 @@ impl IoContext {
     }
 
     /// Get read buffer
-    pub fn get_read_buf(&self) -> (BytesVec, usize, usize) {
+    pub fn get_read_buf(&self) -> BytesVec {
         let inner = &self.0 .0;
 
-        let buf = if inner.flags.get().is_read_buf_ready() {
+        if inner.flags.get().is_read_buf_ready() {
             // read buffer is still not read by dispatcher
             // we cannot touch it
             inner.pool.get().get_read_buf()
@@ -442,11 +442,7 @@ impl IoContext {
                 .buffer
                 .get_read_source()
                 .unwrap_or_else(|| inner.pool.get().get_read_buf())
-        };
-
-        // make sure we've got room
-        let (hw, lw) = self.0.memory_pool().read_params().unpack();
-        (buf, hw, lw)
+        }
     }
 
     /// Set read buffer

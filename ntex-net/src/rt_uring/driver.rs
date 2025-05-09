@@ -8,6 +8,9 @@ use ntex_util::channel::pool;
 use slab::Slab;
 use socket2::Socket;
 
+#[derive(Clone)]
+pub(crate) struct StreamOps(Rc<StreamOpsInner>);
+
 pub(crate) struct StreamCtl {
     id: usize,
     inner: Rc<StreamOpsInner>,
@@ -49,9 +52,6 @@ enum Operation {
     Nop,
 }
 
-#[derive(Clone)]
-pub(crate) struct StreamOps(Rc<StreamOpsInner>);
-
 struct StreamOpsHandler {
     inner: Rc<StreamOpsInner>,
 }
@@ -68,6 +68,8 @@ struct StreamOpsInner {
 struct StreamOpsStorage {
     ops: Slab<Operation>,
     streams: Slab<StreamItem>,
+    lw: usize,
+    hw: usize,
 }
 
 impl StreamOps {
@@ -99,6 +101,8 @@ impl StreamOps {
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
                         streams: Slab::new(),
+                        lw: 1024,
+                        hw: 1024 * 16,
                     }))),
                 });
                 inner = Some(ops.clone());
@@ -257,11 +261,11 @@ impl StreamOpsStorage {
 
         if item.rd_op.is_none() {
             let fd = item.fd();
-            let (mut buf, hw, lw) = ctx.get_read_buf();
+            let mut buf = ctx.get_read_buf();
             // log::trace!("{}: Recv resume ({fd:?})", ctx.tag());
             let remaining = buf.remaining_mut();
-            if remaining < lw {
-                buf.reserve(hw - remaining);
+            if remaining < self.lw {
+                buf.reserve(self.hw);
             }
 
             let slice = buf.chunk_mut();
