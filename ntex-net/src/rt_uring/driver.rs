@@ -178,12 +178,13 @@ impl Handler for StreamOpsHandler {
                     // reset op reference
                     if let Some(item) = st.streams.get_mut(id) {
                         item.rd_op.take();
-                        log::trace!("{}: Recv({:?}) res: {res:?}", ctx.tag(), item.fd());
+                        // log::trace!("{}: Recv({:?}) res: {res:?}", ctx.tag(), item.fd());
                     }
 
                     // handle WouldBlock
                     if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
                         log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), res, ctx.id());
+                        ctx.release_read_buf(0, buf, Poll::Pending);
                         if let Some((id, op)) = st.recv(id, ctx) {
                             self.inner.api.submit(id, op);
                         }
@@ -199,8 +200,6 @@ impl Handler for StreamOpsHandler {
                             if let Some((id, op)) = st.recv(id, ctx) {
                                 self.inner.api.submit(id, op);
                             }
-                        } else {
-                            log::trace!("{}: Recv to pause", ctx.tag());
                         }
                     }
                 }
@@ -208,7 +207,7 @@ impl Handler for StreamOpsHandler {
                     // reset op reference
                     if let Some(item) = st.streams.get_mut(id) {
                         item.wr_op.take();
-                        log::trace!("{}: Sent({:?}) res: {res:?}", ctx.tag(), item.fd());
+                        // log::trace!("{}: Sent({:?}) res: {res:?}", ctx.tag(), item.fd());
                     }
 
                     // set read buf
@@ -259,7 +258,7 @@ impl StreamOpsStorage {
         if item.rd_op.is_none() {
             let fd = item.fd();
             let (mut buf, hw, lw) = ctx.get_read_buf();
-            log::trace!("{}: Recv resume ({fd:?})", ctx.tag());
+            // log::trace!("{}: Recv resume ({fd:?})", ctx.tag());
             let remaining = buf.remaining_mut();
             if remaining < lw {
                 buf.reserve(hw - remaining);
@@ -282,7 +281,7 @@ impl StreamOpsStorage {
         if item.wr_op.is_none() {
             if let Some(buf) = ctx.get_write_buf() {
                 let fd = item.fd();
-                log::trace!("{}: Send resume ({fd:?}) len: {:?}", ctx.tag(), buf.len());
+                // log::trace!("{}: Send resume ({fd:?}) len: {:?}", ctx.tag(), buf.len());
 
                 let slice = buf.chunk();
                 let op = opcode::Send::new(fd, slice.as_ptr(), slice.len() as u32).build();
