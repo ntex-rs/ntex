@@ -364,6 +364,12 @@ impl IoContext {
         Self(io.clone())
     }
 
+    #[doc(hidden)]
+    #[inline]
+    pub fn id(&self) -> usize {
+        self.0 .0.as_ref() as *const _ as usize
+    }
+
     #[inline]
     /// Io tag
     pub fn tag(&self) -> &'static str {
@@ -391,7 +397,7 @@ impl IoContext {
 
     #[inline]
     /// Get io error
-    pub fn stopped(&self, e: Option<io::Error>) {
+    pub fn stop(&self, e: Option<io::Error>) {
         self.0 .0.io_stopped(e);
     }
 
@@ -402,59 +408,32 @@ impl IoContext {
     }
 
     /// Wait when io get closed or preparing for close
-    pub async fn shutdown(&self, flush_buf: bool) {
+    pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
         let st = &self.0 .0;
-        let mut timeout = None;
 
-        poll_fn(|cx| {
-            let flags = self.0.flags();
-            if flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
-                Poll::Ready(())
-            } else {
-                st.write_task.register(cx.waker());
-                if flags.contains(Flags::IO_STOPPING_FILTERS) {
-                    if timeout.is_none() {
-                        timeout = Some(sleep(st.disconnect_timeout.get()));
-                    }
-                    if timeout.as_ref().unwrap().poll_elapsed(cx).is_ready() {
-                        st.dispatch_task.wake();
-                        st.insert_flags(Flags::IO_STOPPING);
-                        return Poll::Ready(());
-                    }
-                }
-                Poll::Pending
+        let flags = self.0.flags();
+        if !flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
+            st.write_task.register(cx.waker());
+            return Poll::Pending;
+        }
+
+        if flush && !flags.contains(Flags::IO_STOPPED) {
+            if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
+                return Poll::Ready(());
             }
-        })
-        .await;
-
-        if flush_buf && !st.flags.get().contains(Flags::WR_PAUSED) {
             st.insert_flags(Flags::WR_TASK_WAIT);
-
-            poll_fn(|cx| {
-                let flags = st.flags.get();
-                if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
-                    Poll::Ready(())
-                } else {
-                    st.write_task.register(cx.waker());
-                    if timeout.is_none() {
-                        timeout = Some(sleep(st.disconnect_timeout.get()));
-                    }
-                    if timeout.as_ref().unwrap().poll_elapsed(cx).is_ready() {
-                        Poll::Ready(())
-                    } else {
-                        Poll::Pending
-                    }
-                }
-            })
-            .await;
+            st.write_task.register(cx.waker());
+            Poll::Pending
+        } else {
+            Poll::Ready(())
         }
     }
 
     /// Get read buffer
-    pub fn get_read_buf(&self) -> (BytesVec, usize, usize) {
+    pub fn get_read_buf(&self) -> BytesVec {
         let inner = &self.0 .0;
 
-        let buf = if inner.flags.get().is_read_buf_ready() {
+        if inner.flags.get().is_read_buf_ready() {
             // read buffer is still not read by dispatcher
             // we cannot touch it
             inner.pool.get().get_read_buf()
@@ -463,11 +442,7 @@ impl IoContext {
                 .buffer
                 .get_read_source()
                 .unwrap_or_else(|| inner.pool.get().get_read_buf())
-        };
-
-        // make sure we've got room
-        let (hw, lw) = self.0.memory_pool().read_params().unpack();
-        (buf, hw, lw)
+        }
     }
 
     /// Set read buffer
@@ -539,10 +514,7 @@ impl IoContext {
                         Ok(())
                     }
                 }
-                Err(err) => {
-                    inner.insert_flags(Flags::BUF_R_READY);
-                    Err(err)
-                }
+                Err(err) => Err(err),
             }
         } else {
             Ok(())
@@ -557,6 +529,7 @@ impl IoContext {
                     inner.io_stopped(None);
                     IoTaskStatus::Pause
                 } else {
+                    self.shutdown_filters();
                     IoTaskStatus::Io
                 }
             }
@@ -679,6 +652,7 @@ impl IoContext {
         {
             match io.filter().shutdown(io, &st.buffer, 0) {
                 Ok(Poll::Ready(())) => {
+                    st.write_task.wake();
                     st.dispatch_task.wake();
                     st.insert_flags(Flags::IO_STOPPING);
                 }
@@ -689,6 +663,7 @@ impl IoContext {
                     if flags.contains(Flags::RD_PAUSED)
                         || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
                     {
+                        st.write_task.wake();
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
                     }

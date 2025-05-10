@@ -80,7 +80,7 @@ impl Arbiter {
     /// Spawn new thread and run runtime in spawned thread.
     /// Returns address of newly created arbiter.
     pub fn new() -> Arbiter {
-        let name = format!("ntex-rt:worker:{}", COUNT.load(Ordering::Relaxed) + 1);
+        let name = format!("worker:{}", COUNT.load(Ordering::Relaxed) + 1);
         Arbiter::with_name(name)
     }
 

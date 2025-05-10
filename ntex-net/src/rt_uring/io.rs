@@ -85,10 +85,18 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     })
     .await;
 
-    ctl.pause_read();
-    ctl.resume_write(&ctx);
-    ctx.shutdown(st == Status::Shutdown).await;
+    if !ctx.is_stopped() {
+        let flush = st == Status::Shutdown;
+        poll_fn(|cx| {
+            ctl.resume_read(&ctx);
+            ctl.resume_write(&ctx);
+            ctx.shutdown(flush, cx)
+        })
+        .await;
+    }
 
     let result = ctl.shutdown().await;
-    ctx.stopped(result.err());
+    if !ctx.is_stopped() {
+        ctx.stop(result.err());
+    }
 }

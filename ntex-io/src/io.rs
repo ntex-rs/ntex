@@ -98,18 +98,36 @@ impl IoState {
     }
 
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
-        if !self.flags.get().contains(Flags::IO_STOPPED) {
+        if !self.flags.get().is_stopped() {
+            log::trace!(
+                "{}: {} Io error {:?} flags: {:?}",
+                self.tag.get(),
+                self as *const _ as usize,
+                err,
+                self.flags.get()
+            );
+
             if err.is_some() {
                 self.error.set(err);
             }
             self.read_task.wake();
             self.write_task.wake();
-            self.dispatch_task.wake();
             self.notify_disconnect();
             self.handle.take();
             self.insert_flags(
-                Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
+                Flags::IO_STOPPED
+                    | Flags::IO_STOPPING
+                    | Flags::IO_STOPPING_FILTERS
+                    | Flags::BUF_R_READY,
             );
+            if !self.dispatch_task.wake_checked() {
+                log::trace!(
+                    "{}: {} Dispatcher is not registered, flags: {:?}",
+                    self.tag.get(),
+                    self as *const _ as usize,
+                    self.flags.get()
+                );
+            }
         }
     }
 

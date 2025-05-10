@@ -1,5 +1,9 @@
 # Changes
 
+## [2.12.1] - 2025-05-08
+
+* Fix filter shutdown handling
+
 ## [2.11.1] - 2025-03-20
 
 * Add readiness check support

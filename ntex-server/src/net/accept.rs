@@ -148,7 +148,7 @@ impl Accept {
 
         // start accept thread
         let _ = thread::Builder::new()
-            .name("ntex-server accept loop".to_owned())
+            .name("accept loop".to_owned())
             .spawn(move || {
                 System::set_current(sys);
                 Accept::new(tx, rx, poller, socks, srv, notify, status_handler).poll()
