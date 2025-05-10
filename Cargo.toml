@@ -45,8 +45,6 @@ ntex-util = { path = "ntex-util" }
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
-ntex-neon = { git = "https://github.com/ntex-rs/neon.git", branch = "iour-fix-2" }
-
 [workspace.dependencies]
 ntex-polling = "3.7.4"
 
@@ -63,7 +61,7 @@ futures-util = "0.3.29"
 fxhash = "0.2"
 libc = "0.2.164"
 log = "0.4"
-io-uring = "0.7.4"
+io-uring = "0.7.6"
 oneshot = "0.1"
 polling = "3.7.4"
 nohash-hasher = "0.2.0"
