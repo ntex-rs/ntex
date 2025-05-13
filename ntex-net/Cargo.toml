@@ -28,6 +28,7 @@ compio = ["ntex-rt/compio", "ntex-compio"]
 neon = ["ntex-rt/neon", "ntex-neon", "slab", "socket2"]
 
 io-uring = ["ntex-neon/io-uring", "socket2"]
+io-uring-compat = []
 
 [dependencies]
 ntex-service = "3.3"

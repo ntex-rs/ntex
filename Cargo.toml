@@ -46,7 +46,6 @@ ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
 ntex-neon = { git = "https://github.com/ntex-rs/neon.git" }
-ntex-io-uring = { git = "https://github.com/fafhrd91/io-uring.git" }
 
 [workspace.dependencies]
 ntex-polling = "3.7.4"

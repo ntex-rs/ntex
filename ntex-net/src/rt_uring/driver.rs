@@ -282,12 +282,12 @@ impl StreamOpsStorage {
             }
 
             let slice = buf.chunk_mut();
-            let op = opcode::Recv::new(fd, slice.as_mut_ptr(), slice.len() as u32);
-            let op = if poll_first {
-                op.ioprio(IORING_RECVSEND_POLL_FIRST).build()
-            } else {
-                op.build()
+            let mut op = opcode::Recv::new(fd, slice.as_mut_ptr(), slice.len() as u32);
+            #[cfg(not(feature = "io-uring-compat"))]
+            if poll_first {
+                op = op.ioprio(IORING_RECVSEND_POLL_FIRST);
             };
+            let op = op.build();
             let op_id = self.ops.insert(Operation::Recv { id, buf, ctx }) as u32;
             item.rd_op = NonZeroU32::new(op_id);
             return Some((op_id, op));
