@@ -67,6 +67,7 @@ struct StreamOpsInner {
     delayd_drop: Cell<bool>,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
     pool: pool::Pool<io::Result<()>>,
+    default_flags: Flags,
 }
 
 struct StreamOpsStorage {
@@ -81,9 +82,11 @@ impl StreamOps {
         Runtime::value(|rt| {
             let mut inner = None;
             rt.register_handler(|api| {
-                if !api.is_supported(opcode::SendZc::CODE) {
-                    panic!("opcode::SendZc is required for io-uring support");
-                }
+                let default_flags = if api.is_supported(opcode::SendZc::CODE) {
+                    Flags::empty()
+                } else {
+                    Flags::NO_ZC
+                };
                 if !api.is_supported(opcode::Close::CODE) {
                     panic!("opcode::Close is required for io-uring support");
                 }
@@ -96,6 +99,7 @@ impl StreamOps {
 
                 let ops = Rc::new(StreamOpsInner {
                     api,
+                    default_flags,
                     feed: Cell::new(Some(Box::new(Vec::new()))),
                     delayd_drop: Cell::new(false),
                     pool: pool::new(),
@@ -120,7 +124,11 @@ impl StreamOps {
             rd_op: None,
             wr_op: None,
             ref_count: 1,
-            flags: if zc { Flags::empty() } else { Flags::NO_ZC },
+            flags: if zc {
+                self.0.default_flags
+            } else {
+                Flags::NO_ZC
+            },
             context: Some(context),
         };
         let id = self.0.with(|st| st.streams.insert(item));
