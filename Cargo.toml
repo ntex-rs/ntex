@@ -47,6 +47,7 @@ ntex-tokio = { path = "ntex-tokio" }
 
 [workspace.dependencies]
 ntex-polling = "3.7.4"
+ntex-io-uring = "0.7.7"
 
 async-channel = "2"
 async-task = "4.5.0"
@@ -61,7 +62,6 @@ futures-util = "0.3.29"
 fxhash = "0.2"
 libc = "0.2.164"
 log = "0.4"
-io-uring = "0.7.6"
 oneshot = "0.1"
 polling = "3.7.4"
 nohash-hasher = "0.2.0"

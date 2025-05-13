@@ -1,6 +1,6 @@
 use std::{cell::RefCell, io, os::fd::RawFd, rc::Rc};
 
-use io_uring::{opcode, types::Fd};
+use ntex_neon::driver::io_uring::{opcode, types::Fd};
 use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
 use ntex_util::channel::oneshot::Sender;
 use slab::Slab;
