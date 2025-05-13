@@ -45,9 +45,6 @@ ntex-util = { path = "ntex-util" }
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
-ntex-neon = { path = "../dev/neon" }
-ntex-io-uring = { path = "../dev/io-uring" }
-
 [workspace.dependencies]
 ntex-polling = "3.7.4"
 ntex-io-uring = "0.7.7"
