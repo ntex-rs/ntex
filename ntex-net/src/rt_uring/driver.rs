@@ -1,8 +1,8 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use io_uring::{opcode, squeue::Entry, types::Fd};
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{IoContext, IoTaskStatus};
+use ntex_neon::driver::io_uring::{cqueue, opcode, squeue::Entry, types::Fd};
 use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
 use ntex_util::channel::pool;
 use slab::Slab;
@@ -25,6 +25,8 @@ bitflags::bitflags! {
         const WR_REISSUE   = 0b0010_0000;
     }
 }
+
+const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
 struct StreamItem {
     io: Socket,
@@ -151,7 +153,7 @@ impl Handler for StreamOpsHandler {
                     item.flags.remove(Flags::RD_CANCELING);
                     if item.flags.contains(Flags::RD_REISSUE) {
                         item.flags.remove(Flags::RD_REISSUE);
-                        if let Some((id, op)) = st.recv(id, ctx) {
+                        if let Some((id, op)) = st.recv(id, ctx, false) {
                             self.inner.api.submit(id, op);
                         }
                     }
@@ -189,7 +191,7 @@ impl Handler for StreamOpsHandler {
                     if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
                         log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), res, ctx.id());
                         ctx.release_read_buf(0, buf, Poll::Pending);
-                        if let Some((id, op)) = st.recv(id, ctx) {
+                        if let Some((id, op)) = st.recv(id, ctx, false) {
                             self.inner.api.submit(id, op);
                         }
                     } else {
@@ -199,10 +201,16 @@ impl Handler for StreamOpsHandler {
                             total = size;
                         }));
 
-                        // set read buf
-                        if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
-                            if let Some((id, op)) = st.recv(id, ctx) {
-                                self.inner.api.submit(id, op);
+                        // check IORING_CQE_F_SOCK_NONEMPTY flag
+                        if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
+                            let (id, op) = st.recv_more(id, ctx, buf);
+                            self.inner.api.submit(id, op);
+                        } else {
+                            // release read buf
+                            if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
+                                if let Some((id, op)) = st.recv(id, ctx, true) {
+                                    self.inner.api.submit(id, op);
+                                }
                             }
                         }
                     }
@@ -256,7 +264,12 @@ impl StreamOpsStorage {
         (self.ops.insert(Operation::Nop) as u32, entry)
     }
 
-    fn recv(&mut self, id: usize, ctx: IoContext) -> Option<(u32, Entry)> {
+    fn recv(
+        &mut self,
+        id: usize,
+        ctx: IoContext,
+        poll_first: bool,
+    ) -> Option<(u32, Entry)> {
         let item = &mut self.streams[id];
 
         if item.rd_op.is_none() {
@@ -269,7 +282,12 @@ impl StreamOpsStorage {
             }
 
             let slice = buf.chunk_mut();
-            let op = opcode::Recv::new(fd, slice.as_mut_ptr(), slice.len() as u32).build();
+            let op = opcode::Recv::new(fd, slice.as_mut_ptr(), slice.len() as u32);
+            let op = if poll_first {
+                op.ioprio(IORING_RECVSEND_POLL_FIRST).build()
+            } else {
+                op.build()
+            };
             let op_id = self.ops.insert(Operation::Recv { id, buf, ctx }) as u32;
             item.rd_op = NonZeroU32::new(op_id);
             return Some((op_id, op));
@@ -277,6 +295,18 @@ impl StreamOpsStorage {
             item.flags.insert(Flags::RD_REISSUE);
         }
         None
+    }
+
+    fn recv_more(&mut self, id: usize, ctx: IoContext, mut buf: BytesVec) -> (u32, Entry) {
+        let item = &mut self.streams[id];
+
+        let fd = item.fd();
+        buf.reserve(self.hw);
+        let slice = buf.chunk_mut();
+        let op = opcode::Recv::new(fd, slice.as_mut_ptr(), slice.len() as u32).build();
+        let op_id = self.ops.insert(Operation::Recv { id, buf, ctx }) as u32;
+        item.rd_op = NonZeroU32::new(op_id);
+        (op_id, op)
     }
 
     fn send(&mut self, id: usize, ctx: IoContext) -> Option<(u32, Entry)> {
@@ -350,8 +380,8 @@ impl StreamCtl {
     }
 
     pub(crate) fn resume_read(&self, ctx: &IoContext) {
-        self.inner.with(|storage| {
-            let result = storage.recv(self.id, ctx.clone());
+        self.inner.with(|st| {
+            let result = st.recv(self.id, ctx.clone(), false);
             if let Some((id, op)) = result {
                 self.inner.api.submit(id, op);
             }
