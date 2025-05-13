@@ -23,6 +23,7 @@ bitflags::bitflags! {
         const RD_REISSUE   = 0b0000_0010;
         const WR_CANCELING = 0b0001_0000;
         const WR_REISSUE   = 0b0010_0000;
+        const NO_ZC        = 0b1000_0000;
     }
 }
 
@@ -47,6 +48,7 @@ enum Operation {
         id: usize,
         buf: BytesVec,
         ctx: IoContext,
+        result: Option<io::Result<usize>>,
     },
     Shutdown {
         tx: Option<pool::Sender<io::Result<()>>>,
@@ -112,13 +114,13 @@ impl StreamOps {
         })
     }
 
-    pub(crate) fn register(&self, io: Socket, context: IoContext) -> StreamCtl {
+    pub(crate) fn register(&self, io: Socket, context: IoContext, zc: bool) -> StreamCtl {
         let item = StreamItem {
             io,
             rd_op: None,
             wr_op: None,
             ref_count: 1,
-            flags: Flags::empty(),
+            flags: if zc { Flags::empty() } else { Flags::NO_ZC },
             context: Some(context),
         };
         let id = self.0.with(|st| st.streams.insert(item));
@@ -157,7 +159,12 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Send { id, buf, ctx } => {
+                Operation::Send {
+                    id,
+                    buf,
+                    ctx,
+                    result,
+                } => {
                     ctx.release_write_buf(buf, Poll::Pending);
                     if let Some(item) = st.streams.get_mut(id) {
                         log::trace!("{}: Send canceled: {:?}", ctx.tag(), item.fd());
@@ -175,7 +182,7 @@ impl Handler for StreamOpsHandler {
             })
     }
 
-    fn completed(&mut self, user_data: usize, flags: u32, mut res: io::Result<usize>) {
+    fn completed(&mut self, user_data: usize, flags: u32, res: io::Result<usize>) {
         self.inner.with(|st| {
             match st.ops[user_data].take().unwrap() {
                 Operation::Recv { id, mut buf, ctx } => {
@@ -205,12 +212,9 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Send { id, buf, ctx } => {
+                Operation::Send { id, buf, ctx, result } => {
                     if cqueue::notif(flags) {
-                        if res.is_ok() {
-                            res = Ok(buf.len());
-                        }
-                        if ctx.release_write_buf(buf, Poll::Ready(res)) == IoTaskStatus::Io {
+                        if ctx.release_write_buf(buf, Poll::Ready(result.unwrap())) == IoTaskStatus::Io {
                             if let Some((id, op)) = st.send(id, ctx) {
                                 self.inner.api.submit(id, op);
                             }
@@ -219,11 +223,13 @@ impl Handler for StreamOpsHandler {
                         // reset op reference
                         st.streams.get_mut(id).map(|item| item.wr_op.take());
                         // try to send next chunk
-                        if let Some((id, op)) = st.send(id, ctx.clone()) {
-                            self.inner.api.submit(id, op);
+                        if res.is_ok() {
+                            if let Some((id, op)) = st.send(id, ctx.clone()) {
+                                self.inner.api.submit(id, op);
+                            }
                         }
                         // insert op back for "notify" handling
-                        st.ops[user_data] = Some(Operation::Send { id, buf, ctx });
+                        st.ops[user_data] = Some(Operation::Send { id, buf, ctx, result: Some(res) });
                         return
                     } else {
                         // reset op reference
@@ -321,10 +327,20 @@ impl StreamOpsStorage {
         if item.wr_op.is_none() {
             if let Some(buf) = ctx.get_write_buf() {
                 let slice = buf.chunk();
-                let op = opcode::SendZc::new(item.fd(), slice.as_ptr(), slice.len() as u32);
-                let op_id = self.ops.insert(Some(Operation::Send { id, buf, ctx })) as u32;
+                let op = if item.flags.contains(Flags::NO_ZC) {
+                    opcode::Send::new(item.fd(), slice.as_ptr(), slice.len() as u32).build()
+                } else {
+                    opcode::SendZc::new(item.fd(), slice.as_ptr(), slice.len() as u32)
+                        .build()
+                };
+                let op_id = self.ops.insert(Some(Operation::Send {
+                    id,
+                    buf,
+                    ctx,
+                    result: None,
+                })) as u32;
                 item.wr_op = NonZeroU32::new(op_id);
-                return Some((op_id, op.build()));
+                return Some((op_id, op));
             }
         } else if item.flags.contains(Flags::WR_CANCELING) {
             item.flags.insert(Flags::WR_REISSUE);
