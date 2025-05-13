@@ -9,7 +9,7 @@ impl ntex_io::IoStream for super::TcpStream {
     fn start(self, read: ReadContext, _: ntex_io::WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let context = read.context();
-        let ctl = StreamOps::current().register(io, context.clone());
+        let ctl = StreamOps::current().register(io, context.clone(), true);
         let ctl2 = ctl.clone();
         spawn(async move { run(ctl, context).await });
 
@@ -21,7 +21,7 @@ impl ntex_io::IoStream for super::UnixStream {
     fn start(self, read: ReadContext, _: ntex_io::WriteContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
         let context = read.context();
-        let ctl = StreamOps::current().register(io, context.clone());
+        let ctl = StreamOps::current().register(io, context.clone(), false);
         spawn(async move { run(ctl, context).await });
 
         None
