@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.19] - 2025-05-15
+
+* Handle uring Close op operation
+
 ## [2.5.18] - 2025-05-14
 
 * iour: Use opcode::SendZc for send op
