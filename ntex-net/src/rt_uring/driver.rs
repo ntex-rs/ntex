@@ -53,6 +53,9 @@ enum Operation {
     Shutdown {
         tx: Option<pool::Sender<io::Result<()>>>,
     },
+    Close {
+        id: usize,
+    },
     Nop,
 }
 
@@ -186,7 +189,7 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Nop | Operation::Shutdown { .. } => {}
+                Operation::Nop | Operation::Close { .. } | Operation::Shutdown { .. } => {}
             })
     }
 
@@ -200,8 +203,8 @@ impl Handler for StreamOpsHandler {
                     // handle WouldBlock
                     if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
                         log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), res, ctx.id());
-                        let (id, op) = st.recv_more(id, ctx, buf);
-                        self.inner.api.submit(id, op);
+                        let (op_id, op) = st.recv_more(id, ctx, buf);
+                        self.inner.api.submit(op_id, op);
                     } else {
                         let mut total = 0;
                         let res = Poll::Ready(res.map(|size| {
@@ -211,11 +214,11 @@ impl Handler for StreamOpsHandler {
 
                         // handle IORING_CQE_F_SOCK_NONEMPTY flag
                         if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
-                            let (id, op) = st.recv_more(id, ctx, buf);
-                            self.inner.api.submit(id, op);
+                            let (op_id, op) = st.recv_more(id, ctx, buf);
+                            self.inner.api.submit(op_id, op);
                         } else if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
-                            if let Some((id, op)) = st.recv(id, ctx, true) {
-                                self.inner.api.submit(id, op);
+                            if let Some((op_id, op)) = st.recv(id, ctx, true) {
+                                self.inner.api.submit(op_id, op);
                             }
                         }
                     }
@@ -256,6 +259,10 @@ impl Handler for StreamOpsHandler {
                         let _ = tx.send(res.map(|_| ()));
                     }
                 }
+                Operation::Close { id } => {
+                    let item = st.streams.remove(id);
+                    mem::forget(item.io);
+                }
                 Operation::Nop => {}
             }
             let _ = st.ops.remove(user_data);
@@ -279,12 +286,11 @@ impl Handler for StreamOpsHandler {
 
 impl StreamOpsStorage {
     fn close(&mut self, id: usize) -> (u32, Entry) {
-        let item = self.streams.remove(id);
+        let item = &self.streams[id];
         let entry = opcode::Close::new(item.fd()).build();
         log::trace!("{}: Close ({:?})", item.tag(), item.fd());
 
-        mem::forget(item.io);
-        (self.add_operation(Operation::Nop), entry)
+        (self.add_operation(Operation::Close { id }), entry)
     }
 
     fn recv(
