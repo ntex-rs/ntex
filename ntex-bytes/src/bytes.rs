@@ -673,7 +673,7 @@ impl Bytes {
             if at == self.len() {
                 Some(Bytes::new())
             } else if at == 0 {
-                Some(mem::replace(self, Bytes::new()))
+                Some(mem::take(self))
             } else {
                 Some(Bytes {
                     inner: self.inner.split_off(at, true),
@@ -718,7 +718,7 @@ impl Bytes {
     pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
             if at == self.len() {
-                Some(mem::replace(self, Bytes::new()))
+                Some(mem::take(self))
             } else if at == 0 {
                 Some(Bytes::new())
             } else {

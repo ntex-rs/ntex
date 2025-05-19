@@ -129,8 +129,7 @@ impl TlsClientFilter {
         cfg: Arc<ClientConfig>,
         domain: ServerName<'static>,
     ) -> Result<Io<Layer<TlsClientFilter, F>>, io::Error> {
-        let session = ClientConnection::new(cfg, domain)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let session = ClientConnection::new(cfg, domain).map_err(io::Error::other)?;
         let filter = TlsClientFilter {
             session: RefCell::new(session),
         };
@@ -165,10 +164,7 @@ impl TlsClientFilter {
                         let read_ready = if wants_read {
                             match ready!(io.poll_read_notify(cx))? {
                                 Some(_) => Ok(true),
-                                None => Err(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    "disconnected",
-                                )),
+                                None => Err(io::Error::other("disconnected")),
                             }?
                         } else {
                             true

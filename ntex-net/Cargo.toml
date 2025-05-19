@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "2.5.19"
+version = "2.5.20"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -10,6 +10,7 @@ documentation = "https://docs.rs/ntex-connect/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
+rust-version = "1.75"
 
 [lib]
 name = "ntex_net"

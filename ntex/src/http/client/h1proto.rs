@@ -191,9 +191,7 @@ impl Stream for PlStream {
                 Err(RecvError::KeepAlive) => {
                     Err(io::Error::new(io::ErrorKind::TimedOut, "Keep-alive").into())
                 }
-                Err(RecvError::Stop) => {
-                    Err(io::Error::new(io::ErrorKind::Other, "Dispatcher stopped").into())
-                }
+                Err(RecvError::Stop) => Err(io::Error::other("Dispatcher stopped").into()),
                 Err(RecvError::WriteBackpressure) => {
                     ready!(this.io.as_ref().unwrap().poll_flush(cx, false))?;
                     continue;

@@ -83,7 +83,7 @@ mod tests {
                 }
             }
         }))
-        .map_init_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "err"))
+        .map_init_err(|_| std::io::Error::other("err"))
         .clone();
 
         assert!(factory.create(&true).await.is_err());
@@ -103,7 +103,7 @@ mod tests {
                 }
             }
         })
-        .map_init_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "err"))
+        .map_init_err(|_| std::io::Error::other("err"))
         .clone();
 
         assert!(factory.create(&true).await.is_err());

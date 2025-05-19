@@ -119,7 +119,7 @@ async fn test_h2_body() -> io::Result<()> {
             .h2(|mut req: Request| async move {
                 let body = load_body(req.take_payload())
                     .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    .map_err(io::Error::other)?;
                 Ok::<_, io::Error>(Response::Ok().body(body))
             })
             .openssl(ssl_acceptor())

@@ -249,22 +249,21 @@ mod tests {
 
     #[test]
     fn test_error_http_response() {
-        let orig = io::Error::new(io::ErrorKind::Other, "other");
+        let orig = io::Error::other("other");
         let resp: Response = orig.into();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]
     fn test_payload_error() {
-        let err: PayloadError = io::Error::new(io::ErrorKind::Other, "DecodeError").into();
+        let err: PayloadError = io::Error::other("DecodeError").into();
         assert!(format!("{}", err).contains("DecodeError"));
 
         let err: PayloadError = BlockingError::Canceled.into();
         assert!(format!("{}", err).contains("Operation is canceled"));
 
         let err: PayloadError =
-            BlockingError::Error(io::Error::new(io::ErrorKind::Other, "DecodeError"))
-                .into();
+            BlockingError::Error(io::Error::other("DecodeError")).into();
         assert!(format!("{}", err).contains("DecodeError"));
 
         let err = PayloadError::Incomplete(None);

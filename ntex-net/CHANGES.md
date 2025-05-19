@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.20] - 2025-05-19
+
+* Do not use zc send for small buffers
+
 ## [2.5.19] - 2025-05-15
 
 * Handle uring Close op operation

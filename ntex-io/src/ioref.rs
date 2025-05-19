@@ -359,7 +359,7 @@ mod tests {
             assert_eq!(msg.unwrap(), Bytes::from_static(BIN));
         }
 
-        client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
+        client.read_error(io::Error::other("err"));
         let msg = state.recv(&BytesCodec).await;
         assert!(msg.is_err());
         assert!(state.flags().contains(Flags::IO_STOPPED));
@@ -368,7 +368,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         let state = Io::new(server);
 
-        client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
+        client.read_error(io::Error::other("err"));
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert!(msg.is_err());
@@ -388,7 +388,7 @@ mod tests {
         let buf = state.decode(&BytesCodec).unwrap().unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
-        client.write_error(io::Error::new(io::ErrorKind::Other, "err"));
+        client.write_error(io::Error::other("err"));
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
         assert!(state.flags().contains(Flags::IO_STOPPED));
@@ -454,7 +454,7 @@ mod tests {
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
             Poll::Pending
         );
-        client.read_error(io::Error::new(io::ErrorKind::Other, "err"));
+        client.read_error(io::Error::other("err"));
         assert_eq!(waiter.await, ());
     }
 

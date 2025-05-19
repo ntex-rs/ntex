@@ -74,7 +74,7 @@ async fn web_no_ws() {
         App::new()
             .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
             .service(web::resource("/ws_error").route(web::to(|| async {
-                Err::<HttpResponse, _>(io::Error::new(io::ErrorKind::Other, "test"))
+                Err::<HttpResponse, _>(io::Error::other("test"))
             })))
     });
 

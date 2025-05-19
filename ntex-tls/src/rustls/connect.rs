@@ -61,8 +61,8 @@ impl<T: Address> TlsConnector<T> {
 
         let tag = io.tag();
         let config = self.config.clone();
-        let host = ServerName::try_from(host)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{}", e)))?;
+        let host =
+            ServerName::try_from(host).map_err(|e| io::Error::other(format!("{}", e)))?;
 
         match TlsClientFilter::create(io, config, host.clone()).await {
             Ok(io) => {
