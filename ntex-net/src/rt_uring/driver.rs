@@ -273,7 +273,11 @@ impl Handler for StreamOpsHandler {
                 }
                 Operation::Poll { id, ctx } => {
                     if !ctx.is_stopped() {
-                        ctx.stop(res.err());
+                        if let Err(err) = res {
+                            ctx.stop(Some(err));
+                        } else {
+                            ctx.init_shutdown();
+                        }
                     }
                 }
                 Operation::Shutdown { tx } => {

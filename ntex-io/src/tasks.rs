@@ -396,9 +396,15 @@ impl IoContext {
     }
 
     #[inline]
-    /// Get io error
+    /// Stop io
     pub fn stop(&self, e: Option<io::Error>) {
         self.0 .0.io_stopped(e);
+    }
+
+    #[inline]
+    /// Initiate gracefully shutdown
+    pub fn init_shutdown(&self) {
+        self.0 .0.init_shutdown();
     }
 
     #[inline]
