@@ -326,7 +326,7 @@ impl StreamOpsStorage {
         poll_first: bool,
     ) -> Option<(u32, Entry)> {
         if !self.streams.contains(id) {
-            return;
+            return None;
         }
 
         let item = &mut self.streams[id];
