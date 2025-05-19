@@ -104,7 +104,7 @@ mod tests {
                          Hello World Hello World Hello World Hello World Hello World \
                          Hello World Hello World Hello World Hello World Hello World";
 
-    // #[ntex::test]
+    #[ntex::test]
     async fn idle_disconnect() {
         PoolId::P5.set_read_params(24, 12);
         let (tx, rx) = ::oneshot::channel();

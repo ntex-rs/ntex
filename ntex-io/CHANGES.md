@@ -1,5 +1,9 @@
 # Changes
 
+## [2.12.2] - 2025-05-19
+
+* Pause on recv back-pressure
+
 ## [2.12.1] - 2025-05-08
 
 * Fix filter shutdown handling

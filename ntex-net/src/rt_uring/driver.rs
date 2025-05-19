@@ -51,6 +51,10 @@ enum Operation {
         ctx: IoContext,
         result: Option<io::Result<usize>>,
     },
+    Poll {
+        id: usize,
+        ctx: IoContext,
+    },
     Shutdown {
         tx: Option<pool::Sender<io::Result<()>>>,
     },
@@ -123,6 +127,7 @@ impl StreamOps {
     }
 
     pub(crate) fn register(&self, io: Socket, context: IoContext, zc: bool) -> StreamCtl {
+        let ctx = context.clone();
         let item = StreamItem {
             io,
             rd_op: None,
@@ -135,7 +140,15 @@ impl StreamOps {
             },
             context: Some(context),
         };
-        let id = self.0.with(|st| st.streams.insert(item));
+
+        let id = self.0.with(move |st| {
+            // handle RDHUP event
+            let op = opcode::PollAdd::new(item.fd(), libc::POLLRDHUP as u32).build();
+            let id = st.streams.insert(item);
+            let op_id = st.ops.insert(Some(Operation::Poll { id, ctx })) as u32;
+            self.0.api.submit(op_id, op);
+            id
+        });
         StreamCtl {
             id,
             inner: self.0.clone(),
@@ -190,7 +203,10 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Nop | Operation::Close { .. } | Operation::Shutdown { .. } => {}
+                Operation::Nop
+                | Operation::Poll { .. }
+                | Operation::Close { .. }
+                | Operation::Shutdown { .. } => {}
             })
     }
 
@@ -253,6 +269,11 @@ impl Handler for StreamOpsHandler {
                                 self.inner.api.submit(id, op);
                             }
                         }
+                    }
+                }
+                Operation::Poll { id, ctx } => {
+                    if !ctx.is_stopped() {
+                        ctx.stop(res.err());
                     }
                 }
                 Operation::Shutdown { tx } => {

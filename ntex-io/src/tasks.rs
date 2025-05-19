@@ -463,6 +463,8 @@ impl IoContext {
             inner.buffer.set_read_source(&self.0, buf);
         }
 
+        let mut full = false;
+
         // handle buffer changes
         let st_res = if nbytes > 0 {
             match self
@@ -480,6 +482,7 @@ impl IoContext {
                                 self.tag(),
                                 buffer_size
                             );
+                            full = true;
                             inner.insert_flags(Flags::BUF_R_READY | Flags::BUF_R_FULL);
                         } else {
                             inner.insert_flags(Flags::BUF_R_READY);
@@ -496,6 +499,7 @@ impl IoContext {
                             // but there is no new data in top most read buffer
                             // so we need to wake up read task to read more data
                             // otherwise read task would sleep forever
+                            full = true;
                             inner.read_task.wake();
                         }
                         if inner.flags.get().is_waiting_for_read() {
@@ -530,7 +534,11 @@ impl IoContext {
                     IoTaskStatus::Pause
                 } else {
                     self.shutdown_filters();
-                    IoTaskStatus::Io
+                    if full {
+                        IoTaskStatus::Pause
+                    } else {
+                        IoTaskStatus::Io
+                    }
                 }
             }
             Poll::Ready(Err(e)) => {
@@ -543,7 +551,11 @@ impl IoContext {
                     IoTaskStatus::Pause
                 } else {
                     self.shutdown_filters();
-                    IoTaskStatus::Io
+                    if full {
+                        IoTaskStatus::Pause
+                    } else {
+                        IoTaskStatus::Io
+                    }
                 }
             }
         }
