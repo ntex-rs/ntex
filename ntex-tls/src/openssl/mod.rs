@@ -137,9 +137,7 @@ impl FilterLayer for SslFilter {
             {
                 Ok(Poll::Pending)
             }
-            Err(e) => Err(e
-                .into_io_error()
-                .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e))),
+            Err(e) => Err(e.into_io_error().unwrap_or_else(io::Error::other)),
         }
     }
 
@@ -257,11 +255,11 @@ async fn handle_result<F>(
                 }
             }
             ssl::ErrorCode::WANT_WRITE => Ok(None),
-            _ => Err(io::Error::new(io::ErrorKind::Other, e)),
+            _ => Err(io::Error::other(e)),
         },
     }
 }
 
 fn map_to_ioerr<E: Into<Box<dyn Error + Send + Sync>>>(err: E) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, err)
+    io::Error::other(err)
 }

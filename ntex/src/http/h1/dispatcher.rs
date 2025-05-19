@@ -543,8 +543,7 @@ where
                                 }
                                 RecvError::Stop => {
                                     self.set_payload_error(PayloadError::EncodingCorrupted);
-                                    Either::Right(Some(io::Error::new(
-                                        io::ErrorKind::Other,
+                                    Either::Right(Some(io::Error::other(
                                         "Dispatcher stopped",
                                     )))
                                 }
@@ -1201,9 +1200,7 @@ mod tests {
         client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
 
         let mut h1 = h1(server, |_| {
-            Box::pin(async {
-                Err::<Response<()>, _>(io::Error::new(io::ErrorKind::Other, "error"))
-            })
+            Box::pin(async { Err::<Response<()>, _>(io::Error::other("error")) })
         });
         // required because io shutdown is async oper
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());

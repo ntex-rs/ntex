@@ -139,8 +139,7 @@ impl TlsServerFilter {
         timeout: Millis,
     ) -> Result<Io<Layer<TlsServerFilter, F>>, io::Error> {
         time::timeout(timeout, async {
-            let session = ServerConnection::new(cfg)
-                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            let session = ServerConnection::new(cfg).map_err(io::Error::other)?;
             let filter = TlsServerFilter {
                 session: RefCell::new(session),
             };
@@ -175,10 +174,7 @@ impl TlsServerFilter {
                             let read_ready = if wants_read {
                                 match ready!(io.poll_read_notify(cx))? {
                                     Some(_) => Ok(true),
-                                    None => Err(io::Error::new(
-                                        io::ErrorKind::Other,
-                                        "disconnected",
-                                    )),
+                                    None => Err(io::Error::other("disconnected")),
                                 }?
                             } else {
                                 true

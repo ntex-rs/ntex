@@ -135,7 +135,9 @@ impl Handler for StreamOpsHandler {
             }
 
             if ev.is_interrupt() {
-                io.context.as_ref().inspect(|ctx| ctx.stop(None));
+                if let Some(ctx) = io.context.as_ref() {
+                    ctx.stop(None)
+                }
             } else {
                 self.inner.api.modify(io.fd(), id as u32, renew);
             }
@@ -203,7 +205,7 @@ impl StreamCtl {
                 async move {
                     if let Some(fut) = fut {
                         fut.await
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                            .map_err(io::Error::other)
                             .and_then(crate::helpers::pool_io_err)
                     } else {
                         Ok(())
@@ -357,8 +359,8 @@ fn close(st: &mut Slab<StreamItem>, id: u32, api: &DriverApi) {
         if shutdown {
             let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
         }
-        syscall!(libc::close(fd)).inspect_err(|err| {
+        if let Err(err) = syscall!(libc::close(fd)) {
             log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
-        })
+        }
     });
 }

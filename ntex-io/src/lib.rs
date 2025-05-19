@@ -209,11 +209,11 @@ mod tests {
     fn test_fmt() {
         type T = DispatchItem<BytesCodec>;
 
-        let err = T::EncoderError(io::Error::new(io::ErrorKind::Other, "err"));
+        let err = T::EncoderError(io::Error::other("err"));
         assert!(format!("{:?}", err).contains("DispatchItem::Encoder"));
-        let err = T::DecoderError(io::Error::new(io::ErrorKind::Other, "err"));
+        let err = T::DecoderError(io::Error::other("err"));
         assert!(format!("{:?}", err).contains("DispatchItem::Decoder"));
-        let err = T::Disconnect(Some(io::Error::new(io::ErrorKind::Other, "err")));
+        let err = T::Disconnect(Some(io::Error::other("err")));
         assert!(format!("{:?}", err).contains("DispatchItem::Disconnect"));
 
         assert!(format!("{:?}", T::WBackPressureEnabled)

@@ -83,10 +83,7 @@ impl<T: Address> Resolver<T> {
                         req.host(),
                         e
                     );
-                    Err(ConnectError::Resolver(io::Error::new(
-                        io::ErrorKind::Other,
-                        e,
-                    )))
+                    Err(ConnectError::Resolver(io::Error::other(e)))
                 }
             }
         }

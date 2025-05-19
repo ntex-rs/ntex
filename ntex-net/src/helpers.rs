@@ -5,7 +5,7 @@ use ntex_util::channel::oneshot::channel;
 use socket2::{Protocol, SockAddr, Socket, Type};
 
 pub(crate) fn pool_io_err<T, E>(result: std::result::Result<T, E>) -> io::Result<T> {
-    result.map_err(|_| io::Error::new(io::ErrorKind::Other, "Thread pool panic"))
+    result.map_err(|_| io::Error::other("Thread pool panic"))
 }
 
 pub(crate) async fn connect(addr: SocketAddr) -> io::Result<Socket> {
@@ -44,7 +44,7 @@ async fn connect_inner(
 
     let fd = ntex_rt::spawn_blocking(move || syscall!(libc::socket(domain, ty, protocol)))
         .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        .map_err(io::Error::other)
         .and_then(pool_io_err)?;
 
     let (sender, rx) = channel();
@@ -52,7 +52,7 @@ async fn connect_inner(
     crate::rt_impl::connect::ConnectOps::current().connect(fd, addr, sender)?;
 
     rx.await
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "IO Driver is gone"))
+        .map_err(|_| io::Error::other("IO Driver is gone"))
         .and_then(|item| item)?;
 
     Ok(unsafe { Socket::from_raw_fd(fd) })

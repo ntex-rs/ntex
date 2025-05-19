@@ -406,7 +406,7 @@ impl StreamCtl {
                 rx
             })
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "gone"))
+            .map_err(|_| io::Error::other("gone"))
             .and_then(|item| item)
     }
 

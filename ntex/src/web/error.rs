@@ -805,10 +805,7 @@ mod tests {
         );
         assert_eq!(
             StatusCode::INTERNAL_SERVER_ERROR,
-            WebResponseError::<DefaultError>::status_code(&io::Error::new(
-                io::ErrorKind::Other,
-                ""
-            )),
+            WebResponseError::<DefaultError>::status_code(&io::Error::other("")),
         );
     }
 
