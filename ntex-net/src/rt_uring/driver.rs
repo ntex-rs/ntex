@@ -51,6 +51,10 @@ enum Operation {
         ctx: IoContext,
         result: Option<io::Result<usize>>,
     },
+    Poll {
+        id: usize,
+        ctx: IoContext,
+    },
     Shutdown {
         tx: Option<pool::Sender<io::Result<()>>>,
     },
@@ -123,6 +127,7 @@ impl StreamOps {
     }
 
     pub(crate) fn register(&self, io: Socket, context: IoContext, zc: bool) -> StreamCtl {
+        let ctx = context.clone();
         let item = StreamItem {
             io,
             rd_op: None,
@@ -135,7 +140,15 @@ impl StreamOps {
             },
             context: Some(context),
         };
-        let id = self.0.with(|st| st.streams.insert(item));
+
+        let id = self.0.with(move |st| {
+            // handle RDHUP event
+            let op = opcode::PollAdd::new(item.fd(), libc::POLLRDHUP as u32).build();
+            let id = st.streams.insert(item);
+            let op_id = st.ops.insert(Some(Operation::Poll { id, ctx })) as u32;
+            self.0.api.submit(op_id, op);
+            id
+        });
         StreamCtl {
             id,
             inner: self.0.clone(),
@@ -165,8 +178,8 @@ impl Handler for StreamOpsHandler {
                         item.flags.remove(Flags::RD_CANCELING);
                         if item.flags.contains(Flags::RD_REISSUE) {
                             item.flags.remove(Flags::RD_REISSUE);
-                            if let Some((id, op)) = st.recv(id, ctx, false) {
-                                self.inner.api.submit(id, op);
+                            if let Some((op_id, op)) = st.recv(id, ctx, false) {
+                                self.inner.api.submit(op_id, op);
                             }
                         }
                     }
@@ -184,13 +197,16 @@ impl Handler for StreamOpsHandler {
                         item.flags.remove(Flags::WR_CANCELING);
                         if item.flags.contains(Flags::WR_REISSUE) {
                             item.flags.remove(Flags::WR_REISSUE);
-                            if let Some((id, op)) = st.send(id, ctx) {
-                                self.inner.api.submit(id, op);
+                            if let Some((op_id, op)) = st.send(id, ctx) {
+                                self.inner.api.submit(op_id, op);
                             }
                         }
                     }
                 }
-                Operation::Nop | Operation::Close { .. } | Operation::Shutdown { .. } => {}
+                Operation::Nop
+                | Operation::Poll { .. }
+                | Operation::Close { .. }
+                | Operation::Shutdown { .. } => {}
             })
     }
 
@@ -227,8 +243,8 @@ impl Handler for StreamOpsHandler {
                 Operation::Send { id, buf, ctx, result } => {
                     if cqueue::notif(flags) {
                         if ctx.release_write_buf(buf, Poll::Ready(result.unwrap())) == IoTaskStatus::Io {
-                            if let Some((id, op)) = st.send(id, ctx) {
-                                self.inner.api.submit(id, op);
+                            if let Some((op_id, op)) = st.send(id, ctx) {
+                                self.inner.api.submit(op_id, op);
                             }
                         }
                     } else if cqueue::more(flags) {
@@ -236,8 +252,8 @@ impl Handler for StreamOpsHandler {
                         st.streams.get_mut(id).map(|item| item.wr_op.take());
                         // try to send next chunk
                         if res.is_ok() {
-                            if let Some((id, op)) = st.send(id, ctx.clone()) {
-                                self.inner.api.submit(id, op);
+                            if let Some((op_id, op)) = st.send(id, ctx.clone()) {
+                                self.inner.api.submit(op_id, op);
                             }
                         }
                         // insert op back for "notify" handling
@@ -249,9 +265,18 @@ impl Handler for StreamOpsHandler {
 
                         // release buffer and try to send next chunk
                         if ctx.release_write_buf(buf, Poll::Ready(res)) == IoTaskStatus::Io {
-                            if let Some((id, op)) = st.send(id, ctx) {
-                                self.inner.api.submit(id, op);
+                            if let Some((op_id, op)) = st.send(id, ctx) {
+                                self.inner.api.submit(op_id, op);
                             }
+                        }
+                    }
+                }
+                Operation::Poll { id, ctx } => {
+                    if !ctx.is_stopped() {
+                        if let Err(err) = res {
+                            ctx.stop(Some(err));
+                        } else {
+                            ctx.init_shutdown();
                         }
                     }
                 }
@@ -275,8 +300,8 @@ impl Handler for StreamOpsHandler {
                 for id in feed.drain(..) {
                     st.streams[id].ref_count -= 1;
                     if st.streams[id].ref_count == 0 {
-                        let (id, entry) = st.close(id);
-                        self.inner.api.submit(id, entry);
+                        let (op_id, entry) = st.close(id);
+                        self.inner.api.submit(op_id, entry);
                     }
                 }
                 self.inner.feed.set(Some(feed));
@@ -300,6 +325,10 @@ impl StreamOpsStorage {
         ctx: IoContext,
         poll_first: bool,
     ) -> Option<(u32, Entry)> {
+        if !self.streams.contains(id) {
+            return None;
+        }
+
         let item = &mut self.streams[id];
 
         if item.rd_op.is_none() {
@@ -419,18 +448,16 @@ impl StreamCtl {
 
     pub(crate) fn resume_read(&self, ctx: &IoContext) {
         self.inner.with(|st| {
-            let result = st.recv(self.id, ctx.clone(), false);
-            if let Some((id, op)) = result {
-                self.inner.api.submit(id, op);
+            if let Some((op_id, op)) = st.recv(self.id, ctx.clone(), false) {
+                self.inner.api.submit(op_id, op);
             }
         })
     }
 
     pub(crate) fn resume_write(&self, ctx: &IoContext) {
         self.inner.with(|storage| {
-            let result = storage.send(self.id, ctx.clone());
-            if let Some((id, op)) = result {
-                self.inner.api.submit(id, op);
+            if let Some((op_id, op)) = storage.send(self.id, ctx.clone()) {
+                self.inner.api.submit(op_id, op);
             }
         })
     }
@@ -467,8 +494,8 @@ impl Drop for StreamCtl {
         if let Some(mut storage) = self.inner.storage.take() {
             storage.streams[self.id].ref_count -= 1;
             if storage.streams[self.id].ref_count == 0 {
-                let (id, entry) = storage.close(self.id);
-                self.inner.api.submit(id, entry);
+                let (op_id, entry) = storage.close(self.id);
+                self.inner.api.submit(op_id, entry);
             }
             self.inner.storage.set(Some(storage));
         } else {

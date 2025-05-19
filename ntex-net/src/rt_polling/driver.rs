@@ -105,7 +105,7 @@ impl Handler for StreamOpsHandler {
                 return;
             }
             let io = &mut streams[id];
-            let mut renew = Event::new(0, false, false);
+            let mut renew = Event::new(0, false, false).with_interrupt();
 
             log::trace!("{}: Event ({:?}): {ev:?}", io.tag(), io.fd());
 
@@ -219,7 +219,7 @@ impl StreamCtl {
     pub(crate) fn interest(&self, rd: bool, wr: bool) {
         self.inner.with(|streams| {
             let io = &mut streams[self.id as usize];
-            let mut event = Event::new(0, false, false);
+            let mut event = Event::new(0, false, false).with_interrupt();
             log::trace!("{}: Mod ({:?}) rd: {rd:?}, wr: {wr:?}", io.tag(), io.fd());
 
             if rd {
