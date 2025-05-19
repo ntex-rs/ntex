@@ -27,6 +27,7 @@ bitflags::bitflags! {
     }
 }
 
+const ZC_SIZE: usize = 1024;
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
 struct StreamItem {
@@ -341,7 +342,7 @@ impl StreamOpsStorage {
         if item.wr_op.is_none() {
             if let Some(buf) = ctx.get_write_buf() {
                 let slice = buf.chunk();
-                let op = if item.flags.contains(Flags::NO_ZC) {
+                let op = if item.flags.contains(Flags::NO_ZC) || slice.len() <= ZC_SIZE {
                     opcode::Send::new(item.fd(), slice.as_ptr(), slice.len() as u32).build()
                 } else {
                     opcode::SendZc::new(item.fd(), slice.as_ptr(), slice.len() as u32)
