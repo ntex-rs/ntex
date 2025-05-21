@@ -1,5 +1,9 @@
 # Changes
 
+## [2.13.1] - 2025-05-21
+
+* Make Readiness::merge() public
+
 ## [2.13.0] - 2025-05-21
 
 * Refine `Filter` trait

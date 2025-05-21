@@ -62,6 +62,24 @@ pub enum Readiness {
     Terminate,
 }
 
+impl Readiness {
+    /// Merge two Readiness values
+    pub fn merge(val1: Poll<Readiness>, val2: Poll<Readiness>) -> Poll<Readiness> {
+        match val1 {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Readiness::Ready) => val2,
+            Poll::Ready(Readiness::Terminate) => Poll::Ready(Readiness::Terminate),
+            Poll::Ready(Readiness::Shutdown) => {
+                if val2 == Poll::Ready(Readiness::Terminate) {
+                    Poll::Ready(Readiness::Terminate)
+                } else {
+                    Poll::Ready(Readiness::Shutdown)
+                }
+            }
+        }
+    }
+}
+
 #[allow(unused_variables)]
 pub trait FilterLayer: fmt::Debug + 'static {
     #[inline]

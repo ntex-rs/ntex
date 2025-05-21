@@ -31,23 +31,6 @@ impl NullFilter {
     }
 }
 
-impl Readiness {
-    fn merge(res1: Poll<Readiness>, res2: Poll<Readiness>) -> Poll<Readiness> {
-        match res1 {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Readiness::Ready) => res2,
-            Poll::Ready(Readiness::Terminate) => Poll::Ready(Readiness::Terminate),
-            Poll::Ready(Readiness::Shutdown) => {
-                if res2 == Poll::Ready(Readiness::Terminate) {
-                    Poll::Ready(Readiness::Terminate)
-                } else {
-                    Poll::Ready(Readiness::Shutdown)
-                }
-            }
-        }
-    }
-}
-
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct FilterReadStatus {
     pub nbytes: usize,
