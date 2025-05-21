@@ -1,7 +1,7 @@
 use std::{any::Any, any::TypeId, fmt, io, ops, task::Context, task::Poll};
 
 use crate::filter::{Filter, FilterReadStatus};
-use crate::{buf::Stack, Io, IoRef, Readiness};
+use crate::{FilterCtx, Io, Readiness};
 
 /// Sealed filter type
 pub struct Sealed(pub(crate) Box<dyn Filter>);
@@ -21,22 +21,20 @@ impl Filter for Sealed {
     #[inline]
     fn process_read_buf(
         &self,
-        io: &IoRef,
-        stack: &Stack,
-        idx: usize,
+        ctx: FilterCtx<'_>,
         nbytes: usize,
     ) -> io::Result<FilterReadStatus> {
-        self.0.process_read_buf(io, stack, idx, nbytes)
+        self.0.process_read_buf(ctx, nbytes)
     }
 
     #[inline]
-    fn process_write_buf(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<()> {
-        self.0.process_write_buf(io, stack, idx)
+    fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
+        self.0.process_write_buf(ctx)
     }
 
     #[inline]
-    fn shutdown(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<Poll<()>> {
-        self.0.shutdown(io, stack, idx)
+    fn shutdown(&self, ctx: FilterCtx<'_>) -> io::Result<Poll<()>> {
+        self.0.shutdown(ctx)
     }
 
     #[inline]

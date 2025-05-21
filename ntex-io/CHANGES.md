@@ -1,5 +1,11 @@
 # Changes
 
+## [2.13.0] - 2025-05-21
+
+* Refine `Filter` trait
+
+* Allow to wrap io's filter
+
 ## [2.12.2] - 2025-05-19
 
 * Pause on recv back-pressure
