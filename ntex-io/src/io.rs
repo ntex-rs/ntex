@@ -321,25 +321,35 @@ impl<F: Filter> Io<F> {
     }
 
     #[inline]
-    /// Map current filter with new one
+    /// Add new layer current current filter
     pub fn add_filter<U>(self, nf: U) -> Io<Layer<U, F>>
     where
         U: FilterLayer,
     {
         let state = self.take_io_ref();
 
-        // add layer to buffers
-        if U::BUFFERS {
-            // Safety: .add_layer() only increases internal buffers
-            // there is no api that holds references into buffers storage
-            // all apis first removes buffer from storage and then work with it
-            unsafe { &mut *(Rc::as_ptr(&state.0) as *mut IoState) }
-                .buffer
-                .add_layer();
-        }
+        // add buffers layer
+        // Safety: .add_layer() only increases internal buffers
+        // there is no api that holds references into buffers storage
+        // all apis first removes buffer from storage and then work with it
+        unsafe { &mut *(Rc::as_ptr(&state.0) as *mut IoState) }
+            .buffer
+            .add_layer();
 
         // replace current filter
         state.0.filter.add_filter::<F, U>(nf);
+
+        Io(UnsafeCell::new(state), marker::PhantomData)
+    }
+
+    /// Map layer
+    pub fn map_filter<U, R>(self, f: U) -> Io<R>
+    where
+        U: FnOnce(F) -> R,
+        R: Filter,
+    {
+        let state = self.take_io_ref();
+        state.0.filter.map_filter::<F, U, R>(f);
 
         Io(UnsafeCell::new(state), marker::PhantomData)
     }
@@ -858,6 +868,27 @@ impl FilterPtr {
         }
     }
 
+    fn map_filter<F: Filter, U, R>(&self, f: U)
+    where
+        U: FnOnce(F) -> R,
+        R: Filter,
+    {
+        let mut data = NULL;
+        let filter = Box::new(f(*self.take_filter::<F>()));
+        unsafe {
+            let filter_ref: &'static dyn Filter = {
+                let f: &dyn Filter = filter.as_ref();
+                std::mem::transmute(f)
+            };
+            self.filter.set(filter_ref);
+
+            let ptr = &mut data as *mut _ as *mut *mut R;
+            ptr.write(Box::into_raw(filter));
+            data[KIND_IDX] |= KIND_PTR;
+            self.data.set(data);
+        }
+    }
+
     fn seal<F: Filter>(&self) {
         let mut data = self.data.get();
 
@@ -1028,11 +1059,19 @@ mod tests {
     }
 
     impl FilterLayer for DropFilter {
-        const BUFFERS: bool = false;
         fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
-            Ok(buf.nbytes())
+            if let Some(src) = buf.take_src() {
+                let len = src.len();
+                buf.set_dst(Some(src));
+                Ok(len)
+            } else {
+                Ok(0)
+            }
         }
-        fn process_write_buf(&self, _: &WriteBuf<'_>) -> io::Result<()> {
+        fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
+            if let Some(src) = buf.take_src() {
+                buf.set_dst(Some(src));
+            }
             Ok(())
         }
     }

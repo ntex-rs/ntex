@@ -4,7 +4,9 @@ use ntex_bytes::{BytesVec, PoolRef};
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Seconds;
 
-use crate::{timer, types, Decoded, Filter, Flags, IoRef, OnDisconnect, WriteBuf};
+use crate::{
+    timer, types, Decoded, Filter, FilterCtx, Flags, IoRef, OnDisconnect, WriteBuf,
+};
 
 impl IoRef {
     #[inline]
@@ -180,7 +182,9 @@ impl IoRef {
         F: FnOnce(&WriteBuf<'_>) -> R,
     {
         let result = self.0.buffer.write_buf(self, 0, f);
-        self.0.filter().process_write_buf(self, &self.0.buffer, 0)?;
+        self.0
+            .filter()
+            .process_write_buf(FilterCtx::new(self, &self.0.buffer))?;
         Ok(result)
     }
 
@@ -194,7 +198,9 @@ impl IoRef {
             Err(self.0.error_or_disconnected())
         } else {
             let result = self.0.buffer.with_write_source(self, f);
-            self.0.filter().process_write_buf(self, &self.0.buffer, 0)?;
+            self.0
+                .filter()
+                .process_write_buf(FilterCtx::new(self, &self.0.buffer))?;
             Ok(result)
         }
     }
@@ -330,7 +336,7 @@ mod tests {
     use ntex_util::time::{sleep, Millis};
 
     use super::*;
-    use crate::{testing::IoTest, FilterLayer, Io, ReadBuf};
+    use crate::{testing::IoTest, FilterCtx, FilterReadStatus, Io};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -472,7 +478,8 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct Counter {
+    struct Counter<F> {
+        layer: F,
         idx: usize,
         in_bytes: Rc<Cell<usize>>,
         out_bytes: Rc<Cell<usize>>,
@@ -480,21 +487,27 @@ mod tests {
         write_order: Rc<RefCell<Vec<usize>>>,
     }
 
-    impl FilterLayer for Counter {
-        const BUFFERS: bool = false;
-
-        fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
+    impl<F: Filter> Filter for Counter<F> {
+        fn process_read_buf(
+            &self,
+            ctx: FilterCtx<'_>,
+            nbytes: usize,
+        ) -> io::Result<FilterReadStatus> {
             self.read_order.borrow_mut().push(self.idx);
-            self.in_bytes.set(self.in_bytes.get() + buf.nbytes());
-            Ok(buf.nbytes())
+            self.in_bytes.set(self.in_bytes.get() + nbytes);
+            self.layer.process_read_buf(ctx, nbytes)
         }
 
-        fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
+        fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
             self.write_order.borrow_mut().push(self.idx);
             self.out_bytes
-                .set(self.out_bytes.get() + buf.with_dst(|b| b.len()));
-            Ok(())
+                .set(self.out_bytes.get() + ctx.write_buf(|buf| buf.with_dst(|b| b.len())));
+            self.layer.process_write_buf(ctx)
         }
+
+        crate::forward_ready!(layer);
+        crate::forward_query!(layer);
+        crate::forward_shutdown!(layer);
     }
 
     #[ntex::test]
@@ -505,15 +518,14 @@ mod tests {
         let write_order = Rc::new(RefCell::new(Vec::new()));
 
         let (client, server) = IoTest::create();
-        let counter = Counter {
+        let io = Io::new(server).map_filter(|layer| Counter {
+            layer,
             idx: 1,
             in_bytes: in_bytes.clone(),
             out_bytes: out_bytes.clone(),
             read_order: read_order.clone(),
             write_order: write_order.clone(),
-        };
-        let _ = format!("{:?}", counter);
-        let io = Io::new(server).add_filter(counter);
+        });
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
@@ -539,15 +551,17 @@ mod tests {
 
         let (client, server) = IoTest::create();
         let state = Io::new(server)
-            .add_filter(Counter {
-                idx: 1,
+            .map_filter(|layer| Counter {
+                layer,
+                idx: 2,
                 in_bytes: in_bytes.clone(),
                 out_bytes: out_bytes.clone(),
                 read_order: read_order.clone(),
                 write_order: write_order.clone(),
             })
-            .add_filter(Counter {
-                idx: 2,
+            .map_filter(|layer| Counter {
+                layer,
+                idx: 1,
                 in_bytes: in_bytes.clone(),
                 out_bytes: out_bytes.clone(),
                 read_order: read_order.clone(),
@@ -579,6 +593,6 @@ mod tests {
         drop(state);
         assert_eq!(Rc::strong_count(&in_bytes), 1);
         assert_eq!(*read_order.borrow(), &[1, 2][..]);
-        assert_eq!(*write_order.borrow(), &[2, 1][..]);
+        assert_eq!(*write_order.borrow(), &[1, 2][..]);
     }
 }

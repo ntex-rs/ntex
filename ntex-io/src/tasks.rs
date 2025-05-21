@@ -3,7 +3,7 @@ use std::{cell::Cell, fmt, future::poll_fn, io, task::Context, task::Poll};
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_util::{future::lazy, future::select, future::Either, time::sleep, time::Sleep};
 
-use crate::{AsyncRead, AsyncWrite, Flags, IoRef, IoTaskStatus, Readiness};
+use crate::{AsyncRead, AsyncWrite, FilterCtx, Flags, IoRef, IoTaskStatus, Readiness};
 
 /// Context for io read task
 pub struct ReadContext(IoRef, Cell<Option<Sleep>>);
@@ -107,7 +107,9 @@ impl ReadContext {
             // handle buffer changes
             if nbytes > 0 {
                 let filter = self.0.filter();
-                let res = match filter.process_read_buf(&self.0, &inner.buffer, 0, nbytes) {
+                let res = match filter
+                    .process_read_buf(FilterCtx::new(&self.0, &inner.buffer), nbytes)
+                {
                     Ok(status) => {
                         if status.nbytes > 0 {
                             // check read back-pressure
@@ -138,7 +140,7 @@ impl ReadContext {
                         // in that case filters need to process write buffers
                         // and potentialy wake write task
                         if status.need_write {
-                            filter.process_write_buf(&self.0, &inner.buffer, 0)
+                            filter.process_write_buf(FilterCtx::new(&self.0, &inner.buffer))
                         } else {
                             Ok(())
                         }
@@ -177,7 +179,7 @@ impl ReadContext {
         let st = &self.0 .0;
         let filter = self.0.filter();
 
-        match filter.shutdown(&self.0, &st.buffer, 0) {
+        match filter.shutdown(FilterCtx::new(&self.0, &st.buffer)) {
             Ok(Poll::Ready(())) => {
                 st.dispatch_task.wake();
                 st.insert_flags(Flags::IO_STOPPING);
@@ -210,7 +212,7 @@ impl ReadContext {
                 st.io_stopped(Some(err));
             }
         }
-        if let Err(err) = filter.process_write_buf(&self.0, &st.buffer, 0) {
+        if let Err(err) = filter.process_write_buf(FilterCtx::new(&self.0, &st.buffer)) {
             st.io_stopped(Some(err));
         }
     }
@@ -476,7 +478,7 @@ impl IoContext {
             match self
                 .0
                 .filter()
-                .process_read_buf(&self.0, &inner.buffer, 0, nbytes)
+                .process_read_buf(FilterCtx::new(&self.0, &inner.buffer), nbytes)
             {
                 Ok(status) => {
                     let buffer_size = inner.buffer.read_destination_size();
@@ -519,7 +521,9 @@ impl IoContext {
                     // in that case filters need to process write buffers
                     // and potentialy wake write task
                     if status.need_write {
-                        self.0.filter().process_write_buf(&self.0, &inner.buffer, 0)
+                        self.0
+                            .filter()
+                            .process_write_buf(FilterCtx::new(&self.0, &inner.buffer))
                     } else {
                         Ok(())
                     }
@@ -668,7 +672,7 @@ impl IoContext {
         if flags.contains(Flags::IO_STOPPING_FILTERS)
             && !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
         {
-            match io.filter().shutdown(io, &st.buffer, 0) {
+            match io.filter().shutdown(FilterCtx::new(io, &st.buffer)) {
                 Ok(Poll::Ready(())) => {
                     st.write_task.wake();
                     st.dispatch_task.wake();
@@ -690,7 +694,10 @@ impl IoContext {
                     st.io_stopped(Some(err));
                 }
             }
-            if let Err(err) = io.filter().process_write_buf(io, &st.buffer, 0) {
+            if let Err(err) = io
+                .filter()
+                .process_write_buf(FilterCtx::new(io, &st.buffer))
+            {
                 st.io_stopped(Some(err));
             }
         }

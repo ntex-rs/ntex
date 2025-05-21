@@ -15,6 +15,7 @@ mod flags;
 mod framed;
 mod io;
 mod ioref;
+mod macros;
 mod seal;
 mod tasks;
 mod timer;
@@ -23,9 +24,9 @@ mod utils;
 use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
 
-pub use self::buf::{ReadBuf, WriteBuf};
+pub use self::buf::{FilterCtx, ReadBuf, WriteBuf};
 pub use self::dispatcher::{Dispatcher, DispatcherConfig};
-pub use self::filter::{Base, Filter, Layer};
+pub use self::filter::{Base, Filter, FilterReadStatus, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
@@ -63,9 +64,6 @@ pub enum Readiness {
 
 #[allow(unused_variables)]
 pub trait FilterLayer: fmt::Debug + 'static {
-    /// Create buffers for this filter
-    const BUFFERS: bool = true;
-
     #[inline]
     /// Check readiness for read operations
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {

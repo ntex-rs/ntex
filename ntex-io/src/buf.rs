@@ -24,7 +24,7 @@ impl fmt::Debug for Buffer {
 }
 
 #[derive(Debug)]
-pub struct Stack {
+pub(crate) struct Stack {
     len: usize,
     buffers: Either<[Buffer; 3], Vec<Buffer>>,
 }
@@ -107,22 +107,6 @@ impl Stack {
             Either::Left(b) => &b[self.len - 1],
             Either::Right(b) => &b[self.len - 1],
         }
-    }
-
-    pub(crate) fn read_buf<F, R>(&self, io: &IoRef, idx: usize, nbytes: usize, f: F) -> R
-    where
-        F: FnOnce(&ReadBuf<'_>) -> R,
-    {
-        self.get_buffers(idx, |curr, next| {
-            let buf = ReadBuf {
-                io,
-                nbytes,
-                curr,
-                next,
-                need_write: Cell::new(false),
-            };
-            f(&buf)
-        })
     }
 
     pub(crate) fn write_buf<F, R>(&self, io: &IoRef, idx: usize, f: F) -> R
@@ -288,6 +272,57 @@ impl Stack {
                 item.1.set(Some(b));
             }
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct FilterCtx<'a> {
+    pub(crate) io: &'a IoRef,
+    pub(crate) stack: &'a Stack,
+    pub(crate) idx: usize,
+}
+
+impl<'a> FilterCtx<'a> {
+    pub(crate) fn new(io: &'a IoRef, stack: &'a Stack) -> Self {
+        Self { io, stack, idx: 0 }
+    }
+
+    pub fn next(&self) -> Self {
+        Self {
+            io: self.io,
+            stack: self.stack,
+            idx: self.idx + 1,
+        }
+    }
+
+    pub fn read_buf<F, R>(&self, nbytes: usize, f: F) -> R
+    where
+        F: FnOnce(&ReadBuf<'_>) -> R,
+    {
+        self.stack.get_buffers(self.idx, |curr, next| {
+            let buf = ReadBuf {
+                nbytes,
+                curr,
+                next,
+                io: self.io,
+                need_write: Cell::new(false),
+            };
+            f(&buf)
+        })
+    }
+
+    pub fn write_buf<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&WriteBuf<'_>) -> R,
+    {
+        self.stack.write_buf(self.io, self.idx, f)
+    }
+
+    pub(crate) fn with_write_destination<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(Option<&mut BytesVec>) -> R,
+    {
+        self.stack.with_write_destination(self.io, f)
     }
 }
 

@@ -1,6 +1,6 @@
 use std::{any, io, task::Context, task::Poll};
 
-use crate::{buf::Stack, FilterLayer, Flags, IoRef, Readiness};
+use crate::{FilterCtx, FilterLayer, Flags, IoRef, Readiness};
 
 #[derive(Debug)]
 /// Default `Io` filter
@@ -59,17 +59,15 @@ pub trait Filter: 'static {
 
     fn process_read_buf(
         &self,
-        io: &IoRef,
-        stack: &Stack,
-        idx: usize,
+        ctx: FilterCtx<'_>,
         nbytes: usize,
     ) -> io::Result<FilterReadStatus>;
 
     /// Process write buffer
-    fn process_write_buf(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<()>;
+    fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()>;
 
     /// Gracefully shutdown filter
-    fn shutdown(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<Poll<()>>;
+    fn shutdown(&self, ctx: FilterCtx<'_>) -> io::Result<Poll<()>>;
 
     /// Check readiness for read operations
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
@@ -130,9 +128,7 @@ impl Filter for Base {
     #[inline]
     fn process_read_buf(
         &self,
-        _: &IoRef,
-        _: &Stack,
-        _: usize,
+        _: FilterCtx<'_>,
         nbytes: usize,
     ) -> io::Result<FilterReadStatus> {
         Ok(FilterReadStatus {
@@ -142,8 +138,8 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn process_write_buf(&self, io: &IoRef, s: &Stack, _: usize) -> io::Result<()> {
-        s.with_write_destination(io, |buf| {
+    fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
+        ctx.with_write_destination(|buf| {
             if let Some(buf) = buf {
                 let len = buf.len();
                 let flags = self.0.flags();
@@ -163,7 +159,7 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn shutdown(&self, _: &IoRef, _: &Stack, _: usize) -> io::Result<Poll<()>> {
+    fn shutdown(&self, _: FilterCtx<'_>) -> io::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }
@@ -179,15 +175,10 @@ where
     }
 
     #[inline]
-    fn shutdown(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<Poll<()>> {
-        let result1 = stack.write_buf(io, idx, |buf| self.0.shutdown(buf))?;
-        self.process_write_buf(io, stack, idx)?;
-
-        let result2 = if F::BUFFERS {
-            self.1.shutdown(io, stack, idx + 1)?
-        } else {
-            self.1.shutdown(io, stack, idx)?
-        };
+    fn shutdown(&self, ctx: FilterCtx<'_>) -> io::Result<Poll<()>> {
+        let result1 = ctx.write_buf(|buf| self.0.shutdown(buf))?;
+        self.process_write_buf(ctx)?;
+        let result2 = self.1.shutdown(ctx.next())?;
 
         if result1.is_pending() || result2.is_pending() {
             Ok(Poll::Pending)
@@ -199,17 +190,11 @@ where
     #[inline]
     fn process_read_buf(
         &self,
-        io: &IoRef,
-        stack: &Stack,
-        idx: usize,
+        ctx: FilterCtx<'_>,
         nbytes: usize,
     ) -> io::Result<FilterReadStatus> {
-        let status = if F::BUFFERS {
-            self.1.process_read_buf(io, stack, idx + 1, nbytes)?
-        } else {
-            self.1.process_read_buf(io, stack, idx, nbytes)?
-        };
-        stack.read_buf(io, idx, status.nbytes, |buf| {
+        let status = self.1.process_read_buf(ctx.next(), nbytes)?;
+        ctx.read_buf(status.nbytes, |buf| {
             self.0.process_read_buf(buf).map(|nbytes| FilterReadStatus {
                 nbytes,
                 need_write: status.need_write || buf.need_write.get(),
@@ -218,14 +203,9 @@ where
     }
 
     #[inline]
-    fn process_write_buf(&self, io: &IoRef, stack: &Stack, idx: usize) -> io::Result<()> {
-        stack.write_buf(io, idx, |buf| self.0.process_write_buf(buf))?;
-
-        if F::BUFFERS {
-            self.1.process_write_buf(io, stack, idx + 1)
-        } else {
-            self.1.process_write_buf(io, stack, idx)
-        }
+    fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
+        ctx.write_buf(|buf| self.0.process_write_buf(buf))?;
+        self.1.process_write_buf(ctx.next())
     }
 
     #[inline]
@@ -256,23 +236,17 @@ impl Filter for NullFilter {
     }
 
     #[inline]
-    fn process_read_buf(
-        &self,
-        _: &IoRef,
-        _: &Stack,
-        _: usize,
-        _: usize,
-    ) -> io::Result<FilterReadStatus> {
+    fn process_read_buf(&self, _: FilterCtx<'_>, _: usize) -> io::Result<FilterReadStatus> {
         Ok(Default::default())
     }
 
     #[inline]
-    fn process_write_buf(&self, _: &IoRef, _: &Stack, _: usize) -> io::Result<()> {
+    fn process_write_buf(&self, _: FilterCtx<'_>) -> io::Result<()> {
         Ok(())
     }
 
     #[inline]
-    fn shutdown(&self, _: &IoRef, _: &Stack, _: usize) -> io::Result<Poll<()>> {
+    fn shutdown(&self, _: FilterCtx<'_>) -> io::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }
