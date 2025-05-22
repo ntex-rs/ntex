@@ -1,5 +1,9 @@
 # Changes
 
+## [2.13.2] - 2025-05-22
+
+* Improve buffer stack management
+
 ## [2.13.1] - 2025-05-21
 
 * Make Readiness::merge() public
