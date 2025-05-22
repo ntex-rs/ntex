@@ -102,13 +102,7 @@ impl Stack {
         if self.len > next {
             f(&buffers[idx], &buffers[next])
         } else {
-            f(
-                &buffers[idx],
-                &Buffer {
-                    read: Cell::new(None),
-                    write: Cell::new(None),
-                },
-            )
+            f(&buffers[idx], &Buffer::default())
         }
     }
 
@@ -143,12 +137,12 @@ impl Stack {
         F: FnOnce(&mut BytesVec) -> R,
     {
         let item = self.get_first_level();
-        let mut rb = item.read.take();
-        if rb.is_none() {
-            rb = Some(io.memory_pool().get_read_buf());
-        }
+        let mut rb = item
+            .read
+            .take()
+            .unwrap_or_else(|| io.memory_pool().get_read_buf());
 
-        let result = f(rb.as_mut().unwrap());
+        let result = f(&mut rb);
 
         // check nested updates
         if item.read.take().is_some() {
@@ -156,12 +150,10 @@ impl Stack {
             io.force_close();
         }
 
-        if let Some(b) = rb {
-            if b.is_empty() {
-                io.memory_pool().release_read_buf(b);
-            } else {
-                item.read.set(Some(b));
-            }
+        if rb.is_empty() {
+            io.memory_pool().release_read_buf(rb);
+        } else {
+            item.read.set(Some(rb));
         }
         result
     }
@@ -186,18 +178,16 @@ impl Stack {
         F: FnOnce(&mut BytesVec) -> R,
     {
         let item = self.get_first_level();
-        let mut wb = item.write.take();
-        if wb.is_none() {
-            wb = Some(io.memory_pool().get_write_buf());
-        }
+        let mut wb = item
+            .write
+            .take()
+            .unwrap_or_else(|| io.memory_pool().get_write_buf());
 
-        let result = f(wb.as_mut().unwrap());
-        if let Some(b) = wb {
-            if b.is_empty() {
-                io.memory_pool().release_write_buf(b);
-            } else {
-                item.write.set(Some(b));
-            }
+        let result = f(&mut wb);
+        if wb.is_empty() {
+            io.memory_pool().release_write_buf(wb);
+        } else {
+            item.write.set(Some(wb));
         }
         result
     }
