@@ -93,11 +93,6 @@ impl Stack {
     where
         F: FnOnce(&Buffer, &Buffer) -> R,
     {
-        const EMPTY: Buffer = Buffer {
-            read: Cell::new(None),
-            write: Cell::new(None),
-        };
-
         let buffers = match self.buffers {
             Either::Left(ref b) => &b[..],
             Either::Right(ref b) => &b[..],
@@ -107,7 +102,13 @@ impl Stack {
         if self.len > next {
             f(&buffers[idx], &buffers[next])
         } else {
-            f(&buffers[idx], &EMPTY)
+            f(
+                &buffers[idx],
+                &Buffer {
+                    read: Cell::new(None),
+                    write: Cell::new(None),
+                },
+            )
         }
     }
 
