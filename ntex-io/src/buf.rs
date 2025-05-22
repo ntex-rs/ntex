@@ -279,6 +279,12 @@ impl<'a> FilterCtx<'a> {
         Self { io, stack, idx: 0 }
     }
 
+    #[inline]
+    pub fn tag(&self) -> &'static str {
+        self.io.tag()
+    }
+
+    #[inline]
     pub fn next(&self) -> Self {
         Self {
             io: self.io,
@@ -287,6 +293,7 @@ impl<'a> FilterCtx<'a> {
         }
     }
 
+    #[inline]
     pub fn read_buf<F, R>(&self, nbytes: usize, f: F) -> R
     where
         F: FnOnce(&ReadBuf<'_>) -> R,
@@ -303,6 +310,7 @@ impl<'a> FilterCtx<'a> {
         })
     }
 
+    #[inline]
     pub fn write_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&WriteBuf<'_>) -> R,
