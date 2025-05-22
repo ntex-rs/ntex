@@ -181,10 +181,9 @@ impl IoRef {
     where
         F: FnOnce(&WriteBuf<'_>) -> R,
     {
-        let result = self.0.buffer.write_buf(self, 0, f);
-        self.0
-            .filter()
-            .process_write_buf(FilterCtx::new(self, &self.0.buffer))?;
+        let ctx = FilterCtx::new(self, &self.0.buffer);
+        let result = ctx.write_buf(f);
+        self.0.filter().process_write_buf(ctx)?;
         Ok(result)
     }
 
@@ -500,8 +499,12 @@ mod tests {
 
         fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
             self.write_order.borrow_mut().push(self.idx);
-            self.out_bytes
-                .set(self.out_bytes.get() + ctx.write_buf(|buf| buf.with_dst(|b| b.len())));
+            self.out_bytes.set(
+                self.out_bytes.get()
+                    + ctx.write_buf(|buf| {
+                        buf.with_src(|b| b.as_ref().map(|b| b.len()).unwrap_or_default())
+                    }),
+            );
             self.layer.process_write_buf(ctx)
         }
 

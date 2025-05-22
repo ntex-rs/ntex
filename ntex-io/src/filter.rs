@@ -122,7 +122,7 @@ impl Filter for Base {
 
     #[inline]
     fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
-        ctx.with_write_destination(|buf| {
+        ctx.stack.with_write_destination(ctx.io, |buf| {
             if let Some(buf) = buf {
                 let len = buf.len();
                 let flags = self.0.flags();
