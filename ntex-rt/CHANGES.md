@@ -1,12 +1,16 @@
 # Changes
 
+## [0.4.31] - 2025-05-26
+
+* Upgrade to compio 0.14
+
 ## [0.4.29] - 2025-03-26
 
 * Add Arbiter::get_value() helper method
 
 ## [0.4.27] - 2025-03-14
 
-* Add srbiters pings ttl
+* Add arbiters pings ttl
 
 * Retrieves a list of all arbiters in the system
 

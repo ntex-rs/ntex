@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.21] - 2025-05-26
+
+* Upgrade to ntex-compio 0.3
+
 ## [2.5.20] - 2025-05-19
 
 * iour: Handle POLLRDHUP event

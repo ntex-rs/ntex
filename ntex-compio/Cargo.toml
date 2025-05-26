@@ -1,6 +1,6 @@
 [package]
 name = "ntex-compio"
-version = "0.2.4"
+version = "0.3.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "compio runtime intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -24,7 +24,7 @@ ntex-rt = "0.4"
 log = "0.4"
 
 compio-buf = "0.5"
-compio-io = "0.5"
-compio-net = "0.6"
-compio-driver = "0.6"
-compio-runtime = { version = "0.6", features = ["io-uring", "polling", "event"] }
+compio-io = "0.6"
+compio-net = "0.7"
+compio-driver = "0.7"
+compio-runtime = { version = "0.7", features = ["io-uring", "polling", "event"] }

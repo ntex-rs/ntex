@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "0.4.30"
+version = "0.4.31"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -35,11 +35,11 @@ futures-timer = "3.0"
 oneshot = "0.1"
 log = "0.4"
 
-compio-driver = { version = "0.6", optional = true }
-compio-runtime = { version = "0.6", optional = true }
+compio-driver = { version = "0.7", optional = true }
+compio-runtime = { version = "0.7", optional = true }
 tok-io = { version = "1", package = "tokio", default-features = false, features = [
     "rt",
     "net",
 ], optional = true }
 
-ntex-neon = { version = "0.1.17", optional = true }
+ntex-neon = { version = "0.1.23", optional = true }

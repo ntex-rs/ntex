@@ -1,5 +1,9 @@
 # Changes
 
+## [0.3.0] - 2025-05-26
+
+* Update to compio 0.14
+
 ## [0.2.4] - 2024-12-01
 
 * Depend on individual compio packages
