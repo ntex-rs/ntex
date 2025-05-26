@@ -46,7 +46,7 @@ jobs:
 
       - name: Run tests (compio)
         timeout-minutes: 40
-        run: cargo test --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: RUST_BACKTRACE=1 cargo test --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Install cargo-cache
         continue-on-error: true
