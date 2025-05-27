@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.22] - 2025-05-27
+
+* Check io-uring compat
+
 ## [2.5.21] - 2025-05-26
 
 * Upgrade to ntex-compio 0.3

@@ -234,7 +234,7 @@ impl Handler for StreamOpsHandler {
                             let (op_id, op) = st.recv_more(id, ctx, buf);
                             self.inner.api.submit(op_id, op);
                         } else if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
-                            if let Some((op_id, op)) = st.recv(id, ctx, true) {
+                            if let Some((op_id, op)) = st.recv(id, ctx, true && self.inner.api.is_new()) {
                                 self.inner.api.submit(op_id, op);
                             }
                         }
@@ -339,7 +339,6 @@ impl StreamOpsStorage {
             let s = buf.chunk_mut();
             let mut op = opcode::Recv::new(item.fd(), s.as_mut_ptr(), s.len() as u32);
 
-            #[cfg(not(feature = "io-uring-compat"))]
             if poll_first {
                 op = op.ioprio(IORING_RECVSEND_POLL_FIRST);
             };
