@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.1] - 2025-05-27
+
+* Clear events list for accept loop
+
 ## [2.8.0] - 2025-04-08
 
 * Add ServerBuilder::on_accept() callback

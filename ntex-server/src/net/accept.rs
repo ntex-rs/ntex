@@ -202,6 +202,8 @@ impl Accept {
 
         let mut timeout = Some(Duration::ZERO);
         loop {
+            events.clear();
+
             if let Err(e) = self.poller.wait(&mut events, timeout) {
                 if e.kind() != io::ErrorKind::Interrupted {
                     panic!("Cannot wait for events in poller: {}", e)
