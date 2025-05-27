@@ -46,9 +46,6 @@ ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
 [workspace.dependencies]
-ntex-polling = "3.7.4"
-ntex-io-uring = "0.7.7"
-
 async-channel = "2"
 async-task = "4.5.0"
 atomic-waker = "1.1"
@@ -63,7 +60,7 @@ fxhash = "0.2"
 libc = "0.2.164"
 log = "0.4"
 oneshot = "0.1"
-polling = "3.7.4"
+polling = "3.8.0"
 nohash-hasher = "0.2.0"
 scoped-tls = "1.0.1"
 slab = "0.4.9"
