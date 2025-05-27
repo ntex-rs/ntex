@@ -27,7 +27,7 @@ bitflags::bitflags! {
     }
 }
 
-const ZC_SIZE: usize = 768;
+const ZC_SIZE: usize = 1024;
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
 struct StreamItem {
