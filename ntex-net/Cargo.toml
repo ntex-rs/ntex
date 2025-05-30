@@ -41,7 +41,7 @@ ntex-util = "2.5"
 
 ntex-tokio = { version = "0.5.3", optional = true }
 ntex-compio = { version = "0.3.0", optional = true }
-ntex-neon = { version = "0.1.27", optional = true }
+ntex-neon = { version = "0.1.28", optional = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
