@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.25] - 2025-05-29
+
+* Use inline api for iour
+
 ## [2.5.22] - 2025-05-27
 
 * Check io-uring compat

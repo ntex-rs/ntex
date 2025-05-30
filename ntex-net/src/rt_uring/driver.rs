@@ -27,7 +27,7 @@ bitflags::bitflags! {
     }
 }
 
-const ZC_SIZE: usize = 1536;
+const ZC_SIZE: u32 = 1536;
 const IORING_RECVSEND_POLL_FIRST: u16 = 1;
 
 struct StreamItem {
@@ -178,9 +178,7 @@ impl Handler for StreamOpsHandler {
                         item.flags.remove(Flags::RD_CANCELING);
                         if item.flags.contains(Flags::RD_REISSUE) {
                             item.flags.remove(Flags::RD_REISSUE);
-                            if let Some((op_id, op)) = st.recv(id, ctx, false) {
-                                self.inner.api.submit(op_id, op);
-                            }
+                            st.recv(id, ctx, false, &self.inner.api);
                         }
                     }
                 }
@@ -197,9 +195,7 @@ impl Handler for StreamOpsHandler {
                         item.flags.remove(Flags::WR_CANCELING);
                         if item.flags.contains(Flags::WR_REISSUE) {
                             item.flags.remove(Flags::WR_REISSUE);
-                            if let Some((op_id, op)) = st.send(id, ctx) {
-                                self.inner.api.submit(op_id, op);
-                            }
+                            st.send(id, ctx, &self.inner.api);
                         }
                     }
                 }
@@ -220,8 +216,7 @@ impl Handler for StreamOpsHandler {
                     // handle WouldBlock
                     if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
                         log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), res, ctx.id());
-                        let (op_id, op) = st.recv_more(id, ctx, buf);
-                        self.inner.api.submit(op_id, op);
+                        st.recv_more(id, ctx, buf, &self.inner.api);
                     } else {
                         let mut total = 0;
                         let res = Poll::Ready(res.map(|size| {
@@ -231,30 +226,23 @@ impl Handler for StreamOpsHandler {
 
                         // handle IORING_CQE_F_SOCK_NONEMPTY flag
                         if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
-                            let (op_id, op) = st.recv_more(id, ctx, buf);
-                            self.inner.api.submit(op_id, op);
+                            st.recv_more(id, ctx, buf, &self.inner.api);
                         } else if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
-                            if let Some((op_id, op)) = st.recv(id, ctx, true && self.inner.api.is_new()) {
-                                self.inner.api.submit(op_id, op);
-                            }
+                            st.recv(id, ctx, true && self.inner.api.is_new(), &self.inner.api);
                         }
                     }
                 }
                 Operation::Send { id, buf, ctx, result } => {
                     if cqueue::notif(flags) {
                         if ctx.release_write_buf(buf, Poll::Ready(result.unwrap())) == IoTaskStatus::Io {
-                            if let Some((op_id, op)) = st.send(id, ctx) {
-                                self.inner.api.submit(op_id, op);
-                            }
+                            st.send(id, ctx, &self.inner.api);
                         }
                     } else if cqueue::more(flags) {
                         // reset op reference
                         st.streams.get_mut(id).map(|item| item.wr_op.take());
                         // try to send next chunk
                         if res.is_ok() {
-                            if let Some((op_id, op)) = st.send(id, ctx.clone()) {
-                                self.inner.api.submit(op_id, op);
-                            }
+                            st.send(id, ctx.clone(), &self.inner.api);
                         }
                         // insert op back for "notify" handling
                         st.ops[user_data] = Some(Operation::Send { id, buf, ctx, result: Some(res) });
@@ -265,9 +253,7 @@ impl Handler for StreamOpsHandler {
 
                         // release buffer and try to send next chunk
                         if ctx.release_write_buf(buf, Poll::Ready(res)) == IoTaskStatus::Io {
-                            if let Some((op_id, op)) = st.send(id, ctx) {
-                                self.inner.api.submit(op_id, op);
-                            }
+                            st.send(id, ctx, &self.inner.api);
                         }
                     }
                 }
@@ -319,63 +305,59 @@ impl StreamOpsStorage {
         (self.add_operation(Operation::Close { id }), entry)
     }
 
-    fn recv(
-        &mut self,
-        id: usize,
-        ctx: IoContext,
-        poll_first: bool,
-    ) -> Option<(u32, Entry)> {
+    fn recv(&mut self, id: usize, ctx: IoContext, poll_first: bool, api: &DriverApi) {
         if !self.streams.contains(id) {
-            return None;
+            return;
         }
 
         let item = &mut self.streams[id];
-
         if item.rd_op.is_none() {
             let mut buf = ctx.get_read_buf();
             if buf.remaining_mut() < self.lw {
                 buf.reserve(self.hw);
             }
             let s = buf.chunk_mut();
-            let mut op = opcode::Recv::new(item.fd(), s.as_mut_ptr(), s.len() as u32);
-
-            if poll_first {
-                op = op.ioprio(IORING_RECVSEND_POLL_FIRST);
-            };
+            let buf_ptr = s.as_mut_ptr();
+            let buf_len = s.len() as u32;
             let op_id = self.ops.insert(Some(Operation::Recv { id, buf, ctx })) as u32;
             item.rd_op = NonZeroU32::new(op_id);
-            return Some((op_id, op.build()));
+
+            api.submit_inline(op_id, move |entry| {
+                let mut op = opcode::Recv::new(item.fd(), buf_ptr, buf_len);
+                if poll_first {
+                    op.set_ioprio(IORING_RECVSEND_POLL_FIRST);
+                };
+                op.build_into(entry);
+            });
         } else if item.flags.contains(Flags::RD_CANCELING) {
             item.flags.insert(Flags::RD_REISSUE);
         }
-        None
     }
 
-    fn recv_more(&mut self, id: usize, ctx: IoContext, mut buf: BytesVec) -> (u32, Entry) {
+    fn recv_more(&mut self, id: usize, ctx: IoContext, mut buf: BytesVec, api: &DriverApi) {
         if buf.remaining_mut() < self.lw {
             buf.reserve(self.hw);
         }
         let slice = buf.chunk_mut();
+        let buf_ptr = slice.as_mut_ptr();
+        let buf_len = slice.len() as u32;
         let item = &mut self.streams[id];
-        let op =
-            opcode::Recv::new(item.fd(), slice.as_mut_ptr(), slice.len() as u32).build();
         let op_id = self.ops.insert(Some(Operation::Recv { id, buf, ctx })) as u32;
         item.rd_op = NonZeroU32::new(op_id);
-        (op_id, op)
+
+        api.submit_inline(op_id, move |entry| {
+            opcode::Recv::new(item.fd(), buf_ptr, buf_len).build_into(entry);
+        });
     }
 
-    fn send(&mut self, id: usize, ctx: IoContext) -> Option<(u32, Entry)> {
+    fn send(&mut self, id: usize, ctx: IoContext, api: &DriverApi) {
         let item = &mut self.streams[id];
 
         if item.wr_op.is_none() {
             if let Some(buf) = ctx.get_write_buf() {
                 let slice = buf.chunk();
-                let op = if item.flags.contains(Flags::NO_ZC) || slice.len() <= ZC_SIZE {
-                    opcode::Send::new(item.fd(), slice.as_ptr(), slice.len() as u32).build()
-                } else {
-                    opcode::SendZc::new(item.fd(), slice.as_ptr(), slice.len() as u32)
-                        .build()
-                };
+                let buf_ptr = slice.as_ptr();
+                let buf_len = slice.len() as u32;
                 let op_id = self.ops.insert(Some(Operation::Send {
                     id,
                     buf,
@@ -383,12 +365,18 @@ impl StreamOpsStorage {
                     result: None,
                 })) as u32;
                 item.wr_op = NonZeroU32::new(op_id);
-                return Some((op_id, op));
+
+                api.submit_inline(op_id, move |entry| {
+                    if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
+                        opcode::Send::new(item.fd(), buf_ptr, buf_len).build_into(entry);
+                    } else {
+                        opcode::SendZc::new(item.fd(), buf_ptr, buf_len).build_into(entry);
+                    }
+                });
             }
         } else if item.flags.contains(Flags::WR_CANCELING) {
             item.flags.insert(Flags::WR_REISSUE);
         }
-        None
     }
 
     fn add_operation(&mut self, op: Operation) -> u32 {
@@ -446,19 +434,13 @@ impl StreamCtl {
     }
 
     pub(crate) fn resume_read(&self, ctx: &IoContext) {
-        self.inner.with(|st| {
-            if let Some((op_id, op)) = st.recv(self.id, ctx.clone(), false) {
-                self.inner.api.submit(op_id, op);
-            }
-        })
+        self.inner
+            .with(|st| st.recv(self.id, ctx.clone(), false, &self.inner.api))
     }
 
     pub(crate) fn resume_write(&self, ctx: &IoContext) {
-        self.inner.with(|storage| {
-            if let Some((op_id, op)) = storage.send(self.id, ctx.clone()) {
-                self.inner.api.submit(op_id, op);
-            }
-        })
+        self.inner
+            .with(|storage| storage.send(self.id, ctx.clone(), &self.inner.api))
     }
 
     pub(crate) fn pause_read(&self) {
