@@ -64,6 +64,19 @@ enum Operation {
     Nop,
 }
 
+impl Operation {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Operation::Recv { .. } => "Recv",
+            Operation::Send { .. } => "Send",
+            Operation::Poll { .. } => "Poll",
+            Operation::Shutdown { .. } => "Shutdown",
+            Operation::Close { .. } => "Close",
+            Operation::Nop => "Nop",
+        }
+    }
+}
+
 struct StreamOpsHandler {
     inner: Rc<StreamOpsInner>,
 }
@@ -208,7 +221,12 @@ impl Handler for StreamOpsHandler {
 
     fn completed(&mut self, user_data: usize, flags: u32, res: io::Result<usize>) {
         self.inner.with(|st| {
-            match st.ops[user_data].take().unwrap() {
+            let oper = st.ops[user_data].take().unwrap();
+            if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::InvalidInput) {
+                log::error!("Invalid input for {}, err: {:?}", oper.as_str(), res);
+            }
+
+            match oper {
                 Operation::Recv { id, mut buf, ctx } => {
                     // reset op reference
                     st.streams.get_mut(id).map(|item| item.rd_op.take());
