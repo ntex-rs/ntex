@@ -228,7 +228,7 @@ impl Handler for StreamOpsHandler {
                         if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
                             st.recv_more(id, ctx, buf, &self.inner.api);
                         } else if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
-                            st.recv(id, ctx, true && self.inner.api.is_new(), &self.inner.api);
+                            st.recv(id, ctx, self.inner.api.is_new(), &self.inner.api);
                         }
                     }
                 }
@@ -324,9 +324,9 @@ impl StreamOpsStorage {
 
             api.submit_inline(op_id, move |entry| {
                 let mut op = opcode::Recv::new(item.fd(), buf_ptr, buf_len);
-                if poll_first {
-                    op.set_ioprio(IORING_RECVSEND_POLL_FIRST);
-                };
+                //if poll_first {
+                //op.set_ioprio(IORING_RECVSEND_POLL_FIRST);
+                //};
                 op.build_into(entry);
             });
         } else if item.flags.contains(Flags::RD_CANCELING) {
