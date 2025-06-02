@@ -323,7 +323,7 @@ impl StreamOpsStorage {
             item.rd_op = NonZeroU32::new(op_id);
 
             api.submit_inline(op_id, move |entry| {
-                let mut op = opcode::Recv::new(item.fd(), buf_ptr, buf_len);
+                let op = opcode::Recv::new(item.fd(), buf_ptr, buf_len);
                 //if poll_first {
                 //op.set_ioprio(IORING_RECVSEND_POLL_FIRST);
                 //};
