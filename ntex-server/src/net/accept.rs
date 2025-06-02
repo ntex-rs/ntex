@@ -64,7 +64,7 @@ impl AcceptLoop {
         // Create a poller instance
         let poll = Arc::new(
             Poller::new()
-                .map_err(|e| panic!("Cannot create Polller {}", e))
+                .map_err(|e| panic!("Cannot create Poller {}", e))
                 .unwrap(),
         );
 
