@@ -2,7 +2,7 @@
 name = "ntex-io"
 version = "2.13.2"
 authors = ["ntex contributors <team@ntex.rs>"]
-description = "Utilities for encoding and decoding frames"
+description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
 homepage = "https://ntex.rs"
 repository = "https://github.com/ntex-rs/ntex.git"
