@@ -2,7 +2,7 @@
 
 ## [2.5.26] - 2025-06-09
 
-* Optimize io-uring submission queue
+* Use optimized io-uring submission api
 
 * Use optimized io-uring opcodes
 

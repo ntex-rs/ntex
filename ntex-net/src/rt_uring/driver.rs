@@ -228,7 +228,7 @@ impl Handler for StreamOpsHandler {
                         if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
                             st.recv_more(id, ctx, buf, &self.inner.api);
                         } else if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
-                            st.recv(id, ctx, true && self.inner.api.is_new(), &self.inner.api);
+                            st.recv(id, ctx, self.inner.api.is_new(), &self.inner.api);
                         }
                     }
                 }
