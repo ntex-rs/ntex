@@ -46,7 +46,8 @@ ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
 ntex-neon = { git = "https://github.com/ntex-rs/neon.git", branch = "opt-sq"  }
-ntex-io-uring = { git = "https://github.com/fafhrd91/io-uring.git", branch = "opt-sq" }
+#ntex-io-uring = { git = "https://github.com/fafhrd91/io-uring.git", branch = "opt-sq" }
+ntex-io-uring = { path = "../dev/io-uring" }
 
 [workspace.dependencies]
 async-channel = "2"
