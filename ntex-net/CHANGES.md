@@ -4,6 +4,8 @@
 
 * Optimize io-uring submission queue
 
+* Use optimized io-uring opcodes
+
 ## [2.5.25] - 2025-05-29
 
 * Use inline api for iour
