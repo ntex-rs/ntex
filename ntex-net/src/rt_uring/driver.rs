@@ -2,7 +2,7 @@ use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::P
 
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{IoContext, IoTaskStatus};
-use ntex_neon::driver::io_uring::{cqueue, opcode, squeue::Entry, types::Fd};
+use ntex_neon::driver::io_uring::{cqueue, opcode, opcode2, squeue::Entry, types::Fd};
 use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
 use ntex_util::channel::pool;
 use slab::Slab;
@@ -228,7 +228,7 @@ impl Handler for StreamOpsHandler {
                         if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
                             st.recv_more(id, ctx, buf, &self.inner.api);
                         } else if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
-                            st.recv(id, ctx, true && self.inner.api.is_new(), &self.inner.api);
+                            st.recv(id, ctx, self.inner.api.is_new(), &self.inner.api);
                         }
                     }
                 }
@@ -323,11 +323,13 @@ impl StreamOpsStorage {
             item.rd_op = NonZeroU32::new(op_id);
 
             api.submit_inline(op_id, move |entry| {
-                let mut op = opcode::Recv::new(item.fd(), buf_ptr, buf_len);
+                let op = opcode2::Recv::new(entry)
+                    .fd(item.fd())
+                    .buf(buf_ptr)
+                    .len(buf_len);
                 if poll_first {
-                    op.set_ioprio(IORING_RECVSEND_POLL_FIRST);
+                    op.ioprio(IORING_RECVSEND_POLL_FIRST);
                 };
-                op.build_into(entry);
             });
         } else if item.flags.contains(Flags::RD_CANCELING) {
             item.flags.insert(Flags::RD_REISSUE);
@@ -346,7 +348,10 @@ impl StreamOpsStorage {
         item.rd_op = NonZeroU32::new(op_id);
 
         api.submit_inline(op_id, move |entry| {
-            opcode::Recv::new(item.fd(), buf_ptr, buf_len).build_into(entry);
+            opcode2::Recv::new(entry)
+                .fd(item.fd())
+                .buf(buf_ptr)
+                .len(buf_len);
         });
     }
 
@@ -368,9 +373,15 @@ impl StreamOpsStorage {
 
                 api.submit_inline(op_id, move |entry| {
                     if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
-                        opcode::Send::new(item.fd(), buf_ptr, buf_len).build_into(entry);
+                        opcode2::Send::new(entry)
+                            .fd(item.fd())
+                            .buf(buf_ptr)
+                            .len(buf_len);
                     } else {
-                        opcode::SendZc::new(item.fd(), buf_ptr, buf_len).build_into(entry);
+                        opcode2::SendZc::new(entry)
+                            .fd(item.fd())
+                            .buf(buf_ptr)
+                            .len(buf_len);
                     }
                 });
             }
