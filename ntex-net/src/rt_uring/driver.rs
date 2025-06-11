@@ -323,10 +323,7 @@ impl StreamOpsStorage {
             item.rd_op = NonZeroU32::new(op_id);
 
             api.submit_inline(op_id, move |entry| {
-                let op = opcode2::Recv::new(entry)
-                    .fd(item.fd())
-                    .buf(buf_ptr)
-                    .len(buf_len);
+                let op = opcode2::Recv::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                 if poll_first {
                     op.ioprio(IORING_RECVSEND_POLL_FIRST);
                 };
@@ -348,10 +345,7 @@ impl StreamOpsStorage {
         item.rd_op = NonZeroU32::new(op_id);
 
         api.submit_inline(op_id, move |entry| {
-            opcode2::Recv::new(entry)
-                .fd(item.fd())
-                .buf(buf_ptr)
-                .len(buf_len);
+            opcode2::Recv::with(entry, item.fd()).buffer(buf_ptr, buf_len);
         });
     }
 
@@ -373,15 +367,9 @@ impl StreamOpsStorage {
 
                 api.submit_inline(op_id, move |entry| {
                     if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
-                        opcode2::Send::new(entry)
-                            .fd(item.fd())
-                            .buf(buf_ptr)
-                            .len(buf_len);
+                        opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                     } else {
-                        opcode2::SendZc::new(entry)
-                            .fd(item.fd())
-                            .buf(buf_ptr)
-                            .len(buf_len);
+                        opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                     }
                 });
             }

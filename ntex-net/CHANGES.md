@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.27] - 2025-06-11
+
+* Use new io-uring opcode api
+
 ## [2.5.26] - 2025-06-09
 
 * Use optimized io-uring submission api
