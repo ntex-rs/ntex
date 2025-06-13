@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "2.11.2"
+version = "2.12.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -26,6 +26,7 @@ slab = "0.4"
 futures-timer = "3.0"
 futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
 pin-project-lite = "0.2"
+thiserror = "2.0"
 
 [dev-dependencies]
 ntex = "2"
