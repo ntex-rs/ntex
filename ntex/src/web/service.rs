@@ -295,7 +295,6 @@ where
     }
 }
 
-/// WebServiceFactory implementation for a Vec<T>
 #[allow(unused_parens)]
 impl<T, Err> WebServiceFactory<Err> for Vec<T>
 where
@@ -309,80 +308,39 @@ where
     }
 }
 
-macro_rules! tuple_web_service({$(($n:tt, $T:ident)),+} => {
-    /// WebServiceFactory implementation for a tuple
-    #[allow(unused_parens)]
-    impl<Err: ErrorRenderer, $($T: WebServiceFactory<Err> + 'static),+> WebServiceFactory<Err> for ($($T,)+) {
-        fn register(self, config: &mut WebServiceConfig<Err>) {
-            $(
-                self.$n.register(config);
-            )+
+macro_rules! tuple_web_service(
+    {$(#[$meta:meta])* $(($n:tt, $T:ident)),+} => {
+        
+        $(#[$meta])*
+        impl<Err: ErrorRenderer, $($T: WebServiceFactory<Err> + 'static),+> WebServiceFactory<Err> for ($($T,)+) {
+            fn register(self, config: &mut WebServiceConfig<Err>) {
+                $(
+                    self.$n.register(config);
+                )+
+            }
         }
     }
-});
+);
 
-macro_rules! array_web_service({$num:tt, $($T:ident),+} => {
-    /// WebServiceFactory implementation for an array
-    #[allow(unused_parens)]
-    impl<Err, T> WebServiceFactory<Err> for [T; $num]
-    where
-        Err: ErrorRenderer,
-        T: WebServiceFactory<Err> + 'static,
-    {
-        fn register(self, config: &mut WebServiceConfig<Err>) {
-            let [$($T,)+] = self;
-
-            $(
-                $T.register(config);
-            )+
+impl<Err, T, const N: usize> WebServiceFactory<Err> for [T; N]
+where
+    Err: ErrorRenderer,
+    T: WebServiceFactory<Err> + 'static,
+{
+    fn register(self, config: &mut WebServiceConfig<Err>) {
+        for t in self {
+            t.register(config);
         }
     }
-});
+}
 
 #[allow(non_snake_case)]
 #[rustfmt::skip]
 mod m {
     use super::*;
+    use variadics_please::all_tuples_enumerated;
 
-array_web_service!(1,A);
-array_web_service!(2,A,B);
-array_web_service!(3,A,B,C);
-array_web_service!(4,A,B,C,D);
-array_web_service!(5,A,B,C,D,E);
-array_web_service!(6,A,B,C,D,E,F);
-array_web_service!(7,A,B,C,D,E,F,G);
-array_web_service!(8,A,B,C,D,E,F,G,H);
-array_web_service!(9,A,B,C,D,E,F,G,H,I);
-array_web_service!(10,A,B,C,D,E,F,G,H,I,J);
-array_web_service!(11,A,B,C,D,E,F,G,H,I,J,K);
-array_web_service!(12,A,B,C,D,E,F,G,H,I,J,K,L);
-array_web_service!(13,A,B,C,D,E,F,G,H,I,J,K,L,M);
-array_web_service!(14,A,B,C,D,E,F,G,H,I,J,K,L,M,N);
-array_web_service!(15,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O);
-array_web_service!(16,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P);
-
-tuple_web_service!((0,A));
-tuple_web_service!((0,A),(1,B));
-tuple_web_service!((0,A),(1,B),(2,C));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T),(20,V));
-tuple_web_service!((0,A),(1,B),(2,C),(3,D),(4,E),(5,F),(6,G),(7,H),(8,I),(9,J),(10,K),(11,L),(12,M),(13,N),(14,O),(15,P),(16,Q),(17,R),(18,S),(19,T),(20,V),(21,X));
+    all_tuples_enumerated!(#[doc(fake_variadic)] tuple_web_service, 1, 24, T);
 }
 
 #[cfg(test)]

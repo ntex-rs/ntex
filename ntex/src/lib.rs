@@ -19,8 +19,11 @@
     clippy::needless_doctest_main,
     clippy::too_many_arguments,
     clippy::new_without_default,
-    clippy::let_underscore_future
+    clippy::let_underscore_future,
+    internal_features,
 )]
+// Used for fake variadics
+#![cfg_attr(any(docsrs, docsrs_dep), feature(rustdoc_internals))]
 
 #[cfg(not(test))] // Work around for rust-lang/rust#62127
 pub use ntex_macros::{rt_main as main, rt_test as test};

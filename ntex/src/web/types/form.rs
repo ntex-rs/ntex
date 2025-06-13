@@ -46,7 +46,7 @@ use crate::web::{FromRequest, HttpRequest, Responder};
 /// ## Respond
 ///
 /// The `Form` type also allows you to respond with well-formed url-encoded data:
-/// simply return a value of type Form<T> where T is the type to be url-encoded.
+/// simply return a value of type `Form<T>` where T is the type to be url-encoded.
 /// The type  must implement `serde::Serialize`;
 ///
 /// ### Example

@@ -47,7 +47,7 @@ use crate::web::{FromRequest, HttpRequest, Responder};
 /// ```
 ///
 /// The `Json` type allows you to respond with well-formed JSON data: simply
-/// return a value of type Json<T> where T is the type of a structure
+/// return a value of type `Json<T>`` where T is the type of a structure
 /// to serialize into *JSON*. The type `T` must implement the `Serialize`
 /// trait from *serde*.
 ///

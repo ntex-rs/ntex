@@ -19,6 +19,14 @@ rust-version = "1.75"
 
 [package.metadata.docs.rs]
 features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/rustls-ring"]
+rustc-args = ["--cfg", "docsrs_dep"]
+rustdoc-args = [
+    "--cfg", "docsrs_dep",
+    "--html-after-content", "docs-rs/trait-tags.html",
+]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
 
 [lib]
 name = "ntex"
@@ -85,6 +93,7 @@ sha-1 = { version = "0.10", optional = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
 nanorand = { workspace = true }
+variadics_please = { workspace = true }
 
 # http/web framework
 httparse = "1.9"

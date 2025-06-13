@@ -221,60 +221,42 @@ impl<Err: ErrorRenderer> IntoRoutes<Err> for Vec<Route<Err>> {
     }
 }
 
-macro_rules! tuple_routes({$(($n:tt, $T:ty)),+} => {
-    /// IntoRoutes implementation for a tuple
-    #[allow(unused_parens)]
-    impl<Err: ErrorRenderer> IntoRoutes<Err> for ($($T,)+) {
-        fn routes(self) -> Vec<Route<Err>> {
-            vec![$(self.$n,)+]
+macro_rules! tuple_routes(
+    {$(#[$meta:meta])* $(($n:tt, $T:ident)),+} => {
+        $(#[$meta])*
+        #[allow(unused_parens)]
+        impl<Err: ErrorRenderer, $($T,)+> IntoRoutes<Err> for ($($T,)+)
+        where
+            $($T: Into<Route<Err>> + 'static,)+ {
+            fn routes(self) -> Vec<Route<Err>> {
+                vec![$(self.$n.into(),)+]
+            }
         }
     }
-});
+);
 
-macro_rules! array_routes({$num:tt, $($T:ident),+} => {
-    /// IntoRoutes implementation for an array
-    #[allow(unused_parens)]
-    impl<Err: ErrorRenderer> IntoRoutes<Err> for [Route<Err>; $num]
-    where
-        Err: ErrorRenderer,
-    {
-        fn routes(self) -> Vec<Route<Err>> {
-            let [$($T,)+] = self;
-            vec![$($T,)+]
+impl<Err, T, const N: usize> IntoRoutes<Err> for [T; N]
+where
+    T: Into<Route<Err>>,
+    Err: ErrorRenderer,
+{
+    fn routes(self) -> Vec<Route<Err>> {
+        let mut routes = Vec::with_capacity(N);
+        for route in self {
+            routes.push(route.into())
         }
+        routes
     }
-});
+}
 
 #[rustfmt::skip]
 mod m {
+    use variadics_please::all_tuples_enumerated;
+
     use super::*;
 
-tuple_routes!((0,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>),(10,Route<Err>));
-tuple_routes!((0,Route<Err>),(1,Route<Err>),(2,Route<Err>),(3,Route<Err>),(4,Route<Err>),(5,Route<Err>),(6,Route<Err>),(7,Route<Err>),(8,Route<Err>),(9,Route<Err>),(10,Route<Err>),(11,Route<Err>));
+    all_tuples_enumerated!(#[doc(fake_variadic)] tuple_routes, 1, 12, T);
 }
-
-array_routes!(1, a);
-array_routes!(2, a, b);
-array_routes!(3, a, b, c);
-array_routes!(4, a, b, c, d);
-array_routes!(5, a, b, c, d, e);
-array_routes!(6, a, b, c, d, e, f);
-array_routes!(7, a, b, c, d, e, f, g);
-array_routes!(8, a, b, c, d, e, f, g, h);
-array_routes!(9, a, b, c, d, e, f, g, h, i);
-array_routes!(10, a, b, c, d, e, f, g, h, i, j);
-array_routes!(11, a, b, c, d, e, f, g, h, i, j, k);
-array_routes!(12, a, b, c, d, e, f, g, h, i, j, k, l);
 
 #[cfg(test)]
 mod tests {
