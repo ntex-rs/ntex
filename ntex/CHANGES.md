@@ -1,5 +1,9 @@
 # Changes
 
+## [2.13.1] - 2025-06-13
+
+* Re-export ErrorMessage from util
+
 ## [2.13.0] - 2025-06-13
 
 * Use `ntex_util::channel::bstream` instead of h1 payload
