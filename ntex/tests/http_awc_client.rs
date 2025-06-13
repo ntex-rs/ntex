@@ -506,8 +506,8 @@ async fn test_client_gzip_encoding_large() {
 
 #[ntex::test]
 async fn test_client_gzip_encoding_large_random() {
-    let data = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
+    let data = rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
         .take(1_048_500)
         .map(char::from)
         .collect::<String>();
@@ -559,8 +559,8 @@ async fn test_client_deflate_encoding() {
 
 #[ntex::test]
 async fn test_client_deflate_encoding_large_random() {
-    let data = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
+    let data = rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
         .take(70_000)
         .map(char::from)
         .collect::<String>();
