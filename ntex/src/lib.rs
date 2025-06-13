@@ -20,7 +20,7 @@
     clippy::too_many_arguments,
     clippy::new_without_default,
     clippy::let_underscore_future,
-    internal_features,
+    internal_features
 )]
 // Used for fake variadics
 #![cfg_attr(any(docsrs, docsrs_dep), feature(rustdoc_internals))]

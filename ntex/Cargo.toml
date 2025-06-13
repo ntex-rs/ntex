@@ -18,6 +18,7 @@ edition = "2021"
 rust-version = "1.75"
 
 [package.metadata.docs.rs]
+toolchain = "nightly"
 features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/rustls-ring"]
 rustc-args = ["--cfg", "docsrs_dep"]
 rustdoc-args = [

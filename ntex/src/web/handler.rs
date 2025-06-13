@@ -84,7 +84,6 @@ where
     }
 }
 
-
 /// FromRequest trait impl for tuples
 macro_rules! factory_tuple (
     {$(#[$meta:meta])* $(($T:ident, $t:ident)),+} => {

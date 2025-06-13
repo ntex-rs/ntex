@@ -310,7 +310,7 @@ where
 
 macro_rules! tuple_web_service(
     {$(#[$meta:meta])* $(($n:tt, $T:ident)),+} => {
-        
+
         $(#[$meta])*
         impl<Err: ErrorRenderer, $($T: WebServiceFactory<Err> + 'static),+> WebServiceFactory<Err> for ($($T,)+) {
             fn register(self, config: &mut WebServiceConfig<Err>) {
