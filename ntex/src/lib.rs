@@ -118,7 +118,7 @@ pub mod util {
     pub use ntex_bytes::{
         Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef,
     };
-    pub use ntex_util::{error, future::*, services::*, HashMap, HashSet};
+    pub use ntex_util::{error::*, future::*, services::*, HashMap, HashSet};
 
     #[doc(hidden)]
     #[deprecated]
