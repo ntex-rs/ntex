@@ -1,4 +1,4 @@
-/// An implementation of [`ready`] that forwards readiness checks to a field.
+/// An implementation of [`crate::Service::ready`] that forwards readiness checks to a field.
 #[macro_export]
 macro_rules! forward_ready {
     ($field:ident) => {
@@ -23,13 +23,7 @@ macro_rules! forward_ready {
     };
 }
 
-/// An implementation of [`not_ready`] that forwards not_ready call to a field.
-#[macro_export]
-macro_rules! forward_notready {
-    ($field:ident) => {};
-}
-
-/// An implementation of [`poll`] that forwards poll call to a field.
+/// An implementation of [`crate::Service::poll`] that forwards poll call to a field.
 #[macro_export]
 macro_rules! forward_poll {
     ($field:ident) => {
@@ -46,7 +40,7 @@ macro_rules! forward_poll {
     };
 }
 
-/// An implementation of [`shutdown`] that forwards shutdown checks to a field.
+/// An implementation of [`crate::Service::shutdown`] that forwards shutdown checks to a field.
 #[macro_export]
 macro_rules! forward_shutdown {
     ($field:ident) => {

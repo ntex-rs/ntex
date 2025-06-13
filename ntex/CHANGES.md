@@ -1,5 +1,10 @@
 # Changes
 
+## [2.13.2] (2025-06-13)
+
+* Update docs to use `variadics_please`
+* Update array imples to const generic impls
+
 ## [2.13.1] - 2025-06-13
 
 * Re-export ErrorMessage from util

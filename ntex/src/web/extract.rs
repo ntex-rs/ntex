@@ -157,38 +157,32 @@ impl<E: ErrorRenderer> FromRequest<E> for () {
     }
 }
 
-macro_rules! tuple_from_req ({$fut_type:ident, $(($n:tt, $T:ident)),+} => {
-    /// FromRequest implementation for a tuple
-    #[allow(unused_parens)]
-    impl<Err: ErrorRenderer, $($T: FromRequest<Err> + 'static),+> FromRequest<Err> for ($($T,)+)
-    where
-        $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
-    {
-        type Error = Err::Container;
+macro_rules! tuple_from_req {
+    ($(#[$meta:meta])* $(($T:ident, $t:ident)),*) => {
+        $(#[$meta])*
+        impl<$($T,)+ Err: ErrorRenderer> FromRequest<Err> for ($($T,)+)
+        where
+            $($T: FromRequest<Err> + 'static,)+
+            $(<$T as $crate::web::FromRequest<Err>>::Error: Into<Err::Container>),+
+        {
+            type Error = Err::Container;
 
-        async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Err::Container> {
-            Ok((
-                $($T::from_request(req, payload).await.map_err(|e| e.into())?,)+
-            ))
+            async fn from_request(req: &HttpRequest, payload: &mut Payload) -> Result<($($T,)+), Err::Container> {
+                Ok((
+                    $($T::from_request(req, payload).await.map_err(|e| e.into())?,)+
+                ))
+            }
         }
     }
-});
+}
 
 #[allow(non_snake_case)]
 #[rustfmt::skip]
 mod m {
     use super::*;
+    use variadics_please::all_tuples;
 
-tuple_from_req!(TupleFromRequest1, (0, A));
-tuple_from_req!(TupleFromRequest2, (0, A), (1, B));
-tuple_from_req!(TupleFromRequest3, (0, A), (1, B), (2, C));
-tuple_from_req!(TupleFromRequest4, (0, A), (1, B), (2, C), (3, D));
-tuple_from_req!(TupleFromRequest5, (0, A), (1, B), (2, C), (3, D), (4, E));
-tuple_from_req!(TupleFromRequest6, (0, A), (1, B), (2, C), (3, D), (4, E), (5, F));
-tuple_from_req!(TupleFromRequest7, (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G));
-tuple_from_req!(TupleFromRequest8, (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H));
-tuple_from_req!(TupleFromRequest9, (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I));
-tuple_from_req!(TupleFromRequest10, (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J));
+    all_tuples!(#[doc(fake_variadic)] tuple_from_req, 1, 12, T, t);
 }
 
 #[cfg(test)]

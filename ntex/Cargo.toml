@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.13.1"
+version = "2.13.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -18,7 +18,16 @@ edition = "2021"
 rust-version = "1.75"
 
 [package.metadata.docs.rs]
+toolchain = "nightly"
 features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/rustls-ring"]
+rustc-args = ["--cfg", "docsrs_dep"]
+rustdoc-args = [
+    "--cfg", "docsrs_dep",
+    "--html-after-content", "docs-rs/trait-tags.html",
+]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
 
 [lib]
 name = "ntex"
@@ -85,6 +94,7 @@ sha-1 = { version = "0.10", optional = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
 nanorand = { workspace = true }
+variadics_please = { workspace = true }
 
 # http/web framework
 httparse = "1.9"

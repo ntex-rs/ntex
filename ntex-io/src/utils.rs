@@ -12,7 +12,7 @@ pub struct Decoded<T> {
     pub consumed: usize,
 }
 
-/// Service that converts any Io<F> stream to IoBoxed stream
+/// Service that converts any `Io<F>` stream to IoBoxed stream
 pub fn seal<F, S, C>(
     srv: S,
 ) -> impl ServiceFactory<

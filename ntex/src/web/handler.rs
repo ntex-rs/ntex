@@ -85,33 +85,29 @@ where
 }
 
 /// FromRequest trait impl for tuples
-macro_rules! factory_tuple ({ $(($n:tt, $T:ident)),+} => {
-    impl<Func, $($T,)+ Res, Err> Handler<($($T,)+), Err> for Func
-    where Func: Fn($($T,)+) -> Res + 'static,
-          Res: Future + 'static,
-          Res::Output: Responder<Err>,
-          Err: ErrorRenderer,
-    {
-        type Output = Res::Output;
+macro_rules! factory_tuple (
+    {$(#[$meta:meta])* $(($T:ident, $t:ident)),+} => {
+        $(#[$meta])*
+        impl<Func, $($T,)+ Res, Err> Handler<($($T,)+), Err> for Func
+        where Func: Fn($($T,)+) -> Res + 'static,
+            Res: Future + 'static,
+            Res::Output: Responder<Err>,
+            Err: ErrorRenderer,
+        {
+            type Output = Res::Output;
 
-        async fn call(&self, param: ($($T,)+)) -> Self::Output {
-            (self)($(param.$n,)+).await
+            async fn call(&self, ($($t,)+): ($($T,)+)) -> Self::Output {
+                (self)($($t,)+).await
+            }
         }
     }
-});
+);
 
 #[rustfmt::skip]
 mod m {
     use super::*;
+    use variadics_please::all_tuples;
 
-factory_tuple!((0, A));
-factory_tuple!((0, A), (1, B));
-factory_tuple!((0, A), (1, B), (2, C));
-factory_tuple!((0, A), (1, B), (2, C), (3, D));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I));
-factory_tuple!((0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J));
+    // Can't use #[doc(fake_variadic)] here
+    all_tuples!(factory_tuple, 1, 16, T, t);
 }
