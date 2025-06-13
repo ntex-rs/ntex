@@ -30,9 +30,9 @@ compio = ["compio-driver", "compio-runtime"]
 neon = ["ntex-neon"]
 
 [dependencies]
-async-channel = "2"
-futures-timer = "3.0"
-oneshot = "0.1"
+async-channel = { workspace = true }
+futures-timer = { workspace = true }
+oneshot = { workspace = true }
 log = { workspace = true }
 
 compio-driver = { version = "0.7", optional = true }
@@ -42,4 +42,4 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
     "net",
 ], optional = true }
 
-ntex-neon = { version = "0.1.23", optional = true }
+ntex-neon = { version = "0.1.31", optional = true }

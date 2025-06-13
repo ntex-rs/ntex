@@ -49,6 +49,7 @@ ntex-tokio = { path = "ntex-tokio" }
 async-channel = "2"
 async-task = "4.5.0"
 atomic-waker = "1.1"
+base64 = "0.22"
 core_affinity = "0.8"
 bitflags = "2"
 cfg_aliases = "0.2.1"
@@ -56,13 +57,18 @@ cfg-if = "1.0.0"
 crossbeam-channel = "0.5.8"
 crossbeam-queue = "0.3.8"
 env_logger = { version = "0.11", default-features = false }
-futures-util = "0.3.29"
-fxhash = "0.2"
+futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3.29", default-features = false, features = ["alloc"] }
+futures-timer = "3.0"
+fxhash = "0.2.1"
 libc = "0.2.164"
 log = "0.4"
 oneshot = "0.1"
 pin-project-lite = "0.2"
 polling = "3.8.0"
+rand = "0.9"
+regex = { version = "1.11", default-features = false, features = ["std"] }
+rustls-pemfile = "2"
 nohash-hasher = "0.2.0"
 nanorand = { version = "0.8", default-features = false, features = [
     "std",
@@ -74,5 +80,6 @@ serde = { version = "1", features = ["derive"] }
 slab = "0.4.9"
 socket2 = "0.5.6"
 windows-sys = "0.52.0"
+time = "0.3"
 thiserror = "2"
-regex = { version = "1.11", default-features = false, features = ["std"] }
+webpki-roots = "1.0"

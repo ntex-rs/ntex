@@ -18,11 +18,11 @@ path = "src/lib.rs"
 [dependencies]
 http = "1"
 log = { workspace = true }
-fxhash = "0.2.1"
+fxhash = { workspace = true }
 itoa = "1.0.4"
 ntex-bytes = "0.1"
 serde = { workspace = true }
-futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-core = { workspace = true }
 
 [dev-dependencies]
 bincode = "1"
@@ -30,4 +30,4 @@ serde_json = "1"
 ntex = "2"
 ntex-util = "2"
 ntex-macros = "0.1.3"
-futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-util = { workspace = true }

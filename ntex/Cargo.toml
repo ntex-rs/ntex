@@ -68,14 +68,14 @@ ntex-service = "3.4"
 ntex-macros = "0.1"
 ntex-util = "2.12"
 ntex-bytes = "0.1.28"
-ntex-server = "2.7.4"
-ntex-h2 = "1.8.6"
-ntex-rt = "0.4.27"
-ntex-io = "2.12.1"
-ntex-net = "2.5.19"
+ntex-server = "2.8.1"
+ntex-h2 = "1.9.0"
+ntex-rt = "0.4.31"
+ntex-io = "2.13.2"
+ntex-net = "2.5.27"
 ntex-tls = "2.3"
 
-base64 = "0.22"
+base64 = { workspace = true }
 bitflags = { workspace = true }
 log = { workspace = true }
 pin-project-lite = { workspace = true }
@@ -102,17 +102,17 @@ tls-openssl = { version = "0.10", package = "openssl", optional = true }
 
 # rustls
 tls-rustls = { version = "0.23", package = "rustls", optional = true, default-features = false }
-webpki-roots = { version = "0.26", optional = true }
+webpki-roots = { workspace = true, optional = true }
 
 # compression
 flate2 = { version = "1.0", optional = true }
 
 [dev-dependencies]
-rand = "0.8"
-time = "0.3"
-oneshot = "0.1"
-futures-util = "0.3"
+rand = { workspace = true }
+time = { workspace = true }
+oneshot = { workspace = true }
+futures-util = { workspace = true }
 tls-openssl = { version = "0.10", package = "openssl" }
 tls-rustls = { version = "0.23", package = "rustls", features = ["ring", "std"], default-features = false }
-rustls-pemfile = "2"
-webpki-roots = "0.26"
+rustls-pemfile = { workspace = true }
+webpki-roots = { workspace = true }
