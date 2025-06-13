@@ -916,8 +916,8 @@ mod tests {
                     match msg {
                         DispatchItem::Item(_) => {
                             data.lock().unwrap().borrow_mut().push(0);
-                            let bytes = rand::thread_rng()
-                                .sample_iter(&rand::distributions::Alphanumeric)
+                            let bytes = rand::rng()
+                                .sample_iter(&rand::distr::Alphanumeric)
                                 .take(65_536)
                                 .map(char::from)
                                 .collect::<String>();
@@ -998,8 +998,8 @@ mod tests {
             let _ = tx.send(());
         });
 
-        let bytes = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
+        let bytes = rand::rng()
+            .sample_iter(&rand::distr::Alphanumeric)
             .take(1024)
             .map(char::from)
             .collect::<String>();

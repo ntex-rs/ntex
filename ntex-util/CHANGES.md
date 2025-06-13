@@ -1,5 +1,9 @@
 # Changes
 
+## [2.12.0] - 2025-06-13
+
+* Add ErrorMessage helper type
+
 ## [2.11.2] - 2025-04-16
 
 * Add bstream::Sender::ready() helper

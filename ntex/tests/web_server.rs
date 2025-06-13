@@ -4,7 +4,7 @@ use std::{future::Future, io, io::Read, io::Write, pin::Pin};
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, Rng};
 use thiserror::Error;
 
 use ntex::http::header::{
@@ -248,7 +248,7 @@ async fn test_body_gzip_large() {
 
 #[ntex::test]
 async fn test_body_gzip_large_random() {
-    let data = rand::thread_rng()
+    let data = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(70_000)
         .map(char::from)
@@ -472,7 +472,7 @@ async fn test_gzip_encoding_large() {
 
 #[ntex::test]
 async fn test_reading_gzip_encoding_large_random() {
-    let data = rand::thread_rng()
+    let data = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(60_000)
         .map(char::from)
@@ -555,7 +555,7 @@ async fn test_reading_deflate_encoding_large() {
 
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random() {
-    let data = rand::thread_rng()
+    let data = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
         .map(char::from)
@@ -588,7 +588,7 @@ async fn test_reading_deflate_encoding_large_random() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls() {
-    let data = rand::thread_rng()
+    let data = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
         .map(char::from)
@@ -627,7 +627,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h1() {
-    let data = rand::thread_rng()
+    let data = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
         .map(char::from)
@@ -668,7 +668,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
 #[cfg(all(feature = "rustls", feature = "openssl"))]
 #[ntex::test]
 async fn test_reading_deflate_encoding_large_random_rustls_h2() {
-    let data = rand::thread_rng()
+    let data = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(160_000)
         .map(char::from)

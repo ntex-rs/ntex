@@ -1,6 +1,6 @@
 # Changes
 
-## [2.13.0] - 2025-xx-xx
+## [2.13.0] - 2025-06-13
 
 * Use `ntex_util::channel::bstream` instead of h1 payload
 

@@ -2,6 +2,7 @@
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
 
 pub mod channel;
+pub mod error;
 pub mod future;
 pub mod services;
 pub mod task;

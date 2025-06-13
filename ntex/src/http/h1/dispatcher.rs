@@ -1031,8 +1031,8 @@ mod tests {
         let mut decoder = ClientCodec::default();
 
         // generate large http message
-        let data = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
+        let data = rand::rng()
+            .sample_iter(&rand::distr::Alphanumeric)
             .take(70_000)
             .map(char::from)
             .collect::<String>();
@@ -1099,8 +1099,8 @@ mod tests {
                 &mut self,
                 _: &mut Context<'_>,
             ) -> Poll<Option<Result<Bytes, Box<dyn error::Error>>>> {
-                let data = rand::thread_rng()
-                    .sample_iter(&rand::distributions::Alphanumeric)
+                let data = rand::rng()
+                    .sample_iter(&rand::distr::Alphanumeric)
                     .take(65_536)
                     .map(char::from)
                     .collect::<String>();
@@ -1158,8 +1158,8 @@ mod tests {
                     Poll::Pending
                 } else {
                     self.0 = true;
-                    let data = rand::thread_rng()
-                        .sample_iter(&rand::distributions::Alphanumeric)
+                    let data = rand::rng()
+                        .sample_iter(&rand::distr::Alphanumeric)
                         .take(1024)
                         .map(char::from)
                         .collect::<String>();

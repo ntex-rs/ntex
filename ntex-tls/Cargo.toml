@@ -32,7 +32,7 @@ ntex-util = "2.5"
 ntex-service = "3.4"
 ntex-net = "2"
 
-log = "0.4"
+log = { workspace = true }
 
 # openssl
 tls_openssl = { version = "0.10", package = "openssl", optional = true }
@@ -42,7 +42,7 @@ tls_rust = { version = "0.23", package = "rustls", default-features = false, opt
 
 [dev-dependencies]
 ntex = { version = "2", features = ["openssl", "rustls"] }
-env_logger = "0.11"
-rustls-pemfile = "2"
-webpki-roots = "0.26"
+env_logger = { workspace = true }
+rustls-pemfile = { workspace = true }
+webpki-roots = { workspace = true }
 tls_rust = { version = "0.23", package = "rustls", features = ["ring", "std"], default-features = false }
