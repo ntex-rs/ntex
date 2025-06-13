@@ -20,9 +20,9 @@ simd = ["simdutf8"]
 mpool = []
 
 [dependencies]
-bitflags = "2"
+bitflags = { workspace = true }
 bytes = "1"
-serde = "1"
+serde = { workspace = true }
 futures-core = { version = "0.3", default-features = false }
 simdutf8 = { version = "0.1.4", optional = true }
 

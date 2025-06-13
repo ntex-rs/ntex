@@ -33,7 +33,7 @@ neon = ["ntex-neon"]
 async-channel = "2"
 futures-timer = "3.0"
 oneshot = "0.1"
-log = "0.4"
+log = { workspace = true }
 
 compio-driver = { version = "0.7", optional = true }
 compio-runtime = { version = "0.7", optional = true }

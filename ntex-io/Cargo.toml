@@ -22,9 +22,9 @@ ntex-bytes = "0.1.28"
 ntex-util = "2.8"
 ntex-service = "3.4"
 
-bitflags = "2"
-log = "0.4"
-pin-project-lite = "0.2"
+bitflags = { workspace = true }
+log = { workspace = true }
+pin-project-lite = { workspace = true }
 
 [dev-dependencies]
 ntex = "2"

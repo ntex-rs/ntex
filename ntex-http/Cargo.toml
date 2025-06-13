@@ -17,11 +17,11 @@ path = "src/lib.rs"
 
 [dependencies]
 http = "1"
-log = "0.4"
+log = { workspace = true }
 fxhash = "0.2.1"
 itoa = "1.0.4"
 ntex-bytes = "0.1"
-serde = "1"
+serde = { workspace = true }
 futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]

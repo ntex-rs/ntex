@@ -76,20 +76,15 @@ ntex-net = "2.5.19"
 ntex-tls = "2.3"
 
 base64 = "0.22"
-bitflags = "2"
-bytes = "1"
-log = "0.4"
-pin-project-lite = "0.2"
-regex = { version = "1.11", default-features = false, features = ["std"] }
-serde = { version = "1", features = ["derive"] }
+bitflags = { workspace = true }
+log = { workspace = true }
+pin-project-lite = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
 sha-1 = { version = "0.10", optional = true }
-env_logger = { version = "0.11", default-features = false }
-thiserror = "1"
-nanorand = { version = "0.8", default-features = false, features = [
-    "std",
-    "wyrand",
-    "entropy"
-] }
+env_logger = { workspace = true }
+thiserror = { workspace = true }
+nanorand = { workspace = true }
 
 # http/web framework
 httparse = "1.9"

@@ -17,11 +17,11 @@ path = "src/lib.rs"
 default = ["http"]
 
 [dependencies]
-serde = "1.0"
+serde = { workspace = true }
 ntex-bytes = "0.1.21"
-log = "0.4"
+log = { workspace = true }
 http = { version = "1", optional = true }
-regex = { version = "1.9", default-features = false, features = ["std"] }
+regex = { workspace = true }
 
 [dev-dependencies]
 http = "1"
