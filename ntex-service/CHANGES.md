@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.0] - 2025-06-14
+
+* Use AsyncFn for fn-services
+
 ## [3.4.0] - 2024-12-04
 
 * Added Service::poll() method
