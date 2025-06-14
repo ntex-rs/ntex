@@ -1,6 +1,6 @@
 # Changes
 
-## [3.5.0] - 2025-06-xx
+## [3.5.0] - 2025-06-14
 
 * Use AsyncFn for fn-services
 
