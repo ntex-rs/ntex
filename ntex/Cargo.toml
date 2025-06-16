@@ -23,7 +23,6 @@ features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/
 rustc-args = ["--cfg", "docsrs_dep"]
 rustdoc-args = [
     "--cfg", "docsrs_dep",
-    "--html-after-content", "docs-rs/trait-tags.html",
 ]
 
 [lints.rust]
