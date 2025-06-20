@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.28] - 2025-06-21
+
+* Check for potential date race
+
 ## [2.5.27] - 2025-06-11
 
 * Use new io-uring opcode api

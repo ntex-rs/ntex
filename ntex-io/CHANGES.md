@@ -1,5 +1,9 @@
 # Changes
 
+## [2.13.3] - 2025-06-21
+
+* Check io closed state
+
 ## [2.13.2] - 2025-05-22
 
 * Improve buffer stack management
