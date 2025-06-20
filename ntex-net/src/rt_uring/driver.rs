@@ -306,75 +306,74 @@ impl StreamOpsStorage {
     }
 
     fn recv(&mut self, id: usize, ctx: IoContext, poll_first: bool, api: &DriverApi) {
-        if !self.streams.contains(id) {
-            return;
-        }
+        if let Some(item) = self.streams.get_mut(id) {
+            if item.rd_op.is_none() {
+                let mut buf = ctx.get_read_buf();
+                if buf.remaining_mut() < self.lw {
+                    buf.reserve(self.hw);
+                }
+                let s = buf.chunk_mut();
+                let buf_ptr = s.as_mut_ptr();
+                let buf_len = s.len() as u32;
+                let op_id = self.ops.insert(Some(Operation::Recv { id, buf, ctx })) as u32;
+                item.rd_op = NonZeroU32::new(op_id);
 
-        let item = &mut self.streams[id];
-        if item.rd_op.is_none() {
-            let mut buf = ctx.get_read_buf();
-            if buf.remaining_mut() < self.lw {
-                buf.reserve(self.hw);
+                api.submit_inline(op_id, move |entry| {
+                    let op = opcode2::Recv::with(entry, item.fd()).buffer(buf_ptr, buf_len);
+                    if poll_first {
+                        op.ioprio(IORING_RECVSEND_POLL_FIRST);
+                    };
+                });
+            } else if item.flags.contains(Flags::RD_CANCELING) {
+                item.flags.insert(Flags::RD_REISSUE);
             }
-            let s = buf.chunk_mut();
-            let buf_ptr = s.as_mut_ptr();
-            let buf_len = s.len() as u32;
-            let op_id = self.ops.insert(Some(Operation::Recv { id, buf, ctx })) as u32;
-            item.rd_op = NonZeroU32::new(op_id);
-
-            api.submit_inline(op_id, move |entry| {
-                let op = opcode2::Recv::with(entry, item.fd()).buffer(buf_ptr, buf_len);
-                if poll_first {
-                    op.ioprio(IORING_RECVSEND_POLL_FIRST);
-                };
-            });
-        } else if item.flags.contains(Flags::RD_CANCELING) {
-            item.flags.insert(Flags::RD_REISSUE);
         }
     }
 
     fn recv_more(&mut self, id: usize, ctx: IoContext, mut buf: BytesVec, api: &DriverApi) {
-        if buf.remaining_mut() < self.lw {
-            buf.reserve(self.hw);
-        }
-        let slice = buf.chunk_mut();
-        let buf_ptr = slice.as_mut_ptr();
-        let buf_len = slice.len() as u32;
-        let item = &mut self.streams[id];
-        let op_id = self.ops.insert(Some(Operation::Recv { id, buf, ctx })) as u32;
-        item.rd_op = NonZeroU32::new(op_id);
+        if let Some(item) = self.streams.get_mut(id) {
+            if buf.remaining_mut() < self.lw {
+                buf.reserve(self.hw);
+            }
+            let slice = buf.chunk_mut();
+            let buf_ptr = slice.as_mut_ptr();
+            let buf_len = slice.len() as u32;
+            let op_id = self.ops.insert(Some(Operation::Recv { id, buf, ctx })) as u32;
+            item.rd_op = NonZeroU32::new(op_id);
 
-        api.submit_inline(op_id, move |entry| {
-            opcode2::Recv::with(entry, item.fd()).buffer(buf_ptr, buf_len);
-        });
+            api.submit_inline(op_id, move |entry| {
+                opcode2::Recv::with(entry, item.fd()).buffer(buf_ptr, buf_len);
+            });
+        }
     }
 
     fn send(&mut self, id: usize, ctx: IoContext, api: &DriverApi) {
-        let item = &mut self.streams[id];
+        if let Some(item) = self.streams.get_mut(id) {
+            if item.wr_op.is_none() {
+                if let Some(buf) = ctx.get_write_buf() {
+                    let slice = buf.chunk();
+                    let buf_ptr = slice.as_ptr();
+                    let buf_len = slice.len() as u32;
+                    let op_id = self.ops.insert(Some(Operation::Send {
+                        id,
+                        buf,
+                        ctx,
+                        result: None,
+                    })) as u32;
+                    item.wr_op = NonZeroU32::new(op_id);
 
-        if item.wr_op.is_none() {
-            if let Some(buf) = ctx.get_write_buf() {
-                let slice = buf.chunk();
-                let buf_ptr = slice.as_ptr();
-                let buf_len = slice.len() as u32;
-                let op_id = self.ops.insert(Some(Operation::Send {
-                    id,
-                    buf,
-                    ctx,
-                    result: None,
-                })) as u32;
-                item.wr_op = NonZeroU32::new(op_id);
-
-                api.submit_inline(op_id, move |entry| {
-                    if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
-                        opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
-                    } else {
-                        opcode2::SendZc::with(entry, item.fd()).buffer(buf_ptr, buf_len);
-                    }
-                });
+                    api.submit_inline(op_id, move |entry| {
+                        if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {
+                            opcode2::Send::with(entry, item.fd()).buffer(buf_ptr, buf_len);
+                        } else {
+                            opcode2::SendZc::with(entry, item.fd())
+                                .buffer(buf_ptr, buf_len);
+                        }
+                    });
+                }
+            } else if item.flags.contains(Flags::WR_CANCELING) {
+                item.flags.insert(Flags::WR_REISSUE);
             }
-        } else if item.flags.contains(Flags::WR_CANCELING) {
-            item.flags.insert(Flags::WR_REISSUE);
         }
     }
 

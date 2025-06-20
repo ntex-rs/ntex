@@ -656,7 +656,11 @@ impl IoContext {
                     inner.remove_flags(Flags::BUF_W_BACKPRESSURE);
                     inner.dispatch_task.wake();
                 }
-                IoTaskStatus::Io
+                if self.is_stopped() {
+                    IoTaskStatus::Pause
+                } else {
+                    IoTaskStatus::Io
+                }
             }
             Err(e) => {
                 inner.io_stopped(Some(e));
