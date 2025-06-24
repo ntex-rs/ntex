@@ -302,21 +302,6 @@ mod neon {
         rt.block_on(fut);
     }
 
-    /// Spawns a blocking task.
-    ///
-    /// The task will be spawned onto a thread pool specifically dedicated
-    /// to blocking tasks. This is useful to prevent long-running synchronous
-    /// operations from blocking the main futures executor.
-    pub fn spawn_blocking<F, T>(f: F) -> BlockingJoinHandle<T>
-    where
-        F: FnOnce() -> T + Send + Sync + 'static,
-        T: Send + 'static,
-    {
-        BlockingJoinHandle {
-            fut: Some(ntex_neon::spawn_blocking(f)),
-        }
-    }
-
     /// Spawn a future on the current thread. This does not create a new Arbiter
     /// or Arbiter address, it is simply a helper for spawning futures on the current
     /// thread.
@@ -347,7 +332,24 @@ mod neon {
             }
         });
 
-        JoinHandle { task: Some(task) }
+        JoinHandle {
+            task: Some(Either::Task(task)),
+        }
+    }
+
+    /// Spawns a blocking task.
+    ///
+    /// The task will be spawned onto a thread pool specifically dedicated
+    /// to blocking tasks. This is useful to prevent long-running synchronous
+    /// operations from blocking the main futures executor.
+    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
+    where
+        F: FnOnce() -> T + Send + Sync + 'static,
+        T: Send + 'static,
+    {
+        JoinHandle {
+            task: Some(Either::Blocking(ntex_neon::spawn_blocking(f))),
+        }
     }
 
     #[derive(Clone, Debug)]
@@ -368,7 +370,7 @@ mod neon {
             F::Output: Send + 'static,
         {
             JoinHandle {
-                task: Some(self.0.spawn(future)),
+                task: Some(Either::Task(self.0.spawn(future))),
             }
         }
     }
@@ -377,24 +379,31 @@ mod neon {
     #[deprecated]
     pub type Task<T> = JoinHandle<T>;
 
+    enum Either<T> {
+        Task(ntex_neon::Task<T>),
+        Blocking(ntex_neon::JoinHandle<T>),
+    }
+
     /// A spawned task.
     pub struct JoinHandle<T> {
-        task: Option<ntex_neon::Task<T>>,
+        task: Option<Either<T>>,
     }
 
     impl<T> JoinHandle<T> {
         pub fn is_finished(&self) -> bool {
-            if let Some(hnd) = &self.task {
-                hnd.is_finished()
-            } else {
-                true
+            match &self.task {
+                Some(Either::Task(fut)) => fut.is_finished(),
+                Some(Either::Blocking(fut)) => fut.is_closed(),
+                None => true,
             }
         }
     }
 
     impl<T> Drop for JoinHandle<T> {
         fn drop(&mut self) {
-            self.task.take().unwrap().detach();
+            if let Some(Either::Task(fut)) = self.task.take() {
+                fut.detach();
+            }
         }
     }
 
@@ -402,7 +411,13 @@ mod neon {
         type Output = Result<T, JoinError>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Ready(Ok(ready!(Pin::new(self.task.as_mut().unwrap()).poll(cx))))
+            Poll::Ready(match self.task.as_mut() {
+                Some(Either::Task(fut)) => Ok(ready!(Pin::new(fut).poll(cx))),
+                Some(Either::Blocking(fut)) => ready!(Pin::new(fut).poll(cx))
+                    .map_err(|_| JoinError)
+                    .and_then(|res| res.map_err(|_| JoinError)),
+                None => Err(JoinError),
+            })
         }
     }
 
@@ -416,28 +431,6 @@ mod neon {
     }
 
     impl std::error::Error for JoinError {}
-
-    pub struct BlockingJoinHandle<T> {
-        fut: Option<ntex_neon::JoinHandle<T>>,
-    }
-
-    impl<T> BlockingJoinHandle<T> {
-        pub fn is_finished(&self) -> bool {
-            self.fut.is_none()
-        }
-    }
-
-    impl<T> Future for BlockingJoinHandle<T> {
-        type Output = Result<T, JoinError>;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Ready(
-                ready!(Pin::new(self.fut.as_mut().unwrap()).poll(cx))
-                    .map_err(|_| JoinError)
-                    .and_then(|result| result.map_err(|_| JoinError)),
-            )
-        }
-    }
 }
 
 #[cfg(feature = "tokio")]
