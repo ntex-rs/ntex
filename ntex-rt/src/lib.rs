@@ -519,6 +519,34 @@ mod no_rt {
     }
 
     impl std::error::Error for JoinError {}
+
+    #[derive(Clone, Debug)]
+    /// Handle to the runtime.
+    pub struct Handle;
+
+    impl Handle {
+        #[inline]
+        pub fn current() -> Self {
+            Self
+        }
+
+        #[inline]
+        /// Wake up runtime
+        pub fn notify(&self) {}
+
+        #[inline]
+        /// Spawns a new asynchronous task, returning a [`Task`] for it.
+        ///
+        /// Spawning a task enables the task to execute concurrently to other tasks.
+        /// There is no guarantee that a spawned task will execute to completion.
+        pub fn spawn<F>(&self, _: F) -> JoinHandle<F::Output>
+        where
+            F: Future + Send + 'static,
+            F::Output: Send + 'static,
+        {
+            panic!("async runtime is not configured");
+        }
+    }
 }
 
 #[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
