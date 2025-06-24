@@ -103,24 +103,6 @@ mod tokio {
         })
     }
 
-    /// Executes a future on the current thread. This does not create a new Arbiter
-    /// or Arbiter address, it is simply a helper for executing futures on the current
-    /// thread.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if ntex system is not running.
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated]
-    pub fn spawn_fn<F, R>(f: F) -> tok_io::task::JoinHandle<R::Output>
-    where
-        F: FnOnce() -> R + 'static,
-        R: Future + 'static,
-    {
-        spawn(async move { f().await })
-    }
-
     #[derive(Clone, Debug)]
     /// Handle to the runtime.
     pub struct Handle(tok_io::runtime::Handle);
@@ -180,7 +162,7 @@ mod compio {
         T: Send + 'static,
     {
         JoinHandle {
-            fut: Some(compio_runtime::spawn_blocking(f)),
+            fut: Some(Either::Compio(compio_runtime::spawn_blocking(f))),
         }
     }
 
@@ -214,25 +196,9 @@ mod compio {
             }
         });
 
-        JoinHandle { fut: Some(fut) }
-    }
-
-    /// Executes a future on the current thread. This does not create a new Arbiter
-    /// or Arbiter address, it is simply a helper for executing futures on the current
-    /// thread.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if ntex system is not running.
-    #[inline]
-    #[doc(hidden)]
-    #[deprecated]
-    pub fn spawn_fn<F, R>(f: F) -> JoinHandle<R::Output>
-    where
-        F: FnOnce() -> R + 'static,
-        R: Future + 'static,
-    {
-        spawn(async move { f().await })
+        JoinHandle {
+            fut: Some(Either::Compio(fut)),
+        }
     }
 
     #[derive(Debug, Copy, Clone)]
@@ -246,23 +212,30 @@ mod compio {
 
     impl std::error::Error for JoinError {}
 
+    enum Either<T> {
+        Compio(compio_runtime::JoinHandle<T>),
+        Spawn(oneshot::Receiver<T>),
+    }
+
     pub struct JoinHandle<T> {
-        fut: Option<compio_runtime::JoinHandle<T>>,
+        fut: Option<Either<T>>,
     }
 
     impl<T> JoinHandle<T> {
         pub fn is_finished(&self) -> bool {
-            if let Some(hnd) = &self.fut {
-                hnd.is_finished()
-            } else {
-                true
+            match &self.fut {
+                Some(Either::Compio(fut)) => fut.is_finished(),
+                Some(Either::Spawn(fut)) => fut.is_closed(),
+                None => true,
             }
         }
     }
 
     impl<T> Drop for JoinHandle<T> {
         fn drop(&mut self) {
-            self.fut.take().unwrap().detach();
+            if let Some(Either::Compio(fut)) = self.fut.take() {
+                fut.detach();
+            }
         }
     }
 
@@ -270,10 +243,15 @@ mod compio {
         type Output = Result<T, JoinError>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            Poll::Ready(
-                ready!(Pin::new(self.fut.as_mut().unwrap()).poll(cx))
-                    .map_err(|_| JoinError),
-            )
+            Poll::Ready(match self.fut.as_mut() {
+                Some(Either::Compio(fut)) => {
+                    ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError)
+                }
+                Some(Either::Spawn(fut)) => {
+                    ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError)
+                }
+                None => Err(JoinError),
+            })
         }
     }
 
@@ -287,7 +265,7 @@ mod compio {
 
         pub fn notify(&self) {}
 
-        pub fn spawn<F>(&self, future: F) -> impl Future<Output = F::Output>
+        pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
         where
             F: Future + Send + 'static,
             F::Output: Send + 'static,
@@ -297,7 +275,9 @@ mod compio {
                 let result = future.await;
                 let _ = tx.send(result);
             });
-            async { rx.await.unwrap() }
+            JoinHandle {
+                fut: Some(Either::Spawn(rx)),
+            }
         }
     }
 }
@@ -308,7 +288,6 @@ mod neon {
     use std::task::{ready, Context, Poll};
     use std::{fmt, future::poll_fn, future::Future, pin::Pin};
 
-    pub use ntex_neon::Handle;
     use ntex_neon::Runtime;
 
     /// Runs the provided future, blocking the current thread until the future
@@ -328,12 +307,12 @@ mod neon {
     /// The task will be spawned onto a thread pool specifically dedicated
     /// to blocking tasks. This is useful to prevent long-running synchronous
     /// operations from blocking the main futures executor.
-    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
+    pub fn spawn_blocking<F, T>(f: F) -> BlockingJoinHandle<T>
     where
         F: FnOnce() -> T + Send + Sync + 'static,
         T: Send + 'static,
     {
-        JoinHandle {
+        BlockingJoinHandle {
             fut: Some(ntex_neon::spawn_blocking(f)),
         }
     }
@@ -346,7 +325,7 @@ mod neon {
     ///
     /// This function panics if ntex system is not running.
     #[inline]
-    pub fn spawn<F>(f: F) -> Task<F::Output>
+    pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
     where
         F: Future + 'static,
     {
@@ -368,33 +347,42 @@ mod neon {
             }
         });
 
-        Task { task: Some(task) }
+        JoinHandle { task: Some(task) }
     }
 
-    /// Executes a future on the current thread. This does not create a new Arbiter
-    /// or Arbiter address, it is simply a helper for executing futures on the current
-    /// thread.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if ntex system is not running.
-    #[inline]
+    #[derive(Clone, Debug)]
+    pub struct Handle(ntex_neon::Handle);
+
+    impl Handle {
+        pub fn current() -> Self {
+            Self(ntex_neon::Handle::current())
+        }
+
+        pub fn notify(&self) {
+            let _ = self.0.notify();
+        }
+
+        pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
+        where
+            F: Future + Send + 'static,
+            F::Output: Send + 'static,
+        {
+            JoinHandle {
+                task: Some(self.0.spawn(future)),
+            }
+        }
+    }
+
     #[doc(hidden)]
     #[deprecated]
-    pub fn spawn_fn<F, R>(f: F) -> Task<R::Output>
-    where
-        F: FnOnce() -> R + 'static,
-        R: Future + 'static,
-    {
-        spawn(async move { f().await })
-    }
+    pub type Task<T> = JoinHandle<T>;
 
     /// A spawned task.
-    pub struct Task<T> {
+    pub struct JoinHandle<T> {
         task: Option<ntex_neon::Task<T>>,
     }
 
-    impl<T> Task<T> {
+    impl<T> JoinHandle<T> {
         pub fn is_finished(&self) -> bool {
             if let Some(hnd) = &self.task {
                 hnd.is_finished()
@@ -404,13 +392,13 @@ mod neon {
         }
     }
 
-    impl<T> Drop for Task<T> {
+    impl<T> Drop for JoinHandle<T> {
         fn drop(&mut self) {
             self.task.take().unwrap().detach();
         }
     }
 
-    impl<T> Future for Task<T> {
+    impl<T> Future for JoinHandle<T> {
         type Output = Result<T, JoinError>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -429,17 +417,17 @@ mod neon {
 
     impl std::error::Error for JoinError {}
 
-    pub struct JoinHandle<T> {
+    pub struct BlockingJoinHandle<T> {
         fut: Option<ntex_neon::JoinHandle<T>>,
     }
 
-    impl<T> JoinHandle<T> {
+    impl<T> BlockingJoinHandle<T> {
         pub fn is_finished(&self) -> bool {
             self.fut.is_none()
         }
     }
 
-    impl<T> Future for JoinHandle<T> {
+    impl<T> Future for BlockingJoinHandle<T> {
         type Output = Result<T, JoinError>;
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
