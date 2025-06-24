@@ -1,5 +1,11 @@
 # Changes
 
+## [0.4.32] - 2025-06-25
+
+* Export Handle type
+
+* Upgrade to compio 0.15
+
 ## [0.4.31] - 2025-05-26
 
 * Upgrade to compio 0.14

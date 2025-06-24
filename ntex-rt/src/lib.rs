@@ -52,13 +52,12 @@ pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
 #[cfg(feature = "tokio")]
 mod tokio {
     use std::future::{poll_fn, Future};
-    use tok_io::runtime::Handle;
     pub use tok_io::task::{spawn_blocking, JoinError, JoinHandle};
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
-        if let Ok(hnd) = Handle::try_current() {
+        if let Ok(hnd) = tok_io::runtime::Handle::try_current() {
             log::debug!("Use existing tokio runtime and block on future");
             hnd.block_on(tok_io::task::LocalSet::new().run_until(fut));
         } else {
@@ -120,6 +119,34 @@ mod tokio {
         R: Future + 'static,
     {
         spawn(async move { f().await })
+    }
+
+    #[derive(Clone, Debug)]
+    /// Handle to the runtime.
+    pub struct Handle(tok_io::runtime::Handle);
+
+    impl Handle {
+        #[inline]
+        pub fn current() -> Self {
+            Self(tok_io::runtime::Handle::current())
+        }
+
+        #[inline]
+        /// Wake up runtime
+        pub fn notify(&self) {}
+
+        #[inline]
+        /// Spawns a new asynchronous task, returning a [`Task`] for it.
+        ///
+        /// Spawning a task enables the task to execute concurrently to other tasks.
+        /// There is no guarantee that a spawned task will execute to completion.
+        pub fn spawn<F>(&self, future: F) -> tok_io::task::JoinHandle<F::Output>
+        where
+            F: Future + Send + 'static,
+            F::Output: Send + 'static,
+        {
+            self.0.spawn(future)
+        }
     }
 }
 
@@ -249,6 +276,30 @@ mod compio {
             )
         }
     }
+
+    #[derive(Clone, Debug)]
+    pub struct Handle(crate::Arbiter);
+
+    impl Handle {
+        pub fn current() -> Self {
+            Self(crate::Arbiter::current())
+        }
+
+        pub fn notify(&self) {}
+
+        pub fn spawn<F>(&self, future: F) -> impl Future<Output = F::Output>
+        where
+            F: Future + Send + 'static,
+            F::Output: Send + 'static,
+        {
+            let (tx, rx) = oneshot::channel();
+            self.0.spawn(async move {
+                let result = future.await;
+                let _ = tx.send(result);
+            });
+            async { rx.await.unwrap() }
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -257,6 +308,7 @@ mod neon {
     use std::task::{ready, Context, Poll};
     use std::{fmt, future::poll_fn, future::Future, pin::Pin};
 
+    pub use ntex_neon::Handle;
     use ntex_neon::Runtime;
 
     /// Runs the provided future, blocking the current thread until the future

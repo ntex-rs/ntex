@@ -1,8 +1,13 @@
 # Changes
 
-## [2.13.2] (2025-06-13)
+## [2.13.3] 2025-06-25
+
+* Upgrade to ntex-compio 0.4
+
+## [2.13.2] 2025-06-13
 
 * Update docs to use `variadics_please`
+
 * Update array imples to const generic impls
 
 ## [2.13.1] - 2025-06-13

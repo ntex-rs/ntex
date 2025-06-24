@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.29] - 2025-06-25
+
+* Upgrade to ntex-compio 0.4
+
 ## [2.5.28] - 2025-06-21
 
 * Check for potential date race
