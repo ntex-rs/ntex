@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.29] (2025-06-26)
+
+* Add From<&ByteSting> for ByteString impl
+
 ## [0.1.28] (2025-04-28)
 
 * Reclaim BytesVec on truncate

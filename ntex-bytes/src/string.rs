@@ -228,6 +228,13 @@ impl From<&str> for ByteString {
     }
 }
 
+impl From<&ByteString> for ByteString {
+    #[inline]
+    fn from(value: &ByteString) -> Self {
+        value.clone()
+    }
+}
+
 impl<'a> From<borrow::Cow<'a, str>> for ByteString {
     #[inline]
     fn from(value: borrow::Cow<'a, str>) -> Self {

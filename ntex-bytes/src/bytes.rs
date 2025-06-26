@@ -1777,6 +1777,13 @@ impl From<String> for BytesMut {
     }
 }
 
+impl From<&BytesMut> for BytesMut {
+    #[inline]
+    fn from(src: &BytesMut) -> BytesMut {
+        src.clone()
+    }
+}
+
 impl<'a> From<&'a [u8]> for BytesMut {
     fn from(src: &'a [u8]) -> BytesMut {
         if src.is_empty() {
@@ -1811,6 +1818,13 @@ impl From<Bytes> for BytesMut {
     fn from(src: Bytes) -> BytesMut {
         src.try_mut()
             .unwrap_or_else(|src| BytesMut::copy_from_slice_in(&src[..], src.inner.pool()))
+    }
+}
+
+impl From<&Bytes> for BytesMut {
+    #[inline]
+    fn from(src: &Bytes) -> BytesMut {
+        BytesMut::copy_from_slice_in(&src[..], src.inner.pool())
     }
 }
 
