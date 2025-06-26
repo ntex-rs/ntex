@@ -228,6 +228,13 @@ impl From<&str> for ByteString {
     }
 }
 
+impl From<&ByteString> for ByteString {
+    #[inline]
+    fn from(value: &ByteString) -> Self {
+        value.clone()
+    }
+}
+
 impl<'a> From<borrow::Cow<'a, str>> for ByteString {
     #[inline]
     fn from(value: borrow::Cow<'a, str>) -> Self {
@@ -438,22 +445,23 @@ mod test {
     }
 
     #[test]
-    fn test_from_string() {
+    fn test_from() {
+        // String
         let s: ByteString = "hello".to_owned().into();
         assert_eq!(&s, "hello");
         let t: &str = s.as_ref();
         assert_eq!(t, "hello");
-    }
 
-    #[test]
-    fn test_from_str() {
+        // str
         let _: ByteString = "str".into();
-    }
 
-    #[test]
-    fn test_from_static_str() {
+        // static str
         static _S: ByteString = ByteString::from_static("hello");
         let _ = ByteString::from_static("str");
+
+        let s = ByteString::from_static("hello");
+        let s1 = ByteString::from(&s);
+        assert_eq!(s1, "hello");
     }
 
     #[test]
