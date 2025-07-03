@@ -111,7 +111,7 @@ pub(super) trait MessageType: Sized {
                     }
                     header::CONTENT_LENGTH => match value.to_str() {
                         Ok(s) if s.trim_start().starts_with('+') => {
-                            log::trace!("illegal Content-Length: {:?}", s);
+                            log::trace!("illegal Content-Length: {s:?}");
                             return Err(DecodeError::Header);
                         }
                         Ok(s) => {
@@ -120,12 +120,12 @@ pub(super) trait MessageType: Sized {
                                 // headers have been processed to prevent request smuggling issues
                                 content_length = Some(len);
                             } else {
-                                log::trace!("illegal Content-Length: {:?}", s);
+                                log::trace!("illegal Content-Length: {s:?}");
                                 return Err(DecodeError::Header);
                             }
                         }
                         Err(_) => {
-                            log::trace!("illegal Content-Length: {:?}", value);
+                            log::trace!("illegal Content-Length: {value:?}");
                             return Err(DecodeError::Header);
                         }
                     },
@@ -143,7 +143,7 @@ pub(super) trait MessageType: Sized {
                             } else if s.eq_ignore_ascii_case("identity") {
                                 // allow silently since multiple TE headers are already checked
                             } else {
-                                log::trace!("illegal Transfer-Encoding: {:?}", s);
+                                log::trace!("illegal Transfer-Encoding: {s:?}");
                                 return Err(DecodeError::Header);
                             }
                         } else {
@@ -727,7 +727,7 @@ impl ChunkedState {
         rem: &mut u64,
         buf: &mut Option<Bytes>,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
-        log::trace!("Chunked read, remaining={:?}", rem);
+        log::trace!("Chunked read, remaining={rem:?}");
 
         let len = rdr.len() as u64;
         if len == 0 {

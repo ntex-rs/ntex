@@ -46,7 +46,7 @@ where
     fn error_response(&self, _: &HttpRequest) -> HttpResponse {
         let mut resp = HttpResponse::new(self.status_code());
         let mut buf = BytesMut::new();
-        let _ = write!(Writer(&mut buf), "{}", self);
+        let _ = write!(Writer(&mut buf), "{self}");
         resp.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text/plain; charset=utf-8"),
@@ -266,7 +266,7 @@ where
             InternalErrorType::Status(st) => {
                 let mut res = HttpResponse::new(st);
                 let mut buf = BytesMut::new();
-                let _ = write!(Writer(&mut buf), "{}", self);
+                let _ = write!(Writer(&mut buf), "{self}");
                 res.headers_mut().insert(
                     header::CONTENT_TYPE,
                     header::HeaderValue::from_static("text/plain; charset=utf-8"),
@@ -687,11 +687,11 @@ mod tests {
     fn test_into_error() {
         let err = UrlencodedError::UnknownLength;
         let e: Error = err.into();
-        let s = format!("{}", e);
+        let s = format!("{e}");
         assert!(s.contains("Payload size is unknown"));
 
         let e = Error::new(UrlencodedError::UnknownLength);
-        let s = format!("{:?}", e);
+        let s = format!("{e:?}");
         assert!(s.contains("UnknownLength"));
 
         let res = crate::http::ResponseError::error_response(&e);
@@ -900,7 +900,7 @@ mod tests {
     #[allow(clippy::cognitive_complexity)]
     fn test_error_helpers() {
         let err = ErrorBadRequest::<_, DefaultError>("err");
-        assert!(format!("{:?}", err).contains("web::InternalError"));
+        assert!(format!("{err:?}").contains("web::InternalError"));
 
         let err: InternalError<_, DefaultError> =
             InternalError::from_response("err", HttpResponse::BadRequest().finish());

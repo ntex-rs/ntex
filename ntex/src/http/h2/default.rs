@@ -29,7 +29,7 @@ impl Service<h2::Control<H2Error>> for DefaultControlService {
         msg: h2::Control<H2Error>,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        log::trace!("HTTP/2 Control message: {:?}", msg);
+        log::trace!("HTTP/2 Control message: {msg:?}");
         Ok(msg.ack())
     }
 }

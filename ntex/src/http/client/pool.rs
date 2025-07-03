@@ -481,7 +481,7 @@ where
                         &this.key.authority
                     );
                     let auth = if let Some(auth) = this.uri.authority() {
-                        format!("{}", auth).into()
+                        format!("{auth}").into()
                     } else {
                         ByteString::new()
                     };
@@ -667,7 +667,7 @@ mod tests {
         };
         let conn = pool.call(req.clone()).await.unwrap();
         assert_eq!(store.borrow().len(), 1);
-        assert!(format!("{:?}", conn).contains("H1Connection"));
+        assert!(format!("{conn:?}").contains("H1Connection"));
         assert_eq!(conn.protocol(), HttpProtocol::Http1);
         assert_eq!(pool.get_ref().inner.borrow().acquired, 1);
         assert!(pool.get_ref().inner.borrow().connecting.is_empty());

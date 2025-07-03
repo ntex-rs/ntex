@@ -178,7 +178,7 @@ where
             .srv
             .create(())
             .await
-            .map_err(|e| log::error!("Cannot construct publish service: {:?}", e))?;
+            .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
 
         let (tx, rx) = oneshot::channel();
         let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, ()));
@@ -221,7 +221,7 @@ where
     #[inline]
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         self.config.service.ready().await.map_err(|e| {
-            log::error!("Service readiness error: {:?}", e);
+            log::error!("Service readiness error: {e:?}");
             DispatchError::Service(Box::new(e))
         })
     }
@@ -247,7 +247,7 @@ where
             inflight.len()
         };
         if inflight != 0 {
-            log::trace!("Shutting down service, in-flight connections: {}", inflight);
+            log::trace!("Shutting down service, in-flight connections: {inflight}");
             if let Some(rx) = self.rx.take() {
                 let _ = rx.await;
             }
@@ -270,13 +270,12 @@ where
         };
 
         log::trace!(
-            "New http2 connection, peer address {:?}, inflight: {}",
-            io.query::<types::PeerAddr>().get(),
-            inflight
+            "New http2 connection, peer address {:?}, inflight: {inflight}",
+            io.query::<types::PeerAddr>().get()
         );
         let control = self.control.create(()).await.map_err(|e| {
             DispatchError::Control(
-                format!("Cannot construct control service: {:?}", e).into(),
+                format!("Cannot construct control service: {e:?}").into(),
             )
         })?;
 
@@ -391,7 +390,7 @@ where
                 return Ok(());
             }
             h2::MessageKind::Eof(item) => {
-                log::debug!("Got payload eof for {:?}: {:?}", stream.id(), item);
+                log::debug!("Got payload eof for {:?}: {item:?}", stream.id());
                 if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     match item {
                         h2::StreamEof::Data(data) => {
@@ -406,7 +405,7 @@ where
                 return Ok(());
             }
             h2::MessageKind::Disconnect(err) => {
-                log::debug!("Connection is disconnected {:?}", err);
+                log::debug!("Connection is disconnected {err:?}");
                 if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     sender.set_error(
                         io::Error::new(io::ErrorKind::UnexpectedEof, err).into(),
@@ -419,11 +418,8 @@ where
         let cfg = self.config.clone();
 
         log::trace!(
-            "{:?} got request (eof: {}): {:#?}\nheaders: {:#?}",
-            stream.id(),
-            eof,
-            pseudo,
-            headers
+            "{:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
+            stream.id()
         );
         let mut req = if let Some(pl) = payload {
             Request::with_payload(crate::http::Payload::H2(pl))
@@ -437,7 +433,7 @@ where
         let head = req.head_mut();
         head.uri = if let Some(ref authority) = pseudo.authority {
             let scheme = pseudo.scheme.ok_or(H2Error::MissingPseudo("Scheme"))?;
-            Uri::try_from(format!("{}://{}{}", scheme, authority, path))?
+            Uri::try_from(format!("{scheme}://{authority}{path}"))?
         } else {
             Uri::try_from(path.as_str())?
         };
@@ -459,7 +455,7 @@ where
         let mut size = body.size();
         prepare_response(&cfg.timer, head, &mut size);
 
-        log::debug!("Received service response: {:?} payload: {:?}", head, size);
+        log::debug!("Received service response: {head:?} payload: {size:?}");
 
         let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
         if size.is_eof() || is_head_req {
@@ -485,7 +481,7 @@ where
                         }
                     }
                     Some(Err(e)) => {
-                        log::error!("Response payload stream error: {:?}", e);
+                        log::error!("Response payload stream error: {e:?}");
                         return Err(e.into());
                     }
                 }
@@ -521,7 +517,7 @@ fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut Bod
         BodySize::Sized(len) => {
             head.headers.insert(
                 header::CONTENT_LENGTH,
-                HeaderValue::try_from(format!("{}", len)).unwrap(),
+                HeaderValue::try_from(format!("{len}")).unwrap(),
             );
         }
     };

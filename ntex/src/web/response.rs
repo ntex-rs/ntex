@@ -27,9 +27,9 @@ impl WebResponse {
         let res: Response = err.error_response(&request);
 
         if res.head().status == StatusCode::INTERNAL_SERVER_ERROR {
-            log::error!("Internal Server Error: {:?}", err);
+            log::error!("Internal Server Error: {err:?}");
         } else {
-            log::debug!("Error in response: {:?}", err);
+            log::debug!("Error in response: {err:?}");
         }
 
         WebResponse {
@@ -140,7 +140,7 @@ impl fmt::Debug for WebResponse {
         );
         let _ = writeln!(f, "  headers:");
         for (key, val) in self.response.head().headers.iter() {
-            let _ = writeln!(f, "    {:?}: {:?}", key, val);
+            let _ = writeln!(f, "    {key:?}: {val:?}");
         }
         let _ = writeln!(f, "  body: {:?}", self.response.body().size());
         res

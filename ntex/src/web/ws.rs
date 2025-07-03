@@ -106,7 +106,7 @@ where
     // start websockets service dispatcher
     let _ = rt::spawn(async move {
         let res = crate::io::Dispatcher::new(io, codec, srv, &cfg).await;
-        log::trace!("Ws handler is terminated: {:?}", res);
+        log::trace!("Ws handler is terminated: {res:?}");
     });
 
     Ok(HttpResponse::new(StatusCode::OK))

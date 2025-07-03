@@ -434,14 +434,14 @@ pub(super) fn write_io(
     let len = buf.len();
 
     if len != 0 {
-        log::trace!("flushing framed transport: {}", len);
+        log::trace!("flushing framed transport: {len}");
 
         let mut written = 0;
         let result = loop {
             break match io.poll_write_buf(cx, &buf[written..]) {
                 Poll::Ready(Ok(n)) => {
                     if n == 0 {
-                        log::trace!("disconnected during flush, written {}", written);
+                        log::trace!("disconnected during flush, written {written}");
                         Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::WriteZero,
                             "failed to write frame to transport",
@@ -462,12 +462,12 @@ pub(super) fn write_io(
                     Poll::Pending
                 }
                 Poll::Ready(Err(e)) => {
-                    log::trace!("error during flush: {}", e);
+                    log::trace!("error during flush: {e}");
                     Poll::Ready(Err(e))
                 }
             };
         };
-        log::trace!("flushed {} bytes", written);
+        log::trace!("flushed {written} bytes");
         result
     } else {
         Poll::Ready(Ok(()))
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(client.clone().tp, Type::ClientClone);
         assert_eq!(server.tp, Type::Server);
         assert_eq!(server.clone().tp, Type::ServerClone);
-        assert!(format!("{:?}", server).contains("IoTest"));
+        assert!(format!("{server:?}").contains("IoTest"));
         assert!(format!("{:?}", AtomicWaker::default()).contains("AtomicWaker"));
 
         server.read_pending();
@@ -515,6 +515,6 @@ mod tests {
         let addr: net::SocketAddr = "127.0.0.1:8080".parse().unwrap();
         let client = crate::Io::new(client.set_peer_addr(addr));
         let item = client.query::<crate::types::PeerAddr>();
-        assert!(format!("{:?}", item).contains("QueryItem(127.0.0.1:8080)"));
+        assert!(format!("{item:?}").contains("QueryItem(127.0.0.1:8080)"));
     }
 }

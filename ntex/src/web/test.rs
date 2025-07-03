@@ -245,7 +245,7 @@ where
     let body = read_response::<S>(app, req).await;
 
     serde_json::from_slice(&body).unwrap_or_else(|e| {
-        panic!("read_response_json failed during deserialization, {:?}", e)
+        panic!("read_response_json failed during deserialization, {e:?}")
     })
 }
 
@@ -618,21 +618,21 @@ where
                 StreamType::Tcp => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg =
-                            AppConfig::new(false, local_addr, format!("{}", local_addr));
+                            AppConfig::new(false, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h1(map_config(factory(), move |_| cfg.clone()))
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg =
-                            AppConfig::new(false, local_addr, format!("{}", local_addr));
+                            AppConfig::new(false, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h2(map_config(factory(), move |_| cfg.clone()))
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg =
-                            AppConfig::new(false, local_addr, format!("{}", local_addr));
+                            AppConfig::new(false, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .finish(map_config(factory(), move |_| cfg.clone()))
@@ -641,24 +641,21 @@ where
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h1(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h2(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .finish(map_config(factory(), move |_| cfg.clone()))
@@ -668,24 +665,21 @@ where
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(config) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h1(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .h2(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(true, local_addr, format!("{}", local_addr));
+                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
                         HttpService::build()
                             .headers_read_rate(ctimeout, Seconds::ZERO, 256)
                             .finish(map_config(factory(), move |_| cfg.clone()))
@@ -717,7 +711,7 @@ where
                 builder.set_verify(SslVerifyMode::NONE);
                 let _ = builder
                     .set_alpn_protos(b"\x02h2\x08http/1.1")
-                    .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
+                    .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
                 Connector::default()
                     .lifetime(Seconds::ZERO)
                     .keep_alive(Seconds(60))
@@ -928,7 +922,7 @@ impl TestServer {
                 builder.set_verify(SslVerifyMode::NONE);
                 let _ = builder
                     .set_alpn_protos(b"\x08http/1.1")
-                    .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
+                    .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
                 WsClient::build(self.url(path))
                     .address(self.addr)
@@ -1153,7 +1147,7 @@ mod tests {
             match res {
                 Ok(value) => Ok(HttpResponse::Ok()
                     .content_type("text/plain")
-                    .body(format!("Async with block value: {}", value))),
+                    .body(format!("Async with block value: {value}"))),
                 Err(_) => panic!("Unexpected"),
             }
         }

@@ -101,7 +101,7 @@ where
 
         Box::pin(async move {
             let factory = factory_fut.await.map_err(|_| {
-                log::error!("Cannot create {:?} service", name);
+                log::error!("Cannot create {name:?} service");
             })?;
             if let Some(tag) = cfg.get_tag() {
                 for item in &mut tokens {
@@ -209,7 +209,7 @@ where
         let f = self.f.clone();
         Box::pin(async move {
             (f)().await.map_err(|e| {
-                log::error!("On worker start callback failed: {}", e);
+                log::error!("On worker start callback failed: {e}");
             })
         })
     }
@@ -261,7 +261,7 @@ where
         let f = self.f.clone();
         Box::pin(async move {
             (f)(name, stream).await.map_err(|e| {
-                log::error!("On accept callback failed: {}", e);
+                log::error!("On accept callback failed: {e}");
             })
         })
     }

@@ -110,11 +110,11 @@ async fn test_chunked_payload() {
                 .take_payload()
                 .map(|res| match res {
                     Ok(pl) => pl,
-                    Err(e) => panic!("Error reading payload: {}", e),
+                    Err(e) => panic!("Error reading payload: {e}"),
                 })
                 .fold(0usize, |acc, chunk| async move { acc + chunk.len() })
                 .map(|req_size| {
-                    Ok::<_, io::Error>(Response::Ok().body(format!("size={}", req_size)))
+                    Ok::<_, io::Error>(Response::Ok().body(format!("size={req_size}")))
                 })
         }))
     });
@@ -129,7 +129,7 @@ async fn test_chunked_payload() {
             let random_bytes: Vec<u8> =
                 (0..*chunk_size).map(|_| rand::random::<u8>()).collect();
 
-            bytes.extend(format!("{:X}\r\n", chunk_size).as_bytes());
+            bytes.extend(format!("{chunk_size:X}\r\n").as_bytes());
             bytes.extend(&random_bytes[..]);
             bytes.extend(b"\r\n");
             let _ = stream.write_all(&bytes);
@@ -142,7 +142,7 @@ async fn test_chunked_payload() {
         let re = Regex::new(r"size=([0-9]+)").unwrap();
         let size: usize = match re.captures(&data) {
             Some(caps) => caps.get(1).unwrap().as_str().parse().unwrap(),
-            None => panic!("Failed to find size in HTTP Response: {}", data),
+            None => panic!("Failed to find size in HTTP Response: {data}"),
         };
         size
     };
@@ -457,17 +457,17 @@ async fn test_content_length() {
 
     {
         for i in 0..4 {
-            let req = srv.request(Method::GET, format!("/{}", i));
+            let req = srv.request(Method::GET, format!("/{i}"));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
-            let req = srv.request(Method::HEAD, format!("/{}", i));
+            let req = srv.request(Method::HEAD, format!("/{i}"));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), None);
         }
 
         for i in 4..6 {
-            let req = srv.request(Method::GET, format!("/{}", i));
+            let req = srv.request(Method::GET, format!("/{i}"));
             let response = req.send().await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));
         }
@@ -485,7 +485,7 @@ async fn test_h1_headers() {
             let mut builder = Response::Ok();
             for idx in 0..20 {
                 builder.header(
-                    format!("X-TEST-{}", idx).as_str(),
+                    format!("X-TEST-{idx}").as_str(),
                     "TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST \
                         TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST \
                         TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST \

@@ -113,8 +113,8 @@ impl<F, T> WsClient<F, T> {
         U: fmt::Display,
     {
         let auth = match password {
-            Some(password) => format!("{}:{}", username, password),
-            None => format!("{}:", username),
+            Some(password) => format!("{username}:{password}"),
+            None => format!("{username}:"),
         };
         self.set_header(AUTHORIZATION, format!("Basic {}", base64.encode(auth)))
     }
@@ -124,7 +124,7 @@ impl<F, T> WsClient<F, T> {
     where
         U: fmt::Display,
     {
-        self.set_header(AUTHORIZATION, format!("Bearer {}", token))
+        self.set_header(AUTHORIZATION, format!("Bearer {token}"))
     }
 }
 
@@ -164,13 +164,13 @@ where
 
         // send request and read response
         let fut = async {
-            log::trace!("{}: Sending ws handshake http message", tag);
+            log::trace!("{tag}: Sending ws handshake http message");
             io.send(
                 (RequestHeadType::Rc(head, Some(headers)), BodySize::None).into(),
                 &codec,
             )
             .await?;
-            log::trace!("{}: Waiting for ws handshake response", tag);
+            log::trace!("{tag}: Waiting for ws handshake response");
             io.recv(&codec)
                 .await?
                 .ok_or(WsClientError::Disconnected(None))
@@ -185,7 +185,7 @@ where
         } else {
             fut.await?
         };
-        log::trace!("{}: Ws handshake response is received {:?}", tag, response);
+        log::trace!("{tag}: Ws handshake response is received {response:?}");
 
         // verify response
         if response.status != StatusCode::SWITCHING_PROTOCOLS {
@@ -203,7 +203,7 @@ where
             false
         };
         if !has_hdr {
-            log::trace!("{}: Invalid upgrade header", tag);
+            log::trace!("{tag}: Invalid upgrade header");
             return Err(WsClientError::InvalidUpgradeHeader);
         }
 
@@ -211,15 +211,15 @@ where
         if let Some(conn) = response.headers.get(&header::CONNECTION) {
             if let Ok(s) = conn.to_str() {
                 if !s.to_ascii_lowercase().contains("upgrade") {
-                    log::trace!("{}: Invalid connection header: {}", tag, s);
+                    log::trace!("{tag}: Invalid connection header: {s}");
                     return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
                 }
             } else {
-                log::trace!("{}: Invalid connection header: {:?}", tag, conn);
+                log::trace!("{tag}: Invalid connection header: {conn:?}");
                 return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
             }
         } else {
-            log::trace!("{}: Missing connection header", tag);
+            log::trace!("{tag}: Missing connection header");
             return Err(WsClientError::MissingConnectionHeader);
         }
 
@@ -227,10 +227,7 @@ where
             let encoded = ws::hash_key(key.as_ref());
             if hdr_key.as_bytes() != encoded.as_bytes() {
                 log::trace!(
-                    "{}: Invalid challenge response: expected: {} received: {:?}",
-                    tag,
-                    encoded,
-                    key
+                    "{tag}: Invalid challenge response: expected: {encoded} received: {key:?}"
                 );
                 return Err(WsClientError::InvalidChallengeResponse(
                     encoded,
@@ -238,10 +235,10 @@ where
                 ));
             }
         } else {
-            log::trace!("{}: Missing SEC-WEBSOCKET-ACCEPT header", tag);
+            log::trace!("{tag}: Missing SEC-WEBSOCKET-ACCEPT header");
             return Err(WsClientError::MissingWebSocketAcceptHeader);
         };
-        log::trace!("{}: Ws handshake response verification is completed", tag);
+        log::trace!("{tag}: Ws handshake response verification is completed");
 
         // response and ws io
         Ok(WsConnection::new(
@@ -262,7 +259,7 @@ impl<F, T> fmt::Debug for WsClient<F, T> {
         writeln!(f, "\nWsClient {}:{}", self.head.method, self.head.uri)?;
         writeln!(f, "  headers:")?;
         for (key, val) in self.head.headers.iter() {
-            writeln!(f, "    {:?}: {:?}", key, val)?;
+            writeln!(f, "    {key:?}: {val:?}")?;
         }
         Ok(())
     }
@@ -465,8 +462,8 @@ where
         U: fmt::Display,
     {
         let auth = match password {
-            Some(password) => format!("{}:{}", username, password),
-            None => format!("{}:", username),
+            Some(password) => format!("{username}:{password}"),
+            None => format!("{username}:"),
         };
         self.header(AUTHORIZATION, format!("Basic {}", base64.encode(auth)))
     }
@@ -476,7 +473,7 @@ where
     where
         U: fmt::Display,
     {
-        self.header(AUTHORIZATION, format!("Bearer {}", token))
+        self.header(AUTHORIZATION, format!("Bearer {token}"))
     }
 
     /// Set request timeout.
@@ -604,7 +601,7 @@ where
                         c.value().as_bytes(),
                         crate::http::helpers::USERINFO,
                     );
-                    let _ = write!(cookie, "; {}={}", name, value);
+                    let _ = write!(cookie, "; {name}={value}");
                 }
                 inner.head.headers.insert(
                     header::COOKIE,
@@ -671,7 +668,7 @@ impl<F, T> fmt::Debug for WsClientBuilder<F, T> {
             )?;
             writeln!(f, "  headers:")?;
             for (key, val) in parts.head.headers.iter() {
-                writeln!(f, "    {:?}: {:?}", key, val)?;
+                writeln!(f, "    {key:?}: {val:?}")?;
             }
         } else {
             writeln!(f, "WsClientBuilder(Consumed)")?;
@@ -815,12 +812,12 @@ mod tests {
         let mut builder = WsClient::build("http://localhost")
             .header("x-test", "111")
             .take();
-        let repr = format!("{:?}", builder);
+        let repr = format!("{builder:?}");
         assert!(repr.contains("WsClientBuilder"));
         assert!(repr.contains("x-test"));
 
         let client = builder.finish().unwrap();
-        let repr = format!("{:?}", client);
+        let repr = format!("{client:?}");
         assert!(repr.contains("WsClient"));
         assert!(repr.contains("x-test"));
     }

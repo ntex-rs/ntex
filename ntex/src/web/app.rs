@@ -133,7 +133,7 @@ where
             Box::pin(async move {
                 match fut.await {
                     Err(e) => {
-                        log::error!("Cannot construct state instance: {:?}", e);
+                        log::error!("Cannot construct state instance: {e:?}");
                         Err(())
                     }
                     Ok(st) => {
@@ -270,9 +270,10 @@ where
         U::InitError: fmt::Debug,
     {
         // create and configure default resource
-        self.default = Some(Rc::new(boxed::factory(chain_factory(f).map_init_err(
-            |e| log::error!("Cannot construct default service: {:?}", e),
-        ))));
+        self.default = Some(Rc::new(boxed::factory(
+            chain_factory(f)
+                .map_init_err(|e| log::error!("Cannot construct default service: {e:?}")),
+        )));
 
         self
     }

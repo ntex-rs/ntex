@@ -236,7 +236,7 @@ mod tests {
         assert!(result.is_err());
         let result = srv.connect("localhost:99999").await;
         assert!(result.is_err());
-        assert!(format!("{:?}", srv).contains("Connector"));
+        assert!(format!("{srv:?}").contains("Connector"));
 
         let srv = Connector::default();
         let result = srv.connect(format!("{}", server.addr())).await;

@@ -396,8 +396,8 @@ mod test {
         assert_eq!(s.as_bytes(), &Bytes::copy_from_slice(b"test"));
         assert_eq!(Borrow::<str>::borrow(&s), "test");
 
-        assert_eq!(format!("{}", s), "test");
-        assert_eq!(format!("{:?}", s), "\"test\"");
+        assert_eq!(format!("{s}"), "test");
+        assert_eq!(format!("{s:?}"), "\"test\"");
 
         let b = s.into_bytes();
         assert_eq!(b, Bytes::copy_from_slice(b"test"));

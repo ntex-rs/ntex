@@ -227,11 +227,11 @@ mod tests {
     #[test]
     fn test_error() {
         let err1 = TimeoutError::<SrvError>::Timeout;
-        assert!(format!("{:?}", err1).contains("TimeoutError::Timeout"));
-        assert!(format!("{}", err1).contains("Service call timeout"));
+        assert!(format!("{err1:?}").contains("TimeoutError::Timeout"));
+        assert!(format!("{err1}").contains("Service call timeout"));
 
         let err2: TimeoutError<_> = SrvError.into();
-        assert!(format!("{:?}", err2).contains("TimeoutError::Service"));
-        assert!(format!("{}", err2).contains("SrvError"));
+        assert!(format!("{err2:?}").contains("TimeoutError::Service"));
+        assert!(format!("{err2}").contains("SrvError"));
     }
 }

@@ -118,7 +118,7 @@ mod tests {
         let server = Framed::new(Io::new(server), BytesCodec);
         server.get_codec();
         server.get_io();
-        assert!(format!("{:?}", server).contains("Framed"));
+        assert!(format!("{server:?}").contains("Framed"));
 
         let item = server.recv().await.unwrap().unwrap();
         assert_eq!(item, b"chunk-0".as_ref());

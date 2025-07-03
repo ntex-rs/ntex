@@ -278,7 +278,7 @@ impl ServiceRuntime {
         let inner = self.0.as_ref().borrow();
         for (name, item) in &inner.names {
             if inner.services[item.idx].is_none() {
-                log::error!("Service {:?} is not configured", name);
+                log::error!("Service {name:?} is not configured");
             }
         }
     }
@@ -317,7 +317,7 @@ impl ServiceRuntime {
                 service.into_factory(),
             ));
         } else {
-            panic!("Unknown service: {:?}", name);
+            panic!("Unknown service: {name:?}");
         }
     }
 }
@@ -368,7 +368,7 @@ where
         let f = self.f.clone();
         Box::pin(async move {
             (f)(rt).await.map_err(|e| {
-                log::error!("On worker start callback failed: {}", e);
+                log::error!("On worker start callback failed: {e}");
             })
         })
     }

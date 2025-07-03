@@ -495,7 +495,7 @@ mod tests {
         dl.reset(Millis(1));
         assert!(lazy(|cx| dl.poll_elapsed(cx)).await.is_pending());
 
-        assert!(format!("{:?}", dl).contains("Deadline"));
+        assert!(format!("{dl:?}").contains("Deadline"));
     }
 
     #[ntex_macros::rt_test2]
@@ -508,8 +508,7 @@ mod tests {
         assert!(
             elapsed > time::Duration::from_millis(200)
                 && elapsed < time::Duration::from_millis(450),
-            "elapsed: {:?}",
-            elapsed
+            "elapsed: {elapsed:?}"
         );
 
         let time = time::Instant::now();
@@ -518,8 +517,7 @@ mod tests {
         assert!(
             elapsed > time::Duration::from_millis(200)
                 && elapsed < time::Duration::from_millis(450),
-            "elapsed: {:?}",
-            elapsed
+            "elapsed: {elapsed:?}"
         );
     }
 
@@ -534,8 +532,7 @@ mod tests {
             assert!(
                 elapsed > time::Duration::from_millis(1000)
                     && elapsed < time::Duration::from_millis(1300),
-                "elapsed: {:?}",
-                elapsed
+                "elapsed: {elapsed:?}"
             );
         }
     }

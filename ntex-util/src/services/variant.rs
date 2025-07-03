@@ -282,7 +282,7 @@ mod tests {
     #[ntex_macros::rt_test2]
     async fn test_variant() {
         let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }));
-        assert!(format!("{:?}", factory).contains("Variant"));
+        assert!(format!("{factory:?}").contains("Variant"));
 
         let factory = factory
             .v2(fn_factory(|| async { Ok::<_, ()>(Srv2) }))
@@ -291,7 +291,7 @@ mod tests {
             .clone();
 
         let service = factory.pipeline(&()).await.unwrap().clone();
-        assert!(format!("{:?}", service).contains("Variant"));
+        assert!(format!("{service:?}").contains("Variant"));
 
         assert!(crate::future::lazy(|cx| service.poll(cx)).await.is_ok());
         assert!(service.ready().await.is_ok());

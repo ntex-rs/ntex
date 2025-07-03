@@ -120,7 +120,7 @@ fn fmt_write() {
     assert_eq!(b, s[..64].as_bytes());
 
     let mut c = BytesMut::with_capacity(2);
-    write!(c, "{}", s).unwrap_err();
+    write!(c, "{s}").unwrap_err();
     assert!(c.is_empty());
 
     let mut a = BytesVec::with_capacity(64);
@@ -133,7 +133,7 @@ fn fmt_write() {
     assert_eq!(b, s[..64].as_bytes());
 
     let mut c = BytesVec::with_capacity(2);
-    write!(c, "{}", s).unwrap_err();
+    write!(c, "{s}").unwrap_err();
     assert!(c.is_empty());
 }
 

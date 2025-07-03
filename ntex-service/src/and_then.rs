@@ -172,7 +172,7 @@ mod tests {
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
 
-        assert!(format!("{:?}", srv).contains("AndThen"));
+        assert!(format!("{srv:?}").contains("AndThen"));
     }
 
     #[ntex::test]

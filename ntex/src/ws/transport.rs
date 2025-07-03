@@ -94,7 +94,7 @@ impl FilterLayer for WsTransport {
 
                 let frame = if let Some(frame) =
                     self.codec.decode_vec(&mut src).map_err(|e| {
-                        log::trace!("Failed to decode ws codec frames: {:?}", e);
+                        log::trace!("Failed to decode ws codec frames: {e:?}");
                         self.insert_flags(Flags::PROTO_ERR);
                         io::Error::new(io::ErrorKind::InvalidData, e)
                     })? {

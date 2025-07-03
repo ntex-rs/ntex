@@ -167,7 +167,7 @@ impl fmt::Debug for ClientResponse {
         writeln!(f, "\nClientResponse {:?} {}", self.version(), self.status(),)?;
         writeln!(f, "  headers:")?;
         for (key, val) in self.headers().iter() {
-            writeln!(f, "    {:?}: {:?}", key, val)?;
+            writeln!(f, "    {key:?}: {val:?}")?;
         }
         Ok(())
     }

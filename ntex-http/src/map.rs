@@ -390,19 +390,19 @@ where
         let map = iter
             .into_iter()
             .filter_map(|(n, v)| {
-                let name = format!("{}", n);
+                let name = format!("{n}");
                 match (HeaderName::try_from(n), Value::try_from(v)) {
                     (Ok(n), Ok(v)) => Some((n, v)),
                     (Ok(n), Err(_)) => {
-                        log::warn!("failed to parse `{}` header value", n);
+                        log::warn!("failed to parse `{n}` header value");
                         None
                     }
                     (Err(_), Ok(_)) => {
-                        log::warn!("invalid HTTP header name: {}", name);
+                        log::warn!("invalid HTTP header name: {name}");
                         None
                     }
                     (Err(_), Err(_)) => {
-                        log::warn!("invalid HTTP header name `{}` and value", name);
+                        log::warn!("invalid HTTP header name `{name}` and value");
                         None
                     }
                 }
@@ -602,7 +602,7 @@ mod tests {
             *m.get_mut(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("text")
         );
-        assert!(format!("{:?}", m).contains("HeaderMap"));
+        assert!(format!("{m:?}").contains("HeaderMap"));
 
         assert!(m.keys().any(|x| x == CONTENT_TYPE));
         m.remove("content-type");

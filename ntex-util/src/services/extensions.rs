@@ -82,7 +82,7 @@ impl fmt::Debug for Extensions {
 fn test_debug() {
     let mut map = Extensions::new();
     map.insert::<i8>(123);
-    assert_eq!(format!("{:?}", map), "Extensions { size: 1 }");
+    assert_eq!(format!("{map:?}"), "Extensions { size: 1 }");
 }
 
 #[test]

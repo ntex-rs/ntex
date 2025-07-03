@@ -373,7 +373,7 @@ impl fmt::Debug for HeaderValue {
                     if b == b'"' {
                         f.write_str("\\\"")?;
                     } else {
-                        write!(f, "\\x{:x}", b)?;
+                        write!(f, "\\x{b:x}")?;
                     }
                     from = i + 1;
                 }
@@ -828,13 +828,13 @@ mod tests {
 
         for &(value, expected) in cases {
             let val = HeaderValue::from_bytes(value.as_bytes()).unwrap();
-            let actual = format!("{:?}", val);
+            let actual = format!("{val:?}");
             assert_eq!(expected, actual);
         }
 
         let mut sensitive = HeaderValue::from_static("password");
         sensitive.set_sensitive(true);
-        assert_eq!("Sensitive", format!("{:?}", sensitive));
+        assert_eq!("Sensitive", format!("{sensitive:?}"));
 
         let s = format!("{:?}", InvalidHeaderValue { _priv: {} });
         assert_eq!(s, "InvalidHeaderValue");

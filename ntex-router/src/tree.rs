@@ -433,8 +433,7 @@ impl Tree {
                                 segments.push((name, item));
                             } else {
                                 log::error!(
-                                    "Dynamic path match but not all segments found: {}",
-                                    name
+                                    "Dynamic path match but not all segments found: {name}"
                                 );
                                 is_match = false;
                                 break;

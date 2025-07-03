@@ -147,7 +147,7 @@ async fn test_rustls_string() {
         )
         .and_then(
             rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
-                log::error!("tls negotiation is failed: {:?}", e);
+                log::error!("tls negotiation is failed: {e:?}");
                 e
             }),
         )

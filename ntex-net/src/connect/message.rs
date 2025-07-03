@@ -311,7 +311,7 @@ mod tests {
         connect = connect.set_port(80);
         assert_eq!(connect.port(), 80);
         let addrs = connect.addrs().clone();
-        assert_eq!(format!("{:?}", addrs), "[]");
+        assert_eq!(format!("{addrs:?}"), "[]");
         assert!(connect.addrs().next().is_none());
         assert!(format!("{:?}", connect.clone()).contains("Connect"));
 
@@ -319,13 +319,13 @@ mod tests {
         assert_eq!(c.host(), "www.rust-lang.org:80");
         assert_eq!(c.port(), 80);
         let addrs = c.addrs().clone();
-        assert_eq!(format!("{:?}", addrs), "[]");
+        assert_eq!(format!("{addrs:?}"), "[]");
         assert!(c.addrs().next().is_none());
 
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         connect = connect.set_addrs(vec![addr]);
         let addrs = connect.addrs().clone();
-        assert_eq!(format!("{:?}", addrs), "[127.0.0.1:8080]");
+        assert_eq!(format!("{addrs:?}"), "[127.0.0.1:8080]");
         let addrs: Vec<_> = connect.take_addrs().collect();
         assert_eq!(addrs.len(), 1);
         assert!(addrs.contains(&addr));
@@ -344,7 +344,7 @@ mod tests {
         assert!(connect.addrs().next().is_none());
 
         connect = connect.set_addrs(vec![addr]);
-        assert_eq!(format!("{}", connect), "www.rust-lang.org:80");
+        assert_eq!(format!("{connect}"), "www.rust-lang.org:80");
 
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         let mut connect = Connect::new(addr);

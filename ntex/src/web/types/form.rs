@@ -370,8 +370,8 @@ mod tests {
         assert_eq!(f.hello, "world");
         f.hello = "test".to_string();
         assert_eq!(f.hello, "test");
-        assert!(format!("{:?}", f).contains("Form"));
-        assert!(format!("{}", f).contains("test"));
+        assert!(format!("{f:?}").contains("Form"));
+        assert!(format!("{f}").contains("test"));
     }
 
     #[crate::rt_test]

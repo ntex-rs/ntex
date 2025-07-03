@@ -141,7 +141,7 @@ mod tests {
     #[ntex::test]
     async fn resolver() {
         let resolver = Resolver::default().clone();
-        assert!(format!("{:?}", resolver).contains("Resolver"));
+        assert!(format!("{resolver:?}").contains("Resolver"));
         let srv = resolver.pipeline(()).await.unwrap().bind();
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
 

@@ -38,8 +38,8 @@ impl fmt::Debug for Payload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Payload::None => write!(f, "Payload::None"),
-            Payload::H1(ref pl) => write!(f, "Payload::H1({:?})", pl),
-            Payload::H2(ref pl) => write!(f, "Payload::H2({:?})", pl),
+            Payload::H1(ref pl) => write!(f, "Payload::H1({pl:?})"),
+            Payload::H2(ref pl) => write!(f, "Payload::H2({pl:?})"),
             Payload::Stream(_) => write!(f, "Payload::Stream(..)"),
         }
     }

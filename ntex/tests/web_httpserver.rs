@@ -37,7 +37,7 @@ async fn test_run() {
             .server_hostname("localhost")
             .stop_runtime()
             .disable_signals()
-            .bind(format!("{}", addr))
+            .bind(format!("{addr}"))
             .unwrap()
             .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
@@ -52,7 +52,7 @@ async fn test_run() {
         .connector(client::Connector::default().timeout(Seconds(100)).finish())
         .finish();
 
-    let host = format!("http://{}", addr);
+    let host = format!("http://{addr}");
     let response = client.get(host.clone()).send().await.unwrap();
     assert!(response.status().is_success());
 
@@ -85,7 +85,7 @@ fn client() -> ntex::http::client::Client {
     builder.set_verify(SslVerifyMode::NONE);
     let _ = builder
         .set_alpn_protos(b"\x02h2\x08http/1.1")
-        .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
+        .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
     ntex::http::client::Client::build()
         .timeout(Seconds(30))
@@ -123,7 +123,7 @@ async fn test_openssl() {
             .shutdown_timeout(Seconds(1))
             .stop_runtime()
             .disable_signals()
-            .bind_openssl(format!("{}", addr), builder)
+            .bind_openssl(format!("{addr}"), builder)
             .unwrap()
             .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
@@ -134,7 +134,7 @@ async fn test_openssl() {
     thread::sleep(Duration::from_millis(100));
 
     let client = client();
-    let host = format!("https://{}", addr);
+    let host = format!("https://{addr}");
     let response = client.get(host.clone()).send().await.unwrap();
     assert!(response.status().is_success());
 
@@ -170,7 +170,7 @@ async fn test_rustls() {
             .shutdown_timeout(Seconds(1))
             .stop_runtime()
             .disable_signals()
-            .bind_rustls(format!("{}", addr), config)
+            .bind_rustls(format!("{addr}"), config)
             .unwrap()
             .run();
             let _ = tx.send((srv, ntex::rt::System::current()));

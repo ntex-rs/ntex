@@ -399,8 +399,8 @@ mod tests {
         assert!(lazy(|cx| srv.poll_shutdown(cx)).await.is_ready());
 
         let err = BufferServiceError::from("test");
-        assert!(format!("{}", err).contains("test"));
-        assert!(format!("{:?}", srv).contains("BufferService"));
+        assert!(format!("{err}").contains("test"));
+        assert!(format!("{srv:?}").contains("BufferService"));
         assert!(format!("{:?}", Buffer::<TestService>::default()).contains("Buffer"));
     }
 

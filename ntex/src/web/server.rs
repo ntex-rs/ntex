@@ -343,12 +343,12 @@ where
 
         self.builder =
             self.builder
-                .listen(format!("ntex-web-service-{}", addr), lst, move |r| {
+                .listen(format!("ntex-web-service-{addr}"), lst, move |r| {
                     let c = cfg.lock().unwrap();
                     let cfg = AppConfig::new(
                         false,
                         addr,
-                        c.host.clone().unwrap_or_else(|| format!("{}", addr)),
+                        c.host.clone().unwrap_or_else(|| format!("{addr}")),
                     );
                     r.tag(c.tag);
                     r.memory_pool(c.pool);
@@ -383,12 +383,12 @@ where
 
         self.builder =
             self.builder
-                .listen(format!("ntex-web-service-{}", addr), lst, move |r| {
+                .listen(format!("ntex-web-service-{addr}"), lst, move |r| {
                     let c = cfg.lock().unwrap();
                     let cfg = AppConfig::new(
                         true,
                         addr,
-                        c.host.clone().unwrap_or_else(|| format!("{}", addr)),
+                        c.host.clone().unwrap_or_else(|| format!("{addr}")),
                     );
                     r.tag(c.tag);
                     r.memory_pool(c.pool);
@@ -423,14 +423,14 @@ where
         let addr = lst.local_addr().unwrap();
 
         self.builder = self.builder.listen(
-            format!("ntex-web-rustls-service-{}", addr),
+            format!("ntex-web-rustls-service-{addr}"),
             lst,
             move |r| {
                 let c = cfg.lock().unwrap();
                 let cfg = AppConfig::new(
                     true,
                     addr,
-                    c.host.clone().unwrap_or_else(|| format!("{}", addr)),
+                    c.host.clone().unwrap_or_else(|| format!("{addr}")),
                 );
                 r.tag(c.tag);
                 r.memory_pool(c.pool);
@@ -539,7 +539,7 @@ where
             let config = AppConfig::new(
                 false,
                 socket_addr,
-                c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
+                c.host.clone().unwrap_or_else(|| format!("{socket_addr}")),
             );
             r.tag(c.tag);
             r.memory_pool(c.pool);
@@ -571,7 +571,7 @@ where
                 let config = AppConfig::new(
                     false,
                     socket_addr,
-                    c.host.clone().unwrap_or_else(|| format!("{}", socket_addr)),
+                    c.host.clone().unwrap_or_else(|| format!("{socket_addr}")),
                 );
                 r.tag(c.tag);
                 r.memory_pool(c.pool);

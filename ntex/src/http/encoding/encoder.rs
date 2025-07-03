@@ -80,7 +80,7 @@ enum EncoderBody<B> {
 impl<B> fmt::Debug for EncoderBody<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EncoderBody::Bytes(ref b) => write!(f, "EncoderBody::Bytes({:?})", b),
+            EncoderBody::Bytes(ref b) => write!(f, "EncoderBody::Bytes({b:?})"),
             EncoderBody::Stream(_) => write!(f, "EncoderBody::Stream(_)"),
             EncoderBody::BoxedStream(_) => write!(f, "EncoderBody::BoxedStream(_)"),
         }
@@ -235,14 +235,14 @@ impl ContentEncoder {
             ContentEncoder::Gzip(ref mut encoder) => match encoder.write_all(data) {
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    log::trace!("Error decoding gzip encoding: {}", err);
+                    log::trace!("Error decoding gzip encoding: {err}");
                     Err(err)
                 }
             },
             ContentEncoder::Deflate(ref mut encoder) => match encoder.write_all(data) {
                 Ok(_) => Ok(()),
                 Err(err) => {
-                    log::trace!("Error decoding deflate encoding: {}", err);
+                    log::trace!("Error decoding deflate encoding: {err}");
                     Err(err)
                 }
             },

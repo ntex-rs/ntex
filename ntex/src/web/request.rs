@@ -286,9 +286,9 @@ impl<Err: ErrorRenderer> fmt::Debug for WebRequest<Err> {
         writeln!(f, "  headers:")?;
         for (key, val) in self.headers().iter() {
             if key == header::AUTHORIZATION {
-                writeln!(f, "    {:?}: <REDACTED>", key)?;
+                writeln!(f, "    {key:?}: <REDACTED>")?;
             } else {
-                writeln!(f, "    {:?}: {:?}", key, val)?;
+                writeln!(f, "    {key:?}: {val:?}")?;
             }
         }
         Ok(())
@@ -338,7 +338,7 @@ mod tests {
         req.message_extensions_mut().remove::<String>();
         assert!(!req.extensions().contains::<String>());
 
-        let t = format!("{:?}", req);
+        let t = format!("{req:?}");
         assert!(t.contains("\"authorization\": <REDACTED>"));
     }
 }

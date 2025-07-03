@@ -430,7 +430,7 @@ mod tests {
         let pred = Header("content-type", "other");
         assert!(!pred.check(req.head()));
 
-        assert!(format!("{:?}", pred).contains("Header"));
+        assert!(format!("{pred:?}").contains("Header"));
     }
 
     #[test]
@@ -491,7 +491,7 @@ mod tests {
         let pred = Host("localhost");
         assert!(!pred.check(req.head()));
 
-        assert!(format!("{:?}", pred).contains("Host"));
+        assert!(format!("{pred:?}").contains("Host"));
     }
 
     #[test]
@@ -600,7 +600,7 @@ mod tests {
         let g = fn_guard(|req| req.headers().contains_key("content-type"));
         assert!(g.check(req.head()));
         let g = FnGuard(|req| req.headers().contains_key("content-type"));
-        assert!(format!("{:?}", g).contains("FnGuard"));
+        assert!(format!("{g:?}").contains("FnGuard"));
 
         let g = |req: &RequestHead| req.headers().contains_key("content-type");
         assert!(g.check(req.head()));

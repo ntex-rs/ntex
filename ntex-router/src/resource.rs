@@ -393,7 +393,7 @@ impl ResourceDef {
         if !pattern.is_empty() {
             // handle tail expression for static segment
             if let Some(stripped) = pattern.strip_suffix('*') {
-                let pattern = Regex::new(&format!("^{}(.+)", stripped)).unwrap();
+                let pattern = Regex::new(&format!("^{stripped}(.+)")).unwrap();
                 pelems.push(Segment::Dynamic {
                     pattern,
                     names: Vec::new(),

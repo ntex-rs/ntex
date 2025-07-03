@@ -285,7 +285,7 @@ mod tests {
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
-        let _ = format!("{:?}", srv);
+        let _ = format!("{srv:?}");
     }
 
     #[ntex::test]
@@ -308,7 +308,7 @@ mod tests {
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
-        let _ = format!("{:?}", new_srv);
+        let _ = format!("{new_srv:?}");
 
         assert!(Err == Err::from(()));
     }
@@ -329,6 +329,6 @@ mod tests {
         let res = srv.call("srv").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
-        let _ = format!("{:?}", new_srv);
+        let _ = format!("{new_srv:?}");
     }
 }
