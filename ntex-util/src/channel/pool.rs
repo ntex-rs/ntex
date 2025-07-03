@@ -211,16 +211,16 @@ mod tests {
     async fn test_pool() {
         let p = new();
         p.shrink_to_fit();
-        assert!(format!("{:?}", p).contains("Pool"));
+        assert!(format!("{p:?}").contains("Pool"));
 
         let (tx, rx) = p.channel();
-        assert!(format!("{:?}", tx).contains("Sender"));
-        assert!(format!("{:?}", rx).contains("Receiver"));
+        assert!(format!("{tx:?}").contains("Sender"));
+        assert!(format!("{rx:?}").contains("Receiver"));
 
         tx.send("test").unwrap();
         assert_eq!(rx.await.unwrap(), "test");
-        assert!(format!("{}", Canceled).contains("canceled"));
-        assert!(format!("{:?}", Canceled).contains("Canceled"));
+        assert!(format!("{Canceled}").contains("canceled"));
+        assert!(format!("{Canceled:?}").contains("Canceled"));
 
         let p2 = p.clone();
         let (tx, rx) = p2.channel();

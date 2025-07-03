@@ -124,9 +124,9 @@ impl fmt::Debug for FrozenClientRequest {
         writeln!(f, "  headers:")?;
         for (key, val) in self.head.headers.iter() {
             if key == header::AUTHORIZATION {
-                writeln!(f, "    {:?}: <REDACTED>", key)?;
+                writeln!(f, "    {key:?}: <REDACTED>")?;
             } else {
-                writeln!(f, "    {:?}: {:?}", key, val)?;
+                writeln!(f, "    {key:?}: {val:?}")?;
             }
         }
         Ok(())

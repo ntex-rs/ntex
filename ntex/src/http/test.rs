@@ -175,7 +175,7 @@ impl TestRequest {
             for c in inner.cookies.delta() {
                 let name = percent_encode(c.name().as_bytes(), super::helpers::USERINFO);
                 let value = percent_encode(c.value().as_bytes(), super::helpers::USERINFO);
-                let _ = write!(cookie, "; {}={}", name, value);
+                let _ = write!(cookie, "; {name}={value}");
             }
             if !cookie.is_empty() {
                 head.headers.insert(
@@ -285,7 +285,7 @@ impl TestServer {
                     builder.set_verify(SslVerifyMode::NONE);
                     let _ = builder
                         .set_alpn_protos(b"\x02h2\x08http/1.1")
-                        .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
+                        .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
                     Connector::default()
                         .timeout(connect_timeout)
                         .openssl(builder.build())
@@ -401,7 +401,7 @@ impl TestServer {
         builder.set_verify(SslVerifyMode::NONE);
         let _ = builder
             .set_alpn_protos(b"\x08http/1.1")
-            .map_err(|e| log::error!("Cannot set alpn protocol: {:?}", e));
+            .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
         WsClient::build(self.url(path))
             .address(self.addr)

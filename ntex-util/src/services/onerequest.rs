@@ -125,7 +125,7 @@ mod tests {
 
     #[ntex_macros::rt_test2]
     async fn test_middleware() {
-        assert_eq!(format!("{:?}", OneRequest), "OneRequest");
+        assert_eq!(format!("{OneRequest:?}"), "OneRequest");
 
         let (tx, rx) = oneshot::channel();
         let rx = RefCell::new(Some(rx));

@@ -684,10 +684,10 @@ async fn client_read_until_eof() {
                 let mut b = [0; 1000];
                 log::debug!("Reading request");
                 let res = stream.read(&mut b).unwrap();
-                log::debug!("Read {:?}", res);
+                log::debug!("Read {res:?}");
                 let res = stream
                     .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
-                log::debug!("Sent {:?}", res);
+                log::debug!("Sent {res:?}");
             } else {
                 break;
             }
@@ -699,7 +699,7 @@ async fn client_read_until_eof() {
     let req = Client::build()
         .timeout(Seconds(30))
         .finish()
-        .get(format!("http://{}/", addr).as_str());
+        .get(format!("http://{addr}/").as_str());
     let mut response = req.send().await.unwrap();
     assert!(response.status().is_success());
 

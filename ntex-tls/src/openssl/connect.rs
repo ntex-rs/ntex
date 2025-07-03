@@ -48,7 +48,8 @@ impl<T: Address> SslConnector<T> {
         let openssl = self.openssl.clone();
 
         let io = conn.await?;
-        log::trace!("{}: SSL Handshake start for: {:?}", io.tag(), host);
+        let tag = io.tag();
+        log::trace!("{tag}: SSL Handshake start for: {host:?}");
 
         match openssl.configure() {
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e).into()),
@@ -56,18 +57,15 @@ impl<T: Address> SslConnector<T> {
                 let ssl = config
                     .into_ssl(&host)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                let tag = io.tag();
                 match connect_io(io, ssl).await {
                     Ok(io) => {
-                        log::trace!("{}: SSL Handshake success: {:?}", tag, host);
+                        log::trace!("{tag}: SSL Handshake success: {host:?}");
                         Ok(io)
                     }
                     Err(e) => {
-                        log::trace!("{}: SSL Handshake error: {:?}", tag, e);
-                        Err(
-                            io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e))
-                                .into(),
-                        )
+                        log::trace!("{tag}: SSL Handshake error: {e:?}");
+                        Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{e}"))
+                            .into())
                     }
                 }
             }
@@ -139,6 +137,6 @@ mod tests {
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
-        assert!(format!("{:?}", srv).contains("SslConnector"));
+        assert!(format!("{srv:?}").contains("SslConnector"));
     }
 }

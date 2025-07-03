@@ -168,7 +168,7 @@ mod tests {
         assert!(!err.is::<InvalidHeaderValue>());
         assert!(err.is::<status::InvalidStatusCode>());
 
-        let s = format!("{:?}", err);
+        let s = format!("{err:?}");
         assert!(s.starts_with("ntex_http::Error"));
     }
 
@@ -183,7 +183,7 @@ mod tests {
         assert!(err.source().is_none());
         assert!(err.is::<method::InvalidMethod>());
 
-        let s = format!("{:?}", err);
+        let s = format!("{err:?}");
         assert!(s.starts_with("ntex_http::Error"));
     }
 }

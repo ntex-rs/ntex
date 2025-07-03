@@ -252,7 +252,7 @@ impl<B: MessageBody> fmt::Debug for Response<B> {
         );
         let _ = writeln!(f, "  headers:");
         for (key, val) in self.head.headers.iter() {
-            let _ = writeln!(f, "    {:?}: {:?}", key, val);
+            let _ = writeln!(f, "    {key:?}: {val:?}");
         }
         let _ = writeln!(f, "  body: {:?}", self.body.size());
         res
@@ -740,7 +740,7 @@ impl fmt::Debug for ResponseBuilder {
         );
         let _ = writeln!(f, "  headers:");
         for (key, val) in head.headers.iter() {
-            let _ = writeln!(f, "    {:?}: {:?}", key, val);
+            let _ = writeln!(f, "    {key:?}: {val:?}");
         }
         res
     }
@@ -748,7 +748,7 @@ impl fmt::Debug for ResponseBuilder {
 
 fn log_error<T: Into<HttpError>>(err: T) -> HttpError {
     let e = err.into();
-    log::error!("Error in ResponseBuilder {}", e);
+    log::error!("Error in ResponseBuilder {e}");
     e
 }
 
@@ -830,7 +830,7 @@ mod tests {
             .header(COOKIE, HeaderValue::from_static("cookie1=value1; "))
             .header(COOKIE, HeaderValue::from_static("cookie2=value2; "))
             .finish();
-        let dbg = format!("{:?}", resp);
+        let dbg = format!("{resp:?}");
         assert!(dbg.contains("Response"));
         let dbg = format!("{:?}", resp.head());
         assert!(dbg.contains("ResponseHead"));
@@ -838,7 +838,7 @@ mod tests {
         let mut resp = Response::Ok();
         resp.header(COOKIE, HeaderValue::from_static("cookie1=value1; "));
         resp.header(COOKIE, HeaderValue::from_static("cookie2=value2; "));
-        let dbg = format!("{:?}", resp);
+        let dbg = format!("{resp:?}");
         assert!(dbg.contains("ResponseBuilder"));
     }
 

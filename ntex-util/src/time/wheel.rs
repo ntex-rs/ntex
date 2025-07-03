@@ -756,8 +756,7 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert!(
             _elapsed > Duration::from_millis(200) && _elapsed < Duration::from_millis(300),
-            "elapsed: {:?}",
-            _elapsed
+            "elapsed: {_elapsed:?}"
         );
 
         fut1.await;
@@ -766,8 +765,7 @@ mod tests {
         assert!(
             _elapsed > Duration::from_millis(1000)
                 && _elapsed < Duration::from_millis(1200), // osx
-            "elapsed: {:?}",
-            _elapsed
+            "elapsed: {_elapsed:?}",
         );
 
         let time = Instant::now();
@@ -776,8 +774,7 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert!(
             _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),
-            "elapsed: {:?}",
-            _elapsed
+            "elapsed: {_elapsed:?}",
         );
     }
 }

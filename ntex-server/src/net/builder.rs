@@ -427,6 +427,6 @@ mod tests {
     #[test]
     fn test_debug() {
         let builder = ServerBuilder::default();
-        assert!(format!("{:?}", builder).contains("ServerBuilder"));
+        assert!(format!("{builder:?}").contains("ServerBuilder"));
     }
 }

@@ -214,7 +214,7 @@ mod tests {
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
 
-        let _ = format!("{:?}", srv);
+        let _ = format!("{srv:?}");
     }
 
     #[ntex::test]
@@ -228,7 +228,7 @@ mod tests {
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
 
-        let _ = format!("{:?}", srv);
+        let _ = format!("{srv:?}");
     }
 
     #[ntex::test]
@@ -241,7 +241,7 @@ mod tests {
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
-        let _ = format!("{:?}", new_srv);
+        let _ = format!("{new_srv:?}");
     }
 
     #[ntex::test]
@@ -255,6 +255,6 @@ mod tests {
         let res = srv.call(()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
-        let _ = format!("{:?}", new_srv);
+        let _ = format!("{new_srv:?}");
     }
 }

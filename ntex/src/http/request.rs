@@ -182,14 +182,14 @@ impl fmt::Debug for Request {
             self.path()
         )?;
         if let Some(q) = self.uri().query().as_ref() {
-            writeln!(f, "  query: ?{:?}", q)?;
+            writeln!(f, "  query: ?{q:?}")?;
         }
         writeln!(f, "  headers:")?;
         for (key, val) in self.headers() {
             if key == header::AUTHORIZATION {
-                writeln!(f, "    {:?}: <REDACTED>", key)?;
+                writeln!(f, "    {key:?}: <REDACTED>")?;
             } else {
-                writeln!(f, "    {:?}: {:?}", key, val)?;
+                writeln!(f, "    {key:?}: {val:?}")?;
             }
         }
         Ok(())
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(req.uri().path(), "/index.html");
         assert_eq!(req.uri().query(), Some("q=1"));
 
-        let s = format!("{:?}", req);
+        let s = format!("{req:?}");
         assert!(s.contains("Request HTTP/1.1 GET:/index.html"));
 
         let s = format!("{:?}", req.head());

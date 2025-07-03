@@ -213,8 +213,8 @@ mod tests {
             Poll::Pending
         );
         cond.notify();
-        assert!(format!("{:?}", cond).contains("Condition"));
-        assert!(format!("{:?}", waiter).contains("Waiter"));
+        assert!(format!("{cond:?}").contains("Condition"));
+        assert!(format!("{waiter:?}").contains("Waiter"));
         assert_eq!(waiter.await, ());
 
         let mut waiter = cond.wait();

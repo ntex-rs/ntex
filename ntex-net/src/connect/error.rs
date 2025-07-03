@@ -27,13 +27,13 @@ impl Clone for ConnectError {
     fn clone(&self) -> Self {
         match self {
             ConnectError::Resolver(err) => {
-                ConnectError::Resolver(io::Error::new(err.kind(), format!("{}", err)))
+                ConnectError::Resolver(io::Error::new(err.kind(), format!("{err}")))
             }
             ConnectError::NoRecords => ConnectError::NoRecords,
             ConnectError::InvalidInput => ConnectError::InvalidInput,
             ConnectError::Unresolved => ConnectError::Unresolved,
             ConnectError::Io(err) => {
-                ConnectError::Io(io::Error::new(err.kind(), format!("{}", err)))
+                ConnectError::Io(io::Error::new(err.kind(), format!("{err}")))
             }
         }
     }

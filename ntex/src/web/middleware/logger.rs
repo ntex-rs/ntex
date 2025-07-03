@@ -233,7 +233,7 @@ impl Format {
     ///
     /// Returns `None` if the format string syntax is incorrect.
     fn new(s: &str) -> Format {
-        log::trace!("Access log format: {}", s);
+        log::trace!("Access log format: {s}");
         let fmt = Regex::new(r"%(\{([A-Za-z0-9\-_]+)\}([ioe])|[atPrUsbTD]?)").unwrap();
 
         let mut idx = 0;
@@ -315,16 +315,16 @@ impl FormatText {
             FormatText::Time => {
                 let rt = entry_time.elapsed().unwrap();
                 let rt = rt.as_secs_f64();
-                fmt.write_fmt(format_args!("{:.6}", rt))
+                fmt.write_fmt(format_args!("{rt:.6}"))
             }
             FormatText::TimeMillis => {
                 let rt = entry_time.elapsed().unwrap();
                 let rt = (rt.as_nanos() as f64) / 1_000_000.0;
-                fmt.write_fmt(format_args!("{:.6}", rt))
+                fmt.write_fmt(format_args!("{rt:.6}"))
             }
             FormatText::EnvironHeader(ref name) => {
                 if let Ok(val) = env::var(name) {
-                    fmt.write_fmt(format_args!("{}", val))
+                    fmt.write_fmt(format_args!("{val}"))
                 } else {
                     "-".fmt(fmt)
                 }

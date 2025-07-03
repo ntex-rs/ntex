@@ -258,8 +258,8 @@ impl ClientRequest {
         U: fmt::Display,
     {
         let auth = match password {
-            Some(password) => format!("{}:{}", username, password),
-            None => format!("{}:", username),
+            Some(password) => format!("{username}:{password}"),
+            None => format!("{username}:"),
         };
         self.header(
             header::AUTHORIZATION,
@@ -272,7 +272,7 @@ impl ClientRequest {
     where
         T: fmt::Display,
     {
-        self.header(header::AUTHORIZATION, format!("Bearer {}", token))
+        self.header(header::AUTHORIZATION, format!("Bearer {token}"))
     }
 
     #[cfg(feature = "cookie")]
@@ -363,7 +363,7 @@ impl ClientRequest {
         if let Some(path_and_query) = parts.path_and_query {
             let query = serde_urlencoded::to_string(query)?;
             let path = path_and_query.path();
-            parts.path_and_query = format!("{}?{}", path, query).parse().ok();
+            parts.path_and_query = format!("{path}?{query}").parse().ok();
 
             match Uri::from_parts(parts) {
                 Ok(uri) => self.head.uri = uri,
@@ -517,7 +517,7 @@ impl ClientRequest {
                         c.value().as_bytes(),
                         crate::http::helpers::USERINFO,
                     );
-                    let _ = write!(cookie, "; {}={}", name, value);
+                    let _ = write!(cookie, "; {name}={value}");
                 }
                 self.head.headers.insert(
                     header::COOKIE,
@@ -560,9 +560,9 @@ impl fmt::Debug for ClientRequest {
         writeln!(f, "  headers:")?;
         for (key, val) in self.head.headers.iter() {
             if key == header::AUTHORIZATION {
-                writeln!(f, "    {:?}: <REDACTED>", key)?;
+                writeln!(f, "    {key:?}: <REDACTED>")?;
             } else {
-                writeln!(f, "    {:?}: {:?}", key, val)?;
+                writeln!(f, "    {key:?}: {val:?}")?;
             }
         }
         Ok(())
@@ -577,7 +577,7 @@ mod tests {
     #[crate::rt_test]
     async fn test_debug() {
         let request = Client::new().get("/").header("x-test", "111");
-        let repr = format!("{:?}", request);
+        let repr = format!("{request:?}");
         assert!(repr.contains("ClientRequest"));
         assert!(repr.contains("x-test"));
     }

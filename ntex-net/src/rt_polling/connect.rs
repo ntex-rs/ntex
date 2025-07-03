@@ -68,7 +68,7 @@ impl ConnectOps {
 
 impl Handler for ConnectOpsBatcher {
     fn event(&mut self, id: usize, event: Event) {
-        log::trace!("connect-fd is readable {:?}", id);
+        log::trace!("connect-fd is readable {id:?}");
 
         let mut connects = self.inner.connects.borrow_mut();
         if let Some(item) = connects.get(id) {

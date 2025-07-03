@@ -84,7 +84,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
                 let mut signals = match Signals::new(sigs) {
                     Ok(signals) => signals,
                     Err(e) => {
-                        log::error!("Cannot initialize signals handler: {}", e);
+                        log::error!("Cannot initialize signals handler: {e}");
                         return;
                     }
                 };

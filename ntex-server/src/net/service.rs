@@ -190,7 +190,7 @@ impl Service<Connection> for StreamServiceImpl {
             if ctx.ready(svc).await.is_err() {
                 for (idx_, tag, _, _, _) in self.tokens.values() {
                     if idx == *idx_ {
-                        log::error!("{}: Service readiness has failed", tag);
+                        log::error!("{tag}: Service readiness has failed");
                         break;
                     }
                 }
@@ -228,7 +228,7 @@ impl Service<Connection> for StreamServiceImpl {
             }
 
             let stream: Io<_> = io.try_into().map_err(|e| {
-                log::error!("Cannot convert to an async io stream: {}", e);
+                log::error!("Cannot convert to an async io stream: {e}");
             })?;
 
             stream.set_tag(tag);
@@ -238,7 +238,7 @@ impl Service<Connection> for StreamServiceImpl {
             drop(guard);
             Ok(())
         } else {
-            log::error!("Cannot get handler service for connection: {:?}", con);
+            log::error!("Cannot get handler service for connection: {con:?}");
             Err(())
         }
     }

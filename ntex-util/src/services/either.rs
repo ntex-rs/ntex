@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(svc.ready().await, Ok(()));
         svc.shutdown().await;
 
-        assert!(format!("{:?}", svc).contains("EitherService"));
+        assert!(format!("{svc:?}").contains("EitherService"));
     }
 
     #[ntex_macros::rt_test2]
@@ -228,7 +228,7 @@ mod tests {
         let factory =
             EitherFactory::new(|s: &&'static str| *s == "svc1", Svc1Factory, Svc2Factory)
                 .clone();
-        assert!(format!("{:?}", factory).contains("EitherServiceFactory"));
+        assert!(format!("{factory:?}").contains("EitherServiceFactory"));
 
         let svc = factory.pipeline("svc1").await.unwrap();
         assert_eq!(svc.call(()).await, Ok("svc1"));

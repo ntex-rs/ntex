@@ -445,7 +445,7 @@ mod tests {
             .uri("/index.html?test=1")
             .header("x-test", "111")
             .to_srv_request();
-        let s = format!("{:?}", req);
+        let s = format!("{req:?}");
         assert!(s.contains("WebRequest"));
         assert!(s.contains("test=1"));
         assert!(s.contains("x-test"));
@@ -455,7 +455,7 @@ mod tests {
             .uri("/index.html?test=1")
             .to_srv_response(res);
 
-        let s = format!("{:?}", res);
+        let s = format!("{res:?}");
         assert!(s.contains("WebResponse"));
         assert!(s.contains("x-test"));
     }

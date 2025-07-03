@@ -73,7 +73,7 @@ impl Clone for ConnectError {
                 ConnectError::SslHandshakeError(e.clone())
             }
             ConnectError::Resolver(e) => {
-                ConnectError::Resolver(io::Error::new(e.kind(), format!("{}", e)))
+                ConnectError::Resolver(io::Error::new(e.kind(), format!("{e}")))
             }
             ConnectError::NoRecords => ConnectError::NoRecords,
             ConnectError::Timeout => ConnectError::Timeout,
@@ -81,7 +81,7 @@ impl Clone for ConnectError {
                 if let Some(e) = e {
                     ConnectError::Disconnected(Some(io::Error::new(
                         e.kind(),
-                        format!("{}", e),
+                        format!("{e}"),
                     )))
                 } else {
                     ConnectError::Disconnected(None)
@@ -114,7 +114,7 @@ impl From<crate::connect::ConnectError> for ConnectError {
 #[cfg(feature = "openssl")]
 impl<T: std::fmt::Debug> From<HandshakeError<T>> for ConnectError {
     fn from(err: HandshakeError<T>) -> ConnectError {
-        ConnectError::SslHandshakeError(format!("{:?}", err))
+        ConnectError::SslHandshakeError(format!("{err:?}"))
     }
 }
 

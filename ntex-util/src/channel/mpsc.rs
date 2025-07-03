@@ -206,8 +206,8 @@ mod tests {
     #[ntex_macros::rt_test2]
     async fn test_mpsc() {
         let (tx, mut rx) = channel();
-        assert!(format!("{:?}", tx).contains("Sender"));
-        assert!(format!("{:?}", rx).contains("Receiver"));
+        assert!(format!("{tx:?}").contains("Sender"));
+        assert!(format!("{rx:?}").contains("Receiver"));
 
         tx.send("test").unwrap();
         assert_eq!(stream_recv(&mut rx).await.unwrap(), "test");
@@ -243,8 +243,8 @@ mod tests {
         assert!(tx2.send("test").is_err());
 
         let err = SendError("test");
-        assert!(format!("{:?}", err).contains("SendError"));
-        assert!(format!("{}", err).contains("send failed because receiver is gone"));
+        assert!(format!("{err:?}").contains("SendError"));
+        assert!(format!("{err}").contains("send failed because receiver is gone"));
         assert_eq!(err.into_inner(), "test");
     }
 

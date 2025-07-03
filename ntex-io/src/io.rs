@@ -84,7 +84,7 @@ impl IoState {
     pub(super) fn error(&self) -> Option<io::Error> {
         if let Some(err) = self.error.take() {
             self.error
-                .set(Some(io::Error::new(err.kind(), format!("{}", err))));
+                .set(Some(io::Error::new(err.kind(), format!("{err}"))));
             Some(err)
         } else {
             None
@@ -1018,11 +1018,11 @@ mod tests {
 
         server.st().notify_timeout();
         let err = server.recv(&BytesCodec).await.err().unwrap();
-        assert!(format!("{:?}", err).contains("Timeout"));
+        assert!(format!("{err:?}").contains("Timeout"));
 
         server.st().insert_flags(Flags::DSP_STOP);
         let err = server.recv(&BytesCodec).await.err().unwrap();
-        assert!(format!("{:?}", err).contains("Dispatcher stopped"));
+        assert!(format!("{err:?}").contains("Dispatcher stopped"));
 
         client.write(TEXT);
         server.st().insert_flags(Flags::BUF_W_BACKPRESSURE);
@@ -1082,7 +1082,7 @@ mod tests {
 
         let (client, server) = IoTest::create();
         let f = DropFilter { p: p.clone() };
-        let _ = format!("{:?}", f);
+        let _ = format!("{f:?}");
         let io = Io::new(server).add_filter(f);
 
         client.remote_buffer_cap(1024);

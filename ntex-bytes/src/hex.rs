@@ -45,9 +45,9 @@ mod tests {
     #[test]
     fn hex() {
         let b = Bytes::from_static(b"hello world");
-        let f = format!("{:x}", b);
+        let f = format!("{b:x}");
         assert_eq!(f, "68656c6c6f20776f726c64");
-        let f = format!("{:X}", b);
+        let f = format!("{b:X}");
         assert_eq!(f, "68656C6C6F20776F726C64");
     }
 }

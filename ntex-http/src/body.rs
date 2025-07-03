@@ -218,7 +218,7 @@ impl fmt::Debug for Body {
         match *self {
             Body::None => write!(f, "Body::None"),
             Body::Empty => write!(f, "Body::Empty"),
-            Body::Bytes(ref b) => write!(f, "Body::Bytes({:?})", b),
+            Body::Bytes(ref b) => write!(f, "Body::Bytes({b:?})"),
             Body::Message(_) => write!(f, "Body::Message(_)"),
         }
     }
@@ -726,9 +726,9 @@ mod tests {
     #[ntex::test]
     async fn body_stream() {
         let st = BodyStream::new(stream::once(Ready::<_, io::Error>::Ok(Bytes::from("1"))));
-        assert!(format!("{:?}", st).contains("BodyStream"));
+        assert!(format!("{st:?}").contains("BodyStream"));
         let body: Body = st.into();
-        assert!(format!("{:?}", body).contains("Body::Message(_)"));
+        assert!(format!("{body:?}").contains("Body::Message(_)"));
         assert!(body != Body::None);
 
         let res = ResponseBody::new(body);
@@ -740,9 +740,9 @@ mod tests {
         let st = BoxedBodyStream::new(stream::once(Ready::<_, Box<dyn Error>>::Ok(
             Bytes::from("1"),
         )));
-        assert!(format!("{:?}", st).contains("BoxedBodyStream"));
+        assert!(format!("{st:?}").contains("BoxedBodyStream"));
         let body: Body = st.into();
-        assert!(format!("{:?}", body).contains("Body::Message(_)"));
+        assert!(format!("{body:?}").contains("Body::Message(_)"));
         assert!(body != Body::None);
 
         let res = ResponseBody::new(body);
@@ -772,7 +772,7 @@ mod tests {
             2,
             stream::iter(["1", "", "2"].iter().map(|&v| Ok(Bytes::from(v)))),
         );
-        assert!(format!("{:?}", body).contains("SizedStream"));
+        assert!(format!("{body:?}").contains("SizedStream"));
         assert_eq!(
             poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
             Some(Bytes::from("1")),

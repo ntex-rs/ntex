@@ -55,7 +55,7 @@ impl ops::Add<Millis> for Millis {
 
     #[inline]
     fn add(self, other: Millis) -> Millis {
-        Millis(self.0.checked_add(other.0).unwrap_or(u32::MAX))
+        Millis(self.0.saturating_add(other.0))
     }
 }
 
@@ -65,11 +65,7 @@ impl ops::Add<Seconds> for Millis {
     #[inline]
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn add(self, other: Seconds) -> Millis {
-        Millis(
-            self.0
-                .checked_add((other.0 as u32).checked_mul(1000).unwrap_or(u32::MAX))
-                .unwrap_or(u32::MAX),
-        )
+        Millis(self.0.saturating_add((other.0 as u32).saturating_mul(1000)))
     }
 }
 
@@ -94,7 +90,7 @@ impl ops::Add<Millis> for std::time::Duration {
 impl From<Seconds> for Millis {
     #[inline]
     fn from(s: Seconds) -> Millis {
-        Millis((s.0 as u32).checked_mul(1000).unwrap_or(u32::MAX))
+        Millis((s.0 as u32).saturating_mul(1000))
     }
 }
 
@@ -102,7 +98,7 @@ impl From<std::time::Duration> for Millis {
     #[inline]
     fn from(d: std::time::Duration) -> Millis {
         Self(d.as_millis().try_into().unwrap_or_else(|_| {
-            log::error!("time Duration is too large {:?}", d);
+            log::error!("time Duration is too large {d:?}");
             1 << 31
         }))
     }
@@ -182,7 +178,7 @@ impl ops::Add<Seconds> for Seconds {
 
     #[inline]
     fn add(self, other: Seconds) -> Seconds {
-        Seconds(self.0.checked_add(other.0).unwrap_or(u16::MAX))
+        Seconds(self.0.saturating_add(other.0))
     }
 }
 

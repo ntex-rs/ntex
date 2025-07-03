@@ -149,7 +149,7 @@ impl SystemRunner {
             match stop.await {
                 Ok(code) => {
                     if code != 0 {
-                        Err(io::Error::other(format!("Non-zero exit code: {}", code)))
+                        Err(io::Error::other(format!("Non-zero exit code: {code}")))
                     } else {
                         Ok(())
                     }

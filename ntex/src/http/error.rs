@@ -20,7 +20,7 @@ pub trait ResponseError: fmt::Display + fmt::Debug {
     fn error_response(&self) -> Response {
         let mut resp = Response::new(StatusCode::INTERNAL_SERVER_ERROR);
         let mut buf = BytesMut::new();
-        let _ = write!(crate::http::helpers::Writer(&mut buf), "{}", self);
+        let _ = write!(crate::http::helpers::Writer(&mut buf), "{self}");
         resp.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text/plain; charset=utf-8"),
@@ -39,9 +39,9 @@ impl<T: ResponseError> From<T> for Response {
     fn from(err: T) -> Response {
         let resp = err.error_response();
         if resp.head().status == StatusCode::INTERNAL_SERVER_ERROR {
-            log::error!("Internal Server Error: {:?}", err);
+            log::error!("Internal Server Error: {err:?}");
         } else {
-            log::debug!("Error in response: {:?}", err);
+            log::debug!("Error in response: {err:?}");
         }
         resp
     }
@@ -257,18 +257,18 @@ mod tests {
     #[test]
     fn test_payload_error() {
         let err: PayloadError = io::Error::other("DecodeError").into();
-        assert!(format!("{}", err).contains("DecodeError"));
+        assert!(format!("{err}").contains("DecodeError"));
 
         let err: PayloadError = BlockingError::Canceled.into();
-        assert!(format!("{}", err).contains("Operation is canceled"));
+        assert!(format!("{err}").contains("Operation is canceled"));
 
         let err: PayloadError =
             BlockingError::Error(io::Error::other("DecodeError")).into();
-        assert!(format!("{}", err).contains("DecodeError"));
+        assert!(format!("{err}").contains("DecodeError"));
 
         let err = PayloadError::Incomplete(None);
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "A payload reached EOF, but is not complete. With error: None"
         );
     }
@@ -277,9 +277,9 @@ mod tests {
         ($from:expr => $error:pat) => {
             match DecodeError::from($from) {
                 e @ $error => {
-                    assert!(format!("{}", e).len() >= 5);
+                    assert!(format!("{e}").len() >= 5);
                 }
-                e => unreachable!("{:?}", e),
+                e => unreachable!("{e:?}"),
             }
         };
     }

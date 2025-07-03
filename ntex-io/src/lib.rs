@@ -188,7 +188,7 @@ where
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             DispatchItem::Item(ref item) => {
-                write!(fmt, "DispatchItem::Item({:?})", item)
+                write!(fmt, "DispatchItem::Item({item:?})")
             }
             DispatchItem::WBackPressureEnabled => {
                 write!(fmt, "DispatchItem::WBackPressureEnabled")
@@ -203,13 +203,13 @@ where
                 write!(fmt, "DispatchItem::ReadTimeout")
             }
             DispatchItem::EncoderError(ref e) => {
-                write!(fmt, "DispatchItem::EncoderError({:?})", e)
+                write!(fmt, "DispatchItem::EncoderError({e:?})")
             }
             DispatchItem::DecoderError(ref e) => {
-                write!(fmt, "DispatchItem::DecoderError({:?})", e)
+                write!(fmt, "DispatchItem::DecoderError({e:?})")
             }
             DispatchItem::Disconnect(ref e) => {
-                write!(fmt, "DispatchItem::Disconnect({:?})", e)
+                write!(fmt, "DispatchItem::Disconnect({e:?})")
             }
         }
     }
@@ -226,11 +226,11 @@ mod tests {
         type T = DispatchItem<BytesCodec>;
 
         let err = T::EncoderError(io::Error::other("err"));
-        assert!(format!("{:?}", err).contains("DispatchItem::Encoder"));
+        assert!(format!("{err:?}").contains("DispatchItem::Encoder"));
         let err = T::DecoderError(io::Error::other("err"));
-        assert!(format!("{:?}", err).contains("DispatchItem::Decoder"));
+        assert!(format!("{err:?}").contains("DispatchItem::Decoder"));
         let err = T::Disconnect(Some(io::Error::other("err")));
-        assert!(format!("{:?}", err).contains("DispatchItem::Disconnect"));
+        assert!(format!("{err:?}").contains("DispatchItem::Disconnect"));
 
         assert!(format!("{:?}", T::WBackPressureEnabled)
             .contains("DispatchItem::WBackPressureEnabled"));

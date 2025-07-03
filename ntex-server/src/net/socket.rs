@@ -38,9 +38,9 @@ pub enum Listener {
 impl fmt::Debug for Listener {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Listener::Tcp(ref lst) => write!(f, "{:?}", lst),
+            Listener::Tcp(ref lst) => write!(f, "{lst:?}"),
             #[cfg(unix)]
-            Listener::Uds(ref lst) => write!(f, "{:?}", lst),
+            Listener::Uds(ref lst) => write!(f, "{lst:?}"),
         }
     }
 }
@@ -66,9 +66,9 @@ pub(crate) enum SocketAddr {
 impl fmt::Display for SocketAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            SocketAddr::Tcp(ref addr) => write!(f, "{}", addr),
+            SocketAddr::Tcp(ref addr) => write!(f, "{addr}"),
             #[cfg(unix)]
-            SocketAddr::Uds(ref addr) => write!(f, "{:?}", addr),
+            SocketAddr::Uds(ref addr) => write!(f, "{addr:?}"),
         }
     }
 }
@@ -76,9 +76,9 @@ impl fmt::Display for SocketAddr {
 impl fmt::Debug for SocketAddr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            SocketAddr::Tcp(ref addr) => write!(f, "{:?}", addr),
+            SocketAddr::Tcp(ref addr) => write!(f, "{addr:?}"),
             #[cfg(unix)]
-            SocketAddr::Uds(ref addr) => write!(f, "{:?}", addr),
+            SocketAddr::Uds(ref addr) => write!(f, "{addr:?}"),
         }
     }
 }
@@ -187,16 +187,16 @@ mod tests {
         use socket2::{Domain, SockAddr, Socket, Type};
 
         let addr = SocketAddr::Tcp("127.0.0.1:8080".parse().unwrap());
-        assert!(format!("{:?}", addr).contains("127.0.0.1:8080"));
-        assert_eq!(format!("{}", addr), "127.0.0.1:8080");
+        assert!(format!("{addr:?}").contains("127.0.0.1:8080"));
+        assert_eq!(format!("{addr}"), "127.0.0.1:8080");
 
         let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
         socket.set_reuse_address(true).unwrap();
         socket.bind(&SockAddr::from(addr)).unwrap();
         let lst = Listener::Tcp(net::TcpListener::from(socket));
-        assert!(format!("{:?}", lst).contains("TcpListener"));
-        assert!(format!("{}", lst).contains("127.0.0.1"));
+        assert!(format!("{lst:?}").contains("TcpListener"));
+        assert!(format!("{lst}").contains("127.0.0.1"));
     }
 
     #[test]
@@ -208,12 +208,12 @@ mod tests {
         if let Ok(lst) = UnixListener::bind("/tmp/sock.xxxxx") {
             let addr = lst.local_addr().expect("Couldn't get local address");
             let a = SocketAddr::Uds(addr);
-            assert!(format!("{:?}", a).contains("/tmp/sock.xxxxx"));
-            assert!(format!("{}", a).contains("/tmp/sock.xxxxx"));
+            assert!(format!("{a:?}").contains("/tmp/sock.xxxxx"));
+            assert!(format!("{a}").contains("/tmp/sock.xxxxx"));
 
             let lst = Listener::Uds(lst);
-            assert!(format!("{:?}", lst).contains("/tmp/sock.xxxxx"));
-            assert!(format!("{}", lst).contains("/tmp/sock.xxxxx"));
+            assert!(format!("{lst:?}").contains("/tmp/sock.xxxxx"));
+            assert!(format!("{lst}").contains("/tmp/sock.xxxxx"));
         }
     }
 }

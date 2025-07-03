@@ -876,7 +876,7 @@ async fn test_web_server() {
     let client = client::Client::build().timeout(Seconds(30)).finish();
 
     let response = client
-        .request(Method::GET, format!("http://{:?}/", addr))
+        .request(Method::GET, format!("http://{addr:?}/"))
         .send()
         .await
         .unwrap();

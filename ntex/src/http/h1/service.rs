@@ -174,12 +174,12 @@ where
             .srv
             .create(())
             .await
-            .map_err(|e| log::error!("Cannot construct publish service: {:?}", e))?;
+            .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
         let control = self
             .ctl
             .create(())
             .await
-            .map_err(|e| log::error!("Cannot construct control service: {:?}", e))?;
+            .map_err(|e| log::error!("Cannot construct control service: {e:?}"))?;
 
         let (tx, rx) = oneshot::channel();
         let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, control));
@@ -221,11 +221,11 @@ where
 
         let (ready1, ready2) = join(cfg.control.ready(), cfg.service.ready()).await;
         ready1.map_err(|e| {
-            log::error!("Http control service readiness error: {:?}", e);
+            log::error!("Http control service readiness error: {e:?}");
             DispatchError::Control(Box::new(e))
         })?;
         ready2.map_err(|e| {
-            log::error!("Http service readiness error: {:?}", e);
+            log::error!("Http service readiness error: {e:?}");
             DispatchError::Service(Box::new(e))
         })
     }
@@ -252,7 +252,7 @@ where
             inflight.len()
         };
         if inflight != 0 {
-            log::trace!("Shutting down service, in-flight connections: {}", inflight);
+            log::trace!("Shutting down service, in-flight connections: {inflight}");
 
             if let Some(rx) = self.rx.take() {
                 let _ = rx.await;

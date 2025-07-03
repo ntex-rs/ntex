@@ -164,17 +164,17 @@ async fn test_h2_content_length() {
 
     {
         for i in 0..1 {
-            let req = srv.srequest(Method::GET, format!("/{}", i)).send();
+            let req = srv.srequest(Method::GET, format!("/{i}")).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
 
-            let req = srv.srequest(Method::HEAD, format!("/{}", i)).send();
+            let req = srv.srequest(Method::HEAD, format!("/{i}")).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), None);
         }
 
         for i in 1..3 {
-            let req = srv.srequest(Method::GET, format!("/{}", i)).send();
+            let req = srv.srequest(Method::GET, format!("/{i}")).send();
             let response = req.await.unwrap();
             assert_eq!(response.headers().get(&header), Some(&value));
         }
@@ -192,7 +192,7 @@ async fn test_h2_headers() {
             let mut builder = Response::Ok();
             for idx in 0..90 {
                 builder.header(
-                    format!("X-TEST-{}", idx).as_str(),
+                    format!("X-TEST-{idx}").as_str(),
                     "TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST \
                         TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST \
                         TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST \

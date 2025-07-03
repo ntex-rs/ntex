@@ -35,7 +35,7 @@ impl<E> From<E> for TimeoutError<E> {
 impl<E: fmt::Debug> fmt::Debug for TimeoutError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TimeoutError::Service(e) => write!(f, "TimeoutError::Service({:?})", e),
+            TimeoutError::Service(e) => write!(f, "TimeoutError::Service({e:?})"),
             TimeoutError::Timeout => write!(f, "TimeoutError::Timeout"),
         }
     }
@@ -227,11 +227,11 @@ mod tests {
     #[test]
     fn test_error() {
         let err1 = TimeoutError::<SrvError>::Timeout;
-        assert!(format!("{:?}", err1).contains("TimeoutError::Timeout"));
-        assert!(format!("{}", err1).contains("Service call timeout"));
+        assert!(format!("{err1:?}").contains("TimeoutError::Timeout"));
+        assert!(format!("{err1}").contains("Service call timeout"));
 
         let err2: TimeoutError<_> = SrvError.into();
-        assert!(format!("{:?}", err2).contains("TimeoutError::Service"));
-        assert!(format!("{}", err2).contains("SrvError"));
+        assert!(format!("{err2:?}").contains("TimeoutError::Service"));
+        assert!(format!("{err2}").contains("SrvError"));
     }
 }

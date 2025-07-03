@@ -64,7 +64,7 @@ impl AcceptLoop {
         // Create a poller instance
         let poll = Arc::new(
             Poller::new()
-                .map_err(|e| panic!("Cannot create Poller {}", e))
+                .map_err(|e| panic!("Cannot create Poller {e}"))
                 .unwrap(),
         );
 
@@ -206,7 +206,7 @@ impl Accept {
 
             if let Err(e) = self.poller.wait(&mut events, timeout) {
                 if e.kind() != io::ErrorKind::Interrupted {
-                    panic!("Cannot wait for events in poller: {}", e)
+                    panic!("Cannot wait for events in poller: {e}")
                 }
             } else if timeout.is_some() {
                 timeout = None;
@@ -256,7 +256,7 @@ impl Accept {
                 if err.kind() == io::ErrorKind::WouldBlock {
                     continue;
                 }
-                log::error!("Cannot register socket listener: {}", err);
+                log::error!("Cannot register socket listener: {err}");
 
                 // sleep after error
                 info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
@@ -411,7 +411,7 @@ impl Accept {
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return true,
                     Err(ref e) if connection_error(e) => continue,
                     Err(e) => {
-                        log::error!("Error accepting socket: {}", e);
+                        log::error!("Error accepting socket: {e}");
 
                         // sleep after error
                         info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));

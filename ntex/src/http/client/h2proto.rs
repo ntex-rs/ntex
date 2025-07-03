@@ -21,9 +21,8 @@ where
     B: MessageBody,
 {
     log::trace!(
-        "{}: Sending client request: {:?} {:?}",
+        "{}: Sending client request: {head:?} {:?}",
         client.client.tag(),
-        head,
         body.size()
     );
     let length = body.size();
@@ -65,7 +64,7 @@ where
         }
         BodySize::Sized(len) => hdrs.insert(
             header::CONTENT_LENGTH,
-            HeaderValue::try_from(format!("{}", len)).unwrap(),
+            HeaderValue::try_from(format!("{len}")).unwrap(),
         ),
     };
 
@@ -73,7 +72,7 @@ where
     let uri = &head.as_ref().uri;
     let path = uri
         .path_and_query()
-        .map(|p| ByteString::from(format!("{}", p)))
+        .map(|p| ByteString::from(format!("{p}")))
         .unwrap_or_else(|| ByteString::from(uri.path()));
     let (snd_stream, rcv_stream) = client
         .client
@@ -86,7 +85,7 @@ where
         // at the same time
         let _ = crate::rt::spawn(async move {
             if let Err(e) = send_body(body, &snd_stream).await {
-                log::error!("{}: Cannot send body: {:?}", snd_stream.tag(), e);
+                log::error!("{}: Cannot send body: {e:?}", snd_stream.tag());
                 snd_stream.reset(frame::Reason::INTERNAL_ERROR);
             }
         });
@@ -112,12 +111,9 @@ async fn get_response(
             eof,
         } => {
             log::trace!(
-                "{}: {:?} got response (eof: {}): {:#?}\nheaders: {:#?}",
+                "{}: {:?} got response (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
                 stream.tag(),
                 stream.id(),
-                eof,
-                pseudo,
-                headers
             );
 
             match pseudo.status {
@@ -163,10 +159,9 @@ async fn get_response(
                                     }
                                     h2::MessageKind::Eof(item) => {
                                         log::trace!(
-                                            "{}: Got payload eof for {:?}: {:?}",
+                                            "{}: Got payload eof for {:?}: {item:?}",
                                             stream.tag(),
                                             stream.id(),
-                                            item
                                         );
                                         match item {
                                             h2::StreamEof::Data(data) => {
@@ -182,9 +177,8 @@ async fn get_response(
                                     }
                                     h2::MessageKind::Disconnect(err) => {
                                         log::trace!(
-                                            "{}: Connection is disconnected {:?}",
+                                            "{}: Connection is disconnected {err:?}",
                                             stream.tag(),
-                                            err
                                         );
                                         pl.set_error(
                                             io::Error::new(

@@ -34,8 +34,8 @@ where
             let mut wrt = BytesMut::with_capacity(host.len() + 5).writer();
 
             let _ = match head.as_ref().uri.port_u16() {
-                None | Some(80) | Some(443) => write!(wrt, "{}", host),
-                Some(port) => write!(wrt, "{}:{}", host, port),
+                None | Some(80) | Some(443) => write!(wrt, "{host}"),
+                Some(port) => write!(wrt, "{host}:{port}"),
             };
 
             match HeaderValue::from_shared(wrt.get_mut().split()) {
@@ -48,14 +48,13 @@ where
                         headers.insert(HOST, value)
                     }
                 },
-                Err(e) => log::error!("Cannot set HOST header {}", e),
+                Err(e) => log::error!("Cannot set HOST header {e}"),
             }
         }
     }
 
     log::trace!(
-        "sending http1 request {:?} body size: {:?}",
-        head,
+        "sending http1 request {head:?} body size: {:?}",
         body.size()
     );
 
@@ -79,9 +78,8 @@ where
     let fut = async {
         if let Some(result) = io.recv(&codec).await? {
             log::trace!(
-                "http1 response is received, type: {:?}, response: {:#?}",
-                codec.message_type(),
-                result
+                "http1 response is received, type: {:?}, response: {result:#?}",
+                codec.message_type()
             );
             Ok(result)
         } else {

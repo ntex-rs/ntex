@@ -135,9 +135,9 @@ impl ClientBuilder {
                 Ok(value) => {
                     self.config.headers.append(key, value);
                 }
-                Err(e) => log::error!("Header value error: {:?}", e),
+                Err(e) => log::error!("Header value error: {e:?}"),
             },
-            Err(e) => log::error!("Header name error: {:?}", e),
+            Err(e) => log::error!("Header name error: {e:?}"),
         }
         self
     }
@@ -148,8 +148,8 @@ impl ClientBuilder {
         U: fmt::Display,
     {
         let auth = match password {
-            Some(password) => format!("{}:{}", username, password),
-            None => format!("{}:", username),
+            Some(password) => format!("{username}:{password}"),
+            None => format!("{username}:"),
         };
         self.header(
             header::AUTHORIZATION,
@@ -162,7 +162,7 @@ impl ClientBuilder {
     where
         T: fmt::Display,
     {
-        self.header(header::AUTHORIZATION, format!("Bearer {}", token))
+        self.header(header::AUTHORIZATION, format!("Bearer {token}"))
     }
 
     /// Finish build process and create `Client` instance.

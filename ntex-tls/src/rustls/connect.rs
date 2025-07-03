@@ -56,21 +56,20 @@ impl<T: Address> TlsConnector<T> {
         let req = Connect::from(message);
         let host = req.host().split(':').next().unwrap().to_owned();
         let io = self.connector.call(req).await?;
-
-        log::trace!("{}: SSL Handshake start for: {:?}", io.tag(), host);
-
         let tag = io.tag();
+
+        log::trace!("{tag}: SSL Handshake start for: {host:?}");
+
         let config = self.config.clone();
-        let host =
-            ServerName::try_from(host).map_err(|e| io::Error::other(format!("{}", e)))?;
+        let host = ServerName::try_from(host).map_err(io::Error::other)?;
 
         match TlsClientFilter::create(io, config, host.clone()).await {
             Ok(io) => {
-                log::trace!("{}: TLS Handshake success: {:?}", tag, &host);
+                log::trace!("{tag}: TLS Handshake success: {host:?}");
                 Ok(io)
             }
             Err(e) => {
-                log::trace!("{}: TLS Handshake error: {:?}", tag, e);
+                log::trace!("{tag}: TLS Handshake error: {e:?}");
                 Err(e.into())
             }
         }

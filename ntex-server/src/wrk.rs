@@ -90,23 +90,23 @@ impl<T> Worker<T> {
         Arbiter::default().exec_fn(move || {
             if let Some(cid) = cid {
                 if core_affinity::set_for_current(cid) {
-                    log::info!("Set affinity to {:?} for worker {:?}", cid, id);
+                    log::info!("Set affinity to {cid:?} for worker {id:?}");
                 }
             }
 
             let _ = spawn(async move {
-                log::info!("Starting worker {:?}", id);
+                log::info!("Starting worker {id:?}");
 
-                log::debug!("Creating server instance in {:?}", id);
+                log::debug!("Creating server instance in {id:?}");
                 let factory = cfg.create().await;
 
                 match create(id, rx1, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {
-                        log::debug!("Server instance has been created in {:?}", id);
+                        log::debug!("Server instance has been created in {id:?}");
                         run_worker(svc, wrk).await;
                     }
                     Err(e) => {
-                        log::error!("Cannot start worker: {:?}", e);
+                        log::error!("Cannot start worker: {e:?}");
                     }
                 }
                 Arbiter::current().stop();
@@ -369,7 +369,7 @@ async fn stop_svc<T, F>(
         let _ = result.send(res.is_ok());
     }
 
-    log::info!("Worker {:?} has been stopped", id);
+    log::info!("Worker {id:?} has been stopped");
 }
 
 async fn create<T, F>(

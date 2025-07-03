@@ -352,7 +352,7 @@ mod tests {
         let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
         assert_eq!(msg, Bytes::from_static(BIN));
         assert_eq!(state.get_ref(), state.as_ref().clone());
-        assert!(format!("{:?}", state).find("Io {").is_some());
+        assert!(format!("{state:?}").find("Io {").is_some());
         assert!(format!("{:?}", state.get_ref()).find("IoRef {").is_some());
 
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;

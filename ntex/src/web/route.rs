@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(body, Bytes::from_static(b"{\"name\":\"test\"}"));
 
         let route: web::Route<DefaultError> = web::get();
-        let repr = format!("{:?}", route);
+        let repr = format!("{route:?}");
         assert!(repr.contains("Route"));
         assert!(repr
             .contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
@@ -368,7 +368,7 @@ mod tests {
         assert!(route.create(()).await.is_ok());
 
         let route_service = route.service();
-        let repr = format!("{:?}", route_service);
+        let repr = format!("{route_service:?}");
         assert!(repr.contains("RouteService"));
         assert!(repr
             .contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
