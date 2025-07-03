@@ -236,7 +236,7 @@ impl SystemSupport {
         loop {
             match self.commands.recv().await {
                 Ok(SystemCommand::Exit(code)) => {
-                    log::debug!("Stopping system with {} code", code);
+                    log::debug!("Stopping system with {code} code");
 
                     // stop arbiters
                     ARBITERS.with(move |arbs| {

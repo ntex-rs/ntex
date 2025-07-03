@@ -35,7 +35,7 @@ impl<E> From<E> for TimeoutError<E> {
 impl<E: fmt::Debug> fmt::Debug for TimeoutError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TimeoutError::Service(e) => write!(f, "TimeoutError::Service({:?})", e),
+            TimeoutError::Service(e) => write!(f, "TimeoutError::Service({e:?})"),
             TimeoutError::Timeout => write!(f, "TimeoutError::Timeout"),
         }
     }

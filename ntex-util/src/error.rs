@@ -2,16 +2,16 @@ use std::{error::Error, fmt, rc::Rc};
 
 use ntex_bytes::ByteString;
 
-pub fn fmt_err_string(e: &(dyn Error + 'static)) -> String {
+pub fn fmt_err_string(e: &dyn Error) -> String {
     let mut buf = String::new();
     _ = fmt_err(&mut buf, e);
     buf
 }
 
-pub fn fmt_err(f: &mut dyn fmt::Write, e: &(dyn Error + 'static)) -> fmt::Result {
-    let mut current = Some(e as &(dyn Error + 'static));
+pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn Error) -> fmt::Result {
+    let mut current = Some(e);
     while let Some(std_err) = current {
-        writeln!(f, "{}", std_err)?;
+        writeln!(f, "{std_err}")?;
         current = std_err.source();
     }
     Ok(())
