@@ -63,7 +63,7 @@ neon = ["ntex-net/neon"]
 neon-uring = ["ntex-net/neon", "ntex-net/io-uring"]
 
 # websocket support
-ws = ["dep:sha-1"]
+ws = ["dep:sha1"]
 
 # disable [ntex::test] logging configuration
 no-test-logging = []
@@ -89,7 +89,7 @@ log = { workspace = true }
 pin-project-lite = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
-sha-1 = { version = "0.10", optional = true }
+sha1 = { version = "0.10", optional = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
 nanorand = { workspace = true }
