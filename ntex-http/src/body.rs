@@ -1,6 +1,7 @@
 //! Traits and structures to aid consuming and writing HTTP payloads.
 use std::{
-    error::Error, fmt, marker::PhantomData, mem, pin::Pin, task::Context, task::Poll,
+    error::Error, fmt, marker::PhantomData, mem, pin::Pin, rc::Rc, task::Context,
+    task::Poll,
 };
 
 use futures_core::Stream;
@@ -29,7 +30,7 @@ pub trait MessageBody: 'static {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>>;
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>>;
 }
 
 impl MessageBody for () {
@@ -42,7 +43,7 @@ impl MessageBody for () {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         Poll::Ready(None)
     }
 }
@@ -57,7 +58,7 @@ impl<T: MessageBody> MessageBody for Box<T> {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         self.as_mut().poll_next_chunk(cx)
     }
 }
@@ -128,7 +129,7 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         match self {
             ResponseBody::Body(ref mut body) => body.poll_next_chunk(cx),
             ResponseBody::Other(ref mut body) => body.poll_next_chunk(cx),
@@ -137,7 +138,7 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
 }
 
 impl<B: MessageBody + Unpin> Stream for ResponseBody<B> {
-    type Item = Result<Bytes, Box<dyn Error>>;
+    type Item = Result<Bytes, Rc<dyn Error>>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.get_mut() {
@@ -185,7 +186,7 @@ impl MessageBody for Body {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         match self {
             Body::None => Poll::Ready(None),
             Body::Empty => Poll::Ready(None),
@@ -268,7 +269,7 @@ impl From<BytesMut> for Body {
 
 impl<S> From<SizedStream<S>> for Body
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
+    S: Stream<Item = Result<Bytes, Rc<dyn Error>>> + Unpin + 'static,
 {
     fn from(s: SizedStream<S>) -> Body {
         Body::from_message(s)
@@ -287,7 +288,7 @@ where
 
 impl<S> From<BoxedBodyStream<S>> for Body
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
+    S: Stream<Item = Result<Bytes, Rc<dyn Error>>> + Unpin + 'static,
 {
     fn from(s: BoxedBodyStream<S>) -> Body {
         Body::from_message(s)
@@ -302,7 +303,7 @@ impl MessageBody for Bytes {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -319,7 +320,7 @@ impl MessageBody for BytesMut {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -336,7 +337,7 @@ impl MessageBody for &'static str {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -353,7 +354,7 @@ impl MessageBody for &'static [u8] {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -370,7 +371,7 @@ impl MessageBody for Vec<u8> {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -387,7 +388,7 @@ impl MessageBody for String {
     fn poll_next_chunk(
         &mut self,
         _: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
@@ -443,11 +444,16 @@ where
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         loop {
             return Poll::Ready(match Pin::new(&mut self.stream).poll_next(cx) {
                 Poll::Ready(Some(Ok(ref bytes))) if bytes.is_empty() => continue,
-                Poll::Ready(opt) => opt.map(|res| res.map_err(Into::into)),
+                Poll::Ready(opt) => opt.map(|res| {
+                    res.map_err(|e| {
+                        let e: Rc<dyn Error> = Rc::new(e);
+                        e
+                    })
+                }),
                 Poll::Pending => return Poll::Pending,
             });
         }
@@ -462,7 +468,7 @@ pub struct BoxedBodyStream<S> {
 
 impl<S> BoxedBodyStream<S>
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
+    S: Stream<Item = Result<Bytes, Rc<dyn Error>>> + Unpin,
 {
     pub fn new(stream: S) -> Self {
         BoxedBodyStream { stream }
@@ -479,7 +485,7 @@ impl<S> fmt::Debug for BoxedBodyStream<S> {
 
 impl<S> MessageBody for BoxedBodyStream<S>
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
+    S: Stream<Item = Result<Bytes, Rc<dyn Error>>> + Unpin + 'static,
 {
     fn size(&self) -> BodySize {
         BodySize::Stream
@@ -493,7 +499,7 @@ where
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         loop {
             return Poll::Ready(match Pin::new(&mut self.stream).poll_next(cx) {
                 Poll::Ready(Some(Ok(ref bytes))) if bytes.is_empty() => continue,
@@ -513,7 +519,7 @@ pub struct SizedStream<S> {
 
 impl<S> SizedStream<S>
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin,
+    S: Stream<Item = Result<Bytes, Rc<dyn Error>>> + Unpin,
 {
     pub fn new(size: u64, stream: S) -> Self {
         SizedStream { size, stream }
@@ -531,7 +537,7 @@ impl<S> fmt::Debug for SizedStream<S> {
 
 impl<S> MessageBody for SizedStream<S>
 where
-    S: Stream<Item = Result<Bytes, Box<dyn Error>>> + Unpin + 'static,
+    S: Stream<Item = Result<Bytes, Rc<dyn Error>>> + Unpin + 'static,
 {
     fn size(&self) -> BodySize {
         BodySize::Sized(self.size)
@@ -545,7 +551,7 @@ where
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         loop {
             return Poll::Ready(match Pin::new(&mut self.stream).poll_next(cx) {
                 Poll::Ready(Some(Ok(ref bytes))) if bytes.is_empty() => continue,
@@ -737,7 +743,7 @@ mod tests {
 
     #[ntex::test]
     async fn boxed_body_stream() {
-        let st = BoxedBodyStream::new(stream::once(Ready::<_, Box<dyn Error>>::Ok(
+        let st = BoxedBodyStream::new(stream::once(Ready::<_, Rc<dyn Error>>::Ok(
             Bytes::from("1"),
         )));
         assert!(format!("{st:?}").contains("BoxedBodyStream"));

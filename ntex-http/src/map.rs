@@ -1,4 +1,5 @@
 use std::collections::{self, hash_map, hash_map::Entry, VecDeque};
+use std::fmt;
 
 use crate::{HeaderName, HeaderValue};
 
@@ -19,7 +20,7 @@ pub enum Either<A, B> {
 /// `HeaderMap` is an multimap of [`HeaderName`] to values.
 ///
 /// [`HeaderName`]: struct.HeaderName.html
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HeaderMap {
     pub(crate) inner: HashMap<HeaderName, Value>,
 }
@@ -546,6 +547,26 @@ impl<'a> Iterator for Iter<'a> {
     }
 }
 
+impl fmt::Debug for HeaderMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut f = f.debug_map();
+
+        for (key, val) in self.inner.iter() {
+            match val {
+                Value::One(val) => {
+                    let _ = f.entry(&key, &val);
+                }
+                Value::Multi(val) => {
+                    for v in val {
+                        f.entry(&key, &v);
+                    }
+                }
+            }
+        }
+        f.finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,7 +623,7 @@ mod tests {
             *m.get_mut(CONTENT_TYPE).unwrap(),
             HeaderValue::from_static("text")
         );
-        assert!(format!("{m:?}").contains("HeaderMap"));
+        assert!(format!("{m:?}").contains("content-type"));
 
         assert!(m.keys().any(|x| x == CONTENT_TYPE));
         m.remove("content-type");

@@ -1,4 +1,4 @@
-use std::{future::poll_fn, io};
+use std::{future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
@@ -212,7 +212,7 @@ async fn get_response(
                 ))),
             }
         }
-        _ => Err(SendRequestError::Error(Box::new(io::Error::new(
+        _ => Err(SendRequestError::Error(Rc::new(io::Error::new(
             io::ErrorKind::Unsupported,
             "unexpected h2 message",
         )))),

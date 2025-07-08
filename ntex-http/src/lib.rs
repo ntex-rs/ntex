@@ -59,3 +59,12 @@ pub mod header {
         X_FRAME_OPTIONS, X_XSS_PROTECTION,
     };
 }
+
+#[doc(hidden)]
+pub mod compat {
+    pub use http::header::InvalidHeaderName;
+    pub use http::header::InvalidHeaderValue;
+    pub use http::method::InvalidMethod;
+    pub use http::status::InvalidStatusCode;
+    pub use http::uri::InvalidUri;
+}

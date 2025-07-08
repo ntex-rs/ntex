@@ -1,17 +1,8 @@
 use std::{error, fmt, result};
 
-pub use http::header::InvalidHeaderName;
-pub use http::method::InvalidMethod;
-pub use http::status::InvalidStatusCode;
-pub use http::uri::InvalidUri;
-
 pub use crate::value::{InvalidHeaderValue, ToStrError};
 
-use http::header;
-use http::method;
-use http::status;
-use http::uri;
-
+#[derive(Clone)]
 /// A generic "error" for HTTP connections
 ///
 /// This error type is less specific than the error returned from other
@@ -22,17 +13,49 @@ pub struct Error {
     inner: ErrorKind,
 }
 
+#[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[error("Invalid URI")]
+/// An error resulting from a failed attempt to construct a URI.
+pub struct InvalidUri {
+    _priv: (),
+}
+
+#[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[error("Invalid HTTP header name")]
+/// A possible error when converting a `HeaderName` from another type.
+pub struct InvalidHeaderName {
+    _priv: (),
+}
+
+#[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[error("Invalid status code")]
+/// A possible error value when converting a `StatusCode` from a `u16` or `&str`.
+///
+/// This error indicates that the supplied input was not a valid number, was less
+/// than 100, or was greater than 999.
+pub struct InvalidStatusCode {
+    _priv: (),
+}
+
+#[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[error("Invalid HTTP method")]
+/// A possible error value when converting `Method` from bytes.
+pub struct InvalidMethod {
+    _priv: (),
+}
+
 /// A `Result` typedef to use with the `http::Error` type
 pub type Result<T> = result::Result<T, Error>;
 
+#[derive(Clone)]
 enum ErrorKind {
-    StatusCode(status::InvalidStatusCode),
-    Method(method::InvalidMethod),
-    Uri(uri::InvalidUri),
-    UriParts(uri::InvalidUriParts),
-    HeaderName(header::InvalidHeaderName),
+    StatusCode(InvalidStatusCode),
+    Method(InvalidMethod),
+    Uri(InvalidUri),
+    UriParts(InvalidUri),
+    HeaderName(InvalidHeaderName),
     HeaderValue(InvalidHeaderValue),
-    Http(http::Error),
+    Http,
 }
 
 impl fmt::Debug for Error {
@@ -67,10 +90,16 @@ impl Error {
             UriParts(ref e) => e,
             HeaderName(ref e) => e,
             HeaderValue(ref e) => e,
-            Http(ref e) => e,
+            Http => &DEFAULT_ERR,
         }
     }
 }
+
+#[derive(thiserror::Error, Copy, Clone, Debug)]
+#[error("{_0}")]
+struct ErrorMessage(&'static str);
+
+const DEFAULT_ERR: ErrorMessage = ErrorMessage("http error");
 
 impl error::Error for Error {
     // Return any available cause from the inner error. Note the inner error is
@@ -80,42 +109,42 @@ impl error::Error for Error {
     }
 }
 
-impl From<status::InvalidStatusCode> for Error {
-    fn from(err: status::InvalidStatusCode) -> Error {
+impl From<http::status::InvalidStatusCode> for Error {
+    fn from(_: http::status::InvalidStatusCode) -> Error {
         Error {
-            inner: ErrorKind::StatusCode(err),
+            inner: ErrorKind::StatusCode(InvalidStatusCode { _priv: () }),
         }
     }
 }
 
-impl From<method::InvalidMethod> for Error {
-    fn from(err: method::InvalidMethod) -> Error {
+impl From<http::method::InvalidMethod> for Error {
+    fn from(_: http::method::InvalidMethod) -> Error {
         Error {
-            inner: ErrorKind::Method(err),
+            inner: ErrorKind::Method(InvalidMethod { _priv: () }),
         }
     }
 }
 
-impl From<uri::InvalidUri> for Error {
-    fn from(err: uri::InvalidUri) -> Error {
+impl From<http::uri::InvalidUri> for Error {
+    fn from(_: http::uri::InvalidUri) -> Error {
         Error {
-            inner: ErrorKind::Uri(err),
+            inner: ErrorKind::Uri(InvalidUri { _priv: () }),
         }
     }
 }
 
-impl From<uri::InvalidUriParts> for Error {
-    fn from(err: uri::InvalidUriParts) -> Error {
+impl From<http::uri::InvalidUriParts> for Error {
+    fn from(_: http::uri::InvalidUriParts) -> Error {
         Error {
-            inner: ErrorKind::UriParts(err),
+            inner: ErrorKind::UriParts(InvalidUri { _priv: () }),
         }
     }
 }
 
-impl From<header::InvalidHeaderName> for Error {
-    fn from(err: header::InvalidHeaderName) -> Error {
+impl From<http::header::InvalidHeaderName> for Error {
+    fn from(_: http::header::InvalidHeaderName) -> Error {
         Error {
-            inner: ErrorKind::HeaderName(err),
+            inner: ErrorKind::HeaderName(InvalidHeaderName { _priv: () }),
         }
     }
 }
@@ -130,15 +159,56 @@ impl From<InvalidHeaderValue> for Error {
 
 impl From<http::Error> for Error {
     fn from(err: http::Error) -> Error {
-        Error {
-            inner: ErrorKind::Http(err),
-        }
+        let inner = if err.is::<http::status::InvalidStatusCode>() {
+            ErrorKind::StatusCode(InvalidStatusCode { _priv: () })
+        } else if err.is::<http::method::InvalidMethod>() {
+            ErrorKind::Method(InvalidMethod { _priv: () })
+        } else if err.is::<http::uri::InvalidUri>() {
+            ErrorKind::Uri(InvalidUri { _priv: () })
+        } else if err.is::<http::header::InvalidHeaderName>() {
+            ErrorKind::HeaderName(InvalidHeaderName { _priv: () })
+        } else if err.is::<http::header::InvalidHeaderValue>() {
+            ErrorKind::HeaderValue(InvalidHeaderValue::default())
+        } else {
+            ErrorKind::Http
+        };
+        Error { inner }
     }
 }
 
 impl From<std::convert::Infallible> for Error {
     fn from(err: std::convert::Infallible) -> Error {
         match err {}
+    }
+}
+
+impl From<http::status::InvalidStatusCode> for InvalidStatusCode {
+    fn from(_: http::status::InvalidStatusCode) -> InvalidStatusCode {
+        InvalidStatusCode { _priv: () }
+    }
+}
+
+impl From<http::method::InvalidMethod> for InvalidMethod {
+    fn from(_: http::method::InvalidMethod) -> InvalidMethod {
+        InvalidMethod { _priv: () }
+    }
+}
+
+impl From<http::uri::InvalidUri> for InvalidUri {
+    fn from(_: http::uri::InvalidUri) -> InvalidUri {
+        InvalidUri { _priv: () }
+    }
+}
+
+impl From<http::header::InvalidHeaderName> for InvalidHeaderName {
+    fn from(_: http::header::InvalidHeaderName) -> InvalidHeaderName {
+        InvalidHeaderName { _priv: () }
+    }
+}
+
+impl From<http::header::InvalidHeaderValue> for InvalidHeaderValue {
+    fn from(_: http::header::InvalidHeaderValue) -> InvalidHeaderValue {
+        InvalidHeaderValue::default()
     }
 }
 
@@ -149,24 +219,24 @@ mod tests {
 
     #[test]
     fn inner_http_error() {
-        let e = method::Method::from_bytes(b"").unwrap_err();
+        let e = http::method::Method::from_bytes(b"").unwrap_err();
         let err: Error = http::Error::from(e).into();
         let ie = err.get_ref();
-        assert!(ie.is::<http::Error>());
+        assert!(!ie.is::<http::Error>());
     }
 
     #[test]
     fn inner_error_is_invalid_status_code() {
-        let e = status::StatusCode::from_u16(6666).unwrap_err();
+        let e = http::status::StatusCode::from_u16(6666).unwrap_err();
         let err: Error = e.into();
         let ie = err.get_ref();
-        assert!(!ie.is::<header::InvalidHeaderValue>());
-        assert!(ie.is::<status::InvalidStatusCode>());
-        ie.downcast_ref::<status::InvalidStatusCode>().unwrap();
+        assert!(!ie.is::<InvalidHeaderValue>());
+        assert!(ie.is::<InvalidStatusCode>());
+        ie.downcast_ref::<InvalidStatusCode>().unwrap();
 
         assert!(err.source().is_none());
         assert!(!err.is::<InvalidHeaderValue>());
-        assert!(err.is::<status::InvalidStatusCode>());
+        assert!(err.is::<InvalidStatusCode>());
 
         let s = format!("{err:?}");
         assert!(s.starts_with("ntex_http::Error"));
@@ -174,14 +244,14 @@ mod tests {
 
     #[test]
     fn inner_error_is_invalid_method() {
-        let e = method::Method::from_bytes(b"").unwrap_err();
+        let e = http::method::Method::from_bytes(b"").unwrap_err();
         let err: Error = e.into();
         let ie = err.get_ref();
-        assert!(ie.is::<method::InvalidMethod>());
-        ie.downcast_ref::<method::InvalidMethod>().unwrap();
+        assert!(ie.is::<InvalidMethod>());
+        ie.downcast_ref::<InvalidMethod>().unwrap();
 
         assert!(err.source().is_none());
-        assert!(err.is::<method::InvalidMethod>());
+        assert!(err.is::<InvalidMethod>());
 
         let s = format!("{err:?}");
         assert!(s.starts_with("ntex_http::Error"));

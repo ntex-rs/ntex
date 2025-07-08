@@ -1,4 +1,6 @@
 //! HTTP/1 implementation
+use std::rc::Rc;
+
 use crate::util::{Bytes, BytesMut};
 
 mod client;
@@ -56,7 +58,7 @@ pub(crate) fn reserve_readbuf(src: &mut BytesMut) {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug)]
 /// A set of errors that can occur during dispatching http requests
 pub enum ProtocolError {
     /// Http request parse error.
@@ -77,7 +79,7 @@ pub enum ProtocolError {
 
     /// Response body processing error
     #[error("Response body processing error: {0}")]
-    ResponsePayload(Box<dyn std::error::Error>),
+    ResponsePayload(Rc<dyn std::error::Error>),
 }
 
 impl super::ResponseError for ProtocolError {

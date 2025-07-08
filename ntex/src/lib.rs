@@ -118,6 +118,8 @@ pub mod tls {
 }
 
 pub mod util {
+    use std::{error::Error, io, rc::Rc};
+
     pub use ntex_bytes::{
         Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef,
     };
@@ -136,5 +138,21 @@ pub mod util {
             }
             let _ = env_logger::builder().is_test(true).try_init();
         }
+    }
+
+    pub fn dyn_rc_error<T: Error + 'static>(err: T) -> Rc<dyn Error> {
+        Rc::new(err)
+    }
+
+    pub fn str_rc_error(s: String) -> Rc<dyn Error> {
+        #[derive(thiserror::Error, Debug)]
+        #[error("{_0}")]
+        struct StringError(String);
+
+        Rc::new(StringError(s))
+    }
+
+    pub fn clone_io_error(err: &io::Error) -> io::Error {
+        io::Error::new(err.kind(), format!("{err:?}"))
     }
 }

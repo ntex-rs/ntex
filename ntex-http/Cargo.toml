@@ -1,6 +1,6 @@
 [package]
 name = "ntex-http"
-version = "0.1.13"
+version = "0.1.14"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Http types for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -16,13 +16,15 @@ name = "ntex_http"
 path = "src/lib.rs"
 
 [dependencies]
-http = "1"
-log = { workspace = true }
-fxhash = { workspace = true }
-itoa = "1.0.4"
 ntex-bytes = "0.1"
-serde = { workspace = true }
+
+fxhash = { workspace = true }
 futures-core = { workspace = true }
+http = { workspace = true }
+itoa = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 bincode = "1"

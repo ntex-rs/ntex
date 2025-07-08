@@ -23,6 +23,8 @@ pub struct HeaderValue {
     is_sensitive: bool,
 }
 
+#[derive(thiserror::Error, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[error("Invalid HTTP header value")]
 /// A possible error when converting a `HeaderValue` from a string or byte
 /// slice.
 pub struct InvalidHeaderValue {
@@ -33,7 +35,7 @@ pub struct InvalidHeaderValue {
 ///
 /// Header field values may contain opaque bytes, in which case it is not
 /// possible to represent the value as a string.
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ToStrError {
     _priv: (),
 }
@@ -510,19 +512,11 @@ fn is_valid(b: u8) -> bool {
     b >= 32 && b != 127 || b == b'\t'
 }
 
-impl Error for InvalidHeaderValue {}
-
 impl fmt::Debug for InvalidHeaderValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InvalidHeaderValue")
             // skip _priv noise
             .finish()
-    }
-}
-
-impl fmt::Display for InvalidHeaderValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("failed to parse header value")
     }
 }
 

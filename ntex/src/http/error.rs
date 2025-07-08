@@ -1,8 +1,8 @@
 //! Http related errors
-use std::{error, fmt, io, io::Write, str::Utf8Error, string::FromUtf8Error};
+use std::{error, fmt, io, io::Write, rc::Rc, string::FromUtf8Error};
 
 use ntex_h2::{self as h2};
-use ntex_http::{header, uri::InvalidUri, StatusCode};
+use ntex_http::{header, StatusCode};
 
 // re-export for convinience
 pub use crate::channel::Canceled;
@@ -10,7 +10,7 @@ pub use ntex_http::error::Error as HttpError;
 
 use crate::http::body::Body;
 use crate::http::response::Response;
-use crate::util::{BytesMut, Either};
+use crate::util::{clone_io_error, BytesMut, Either};
 
 /// Error that can be converted to `Response`
 pub trait ResponseError: fmt::Display + fmt::Debug {
@@ -72,15 +72,25 @@ pub enum EncodeError {
     Fmt(io::Error),
 }
 
+impl Clone for EncodeError {
+    fn clone(&self) -> Self {
+        match self {
+            EncodeError::UnexpectedEof => EncodeError::UnexpectedEof,
+            EncodeError::UnsupportedVersion(err) => EncodeError::UnsupportedVersion(*err),
+            EncodeError::Fmt(err) => EncodeError::Fmt(clone_io_error(err)),
+        }
+    }
+}
+
 /// A set of errors that can occur during parsing HTTP streams
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Copy, Clone, Debug)]
 pub enum DecodeError {
     /// An invalid `Method`, such as `GE.T`.
     #[error("Invalid Method specified")]
     Method,
     /// An invalid `Uri`, such as `exam ple.domain`.
-    #[error("Uri error: {0}")]
-    Uri(#[from] InvalidUri),
+    #[error("Uri error")]
+    Uri,
     /// An invalid `HttpVersion`, such as `HTP/1.1`
     #[error("Invalid HTTP version specified")]
     Version,
@@ -100,13 +110,19 @@ pub enum DecodeError {
     #[error("`InvalidInput` occurred while trying to parse incoming stream: {0}")]
     InvalidInput(&'static str),
     /// Parsing a field as string failed
-    #[error("UTF8 error: {0}")]
-    Utf8(#[from] Utf8Error),
+    #[error("UTF8 error")]
+    Utf8,
+}
+
+impl From<ntex_http::compat::InvalidUri> for DecodeError {
+    fn from(_: ntex_http::compat::InvalidUri) -> DecodeError {
+        DecodeError::Uri
+    }
 }
 
 impl From<FromUtf8Error> for DecodeError {
-    fn from(err: FromUtf8Error) -> DecodeError {
-        DecodeError::Utf8(err.utf8_error())
+    fn from(_: FromUtf8Error) -> DecodeError {
+        DecodeError::Utf8
     }
 }
 
@@ -150,6 +166,20 @@ pub enum PayloadError {
     Io(#[from] io::Error),
 }
 
+impl Clone for PayloadError {
+    fn clone(&self) -> PayloadError {
+        match self {
+            PayloadError::Incomplete(_) => PayloadError::Incomplete(None),
+            PayloadError::EncodingCorrupted => PayloadError::EncodingCorrupted,
+            PayloadError::Overflow => PayloadError::Overflow,
+            PayloadError::UnknownLength => PayloadError::UnknownLength,
+            PayloadError::Http2Payload(err) => PayloadError::Http2Payload(*err),
+            PayloadError::Decode(err) => PayloadError::Decode(*err),
+            PayloadError::Io(err) => PayloadError::Io(clone_io_error(err)),
+        }
+    }
+}
+
 impl From<Either<PayloadError, io::Error>> for PayloadError {
     fn from(err: Either<PayloadError, io::Error>) -> Self {
         match err {
@@ -159,19 +189,19 @@ impl From<Either<PayloadError, io::Error>> for PayloadError {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug)]
 /// A set of errors that can occur during dispatching http requests
 pub enum DispatchError {
     /// Service error
     #[error("Service error")]
-    Service(Box<dyn super::ResponseError>),
+    Service(Rc<dyn super::ResponseError>),
 
     /// Control service error
     #[error("Control service error: {0}")]
-    Control(Box<dyn std::error::Error>),
+    Control(Rc<dyn std::error::Error>),
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug)]
 /// A set of errors that can occur during dispatching http2 requests
 pub enum H2Error {
     /// Operation error
@@ -181,15 +211,21 @@ pub enum H2Error {
     #[error("Missing pseudo header: {0}")]
     MissingPseudo(&'static str),
     /// Uri parsing error
-    #[error("Uri: {0}")]
-    Uri(#[from] InvalidUri),
+    #[error("Uri")]
+    Uri,
     /// Body stream error
     #[error("{0}")]
-    Stream(#[from] Box<dyn error::Error>),
+    Stream(#[from] Rc<dyn error::Error>),
+}
+
+impl From<ntex_http::compat::InvalidUri> for H2Error {
+    fn from(_: ntex_http::compat::InvalidUri) -> H2Error {
+        H2Error::Uri
+    }
 }
 
 /// A set of error that can occure during parsing content type
-#[derive(thiserror::Error, PartialEq, Eq, Debug)]
+#[derive(thiserror::Error, Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ContentTypeError {
     /// Cannot parse content type
     #[error("Cannot parse content type")]
