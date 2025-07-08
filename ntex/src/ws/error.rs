@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
 use crate::http::{header::HeaderValue, header::ALLOW, Response, StatusCode};
-use crate::{connect::ConnectError, util::Either};
+use crate::{connect::ConnectError, util::clone_io_error, util::Either};
 
 use super::OpCode;
 
@@ -29,7 +29,7 @@ pub enum WsError<E> {
 }
 
 /// Websocket protocol errors
-#[derive(Error, Debug)]
+#[derive(Error, Copy, Clone, Debug)]
 pub enum ProtocolError {
     /// Received an unmasked frame from client
     #[error("Received an unmasked frame from client")]
@@ -61,7 +61,7 @@ pub enum ProtocolError {
 }
 
 /// Websocket client error
-#[derive(Error, Debug)]
+#[derive(Error, Clone, Debug)]
 pub enum WsClientBuilderError {
     #[error("Missing url scheme")]
     MissingScheme,
@@ -132,8 +132,41 @@ impl From<Either<EncodeError, io::Error>> for WsClientError {
     }
 }
 
+impl Clone for WsClientError {
+    fn clone(&self) -> Self {
+        match self {
+            WsClientError::InvalidRequest(err) => {
+                WsClientError::InvalidRequest(err.clone())
+            }
+            WsClientError::InvalidResponse(err) => WsClientError::InvalidResponse(*err),
+            WsClientError::InvalidResponseStatus(err) => {
+                WsClientError::InvalidResponseStatus(*err)
+            }
+            WsClientError::InvalidUpgradeHeader => WsClientError::InvalidUpgradeHeader,
+            WsClientError::InvalidConnectionHeader(err) => {
+                WsClientError::InvalidConnectionHeader(err.clone())
+            }
+            WsClientError::MissingConnectionHeader => {
+                WsClientError::MissingConnectionHeader
+            }
+            WsClientError::MissingWebSocketAcceptHeader => {
+                WsClientError::MissingWebSocketAcceptHeader
+            }
+            WsClientError::InvalidChallengeResponse(n, val) => {
+                WsClientError::InvalidChallengeResponse(n.clone(), val.clone())
+            }
+            WsClientError::Protocol(err) => WsClientError::Protocol(*err),
+            WsClientError::Timeout => WsClientError::Timeout,
+            WsClientError::Connect(err) => WsClientError::Connect(err.clone()),
+            WsClientError::Disconnected(err) => {
+                WsClientError::Disconnected(err.as_ref().map(clone_io_error))
+            }
+        }
+    }
+}
+
 /// Websocket handshake errors
-#[derive(Error, PartialEq, Eq, Debug)]
+#[derive(Error, Copy, Clone, PartialEq, Eq, Debug)]
 pub enum HandshakeError {
     /// Only get method is allowed
     #[error("Method not allowed")]

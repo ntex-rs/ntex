@@ -1,5 +1,9 @@
 # Changes
 
+## [2.15.0] 2025-07-08
+
+* Make http error clonable
+
 ## [2.14.0] 2025-06-25
 
 * Upgrade to ntex-compio 0.4

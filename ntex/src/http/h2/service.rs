@@ -222,7 +222,7 @@ where
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         self.config.service.ready().await.map_err(|e| {
             log::error!("Service readiness error: {e:?}");
-            DispatchError::Service(Box::new(e))
+            DispatchError::Service(Rc::new(e))
         })
     }
 
@@ -231,7 +231,7 @@ where
         self.config
             .service
             .poll(cx)
-            .map_err(|e| DispatchError::Service(Box::new(e)))
+            .map_err(|e| DispatchError::Service(Rc::new(e)))
     }
 
     #[inline]
@@ -274,9 +274,9 @@ where
             io.query::<types::PeerAddr>().get()
         );
         let control = self.control.create(()).await.map_err(|e| {
-            DispatchError::Control(
-                format!("Cannot construct control service: {e:?}").into(),
-            )
+            DispatchError::Control(crate::util::str_rc_error(format!(
+                "Cannot construct control service: {e:?}"
+            )))
         })?;
 
         let ioref = io.get_ref();
@@ -482,7 +482,7 @@ where
                     }
                     Some(Err(e)) => {
                         log::error!("Response payload stream error: {e:?}");
-                        return Err(e.into());
+                        return Err(H2Error::Stream(e));
                     }
                 }
             }

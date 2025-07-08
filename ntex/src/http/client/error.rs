@@ -1,5 +1,5 @@
 //! Http client errors
-use std::{error::Error, io};
+use std::{error::Error, io, rc::Rc};
 
 use serde_json::error::Error as JsonError;
 use thiserror::Error;
@@ -8,7 +8,7 @@ use thiserror::Error;
 use tls_openssl::ssl::{Error as SslError, HandshakeError};
 
 use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
-use crate::util::Either;
+use crate::util::{clone_io_error, Either};
 
 /// A set of errors that can occur during parsing json payloads
 #[derive(Error, Debug)]
@@ -34,7 +34,7 @@ pub enum ConnectError {
     /// SSL error
     #[cfg(feature = "openssl")]
     #[error("{0}")]
-    SslError(std::rc::Rc<SslError>),
+    SslError(Rc<SslError>),
 
     /// SSL Handshake error
     #[cfg(feature = "openssl")]
@@ -72,17 +72,12 @@ impl Clone for ConnectError {
             ConnectError::SslHandshakeError(e) => {
                 ConnectError::SslHandshakeError(e.clone())
             }
-            ConnectError::Resolver(e) => {
-                ConnectError::Resolver(io::Error::new(e.kind(), format!("{e}")))
-            }
+            ConnectError::Resolver(e) => ConnectError::Resolver(clone_io_error(e)),
             ConnectError::NoRecords => ConnectError::NoRecords,
             ConnectError::Timeout => ConnectError::Timeout,
             ConnectError::Disconnected(e) => {
                 if let Some(e) = e {
-                    ConnectError::Disconnected(Some(io::Error::new(
-                        e.kind(),
-                        format!("{e}"),
-                    )))
+                    ConnectError::Disconnected(Some(clone_io_error(e)))
                 } else {
                     ConnectError::Disconnected(None)
                 }
@@ -118,7 +113,7 @@ impl<T: std::fmt::Debug> From<HandshakeError<T>> for ConnectError {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(Clone, Error, Debug)]
 pub enum InvalidUrl {
     #[error("Missing url scheme")]
     MissingScheme,
@@ -162,7 +157,26 @@ pub enum SendRequestError {
     TunnelNotSupported,
     /// Error sending request body
     #[error("Error sending request body {0}")]
-    Error(#[from] Box<dyn Error>),
+    Error(#[from] Rc<dyn Error>),
+}
+
+impl Clone for SendRequestError {
+    fn clone(&self) -> SendRequestError {
+        match self {
+            SendRequestError::Url(err) => SendRequestError::Url(err.clone()),
+            SendRequestError::Connect(err) => SendRequestError::Connect(err.clone()),
+            SendRequestError::Request(err) => SendRequestError::Request(err.clone()),
+            SendRequestError::Response(err) => SendRequestError::Response(*err),
+            SendRequestError::Http(err) => SendRequestError::Http(err.clone()),
+            SendRequestError::H2(err) => SendRequestError::H2(err.clone()),
+            SendRequestError::Timeout => SendRequestError::Timeout,
+            SendRequestError::TunnelNotSupported => SendRequestError::TunnelNotSupported,
+            SendRequestError::Error(err) => SendRequestError::Error(err.clone()),
+            SendRequestError::Send(err) => {
+                SendRequestError::Send(crate::util::clone_io_error(err))
+            }
+        }
+    }
 }
 
 impl From<Either<EncodeError, io::Error>> for SendRequestError {
@@ -184,7 +198,7 @@ impl From<Either<DecodeError, io::Error>> for SendRequestError {
 }
 
 /// A set of errors that can occur during freezing a request
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum FreezeRequestError {
     /// Invalid URL
     #[error("Invalid URL: {0}")]

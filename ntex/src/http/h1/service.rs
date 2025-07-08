@@ -222,11 +222,11 @@ where
         let (ready1, ready2) = join(cfg.control.ready(), cfg.service.ready()).await;
         ready1.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");
-            DispatchError::Control(Box::new(e))
+            DispatchError::Control(Rc::new(e))
         })?;
         ready2.map_err(|e| {
             log::error!("Http service readiness error: {e:?}");
-            DispatchError::Service(Box::new(e))
+            DispatchError::Service(Rc::new(e))
         })
     }
 
@@ -234,10 +234,10 @@ where
         let cfg = self.config.as_ref();
         cfg.control
             .poll(cx)
-            .map_err(|e| DispatchError::Control(Box::new(e)))?;
+            .map_err(|e| DispatchError::Control(Rc::new(e)))?;
         cfg.service
             .poll(cx)
-            .map_err(|e| DispatchError::Service(Box::new(e)))
+            .map_err(|e| DispatchError::Service(Rc::new(e)))
     }
 
     async fn shutdown(&self) {

@@ -1,5 +1,11 @@
 # Changes
 
+## [0.1.14] - 2025-07-08
+
+* Use custom error instead of errors from http crate
+
+* Add Copy, Clone impls to Error type
+
 ## [0.1.13] - 2024-01-30
 
 * Move body related types from ntex::http

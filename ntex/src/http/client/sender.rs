@@ -18,7 +18,7 @@ use crate::http::Payload;
 use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
 use super::{ClientConfig, ClientResponse};
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Clone, Debug)]
 pub(crate) enum PrepForSendingError {
     #[error("Invalid url {0}")]
     Url(#[from] InvalidUrl),
@@ -154,7 +154,7 @@ impl RequestHeadType {
     ) -> SendClientRequest {
         let body = match serde_json::to_string(value) {
             Ok(body) => body,
-            Err(e) => return SendRequestError::Error(Box::new(e)).into(),
+            Err(e) => return SendRequestError::Error(Rc::new(e)).into(),
         };
 
         if let Err(e) = self.set_header_if_none(header::CONTENT_TYPE, "application/json") {
@@ -180,7 +180,7 @@ impl RequestHeadType {
     ) -> SendClientRequest {
         let body = match serde_urlencoded::to_string(value) {
             Ok(body) => body,
-            Err(e) => return SendRequestError::Error(Box::new(e)).into(),
+            Err(e) => return SendRequestError::Error(Rc::new(e)).into(),
         };
 
         // set content-type

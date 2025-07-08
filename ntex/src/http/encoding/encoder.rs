@@ -1,5 +1,7 @@
 //! Stream encoder
-use std::{fmt, future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
+use std::{
+    fmt, future::Future, io, io::Write, pin::Pin, rc::Rc, task::Context, task::Poll,
+};
 
 use flate2::write::{GzEncoder, ZlibEncoder};
 
@@ -7,7 +9,7 @@ use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{ContentEncoding, HeaderValue, CONTENT_ENCODING};
 use crate::http::{ResponseHead, StatusCode};
 use crate::rt::{spawn_blocking, JoinHandle};
-use crate::util::Bytes;
+use crate::util::{dyn_rc_error, Bytes};
 
 use super::Writer;
 
@@ -103,7 +105,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn std::error::Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn std::error::Error>>>> {
         loop {
             if self.eof {
                 return Poll::Ready(None);
@@ -112,9 +114,9 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
             if let Some(ref mut fut) = self.fut {
                 let mut encoder = match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(Ok(item))) => item,
-                    Poll::Ready(Ok(Err(e))) => return Poll::Ready(Some(Err(Box::new(e)))),
+                    Poll::Ready(Ok(Err(e))) => return Poll::Ready(Some(Err(Rc::new(e)))),
                     Poll::Ready(Err(_)) => {
-                        return Poll::Ready(Some(Err(Box::new(io::Error::new(
+                        return Poll::Ready(Some(Err(Rc::new(io::Error::new(
                             io::ErrorKind::Interrupted,
                             "Canceled",
                         )))));
@@ -144,7 +146,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                 Poll::Ready(Some(Ok(chunk))) => {
                     if let Some(mut encoder) = self.encoder.take() {
                         if chunk.len() < INPLACE {
-                            encoder.write(&chunk)?;
+                            encoder.write(&chunk).map_err(dyn_rc_error)?;
                             let chunk = encoder.take();
                             self.encoder = Some(encoder);
                             if !chunk.is_empty() {
@@ -162,7 +164,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                 }
                 Poll::Ready(None) => {
                     if let Some(encoder) = self.encoder.take() {
-                        let chunk = encoder.finish()?;
+                        let chunk = encoder.finish().map_err(dyn_rc_error)?;
                         if chunk.is_empty() {
                             return Poll::Ready(None);
                         } else {

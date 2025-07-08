@@ -128,7 +128,7 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
-    type Output = Result<(), Box<dyn error::Error>>;
+    type Output = Result<(), Rc<dyn error::Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -188,7 +188,7 @@ where
                     }
                     Poll::Ready(Err(err)) => {
                         log::error!("{}: Control plain error: {}", inner.io.tag(), err);
-                        return Poll::Ready(Err(Box::new(err)));
+                        return Poll::Ready(Err(Rc::new(err)));
                     }
                     Poll::Pending => ready!(inner.poll_request(cx)),
                 },
@@ -223,7 +223,8 @@ where
 
                     inner.io.stop_timer();
                     return Poll::Ready(
-                        ready!(inner.io.poll_shutdown(cx)).map_err(From::from),
+                        ready!(inner.io.poll_shutdown(cx))
+                            .map_err(crate::util::dyn_rc_error),
                     );
                 }
             }
@@ -1098,7 +1099,7 @@ mod tests {
             fn poll_next_chunk(
                 &mut self,
                 _: &mut Context<'_>,
-            ) -> Poll<Option<Result<Bytes, Box<dyn error::Error>>>> {
+            ) -> Poll<Option<Result<Bytes, Rc<dyn error::Error>>>> {
                 let data = rand::rng()
                     .sample_iter(&rand::distr::Alphanumeric)
                     .take(65_536)
@@ -1153,7 +1154,7 @@ mod tests {
             fn poll_next_chunk(
                 &mut self,
                 _: &mut Context<'_>,
-            ) -> Poll<Option<Result<Bytes, Box<dyn error::Error>>>> {
+            ) -> Poll<Option<Result<Bytes, Rc<dyn error::Error>>>> {
                 if self.0 {
                     Poll::Pending
                 } else {

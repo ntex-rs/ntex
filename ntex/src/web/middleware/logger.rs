@@ -204,7 +204,7 @@ impl MessageBody for StreamLog {
     fn poll_next_chunk(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Box<dyn Error>>>> {
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         match self.body.poll_next_chunk(cx) {
             Poll::Ready(Some(Ok(chunk))) => {
                 self.size += chunk.len();
