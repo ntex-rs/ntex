@@ -701,7 +701,7 @@ async fn test_h1_response_http_error_handling() {
 
     // read response
     let bytes = srv.load_body(response).await.unwrap();
-    assert_eq!(bytes, Bytes::from_static(b"failed to parse header value"));
+    assert_eq!(bytes, Bytes::from_static(b"Invalid HTTP header value"));
 }
 
 #[ntex::test]
