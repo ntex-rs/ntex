@@ -45,8 +45,6 @@ ntex-util = { path = "ntex-util" }
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
-ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "err-clone" }
-
 [workspace.dependencies]
 async-channel = "2"
 async-task = "4.5.0"
@@ -81,6 +79,7 @@ nanorand = { version = "0.8", default-features = false, features = [
 ] }
 scoped-tls = "1.0.1"
 serde = { version = "1", features = ["derive"] }
+sha1 = "0.10"
 slab = "0.4.9"
 socket2 = "0.5.6"
 variadics_please = "1.1"

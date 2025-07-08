@@ -89,7 +89,7 @@ log = { workspace = true }
 pin-project-lite = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
-sha1 = { version = "0.10", optional = true }
+sha1 = { workspace = true, optional = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
 nanorand = { workspace = true }
