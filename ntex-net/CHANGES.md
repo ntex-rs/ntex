@@ -1,5 +1,9 @@
 # Changes
 
+## [2.7.0] - 2025-07-09
+
+* Add timeout support to connector
+
 ## [2.6.0] - 2025-06-25
 
 * Upgrade to ntex-compio 0.4

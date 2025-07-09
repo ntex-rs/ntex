@@ -22,17 +22,30 @@ impl<T: Address> SslConnector<T> {
         }
     }
 
+    /// Construct new openssl connector
+    pub fn with(config: BaseSslConnector, base: BaseConnector<T>) -> Self {
+        SslConnector {
+            openssl: config,
+            connector: base.into(),
+        }
+    }
+
+    /// Set io tag
+    ///
+    /// Set tag to opened io object.
+    pub fn tag(mut self, tag: &'static str) -> Self {
+        self.connector = self.connector.get_ref().tag(tag).into();
+        self
+    }
+
+    #[deprecated]
+    #[doc(hidden)]
     /// Set memory pool.
     ///
     /// Use specified memory pool for memory allocations. By default P0
     /// memory pool is used.
-    pub fn memory_pool(self, id: PoolId) -> Self {
-        let connector = self.connector.get_ref().memory_pool(id).into();
-
-        Self {
-            connector,
-            openssl: self.openssl,
-        }
+    pub fn memory_pool(self, _: PoolId) -> Self {
+        self
     }
 }
 
@@ -116,6 +129,7 @@ impl<T: Address> Service<Connect<T>> for SslConnector<T> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use tls_openssl::ssl::SslMethod;
 
@@ -128,7 +142,10 @@ mod tests {
         });
 
         let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = SslConnector::new(ssl.build())
+        let _ = SslConnector::<&'static str>::new(ssl.build());
+        let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
+        let factory = SslConnector::with(ssl.build(), Default::default())
+            .tag("IO")
             .memory_pool(PoolId::P5)
             .clone();
 

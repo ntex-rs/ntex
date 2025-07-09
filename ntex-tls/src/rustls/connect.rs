@@ -23,24 +23,44 @@ impl<T: Address> From<Arc<ClientConfig>> for TlsConnector<T> {
     }
 }
 
-impl<T: Address> TlsConnector<T> {
-    pub fn new(config: ClientConfig) -> Self {
+impl<'a, T: Address> From<&'a Arc<ClientConfig>> for TlsConnector<T> {
+    fn from(config: &'a Arc<ClientConfig>) -> Self {
         TlsConnector {
-            config: Arc::new(config),
+            config: config.clone(),
             connector: BaseConnector::default().into(),
         }
     }
+}
 
+impl<T: Address> TlsConnector<T> {
+    pub fn new(config: ClientConfig) -> Self {
+        TlsConnector::from(Arc::new(config))
+    }
+
+    /// Construct new tls connector
+    pub fn with(config: Arc<ClientConfig>, base: BaseConnector<T>) -> Self {
+        TlsConnector {
+            config,
+            connector: base.into(),
+        }
+    }
+
+    /// Set io tag
+    ///
+    /// Set tag to opened io object.
+    pub fn tag(mut self, tag: &'static str) -> Self {
+        self.connector = self.connector.get_ref().tag(tag).into();
+        self
+    }
+
+    #[deprecated]
+    #[doc(hidden)]
     /// Set memory pool.
     ///
     /// Use specified memory pool for memory allocations. By default P0
     /// memory pool is used.
-    pub fn memory_pool(self, id: PoolId) -> Self {
-        let connector = self.connector.get_ref().memory_pool(id).into();
-        Self {
-            connector,
-            config: self.config,
-        }
+    pub fn memory_pool(self, _: PoolId) -> Self {
+        self
     }
 }
 
@@ -118,11 +138,12 @@ impl<T: Address> Service<Connect<T>> for TlsConnector<T> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
-    use tls_rust::RootCertStore;
-
     use super::*;
+
     use ntex_util::future::lazy;
+    use tls_rust::RootCertStore;
 
     #[ntex::test]
     async fn test_rustls_connect() {
@@ -136,8 +157,9 @@ mod tests {
             .with_root_certificates(cert_store)
             .with_no_client_auth();
         let _ = TlsConnector::<&'static str>::new(config.clone()).clone();
-        let factory = TlsConnector::from(Arc::new(config))
+        let factory = TlsConnector::with(Arc::new(config), Default::default())
             .memory_pool(PoolId::P5)
+            .tag("IO")
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap().bind();
