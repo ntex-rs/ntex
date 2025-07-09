@@ -183,7 +183,7 @@ mod tests {
             ntex_service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let srv = Connector::default().tag("T");
+        let srv = Connector::default().tag("T").timeout(Millis(5000));
         let result = srv.connect("").await;
         assert!(result.is_err());
         let result = srv.connect("localhost:99999").await;
