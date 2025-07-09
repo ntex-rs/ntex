@@ -23,10 +23,7 @@ mod no_rt {
 
     /// Opens a TCP connection to a remote host.
     pub async fn tcp_connect(_: std::net::SocketAddr) -> std::io::Result<Io> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "runtime is not configure",
-        ))
+        Err(std::io::Error::other("runtime is not configure"))
     }
 
     /// Opens a TCP connection to a remote host and use specified memory pool.
@@ -34,10 +31,7 @@ mod no_rt {
         _: std::net::SocketAddr,
         _: ntex_bytes::PoolRef,
     ) -> std::io::Result<Io> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "runtime is not configure",
-        ))
+        Err(std::io::Error::other("runtime is not configure"))
     }
 
     #[cfg(unix)]
@@ -46,10 +40,7 @@ mod no_rt {
     where
         P: AsRef<std::path::Path> + 'a,
     {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "runtime is not configure",
-        ))
+        Err(std::io::Error::other("runtime is not configure"))
     }
 
     #[cfg(unix)]
@@ -58,27 +49,18 @@ mod no_rt {
     where
         P: AsRef<std::path::Path> + 'a,
     {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "runtime is not configure",
-        ))
+        Err(std::io::Error::other("runtime is not configure"))
     }
 
     /// Convert std TcpStream to tokio's TcpStream
     pub fn from_tcp_stream(_: std::net::TcpStream) -> std::io::Result<Io> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "runtime is not configure",
-        ))
+        Err(std::io::Error::other("runtime is not configure"))
     }
 
     #[cfg(unix)]
     /// Convert std UnixStream to tokio's UnixStream
     pub fn from_unix_stream(_: std::os::unix::net::UnixStream) -> std::io::Result<Io> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "runtime is not configure",
-        ))
+        Err(std::io::Error::other("runtime is not configure"))
     }
 }
 

@@ -1,19 +1,18 @@
-use std::task::{Context, Poll};
-use std::{collections::VecDeque, fmt, future::Future, io, net::SocketAddr, pin::Pin};
+use std::{collections::VecDeque, fmt, io, net::SocketAddr};
 
-use ntex_bytes::{PoolId, PoolRef};
+use ntex_bytes::PoolId;
 use ntex_io::{types, Io};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::future::{BoxFuture, Either};
+use ntex_util::{future::Either, time::timeout_checked, time::Millis};
 
 use super::{Address, Connect, ConnectError, Resolver};
-use crate::tcp_connect_in;
+use crate::tcp_connect;
 
 /// Basic tcp stream connector
 pub struct Connector<T> {
-    resolver: Resolver<T>,
-    pool: PoolRef,
     tag: &'static str,
+    timeout: Millis,
+    resolver: Resolver<T>,
 }
 
 impl<T> Copy for Connector<T> {}
@@ -23,18 +22,9 @@ impl<T> Connector<T> {
     pub fn new() -> Self {
         Connector {
             resolver: Resolver::new(),
-            pool: PoolId::P0.pool_ref(),
             tag: "TCP-CLIENT",
+            timeout: Millis::ZERO,
         }
-    }
-
-    /// Set memory pool
-    ///
-    /// Use specified memory pool for memory allocations. By default P0
-    /// memory pool is used.
-    pub fn memory_pool(mut self, id: PoolId) -> Self {
-        self.pool = id.pool_ref();
-        self
     }
 
     /// Set io tag
@@ -42,6 +32,25 @@ impl<T> Connector<T> {
     /// Set tag to opened io object.
     pub fn tag(mut self, tag: &'static str) -> Self {
         self.tag = tag;
+        self
+    }
+
+    /// Connect timeout.
+    ///
+    /// i.e. max time to connect to remote host including dns name resolution.
+    /// Timeout is disabled by default
+    pub fn timeout<U: Into<Millis>>(mut self, timeout: U) -> Self {
+        self.timeout = timeout.into();
+        self
+    }
+
+    #[deprecated]
+    #[doc(hidden)]
+    /// Set memory pool
+    ///
+    /// Use specified memory pool for memory allocations. By default P0
+    /// memory pool is used.
+    pub fn memory_pool(self, _: PoolId) -> Self {
         self
     }
 }
@@ -52,30 +61,28 @@ impl<T: Address> Connector<T> {
     where
         Connect<T>: From<U>,
     {
-        // resolve first
-        let address = self
-            .resolver
-            .lookup_with_tag(message.into(), self.tag)
-            .await?;
+        timeout_checked(self.timeout, async {
+            // resolve first
+            let address = self
+                .resolver
+                .lookup_with_tag(message.into(), self.tag)
+                .await?;
 
-        let port = address.port();
-        let Connect { req, addr, .. } = address;
+            let port = address.port();
+            let Connect { req, addr, .. } = address;
 
-        if let Some(addr) = addr {
-            TcpConnectorResponse::new(req, port, addr, self.tag, self.pool).await
-        } else if let Some(addr) = req.addr() {
-            TcpConnectorResponse::new(
-                req,
-                addr.port(),
-                Either::Left(addr),
-                self.tag,
-                self.pool,
-            )
-            .await
-        } else {
-            log::error!("{}: TCP connector: got unresolved address", self.tag);
-            Err(ConnectError::Unresolved)
-        }
+            if let Some(addr) = addr {
+                connect(req, port, addr, self.tag).await
+            } else if let Some(addr) = req.addr() {
+                connect(req, addr.port(), Either::Left(addr), self.tag).await
+            } else {
+                log::error!("{}: TCP connector: got unresolved address", self.tag);
+                Err(ConnectError::Unresolved)
+            }
+        })
+        .await
+        .map_err(|_| ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Timeout")))
+        .and_then(|item| item)
     }
 }
 
@@ -95,8 +102,8 @@ impl<T> fmt::Debug for Connector<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Connector")
             .field("tag", &self.tag)
+            .field("timeout", &self.timeout)
             .field("resolver", &self.resolver)
-            .field("memory_pool", &self.pool)
             .finish()
     }
 }
@@ -125,100 +132,45 @@ impl<T: Address> Service<Connect<T>> for Connector<T> {
     }
 }
 
-/// Tcp stream connector response future
-struct TcpConnectorResponse<T> {
-    req: Option<T>,
+/// Tcp stream connector
+async fn connect<T: Address>(
+    req: T,
     port: u16,
-    addrs: Option<VecDeque<SocketAddr>>,
-    #[allow(clippy::type_complexity)]
-    stream: Option<BoxFuture<'static, Result<Io, io::Error>>>,
+    addr: Either<SocketAddr, VecDeque<SocketAddr>>,
     tag: &'static str,
-    pool: PoolRef,
-}
+) -> Result<Io, ConnectError> {
+    log::trace!(
+        "{tag}: TCP connector - connecting to {:?} addr:{addr:?} port:{port}",
+        req.host(),
+    );
 
-impl<T: Address> TcpConnectorResponse<T> {
-    fn new(
-        req: T,
-        port: u16,
-        addr: Either<SocketAddr, VecDeque<SocketAddr>>,
-        tag: &'static str,
-        pool: PoolRef,
-    ) -> TcpConnectorResponse<T> {
-        log::trace!(
-            "{}: TCP connector - connecting to {:?} addr:{:?} port:{}",
-            tag,
-            req.host(),
-            addr,
-            port
-        );
+    let io = match addr {
+        Either::Left(addr) => tcp_connect(addr).await?,
+        Either::Right(mut addrs) => loop {
+            let addr = addrs.pop_front().unwrap();
 
-        match addr {
-            Either::Left(addr) => TcpConnectorResponse {
-                req: Some(req),
-                addrs: None,
-                stream: Some(Box::pin(tcp_connect_in(addr, pool))),
-                tag,
-                pool,
-                port,
-            },
-            Either::Right(addrs) => TcpConnectorResponse {
-                tag,
-                port,
-                pool,
-                req: Some(req),
-                addrs: Some(addrs),
-                stream: None,
-            },
-        }
-    }
-
-    fn can_continue(&self, err: &io::Error) -> bool {
-        log::trace!(
-            "{}: TCP connector - failed to connect to {:?} port: {} err: {:?}",
-            self.tag,
-            self.req.as_ref().unwrap().host(),
-            self.port,
-            err
-        );
-        !(self.addrs.is_none() || self.addrs.as_ref().unwrap().is_empty())
-    }
-}
-
-impl<T: Address> Future for TcpConnectorResponse<T> {
-    type Output = Result<Io, ConnectError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        // connect
-        loop {
-            if let Some(new) = this.stream.as_mut() {
-                match new.as_mut().poll(cx) {
-                    Poll::Ready(Ok(sock)) => {
-                        let req = this.req.take().unwrap();
-                        log::trace!(
-                            "{}: TCP connector - successfully connected to {:?} - {:?}",
-                            this.tag,
-                            req.host(),
-                            sock.query::<types::PeerAddr>().get()
-                        );
-                        sock.set_tag(this.tag);
-                        return Poll::Ready(Ok(sock));
-                    }
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Err(err)) => {
-                        if !this.can_continue(&err) {
-                            return Poll::Ready(Err(err.into()));
-                        }
+            match tcp_connect(addr).await {
+                Ok(io) => break io,
+                Err(err) => {
+                    log::trace!(
+                        "{tag}: TCP connector - failed to connect to {:?} port: {port} err: {err:?}",
+                        req.host(),
+                    );
+                    if addrs.is_empty() {
+                        return Err(err.into());
                     }
                 }
             }
+        },
+    };
 
-            // try to connect
-            let addr = this.addrs.as_mut().unwrap().pop_front().unwrap();
-            this.stream = Some(Box::pin(tcp_connect_in(addr, this.pool)));
-        }
-    }
+    log::trace!(
+        "{tag}: TCP connector - successfully connected to {:?} - {:?}",
+        req.host(),
+        io.query::<types::PeerAddr>().get()
+    );
+    io.set_tag(tag);
+    Ok(io)
 }
 
 #[cfg(test)]
@@ -231,7 +183,7 @@ mod tests {
             ntex_service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let srv = Connector::default().tag("T").memory_pool(PoolId::P5);
+        let srv = Connector::default().tag("T").timeout(Millis(5000));
         let result = srv.connect("").await;
         assert!(result.is_err());
         let result = srv.connect("localhost:99999").await;

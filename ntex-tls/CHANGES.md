@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.0] - 2025-07-09
+
+* Add rustls connector helper constructors
+
 ## [2.4.1] - 2025-04-18
 
 * Fix deprecated code
