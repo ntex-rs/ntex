@@ -1,5 +1,9 @@
 # Changes
 
+## [2.13.0] - 2025-07-16
+
+* Add helper methods for ErrorMessage
+
 ## [2.12.1] - 2025-07-03
 
 * Fix type for fmt_err and fmt_err_string helpers

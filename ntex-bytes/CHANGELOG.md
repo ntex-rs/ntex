@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.30] (2025-06-26)
+
+* Add helper PartialEq to ByteString
+
 ## [0.1.29] (2025-06-26)
 
 * Add From<&ByteSting> for ByteString impl
