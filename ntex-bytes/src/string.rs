@@ -182,6 +182,24 @@ impl<T: AsRef<str>> PartialEq<T> for ByteString {
     }
 }
 
+impl PartialEq<ByteString> for &ByteString {
+    fn eq(&self, other: &ByteString) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<ByteString> for str {
+    fn eq(&self, other: &ByteString) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<ByteString> for &str {
+    fn eq(&self, other: &ByteString) -> bool {
+        *self == other.as_str()
+    }
+}
+
 impl AsRef<str> for ByteString {
     #[inline]
     fn as_ref(&self) -> &str {
@@ -395,6 +413,8 @@ mod test {
         assert_eq!(s.as_slice(), b"test");
         assert_eq!(s.as_bytes(), &Bytes::copy_from_slice(b"test"));
         assert_eq!(Borrow::<str>::borrow(&s), "test");
+        assert_eq!("test", s);
+        assert_eq!("test", &s);
 
         assert_eq!(format!("{s}"), "test");
         assert_eq!(format!("{s:?}"), "\"test\"");

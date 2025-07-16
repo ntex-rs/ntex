@@ -40,6 +40,11 @@ impl ErrorMessageChained {
         }
     }
 
+    /// Construct ErrorMessageChained from ByteString
+    pub const fn from_bstr(msg: ByteString) -> Self {
+        Self { msg, source: None }
+    }
+
     pub fn msg(&self) -> &ByteString {
         &self.msg
     }
@@ -50,8 +55,19 @@ impl ErrorMessageChained {
 }
 
 impl ErrorMessage {
+    /// Construct new empty ErrorMessage
     pub const fn empty() -> Self {
         Self(ByteString::from_static(""))
+    }
+
+    /// Construct ErrorMessage from ByteString
+    pub const fn from_bstr(msg: ByteString) -> ErrorMessage {
+        ErrorMessage(msg)
+    }
+
+    /// Construct ErrorMessage from static string
+    pub const fn from_static(msg: &'static str) -> Self {
+        ErrorMessage(ByteString::from_static(msg))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -117,5 +133,59 @@ impl<M: Into<ErrorMessage>> From<M> for ErrorMessageChained {
             msg: value.into().0,
             source: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_message() {
+        let msg = ErrorMessage::empty();
+        assert!(msg.is_empty());
+        assert_eq!(msg.as_str(), "");
+        assert_eq!(msg.as_bstr(), ByteString::new());
+        assert_eq!(ByteString::new(), msg.as_bstr());
+        assert_eq!(ByteString::new(), msg.into_string());
+
+        let msg = ErrorMessage::from("test");
+        assert!(!msg.is_empty());
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
+        let msg = ErrorMessage::from("test".to_string());
+        assert!(!msg.is_empty());
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
+        let msg = ErrorMessage::from_bstr(ByteString::from("test"));
+        assert!(!msg.is_empty());
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
+        let msg = ErrorMessage::from(ByteString::from("test"));
+        assert!(!msg.is_empty());
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
+        let msg = ErrorMessage::from_static("test");
+        assert!(!msg.is_empty());
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
+        assert_eq!(ByteString::from(&msg), "test");
+        assert_eq!(ByteString::from(msg), "test");
+    }
+
+    #[test]
+    fn error_message_chained() {
+        let chained = ErrorMessageChained::from(ByteString::from("test"));
+        assert_eq!(chained.msg(), "test");
+        assert!(chained.source().is_none());
+
+        let chained = ErrorMessageChained::from_bstr(ByteString::from("test"));
+        assert_eq!(chained.msg(), "test");
+        assert!(chained.source().is_none());
     }
 }

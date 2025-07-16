@@ -3021,7 +3021,7 @@ impl Inner {
     const fn empty_inline() -> Inner {
         Inner {
             arc: unsafe { NonNull::new_unchecked(KIND_INLINE as *mut Shared) },
-            ptr: 0 as *mut u8,
+            ptr: ptr::null_mut::<u8>(),
             len: 0,
             cap: 0,
         }
