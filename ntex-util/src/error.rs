@@ -159,6 +159,11 @@ mod tests {
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
+        let msg = ErrorMessage::from_bstr(ByteString::from("test"));
+        assert!(!msg.is_empty());
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
         let msg = ErrorMessage::from(ByteString::from("test"));
         assert!(!msg.is_empty());
         assert_eq!(msg.as_str(), "test");
@@ -176,6 +181,10 @@ mod tests {
     #[test]
     fn error_message_chained() {
         let chained = ErrorMessageChained::from(ByteString::from("test"));
+        assert_eq!(chained.msg(), "test");
+        assert!(chained.source().is_none());
+
+        let chained = ErrorMessageChained::from_bstr(ByteString::from("test"));
         assert_eq!(chained.msg(), "test");
         assert!(chained.source().is_none());
     }
