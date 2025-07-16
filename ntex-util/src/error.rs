@@ -40,7 +40,7 @@ impl ErrorMessageChained {
         }
     }
 
-    /// Construct ErrorMessage from ErrorMessageChained
+    /// Construct ErrorMessageChained from ByteString
     pub const fn from_bstr(msg: ByteString) -> Self {
         Self { msg, source: None }
     }
@@ -63,6 +63,11 @@ impl ErrorMessage {
     /// Construct ErrorMessage from ByteString
     pub const fn from_bstr(msg: ByteString) -> ErrorMessage {
         ErrorMessage(msg)
+    }
+
+    /// Construct ErrorMessage from static string
+    pub const fn from_static(msg: &'static str) -> Self {
+        ErrorMessage(ByteString::from_static(msg))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -155,6 +160,11 @@ mod tests {
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
         let msg = ErrorMessage::from(ByteString::from("test"));
+        assert!(!msg.is_empty());
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
+        let msg = ErrorMessage::from_static("test");
         assert!(!msg.is_empty());
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
