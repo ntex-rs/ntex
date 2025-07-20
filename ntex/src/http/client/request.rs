@@ -8,19 +8,12 @@ use serde::Serialize;
 use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::{
-    uri, ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version,
-};
+use crate::http::{ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version};
 use crate::{time::Millis, util::Bytes, util::Stream};
 
 use super::error::{FreezeRequestError, InvalidUrl};
 use super::sender::{PrepForSendingError, SendClientRequest};
 use super::{frozen::FrozenClientRequest, ClientConfig};
-
-#[cfg(feature = "compress")]
-const HTTPS_ENCODING: &str = "br, gzip, deflate";
-#[cfg(not(feature = "compress"))]
-const HTTPS_ENCODING: &str = "br";
 
 /// An HTTP Client request builder
 ///
@@ -528,22 +521,9 @@ impl ClientRequest {
 
         let mut slf = self;
 
+        #[cfg(feature = "compress")]
         if slf.response_decompress {
-            let https = slf
-                .head
-                .uri
-                .scheme()
-                .map(|s| s == &uri::Scheme::HTTPS)
-                .unwrap_or(true);
-
-            if https {
-                slf = slf.set_header_if_none(header::ACCEPT_ENCODING, HTTPS_ENCODING)
-            } else {
-                #[cfg(feature = "compress")]
-                {
-                    slf = slf.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate")
-                }
-            };
+            slf = slf.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate");
         }
 
         Ok(slf)

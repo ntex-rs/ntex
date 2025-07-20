@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.15.0"
+version = "2.15.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -21,9 +21,7 @@ rust-version = "1.75"
 toolchain = "nightly"
 features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/rustls-ring"]
 rustc-args = ["--cfg", "docsrs_dep"]
-rustdoc-args = [
-    "--cfg", "docsrs_dep",
-]
+rustdoc-args = ["--cfg", "docsrs_dep"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
@@ -74,13 +72,13 @@ ntex-http = "0.1.14"
 ntex-router = "0.5"
 ntex-service = "3.5"
 ntex-macros = "0.1"
-ntex-util = "2.12"
-ntex-bytes = "0.1.28"
+ntex-util = "2.13"
+ntex-bytes = "0.1.30"
 ntex-server = "2.8.1"
 ntex-h2 = "1.12.0"
 ntex-rt = "0.4.32"
-ntex-io = "2.13.3"
-ntex-net = "2.6.0"
+ntex-io = "2.14.0"
+ntex-net = "2.7.0"
 ntex-tls = "2.3"
 
 base64 = { workspace = true }
