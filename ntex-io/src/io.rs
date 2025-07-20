@@ -775,7 +775,7 @@ impl FilterPtr {
         unsafe {
             let filter_ref: &'static dyn Filter = {
                 let f: &dyn Filter = filter.as_ref();
-                std::mem::transmute(f)
+                mem::transmute(f)
             };
             self.filter.set(filter_ref);
 
@@ -852,12 +852,25 @@ impl FilterPtr {
 
 impl FilterPtr {
     fn add_filter<F: Filter, T: FilterLayer>(&self, new: T) {
+        let data = self.data.get();
+        let filter = if data[KIND_IDX] & KIND_PTR != 0 {
+            Box::new(Layer::new(new, *self.take_filter::<F>()))
+        } else if data[KIND_IDX] & KIND_SEALED != 0 {
+            let f = Box::new(Layer::new(new, self.take_sealed()));
+            // SAFETY: If filter is marked as Sealed, then F = Sealed
+            unsafe { mem::transmute::<Box<Layer<T, Sealed>>, Box<Layer<T, F>>>(f) }
+        } else {
+            panic!(
+                "Wrong filter item {:?} expected: {:?}",
+                data[KIND_IDX], KIND_PTR
+            );
+        };
+
         let mut data = NULL;
-        let filter = Box::new(Layer::new(new, *self.take_filter::<F>()));
         unsafe {
             let filter_ref: &'static dyn Filter = {
                 let f: &dyn Filter = filter.as_ref();
-                std::mem::transmute(f)
+                mem::transmute(f)
             };
             self.filter.set(filter_ref);
 
@@ -878,7 +891,7 @@ impl FilterPtr {
         unsafe {
             let filter_ref: &'static dyn Filter = {
                 let f: &dyn Filter = filter.as_ref();
-                std::mem::transmute(f)
+                mem::transmute(f)
             };
             self.filter.set(filter_ref);
 
@@ -906,7 +919,7 @@ impl FilterPtr {
         unsafe {
             let filter_ref: &'static dyn Filter = {
                 let f: &dyn Filter = filter.0.as_ref();
-                std::mem::transmute(f)
+                mem::transmute(f)
             };
             self.filter.set(filter_ref);
 
@@ -1105,5 +1118,14 @@ mod tests {
         drop(io4);
 
         assert_eq!(p.get(), 1);
+    }
+
+    #[ntex::test]
+    async fn test_take_sealed_filter() {
+        let p = Rc::new(Cell::new(0));
+        let f = DropFilter { p: p.clone() };
+
+        let io = Io::new(IoTest::create().0).seal();
+        let _io: Io<Layer<DropFilter, Sealed>> = io.add_filter(f);
     }
 }

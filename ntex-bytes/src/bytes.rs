@@ -2666,6 +2666,7 @@ impl InnerVec {
         Self::from_slice(capacity, &[], pool)
     }
 
+    #[allow(warnings)]
     #[inline]
     fn from_slice(cap: usize, src: &[u8], pool: PoolRef) -> InnerVec {
         // vec must be aligned to SharedVec instead of u8
@@ -3058,6 +3059,7 @@ impl Inner {
         Inner::from_slice(capacity, &[], pool)
     }
 
+    #[allow(warnings)]
     #[inline]
     fn from_slice(cap: usize, src: &[u8], pool: PoolRef) -> Inner {
         // vec must be aligned to SharedVec instead of u8
