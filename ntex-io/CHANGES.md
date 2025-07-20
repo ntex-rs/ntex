@@ -1,5 +1,9 @@
 # Changes
 
+## [2.14.0] - 2025-07-20
+
+* Add .add_filter() support to Io<Sealed>
+
 ## [2.13.3] - 2025-06-21
 
 * Check io closed state
