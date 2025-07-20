@@ -1,5 +1,9 @@
 # Changes
 
+## [2.15.1] 2025-07-20
+
+* Remove client `br` encoding from accept-encoding header
+
 ## [2.15.0] 2025-07-08
 
 * Make http error clonable
