@@ -51,7 +51,7 @@ impl<T> cmp::Ord for Worker<T> {
 
 impl<T> cmp::PartialOrd for Worker<T> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.id.cmp(&other.id))
+        Some(self.cmp(other))
     }
 }
 

@@ -1126,11 +1126,6 @@ mod tests {
         let f = DropFilter { p: p.clone() };
 
         let io = Io::new(IoTest::create().0).seal();
-        let f2: &dyn Filter = io.filter();
-        let addr = f2.query(std::any::TypeId::of::<crate::types::PeerAddr>());
-        println!("{addr:?}");
-
-        let io: Io<Layer<DropFilter, Sealed>> = io.add_filter(f);
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _io: Io<Layer<DropFilter, Sealed>> = io.add_filter(f);
     }
 }
