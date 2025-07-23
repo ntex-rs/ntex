@@ -351,11 +351,10 @@ where
             let result = self
                 .io
                 .encode(Message::Item((msg, body.size())), &self.codec)
-                .map_err(|err| {
+                .inspect_err(|_| {
                     if let Some(ref mut payload) = self.payload {
                         payload.1.set_error(PayloadError::Incomplete(None));
                     }
-                    err
                 });
 
             match result {
