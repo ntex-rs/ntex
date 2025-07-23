@@ -8,7 +8,7 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - 1.75.0 # MSRV
+          - 1.81.0 # MSRV
           - stable
           - nightly
 
@@ -22,22 +22,6 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ matrix.version }}-x86_64-unknown-linux-gnu
-
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Generate Cargo.lock
-        run: cargo generate-lockfile
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-registry-trimmed-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ matrix.version }}-x86_64-unknown-linux-gnu-cargo-index-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests (neon)
         timeout-minutes: 40
@@ -58,13 +42,3 @@ jobs:
         timeout-minutes: 40
         run: |
           cargo test --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
-
-      - name: Install cargo-cache
-        continue-on-error: true
-        run: |
-          cargo install cargo-cache --no-default-features --features ci-autoclean
-
-      - name: Clear the cargo caches
-        continue-on-error: true
-        run: |
-          cargo-cache
