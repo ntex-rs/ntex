@@ -1,5 +1,9 @@
 # Changes
 
+## [2.15.2] 2025-07-23
+
+* Fix rust 1.75 compat
+
 ## [2.15.1] 2025-07-20
 
 * Remove client `br` encoding from accept-encoding header

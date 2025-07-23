@@ -67,9 +67,7 @@ mod app_service;
 mod config;
 pub mod error;
 mod error_default;
-mod extract;
 pub mod guard;
-mod handler;
 mod httprequest;
 mod info;
 pub mod middleware;
@@ -78,14 +76,34 @@ mod resource;
 mod responder;
 mod response;
 mod rmap;
-mod route;
 mod scope;
 mod server;
-mod service;
 pub mod stack;
 pub mod test;
 pub mod types;
 mod util;
+
+#[cfg(feature = "rust-181")]
+mod extract;
+#[cfg(feature = "rust-181")]
+mod handler;
+#[cfg(feature = "rust-181")]
+mod route;
+#[cfg(feature = "rust-181")]
+mod service;
+
+#[cfg(not(feature = "rust-181"))]
+#[path = "comp_extract.rs"]
+mod extract;
+#[cfg(not(feature = "rust-181"))]
+#[path = "comp_handler.rs"]
+mod handler;
+#[cfg(not(feature = "rust-181"))]
+#[path = "comp_route.rs"]
+mod route;
+#[cfg(not(feature = "rust-181"))]
+#[path = "comp_service.rs"]
+mod service;
 
 #[cfg(feature = "ws")]
 pub mod ws;

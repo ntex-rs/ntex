@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.15.1"
+version = "2.15.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -14,6 +14,7 @@ categories = [
     "web-programming::websocket",
 ]
 license = "MIT OR Apache-2.0"
+build = "build.rs"
 edition = "2021"
 rust-version = "1.75"
 
@@ -66,6 +67,8 @@ ws = ["dep:sha1"]
 # disable [ntex::test] logging configuration
 no-test-logging = []
 
+rust-181 = ["variadics_please"]
+
 [dependencies]
 ntex-codec = "0.6"
 ntex-http = "0.1.14"
@@ -91,7 +94,7 @@ sha1 = { workspace = true, optional = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
 nanorand = { workspace = true }
-variadics_please = { workspace = true }
+variadics_please = { workspace = true, optional = true }
 
 # http/web framework
 httparse = "1.9"
@@ -123,3 +126,6 @@ tls-openssl = { version = "0.10", package = "openssl" }
 tls-rustls = { version = "0.23", package = "rustls", features = ["ring", "std"], default-features = false }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
+
+[build-dependencies]
+version_check = "0.9"
