@@ -46,7 +46,7 @@ compress = ["flate2"]
 cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 # url support
-url = ["url-pkg"]
+url = ["url-pkg", "idna_adapter"]
 
 # tokio runtime
 tokio = ["ntex-net/tokio"]
@@ -94,15 +94,16 @@ nanorand = { workspace = true }
 variadics_please = { workspace = true }
 
 # http/web framework
-httparse = "1.9"
-httpdate = "1.0"
-encoding_rs = "0.8"
-mime = "0.3"
-percent-encoding = "2.3"
-serde_json = "1"
-serde_urlencoded = "0.7"
-url-pkg = { version = "2.5", package = "url", optional = true }
-coo-kie = { version = "0.18", package = "cookie", optional = true }
+httparse = { workspace = true }
+httpdate = { workspace = true }
+encoding_rs = { workspace = true }
+mime = { workspace = true }
+percent-encoding = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }
+url-pkg = { workspace = true, package = "url", optional = true }
+coo-kie = { workspace = true, package = "cookie", optional = true }
+idna_adapter = { workspace = true, optional = true }
 
 # openssl
 tls-openssl = { version = "0.10", package = "openssl", optional = true }
