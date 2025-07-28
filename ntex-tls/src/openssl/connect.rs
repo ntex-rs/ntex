@@ -131,9 +131,9 @@ impl<T: Address> Service<Connect<T>> for SslConnector<T> {
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
-    use tls_openssl::ssl::SslMethod;
-
     use super::*;
+
+    use tls_openssl::ssl::SslMethod;
 
     #[ntex::test]
     async fn test_openssl_connect() {
@@ -150,6 +150,8 @@ mod tests {
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap();
+        // always ready
+        assert!(srv.ready().await.is_ok());
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
