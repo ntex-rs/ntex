@@ -151,7 +151,7 @@ mod tests {
     async fn test_rustls_connect() {
         let server = ntex::server::test_server(|| {
             ntex::service::fn_service(|io: Io| async move {
-                io.send(Bytes::from_static(b"Hello"), &BytesCodec).await
+                io.send(Bytes::from_static(b"Invalid data"), &BytesCodec).await
                     .expect("Failed to send data");
                 Ok::<_, ()>(())
             })
@@ -171,11 +171,10 @@ mod tests {
         let srv = factory.pipeline(&()).await.unwrap().bind();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
-        let io = srv
-            .call(Connect::new("localhost").set_addr(Some(server.addr())))
-            .await
-            .unwrap();
-        let _ = io.read_ready().await;
-        assert!(io.is_closed());
+        let result = srv
+            .call(Connect::new("").set_addr(Some(server.addr())))
+            .await;
+        assert!(result.is_err());
+        assert!(format!("{srv:?}").contains("TlsConnector"));
     }
 }

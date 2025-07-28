@@ -156,6 +156,8 @@ mod tests {
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap();
+        // always ready
+        assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
