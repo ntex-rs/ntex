@@ -155,7 +155,7 @@ impl TlsServerFilter {
                     while session.wants_write() {
                         result = session.write_tls(&mut wrp).map(|_| ());
                         if result.is_err() {
-                            break
+                            break;
                         }
                     }
                     if session.wants_read() {
