@@ -148,7 +148,10 @@ mod tests {
     #[ntex::test]
     async fn test_rustls_connect() {
         let server = ntex::server::test_server(|| {
-            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
+            ntex::service::fn_service(|_| async {
+                io.write("Testing");
+                Ok::<_, ()>(()) 
+            })
         });
 
         let cert_store =
