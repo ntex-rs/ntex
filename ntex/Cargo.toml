@@ -101,8 +101,8 @@ mime = { workspace = true }
 percent-encoding = { workspace = true }
 serde_json = { workspace = true }
 serde_urlencoded = { workspace = true }
-url-pkg = { workspace = true, package = "url", optional = true }
-coo-kie = { workspace = true, package = "cookie", optional = true }
+url-pkg = { workspace = true, optional = true }
+coo-kie = { workspace = true, optional = true }
 
 # openssl
 tls-openssl = { version = "0.10", package = "openssl", optional = true }
