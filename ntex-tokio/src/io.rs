@@ -62,7 +62,7 @@ impl ntex_io::AsyncRead for Read {
                     }
                     Poll::Ready(size) => {
                         n += size;
-                        if n > 0 && buf.remaining_mut() > 0 {
+                        if size > 0 && buf.remaining_mut() > 0 {
                             continue;
                         }
                         Poll::Ready(Ok(n))
@@ -141,7 +141,7 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
     let len = buf.len();
 
     if len != 0 {
-        // log::trace!("{}: Flushing framed transport: {:?}", st.tag(), buf.len());
+        // log::trace!("Flushing framed transport: {:?}", buf.len());
 
         let mut written = 0;
         let result = loop {
@@ -170,7 +170,7 @@ pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
                 Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
             };
         };
-        // log::trace!("{}: flushed {} bytes", st.tag(), written);
+        // log::trace!("flushed {} bytes", written);
 
         // flush
         if written > 0 {

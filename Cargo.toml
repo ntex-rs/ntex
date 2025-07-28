@@ -98,4 +98,3 @@ thiserror = "2"
 webpki-roots = "1.0"
 url = "2.5.2"
 url-pkg = { version = "2.5.2", package = "url" }
-idna_adapter = "=1.2.0"

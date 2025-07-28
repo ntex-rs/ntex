@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tokio"
-version = "0.5.3"
+version = "0.5.4"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "tokio intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]

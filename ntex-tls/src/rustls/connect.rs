@@ -165,9 +165,11 @@ mod tests {
         let srv = factory.pipeline(&()).await.unwrap().bind();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
-        let result = srv
-            .call(Connect::new("www.rust-lang.org").set_addr(Some(server.addr())))
-            .await;
-        assert!(result.is_err());
+        let io = srv
+            .call(Connect::new("localhost").set_addr(Some(server.addr())))
+            .await
+            .unwrap();
+        let _ = io.read_ready().await;
+        assert!(io.is_closed());
     }
 }
