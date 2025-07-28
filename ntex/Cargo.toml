@@ -46,7 +46,7 @@ compress = ["flate2"]
 cookie = ["coo-kie", "coo-kie/percent-encode"]
 
 # url support
-url = ["url-pkg", "idna_adapter"]
+url = ["url-pkg"]
 
 # tokio runtime
 tokio = ["ntex-net/tokio"]
@@ -103,7 +103,6 @@ serde_json = { workspace = true }
 serde_urlencoded = { workspace = true }
 url-pkg = { workspace = true, package = "url", optional = true }
 coo-kie = { workspace = true, package = "cookie", optional = true }
-idna_adapter = { workspace = true, optional = true }
 
 # openssl
 tls-openssl = { version = "0.10", package = "openssl", optional = true }

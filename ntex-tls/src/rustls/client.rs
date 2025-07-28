@@ -142,8 +142,11 @@ impl TlsClientFilter {
                 let mut session = filter.session.borrow_mut();
                 let mut result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
 
-                if session.wants_write() {
+                while session.wants_write() {
                     result = session.write_tls(&mut wrp).map(|_| ());
+                    if result.is_err() {
+                        break
+                    }
                 }
                 if session.wants_read() {
                     let has_data = buf.with_read_buf(|rbuf| {
