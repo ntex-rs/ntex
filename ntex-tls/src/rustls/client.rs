@@ -172,6 +172,8 @@ impl TlsClientFilter {
                             let _ = session.write_tls(&mut wrp);
                             io::Error::new(io::ErrorKind::InvalidData, err)
                         })?;
+                    } else {
+                        result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
                     }
                 }
 
