@@ -147,43 +147,58 @@ impl TlsServerFilter {
 
             let filter = io.filter();
             loop {
-                let (result, wants_read, handshaking) = io.with_buf(|buf| {
-                    let mut session = filter.session.borrow_mut();
+                let (result, handshaking) = io.with_buf(|buf| {
                     let mut wrp = Wrapper(buf);
-                    let mut result = (
-                        session.complete_io(&mut wrp),
-                        session.wants_read(),
-                        session.is_handshaking(),
-                    );
+                    let mut session = filter.session.borrow_mut();
+                    let mut result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
 
-                    if result.0.is_ok() && session.wants_write() {
-                        result.0 = session.complete_io(&mut wrp);
+                    if session.wants_write() {
+                        result = session.write_tls(&mut wrp).map(|_| ());
                     }
-                    result
-                })?;
+                    if session.wants_read() {
+                        let has_data = buf.with_read_buf(|rbuf| {
+                            rbuf.with_src(|b| {
+                                b.as_ref().map(|b| !b.is_empty()).unwrap_or_default()
+                            })
+                        });
+
+                        if has_data {
+                            result = match session.read_tls(&mut wrp) {
+                                Ok(0) => Err(io::Error::new(
+                                    io::ErrorKind::NotConnected,
+                                    "disconnected",
+                                )),
+                                Ok(_) => Ok(()),
+                                Err(e) => Err(e),
+                            };
+
+                            session.process_new_packets().map_err(|err| {
+                                // In case we have an alert to send describing this error,
+                                // try a last-gasp write -- but don't predate the primary
+                                // error.
+                                let _ = session.write_tls(&mut wrp);
+                                io::Error::new(io::ErrorKind::InvalidData, err)
+                            })?;
+                        }
+                    }
+                    Ok::<_, io::Error>((result, session.is_handshaking()))
+                })??;
 
                 match result {
-                    Ok(_) => {
-                        return Ok(io);
-                    }
+                    Ok(()) => return Ok(io),
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                         if !handshaking {
                             return Ok(io);
                         }
                         poll_fn(|cx| {
-                            let read_ready = if wants_read {
-                                match ready!(io.poll_read_notify(cx))? {
-                                    Some(_) => Ok(true),
-                                    None => Err(io::Error::other("disconnected")),
-                                }?
-                            } else {
-                                true
-                            };
-                            if read_ready {
-                                Poll::Ready(Ok::<_, io::Error>(()))
-                            } else {
-                                Poll::Pending
-                            }
+                            match ready!(io.poll_read_notify(cx))? {
+                                Some(_) => Ok(()),
+                                None => Err(io::Error::new(
+                                    io::ErrorKind::NotConnected,
+                                    "disconnected",
+                                )),
+                            }?;
+                            Poll::Ready(Ok::<_, io::Error>(()))
                         })
                         .await?;
                     }

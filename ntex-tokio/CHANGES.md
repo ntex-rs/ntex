@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.4] - 2025-07-28
+
+* Better handling for zero reads
+
 ## [0.5.3] - 2024-11-04
 
 * Use std::task::ready

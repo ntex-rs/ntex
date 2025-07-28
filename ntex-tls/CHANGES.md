@@ -1,5 +1,9 @@
 # Changes
 
+## [2.5.1] - 2025-07-28
+
+* Fix rustls filter impls
+
 ## [2.5.0] - 2025-07-09
 
 * Add rustls connector helper constructors
