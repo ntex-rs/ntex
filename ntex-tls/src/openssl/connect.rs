@@ -133,8 +133,6 @@ impl<T: Address> Service<Connect<T>> for SslConnector<T> {
 mod tests {
     use super::*;
 
-    use ntex::codec::BytesCodec;
-    use ntex_bytes::Bytes;
     use tls_openssl::ssl::SslMethod;
 
     #[ntex::test]

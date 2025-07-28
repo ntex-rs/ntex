@@ -142,8 +142,6 @@ impl<T: Address> Service<Connect<T>> for TlsConnector<T> {
 mod tests {
     use super::*;
 
-    use ntex::codec::BytesCodec;
-    use ntex_bytes::Bytes;
     use ntex_util::future::lazy;
     use tls_rust::RootCertStore;
 
