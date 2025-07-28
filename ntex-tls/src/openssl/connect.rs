@@ -138,7 +138,7 @@ mod tests {
     #[ntex::test]
     async fn test_openssl_connect() {
         let server = ntex::server::test_server(|| {
-            ntex::service::fn_service(|_: Io| async move { Ok::<_, ()>(()) })
+            ntex::service::fn_service(|_| async move { Ok::<_, ()>(()) })
         });
 
         let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
