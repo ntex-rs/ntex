@@ -133,15 +133,16 @@ impl<T: Address> Service<Connect<T>> for SslConnector<T> {
 mod tests {
     use super::*;
 
+    use ntex::codec::BytesCodec;
     use ntex_bytes::Bytes;
     use tls_openssl::ssl::SslMethod;
-    use ntex::codec::BytesCodec;
 
     #[ntex::test]
     async fn test_openssl_connect() {
         let server = ntex::server::test_server(|| {
             ntex::service::fn_service(|io: Io| async move {
-                io.send(Bytes::from_static(b"Hello"), &BytesCodec).await
+                io.send(Bytes::from_static(b"Hello"), &BytesCodec)
+                    .await
                     .expect("Failed to send data");
                 Ok::<_, ()>(())
             })
