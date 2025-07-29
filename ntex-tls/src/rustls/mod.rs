@@ -1,18 +1,18 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::{cmp, io};
-
-use ntex_io::WriteBuf;
 use tls_rust::pki_types::CertificateDer;
 
 mod accept;
 mod client;
 mod connect;
 mod server;
+mod stream;
 
 pub use self::accept::{TlsAcceptor, TlsAcceptorService};
 pub use self::client::TlsClientFilter;
 pub use self::connect::TlsConnector;
 pub use self::server::TlsServerFilter;
+
+use self::stream::Stream;
 
 /// Connection's peer cert
 #[derive(Debug)]
@@ -21,33 +21,3 @@ pub struct PeerCert<'a>(pub CertificateDer<'a>);
 /// Connection's peer cert chain
 #[derive(Debug)]
 pub struct PeerCertChain<'a>(pub Vec<CertificateDer<'a>>);
-
-pub(crate) struct Wrapper<'a, 'b>(&'a WriteBuf<'b>);
-
-impl io::Read for Wrapper<'_, '_> {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        self.0.with_read_buf(|buf| {
-            buf.with_src(|buf| {
-                if let Some(buf) = buf {
-                    let len = cmp::min(buf.len(), dst.len());
-                    if len > 0 {
-                        dst[..len].copy_from_slice(&buf.split_to(len));
-                        return Ok(len);
-                    }
-                }
-                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-            })
-        })
-    }
-}
-
-impl io::Write for Wrapper<'_, '_> {
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.0.with_dst(|buf| buf.extend_from_slice(src));
-        Ok(src.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
