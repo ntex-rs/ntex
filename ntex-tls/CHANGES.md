@@ -1,5 +1,11 @@
 # Changes
 
+## [2.6.0] - 2025-07-29
+
+* Fix the rustls handshake negotiation #620
+
+* Refactor rustls support
+
 ## [2.5.1] - 2025-07-28
 
 * Fix rustls filter impls
