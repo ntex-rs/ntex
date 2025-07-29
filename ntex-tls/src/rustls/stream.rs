@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::io::{self, Read, Write};
 use std::{any, cmp, future::poll_fn, ops::Deref, ops::DerefMut, task::ready, task::Poll};
 
@@ -22,75 +23,6 @@ where
     S: DerefMut + Deref<Target = ConnectionCommon<SD>>,
     SD: SideData,
 {
-    pub(crate) async fn handshake<F>(&mut self, io: &Io<F>) -> Result<(), io::Error> {
-        let session = &mut self.session;
-
-        loop {
-            let result = io.with_buf(|buf| {
-                let mut wrp = Wrapper(buf);
-                let mut result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
-
-                while session.wants_write() {
-                    result = session.write_tls(&mut wrp).map(|_| ());
-                    if result.is_err() {
-                        break;
-                    }
-                }
-                if session.wants_read() {
-                    let has_data = buf.with_read_buf(|rbuf| {
-                        rbuf.with_src(|b| {
-                            b.as_ref().map(|b| !b.is_empty()).unwrap_or_default()
-                        })
-                    });
-
-                    if has_data {
-                        result = match session.read_tls(&mut wrp) {
-                            Ok(0) => Err(io::Error::new(
-                                io::ErrorKind::NotConnected,
-                                "disconnected",
-                            )),
-                            Ok(_) => Ok(()),
-                            Err(e) => Err(e),
-                        };
-
-                        session.process_new_packets().map_err(|err| {
-                            // In case we have an alert to send describing this error,
-                            // try a last-gasp write -- but don't predate the primary
-                            // error.
-                            let _ = session.write_tls(&mut wrp);
-                            io::Error::new(io::ErrorKind::InvalidData, err)
-                        })?;
-                    } else {
-                        result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
-                    }
-                }
-
-                Ok::<_, io::Error>(result)
-            })??;
-
-            match result {
-                Ok(()) => return Ok(()),
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    if !session.is_handshaking() {
-                        return Ok(());
-                    }
-                    poll_fn(|cx| {
-                        match ready!(io.poll_read_notify(cx))? {
-                            Some(_) => Ok(()),
-                            None => Err(io::Error::new(
-                                io::ErrorKind::NotConnected,
-                                "disconnected",
-                            )),
-                        }?;
-                        Poll::Ready(Ok::<_, io::Error>(()))
-                    })
-                    .await?;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
     pub(crate) fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         const H2: &[u8] = b"h2";
 
@@ -194,6 +126,77 @@ where
             }
             Ok(())
         })
+    }
+}
+
+pub(crate) async fn handshake<F, S, SD>(
+    session: &RefCell<S>,
+    io: &Io<F>,
+) -> Result<(), io::Error>
+where
+    S: DerefMut + Deref<Target = ConnectionCommon<SD>>,
+    SD: SideData,
+{
+    loop {
+        let (result, handshaking) = io.with_buf(|buf| {
+            let mut session = session.borrow_mut();
+            let mut wrp = Wrapper(buf);
+            let mut result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
+
+            while session.wants_write() {
+                result = session.write_tls(&mut wrp).map(|_| ());
+                if result.is_err() {
+                    break;
+                }
+            }
+            if session.wants_read() {
+                let has_data = buf.with_read_buf(|rbuf| {
+                    rbuf.with_src(|b| b.as_ref().map(|b| !b.is_empty()).unwrap_or_default())
+                });
+
+                if has_data {
+                    result = match session.read_tls(&mut wrp) {
+                        Ok(0) => {
+                            Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
+                        }
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(e),
+                    };
+
+                    session.process_new_packets().map_err(|err| {
+                        // In case we have an alert to send describing this error,
+                        // try a last-gasp write -- but don't predate the primary
+                        // error.
+                        let _ = session.write_tls(&mut wrp);
+                        io::Error::new(io::ErrorKind::InvalidData, err)
+                    })?;
+                } else {
+                    result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
+                }
+            }
+
+            Ok::<_, io::Error>((result, session.is_handshaking()))
+        })??;
+
+        match result {
+            Ok(()) => return Ok(()),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                if !handshaking {
+                    return Ok(());
+                }
+                poll_fn(|cx| {
+                    match ready!(io.poll_read_notify(cx))? {
+                        Some(_) => Ok(()),
+                        None => {
+                            Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
+                        }
+                    }?;
+                    Poll::Ready(Ok::<_, io::Error>(()))
+                })
+                .await?;
+            }
+            Err(e) => return Err(e),
+        }
     }
 }
 

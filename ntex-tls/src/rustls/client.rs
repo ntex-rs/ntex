@@ -32,11 +32,11 @@ impl TlsClientFilter {
         cfg: Arc<ClientConfig>,
         domain: ServerName<'static>,
     ) -> Result<Io<Layer<TlsClientFilter, F>>, io::Error> {
-        let mut session = ClientConnection::new(cfg, domain).map_err(io::Error::other)?;
-
-        Stream::new(&mut session).handshake(&io).await?;
-        Ok(io.add_filter(TlsClientFilter {
+        let session = ClientConnection::new(cfg, domain).map_err(io::Error::other)?;
+        let io = io.add_filter(TlsClientFilter {
             session: RefCell::new(session),
-        }))
+        });
+        super::stream::handshake(&io.filter().session, &io).await?;
+        Ok(io)
     }
 }

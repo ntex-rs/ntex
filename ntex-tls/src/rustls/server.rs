@@ -45,12 +45,13 @@ impl TlsServerFilter {
         timeout: Millis,
     ) -> Result<Io<Layer<TlsServerFilter, F>>, io::Error> {
         time::timeout(timeout, async {
-            let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
-
-            Stream::new(&mut session).handshake(&io).await?;
-            Ok(io.add_filter(TlsServerFilter {
+            let session = ServerConnection::new(cfg).map_err(io::Error::other)?;
+            let io = io.add_filter(TlsServerFilter {
                 session: RefCell::new(session),
-            }))
+            });
+
+            super::stream::handshake(&io.filter().session, &io).await?;
+            Ok(io)
         })
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "rustls handshake timeout"))
