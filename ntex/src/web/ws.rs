@@ -65,9 +65,10 @@ where
 }
 
 /// Do websocket handshake and start websockets service.
-pub async fn start_with<T, F, Err>(
+pub async fn start_with_config<T, F, Err>(
     req: HttpRequest,
     factory: F,
+    cfg: crate::io::DispatcherConfig,
 ) -> Result<HttpResponse, Err>
 where
     T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
@@ -100,9 +101,6 @@ where
     // create ws service
     let srv = factory.into_factory().create(sink.clone()).await?;
 
-    let cfg = crate::io::DispatcherConfig::default();
-    cfg.set_keepalive_timeout(Seconds::ZERO);
-
     // start websockets service dispatcher
     let _ = rt::spawn(async move {
         let res = crate::io::Dispatcher::new(io, codec, srv, &cfg).await;
@@ -110,4 +108,19 @@ where
     });
 
     Ok(HttpResponse::new(StatusCode::OK))
+}
+
+/// Do websocket handshake and start websockets service.
+pub async fn start_with<T, F, Err>(
+    req: HttpRequest,
+    factory: F,
+) -> Result<HttpResponse, Err>
+where
+    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
+        + 'static,
+    T::Error: fmt::Debug,
+    F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
+    Err: From<T::InitError> + From<HandshakeError>,
+{
+    start_with_config(req, factory, crate::io::DispatcherConfig::default()).await
 }
