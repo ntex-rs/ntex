@@ -179,7 +179,7 @@ where
     // Start the WebSocket service dispatcher in a background task
     let _ = rt::spawn(async move {
         let res = crate::io::Dispatcher::new(io, codec, srv, &cfg).await;
-        log::trace!("WebSocket handler terminated: {:?}", res);
+        log::trace!("WebSocket handler terminated: {res:?}");
     });
 
     // Return an empty OK response, as the connection has been upgraded.
