@@ -160,7 +160,7 @@ where
 
     // Extract I/O and HTTP codec from request
     let (io, codec) = req
-        .head_mut()
+        .head()
         .take_io()
         .ok_or(HandshakeError::NoWebsocketUpgrade)?;
 
