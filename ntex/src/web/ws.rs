@@ -142,7 +142,7 @@ where
 /// This is the core function that performs the handshake and starts the dispatcher.
 /// All other functions in this module delegate to this one.
 pub async fn start_service_with_config<T, F, Err>(
-    mut req: HttpRequest,
+    req: HttpRequest,
     factory: F,
     cfg: DispatcherConfig,
 ) -> Result<HttpResponse, Err>
