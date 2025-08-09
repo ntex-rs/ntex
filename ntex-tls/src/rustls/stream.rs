@@ -142,7 +142,7 @@ where
             let mut session = session.borrow_mut();
             let mut wrp = Wrapper(buf);
 
-            if session.wants_read() {
+            while session.wants_read() {
                 let has_data = buf.with_read_buf(|rbuf| {
                     rbuf.with_src(|b| b.as_ref().map(|b| !b.is_empty()).unwrap_or_default())
                 });
@@ -154,7 +154,6 @@ where
                             "disconnected",
                         ));
                     }
-
                     session.process_new_packets().map_err(|err| {
                         // In case we have an alert to send describing this error,
                         // try a last-gasp write -- but don't predate the primary
@@ -162,10 +161,12 @@ where
                         let _ = session.write_tls(&mut wrp);
                         io::Error::new(io::ErrorKind::InvalidData, err)
                     })?;
+                } else {
+                    break;
                 }
             }
 
-            if session.wants_write() {
+            while session.wants_write() {
                 session.write_tls(&mut wrp).map(|_| ())?;
             }
             Ok(session.is_handshaking())
