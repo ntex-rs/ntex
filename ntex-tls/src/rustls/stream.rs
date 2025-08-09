@@ -138,31 +138,22 @@ where
     SD: SideData,
 {
     loop {
-        let (result, handshaking) = io.with_buf(|buf| {
+        let handshaking = io.with_buf(|buf| {
             let mut session = session.borrow_mut();
             let mut wrp = Wrapper(buf);
-            let mut result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
 
-            while session.wants_write() {
-                result = session.write_tls(&mut wrp).map(|_| ());
-                if result.is_err() {
-                    break;
-                }
-            }
-            if session.wants_read() {
+            while session.wants_read() {
                 let has_data = buf.with_read_buf(|rbuf| {
                     rbuf.with_src(|b| b.as_ref().map(|b| !b.is_empty()).unwrap_or_default())
                 });
 
                 if has_data {
-                    result = match session.read_tls(&mut wrp) {
-                        Ok(0) => {
-                            Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
-                        }
-                        Ok(_) => Ok(()),
-                        Err(e) => Err(e),
-                    };
-
+                    if session.read_tls(&mut wrp)? == 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotConnected,
+                            "disconnected",
+                        ));
+                    }
                     session.process_new_packets().map_err(|err| {
                         // In case we have an alert to send describing this error,
                         // try a last-gasp write -- but don't predate the primary
@@ -171,31 +162,27 @@ where
                         io::Error::new(io::ErrorKind::InvalidData, err)
                     })?;
                 } else {
-                    result = Err(io::Error::new(io::ErrorKind::WouldBlock, ""));
+                    break;
                 }
             }
 
-            Ok::<_, io::Error>((result, session.is_handshaking()))
+            while session.wants_write() {
+                session.write_tls(&mut wrp).map(|_| ())?;
+            }
+            Ok(session.is_handshaking())
         })??;
 
-        match result {
-            Ok(()) => return Ok(()),
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                if !handshaking {
-                    return Ok(());
-                }
-                poll_fn(|cx| {
-                    match ready!(io.poll_read_notify(cx))? {
-                        Some(_) => Ok(()),
-                        None => {
-                            Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
-                        }
-                    }?;
-                    Poll::Ready(Ok::<_, io::Error>(()))
+        if handshaking {
+            poll_fn(|cx| {
+                Poll::Ready(if ready!(io.poll_read_notify(cx))?.is_none() {
+                    Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
+                } else {
+                    Ok(())
                 })
-                .await?;
-            }
-            Err(e) => return Err(e),
+            })
+            .await?;
+        } else {
+            return Ok(());
         }
     }
 }
