@@ -35,7 +35,7 @@ io-uring-compat = []
 ntex-service = "3.5"
 ntex-bytes = "0.1"
 ntex-http = "0.1"
-ntex-io = "2.13"
+ntex-io = "2.14"
 ntex-rt = "0.4.32"
 ntex-util = "2.12"
 
