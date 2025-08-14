@@ -366,7 +366,6 @@ impl IoContext {
         Self(io.clone())
     }
 
-    #[deprecated(since = "2.14.1")]
     #[doc(hidden)]
     #[inline]
     pub fn id(&self) -> usize {
