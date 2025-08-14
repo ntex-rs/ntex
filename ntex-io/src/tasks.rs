@@ -366,6 +366,7 @@ impl IoContext {
         Self(io.clone())
     }
 
+    #[deprecated(since = "2.14.1")]
     #[doc(hidden)]
     #[inline]
     pub fn id(&self) -> usize {
@@ -378,6 +379,7 @@ impl IoContext {
         self.0.tag()
     }
 
+    #[deprecated(since = "2.14.1")]
     #[doc(hidden)]
     /// Io flags
     pub fn flags(&self) -> crate::flags::Flags {
@@ -403,6 +405,8 @@ impl IoContext {
         self.0 .0.io_stopped(e);
     }
 
+    #[deprecated(since = "2.14.1")]
+    #[doc(hidden)]
     #[inline]
     /// Initiate gracefully shutdown
     pub fn init_shutdown(&self) {
