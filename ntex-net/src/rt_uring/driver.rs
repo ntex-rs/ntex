@@ -228,6 +228,11 @@ impl Handler for StreamOpsHandler {
 
                             // handle IORING_CQE_F_SOCK_NONEMPTY flag
                             if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
+                                // In case of disconnect, sock_nonempty is set to true.
+                                // First completion contains data, second Recv(0)
+                                // Before receiving Recv(0), POLLRDHUP is triggered
+                                // Driver must read all recv() call before handling
+                                // disconnects
                                 item.flags.insert(Flags::RD_MORE);
                                 st.recv_more(id, ctx, buf, &self.inner.api);
                             } else {
