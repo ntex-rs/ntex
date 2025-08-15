@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.0] - 2025-08-15
+
+* Fix io disconnect handling for io-uring driver
+
 ## [2.7.0] - 2025-07-09
 
 * Add timeout support to connector
