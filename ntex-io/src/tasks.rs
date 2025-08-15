@@ -378,7 +378,6 @@ impl IoContext {
         self.0.tag()
     }
 
-    #[deprecated(since = "2.14.1")]
     #[doc(hidden)]
     /// Io flags
     pub fn flags(&self) -> crate::flags::Flags {

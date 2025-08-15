@@ -1,8 +1,8 @@
 # Changes
 
-## [2.7.1] - 2025-08-xx
+## [2.8.0] - 2025-08-15
 
-* Handle io disconnect for io-uring driver
+* Fix io disconnect handling for io-uring driver
 
 ## [2.7.0] - 2025-07-09
 

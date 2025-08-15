@@ -21,6 +21,7 @@ bitflags::bitflags! {
     struct Flags: u8 {
         const RD_CANCELING = 0b0000_0001;
         const RD_REISSUE   = 0b0000_0010;
+        const RD_MORE      = 0b0000_0100;
         const WR_CANCELING = 0b0001_0000;
         const WR_REISSUE   = 0b0010_0000;
         const NO_ZC        = 0b1000_0000;
@@ -210,25 +211,31 @@ impl Handler for StreamOpsHandler {
         self.inner.with(|st| {
             match st.ops[user_data].take().unwrap() {
                 Operation::Recv { id, mut buf, ctx } => {
-                    // reset op reference
-                    st.streams.get_mut(id).map(|item| item.rd_op.take());
+                    if let Some(item) = st.streams.get_mut(id) {
+                        // reset op reference
+                        let _ = item.rd_op.take();
 
-                    // handle WouldBlock
-                    if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
-                        log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), res, ctx.id());
-                        st.recv_more(id, ctx, buf, &self.inner.api);
-                    } else {
-                        let mut total = 0;
-                        let res = Poll::Ready(res.map(|size| {
-                            unsafe { buf.advance_mut(size) };
-                            total = size;
-                        }));
-
-                        // handle IORING_CQE_F_SOCK_NONEMPTY flag
-                        if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
+                        // handle WouldBlock
+                        if matches!(res, Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(::libc::EINPROGRESS)) {
+                            log::error!("{}: Received WouldBlock {:?}, id: {:?}", ctx.tag(), res, ctx.id());
                             st.recv_more(id, ctx, buf, &self.inner.api);
-                        } else if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
-                            st.recv(id, ctx, self.inner.api.is_new(), &self.inner.api);
+                        } else {
+                            let mut total = 0;
+                            let res = Poll::Ready(res.map(|size| {
+                                unsafe { buf.advance_mut(size) };
+                                total = size;
+                            }));
+
+                            // handle IORING_CQE_F_SOCK_NONEMPTY flag
+                            if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
+                                item.flags.insert(Flags::RD_MORE);
+                                st.recv_more(id, ctx, buf, &self.inner.api);
+                            } else {
+                                item.flags.remove(Flags::RD_MORE);
+                                if ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
+                                    st.recv(id, ctx, self.inner.api.is_new(), &self.inner.api);
+                                }
+                            }
                         }
                     }
                 }
@@ -258,8 +265,10 @@ impl Handler for StreamOpsHandler {
                     }
                 }
                 Operation::Poll { id, ctx } => {
-                    if !ctx.is_stopped() {
-                        ctx.stop(res.err());
+                    if let Some(item) = st.streams.get_mut(id) {
+                        if !item.flags.contains(Flags::RD_MORE) && !ctx.is_stopped() {
+                            ctx.stop(res.err());
+                        }
                     }
                 }
                 Operation::Shutdown { tx } => {

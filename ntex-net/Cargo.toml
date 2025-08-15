@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "2.7.1"
+version = "2.8.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -35,7 +35,7 @@ io-uring-compat = []
 ntex-service = "3.5"
 ntex-bytes = "0.1"
 ntex-http = "0.1"
-ntex-io = "2.14"
+ntex-io = "2.15"
 ntex-rt = "0.4.32"
 ntex-util = "2.12"
 
