@@ -136,7 +136,7 @@ impl Handler for StreamOpsHandler {
 
             if ev.is_interrupt() {
                 if let Some(ctx) = io.context.as_ref() {
-                    ctx.init_shutdown();
+                    ctx.stop(None);
                 }
             } else {
                 self.inner.api.modify(io.fd(), id as u32, renew);

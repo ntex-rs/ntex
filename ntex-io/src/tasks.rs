@@ -403,6 +403,8 @@ impl IoContext {
         self.0 .0.io_stopped(e);
     }
 
+    #[deprecated(since = "2.14.1")]
+    #[doc(hidden)]
     #[inline]
     /// Initiate gracefully shutdown
     pub fn init_shutdown(&self) {
