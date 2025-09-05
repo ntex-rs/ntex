@@ -1,5 +1,9 @@
 # Changes
 
+## [2.15.2] 2025-09-02
+
+* Remove connection headers for h2 client #628
+
 ## [2.15.1] 2025-07-20
 
 * Remove client `br` encoding from accept-encoding header

@@ -50,8 +50,9 @@ where
         .headers
         .iter()
         .filter(|(name, _)| {
-            !matches!(*name, &header::CONNECTION | &header::TRANSFER_ENCODING)
-                || !extra_headers.contains_key(*name)
+            // h2 does not user connection headers
+            !(matches!(*name, &header::CONNECTION | &header::TRANSFER_ENCODING)
+                || extra_headers.contains_key(*name))
         })
         .chain(extra_headers.iter())
         .collect();
