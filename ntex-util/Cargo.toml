@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "2.13.0"
+version = "2.14.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -20,8 +20,8 @@ ntex-bytes = "0.1"
 ntex-service = "3.4"
 ntex-rt = "0.4"
 
+ahash = { workspace = true }
 bitflags = { workspace = true }
-fxhash = { workspace = true }
 log = { workspace = true }
 slab = { workspace = true }
 futures-timer = { workspace = true }
