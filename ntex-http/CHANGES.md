@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.15] - 2025-09-10
+
+* Use ahash instead of fxhash
+
 ## [0.1.14] - 2025-07-08
 
 * Use custom error instead of errors from http crate

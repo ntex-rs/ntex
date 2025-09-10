@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.15.2"
+version = "2.16.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -68,14 +68,14 @@ no-test-logging = []
 
 [dependencies]
 ntex-codec = "0.6"
-ntex-http = "0.1.14"
+ntex-http = "0.1.15"
 ntex-router = "0.5"
 ntex-service = "3.5"
 ntex-macros = "0.1"
-ntex-util = "2.13"
+ntex-util = "2.14"
 ntex-bytes = "0.1.30"
 ntex-server = "2.8.1"
-ntex-h2 = "1.12.0"
+ntex-h2 = "1.13"
 ntex-rt = "0.4.32"
 ntex-io = "2.14.0"
 ntex-net = "2.7.0"

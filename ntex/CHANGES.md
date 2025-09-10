@@ -1,5 +1,9 @@
 # Changes
 
+## [2.16.0] 2025-09-10
+
+* Use ahash instead of fxhash
+
 ## [2.15.2] 2025-09-02
 
 * Remove connection headers for h2 client #628
