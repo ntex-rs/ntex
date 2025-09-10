@@ -247,12 +247,6 @@ impl AsRef<RequestHead> for RequestHeadType {
     }
 }
 
-//impl From<RequestHead> for RequestHeadType {
-//    fn from(head: RequestHead) -> Self {
-//        RequestHeadType::Owned(head)
-//    }
-//}
-
 #[derive(Debug)]
 pub struct ResponseHead {
     pub version: Version,
