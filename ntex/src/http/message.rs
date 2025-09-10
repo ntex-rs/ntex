@@ -225,7 +225,7 @@ impl RequestHead {
 
 #[derive(Debug)]
 pub enum RequestHeadType {
-    Owned(RequestHead),
+    Owned(Box<RequestHead>),
     Rc(Rc<RequestHead>, Option<HeaderMap>),
 }
 
@@ -241,17 +241,17 @@ impl RequestHeadType {
 impl AsRef<RequestHead> for RequestHeadType {
     fn as_ref(&self) -> &RequestHead {
         match self {
-            RequestHeadType::Owned(head) => head,
+            RequestHeadType::Owned(head) => head.as_ref(),
             RequestHeadType::Rc(head, _) => head.as_ref(),
         }
     }
 }
 
-impl From<RequestHead> for RequestHeadType {
-    fn from(head: RequestHead) -> Self {
-        RequestHeadType::Owned(head)
-    }
-}
+//impl From<RequestHead> for RequestHeadType {
+//    fn from(head: RequestHead) -> Self {
+//        RequestHeadType::Owned(head)
+//    }
+//}
 
 #[derive(Debug)]
 pub struct ResponseHead {

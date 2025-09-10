@@ -38,7 +38,7 @@ use super::{frozen::FrozenClientRequest, ClientConfig};
 /// }
 /// ```
 pub struct ClientRequest {
-    pub(crate) head: RequestHead,
+    pub(crate) head: Box<RequestHead>,
     err: Option<HttpError>,
     addr: Option<net::SocketAddr>,
     #[cfg(feature = "cookie")]
@@ -57,7 +57,7 @@ impl ClientRequest {
     {
         ClientRequest {
             config,
-            head: RequestHead::default(),
+            head: Box::new(RequestHead::default()),
             err: None,
             addr: None,
             #[cfg(feature = "cookie")]
@@ -376,7 +376,7 @@ impl ClientRequest {
         };
 
         let request = FrozenClientRequest {
-            head: Rc::new(slf.head),
+            head: Rc::new(*slf.head),
             addr: slf.addr,
             response_decompress: slf.response_decompress,
             timeout: slf.timeout,
