@@ -1,5 +1,9 @@
 # Changes
 
+## [2.14.0] - 2025-09-10
+
+* Use ahash instead of fxhash
+
 ## [2.13.0] - 2025-07-16
 
 * Add helper methods for ErrorMessage

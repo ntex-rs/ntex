@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::{HeaderName, HeaderValue};
 
-type HashMap<K, V> = collections::HashMap<K, V, fxhash::FxBuildHasher>;
+type HashMap<K, V> = collections::HashMap<K, V, ahash::RandomState>;
 
 /// Combines two different futures, streams, or sinks having the same associated types into a single
 /// type.
