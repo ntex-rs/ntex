@@ -121,6 +121,11 @@ impl WebResponse {
             request: self.request,
         }
     }
+
+    /// Destruct response into parts
+    pub fn into_parts(self) -> (Response<Body>, HttpRequest) {
+        (self.response, self.request)
+    }
 }
 
 impl From<WebResponse> for Response<Body> {
