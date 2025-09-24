@@ -98,6 +98,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     })
     .await;
 
+    log::trace!("{}: Shuting down io", context.tag());
     if !context.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
@@ -108,6 +109,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
     }
 
     let result = ctl.shutdown().await;
+    log::trace!("{}: Shutdown complete {result:?}", context.tag());
     if !context.is_stopped() {
         context.stop(result.err());
     }

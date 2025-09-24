@@ -68,7 +68,7 @@ impl ConnectOps {
 
 impl Handler for ConnectOpsBatcher {
     fn event(&mut self, id: usize, event: Event) {
-        log::trace!("connect-fd is readable {id:?}");
+        log::trace!("connect-fd {id:?} is {event:?}");
 
         let mut connects = self.inner.connects.borrow_mut();
         if let Some(item) = connects.get(id) {
@@ -92,7 +92,18 @@ impl Handler for ConnectOpsBatcher {
                 };
 
                 self.inner.api.detach(item.fd, id as u32);
-                let _ = item.sender.send(res);
+
+                if let Err(Ok(res)) = item.sender.send(res) {
+                    ntex_rt::spawn_blocking(move || {
+                        let _ = syscall!(libc::shutdown(item.fd, libc::SHUT_RDWR));
+                        if let Err(err) = syscall!(libc::close(item.fd)) {
+                            log::error!(
+                                "Cannot close file descriptor ({:?}), {err:?}",
+                                item.fd
+                            );
+                        }
+                    });
+                }
             } else if !item.sender.is_canceled() {
                 self.inner
                     .api
@@ -103,6 +114,10 @@ impl Handler for ConnectOpsBatcher {
 
     fn error(&mut self, id: usize, err: io::Error) {
         let mut connects = self.inner.connects.borrow_mut();
+        log::trace!(
+            "connect-fd {id:?} is failed {err:?}, has-con: {}",
+            connects.contains(id)
+        );
 
         if connects.contains(id) {
             let item = connects.remove(id);
