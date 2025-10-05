@@ -44,6 +44,8 @@ impl TlsServerFilter {
         cfg: Arc<ServerConfig>,
         timeout: Millis,
     ) -> Result<Io<Layer<TlsServerFilter, F>>, io::Error> {
+        log::trace!("{}: Initiate server connection", io.tag());
+
         time::timeout(timeout, async {
             let session = ServerConnection::new(cfg).map_err(io::Error::other)?;
             let io = io.add_filter(TlsServerFilter {

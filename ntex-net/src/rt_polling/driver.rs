@@ -107,7 +107,7 @@ impl Handler for StreamOpsHandler {
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false).with_interrupt();
 
-            log::trace!("{}: Event ({:?}): {ev:?}", io.tag(), io.fd());
+            log::trace!("{}: Event ({:?}): {ev:?} {:?}", io.tag(), io.fd(), io.flags);
 
             if ev.readable {
                 match io.read(id as u32, &self.inner.api, self.inner.lw, self.inner.hw) {
@@ -139,6 +139,12 @@ impl Handler for StreamOpsHandler {
                     ctx.stop(None);
                 }
             } else {
+                log::trace!(
+                    "{}: Renew rd:{:?}, wr:{:?} ",
+                    io.tag(),
+                    renew.readable,
+                    renew.writable
+                );
                 self.inner.api.modify(io.fd(), id as u32, renew);
             }
 
@@ -220,33 +226,59 @@ impl StreamCtl {
         self.inner.with(|streams| {
             let io = &mut streams[self.id as usize];
             let mut event = Event::new(0, false, false).with_interrupt();
-            log::trace!("{}: Mod ({:?}) rd: {rd:?}, wr: {wr:?}", io.tag(), io.fd());
+            log::trace!(
+                "{}: Mod ({:?}) rd: {rd:?}, wr: {wr:?} {:?}",
+                io.tag(),
+                io.fd(),
+                io.flags
+            );
 
+            let mut want_update_read = true;
             if rd {
                 if io.flags.contains(Flags::RD) {
                     event.readable = true;
+                    want_update_read = false;
                 } else if io.read(self.id, &self.inner.api, self.inner.lw, self.inner.hw)
                     == IoTaskStatus::Io
                 {
                     event.readable = true;
                     io.flags.insert(Flags::RD);
+                } else {
+                    want_update_read = false;
                 }
-            } else {
+            } else if io.flags.contains(Flags::RD) {
                 io.flags.remove(Flags::RD);
+            } else {
+                want_update_read = false;
             }
 
+            let mut want_update_write = true;
             if wr {
                 if io.flags.contains(Flags::WR) {
                     event.writable = true;
+                    want_update_write = false;
                 } else if io.write(self.id, &self.inner.api) == IoTaskStatus::Io {
                     event.writable = true;
                     io.flags.insert(Flags::WR);
+                } else {
+                    want_update_write = false;
                 }
-            } else {
+            } else if io.flags.contains(Flags::WR) {
                 io.flags.remove(Flags::WR);
+            } else {
+                want_update_write = false;
             }
 
-            self.inner.api.modify(io.fd(), self.id, event);
+            if want_update_read || want_update_write {
+                log::trace!(
+                    "{}: Update ({:?}) rd: {:?}, wr:{:?}",
+                    io.tag(),
+                    io.fd(),
+                    event.readable,
+                    event.writable
+                );
+                self.inner.api.modify(io.fd(), self.id, event);
+            }
         })
     }
 }

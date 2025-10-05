@@ -1,5 +1,9 @@
 # Changes
 
+## [2.8.1] - 2025-09-24
+
+* Omitimize neon polling driver
+
 ## [2.8.0] - 2025-08-15
 
 * Fix io disconnect handling for io-uring driver
