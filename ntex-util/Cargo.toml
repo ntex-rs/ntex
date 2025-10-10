@@ -17,10 +17,10 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-bytes = "0.1"
-ntex-service = "3.4"
+ntex-service = "3.5"
 ntex-rt = "0.4"
 
-ahash = { workspace = true }
+fxhash = { workspace = true }
 bitflags = { workspace = true }
 log = { workspace = true }
 slab = { workspace = true }
