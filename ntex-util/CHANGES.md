@@ -1,5 +1,9 @@
 # Changes
 
+## [2.15.0] - 2025-10-10
+
+* Fix readiness check for Variant service
+
 ## [2.14.0] - 2025-09-10
 
 * Use ahash instead of fxhash
