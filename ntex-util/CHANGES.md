@@ -1,5 +1,9 @@
 # Changes
 
+## [2.13.1] - 2025-10-13
+
+* Fix readiness check for Variant service
+
 ## [2.13.0] - 2025-07-16
 
 * Add helper methods for ErrorMessage

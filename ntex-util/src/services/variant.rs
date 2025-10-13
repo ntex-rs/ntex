@@ -83,7 +83,7 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
     }
 });
 
-macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, $fac_type:ident, $(($n:tt, $T:ident, $R:ident)),+} => {
+macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, $fac_type:ident, $num:literal, $(($n:tt, $T:ident, $R:ident)),+} => {
 
     #[allow(non_snake_case, missing_debug_implementations)]
     pub enum $enum_type<V1R, $($R),+> {
@@ -131,15 +131,22 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             let mut fut1 = ::std::pin::pin!(ctx.ready(&self.V1));
             $(let mut $T = ::std::pin::pin!(ctx.ready(&self.$T));)+
 
-            ::std::future::poll_fn(|cx| {
-                let mut ready = Pin::new(&mut fut1).poll(cx)?.is_ready();
-                $(ready = Pin::new(&mut $T).poll(cx)?.is_ready() && ready;)+
+            let mut ready: [bool; $num] = [false; $num];
 
-                if ready {
-                   Poll::Ready(Ok(()))
-                } else {
-                    Poll::Pending
+            ::std::future::poll_fn(|cx| {
+                if !ready[$num-1] {
+                    ready[$num-1] = Pin::new(&mut fut1).poll(cx)?.is_ready();
                 }
+                $(if !ready[$n] {
+                    ready[$n] = Pin::new(&mut $T).poll(cx)?.is_ready();
+                })+;
+
+                for v in &ready[..] {
+                    if !v {
+                        return Poll::Pending
+                    }
+                }
+                Poll::Ready(Ok(()))
             }).await
         }
 
@@ -210,19 +217,19 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
 });
 
 #[rustfmt::skip]
-variant_impl!(v2, Variant2, VariantService2, VariantFactory2, (0, V2, V2R));
+variant_impl!(v2, Variant2, VariantService2, VariantFactory2, 2, (0, V2, V2R));
 #[rustfmt::skip]
-variant_impl!(v3, Variant3, VariantService3, VariantFactory3, (0, V2, V2R), (1, V3, V3R));
+variant_impl!(v3, Variant3, VariantService3, VariantFactory3, 3, (0, V2, V2R), (1, V3, V3R));
 #[rustfmt::skip]
-variant_impl!(v4, Variant4, VariantService4, VariantFactory4, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R));
+variant_impl!(v4, Variant4, VariantService4, VariantFactory4, 4, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R));
 #[rustfmt::skip]
-variant_impl!(v5, Variant5, VariantService5, VariantFactory5, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R));
+variant_impl!(v5, Variant5, VariantService5, VariantFactory5, 5, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R));
 #[rustfmt::skip]
-variant_impl!(v6, Variant6, VariantService6, VariantFactory6, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R), (4, V6, V6R));
+variant_impl!(v6, Variant6, VariantService6, VariantFactory6, 6, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R), (4, V6, V6R));
 #[rustfmt::skip]
-variant_impl!(v7, Variant7, VariantService7, VariantFactory7, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R), (4, V6, V6R), (5, V7, V7R));
+variant_impl!(v7, Variant7, VariantService7, VariantFactory7, 7, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R), (4, V6, V6R), (5, V7, V7R));
 #[rustfmt::skip]
-variant_impl!(v8, Variant8, VariantService8, VariantFactory8, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R), (4, V6, V6R), (5, V7, V7R), (6, V8, V8R));
+variant_impl!(v8, Variant8, VariantService8, VariantFactory8, 8, (0, V2, V2R), (1, V3, V3R), (2, V4, V4R), (3, V5, V5R), (4, V6, V6R), (5, V7, V7R), (6, V8, V8R));
 
 #[rustfmt::skip]
 variant_impl_and!(VariantFactory2, VariantFactory3, V3, V3R, v3, (V2), (V2R));
@@ -239,9 +246,10 @@ variant_impl_and!(VariantFactory7, VariantFactory8, V8, V8R, v8, (V2, V3, V4, V5
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::fn_factory;
+    use ntex_service::{fn_factory, fn_service};
 
     use super::*;
+    use crate::time;
 
     #[derive(Debug, Clone)]
     struct Srv1;
@@ -300,5 +308,33 @@ mod tests {
         assert_eq!(service.call(Variant3::V1(())).await, Ok(1));
         assert_eq!(service.call(Variant3::V2(())).await, Ok(2));
         assert_eq!(service.call(Variant3::V3(())).await, Ok(2));
+    }
+
+    #[ntex_macros::rt_test2]
+    async fn test_variant_readiness() {
+        #[derive(Debug, Clone)]
+        struct Srv5;
+
+        impl Service<()> for Srv5 {
+            type Response = usize;
+            type Error = ();
+            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+                time::sleep(time::Millis(50)).await;
+                time::sleep(time::Millis(50)).await;
+                time::sleep(time::Millis(50)).await;
+                time::sleep(time::Millis(50)).await;
+                Ok(())
+            }
+            async fn shutdown(&self) {}
+            async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+                Ok(2)
+            }
+        }
+
+        let factory = variant(fn_service(|()| async { Ok::<_, ()>(0) }))
+            .v2(fn_factory(|| async { Ok::<_, ()>(Srv5) }))
+            .v3(fn_service(|()| crate::future::Ready::Ok::<_, ()>(2)));
+        let service = factory.pipeline(&()).await.unwrap().clone();
+        assert!(service.ready().await.is_ok());
     }
 }
