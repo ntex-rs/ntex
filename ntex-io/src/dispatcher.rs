@@ -599,7 +599,7 @@ where
             } else {
                 Ok(())
             }
-        } else if self.flags.contains(Flags::KA_TIMEOUT) {
+        } else if self.flags.contains(Flags::KA_TIMEOUT) || self.shared.io.is_keepalive() {
             log::trace!(
                 "{}: Keep-alive error, stopping dispatcher",
                 self.shared.io.tag()
