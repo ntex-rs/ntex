@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "2.14.0"
+version = "2.15.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ntex-io/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.81"
 
 [lib]
 name = "ntex_io"
