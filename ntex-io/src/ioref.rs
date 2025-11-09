@@ -236,6 +236,20 @@ impl IoRef {
         self.0.notify_timeout()
     }
 
+    #[doc(hidden)]
+    #[inline]
+    /// Keep-alive error
+    pub fn is_keepalive(&self) -> bool {
+        self.0.flags.get().is_keepalive()
+    }
+
+    #[inline]
+    /// Wakeup dispatcher and send keep-alive error
+    pub fn notify_keepalive(&self) {
+        self.0.insert_flags(Flags::DSP_KEEPALIVE);
+        self.0.notify_timeout()
+    }
+
     #[inline]
     /// current timer handle
     pub fn timer_handle(&self) -> timer::TimerHandle {

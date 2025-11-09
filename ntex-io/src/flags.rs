@@ -11,12 +11,12 @@ bitflags::bitflags! {
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
         /// read any data and notify dispatcher
-        const RD_NOTIFY           = 0b0000_0000_1000_0000;
+        const RD_NOTIFY           = 0b0000_0000_0010_0000;
 
         /// new data is available in read buffer
-        const BUF_R_READY         = 0b0000_0000_0010_0000;
+        const BUF_R_READY         = 0b0000_0000_0100_0000;
         /// read buffer is full
-        const BUF_R_FULL          = 0b0000_0000_0100_0000;
+        const BUF_R_FULL          = 0b0000_0000_1000_0000;
 
         /// wait while write task flushes buf
         const BUF_W_MUST_FLUSH    = 0b0000_0001_0000_0000;
@@ -32,12 +32,18 @@ bitflags::bitflags! {
         const DSP_STOP            = 0b0001_0000_0000_0000;
         /// timeout occured
         const DSP_TIMEOUT         = 0b0010_0000_0000_0000;
+        /// keep-alive timeout occured
+        const DSP_KEEPALIVE       = 0b0100_0000_0000_0000;
     }
 }
 
 impl Flags {
     pub(crate) fn is_stopped(&self) -> bool {
-        self.intersects(Flags::IO_STOPPED)
+        self.contains(Flags::IO_STOPPED)
+    }
+
+    pub(crate) fn is_keepalive(&self) -> bool {
+        self.contains(Flags::DSP_KEEPALIVE)
     }
 
     pub(crate) fn is_task_waiting_for_write(&self) -> bool {
