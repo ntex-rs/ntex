@@ -77,7 +77,7 @@ ntex-bytes = "0.1.30"
 ntex-server = "2.8.1"
 ntex-h2 = "1.13"
 ntex-rt = "0.4.32"
-ntex-io = "2.15.0"
+ntex-io = "2.15.1"
 ntex-net = "2.7.0"
 ntex-tls = "2.3"
 
