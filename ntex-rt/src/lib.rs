@@ -138,6 +138,7 @@ mod compio {
     use std::task::{ready, Context, Poll};
     use std::{fmt, future::poll_fn, future::Future, pin::Pin};
 
+    use compio_driver::DriverType;
     use compio_runtime::Runtime;
 
     /// Runs the provided future, blocking the current thread until the future
@@ -145,7 +146,8 @@ mod compio {
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
         log::info!(
             "Starting compio runtime, driver {:?}",
-            compio_driver::DriverType::current()
+            compio_runtime::Runtime::try_with_current(|rt| rt.driver_type())
+                .unwrap_or(DriverType::Poll)
         );
         let rt = Runtime::new().unwrap();
         rt.block_on(fut);
