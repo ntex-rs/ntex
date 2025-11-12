@@ -1,5 +1,9 @@
 # Changes
 
+## [0.5.0] - 2025-11-12
+
+* Update to compio 0.16
+
 ## [0.4.0] - 2025-06-25
 
 * Update to compio 0.15
