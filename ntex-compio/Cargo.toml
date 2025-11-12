@@ -26,5 +26,5 @@ log = { workspace = true }
 compio-buf = "0.7"
 compio-io = "0.8"
 compio-net = "0.9"
-compio-driver = "0.9"
-compio-runtime = { version = "0.9", features = ["io-uring", "polling", "event"] }
+compio-runtime = "0.9"
+compio-driver = { version = "0.9", features = ["io-uring", "polling"] }
