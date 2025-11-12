@@ -145,7 +145,7 @@ mod compio {
     pub fn block_on<F: Future<Output = ()>>(fut: F) {
         log::info!(
             "Starting compio runtime, driver {:?}",
-            compio_driver::DriverType::current()
+            compio_runtime::Runtime::with_current(|rt| rt.driver_type())
         );
         let rt = Runtime::new().unwrap();
         rt.block_on(fut);
