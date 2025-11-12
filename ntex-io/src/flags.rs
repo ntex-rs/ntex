@@ -32,18 +32,12 @@ bitflags::bitflags! {
         const DSP_STOP            = 0b0001_0000_0000_0000;
         /// timeout occured
         const DSP_TIMEOUT         = 0b0010_0000_0000_0000;
-        /// keep-alive timeout occured
-        const DSP_KEEPALIVE       = 0b0100_0000_0000_0000;
     }
 }
 
 impl Flags {
     pub(crate) fn is_stopped(&self) -> bool {
         self.contains(Flags::IO_STOPPED)
-    }
-
-    pub(crate) fn is_keepalive(&self) -> bool {
-        self.contains(Flags::DSP_KEEPALIVE)
     }
 
     pub(crate) fn is_task_waiting_for_write(&self) -> bool {
