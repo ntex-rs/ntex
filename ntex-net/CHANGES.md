@@ -1,5 +1,9 @@
 # Changes
 
+## [2.9.0] - 2025-11-12
+
+* Update to compio 0.16
+
 ## [2.8.1] - 2025-09-24
 
 * Omitimize neon polling driver
