@@ -56,14 +56,17 @@
 pub mod buf;
 pub use crate::buf::{Buf, BufMut};
 
+mod bvec;
 mod bytes;
 mod debug;
 mod hex;
 mod pool;
 mod serde;
+mod storage;
 mod string;
 
-pub use crate::bytes::{Bytes, BytesMut, BytesVec};
+pub use crate::bvec::BytesVec;
+pub use crate::bytes::{Bytes, BytesMut};
 pub use crate::string::ByteString;
 
 #[doc(hidden)]

@@ -17,8 +17,6 @@ default = []
 # simd utf8 check support
 simd = ["simdutf8"]
 
-mpool = []
-
 [dependencies]
 bitflags = { workspace = true }
 bytes = "1"
@@ -30,4 +28,4 @@ simdutf8 = { version = "0.1.5", optional = true }
 serde_test = "1"
 serde_json = "1"
 ntex = "2"
-ntex-bytes = { path = ".", features = ["mpool"] }
+ntex-bytes = { path = "." }
