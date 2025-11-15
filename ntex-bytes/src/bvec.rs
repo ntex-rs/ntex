@@ -48,7 +48,7 @@ use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut, Bytes, BytesMut
 /// assert_eq!(b, b"hello");
 /// ```
 pub struct BytesVec {
-    inner: StorageVec,
+    pub(crate) inner: StorageVec,
 }
 
 /*
@@ -94,9 +94,8 @@ impl BytesVec {
 
     /// Creates a new `BytesVec` from slice, by copying it.
     pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
-        let s = src.as_ref();
         BytesVec {
-            inner: StorageVec::from_slice(s),
+            inner: StorageVec::from_slice(src.as_ref()),
         }
     }
 
@@ -489,10 +488,6 @@ impl BytesVec {
     pub fn iter(&'_ self) -> std::slice::Iter<'_, u8> {
         self.chunk().iter()
     }
-
-    pub fn info(&mut self) {
-        self.inner.info();
-    }
 }
 
 impl Buf for BytesVec {
@@ -508,7 +503,12 @@ impl Buf for BytesVec {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(cnt <= self.inner.len(), "cannot advance past `remaining`");
+        assert!(
+            cnt <= self.inner.len(),
+            "cannot advance past `remaining` len:{} delta:{}",
+            self.inner.len(),
+            cnt
+        );
         unsafe {
             self.inner.set_start(cnt as u32);
         }
@@ -523,10 +523,8 @@ impl BufMut for BytesVec {
 
     #[inline]
     unsafe fn advance_mut(&mut self, cnt: usize) {
-        let new_len = self.len() + cnt;
-
         // This call will panic if `cnt` is too big
-        self.inner.set_len(new_len);
+        self.inner.set_len(self.len() + cnt);
     }
 
     #[inline]
@@ -536,7 +534,6 @@ impl BufMut for BytesVec {
         unsafe {
             // This will never panic as `len` can never become invalid
             let ptr = &mut self.inner.as_raw()[len..];
-
             UninitSlice::from_raw_parts_mut(ptr.as_mut_ptr(), self.capacity() - len)
         }
     }

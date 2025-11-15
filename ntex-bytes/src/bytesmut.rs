@@ -518,10 +518,6 @@ impl BytesMut {
     pub fn iter(&'_ self) -> std::slice::Iter<'_, u8> {
         self.chunk().iter()
     }
-
-    pub fn is_inline(&self) -> bool {
-        self.inner.is_inline()
-    }
 }
 
 impl Buf for BytesMut {

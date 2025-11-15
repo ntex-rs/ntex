@@ -1080,7 +1080,7 @@ impl StorageVec {
                 }
             }
 
-            if len <= self.len() {
+            if len < self.len() {
                 self.set_len(len);
             }
         }
@@ -1103,10 +1103,7 @@ impl StorageVec {
 
     #[inline]
     pub(crate) fn reserve(&mut self, additional: usize) {
-        let len = self.len();
-        let rem = self.capacity() - len;
-
-        if additional <= rem {
+        if additional <= self.capacity() - self.len() {
             // The handle can already store at least `additional` more bytes, so
             // there is no further work needed to be done.
             return;
@@ -1136,8 +1133,10 @@ impl StorageVec {
                 inner.offset = SHARED_VEC_SIZE as u32;
 
                 // The capacity is sufficient, reclaim the buffer
-                let ptr = self.0.as_ptr() as *mut u8;
-                ptr::copy(ptr.add(offset as usize), ptr.add(SHARED_VEC_SIZE), len);
+                if len != 0 {
+                    let ptr = self.0.as_ptr() as *mut u8;
+                    ptr::copy(ptr.add(offset as usize), ptr.add(SHARED_VEC_SIZE), len);
+                }
             } else {
                 // Create a new vector storage
                 *self = StorageVec(NonNull::new_unchecked(SharedVec::create(
@@ -1157,9 +1156,17 @@ impl StorageVec {
 
     pub(crate) unsafe fn set_start(&mut self, start: u32) {
         if start != 0 {
-            assert!(start <= self.capacity() as u32);
-
+            let cap = self.capacity();
             let inner = self.as_inner();
+
+            assert!(
+                start <= cap as u32,
+                "Cannot set start position cap:{} offset:{} len:{} acap:{}",
+                inner.cap,
+                inner.offset,
+                inner.len,
+                cap
+            );
 
             // Updating the start of the view is setting `offset` to point to the
             // new start and updating the `len` field to reflect the new length
@@ -1171,13 +1178,6 @@ impl StorageVec {
             } else {
                 inner.len = 0;
             }
-        }
-    }
-
-    pub(crate) fn info(&mut self) {
-        unsafe {
-            let inner = self.as_inner();
-            println!("st == {:?} {:?} {:?}", inner.cap, inner.len, inner.offset);
         }
     }
 }
@@ -1348,5 +1348,22 @@ mod tests {
         let mut b = BytesMut::try_from(b).unwrap();
         b.put(".");
         assert_eq!(b, "hello world.");
+
+        // does not re-alloc
+        let mut bv = BytesVec::new();
+        bv.extend_from_slice(b"hello world.");
+        bv.extend_from_slice(b"hello world.");
+        bv.extend_from_slice(b"hello world.");
+        bv.extend_from_slice(b"hello world.");
+        let p1 = unsafe { bv.inner.as_ptr() as usize };
+
+        bv.advance(48);
+        assert!(bv.len() == 0);
+        assert!(bv.capacity() == 0);
+        bv.reserve(48);
+        assert!(bv.len() == 0);
+        assert!(bv.capacity() == 48);
+        let p2 = unsafe { bv.inner.as_ptr() as usize };
+        assert!(p1 == p2);
     }
 }
