@@ -39,7 +39,7 @@
 //! let b = buf.split();
 //! assert_eq!(b, b"goodbye world"[..]);
 //!
-//! assert_eq!(buf.capacity(), 998);
+//! assert_eq!(buf.capacity(), 1006);
 //! ```
 //!
 //! In the above example, only a single buffer of 1024 is allocated. The handles
@@ -58,6 +58,7 @@ pub use crate::buf::{Buf, BufMut};
 
 mod bvec;
 mod bytes;
+mod bytesmut;
 mod debug;
 mod hex;
 mod pool;
@@ -66,7 +67,8 @@ mod storage;
 mod string;
 
 pub use crate::bvec::BytesVec;
-pub use crate::bytes::{Bytes, BytesMut};
+pub use crate::bytes::Bytes;
+pub use crate::bytesmut::BytesMut;
 pub use crate::string::ByteString;
 
 #[doc(hidden)]

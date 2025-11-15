@@ -9,6 +9,7 @@ readme = "README.md"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]
 edition = "2021"
+rust-version = "1.82"
 license = "MIT OR Apache-2.0"
 
 [features]

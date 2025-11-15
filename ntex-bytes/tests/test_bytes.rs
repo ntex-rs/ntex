@@ -275,7 +275,7 @@ fn split_off_uninitialized() {
     assert_eq!(bytes.capacity(), 128);
 
     assert_eq!(other.len(), 0);
-    assert_eq!(other.capacity(), 896);
+    assert_eq!(other.capacity(), 904);
 }
 
 #[test]
@@ -706,7 +706,7 @@ fn reserve_convert() {
     // Vec -> Vec
     let mut bytes = BytesMut::from(LONG);
     bytes.reserve(64);
-    assert_eq!(bytes.capacity(), LONG.len() + 80);
+    assert_eq!(bytes.capacity(), LONG.len() + 72);
 
     // Arc -> Vec
     let mut bytes = BytesMut::from(Vec::from(LONG));
@@ -720,7 +720,7 @@ fn reserve_convert() {
     // Vec -> Vec
     let mut bytes = BytesVec::copy_from_slice(LONG);
     bytes.reserve(64);
-    assert_eq!(bytes.capacity(), LONG.len() + 80);
+    assert_eq!(bytes.capacity(), LONG.len() + 72);
 }
 
 // Without either looking at the internals of the BytesMut or doing weird stuff
@@ -741,12 +741,12 @@ fn reserve_vec_recycling() {
 #[test]
 fn reserve_recycling() {
     let mut bytes = BytesVec::with_capacity(16);
-    assert_eq!(bytes.capacity(), 32);
+    assert_eq!(bytes.capacity(), 48);
     bytes.put("0123456789012345".as_bytes());
     bytes.advance(10);
-    assert_eq!(bytes.capacity(), 22);
+    assert_eq!(bytes.capacity(), 38);
     bytes.reserve(32);
-    assert_eq!(bytes.capacity(), 64);
+    assert_eq!(bytes.capacity(), 38);
 }
 
 #[test]
@@ -756,7 +756,7 @@ fn reserve_in_arc_unique_does_not_overallocate() {
 
     // now bytes is Arc and refcount == 1
 
-    assert_eq!(1024, bytes.capacity());
+    assert_eq!(1008, bytes.capacity());
     bytes.reserve(2001);
     assert_eq!(2016, bytes.capacity());
 }
@@ -768,9 +768,9 @@ fn reserve_in_arc_unique_doubles() {
 
     // now bytes is Arc and refcount == 1
 
-    assert_eq!(1024, bytes.capacity());
+    assert_eq!(1008, bytes.capacity());
     bytes.reserve(1025);
-    assert_eq!(1056, bytes.capacity());
+    assert_eq!(1032, bytes.capacity());
 }
 
 #[test]
@@ -780,7 +780,7 @@ fn reserve_in_arc_nonunique_does_not_overallocate() {
 
     // now bytes is Arc and refcount == 2
 
-    assert_eq!(1024, bytes.capacity());
+    assert_eq!(1008, bytes.capacity());
     bytes.reserve(2001);
     assert_eq!(2016, bytes.capacity());
 }
