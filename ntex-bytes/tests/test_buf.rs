@@ -1,7 +1,7 @@
 #![deny(warnings, rust_2018_idioms)]
 #![allow(clippy::unnecessary_mut_passed)]
 
-use ntex_bytes::{Buf, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, BytesVec};
 
 #[test]
 fn test_fresh_cursor_vec() {
@@ -42,11 +42,29 @@ fn test_bytes() {
 #[test]
 fn test_bytes_mut() {
     let mut buf = BytesMut::from(b"hello");
+    assert_eq!(Buf::remaining(&buf), 5);
+    assert_eq!(Buf::chunk(&buf), b"hello");
+
+    assert_eq!(BufMut::remaining_mut(&mut buf), 25);
+    Buf::advance(&mut buf, 2);
+
+    assert_eq!(Buf::remaining(&buf), 3);
+    assert_eq!(Buf::chunk(&buf), b"llo");
+
+    Buf::advance(&mut buf, 3);
+
+    assert_eq!(Buf::remaining(&buf), 0);
+    assert_eq!(Buf::chunk(&buf), b"");
+}
+
+#[test]
+fn test_bytes_mut_buf() {
+    let mut buf = BytesMut::from(b"hello");
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 5);
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"hello");
 
-    assert_eq!(bytes::buf::BufMut::remaining_mut(&mut buf), 27);
+    assert_eq!(bytes::buf::BufMut::remaining_mut(&mut buf), 25);
     bytes::buf::Buf::advance(&mut buf, 2);
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 3);
@@ -56,6 +74,65 @@ fn test_bytes_mut() {
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 0);
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"");
+
+    bytes::buf::BufMut::put_slice(&mut buf, b"12");
+    bytes::buf::BufMut::put_u8(&mut buf, b'3');
+    bytes::buf::BufMut::put_i8(&mut buf, b'4' as i8);
+    unsafe {
+        bytes::buf::BufMut::advance_mut(&mut buf, 2);
+        let c = bytes::buf::BufMut::chunk_mut(&mut buf);
+        *c.as_mut_ptr() = b'5';
+        assert!(c.as_mut_ptr().as_ref().unwrap() == &b'5');
+    }
+    assert_eq!(&bytes::buf::Buf::chunk(&buf)[..4], b"1234");
+}
+
+#[test]
+fn test_bytes_vec() {
+    let mut buf = BytesVec::from(b"hello");
+    assert_eq!(Buf::remaining(&buf), 5);
+    assert_eq!(Buf::chunk(&buf), b"hello");
+
+    assert_eq!(BufMut::remaining_mut(&mut buf), 43);
+    Buf::advance(&mut buf, 2);
+
+    assert_eq!(Buf::remaining(&buf), 3);
+    assert_eq!(Buf::chunk(&buf), b"llo");
+
+    Buf::advance(&mut buf, 3);
+
+    assert_eq!(Buf::remaining(&buf), 0);
+    assert_eq!(Buf::chunk(&buf), b"");
+}
+
+#[test]
+fn test_bytes_vec_buf() {
+    let mut buf = BytesVec::from(b"hello");
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 5);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"hello");
+
+    assert_eq!(bytes::buf::BufMut::remaining_mut(&mut buf), 43);
+    bytes::buf::Buf::advance(&mut buf, 2);
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 3);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"llo");
+
+    bytes::buf::Buf::advance(&mut buf, 3);
+
+    assert_eq!(bytes::buf::Buf::remaining(&buf), 0);
+    assert_eq!(bytes::buf::Buf::chunk(&buf), b"");
+
+    bytes::buf::BufMut::put_slice(&mut buf, b"12");
+    bytes::buf::BufMut::put_u8(&mut buf, b'3');
+    bytes::buf::BufMut::put_i8(&mut buf, b'4' as i8);
+    unsafe {
+        bytes::buf::BufMut::advance_mut(&mut buf, 2);
+        let c = bytes::buf::BufMut::chunk_mut(&mut buf);
+        *c.as_mut_ptr() = b'5';
+        assert!(c.as_mut_ptr().as_ref().unwrap() == &b'5');
+    }
+    assert_eq!(&bytes::buf::Buf::chunk(&buf)[..4], b"1234");
 }
 
 #[test]
