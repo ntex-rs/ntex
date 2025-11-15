@@ -74,6 +74,16 @@ fn test_bytes_mut_buf() {
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 0);
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"");
+
+    bytes::buf::BufMut::put_slice(&mut buf, b"12");
+    bytes::buf::BufMut::put_u8(&mut buf, b'3');
+    bytes::buf::BufMut::put_i8(&mut buf, b'4' as i8);
+    unsafe {
+        bytes::buf::BufMut::advance_mut(&mut buf, 2);
+        let c = bytes::buf::BufMut::chunk_mut(&mut buf);
+        assert!(c.as_mut_ptr().as_ref().unwrap() == &0);
+    }
+    assert_eq!(&bytes::buf::Buf::chunk(&buf)[..4], b"1234");
 }
 
 #[test]
@@ -111,6 +121,16 @@ fn test_bytes_vec_buf() {
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 0);
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"");
+
+    bytes::buf::BufMut::put_slice(&mut buf, b"12");
+    bytes::buf::BufMut::put_u8(&mut buf, b'3');
+    bytes::buf::BufMut::put_i8(&mut buf, b'4' as i8);
+    unsafe {
+        bytes::buf::BufMut::advance_mut(&mut buf, 2);
+        let c = bytes::buf::BufMut::chunk_mut(&mut buf);
+        assert!(c.as_mut_ptr().as_ref().unwrap() == &0);
+    }
+    assert_eq!(&bytes::buf::Buf::chunk(&buf)[..4], b"1234");
 }
 
 #[test]
