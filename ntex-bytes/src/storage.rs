@@ -1358,10 +1358,10 @@ mod tests {
         let p1 = unsafe { bv.inner.as_ptr() as usize };
 
         bv.advance(48);
-        assert!(bv.len() == 0);
+        assert!(bv.is_empty());
         assert!(bv.capacity() == 0);
         bv.reserve(48);
-        assert!(bv.len() == 0);
+        assert!(bv.is_empty());
         assert!(bv.capacity() == 48);
         let p2 = unsafe { bv.inner.as_ptr() as usize };
         assert!(p1 == p2);
