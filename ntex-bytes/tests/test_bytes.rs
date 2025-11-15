@@ -1,7 +1,7 @@
 #![allow(clippy::op_ref, clippy::let_underscore_future)]
-use std::{borrow::Borrow, borrow::BorrowMut, task::Poll};
+use std::{borrow::Borrow, borrow::BorrowMut};
 
-use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef};
+use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, BytesVec};
 
 const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &[u8] = b"hello world";
@@ -9,11 +9,6 @@ const SHORT: &[u8] = b"hello world";
 fn inline_cap() -> usize {
     use std::mem;
     4 * mem::size_of::<usize>() - 1
-}
-
-const fn shared_vec() -> usize {
-    use std::mem;
-    3 * mem::size_of::<usize>() + 8
 }
 
 fn is_sync<T: Sync>() {}
@@ -66,13 +61,6 @@ fn from_slice() {
     assert_eq!(Vec::from(&b"abcdefgh"[..]), a);
 
     let a = BytesVec::copy_from_slice(&b"abcdefgh"[..]);
-    assert_eq!(a, b"abcdefgh"[..]);
-    assert_eq!(a, &b"abcdefgh"[..]);
-    assert_eq!(b"abcdefgh"[..], a);
-    assert_eq!(&b"abcdefgh"[..], a);
-    assert_eq!(Vec::from(&b"abcdefgh"[..]), a);
-
-    let a = BytesVec::copy_from_slice_in(&b"abcdefgh"[..], PoolId::P10);
     assert_eq!(a, b"abcdefgh"[..]);
     assert_eq!(a, &b"abcdefgh"[..]);
     assert_eq!(b"abcdefgh"[..], a);
@@ -282,7 +270,7 @@ fn split_off_uninitialized() {
     assert_eq!(bytes.capacity(), 128);
 
     assert_eq!(other.len(), 0);
-    assert_eq!(other.capacity(), 896);
+    assert_eq!(other.capacity(), 904);
 }
 
 #[test]
@@ -713,7 +701,7 @@ fn reserve_convert() {
     // Vec -> Vec
     let mut bytes = BytesMut::from(LONG);
     bytes.reserve(64);
-    assert_eq!(bytes.capacity(), LONG.len() + 80);
+    assert_eq!(bytes.capacity(), LONG.len() + 72);
 
     // Arc -> Vec
     let mut bytes = BytesMut::from(Vec::from(LONG));
@@ -727,7 +715,7 @@ fn reserve_convert() {
     // Vec -> Vec
     let mut bytes = BytesVec::copy_from_slice(LONG);
     bytes.reserve(64);
-    assert_eq!(bytes.capacity(), LONG.len() + 80);
+    assert_eq!(bytes.capacity(), LONG.len() + 72);
 }
 
 // Without either looking at the internals of the BytesMut or doing weird stuff
@@ -748,12 +736,12 @@ fn reserve_vec_recycling() {
 #[test]
 fn reserve_recycling() {
     let mut bytes = BytesVec::with_capacity(16);
-    assert_eq!(bytes.capacity(), 32);
+    assert_eq!(bytes.capacity(), 48);
     bytes.put("0123456789012345".as_bytes());
     bytes.advance(10);
-    assert_eq!(bytes.capacity(), 22);
+    assert_eq!(bytes.capacity(), 38);
     bytes.reserve(32);
-    assert_eq!(bytes.capacity(), 64);
+    assert_eq!(bytes.capacity(), 38);
 }
 
 #[test]
@@ -763,7 +751,7 @@ fn reserve_in_arc_unique_does_not_overallocate() {
 
     // now bytes is Arc and refcount == 1
 
-    assert_eq!(1024, bytes.capacity());
+    assert_eq!(1008, bytes.capacity());
     bytes.reserve(2001);
     assert_eq!(2016, bytes.capacity());
 }
@@ -775,9 +763,9 @@ fn reserve_in_arc_unique_doubles() {
 
     // now bytes is Arc and refcount == 1
 
-    assert_eq!(1024, bytes.capacity());
+    assert_eq!(1008, bytes.capacity());
     bytes.reserve(1025);
-    assert_eq!(1056, bytes.capacity());
+    assert_eq!(1032, bytes.capacity());
 }
 
 #[test]
@@ -787,7 +775,7 @@ fn reserve_in_arc_nonunique_does_not_overallocate() {
 
     // now bytes is Arc and refcount == 2
 
-    assert_eq!(1024, bytes.capacity());
+    assert_eq!(1008, bytes.capacity());
     bytes.reserve(2001);
     assert_eq!(2016, bytes.capacity());
 }
@@ -1066,121 +1054,4 @@ fn bytes_vec() {
         *buf = BytesMut::from(b"12345".to_vec());
     });
     assert_eq!(bytes, "12345");
-}
-
-#[test]
-fn pool() {
-    assert_eq!(PoolRef::default().id(), PoolId::DEFAULT);
-    assert!(format!("{:?}", PoolRef::default()).contains("PoolRef"));
-
-    assert_eq!(Pool::from(PoolRef::default()).id(), PoolId::DEFAULT);
-    assert!(format!("{:?}", Pool::from(PoolId::DEFAULT)).contains("Pool"));
-
-    // Pool
-    let p1 = PoolId::P1.pool_ref();
-    assert_eq!(p1.allocated(), 0);
-    let mut buf = BytesMut::with_capacity_in(1024, p1);
-    assert_eq!(p1.allocated(), 1024 + shared_vec());
-    buf.reserve(2048);
-    assert_eq!(p1.allocated(), 2048 + shared_vec());
-    drop(buf);
-    assert_eq!(p1.allocated(), 0);
-
-    // Default pool
-    let p = PoolId::DEFAULT.pool_ref();
-    assert_eq!(p.allocated(), 0);
-    let mut buf = BytesMut::with_capacity(1024);
-    assert_eq!(p.allocated(), 1024 + shared_vec());
-    buf.reserve(2048);
-    assert_eq!(p.allocated(), 2048 + shared_vec());
-    drop(buf);
-    assert_eq!(p.allocated(), 0);
-
-    let mut buf = BytesMut::with_capacity(1024);
-    assert_eq!(p.allocated(), 1024 + shared_vec());
-    assert_eq!(p1.allocated(), 0);
-    p1.move_in(&mut buf);
-    assert_eq!(p.allocated(), 0);
-    assert_eq!(p1.allocated(), 1024 + shared_vec());
-
-    let mut buf = BytesMut::from(Vec::with_capacity(1024));
-    assert_eq!(p.allocated(), 992 + shared_vec());
-    assert_eq!(p1.allocated(), 1056);
-    p1.move_in(&mut buf);
-    assert_eq!(p.allocated(), 0);
-    assert_eq!(p1.allocated(), 2048 + shared_vec());
-
-    let p1 = PoolId::P2.pool_ref();
-    let mut buf = BytesVec::with_capacity(1024);
-    assert_eq!(p.allocated(), 1024 + shared_vec());
-    assert_eq!(p1.allocated(), 0);
-    p1.move_vec_in(&mut buf);
-    assert_eq!(p.allocated(), 0);
-    assert_eq!(p1.allocated(), 1024 + shared_vec());
-
-    let p3 = PoolId::P3.pool_ref();
-    assert_eq!(p3.id(), PoolId::P3);
-    let b: BytesMut = p3.buf_with_capacity(1024);
-    assert_eq!(b.capacity(), 992 + shared_vec());
-    assert_eq!(p3.allocated(), 1024 + shared_vec());
-
-    let b: BytesVec = p3.vec_with_capacity(1024);
-    assert_eq!(b.capacity(), 992 + shared_vec());
-    assert_eq!(p3.allocated(), 2080 + shared_vec());
-}
-
-#[ntex::test]
-async fn pool_usage() {
-    use ntex::{time, util};
-
-    PoolId::set_spawn_fn_all(|f| {
-        let _ = ntex::rt::spawn(f);
-    });
-
-    let p_ref = PoolId::P1.set_pool_size(10 * 1024);
-    let p1 = p_ref.pool();
-    let p2 = p_ref.pool().clone();
-
-    let p_ref2 = PoolRef::from(&p1);
-    assert_eq!(p_ref2.read_params_high(), 4096);
-    assert_eq!(p_ref2.write_params_high(), 4096);
-    p_ref2.id().set_spawn_fn(|f| {
-        let _ = ntex::rt::spawn(f);
-    });
-
-    assert_eq!(Poll::Ready(()), util::lazy(|cx| p1.poll_ready(cx)).await);
-
-    let buf = BytesMut::with_capacity_in(11 * 1024, p_ref);
-    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
-    assert!(!p1.is_ready());
-    assert_eq!(Poll::Pending, util::lazy(|cx| p2.poll_ready(cx)).await);
-    assert!(!p2.is_ready());
-    time::sleep(time::Millis(50)).await;
-    drop(buf);
-
-    time::sleep(time::Millis(50)).await;
-    assert!(p1.is_ready());
-    assert!(p2.is_ready());
-
-    assert_eq!(Poll::Ready(()), util::lazy(|cx| p1.poll_ready(cx)).await);
-    assert_eq!(Poll::Ready(()), util::lazy(|cx| p2.poll_ready(cx)).await);
-
-    // pool is full
-    let buf = BytesMut::with_capacity_in(11 * 1024, p_ref);
-    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
-    assert_eq!(Poll::Pending, util::lazy(|cx| p2.poll_ready(cx)).await);
-    drop(buf);
-
-    // pool has some space
-    let buf = BytesMut::with_capacity_in(10100, p_ref);
-    time::sleep(time::Millis(50)).await;
-    assert!(p1.is_ready());
-    assert!(!p2.is_ready());
-
-    // new pools should wait for next update
-    assert_eq!(Poll::Pending, util::lazy(|cx| p1.poll_ready(cx)).await);
-    drop(buf);
-    time::sleep(time::Millis(50)).await;
-    assert!(p1.is_ready());
-    assert!(p2.is_ready());
 }

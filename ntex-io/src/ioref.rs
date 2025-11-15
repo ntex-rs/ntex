@@ -237,16 +237,10 @@ impl IoRef {
     }
 
     #[doc(hidden)]
-    #[inline]
-    /// Keep-alive error
-    pub fn is_keepalive(&self) -> bool {
-        self.0.flags.get().is_keepalive()
-    }
-
+    #[deprecated]
     #[inline]
     /// Wakeup dispatcher and send keep-alive error
     pub fn notify_keepalive(&self) {
-        self.0.insert_flags(Flags::DSP_KEEPALIVE);
         self.0.notify_timeout()
     }
 

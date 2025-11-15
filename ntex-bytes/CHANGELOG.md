@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.31] (2025-11-15)
+
+* Refactor code structure
+
 ## [0.1.30] (2025-06-26)
 
 * Add helper PartialEq to ByteString

@@ -1,5 +1,6 @@
-use crate::{Bytes, BytesMut, BytesVec};
 use std::fmt::{Formatter, LowerHex, Result, UpperHex};
+
+use crate::{Bytes, BytesMut, BytesVec};
 
 struct BytesRef<'a>(&'a [u8]);
 

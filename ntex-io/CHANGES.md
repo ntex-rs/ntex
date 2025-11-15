@@ -1,5 +1,9 @@
 # Changes
 
+## [2.15.1] - 2025-11-12
+
+* Resolve keep-alive handling for the dispatcher's idle state
+
 ## [2.15.0] - 2025-11-06
 
 * Api for forcing keep-alive error

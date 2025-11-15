@@ -124,6 +124,7 @@ where
                     Ok(size) => {
                         buf.0.advance(size);
                         if buf.0.is_empty() {
+                            buf.0.clear();
                             Ok(())
                         } else {
                             continue;
