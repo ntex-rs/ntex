@@ -11,11 +11,6 @@ fn inline_cap() -> usize {
     4 * mem::size_of::<usize>() - 1
 }
 
-const fn shared_vec() -> usize {
-    use std::mem;
-    3 * mem::size_of::<usize>() + 8
-}
-
 fn is_sync<T: Sync>() {}
 fn is_send<T: Send>() {}
 
