@@ -11,7 +11,7 @@ categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
 build = "build.rs"
-rust-version = "1.75"
+rust-version = "1.83"
 
 [lib]
 name = "ntex_service"
