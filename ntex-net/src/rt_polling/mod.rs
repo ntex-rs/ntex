@@ -60,7 +60,7 @@ pub fn active_stream_ops() -> usize {
 #[cfg(all(target_os = "linux", feature = "neon"))]
 #[cfg(test)]
 mod tests {
-    use ntex::{io::Io, time::sleep, time::Millis, util::PoolId};
+    use ntex::{io::Io, io::IoConfig, time::sleep, time::Millis};
     use std::sync::{Arc, Mutex};
 
     use crate::connect::Connect;
@@ -89,7 +89,6 @@ mod tests {
 
     #[ntex::test]
     async fn idle_disconnect() {
-        PoolId::P5.set_read_params(24, 12);
         let (tx, rx) = ::oneshot::channel();
         let tx = Arc::new(Mutex::new(Some(tx)));
 
@@ -107,9 +106,10 @@ mod tests {
             })
         });
 
+        let cfg = IoConfig::build("NEON").set_read_buf(24, 12, 16).finish();
+
         let msg = Connect::new(server.addr());
-        let io = crate::connect::connect(msg).await.unwrap();
-        io.set_memory_pool(PoolId::P5.into());
+        let io = crate::connect::connect_with(msg, cfg).await.unwrap();
         rx.await.unwrap();
 
         io.on_disconnect().await;

@@ -26,6 +26,15 @@ impl<T> Connector<T> {
         }
     }
 
+    /// Construct new connect service with default dns resolver
+    pub fn with(cfg: IoConfig) -> Self {
+        Connector {
+            cfg,
+            resolver: Resolver::new(),
+            timeout: Millis::ZERO,
+        }
+    }
+
     /// Set io config
     ///
     /// Set config for new io object.

@@ -275,7 +275,7 @@ impl LocalCache {
     {
         let cache = unsafe { &mut *self.cache.get() };
 
-        while cache.len() < idx {
+        while cache.len() <= idx {
             cache.push(Vec::new())
         }
         f(&mut cache[idx])
