@@ -332,7 +332,7 @@ impl WriteContextBuf {
             }
             flags.insert(Flags::WR_PAUSED);
             inner.flags.set(flags);
-        } else if flags.contains(Flags::BUF_W_BACKPRESSURE) && len < inner.write_buf().half
+        } else if flags.contains(Flags::BUF_W_BACKPRESSURE) && len <= inner.write_buf().half
         {
             flags.remove(Flags::BUF_W_BACKPRESSURE);
             inner.flags.set(flags);

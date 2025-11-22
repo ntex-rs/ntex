@@ -601,27 +601,18 @@ mod tests {
     {
         /// Construct new `Dispatcher` instance
         pub(crate) fn debug(io: Io, codec: U, service: S) -> (Self, State) {
-            let cfg = IoConfig::build("DBG")
-                .set_keepalive_timeout(Seconds(1))
-                .finish();
-            io.set_config(cfg);
-            Self::debug_cfg(io, codec, service)
-        }
-
-        /// Construct new `Dispatcher` instance
-        pub(crate) fn debug_cfg(state: Io, codec: U, service: S) -> (Self, State) {
-            let flags = if state.cfg().keepalive_timeout().is_zero() {
+            let flags = if io.cfg().keepalive_timeout().is_zero() {
                 super::Flags::empty()
             } else {
                 super::Flags::KA_ENABLED
             };
 
-            let inner = State(state.get_ref());
-            state.start_timer(Seconds::ONE);
+            let inner = State(io.get_ref());
+            io.start_timer(Seconds::ONE);
 
             let shared = Rc::new(DispatcherShared {
                 codec,
-                io: state.into(),
+                io: io.into(),
                 flags: Cell::new(flags),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
@@ -877,9 +868,9 @@ mod tests {
         sleep(Millis(50)).await;
         assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 55296);
 
-        client.remote_buffer_cap(45056);
+        client.remote_buffer_cap(48056);
         sleep(Millis(50)).await;
-        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 10240);
+        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 7240);
 
         // backpressure disabled
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1, 2]);
@@ -947,7 +938,7 @@ mod tests {
             .set_keepalive_timeout(Seconds(1))
             .finish();
 
-        let (disp, state) = Dispatcher::debug_cfg(
+        let (disp, state) = Dispatcher::debug(
             Io::new(server, cfg),
             BytesCodec,
             ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
@@ -995,7 +986,7 @@ mod tests {
             .set_frame_read_rate(Seconds(1), Seconds(2), 2)
             .finish();
 
-        let (disp, state) = Dispatcher::debug_cfg(
+        let (disp, state) = Dispatcher::debug(
             Io::new(server, cfg),
             BCodec(8),
             ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
@@ -1045,7 +1036,7 @@ mod tests {
             .set_frame_read_rate(Seconds(1), Seconds(2), 2)
             .finish();
 
-        let (disp, _) = Dispatcher::debug_cfg(
+        let (disp, _) = Dispatcher::debug(
             Io::new(server, cfg),
             BCodec(1),
             ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
@@ -1163,7 +1154,7 @@ mod tests {
         );
         let ioref = io.get_ref();
 
-        let (disp, state) = Dispatcher::debug_cfg(
+        let (disp, state) = Dispatcher::debug(
             io,
             BCodec(1),
             ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {

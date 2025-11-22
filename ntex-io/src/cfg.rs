@@ -25,10 +25,10 @@ pub struct IoConfig(&'static IoConfigInner);
 /// Construct shared configuration
 pub struct IoConfigBuilder(IoConfigInner);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 /// Shared configuration
 struct IoConfigInner {
-    tag: &'static str,
+    tag: String,
     keepalive_timeout: Seconds,
     disconnect_timeout: Seconds,
     frame_read_rate: Option<FrameReadRate>,
@@ -64,16 +64,16 @@ impl Default for IoConfig {
 impl IoConfig {
     #[inline]
     /// Create new config object
-    pub fn new(tag: &'static str) -> IoConfig {
+    pub fn new<T: AsRef<str>>(tag: T) -> IoConfig {
         IoConfig::build(tag).finish()
     }
 
     /// Construct new configuration
-    pub fn build(tag: &'static str) -> IoConfigBuilder {
+    pub fn build<T: AsRef<str>>(tag: T) -> IoConfigBuilder {
         let idx1 = IDX.fetch_add(1, Ordering::SeqCst);
         let idx2 = IDX.fetch_add(1, Ordering::SeqCst);
         IoConfigBuilder(IoConfigInner {
-            tag,
+            tag: tag.as_ref().to_string(),
             keepalive_timeout: Seconds(0),
             disconnect_timeout: Seconds(1),
             frame_read_rate: None,
@@ -98,7 +98,7 @@ impl IoConfig {
     #[inline]
     /// Get keep-alive timeout
     pub fn tag(&self) -> &'static str {
-        self.0.tag
+        self.0.tag.as_ref()
     }
 
     #[inline]
@@ -134,8 +134,8 @@ impl IoConfig {
 
 impl IoConfigBuilder {
     /// Set tag
-    pub fn set_tag(&mut self, tag: &'static str) -> &mut Self {
-        self.0.tag = tag;
+    pub fn set_tag<T: AsRef<str>>(&mut self, tag: T) -> &mut Self {
+        self.0.tag = tag.as_ref().to_string();
         self
     }
 
@@ -217,7 +217,7 @@ impl IoConfigBuilder {
 
     /// Build static ref
     pub fn finish(&self) -> IoConfig {
-        IoConfig(Box::leak(Box::new(self.0)))
+        IoConfig(Box::leak(Box::new(self.0.clone())))
     }
 }
 
