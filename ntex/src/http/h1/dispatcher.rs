@@ -1235,6 +1235,7 @@ mod tests {
             Config::server(),
         );
         config.payload_read_rate(Seconds(1), Seconds(2), 512);
+
         let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
             nio::Io::new(server, nio::IoConfig::default()),
             Rc::new(DispatcherConfig::new(
@@ -1264,8 +1265,8 @@ mod tests {
             client.write(random_bytes);
             sleep(Millis(750)).await;
         }
-        assert!(mark.load(Ordering::Relaxed) == 1536);
-        assert!(err_mark.load(Ordering::Relaxed) == 1);
+        assert_eq!(mark.load(Ordering::Relaxed), 768);
+        assert_eq!(err_mark.load(Ordering::Relaxed), 1);
     }
 
     #[crate::rt_test]

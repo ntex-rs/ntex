@@ -1,6 +1,6 @@
 [package]
 name = "ntex-macros"
-version = "0.1.4"
+version = "0.1.5"
 description = "ntex proc macros"
 readme = "README.md"
 authors = ["ntex contributors <team@ntex.rs>"]
