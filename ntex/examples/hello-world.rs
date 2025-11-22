@@ -14,7 +14,6 @@ async fn main() -> io::Result<()> {
         .bind("hello-world", "127.0.0.1:8080", |_| {
             HttpService::build()
                 .headers_read_rate(Seconds(1), Seconds(3), 128)
-                .disconnect_timeout(Seconds(1))
                 .finish(|_req| {
                     info!("{:?}", _req);
                     let mut res = Response::Ok();

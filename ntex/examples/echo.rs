@@ -15,7 +15,6 @@ async fn main() -> io::Result<()> {
         .bind("echo", "127.0.0.1:8080", |_| {
             HttpService::build()
                 .headers_read_rate(Seconds(1), Seconds(5), 128)
-                .disconnect_timeout(Seconds(1))
                 .finish(|mut req: Request| async move {
                     let mut body = BytesMut::new();
                     while let Some(item) = req.payload().next().await {

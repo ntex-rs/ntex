@@ -40,7 +40,6 @@ async fn main() -> io::Result<()> {
         .bind("basic", "127.0.0.1:8443", move |_| {
             HttpService::build()
                 .client_timeout(Seconds(1))
-                .disconnect_timeout(Seconds(1))
                 .h2(|req| {
                     info!("{:?}", req);
                     let mut res = Response::Ok();
