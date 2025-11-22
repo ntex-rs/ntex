@@ -1,7 +1,6 @@
 use std::{fmt, sync::Arc, task::Context};
 
-use ntex_bytes::{Pool, PoolRef};
-use ntex_net::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
 use ntex_util::{future::join_all, services::Counter, HashMap};
 
@@ -132,17 +131,8 @@ impl ServiceFactory<Connection> for StreamService {
                     log::trace!("Constructed server service for {:?}", info.tokens);
                     services.push(svc);
                     let idx = services.len() - 1;
-                    for (token, tag) in &info.tokens {
-                        tokens.insert(
-                            *token,
-                            (
-                                idx,
-                                *tag,
-                                info.name.clone(),
-                                info.pool.pool(),
-                                info.pool.pool_ref(),
-                            ),
-                        );
+                    for (token, cfg) in &info.tokens {
+                        tokens.insert(*token, (idx, info.name.clone(), *cfg));
                     }
                 }
                 Err(_) => {
@@ -162,7 +152,7 @@ impl ServiceFactory<Connection> for StreamService {
 }
 
 pub struct StreamServiceImpl {
-    tokens: HashMap<Token, (usize, &'static str, Arc<str>, Pool, PoolRef)>,
+    tokens: HashMap<Token, (usize, Arc<str>, IoConfig)>,
     services: Vec<BoxService>,
     conns: Counter,
     on_accept: Option<Box<dyn OnAccept + Send>>,
@@ -188,9 +178,9 @@ impl Service<Connection> for StreamServiceImpl {
         }
         for (idx, svc) in self.services.iter().enumerate() {
             if ctx.ready(svc).await.is_err() {
-                for (idx_, tag, _, _, _) in self.tokens.values() {
+                for (idx_, _, cfg) in self.tokens.values() {
                     if idx == *idx_ {
-                        log::error!("{tag}: Service readiness has failed");
+                        log::error!("{}: Service readiness has failed", cfg.tag());
                         break;
                     }
                 }
@@ -218,7 +208,7 @@ impl Service<Connection> for StreamServiceImpl {
     }
 
     async fn call(&self, con: Connection, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
-        if let Some((idx, tag, name, _, pool)) = self.tokens.get(&con.token) {
+        if let Some((idx, name, cfg)) = self.tokens.get(&con.token) {
             let mut io = con.io;
             if let Some(ref f) = self.on_accept {
                 match f.run(name.clone(), io).await {
@@ -227,12 +217,10 @@ impl Service<Connection> for StreamServiceImpl {
                 }
             }
 
-            let stream: Io<_> = io.try_into().map_err(|e| {
+            let stream = io.convert(*cfg).map_err(|e| {
                 log::error!("Cannot convert to an async io stream: {e}");
             })?;
 
-            stream.set_tag(tag);
-            stream.set_memory_pool(*pool);
             let guard = self.conns.get();
             let _ = ctx.call(&self.services[*idx], stream).await;
             drop(guard);

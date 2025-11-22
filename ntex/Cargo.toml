@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.17.0"
+version = "2.18.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -15,7 +15,7 @@ categories = [
 ]
 license = "MIT OR Apache-2.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.83"
 
 [package.metadata.docs.rs]
 toolchain = "nightly"
@@ -72,14 +72,14 @@ ntex-http = "0.1.15"
 ntex-router = "0.5"
 ntex-service = "3.5"
 ntex-macros = "0.1"
-ntex-util = "2.14"
+ntex-util = "2.15"
 ntex-bytes = "0.1.31"
-ntex-server = "2.8.1"
-ntex-h2 = "1.14.2"
+ntex-server = "2.9"
+ntex-h2 = "1.15"
 ntex-rt = "0.4.33"
-ntex-io = "2.15.1"
-ntex-net = "2.9.0"
-ntex-tls = "2.3"
+ntex-io = "2.16"
+ntex-net = "2.10"
+ntex-tls = "2.7"
 
 base64 = { workspace = true }
 bitflags = { workspace = true }

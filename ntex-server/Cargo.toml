@@ -1,6 +1,6 @@
 [package]
 name = "ntex-server"
-version = "2.8.1"
+version = "2.9.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Server for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -16,11 +16,11 @@ name = "ntex_server"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "0.1"
-ntex-net = "2"
-ntex-service = "3.4"
+ntex-io = "2.16"
+ntex-net = "2.10"
+ntex-service = "3.5"
 ntex-rt = "0.4"
-ntex-util = "2.8"
+ntex-util = "2.15"
 
 async-channel = { workspace = true }
 atomic-waker = { workspace = true }

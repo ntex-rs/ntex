@@ -339,3 +339,63 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
 
     result.into()
 }
+
+/// Marks async test function to be executed by ntex runtime.
+///
+/// ## Usage
+///
+/// ```no_run
+/// #[ntex::test]
+/// async fn my_test() {
+///     assert!(true);
+/// }
+/// ```
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(item as syn::ItemFn);
+
+    let ret = &input.sig.output;
+    let name = &input.sig.ident;
+    let body = &input.block;
+    let attrs = &input.attrs;
+    let mut has_test_attr = false;
+
+    for attr in attrs {
+        if attr.path.is_ident("test") {
+            has_test_attr = true;
+        }
+    }
+
+    if input.sig.asyncness.is_none() {
+        return syn::Error::new_spanned(
+            input.sig.fn_token,
+            format!("only async fn is supported, {}", input.sig.ident),
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let result = if has_test_attr {
+        quote! {
+            #(#attrs)*
+            fn #name() #ret {
+                crate::util::enable_test_logging();
+                ntex_rt::System::new("test")
+                    .block_on(async { #body })
+            }
+        }
+    } else {
+        quote! {
+            #[test]
+            #(#attrs)*
+            fn #name() #ret {
+                crate::util::enable_test_logging();
+                ntex_rt::System::new("test")
+                    .block_on(async { #body })
+            }
+        }
+    };
+
+    result.into()
+}

@@ -19,7 +19,6 @@ async fn test_h1() {
         HttpService::build()
             .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
             .keep_alive(KeepAlive::Disabled)
-            .disconnect_timeout(Seconds(1))
             .h1(|req: Request| {
                 assert!(req.peer_addr().is_some());
                 Ready::Ok::<_, io::Error>(Response::Ok().finish())
@@ -35,7 +34,6 @@ async fn test_h1_2() {
     let srv = test_server(|| {
         HttpService::build()
             .keep_alive(KeepAlive::Disabled)
-            .disconnect_timeout(Seconds(1))
             .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
             .finish(|req: Request| {
                 assert!(req.peer_addr().is_some());

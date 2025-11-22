@@ -78,19 +78,6 @@ where
         self
     }
 
-    /// Set server connection disconnect timeout in seconds.
-    ///
-    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
-    /// within this time, the connection get dropped.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default disconnect timeout is set to 1 seconds.
-    pub fn disconnect_timeout(mut self, timeout: Seconds) -> Self {
-        self.config.disconnect_timeout(timeout);
-        self
-    }
-
     /// Set server ssl handshake timeout.
     ///
     /// Defines a timeout for connection ssl handshake negotiation.
@@ -113,7 +100,7 @@ where
         mut self,
         timeout: Seconds,
         max_timeout: Seconds,
-        rate: u16,
+        rate: u32,
     ) -> Self {
         self.config.headers_read_rate(timeout, max_timeout, rate);
         self
@@ -130,7 +117,7 @@ where
         mut self,
         timeout: Seconds,
         max_timeout: Seconds,
-        rate: u16,
+        rate: u32,
     ) -> Self {
         self.config.payload_read_rate(timeout, max_timeout, rate);
         self

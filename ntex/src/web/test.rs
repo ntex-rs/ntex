@@ -12,7 +12,7 @@ use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 #[cfg(feature = "ws")]
-use crate::io::Sealed;
+use crate::io::{IoConfig, Sealed};
 use crate::router::{Path, ResourceDef};
 use crate::service::{
     map_config, IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory,
@@ -688,7 +688,7 @@ where
                 },
             }
             .unwrap()
-            .set_tag("test", "WEB-SRV")
+            .set_config("test", IoConfig::new("WEB-SRV"))
             .run();
 
             crate::rt::spawn(async move {
@@ -716,7 +716,6 @@ where
                     .lifetime(Seconds::ZERO)
                     .keep_alive(Seconds(60))
                     .timeout(Millis(90_000))
-                    .disconnect_timeout(Seconds(5))
                     .openssl(builder.build())
                     .finish()
             }

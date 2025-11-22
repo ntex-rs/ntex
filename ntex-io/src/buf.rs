@@ -1,9 +1,9 @@
 use std::{cell::Cell, fmt};
 
-use ntex_bytes::{BytesVec, PoolRef};
+use ntex_bytes::BytesVec;
 use ntex_util::future::Either;
 
-use crate::IoRef;
+use crate::{cfg::BufConfig, IoRef};
 
 #[derive(Default)]
 pub(crate) struct Buffer {
@@ -126,7 +126,7 @@ impl Stack {
 
     pub(crate) fn set_read_source(&self, io: &IoRef, buf: BytesVec) {
         if buf.is_empty() {
-            io.memory_pool().release_read_buf(buf);
+            io.cfg().read_buf().release(buf);
         } else {
             self.get_last_level().read.set(Some(buf));
         }
@@ -140,7 +140,7 @@ impl Stack {
         let mut rb = item
             .read
             .take()
-            .unwrap_or_else(|| io.memory_pool().get_read_buf());
+            .unwrap_or_else(|| io.cfg().read_buf().get());
 
         let result = f(&mut rb);
 
@@ -151,7 +151,7 @@ impl Stack {
         }
 
         if rb.is_empty() {
-            io.memory_pool().release_read_buf(rb);
+            io.cfg().read_buf().release(rb);
         } else {
             item.read.set(Some(rb));
         }
@@ -181,11 +181,11 @@ impl Stack {
         let mut wb = item
             .write
             .take()
-            .unwrap_or_else(|| io.memory_pool().get_write_buf());
+            .unwrap_or_else(|| io.cfg().write_buf().get());
 
         let result = f(&mut wb);
         if wb.is_empty() {
-            io.memory_pool().release_write_buf(wb);
+            io.cfg().write_buf().release(wb);
         } else {
             item.write.set(Some(wb));
         }
@@ -209,7 +209,7 @@ impl Stack {
 
         if let Some(b) = wb {
             if b.is_empty() {
-                io.memory_pool().release_write_buf(b);
+                io.cfg().write_buf().release(b);
             } else {
                 item.write.set(Some(b));
             }
@@ -231,39 +231,6 @@ impl Stack {
         let size = wb.as_ref().map(|b| b.len()).unwrap_or(0);
         item.write.set(wb);
         size
-    }
-
-    pub(crate) fn release(&self, pool: PoolRef) {
-        let items = match &self.buffers {
-            Either::Left(b) => &b[..],
-            Either::Right(b) => &b[..],
-        };
-
-        for item in items {
-            if let Some(buf) = item.read.take() {
-                pool.release_read_buf(buf);
-            }
-            if let Some(buf) = item.write.take() {
-                pool.release_write_buf(buf);
-            }
-        }
-    }
-
-    pub(crate) fn set_memory_pool(&self, pool: PoolRef) {
-        let items = match &self.buffers {
-            Either::Left(b) => &b[..],
-            Either::Right(b) => &b[..],
-        };
-        for item in items {
-            if let Some(mut b) = item.read.take() {
-                pool.move_vec_in(&mut b);
-                item.read.set(Some(b));
-            }
-            if let Some(mut b) = item.write.take() {
-                pool.move_vec_in(&mut b);
-                item.write.set(Some(b));
-            }
-        }
     }
 }
 
@@ -344,6 +311,12 @@ impl ReadBuf<'_> {
     }
 
     #[inline]
+    /// Get buffer params
+    pub fn cfg(&self) -> &BufConfig {
+        self.io.cfg().read_buf()
+    }
+
+    #[inline]
     /// Get number of newly added bytes
     pub fn nbytes(&self) -> usize {
         self.nbytes
@@ -358,7 +331,7 @@ impl ReadBuf<'_> {
     #[inline]
     /// Make sure buffer has enough free space
     pub fn resize_buf(&self, buf: &mut BytesVec) {
-        self.io.memory_pool().resize_read_buf(buf);
+        self.io.cfg().read_buf().resize(buf);
     }
 
     #[inline]
@@ -372,7 +345,7 @@ impl ReadBuf<'_> {
 
         if let Some(b) = buf {
             if b.is_empty() {
-                self.io.memory_pool().release_read_buf(b);
+                self.io.cfg().read_buf().release(b);
             } else {
                 self.next.read.set(Some(b));
             }
@@ -390,11 +363,11 @@ impl ReadBuf<'_> {
             .curr
             .read
             .take()
-            .unwrap_or_else(|| self.io.memory_pool().get_read_buf());
+            .unwrap_or_else(|| self.io.cfg().read_buf().get());
 
         let result = f(&mut rb);
         if rb.is_empty() {
-            self.io.memory_pool().release_read_buf(rb);
+            self.io.cfg().read_buf().release(rb);
         } else {
             self.curr.read.set(Some(rb));
         }
@@ -406,7 +379,7 @@ impl ReadBuf<'_> {
     pub fn take_src(&self) -> Option<BytesVec> {
         self.next.read.take().and_then(|b| {
             if b.is_empty() {
-                self.io.memory_pool().release_read_buf(b);
+                self.io.cfg().read_buf().release(b);
                 None
             } else {
                 Some(b)
@@ -419,11 +392,11 @@ impl ReadBuf<'_> {
     pub fn set_src(&self, src: Option<BytesVec>) {
         if let Some(src) = src {
             if src.is_empty() {
-                self.io.memory_pool().release_read_buf(src);
+                self.io.cfg().read_buf().release(src);
             } else if let Some(mut buf) = self.next.read.take() {
                 buf.extend_from_slice(&src);
                 self.next.read.set(Some(buf));
-                self.io.memory_pool().release_read_buf(src);
+                self.io.cfg().read_buf().release(src);
             } else {
                 self.next.read.set(Some(src));
             }
@@ -436,7 +409,7 @@ impl ReadBuf<'_> {
         self.curr
             .read
             .take()
-            .unwrap_or_else(|| self.io.memory_pool().get_read_buf())
+            .unwrap_or_else(|| self.io.cfg().read_buf().get())
     }
 
     #[inline]
@@ -444,11 +417,11 @@ impl ReadBuf<'_> {
     pub fn set_dst(&self, dst: Option<BytesVec>) {
         if let Some(dst) = dst {
             if dst.is_empty() {
-                self.io.memory_pool().release_read_buf(dst);
+                self.io.cfg().read_buf().release(dst);
             } else if let Some(mut buf) = self.curr.read.take() {
                 buf.extend_from_slice(&dst);
                 self.curr.read.set(Some(buf));
-                self.io.memory_pool().release_read_buf(dst);
+                self.io.cfg().read_buf().release(dst);
             } else {
                 self.curr.read.set(Some(dst));
             }
@@ -488,6 +461,12 @@ impl WriteBuf<'_> {
     }
 
     #[inline]
+    /// Get buffer params
+    pub fn cfg(&self) -> &BufConfig {
+        self.io.cfg().write_buf()
+    }
+
+    #[inline]
     /// Initiate graceful io stream shutdown
     pub fn want_shutdown(&self) {
         self.io.want_shutdown()
@@ -496,7 +475,7 @@ impl WriteBuf<'_> {
     #[inline]
     /// Make sure buffer has enough free space
     pub fn resize_buf(&self, buf: &mut BytesVec) {
-        self.io.memory_pool().resize_write_buf(buf);
+        self.io.cfg().write_buf().resize(buf);
     }
 
     #[inline]
@@ -509,7 +488,7 @@ impl WriteBuf<'_> {
         let result = f(&mut wb);
         if let Some(b) = wb {
             if b.is_empty() {
-                self.io.memory_pool().release_write_buf(b);
+                self.io.cfg().write_buf().release(b);
             } else {
                 self.curr.write.set(Some(b));
             }
@@ -527,13 +506,13 @@ impl WriteBuf<'_> {
             .next
             .write
             .take()
-            .unwrap_or_else(|| self.io.memory_pool().get_write_buf());
+            .unwrap_or_else(|| self.io.cfg().write_buf().get());
 
         let total = wb.len();
         let result = f(&mut wb);
 
         if wb.is_empty() {
-            self.io.memory_pool().release_write_buf(wb);
+            self.io.cfg().write_buf().release(wb);
         } else {
             self.need_write
                 .set(self.need_write.get() | (total != wb.len()));
@@ -547,7 +526,7 @@ impl WriteBuf<'_> {
     pub fn take_src(&self) -> Option<BytesVec> {
         self.curr.write.take().and_then(|b| {
             if b.is_empty() {
-                self.io.memory_pool().release_write_buf(b);
+                self.io.cfg().write_buf().release(b);
                 None
             } else {
                 Some(b)
@@ -560,11 +539,11 @@ impl WriteBuf<'_> {
     pub fn set_src(&self, src: Option<BytesVec>) {
         if let Some(src) = src {
             if src.is_empty() {
-                self.io.memory_pool().release_write_buf(src);
+                self.io.cfg().write_buf().release(src);
             } else if let Some(mut buf) = self.curr.write.take() {
                 buf.extend_from_slice(&src);
                 self.curr.write.set(Some(buf));
-                self.io.memory_pool().release_write_buf(src);
+                self.io.cfg().write_buf().release(src);
             } else {
                 self.curr.write.set(Some(src));
             }
@@ -577,7 +556,7 @@ impl WriteBuf<'_> {
         self.next
             .write
             .take()
-            .unwrap_or_else(|| self.io.memory_pool().get_write_buf())
+            .unwrap_or_else(|| self.io.cfg().write_buf().get())
     }
 
     #[inline]
@@ -585,14 +564,14 @@ impl WriteBuf<'_> {
     pub fn set_dst(&self, dst: Option<BytesVec>) {
         if let Some(dst) = dst {
             if dst.is_empty() {
-                self.io.memory_pool().release_write_buf(dst);
+                self.io.cfg().write_buf().release(dst);
             } else {
                 self.need_write.set(true);
 
                 if let Some(mut buf) = self.next.write.take() {
                     buf.extend_from_slice(&dst);
                     self.next.write.set(Some(buf));
-                    self.io.memory_pool().release_write_buf(dst);
+                    self.io.cfg().write_buf().release(dst);
                 } else {
                     self.next.write.set(Some(dst));
                 }

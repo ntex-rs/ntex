@@ -1,17 +1,14 @@
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use std::{
-    cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc, task::ready,
-};
+use std::{cell::RefCell, collections::VecDeque, future, pin, rc::Rc, task::ready};
 
 use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{types::HttpProtocol, IoBoxed};
 use crate::service::{Pipeline, PipelineCall, Service, ServiceCtx};
-use crate::time::{now, Seconds};
 use crate::util::{ByteString, HashMap, HashSet};
-use crate::{channel::pool, rt::spawn, task::LocalWaker};
+use crate::{channel::pool, rt::spawn, task::LocalWaker, time::now};
 
 use super::connection::{Connection, ConnectionType};
 use super::{error::ConnectError, h2proto::H2Client, Connect};
@@ -59,7 +56,6 @@ where
         connector: T,
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
-        disconnect_timeout: Seconds,
         limit: usize,
         h2config: h2::Config,
     ) -> Self {
@@ -71,7 +67,6 @@ where
         let inner = Rc::new(RefCell::new(Inner {
             conn_lifetime,
             conn_keep_alive,
-            disconnect_timeout,
             limit,
             h2config,
             acquired: 0,
@@ -192,7 +187,6 @@ where
 pub(super) struct Inner {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout: Seconds,
     limit: usize,
     h2config: h2::Config,
     acquired: usize,
@@ -328,13 +322,13 @@ struct ConnectionPoolSupport<T> {
     waiters: Rc<RefCell<Waiters>>,
 }
 
-impl<T> Future for ConnectionPoolSupport<T>
+impl<T> future::Future for ConnectionPoolSupport<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
 {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
         // we are last copy
@@ -411,7 +405,6 @@ pin_project_lite::pin_project! {
         uri: Uri,
         tx: Option<Waiter>,
         guard: Option<OpenGuard>,
-        disconnect_timeout: Seconds,
         inner: Rc<RefCell<Inner>>,
     }
 }
@@ -429,7 +422,6 @@ where
         msg: Connect,
     ) {
         let fut = pipeline.call_static(msg);
-        let disconnect_timeout = inner.borrow().disconnect_timeout;
 
         #[allow(clippy::redundant_async_block)]
         let _ = spawn(async move {
@@ -440,20 +432,19 @@ where
                 guard: Some(OpenGuard::new(key, inner)),
                 fut,
                 uri,
-                disconnect_timeout,
             }
             .await
         });
     }
 }
 
-impl<T> Future for OpenConnection<T>
+impl<T> future::Future for OpenConnection<T>
 where
     T: Service<Connect, Response = IoBoxed, Error = ConnectError>,
 {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         // open tcp connection
@@ -471,8 +462,6 @@ where
                 Poll::Ready(())
             }
             Ok(io) => {
-                io.set_disconnect_timeout(*this.disconnect_timeout);
-
                 // handle http2 proto
                 if io.query::<HttpProtocol>().get() == Some(HttpProtocol::Http2) {
                     // init http2 handshake
@@ -624,6 +613,8 @@ impl Drop for Acquired {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+
     use super::*;
     use crate::time::{sleep, Millis};
     use crate::{io as nio, service::fn_service, testing::Io, util::lazy};
@@ -638,11 +629,15 @@ mod tests {
                 fn_service(move |req| {
                     let (client, server) = Io::create();
                     store2.borrow_mut().push((req, server));
-                    Box::pin(async move { Ok(IoBoxed::from(nio::Io::new(client))) })
+                    Box::pin(async move {
+                        Ok(IoBoxed::from(nio::Io::new(
+                            client,
+                            nio::IoConfig::default(),
+                        )))
+                    })
                 }),
                 Duration::from_secs(10),
                 Duration::from_secs(10),
-                Seconds::ZERO,
                 1,
                 h2::Config::client(),
             )
@@ -707,7 +702,9 @@ mod tests {
 
         // drop waiter, no interest in connection
         let mut fut = Box::pin(pool.call(req.clone()));
-        assert!(lazy(|cx| Pin::new(&mut fut).poll(cx)).await.is_pending());
+        assert!(lazy(|cx| pin::Pin::new(&mut fut).poll(cx))
+            .await
+            .is_pending());
         drop(fut);
         sleep(Millis(50)).await;
         pool.get_ref().inner.borrow_mut().check_availibility();

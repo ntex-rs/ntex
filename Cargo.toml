@@ -25,7 +25,7 @@ repository = "https://github.com/ntex-rs/ntex"
 documentation = "https://docs.rs/ntex/"
 license = "MIT OR Apache-2.0"
 edition = "2021"
-rust-version = "1.81"
+rust-version = "1.83"
 
 [patch.crates-io]
 ntex = { path = "ntex" }
@@ -44,6 +44,8 @@ ntex-util = { path = "ntex-util" }
 
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
+
+ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "io-config" }
 
 [workspace.dependencies]
 ahash = "0.8.10"

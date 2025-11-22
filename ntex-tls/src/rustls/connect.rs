@@ -1,7 +1,6 @@
 use std::{fmt, io, sync::Arc};
 
-use ntex_bytes::PoolId;
-use ntex_io::{Io, Layer};
+use ntex_io::{Io, IoConfig, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnector};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use tls_rust::{pki_types::ServerName, ClientConfig};
@@ -45,21 +44,16 @@ impl<T: Address> TlsConnector<T> {
         }
     }
 
-    /// Set io tag
-    ///
-    /// Set tag to opened io object.
-    pub fn tag(mut self, tag: &'static str) -> Self {
-        self.connector = self.connector.get_ref().tag(tag).into();
+    /// Set io configuration
+    pub fn cfg(mut self, cfg: IoConfig) -> Self {
+        self.connector = self.connector.get_ref().cfg(cfg).into();
         self
     }
 
     #[deprecated]
     #[doc(hidden)]
-    /// Set memory pool.
-    ///
-    /// Use specified memory pool for memory allocations. By default P0
-    /// memory pool is used.
-    pub fn memory_pool(self, _: PoolId) -> Self {
+    /// Set io tag
+    pub fn tag(self, _: &'static str) -> Self {
         self
     }
 }
@@ -158,8 +152,7 @@ mod tests {
             .with_no_client_auth();
         let _ = TlsConnector::<&'static str>::new(config.clone()).clone();
         let factory = TlsConnector::with(Arc::new(config), Default::default())
-            .memory_pool(PoolId::P5)
-            .tag("IO")
+            .cfg(IoConfig::new("IO"))
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap().bind();

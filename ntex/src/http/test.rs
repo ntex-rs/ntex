@@ -7,7 +7,7 @@ use coo_kie::{Cookie, CookieJar};
 use crate::channel::bstream;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
-use crate::io::Io;
+use crate::io::{Io, IoConfig};
 use crate::server::Server;
 use crate::service::ServiceFactory;
 #[cfg(feature = "ws")]
@@ -240,7 +240,7 @@ where
         sys.run(move || {
             let srv = crate::server::build()
                 .listen("test", tcp, move |_| factory())?
-                .set_tag("test", "HTTP-TEST-SRV")
+                .set_config("test", IoConfig::new("HTTP-TEST-SRV"))
                 .workers(1)
                 .disable_signals()
                 .run();

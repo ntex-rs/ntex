@@ -383,6 +383,7 @@ impl Handle for Rc<IoTest> {
 /// Read io task
 struct Read(Rc<IoTest>);
 
+#[allow(deprecated)]
 impl crate::AsyncRead for Read {
     async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
         // read data from socket
@@ -394,6 +395,7 @@ impl crate::AsyncRead for Read {
 /// Write
 struct Write(Rc<IoTest>);
 
+#[allow(deprecated)]
 impl crate::AsyncWrite for Write {
     async fn write(&mut self, buf: &mut WriteContextBuf) -> io::Result<()> {
         poll_fn(|cx| {
@@ -513,7 +515,7 @@ mod tests {
 
         let (client, _) = IoTest::create();
         let addr: net::SocketAddr = "127.0.0.1:8080".parse().unwrap();
-        let client = crate::Io::new(client.set_peer_addr(addr));
+        let client = crate::Io::from(client.set_peer_addr(addr));
         let item = client.query::<crate::types::PeerAddr>();
         assert!(format!("{item:?}").contains("QueryItem(127.0.0.1:8080)"));
     }

@@ -36,7 +36,6 @@ pub struct Connector {
     timeout: Millis,
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
-    disconnect_timeout: Seconds,
     limit: usize,
     h2config: h2::Config,
     connector: BoxedConnector,
@@ -61,7 +60,6 @@ impl Connector {
             timeout: Millis(1_000),
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
-            disconnect_timeout: Seconds(3),
             limit: 100,
             h2config: h2::Config::client(),
         };
@@ -155,19 +153,6 @@ impl Connector {
         self
     }
 
-    /// Set server connection disconnect timeout.
-    ///
-    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
-    /// within this time, the socket get dropped. This timeout affects only secure connections.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default disconnect timeout is set to 3 seconds.
-    pub fn disconnect_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
-        self.disconnect_timeout = timeout.into();
-        self
-    }
-
     #[doc(hidden)]
     /// Configure http2 connection settings
     pub fn configure_http2<O, R>(self, f: O) -> Self
@@ -208,15 +193,14 @@ impl Connector {
         self,
     ) -> impl Service<Connect, Response = Connection, Error = ConnectError> + fmt::Debug
     {
-        let tcp_service = connector(self.connector, self.timeout, self.disconnect_timeout);
+        let tcp_service = connector(self.connector, self.timeout);
 
         let ssl_pool = if let Some(ssl_connector) = self.ssl_connector {
-            let srv = connector(ssl_connector, self.timeout, self.disconnect_timeout);
+            let srv = connector(ssl_connector, self.timeout);
             Some(ConnectionPool::new(
                 srv,
                 self.conn_lifetime,
                 self.conn_keep_alive,
-                self.disconnect_timeout,
                 self.limit,
                 self.h2config.clone(),
             ))
@@ -229,7 +213,6 @@ impl Connector {
                 tcp_service,
                 self.conn_lifetime,
                 self.conn_keep_alive,
-                self.disconnect_timeout,
                 self.limit,
                 self.h2config.clone(),
             ),
@@ -241,16 +224,11 @@ impl Connector {
 fn connector(
     connector: BoxedConnector,
     timeout: Millis,
-    disconnect_timeout: Seconds,
 ) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError> + fmt::Debug {
     TimeoutService::new(
         timeout,
         apply_fn(connector, |msg: Connect, svc| async move {
             svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
-        })
-        .map(move |io: IoBoxed| {
-            io.set_disconnect_timeout(disconnect_timeout);
-            io
         })
         .map_err(ConnectError::from),
     )

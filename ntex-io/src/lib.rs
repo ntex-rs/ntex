@@ -5,6 +5,7 @@
 use std::io::{Error as IoError, Result as IoResult};
 use std::{any::Any, any::TypeId, fmt, task::Context, task::Poll};
 
+pub mod cfg;
 pub mod testing;
 pub mod types;
 
@@ -25,7 +26,8 @@ use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
 
 pub use self::buf::{FilterCtx, ReadBuf, WriteBuf};
-pub use self::dispatcher::{Dispatcher, DispatcherConfig};
+pub use self::cfg::IoConfig;
+pub use self::dispatcher::Dispatcher;
 pub use self::filter::{Base, Filter, FilterReadStatus, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
@@ -33,6 +35,10 @@ pub use self::seal::{IoBoxed, Sealed};
 pub use self::tasks::{IoContext, ReadContext, WriteContext, WriteContextBuf};
 pub use self::timer::TimerHandle;
 pub use self::utils::{seal, Decoded};
+
+#[deprecated]
+#[doc(hidden)]
+pub type DispatcherConfig = cfg::IoConfig;
 
 #[doc(hidden)]
 pub use self::flags::Flags;

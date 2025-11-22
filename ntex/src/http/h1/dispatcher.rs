@@ -91,7 +91,6 @@ where
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, C>>) -> Self {
         let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
-        io.set_disconnect_timeout(config.client_disconnect);
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
@@ -596,19 +595,12 @@ where
         };
 
         if let Some(ref cfg) = cfg {
-            let total = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-                let total = (self.read_remains - self.read_consumed)
-                    .try_into()
-                    .unwrap_or(u16::MAX);
+            if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
                 self.read_remains = 0;
-                total
             } else {
-                let total = (self.read_remains + self.read_consumed)
-                    .try_into()
-                    .unwrap_or(u16::MAX);
                 self.read_consumed = 0;
-                total
-            };
+            }
+            let total = self.read_remains - self.read_consumed;
 
             if total > cfg.rate {
                 // update max timeout
@@ -788,12 +780,11 @@ mod tests {
         let config = ServiceConfig::new(
             Seconds(5).into(),
             Seconds(1),
-            Seconds::ZERO,
             Millis(5_000),
             Config::server(),
         );
         Dispatcher::new(
-            nio::Io::new(stream),
+            nio::Io::new(stream, nio::IoConfig::default()),
             Rc::new(DispatcherConfig::new(
                 config,
                 service.into_service(),
@@ -811,7 +802,7 @@ mod tests {
         B: MessageBody + 'static,
     {
         crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
-            nio::Io::new(stream),
+            nio::Io::new(stream, nio::IoConfig::default()),
             Rc::new(DispatcherConfig::new(
                 ServiceConfig::default(),
                 service.into_service(),
@@ -835,12 +826,11 @@ mod tests {
         let config = ServiceConfig::new(
             Seconds(5).into(),
             Seconds(1),
-            Seconds::ZERO,
             Millis(5_000),
             Config::server(),
         );
         let mut h1 = Dispatcher::<_, _, _, _>::new(
-            nio::Io::new(server),
+            nio::Io::new(server, nio::IoConfig::default()),
             Rc::new(DispatcherConfig::new(
                 config,
                 fn_service(|_| {
@@ -1021,12 +1011,12 @@ mod tests {
         let mut h1 = h1(server, |_| {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
-        crate::util::PoolId::P0
-            .set_read_params(15 * 1024, 1024)
-            .set_write_params(15 * 1024, 1024);
-        h1.inner
-            .io
-            .set_memory_pool(crate::util::PoolId::P0.pool_ref());
+        h1.inner.io.set_config(
+            nio::IoConfig::build("TEST")
+                .set_read_buf(15 * 1024, 1024, 16)
+                .set_write_buf(15 * 1024, 1024, 16)
+                .finish(),
+        );
 
         let mut decoder = ClientCodec::default();
 
@@ -1241,13 +1231,13 @@ mod tests {
         let mut config = ServiceConfig::new(
             Seconds(5).into(),
             Seconds(1),
-            Seconds::ZERO,
             Millis(5_000),
             Config::server(),
         );
         config.payload_read_rate(Seconds(1), Seconds(2), 512);
+
         let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
-            nio::Io::new(server),
+            nio::Io::new(server, nio::IoConfig::default()),
             Rc::new(DispatcherConfig::new(
                 config,
                 svc.into_service(),
@@ -1275,8 +1265,8 @@ mod tests {
             client.write(random_bytes);
             sleep(Millis(750)).await;
         }
-        assert!(mark.load(Ordering::Relaxed) == 1536);
-        assert!(err_mark.load(Ordering::Relaxed) == 1);
+        assert_eq!(mark.load(Ordering::Relaxed), 768);
+        assert_eq!(err_mark.load(Ordering::Relaxed), 1);
     }
 
     #[crate::rt_test]

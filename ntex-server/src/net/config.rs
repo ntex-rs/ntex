@@ -1,7 +1,6 @@
 use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, rc::Rc};
 
-use ntex_bytes::PoolId;
-use ntex_net::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_service::{IntoServiceFactory, ServiceFactory};
 use ntex_util::{future::BoxFuture, future::Ready, HashMap};
 
@@ -15,40 +14,32 @@ pub struct Config(Rc<InnerServiceConfig>);
 
 #[derive(Debug)]
 pub(super) struct InnerServiceConfig {
-    pub(super) pool: Cell<PoolId>,
-    pub(super) tag: Cell<Option<&'static str>>,
+    pub(super) config: Cell<Option<IoConfig>>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self(Rc::new(InnerServiceConfig {
-            pool: Cell::new(PoolId::DEFAULT),
-            tag: Cell::new(None),
+            config: Cell::new(Some(IoConfig::default())),
         }))
     }
 }
 
 impl Config {
-    /// Set memory pool for the service.
-    ///
-    /// Use specified memory pool for memory allocations.
-    pub fn memory_pool(&self, id: PoolId) -> &Self {
-        self.0.pool.set(id);
-        self
-    }
-
+    #[deprecated]
     /// Set io tag for the service.
-    pub fn tag(&self, tag: &'static str) -> &Self {
-        self.0.tag.set(Some(tag));
+    pub fn tag(&self, _: &'static str) -> &Self {
         self
     }
 
-    pub(super) fn get_pool_id(&self) -> PoolId {
-        self.0.pool.get()
+    /// Set io config for the service.
+    pub fn config(&self, cfg: IoConfig) -> &Self {
+        self.0.config.set(Some(cfg));
+        self
     }
 
-    pub(super) fn get_tag(&self) -> Option<&'static str> {
-        self.0.tag.get()
+    pub(super) fn get_config(&self) -> Option<IoConfig> {
+        self.0.config.get()
     }
 }
 
@@ -58,7 +49,7 @@ pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
 #[derive(Debug)]
 struct Socket {
     name: String,
-    sockets: Vec<(Token, Listener, &'static str)>,
+    sockets: Vec<(Token, Listener, IoConfig)>,
 }
 
 pub(super) struct ServiceConfigInner {
@@ -103,7 +94,13 @@ impl ServiceConfig {
             name: name.as_ref().to_string(),
             sockets: sockets
                 .into_iter()
-                .map(|lst| (inner.token.next(), Listener::from_tcp(lst), ""))
+                .map(|lst| {
+                    (
+                        inner.token.next(),
+                        Listener::from_tcp(lst),
+                        IoConfig::default(),
+                    )
+                })
                 .collect(),
         };
         inner.sockets.push(socket);
@@ -116,7 +113,11 @@ impl ServiceConfig {
         let mut inner = self.0.borrow_mut();
         let socket = Socket {
             name: name.as_ref().to_string(),
-            sockets: vec![(inner.token.next(), Listener::from_tcp(lst), "")],
+            sockets: vec![(
+                inner.token.next(),
+                Listener::from_tcp(lst),
+                IoConfig::default(),
+            )],
         };
         inner.sockets.push(socket);
 
@@ -125,11 +126,16 @@ impl ServiceConfig {
 
     /// Set io tag for configured service.
     pub fn set_tag<N: AsRef<str>>(&self, name: N, tag: &'static str) -> &Self {
+        self.set_config(name, IoConfig::new(tag))
+    }
+
+    /// Set io config for configured service.
+    pub fn set_config<N: AsRef<str>>(&self, name: N, cfg: IoConfig) -> &Self {
         let mut inner = self.0.borrow_mut();
         for sock in &mut inner.sockets {
             if sock.name == name.as_ref() {
                 for item in &mut sock.sockets {
-                    item.2 = tag;
+                    item.2 = cfg;
                 }
             }
         }
@@ -162,7 +168,6 @@ impl ServiceConfig {
                 s.name.clone(),
                 Entry {
                     idx,
-                    pool: PoolId::DEFAULT,
                     name: s.name.clone(),
                     tokens: s
                         .sockets
@@ -223,7 +228,6 @@ impl FactoryService for ConfiguredService {
                         if entry.idx == services.len() {
                             res.push(NetService {
                                 name: std::sync::Arc::from(entry.name.clone()),
-                                pool: entry.pool,
                                 tokens: entry.tokens.clone(),
                                 factory: svc,
                             });
@@ -246,9 +250,8 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 #[derive(Debug, Clone)]
 struct Entry {
     idx: usize,
-    pool: PoolId,
     name: String,
-    tokens: Vec<(Token, &'static str)>,
+    tokens: Vec<(Token, IoConfig)>,
 }
 
 struct ServiceRuntimeInner {
@@ -294,24 +297,9 @@ impl ServiceRuntime {
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
-        self.service_in(name, PoolId::P0, service)
-    }
-
-    /// Register service with memory pool.
-    ///
-    /// Name of the service must be registered during configuration stage with
-    /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
-    pub fn service_in<T, F>(&self, name: &str, pool: PoolId, service: F)
-    where
-        F: IntoServiceFactory<T, Io>,
-        T: ServiceFactory<Io> + 'static,
-        T::Service: 'static,
-        T::InitError: fmt::Debug,
-    {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             let idx = entry.idx;
-            entry.pool = pool;
             inner.services[idx] = Some(factory::create_boxed_factory(
                 name.to_string(),
                 service.into_factory(),

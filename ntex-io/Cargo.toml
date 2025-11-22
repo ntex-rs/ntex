@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "2.15.1"
+version = "2.16.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ntex-io/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
-rust-version = "1.81"
+rust-version = "1.83"
 
 [lib]
 name = "ntex_io"
@@ -18,8 +18,8 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-codec = "0.6"
-ntex-bytes = "0.1.28"
-ntex-util = "2.8"
+ntex-bytes = "0.1.31"
+ntex-util = "2.15"
 ntex-service = "3.4"
 
 bitflags = { workspace = true }

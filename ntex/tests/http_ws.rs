@@ -3,7 +3,7 @@ use std::{cell::Cell, io, sync::Arc, sync::Mutex};
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
-use ntex::io::{DispatchItem, Dispatcher, Io};
+use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
 use ntex::service::{Pipeline, Service, ServiceCtx};
 use ntex::time::Seconds;
 use ntex::util::{ByteString, Bytes, Ready};
@@ -50,10 +50,12 @@ impl Service<(Request, Io, h1::Codec)> for WsService {
         io.encode((res, body::BodySize::None).into(), &codec)
             .unwrap();
 
-        let cfg = ntex_io::DispatcherConfig::default();
-        cfg.set_keepalive_timeout(Seconds(0));
-
-        Dispatcher::new(io.seal(), ws::Codec::new(), service, &cfg)
+        io.set_config(
+            IoConfig::build("WS-SRV")
+                .set_keepalive_timeout(Seconds(0))
+                .finish(),
+        );
+        Dispatcher::new(io.seal(), ws::Codec::new(), service)
             .await
             .map_err(|_| panic!())
     }

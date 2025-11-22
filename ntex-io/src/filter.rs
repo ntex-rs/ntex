@@ -130,7 +130,7 @@ impl Filter for Base {
                     self.0 .0.remove_flags(Flags::WR_PAUSED);
                     self.0 .0.write_task.wake();
                 }
-                if len >= self.0.memory_pool().write_params_high()
+                if len >= self.0.cfg().write_buf().high
                     && !flags.contains(Flags::BUF_W_BACKPRESSURE)
                 {
                     self.0 .0.insert_flags(Flags::BUF_W_BACKPRESSURE);

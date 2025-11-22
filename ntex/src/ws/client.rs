@@ -15,15 +15,17 @@ use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use crate::http::{body::BodySize, client, client::ClientResponse, error::HttpError, h1};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
-use crate::io::{
-    Base, DispatchItem, Dispatcher, DispatcherConfig, Filter, Io, Layer, Sealed,
-};
+use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, IoConfig, Layer, Sealed};
 use crate::service::{apply_fn, fn_service, IntoService, Pipeline, Service};
-use crate::time::{timeout, Millis, Seconds};
+use crate::time::{timeout, Millis};
 use crate::{channel::mpsc, rt, util::Ready, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
 use super::transport::WsTransport;
+
+thread_local! {
+    static CFG: IoConfig = IoConfig::new("WS-CLIENT");
+}
 
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
@@ -34,7 +36,6 @@ pub struct WsClient<F, T> {
     server_mode: bool,
     timeout: Millis,
     extra_headers: RefCell<Option<HeaderMap>>,
-    config: DispatcherConfig,
     client_cfg: Rc<client::ClientConfig>,
     _t: marker::PhantomData<F>,
 }
@@ -56,7 +57,6 @@ struct Inner<F, T> {
     max_size: usize,
     server_mode: bool,
     timeout: Millis,
-    config: DispatcherConfig,
     _t: marker::PhantomData<F>,
 }
 
@@ -249,7 +249,6 @@ where
             } else {
                 ws::Codec::new().max_size(max_size).client_mode()
             },
-            self.config.clone(),
         ))
     }
 }
@@ -283,22 +282,17 @@ impl WsClientBuilder<Base, ()> {
             Err(e) => (Default::default(), Some(e.into())),
         };
 
-        let config = DispatcherConfig::default()
-            .set_keepalive_timeout(Seconds(600))
-            .clone();
-
         WsClientBuilder {
             err,
             origin: None,
             protocols: None,
             inner: Some(Inner {
                 head,
-                config,
-                connector: Connector::<Uri>::default().tag("WS-CLIENT"),
                 addr: None,
                 max_size: 65_536,
                 server_mode: false,
                 timeout: Millis(5_000),
+                connector: Connector::<Uri>::default().cfg(CFG.with(|c| *c)),
                 _t: marker::PhantomData,
             }),
             #[cfg(feature = "cookie")]
@@ -487,18 +481,6 @@ where
         self
     }
 
-    /// Set keep-alive timeout.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default keep-alive timeout is set to 600 seconds.
-    pub fn keepalive_timeout(&mut self, timeout: Seconds) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, &self.err) {
-            parts.config.set_keepalive_timeout(timeout);
-        }
-        self
-    }
-
     /// Use custom connector
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
@@ -515,7 +497,6 @@ where
                 max_size: inner.max_size,
                 server_mode: inner.server_mode,
                 timeout: inner.timeout,
-                config: inner.config,
                 _t: marker::PhantomData,
             }),
             err: self.err.take(),
@@ -639,7 +620,6 @@ where
             max_size: inner.max_size,
             server_mode: inner.server_mode,
             timeout: inner.timeout,
-            config: inner.config,
             extra_headers: RefCell::new(None),
             client_cfg: Default::default(),
             _t: marker::PhantomData,
@@ -681,22 +661,11 @@ pub struct WsConnection<F> {
     io: Io<F>,
     codec: ws::Codec,
     res: ClientResponse,
-    config: DispatcherConfig,
 }
 
 impl<F> WsConnection<F> {
-    fn new(
-        io: Io<F>,
-        res: ClientResponse,
-        codec: ws::Codec,
-        config: DispatcherConfig,
-    ) -> Self {
-        Self {
-            io,
-            codec,
-            res,
-            config,
-        }
+    fn new(io: Io<F>, res: ClientResponse, codec: ws::Codec) -> Self {
+        Self { io, codec, res }
     }
 
     /// Get codec reference
@@ -774,7 +743,7 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::new(self.io, self.codec, service, &self.config).await
+        Dispatcher::new(self.io, self.codec, service).await
     }
 }
 
@@ -785,7 +754,6 @@ impl<F: Filter> WsConnection<F> {
             io: self.io.seal(),
             codec: self.codec,
             res: self.res,
-            config: self.config,
         }
     }
 

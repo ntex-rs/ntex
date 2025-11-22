@@ -40,7 +40,7 @@ async fn main() -> std::io::Result<()> {
     .bind("0.0.0.0:8081")?
     .workers(4)
     .keep_alive(http::KeepAlive::Disabled)
-    .tag("MY-SERVER")
+    .config(ntex::io::IoConfig::new("MY-SERVER"))
     .run()
     .await
 }

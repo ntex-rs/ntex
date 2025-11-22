@@ -1,7 +1,6 @@
 use std::{collections::VecDeque, fmt, io, net::SocketAddr};
 
-use ntex_bytes::PoolId;
-use ntex_io::{types, Io};
+use ntex_io::{types, Io, IoConfig};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{future::Either, time::timeout_checked, time::Millis};
 
@@ -10,7 +9,7 @@ use crate::tcp_connect;
 
 /// Basic tcp stream connector
 pub struct Connector<T> {
-    tag: &'static str,
+    cfg: IoConfig,
     timeout: Millis,
     resolver: Resolver<T>,
 }
@@ -21,17 +20,26 @@ impl<T> Connector<T> {
     /// Construct new connect service with default dns resolver
     pub fn new() -> Self {
         Connector {
+            cfg: IoConfig::default(),
             resolver: Resolver::new(),
-            tag: "TCP-CLIENT",
             timeout: Millis::ZERO,
         }
     }
 
-    /// Set io tag
+    /// Construct new connect service with default dns resolver
+    pub fn with(cfg: IoConfig) -> Self {
+        Connector {
+            cfg,
+            resolver: Resolver::new(),
+            timeout: Millis::ZERO,
+        }
+    }
+
+    /// Set io config
     ///
-    /// Set tag to opened io object.
-    pub fn tag(mut self, tag: &'static str) -> Self {
-        self.tag = tag;
+    /// Set config for new io object.
+    pub fn cfg(mut self, cfg: IoConfig) -> Self {
+        self.cfg = cfg;
         self
     }
 
@@ -41,16 +49,6 @@ impl<T> Connector<T> {
     /// Timeout is disabled by default
     pub fn timeout<U: Into<Millis>>(mut self, timeout: U) -> Self {
         self.timeout = timeout.into();
-        self
-    }
-
-    #[deprecated]
-    #[doc(hidden)]
-    /// Set memory pool
-    ///
-    /// Use specified memory pool for memory allocations. By default P0
-    /// memory pool is used.
-    pub fn memory_pool(self, _: PoolId) -> Self {
         self
     }
 }
@@ -65,18 +63,18 @@ impl<T: Address> Connector<T> {
             // resolve first
             let address = self
                 .resolver
-                .lookup_with_tag(message.into(), self.tag)
+                .lookup_with_tag(message.into(), self.cfg.tag())
                 .await?;
 
             let port = address.port();
             let Connect { req, addr, .. } = address;
 
             if let Some(addr) = addr {
-                connect(req, port, addr, self.tag).await
+                connect(req, port, addr, self.cfg).await
             } else if let Some(addr) = req.addr() {
-                connect(req, addr.port(), Either::Left(addr), self.tag).await
+                connect(req, addr.port(), Either::Left(addr), self.cfg).await
             } else {
-                log::error!("{}: TCP connector: got unresolved address", self.tag);
+                log::error!("{}: TCP connector: got unresolved address", self.cfg.tag());
                 Err(ConnectError::Unresolved)
             }
         })
@@ -101,7 +99,7 @@ impl<T> Clone for Connector<T> {
 impl<T> fmt::Debug for Connector<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Connector")
-            .field("tag", &self.tag)
+            .field("cfg", &self.cfg)
             .field("timeout", &self.timeout)
             .field("resolver", &self.resolver)
             .finish()
@@ -137,24 +135,25 @@ async fn connect<T: Address>(
     req: T,
     port: u16,
     addr: Either<SocketAddr, VecDeque<SocketAddr>>,
-    tag: &'static str,
+    cfg: IoConfig,
 ) -> Result<Io, ConnectError> {
     log::trace!(
-        "{tag}: TCP connector - connecting to {:?} addr:{addr:?} port:{port}",
+        "{}: TCP connector - connecting to {:?} addr:{addr:?} port:{port}",
+        cfg.tag(),
         req.host(),
     );
 
     let io = match addr {
-        Either::Left(addr) => tcp_connect(addr).await?,
+        Either::Left(addr) => tcp_connect(addr, cfg).await?,
         Either::Right(mut addrs) => loop {
             let addr = addrs.pop_front().unwrap();
 
-            match tcp_connect(addr).await {
+            match tcp_connect(addr, cfg).await {
                 Ok(io) => break io,
                 Err(err) => {
                     log::trace!(
-                        "{tag}: TCP connector - failed to connect to {:?} port: {port} err: {err:?}",
-                        req.host(),
+                        "{}: TCP connector - failed to connect to {:?} port: {port} err: {err:?}",
+                        cfg.tag(), req.host(),
                     );
                     if addrs.is_empty() {
                         return Err(err.into());
@@ -165,11 +164,11 @@ async fn connect<T: Address>(
     };
 
     log::trace!(
-        "{tag}: TCP connector - successfully connected to {:?} - {:?}",
+        "{}: TCP connector - successfully connected to {:?} - {:?}",
+        cfg.tag(),
         req.host(),
         io.query::<types::PeerAddr>().get()
     );
-    io.set_tag(tag);
     Ok(io)
 }
 
@@ -183,7 +182,9 @@ mod tests {
             ntex_service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let srv = Connector::default().tag("T").timeout(Millis(5000));
+        let srv = Connector::default()
+            .cfg(IoConfig::new("T"))
+            .timeout(Millis(5000));
         let result = srv.connect("").await;
         assert!(result.is_err());
         let result = srv.connect("localhost:99999").await;

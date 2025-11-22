@@ -1,7 +1,6 @@
 use std::{fmt, io};
 
-use ntex_bytes::PoolId;
-use ntex_io::{Io, Layer};
+use ntex_io::{Io, IoConfig, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnector};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use tls_openssl::ssl::SslConnector as BaseSslConnector;
@@ -30,21 +29,16 @@ impl<T: Address> SslConnector<T> {
         }
     }
 
-    /// Set io tag
-    ///
-    /// Set tag to opened io object.
-    pub fn tag(mut self, tag: &'static str) -> Self {
-        self.connector = self.connector.get_ref().tag(tag).into();
+    /// Set io configuration
+    pub fn cfg(mut self, cfg: IoConfig) -> Self {
+        self.connector = self.connector.get_ref().cfg(cfg).into();
         self
     }
 
     #[deprecated]
     #[doc(hidden)]
-    /// Set memory pool.
-    ///
-    /// Use specified memory pool for memory allocations. By default P0
-    /// memory pool is used.
-    pub fn memory_pool(self, _: PoolId) -> Self {
+    /// Set io tag
+    pub fn tag(self, _: &'static str) -> Self {
         self
     }
 }
@@ -145,8 +139,7 @@ mod tests {
         let _ = SslConnector::<&'static str>::new(ssl.build());
         let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::with(ssl.build(), Default::default())
-            .tag("IO")
-            .memory_pool(PoolId::P5)
+            .cfg(ntex_io::IoConfig::new("IO"))
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap();
