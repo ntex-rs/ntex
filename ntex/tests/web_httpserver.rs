@@ -8,7 +8,7 @@ use tls_openssl::ssl::SslAcceptorBuilder;
 mod rustls_utils;
 
 use ntex::web::{self, App, HttpResponse, HttpServer};
-use ntex::{rt, server::TestServer, time::sleep, time::Seconds};
+use ntex::{io::IoConfig, rt, server::TestServer, time::sleep, time::Seconds};
 
 #[cfg(unix)]
 #[ntex::test]
@@ -225,7 +225,7 @@ async fn test_bind_uds() {
         .connector(
             client::Connector::default()
                 .connector(ntex::service::fn_service(|_| async {
-                    Ok(rt::unix_connect("/tmp/uds-test").await?)
+                    Ok(rt::unix_connect("/tmp/uds-test", IoConfig::default()).await?)
                 }))
                 .finish(),
         )
@@ -277,7 +277,7 @@ async fn test_listen_uds() {
         .connector(
             client::Connector::default()
                 .connector(ntex::service::fn_service(|_| async {
-                    Ok(rt::unix_connect("/tmp/uds-test2").await?)
+                    Ok(rt::unix_connect("/tmp/uds-test2", IoConfig::default()).await?)
                 }))
                 .finish(),
         )

@@ -2,7 +2,7 @@ use std::{fmt, future::Future, io, net, sync::Arc};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use ntex_net::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_service::ServiceFactory;
 use ntex_util::time::Millis;
 
@@ -229,7 +229,7 @@ impl ServerBuilder {
             let token = self.token.next();
             self.sockets
                 .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
-            tokens.push((token, ""));
+            tokens.push((token, IoConfig::default()));
         }
 
         self.services.push(factory::create_factory_service(
@@ -282,7 +282,7 @@ impl ServerBuilder {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, "")],
+            vec![(token, IoConfig::default())],
             factory,
         ));
         self.sockets
@@ -304,7 +304,7 @@ impl ServerBuilder {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, "")],
+            vec![(token, IoConfig::default())],
             factory,
         ));
         self.sockets
@@ -312,8 +312,14 @@ impl ServerBuilder {
         Ok(self)
     }
 
+    #[deprecated]
     /// Set io tag for named service.
-    pub fn set_tag<N: AsRef<str>>(mut self, name: N, tag: &'static str) -> Self {
+    pub fn set_tag<N: AsRef<str>>(self, name: N, tag: &'static str) -> Self {
+        self.set_config(name, IoConfig::new(tag))
+    }
+
+    /// Set io config for named service.
+    pub fn set_config<N: AsRef<str>>(mut self, name: N, cfg: IoConfig) -> Self {
         let mut token = None;
         for sock in &self.sockets {
             if sock.1 == name.as_ref() {
@@ -325,7 +331,7 @@ impl ServerBuilder {
         if let Some(token) = token {
             for svc in &mut self.services {
                 if svc.name(token) == name.as_ref() {
-                    svc.set_tag(token, tag);
+                    svc.set_config(token, cfg);
                 }
             }
         } else {

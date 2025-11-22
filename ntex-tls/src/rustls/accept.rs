@@ -15,7 +15,6 @@ use crate::{rustls::TlsServerFilter, MAX_SSL_ACCEPT_COUNTER};
 pub struct TlsAcceptor {
     config: Arc<ServerConfig>,
     timeout: Millis,
-    tag: &'static str,
 }
 
 impl TlsAcceptor {
@@ -24,15 +23,15 @@ impl TlsAcceptor {
         Self {
             config,
             timeout: Millis(5_000),
-            tag: "TLS-ACCEPT",
         }
     }
 
+    #[deprecated]
+    #[doc(hidden)]
     /// Set io tag
     ///
     /// Set tag to opened io object.
-    pub fn tag(mut self, tag: &'static str) -> Self {
-        self.tag = tag;
+    pub fn tag(self, _: &'static str) -> Self {
         self
     }
 
@@ -56,7 +55,6 @@ impl Clone for TlsAcceptor {
         Self {
             config: self.config.clone(),
             timeout: self.timeout,
-            tag: self.tag,
         }
     }
 }
@@ -73,7 +71,6 @@ impl<F: Filter, C> ServiceFactory<Io<F>, C> for TlsAcceptor {
                 config: self.config.clone(),
                 timeout: self.timeout,
                 conns: conns.clone(),
-                tag: self.tag,
             })
         })
     }
@@ -85,7 +82,6 @@ pub struct TlsAcceptorService {
     config: Arc<ServerConfig>,
     timeout: Millis,
     conns: Counter,
-    tag: &'static str,
 }
 
 impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
@@ -105,7 +101,6 @@ impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let _guard = self.conns.get();
-        io.set_tag(self.tag);
         super::TlsServerFilter::create(io, self.config.clone(), self.timeout).await
     }
 }

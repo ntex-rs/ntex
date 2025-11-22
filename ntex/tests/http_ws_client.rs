@@ -3,7 +3,7 @@ use std::io;
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{body::BodySize, h1, HttpService, Response};
-use ntex::io::{DispatchItem, Dispatcher, DispatcherConfig};
+use ntex::io::{DispatchItem, Dispatcher, IoConfig};
 use ntex::service::{fn_factory_with_config, fn_service};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
@@ -44,13 +44,7 @@ async fn test_simple() {
                         .unwrap();
 
                         // start websocket service
-                        Dispatcher::new(
-                            io.seal(),
-                            ws::Codec::default(),
-                            ws_service,
-                            &Default::default(),
-                        )
-                        .await
+                        Dispatcher::new(io.seal(), ws::Codec::default(), ws_service).await
                     })
                 } else {
                     req.ack()
@@ -112,7 +106,6 @@ async fn test_transport() {
                             io.seal(),
                             ws::Codec::default(),
                             fn_service(ws_service),
-                            &Default::default(),
                         )
                         .await
                     })
@@ -151,13 +144,16 @@ async fn test_keepalive_timeout() {
                         .unwrap();
 
                         // start websocket service
-                        let cfg = DispatcherConfig::default();
-                        cfg.set_keepalive_timeout(Seconds::ZERO);
+                        io.set_config(
+                            IoConfig::build("WS-SRV")
+                                .set_keepalive_timeout(Seconds::ZERO)
+                                .finish(),
+                        );
+
                         Dispatcher::new(
                             io.seal(),
                             ws::Codec::default(),
                             fn_service(ws_service),
-                            &cfg,
                         )
                         .await
                     })
@@ -173,7 +169,6 @@ async fn test_keepalive_timeout() {
     let con = ws::WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
-        .keepalive_timeout(Seconds(1))
         .finish()
         .unwrap()
         .connect()
@@ -219,7 +214,6 @@ async fn test_upgrade_handler_with_await() {
     let _ = ws::WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(1))
-        .keepalive_timeout(Seconds(1))
         .finish()
         .unwrap()
         .connect()

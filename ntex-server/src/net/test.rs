@@ -1,7 +1,8 @@
 //! Test server
 use std::{io, net, thread};
 
-use ntex_net::{tcp_connect, Io};
+use ntex_io::{Io, IoConfig};
+use ntex_net::tcp_connect;
 use ntex_rt::System;
 use ntex_service::ServiceFactory;
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -55,7 +56,7 @@ where
         sys.run(move || {
             let server = ServerBuilder::new()
                 .listen("test", tcp, move |_| factory())?
-                .set_tag("test", "TEST-SERVER")
+                .set_config("test", IoConfig::new("TEST-SERVER"))
                 .workers(1)
                 .disable_signals()
                 .run();
@@ -76,6 +77,7 @@ where
         addr,
         server,
         system,
+        cfg: IoConfig::new("TEST-CLIENT"),
     }
 }
 
@@ -103,6 +105,7 @@ where
         system,
         server,
         addr: "127.0.0.1:0".parse().unwrap(),
+        cfg: IoConfig::new("TEST-CLIENT"),
     }
 }
 
@@ -112,6 +115,7 @@ pub struct TestServer {
     addr: net::SocketAddr,
     system: System,
     server: Server,
+    cfg: IoConfig,
 }
 
 impl TestServer {
@@ -127,7 +131,7 @@ impl TestServer {
 
     /// Connect to server, return Io
     pub async fn connect(&self) -> io::Result<Io> {
-        tcp_connect(self.addr).await
+        tcp_connect(self.addr, self.cfg).await
     }
 
     /// Stop http server by stopping the runtime.

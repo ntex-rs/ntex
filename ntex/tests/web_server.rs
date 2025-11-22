@@ -12,6 +12,7 @@ use ntex::http::header::{
     TRANSFER_ENCODING,
 };
 use ntex::http::{body::Body, client, ConnectionType, Method, StatusCode};
+use ntex::io::IoConfig;
 use ntex::time::{sleep, Millis, Seconds, Sleep};
 use ntex::util::{Bytes, Ready, Stream};
 
@@ -863,8 +864,11 @@ async fn test_web_server() {
             })
             .headers_read_rate(Seconds(1), Seconds(5), 128)
             .payload_read_rate(Seconds(1), Seconds(5), 128)
-            .disconnect_timeout(Seconds(1))
-            .memory_pool(ntex_bytes::PoolId::P1)
+            .config(
+                IoConfig::build("TEST")
+                    .set_disconnect_timeout(Seconds(1))
+                    .finish(),
+            )
             .listen(tcp)
             .unwrap()
             .run()

@@ -1,6 +1,6 @@
 use std::{cell::Cell, fmt, future::poll_fn, io, task::Context, task::Poll};
 
-use ntex_bytes::{Buf, BufMut, BytesVec};
+use ntex_bytes::{Buf, BytesVec};
 use ntex_util::{future::lazy, future::select, future::Either, time::sleep, time::Sleep};
 
 use crate::{AsyncRead, AsyncWrite, FilterCtx, Flags, IoRef, IoTaskStatus, Readiness};
@@ -67,20 +67,16 @@ impl ReadContext {
             let mut buf = if inner.flags.get().is_read_buf_ready() {
                 // read buffer is still not read by dispatcher
                 // we cannot touch it
-                inner.pool.get().get_read_buf()
+                inner.read_buf().get()
             } else {
                 inner
                     .buffer
                     .get_read_source()
-                    .unwrap_or_else(|| inner.pool.get().get_read_buf())
+                    .unwrap_or_else(|| inner.read_buf().get())
             };
 
             // make sure we've got room
-            let (hw, lw) = self.0.memory_pool().read_params().unpack();
-            let remaining = buf.remaining_mut();
-            if remaining <= lw {
-                buf.reserve(hw - remaining);
-            }
+            inner.read_buf().resize(&mut buf);
             let total = buf.len();
 
             // call provided callback
@@ -113,7 +109,8 @@ impl ReadContext {
                     Ok(status) => {
                         if status.nbytes > 0 {
                             // check read back-pressure
-                            if hw < inner.buffer.read_destination_size() {
+                            if inner.read_buf().high < inner.buffer.read_destination_size()
+                            {
                                 log::trace!(
                                 "{}: Io read buffer is too large {}, enable read back-pressure",
                                 self.0.tag(),
@@ -199,7 +196,7 @@ impl ReadContext {
                     let timeout = self
                         .1
                         .take()
-                        .unwrap_or_else(|| sleep(st.disconnect_timeout.get()));
+                        .unwrap_or_else(|| sleep(st.cfg.get().disconnect_timeout()));
                     if timeout.poll_elapsed(cx).is_ready() {
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
@@ -293,7 +290,8 @@ impl WriteContext {
                         io.shutdown().await?;
                         Ok(())
                     };
-                    match select(sleep(self.0 .0.disconnect_timeout.get()), fut).await {
+                    match select(sleep(self.0 .0.cfg.get().disconnect_timeout()), fut).await
+                    {
                         Either::Left(_) => self.close(None),
                         Either::Right(res) => self.close(res.err()),
                     }
@@ -311,10 +309,10 @@ impl WriteContext {
 impl WriteContextBuf {
     pub fn set(&mut self, mut buf: BytesVec) {
         if buf.is_empty() {
-            self.io.memory_pool().release_write_buf(buf);
+            self.io.cfg().write_buf().release(buf);
         } else if let Some(b) = self.buf.take() {
             buf.extend_from_slice(&b);
-            self.io.memory_pool().release_write_buf(b);
+            self.io.cfg().write_buf().release(b);
             self.buf = Some(buf);
         } else if let Some(b) = self.io.0.buffer.set_write_destination(buf) {
             // write buffer is already set
@@ -334,8 +332,7 @@ impl WriteContextBuf {
             }
             flags.insert(Flags::WR_PAUSED);
             inner.flags.set(flags);
-        } else if flags.contains(Flags::BUF_W_BACKPRESSURE)
-            && len < inner.pool.get().write_params_high() << 1
+        } else if flags.contains(Flags::BUF_W_BACKPRESSURE) && len < inner.write_buf().half
         {
             flags.remove(Flags::BUF_W_BACKPRESSURE);
             inner.flags.set(flags);
@@ -446,12 +443,12 @@ impl IoContext {
         if inner.flags.get().is_read_buf_ready() {
             // read buffer is still not read by dispatcher
             // we cannot touch it
-            inner.pool.get().get_read_buf()
+            inner.read_buf().get()
         } else {
             inner
                 .buffer
                 .get_read_source()
-                .unwrap_or_else(|| inner.pool.get().get_read_buf())
+                .unwrap_or_else(|| inner.read_buf().get())
         }
     }
 
@@ -464,7 +461,7 @@ impl IoContext {
     ) -> IoTaskStatus {
         let inner = &self.0 .0;
         let orig_size = inner.buffer.read_destination_size();
-        let hw = self.0.memory_pool().read_params().unpack().0;
+        let hw = self.0.cfg().read_buf().high;
 
         if let Some(mut first_buf) = inner.buffer.get_read_source() {
             first_buf.extend_from_slice(&buf);
@@ -616,13 +613,13 @@ impl IoContext {
         // set buffer back
         let result = match result {
             Ok(0) => {
-                self.0.memory_pool().release_write_buf(buf);
+                self.0.cfg().write_buf().release(buf);
                 Ok(inner.buffer.write_destination_size())
             }
             Ok(_) => {
                 if let Some(b) = inner.buffer.get_write_destination() {
                     buf.extend_from_slice(&b);
-                    self.0.memory_pool().release_write_buf(b);
+                    self.0.cfg().write_buf().release(b);
                 }
                 let l = buf.len();
                 inner.buffer.set_write_destination(buf);
@@ -653,7 +650,7 @@ impl IoContext {
             Ok(len) => {
                 // if write buffer is smaller than high watermark value, turn off back-pressure
                 if inner.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
-                    && len < inner.pool.get().write_params_high() << 1
+                    && len < inner.write_buf().half
                 {
                     inner.remove_flags(Flags::BUF_W_BACKPRESSURE);
                     inner.dispatch_task.wake();

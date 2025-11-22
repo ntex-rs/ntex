@@ -8,9 +8,10 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 use crate::http::{
     self, body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
 };
+use crate::io::{cfg::FrameReadRate, IoConfig};
 use crate::server::{Server, ServerBuilder};
 use crate::service::{map_config, IntoServiceFactory, ServiceFactory};
-use crate::{time::Seconds, util::PoolId};
+use crate::time::Seconds;
 
 use super::config::AppConfig;
 
@@ -19,17 +20,9 @@ struct Config {
     keep_alive: KeepAlive,
     client_disconnect: Seconds,
     ssl_handshake_timeout: Seconds,
-    headers_read_rate: Option<ReadRate>,
-    payload_read_rate: Option<ReadRate>,
-    tag: &'static str,
-    pool: PoolId,
-}
-
-#[derive(Default, Copy, Clone)]
-struct ReadRate {
-    rate: u16,
-    timeout: Seconds,
-    max_timeout: Seconds,
+    headers_read_rate: Option<FrameReadRate>,
+    payload_read_rate: Option<FrameReadRate>,
+    cfg: IoConfig,
 }
 
 impl Config {
@@ -37,7 +30,6 @@ impl Config {
     fn into_cfg(&self) -> http::ServiceConfig {
         let mut svc_cfg = http::ServiceConfig::default();
         svc_cfg.keepalive(self.keep_alive);
-        svc_cfg.disconnect_timeout(self.client_disconnect);
         svc_cfg.ssl_handshake_timeout(self.ssl_handshake_timeout);
         if let Some(hdrs) = self.headers_read_rate {
             svc_cfg.headers_read_rate(hdrs.timeout, hdrs.max_timeout, hdrs.rate);
@@ -102,14 +94,13 @@ where
                 keep_alive: KeepAlive::Timeout(Seconds(5)),
                 client_disconnect: Seconds(1),
                 ssl_handshake_timeout: Seconds(5),
-                headers_read_rate: Some(ReadRate {
+                headers_read_rate: Some(FrameReadRate {
                     rate: 256,
                     timeout: Seconds(1),
                     max_timeout: Seconds(13),
                 }),
                 payload_read_rate: None,
-                tag: "WEB",
-                pool: PoolId::P0,
+                cfg: IoConfig::default(),
             })),
             backlog: 1024,
             builder: ServerBuilder::default(),
@@ -188,7 +179,11 @@ where
             if timeout.is_zero() {
                 cfg.headers_read_rate = None;
             } else {
-                let mut rate = cfg.headers_read_rate.unwrap_or_default();
+                let mut rate = cfg.headers_read_rate.unwrap_or(FrameReadRate {
+                    rate: 256,
+                    timeout: Seconds(5),
+                    max_timeout: Seconds(15),
+                });
                 rate.timeout = timeout;
                 cfg.headers_read_rate = Some(rate);
             }
@@ -231,10 +226,10 @@ where
         self,
         timeout: Seconds,
         max_timeout: Seconds,
-        rate: u16,
+        rate: u32,
     ) -> Self {
         if !timeout.is_zero() {
-            self.config.lock().unwrap().headers_read_rate = Some(ReadRate {
+            self.config.lock().unwrap().headers_read_rate = Some(FrameReadRate {
                 rate,
                 timeout,
                 max_timeout,
@@ -256,10 +251,10 @@ where
         self,
         timeout: Seconds,
         max_timeout: Seconds,
-        rate: u16,
+        rate: u32,
     ) -> Self {
         if !timeout.is_zero() {
-            self.config.lock().unwrap().payload_read_rate = Some(ReadRate {
+            self.config.lock().unwrap().payload_read_rate = Some(FrameReadRate {
                 rate,
                 timeout,
                 max_timeout,
@@ -318,17 +313,15 @@ where
         self
     }
 
-    /// Set io tag for web server
-    pub fn tag(self, tag: &'static str) -> Self {
-        self.config.lock().unwrap().tag = tag;
+    /// Set io config for named service.
+    pub fn config(self, cfg: IoConfig) -> Self {
+        self.config.lock().unwrap().cfg = cfg;
         self
     }
 
-    /// Set memory pool.
-    ///
-    /// Use specified memory pool for memory allocations.
-    pub fn memory_pool(self, id: PoolId) -> Self {
-        self.config.lock().unwrap().pool = id;
+    #[deprecated]
+    /// Set io tag for web server
+    pub fn tag(self, _: &'static str) -> Self {
         self
     }
 
@@ -350,8 +343,7 @@ where
                         addr,
                         c.host.clone().unwrap_or_else(|| format!("{addr}")),
                     );
-                    r.tag(c.tag);
-                    r.memory_pool(c.pool);
+                    r.config(c.cfg);
 
                     HttpService::build_with_config(c.into_cfg())
                         .finish(map_config(factory(), move |_| cfg.clone()))
@@ -390,8 +382,7 @@ where
                         addr,
                         c.host.clone().unwrap_or_else(|| format!("{addr}")),
                     );
-                    r.tag(c.tag);
-                    r.memory_pool(c.pool);
+                    r.config(c.cfg);
 
                     HttpService::build_with_config(c.into_cfg())
                         .finish(map_config(factory(), move |_| cfg.clone()))
@@ -432,8 +423,7 @@ where
                     addr,
                     c.host.clone().unwrap_or_else(|| format!("{addr}")),
                 );
-                r.tag(c.tag);
-                r.memory_pool(c.pool);
+                r.config(c.cfg);
 
                 HttpService::build_with_config(c.into_cfg())
                     .finish(map_config(factory(), move |_| cfg.clone()))
@@ -541,8 +531,7 @@ where
                 socket_addr,
                 c.host.clone().unwrap_or_else(|| format!("{socket_addr}")),
             );
-            r.tag(c.tag);
-            r.memory_pool(c.pool);
+            r.config(c.cfg);
 
             HttpService::build_with_config(c.into_cfg())
                 .finish(map_config(factory(), move |_| config.clone()))
@@ -573,8 +562,7 @@ where
                     socket_addr,
                     c.host.clone().unwrap_or_else(|| format!("{socket_addr}")),
                 );
-                r.tag(c.tag);
-                r.memory_pool(c.pool);
+                r.config(c.cfg);
 
                 HttpService::build_with_config(c.into_cfg())
                     .finish(map_config(factory(), move |_| config.clone()))

@@ -1,14 +1,21 @@
 use std::{any, fmt, hash, io};
 
-use ntex_bytes::{BytesVec, PoolRef};
+use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Seconds;
 
 use crate::{
-    timer, types, Decoded, Filter, FilterCtx, Flags, IoRef, OnDisconnect, WriteBuf,
+    timer, types, Decoded, Filter, FilterCtx, Flags, IoConfig, IoRef, OnDisconnect,
+    WriteBuf,
 };
 
 impl IoRef {
+    #[inline]
+    /// Get tag
+    pub fn tag(&self) -> &'static str {
+        self.0.cfg.get().tag()
+    }
+
     #[inline]
     #[doc(hidden)]
     /// Get current state flags
@@ -23,9 +30,9 @@ impl IoRef {
     }
 
     #[inline]
-    /// Get memory pool
-    pub fn memory_pool(&self) -> PoolRef {
-        self.0.pool.get()
+    /// Get configuration
+    pub fn cfg(&self) -> IoConfig {
+        self.0.cfg.get()
     }
 
     #[inline]
@@ -114,7 +121,7 @@ impl IoRef {
         if !self.is_closed() {
             self.with_write_buf(|buf| {
                 // make sure we've got room
-                self.memory_pool().resize_write_buf(buf);
+                self.cfg().write_buf().resize(buf);
 
                 // encode item and wake write task
                 codec.encode_vec(item, buf)
@@ -236,14 +243,6 @@ impl IoRef {
         self.0.notify_timeout()
     }
 
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    /// Wakeup dispatcher and send keep-alive error
-    pub fn notify_keepalive(&self) {
-        self.0.notify_timeout()
-    }
-
     #[inline]
     /// current timer handle
     pub fn timer_handle(&self) -> timer::TimerHandle {
@@ -287,18 +286,6 @@ impl IoRef {
             self.0.timeout.set(timer::TimerHandle::ZERO);
             timer::unregister(hnd, self)
         }
-    }
-
-    #[inline]
-    /// Get tag
-    pub fn tag(&self) -> &'static str {
-        self.0.tag.get()
-    }
-
-    #[inline]
-    /// Set tag
-    pub fn set_tag(&self, tag: &'static str) {
-        self.0.tag.set(tag)
     }
 
     #[inline]
@@ -354,7 +341,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write(TEXT);
 
-        let state = Io::new(server);
+        let state = Io::from(server);
         assert_eq!(state.get_ref(), state.get_ref());
 
         let msg = state.recv(&BytesCodec).await.unwrap().unwrap();
@@ -379,7 +366,7 @@ mod tests {
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
-        let state = Io::new(server);
+        let state = Io::from(server);
 
         client.read_error(io::Error::other("err"));
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
@@ -391,7 +378,7 @@ mod tests {
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
-        let state = Io::new(server);
+        let state = Io::from(server);
         state.write(b"test").unwrap();
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
@@ -408,7 +395,7 @@ mod tests {
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
-        let state = Io::new(server);
+        let state = Io::from(server);
         state.force_close();
         assert!(state.flags().contains(Flags::DSP_STOP));
         assert!(state.flags().contains(Flags::IO_STOPPING));
@@ -419,7 +406,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let io = Io::new(server);
+        let io = Io::from(server);
         assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
 
         client.write(TEXT);
@@ -439,7 +426,7 @@ mod tests {
     #[allow(clippy::unit_cmp)]
     async fn on_disconnect() {
         let (client, server) = IoTest::create();
-        let state = Io::new(server);
+        let state = Io::from(server);
         let mut waiter = state.on_disconnect();
         assert_eq!(
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
@@ -461,7 +448,7 @@ mod tests {
         );
 
         let (client, server) = IoTest::create();
-        let state = Io::new(server);
+        let state = Io::from(server);
         let mut waiter = state.on_disconnect();
         assert_eq!(
             lazy(|cx| Pin::new(&mut waiter).poll(cx)).await,
@@ -474,7 +461,7 @@ mod tests {
     #[ntex::test]
     async fn write_to_closed_io() {
         let (client, server) = IoTest::create();
-        let state = Io::new(server);
+        let state = Io::from(server);
         client.close().await;
 
         assert!(state.is_closed());
@@ -529,7 +516,7 @@ mod tests {
         let write_order = Rc::new(RefCell::new(Vec::new()));
 
         let (client, server) = IoTest::create();
-        let io = Io::new(server).map_filter(|layer| Counter {
+        let io = Io::from(server).map_filter(|layer| Counter {
             layer,
             idx: 1,
             in_bytes: in_bytes.clone(),
@@ -561,7 +548,7 @@ mod tests {
         let write_order = Rc::new(RefCell::new(Vec::new()));
 
         let (client, server) = IoTest::create();
-        let state = Io::new(server)
+        let state = Io::from(server)
             .map_filter(|layer| Counter {
                 layer,
                 idx: 2,

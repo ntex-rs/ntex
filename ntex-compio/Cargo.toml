@@ -1,6 +1,6 @@
 [package]
 name = "ntex-compio"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "compio runtime intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-bytes = "0.1"
-ntex-io = "2.5"
+ntex-io = "2.16"
 ntex-util = "2"
 ntex-rt = "0.4.33"
 log = { workspace = true }

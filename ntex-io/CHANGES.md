@@ -1,5 +1,9 @@
 # Changes
 
+## [2.16.0] - 2025-11-xx
+
+* New io configuration subsystem
+
 ## [2.15.1] - 2025-11-12
 
 * Resolve keep-alive handling for the dispatcher's idle state

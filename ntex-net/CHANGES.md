@@ -1,5 +1,9 @@
 # Changes
 
+## [2.10.0] - 2025-11-xx
+
+* New io configuration subsystem
+
 ## [2.9.0] - 2025-11-12
 
 * Update to compio 0.16

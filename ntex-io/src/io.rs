@@ -3,11 +3,11 @@ use std::future::{poll_fn, Future};
 use std::task::{Context, Poll};
 use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 
-use ntex_bytes::{PoolId, PoolRef};
 use ntex_codec::{Decoder, Encoder};
-use ntex_util::{future::Either, task::LocalWaker, time::Seconds};
+use ntex_util::{future::Either, task::LocalWaker};
 
 use crate::buf::Stack;
+use crate::cfg::{BufConfig, IoConfig};
 use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::flags::Flags;
 use crate::seal::{IoBoxed, Sealed};
@@ -23,9 +23,8 @@ pub struct IoRef(pub(super) Rc<IoState>);
 
 pub(crate) struct IoState {
     filter: FilterPtr,
+    pub(super) cfg: Cell<IoConfig>,
     pub(super) flags: Cell<Flags>,
-    pub(super) pool: Cell<PoolRef>,
-    pub(super) disconnect_timeout: Cell<Seconds>,
     pub(super) error: Cell<Option<io::Error>>,
     pub(super) read_task: LocalWaker,
     pub(super) write_task: LocalWaker,
@@ -33,12 +32,9 @@ pub(crate) struct IoState {
     pub(super) buffer: Stack,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) timeout: Cell<TimerHandle>,
-    pub(super) tag: Cell<&'static str>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
 }
-
-const DEFAULT_TAG: &str = "IO";
 
 impl IoState {
     pub(super) fn filter(&self) -> &dyn Filter {
@@ -68,7 +64,7 @@ impl IoState {
             flags.insert(Flags::DSP_TIMEOUT);
             self.flags.set(flags);
             self.dispatch_task.wake();
-            log::trace!("{}: Timer, notify dispatcher", self.tag.get());
+            log::trace!("{}: Timer, notify dispatcher", self.cfg.get().tag());
         }
     }
 
@@ -101,7 +97,7 @@ impl IoState {
         if !self.flags.get().is_stopped() {
             log::trace!(
                 "{}: {} Io error {:?} flags: {:?}",
-                self.tag.get(),
+                self.cfg.get().tag(),
                 self as *const _ as usize,
                 err,
                 self.flags.get()
@@ -123,7 +119,7 @@ impl IoState {
             if !self.dispatch_task.wake_checked() {
                 log::trace!(
                     "{}: {} Dispatcher is not registered, flags: {:?}",
-                    self.tag.get(),
+                    self.cfg.get().tag(),
                     self as *const _ as usize,
                     self.flags.get()
                 );
@@ -140,12 +136,22 @@ impl IoState {
         {
             log::trace!(
                 "{}: Initiate io shutdown {:?}",
-                self.tag.get(),
+                self.cfg.get().tag(),
                 self.flags.get()
             );
             self.insert_flags(Flags::IO_STOPPING_FILTERS);
             self.read_task.wake();
         }
+    }
+
+    #[inline]
+    pub(super) fn read_buf(&self) -> &BufConfig {
+        self.cfg.get().read_buf()
+    }
+
+    #[inline]
+    pub(super) fn write_buf(&self) -> &BufConfig {
+        self.cfg.get().write_buf()
     }
 }
 
@@ -165,13 +171,6 @@ impl hash::Hash for IoState {
     }
 }
 
-impl Drop for IoState {
-    #[inline]
-    fn drop(&mut self) {
-        self.buffer.release(self.pool.get());
-    }
-}
-
 impl fmt::Debug for IoState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let err = self.error.take();
@@ -179,10 +178,10 @@ impl fmt::Debug for IoState {
             .debug_struct("IoState")
             .field("flags", &self.flags)
             .field("filter", &self.filter.is_set())
-            .field("disconnect_timeout", &self.disconnect_timeout)
             .field("timeout", &self.timeout)
             .field("error", &err)
             .field("buffer", &self.buffer)
+            .field("cfg", &self.cfg)
             .finish();
         self.error.set(err);
         res
@@ -192,16 +191,10 @@ impl fmt::Debug for IoState {
 impl Io {
     #[inline]
     /// Create `Io` instance
-    pub fn new<I: IoStream>(io: I) -> Self {
-        Self::with_memory_pool(io, PoolId::DEFAULT.pool_ref())
-    }
-
-    #[inline]
-    /// Create `Io` instance in specific memory pool.
-    pub fn with_memory_pool<I: IoStream>(io: I, pool: PoolRef) -> Self {
+    pub fn new<I: IoStream>(io: I, cfg: IoConfig) -> Self {
         let inner = Rc::new(IoState {
+            cfg: Cell::new(cfg),
             filter: FilterPtr::null(),
-            pool: Cell::new(pool),
             flags: Cell::new(Flags::WR_PAUSED),
             error: Cell::new(None),
             dispatch_task: LocalWaker::new(),
@@ -210,9 +203,7 @@ impl Io {
             buffer: Stack::new(),
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
-            disconnect_timeout: Cell::new(Seconds(1)),
             on_disconnect: Cell::new(None),
-            tag: Cell::new(DEFAULT_TAG),
         });
         inner.filter.update(Base::new(IoRef(inner.clone())));
 
@@ -226,20 +217,14 @@ impl Io {
     }
 }
 
+impl<I: IoStream> From<I> for Io {
+    #[inline]
+    fn from(io: I) -> Io {
+        Io::new(io, IoConfig::default())
+    }
+}
+
 impl<F> Io<F> {
-    #[inline]
-    /// Set memory pool
-    pub fn set_memory_pool(&self, pool: PoolRef) {
-        self.st().buffer.set_memory_pool(pool);
-        self.st().pool.set(pool);
-    }
-
-    #[inline]
-    /// Set io disconnect timeout in millis
-    pub fn set_disconnect_timeout(&self, timeout: Seconds) {
-        self.st().disconnect_timeout.set(timeout);
-    }
-
     #[inline]
     /// Clone current io object.
     ///
@@ -250,8 +235,8 @@ impl<F> Io<F> {
 
     fn take_io_ref(&self) -> IoRef {
         let inner = Rc::new(IoState {
+            cfg: Cell::new(IoConfig::default()),
             filter: FilterPtr::null(),
-            pool: self.st().pool.clone(),
             flags: Cell::new(
                 Flags::DSP_STOP
                     | Flags::IO_STOPPED
@@ -259,7 +244,6 @@ impl<F> Io<F> {
                     | Flags::IO_STOPPING_FILTERS,
             ),
             error: Cell::new(None),
-            disconnect_timeout: Cell::new(Seconds(1)),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
@@ -267,13 +251,10 @@ impl<F> Io<F> {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             on_disconnect: Cell::new(None),
-            tag: Cell::new(DEFAULT_TAG),
         });
         unsafe { mem::replace(&mut *self.0.get(), IoRef(inner)) }
     }
-}
 
-impl<F> Io<F> {
     #[inline]
     #[doc(hidden)]
     /// Get current state flags
@@ -293,6 +274,12 @@ impl<F> Io<F> {
 
     fn io_ref(&self) -> &IoRef {
         unsafe { &*self.0.get() }
+    }
+
+    #[inline]
+    /// Set io config
+    pub fn set_config(&self, cfg: IoConfig) {
+        self.st().cfg.set(cfg);
     }
 }
 
@@ -598,7 +585,7 @@ impl<F> Io<F> {
                 } else {
                     Poll::Pending
                 };
-            } else if len >= st.pool.get().write_params_high() << 1 {
+            } else if len >= st.write_buf().half {
                 st.insert_flags(Flags::BUF_W_BACKPRESSURE);
                 st.dispatch_task.register(cx.waker());
                 return if flags.is_stopped() {
@@ -726,7 +713,7 @@ impl<F> Drop for Io<F> {
             if !st.flags.get().is_stopped() {
                 log::trace!(
                     "{}: Io is dropped, force stopping io streams {:?}",
-                    st.tag.get(),
+                    st.cfg.get().tag(),
                     st.flags.get()
                 );
             }
@@ -1013,7 +1000,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let server = Io::new(server);
+        let server = Io::from(server);
         assert!(server.eq(&server));
         assert!(server.io_ref().eq(server.io_ref()));
 
@@ -1027,7 +1014,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let server = Io::new(server);
+        let server = Io::from(server);
 
         server.st().notify_timeout();
         let err = server.recv(&BytesCodec).await.err().unwrap();
@@ -1048,7 +1035,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let server = Io::new(server);
+        let server = Io::from(server);
         assert!(server.eq(&server));
 
         server
@@ -1096,7 +1083,7 @@ mod tests {
         let (client, server) = IoTest::create();
         let f = DropFilter { p: p.clone() };
         let _ = format!("{f:?}");
-        let io = Io::new(server).add_filter(f);
+        let io = Io::from(server).add_filter(f);
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);
@@ -1125,7 +1112,7 @@ mod tests {
         let p = Rc::new(Cell::new(0));
         let f = DropFilter { p: p.clone() };
 
-        let io = Io::new(IoTest::create().0).seal();
+        let io = Io::from(IoTest::create().0).seal();
         let _io: Io<Layer<DropFilter, Sealed>> = io.add_filter(f);
     }
 }

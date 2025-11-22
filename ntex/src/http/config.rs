@@ -3,7 +3,7 @@ use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time};
 use ntex_h2::{self as h2};
 
 use crate::time::{sleep, Millis, Seconds};
-use crate::{service::Pipeline, util::BytesMut};
+use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -46,26 +46,9 @@ pub struct ServiceConfig {
     pub(super) ka_enabled: bool,
     pub(super) ssl_handshake_timeout: Millis,
     pub(super) h2config: h2::Config,
-    pub(super) headers_read_rate: Option<ReadRate>,
-    pub(super) payload_read_rate: Option<ReadRate>,
+    pub(super) headers_read_rate: Option<FrameReadRate>,
+    pub(super) payload_read_rate: Option<FrameReadRate>,
     pub(super) timer: DateService,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct ReadRate {
-    pub(super) rate: u16,
-    pub(super) timeout: Seconds,
-    pub(super) max_timeout: Seconds,
-}
-
-impl Default for ReadRate {
-    fn default() -> Self {
-        ReadRate {
-            rate: 256,
-            timeout: Seconds(5),
-            max_timeout: Seconds(15),
-        }
-    }
 }
 
 impl Default for ServiceConfig {
@@ -107,7 +90,7 @@ impl ServiceConfig {
             keep_alive,
             ka_enabled,
             timer: DateService::new(),
-            headers_read_rate: Some(ReadRate {
+            headers_read_rate: Some(FrameReadRate {
                 rate: 256,
                 timeout: client_timeout,
                 max_timeout: client_timeout + Seconds(15),
@@ -120,7 +103,11 @@ impl ServiceConfig {
         if timeout.is_zero() {
             self.headers_read_rate = None;
         } else {
-            let mut rate = self.headers_read_rate.unwrap_or_default();
+            let mut rate = self.headers_read_rate.unwrap_or(FrameReadRate {
+                rate: 256,
+                timeout: Seconds(5),
+                max_timeout: Seconds(15),
+            });
             rate.timeout = timeout;
             self.headers_read_rate = Some(rate);
         }
@@ -157,20 +144,6 @@ impl ServiceConfig {
         self
     }
 
-    /// Set connection disconnect timeout.
-    ///
-    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
-    /// within this time, the connection get dropped.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default disconnect timeout is set to 1 seconds.
-    pub fn disconnect_timeout(&mut self, timeout: Seconds) -> &mut Self {
-        self.client_disconnect = timeout;
-        self.h2config.disconnect_timeout(timeout);
-        self
-    }
-
     /// Set server ssl handshake timeout.
     ///
     /// Defines a timeout for connection ssl handshake negotiation.
@@ -194,10 +167,10 @@ impl ServiceConfig {
         &mut self,
         timeout: Seconds,
         max_timeout: Seconds,
-        rate: u16,
+        rate: u32,
     ) -> &mut Self {
         if !timeout.is_zero() {
-            self.headers_read_rate = Some(ReadRate {
+            self.headers_read_rate = Some(FrameReadRate {
                 rate,
                 timeout,
                 max_timeout,
@@ -219,10 +192,10 @@ impl ServiceConfig {
         &mut self,
         timeout: Seconds,
         max_timeout: Seconds,
-        rate: u16,
+        rate: u32,
     ) -> &mut Self {
         if !timeout.is_zero() {
-            self.payload_read_rate = Some(ReadRate {
+            self.payload_read_rate = Some(FrameReadRate {
                 rate,
                 timeout,
                 max_timeout,
@@ -251,8 +224,8 @@ pub(super) struct DispatcherConfig<S, C> {
     pub(super) keep_alive: Seconds,
     pub(super) client_disconnect: Seconds,
     pub(super) h2config: h2::Config,
-    pub(super) headers_read_rate: Option<ReadRate>,
-    pub(super) payload_read_rate: Option<ReadRate>,
+    pub(super) headers_read_rate: Option<FrameReadRate>,
+    pub(super) payload_read_rate: Option<FrameReadRate>,
     pub(super) timer: DateService,
 }
 
@@ -280,7 +253,7 @@ impl<S, C> DispatcherConfig<S, C> {
         self.flags.get().contains(Flags::KA_ENABLED)
     }
 
-    pub(super) fn headers_read_rate(&self) -> Option<&ReadRate> {
+    pub(super) fn headers_read_rate(&self) -> Option<&FrameReadRate> {
         self.headers_read_rate.as_ref()
     }
 

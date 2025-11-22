@@ -38,7 +38,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{buf::Stack, filter::NullFilter, testing::IoTest, FilterCtx};
+    use crate::{buf::Stack, filter::NullFilter, testing::IoTest, FilterCtx, IoConfig};
 
     #[ntex::test]
     async fn test_utils() {
@@ -57,7 +57,7 @@ mod tests {
         .pipeline(())
         .await
         .unwrap();
-        let _ = svc.call(Io::new(server)).await;
+        let _ = svc.call(Io::new(server, IoConfig::default())).await;
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, b"RES".as_ref());
@@ -66,7 +66,7 @@ mod tests {
     #[ntex::test]
     async fn test_null_filter() {
         let (_, server) = IoTest::create();
-        let io = Io::new(server);
+        let io = Io::new(server, IoConfig::default());
         let ioref = io.get_ref();
         let stack = Stack::new();
         assert!(NullFilter.query(std::any::TypeId::of::<()>()).is_none());

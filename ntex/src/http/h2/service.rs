@@ -309,7 +309,6 @@ where
     C2: Service<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
     C2::Error: Error,
 {
-    io.set_disconnect_timeout(config.client_disconnect);
     let ioref = io.get_ref();
 
     let _ = server::handle_one(

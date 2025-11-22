@@ -370,11 +370,7 @@ impl ClientRequest {
     /// Freeze request builder and construct `FrozenClientRequest`,
     /// which could be used for sending same request multiple times.
     pub fn freeze(self) -> Result<FrozenClientRequest, FreezeRequestError> {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return Err(e.into()),
-        };
-
+        let slf = self.prep_for_sending()?;
         let request = FrozenClientRequest {
             head: Rc::new(*slf.head),
             addr: slf.addr,

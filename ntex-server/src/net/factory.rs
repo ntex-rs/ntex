@@ -1,7 +1,6 @@
 use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
-use ntex_bytes::PoolId;
-use ntex_net::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
 use ntex_util::future::{BoxFuture, Ready};
 
@@ -13,9 +12,8 @@ pub(crate) type FactoryServiceType = Box<dyn FactoryService>;
 #[derive(Debug)]
 pub(crate) struct NetService {
     pub(crate) name: Arc<str>,
-    pub(crate) tokens: Vec<(Token, &'static str)>,
+    pub(crate) tokens: Vec<(Token, IoConfig)>,
     pub(crate) factory: BoxServerService,
-    pub(crate) pool: PoolId,
 }
 
 pub(crate) trait FactoryService: Send {
@@ -23,7 +21,7 @@ pub(crate) trait FactoryService: Send {
         ""
     }
 
-    fn set_tag(&mut self, _: Token, _: &'static str) {}
+    fn set_config(&mut self, _: Token, _: IoConfig) {}
 
     fn clone_factory(&self) -> Box<dyn FactoryService>;
 
@@ -42,7 +40,7 @@ where
 
 pub(crate) fn create_factory_service<F, R>(
     name: String,
-    tokens: Vec<(Token, &'static str)>,
+    tokens: Vec<(Token, IoConfig)>,
     factory: F,
 ) -> Box<dyn FactoryService>
 where
@@ -61,7 +59,7 @@ where
 
 struct Factory<F, R, E> {
     name: String,
-    tokens: Vec<(Token, &'static str)>,
+    tokens: Vec<(Token, IoConfig)>,
     factory: F,
     _t: PhantomData<(R, E)>,
 }
@@ -85,10 +83,10 @@ where
         })
     }
 
-    fn set_tag(&mut self, token: Token, tag: &'static str) {
+    fn set_config(&mut self, token: Token, cfg: IoConfig) {
         for item in &mut self.tokens {
             if item.0 == token {
-                item.1 = tag;
+                item.1 = cfg;
             }
         }
     }
@@ -103,9 +101,9 @@ where
             let factory = factory_fut.await.map_err(|_| {
                 log::error!("Cannot create {name:?} service");
             })?;
-            if let Some(tag) = cfg.get_tag() {
+            if let Some(config) = cfg.get_config() {
                 for item in &mut tokens {
-                    item.1 = tag;
+                    item.1 = config;
                 }
             }
 
@@ -113,7 +111,6 @@ where
                 tokens,
                 factory,
                 name: Arc::from(name),
-                pool: cfg.get_pool_id(),
             }])
         })
     }
