@@ -42,7 +42,6 @@ impl From<Option<usize>> for KeepAlive {
 /// Http service configuration
 pub struct ServiceConfig {
     pub(super) keep_alive: Seconds,
-    pub(super) client_disconnect: Seconds,
     pub(super) ka_enabled: bool,
     pub(super) ssl_handshake_timeout: Millis,
     pub(super) h2config: h2::Config,
@@ -56,7 +55,6 @@ impl Default for ServiceConfig {
         Self::new(
             KeepAlive::Timeout(Seconds(5)),
             Seconds::ONE,
-            Seconds::ONE,
             Millis(5_000),
             h2::Config::server(),
         )
@@ -68,7 +66,6 @@ impl ServiceConfig {
     pub fn new(
         keep_alive: KeepAlive,
         client_timeout: Seconds,
-        client_disconnect: Seconds,
         ssl_handshake_timeout: Millis,
         h2config: h2::Config,
     ) -> ServiceConfig {
@@ -84,7 +81,6 @@ impl ServiceConfig {
         };
 
         ServiceConfig {
-            client_disconnect,
             ssl_handshake_timeout,
             h2config,
             keep_alive,
@@ -222,7 +218,6 @@ pub(super) struct DispatcherConfig<S, C> {
     pub(super) service: Pipeline<S>,
     pub(super) control: Pipeline<C>,
     pub(super) keep_alive: Seconds,
-    pub(super) client_disconnect: Seconds,
     pub(super) h2config: h2::Config,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
@@ -235,7 +230,6 @@ impl<S, C> DispatcherConfig<S, C> {
             service: service.into(),
             control: control.into(),
             keep_alive: cfg.keep_alive,
-            client_disconnect: cfg.client_disconnect,
             headers_read_rate: cfg.headers_read_rate,
             payload_read_rate: cfg.payload_read_rate,
             h2config: cfg.h2config.clone(),

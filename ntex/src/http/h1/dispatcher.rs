@@ -780,7 +780,6 @@ mod tests {
         let config = ServiceConfig::new(
             Seconds(5).into(),
             Seconds(1),
-            Seconds::ZERO,
             Millis(5_000),
             Config::server(),
         );
@@ -827,7 +826,6 @@ mod tests {
         let config = ServiceConfig::new(
             Seconds(5).into(),
             Seconds(1),
-            Seconds::ZERO,
             Millis(5_000),
             Config::server(),
         );
@@ -1233,7 +1231,6 @@ mod tests {
         let mut config = ServiceConfig::new(
             Seconds(5).into(),
             Seconds(1),
-            Seconds::ZERO,
             Millis(5_000),
             Config::server(),
         );
