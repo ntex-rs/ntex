@@ -62,7 +62,9 @@ unsafe impl IoBufMut for CompioBuf {
 
 impl SetBufInit for CompioBuf {
     unsafe fn set_buf_init(&mut self, len: usize) {
-        self.0.set_len(len + self.0.len());
+        unsafe {
+            self.0.set_len(len + self.0.len());
+        }
     }
 }
 
