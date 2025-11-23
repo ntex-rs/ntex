@@ -102,7 +102,7 @@ where
                 let result = ctx.release_read_buf(
                     nbytes,
                     cbuf.0,
-                    Poll::Ready(result.map(|_| ()).map_err(|e| Some(e))),
+                    Poll::Ready(result.map(|_| ()).map_err(Some)),
                 );
                 if result == IoTaskStatus::Stop {
                     break;
