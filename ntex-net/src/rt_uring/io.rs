@@ -6,23 +6,21 @@ use ntex_rt::spawn;
 use super::driver::{StreamCtl, StreamOps};
 
 impl ntex_io::IoStream for super::TcpStream {
-    fn start(self, read: ReadContext, _: ntex_io::WriteContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
-        let context = read.context();
-        let ctl = StreamOps::current().register(io, context.clone(), true);
+        let ctl = StreamOps::current().register(io, ctx.clone(), true);
         let ctl2 = ctl.clone();
-        spawn(async move { run(ctl, context).await });
+        spawn(async move { run(ctl, ctx).await });
 
         Some(Box::new(HandleWrapper(ctl2)))
     }
 }
 
 impl ntex_io::IoStream for super::UnixStream {
-    fn start(self, read: ReadContext, _: ntex_io::WriteContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
-        let context = read.context();
-        let ctl = StreamOps::current().register(io, context.clone(), false);
-        spawn(async move { run(ctl, context).await });
+        let ctl = StreamOps::current().register(io, ctx.clone(), false);
+        spawn(async move { run(ctl, ctx).await });
 
         None
     }
