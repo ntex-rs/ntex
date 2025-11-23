@@ -224,7 +224,7 @@ impl Handler for StreamOpsHandler {
                             let res = Poll::Ready(res.map(|size| {
                                 unsafe { buf.advance_mut(size) };
                                 total = size;
-                            }));
+                            }).map_err(|e| Some(e)));
 
                             // handle IORING_CQE_F_SOCK_NONEMPTY flag
                             if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
