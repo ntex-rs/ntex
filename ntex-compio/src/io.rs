@@ -98,7 +98,7 @@ where
 
         match select(read_fut.take().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
-                let nbytes = cbuf.0.len().saturating_sub(total);
+                let nbytes = cbuf.0.len() - total;
                 let result = ctx.release_read_buf(
                     nbytes,
                     cbuf.0,
@@ -184,9 +184,9 @@ where
                     io::ErrorKind::WriteZero,
                     "failed to write frame to transport",
                 )),
-                Ok(_) => {
+                Ok(size) => {
+                    buf.0.advance(size);
                     if buf.0.is_empty() {
-                        buf.0.clear();
                         Ok(len)
                     } else {
                         continue;
@@ -194,6 +194,8 @@ where
                 }
                 Err(e) => Err(e),
             };
+            buf.0.clear();
+            unsafe { buf.0.set_len(len) };
             return ctx.release_write_buf(buf.0, Poll::Ready(result));
         }
     } else {
