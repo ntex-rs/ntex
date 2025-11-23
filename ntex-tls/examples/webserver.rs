@@ -8,7 +8,6 @@ use tls_openssl::ssl::{self, SslFiletype, SslMethod};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    std::env::set_var("RUST_LOG", "trace");
     let _ = env_logger::try_init();
 
     println!("Started openssl web server: 127.0.0.1:8443");

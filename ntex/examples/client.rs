@@ -2,7 +2,6 @@ use ntex::http::client::{Client, error::SendRequestError};
 
 #[ntex::main]
 async fn main() -> Result<(), SendRequestError> {
-    std::env::set_var("RUST_LOG", "ntex=trace");
     env_logger::init();
 
     let client = Client::new();

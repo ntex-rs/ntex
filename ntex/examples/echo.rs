@@ -1,4 +1,4 @@
-use std::{env, io};
+use std::io;
 
 use futures_util::StreamExt;
 use log::info;
@@ -8,7 +8,6 @@ use ntex::{time::Seconds, util::BytesMut};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    env::set_var("RUST_LOG", "echo=info");
     env_logger::init();
 
     ntex::server::build()

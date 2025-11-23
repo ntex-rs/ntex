@@ -1,4 +1,4 @@
-use std::{env, io};
+use std::io;
 
 use log::info;
 use ntex::http::header::HeaderValue;
@@ -7,7 +7,6 @@ use ntex::{time::Seconds, util::Ready};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    env::set_var("RUST_LOG", "ntex=trace,hello_world=info");
     env_logger::init();
 
     ntex::server::build()
