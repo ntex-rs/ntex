@@ -1,6 +1,6 @@
 use std::{borrow, fmt, ops, ptr};
 
-use crate::{buf::IntoIter, buf::UninitSlice, debug, storage::Storage, Buf, BufMut, Bytes};
+use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, debug, storage::Storage};
 
 /// A unique reference to a contiguous slice of memory.
 ///

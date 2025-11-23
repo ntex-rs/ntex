@@ -547,11 +547,7 @@ impl TimerInner {
             clk += u64::from(lvl_clk != 0);
         }
 
-        if next < u64::MAX {
-            Some(next)
-        } else {
-            None
-        }
+        if next < u64::MAX { Some(next) } else { None }
     }
 
     /// Get next expiry time in millis
@@ -737,7 +733,7 @@ impl Future for LowresTimerDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::time::{interval, sleep, Millis};
+    use crate::time::{Millis, interval, sleep};
 
     #[ntex_macros::rt_test2]
     async fn test_timer() {

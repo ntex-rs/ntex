@@ -10,11 +10,11 @@ use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
-use crate::io::{types, Filter, Io, IoBoxed, IoRef};
+use crate::io::{Filter, Io, IoBoxed, IoRef, types};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 use crate::util::{Bytes, BytesMut, HashMap, HashSet};
 
-use super::{payload::Payload, payload::PayloadSender, DefaultControlService};
+use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
 /// `ServiceFactory` implementation for HTTP2 transport
 pub struct H2Service<F, S, B, C> {

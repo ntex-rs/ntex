@@ -1,4 +1,4 @@
-use super::{util, Service, ServiceCtx, ServiceFactory};
+use super::{Service, ServiceCtx, ServiceFactory, util};
 
 #[derive(Clone, Debug)]
 /// Service for the `and_then` combinator, chaining a computation onto the end
@@ -92,7 +92,7 @@ mod tests {
     use ntex_util::future::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
 
-    use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
+    use crate::{Service, ServiceCtx, chain, chain_factory, fn_factory};
 
     #[derive(Debug, Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);

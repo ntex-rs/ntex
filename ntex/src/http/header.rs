@@ -2,10 +2,10 @@
 
 pub use ntex_http::header::{HeaderName, HeaderValue, InvalidHeaderValue};
 
+pub use ntex_http::HeaderMap;
 pub use ntex_http::header::*;
 #[doc(hidden)]
 pub use ntex_http::header::{AsName, GetAll, Value};
-pub use ntex_http::HeaderMap;
 
 /// Represents supported types of content encodings
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

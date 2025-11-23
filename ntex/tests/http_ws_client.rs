@@ -2,7 +2,7 @@ use std::io;
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
-use ntex::http::{body::BodySize, h1, HttpService, Response};
+use ntex::http::{HttpService, Response, body::BodySize, h1};
 use ntex::io::{DispatchItem, Dispatcher, IoConfig};
 use ntex::service::{fn_factory_with_config, fn_service};
 use ntex::web::{self, App, HttpRequest};

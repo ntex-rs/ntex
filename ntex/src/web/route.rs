@@ -2,6 +2,7 @@ use std::{fmt, mem, rc::Rc};
 
 use crate::{http::Method, service::Service, service::ServiceCtx, service::ServiceFactory};
 
+use super::HttpResponse;
 use super::error::ErrorRenderer;
 use super::error_default::DefaultError;
 use super::extract::FromRequest;
@@ -9,7 +10,6 @@ use super::guard::{self, AllGuard, Guard};
 use super::handler::{Handler, HandlerFn, HandlerWrapper};
 use super::request::WebRequest;
 use super::response::WebResponse;
-use super::HttpResponse;
 
 /// Resource route definition
 ///
@@ -262,11 +262,11 @@ mod m {
 mod tests {
     use ntex_service::ServiceFactory;
 
-    use crate::http::{header, Method, StatusCode};
-    use crate::time::{sleep, Millis};
+    use crate::http::{Method, StatusCode, header};
+    use crate::time::{Millis, sleep};
     use crate::util::Bytes;
-    use crate::web::test::{call_service, init_service, read_body, TestRequest};
-    use crate::web::{self, error, guard, App, DefaultError, HttpResponse};
+    use crate::web::test::{TestRequest, call_service, init_service, read_body};
+    use crate::web::{self, App, DefaultError, HttpResponse, error, guard};
 
     #[derive(serde::Serialize, PartialEq, Debug)]
     struct MyObject {
@@ -360,8 +360,11 @@ mod tests {
         let route: web::Route<DefaultError> = web::get();
         let repr = format!("{route:?}");
         assert!(repr.contains("Route"));
-        assert!(repr
-            .contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
+        assert!(
+            repr.contains(
+                "handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"
+            )
+        );
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
 
@@ -370,8 +373,11 @@ mod tests {
         let route_service = route.service();
         let repr = format!("{route_service:?}");
         assert!(repr.contains("RouteService"));
-        assert!(repr
-            .contains("handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"));
+        assert!(
+            repr.contains(
+                "handler: Handler(\"ntex::web::route::Route::new::{{closure}}\")"
+            )
+        );
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
     }

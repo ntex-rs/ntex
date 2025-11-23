@@ -2,8 +2,8 @@ use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 
 use bitflags::bitflags;
 
-use crate::http::{h1::Codec, header::HeaderMap, Method, StatusCode, Uri, Version};
-use crate::io::{types, IoBoxed, IoRef};
+use crate::http::{Method, StatusCode, Uri, Version, h1::Codec, header::HeaderMap};
+use crate::io::{IoBoxed, IoRef, types};
 use crate::util::Extensions;
 
 /// Represents various types of connection
@@ -56,15 +56,15 @@ impl CurrentIo {
 
     pub(crate) fn as_ref(&self) -> Option<&IoRef> {
         match self {
-            CurrentIo::Ref(ref io) => Some(io),
-            CurrentIo::Io(ref io) => io.get(),
+            CurrentIo::Ref(io) => Some(io),
+            CurrentIo::Io(io) => io.get(),
             CurrentIo::None => None,
         }
     }
 
     pub(crate) fn take(&self) -> Option<(IoBoxed, Codec)> {
         match self {
-            CurrentIo::Io(ref io) => io.take(),
+            CurrentIo::Io(io) => io.take(),
             _ => None,
         }
     }

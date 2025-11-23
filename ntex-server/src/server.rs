@@ -1,5 +1,5 @@
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc};
-use std::task::{ready, Context, Poll};
+use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::task::{Context, Poll, ready};
 use std::{future::Future, io, pin::Pin};
 
 use async_channel::Sender;

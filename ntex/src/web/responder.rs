@@ -306,11 +306,11 @@ where
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::http::Response as HttpResponse;
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::CONTENT_TYPE;
-    use crate::http::Response as HttpResponse;
     use crate::web;
-    use crate::web::test::{init_service, TestRequest};
+    use crate::web::test::{TestRequest, init_service};
 
     fn responder<T: Responder<DefaultError>>(responder: T) -> impl Responder<DefaultError> {
         responder
@@ -357,7 +357,7 @@ pub(crate) mod tests {
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         match resp.response().body() {
-            ResponseBody::Body(Body::Bytes(ref b)) => {
+            ResponseBody::Body(Body::Bytes(b)) => {
                 let bytes: Bytes = b.clone();
                 assert_eq!(bytes, Bytes::from_static(b"some"));
             }

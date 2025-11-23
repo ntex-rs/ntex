@@ -4,8 +4,8 @@ use flate2::write::{GzDecoder, ZlibDecoder};
 
 use super::Writer;
 use crate::http::error::PayloadError;
-use crate::http::header::{ContentEncoding, HeaderMap, CONTENT_ENCODING};
-use crate::rt::{spawn_blocking, JoinHandle};
+use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderMap};
+use crate::rt::{JoinHandle, spawn_blocking};
 use crate::util::{Bytes, Stream};
 
 const INPLACE: usize = 2049;
@@ -136,25 +136,17 @@ enum ContentDecoder {
 impl ContentDecoder {
     fn feed_eof(&mut self) -> io::Result<Option<Bytes>> {
         match self {
-            ContentDecoder::Gzip(ref mut decoder) => match decoder.try_finish() {
+            ContentDecoder::Gzip(decoder) => match decoder.try_finish() {
                 Ok(_) => {
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
+                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
                 }
                 Err(e) => Err(e),
             },
-            ContentDecoder::Deflate(ref mut decoder) => match decoder.try_finish() {
+            ContentDecoder::Deflate(decoder) => match decoder.try_finish() {
                 Ok(_) => {
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
+                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
                 }
                 Err(e) => Err(e),
             },
@@ -163,27 +155,19 @@ impl ContentDecoder {
 
     fn feed_data(&mut self, data: Bytes) -> io::Result<Option<Bytes>> {
         match self {
-            ContentDecoder::Gzip(ref mut decoder) => match decoder.write_all(&data) {
+            ContentDecoder::Gzip(decoder) => match decoder.write_all(&data) {
                 Ok(_) => {
                     decoder.flush()?;
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
+                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
                 }
                 Err(e) => Err(e),
             },
-            ContentDecoder::Deflate(ref mut decoder) => match decoder.write_all(&data) {
+            ContentDecoder::Deflate(decoder) => match decoder.write_all(&data) {
                 Ok(_) => {
                     decoder.flush()?;
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
+                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
                 }
                 Err(e) => Err(e),
             },

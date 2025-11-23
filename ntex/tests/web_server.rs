@@ -1,19 +1,19 @@
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{future::Future, io, io::Read, io::Write, pin::Pin};
 
+use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
-use flate2::Compression;
-use rand::{distr::Alphanumeric, Rng};
+use rand::{Rng, distr::Alphanumeric};
 use thiserror::Error;
 
 use ntex::http::header::{
-    ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
+    ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, ContentEncoding,
     TRANSFER_ENCODING,
 };
-use ntex::http::{body::Body, client, ConnectionType, Method, StatusCode};
+use ntex::http::{ConnectionType, Method, StatusCode, body::Body, client};
 use ntex::io::IoConfig;
-use ntex::time::{sleep, Millis, Seconds, Sleep};
+use ntex::time::{Millis, Seconds, Sleep, sleep};
 use ntex::util::{Bytes, Ready, Stream};
 
 use ntex::web::{self, middleware::Compress, test};
@@ -709,8 +709,8 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
 
 #[ntex::test]
 async fn test_server_cookies() {
-    use ntex::http::header::SET_COOKIE;
     use ntex::http::HttpMessage;
+    use ntex::http::header::SET_COOKIE;
 
     let srv = test::server(|| {
         App::new().service(web::resource("/").to(|| async {

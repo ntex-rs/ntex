@@ -30,9 +30,6 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 /// use ntex::web::middleware::Logger;
 ///
 /// fn main() {
-///     std::env::set_var("RUST_LOG", "ntex=info");
-///     env_logger::init();
-///
 ///     let app = App::new()
 ///         .wrap(Logger::default())
 ///         .wrap(Logger::new("%a %{User-Agent}i"));
@@ -409,7 +406,7 @@ impl fmt::Display for FormatDisplay<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{header, StatusCode};
+    use crate::http::{StatusCode, header};
     use crate::service::{IntoService, Pipeline};
     use crate::util::lazy;
     use crate::web::test::{self, TestRequest};

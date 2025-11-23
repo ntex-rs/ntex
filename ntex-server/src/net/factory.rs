@@ -1,10 +1,10 @@
 use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
 use ntex_io::{Io, IoConfig};
-use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed};
 use ntex_util::future::{BoxFuture, Ready};
 
-use super::{socket::Stream, Config, Token};
+use super::{Config, Token, socket::Stream};
 
 pub(super) type BoxServerService = boxed::BoxServiceFactory<(), Io, (), (), ()>;
 pub(crate) type FactoryServiceType = Box<dyn FactoryService>;
@@ -216,7 +216,7 @@ pub(crate) trait OnAccept {
     fn clone_fn(&self) -> Box<dyn OnAccept + Send>;
 
     fn run(&self, name: Arc<str>, stream: Stream)
-        -> BoxFuture<'static, Result<Stream, ()>>;
+    -> BoxFuture<'static, Result<Stream, ()>>;
 }
 
 pub(super) struct OnAcceptWrapper<F, R, E> {

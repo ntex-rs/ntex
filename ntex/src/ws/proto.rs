@@ -1,6 +1,6 @@
 use std::fmt;
 
-use base64::{engine::general_purpose::STANDARD as base64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use self::OpCode::*;
 /// Operation codes as part of rfc6455.

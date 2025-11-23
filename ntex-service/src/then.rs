@@ -1,4 +1,4 @@
-use super::{util, Service, ServiceCtx, ServiceFactory};
+use super::{Service, ServiceCtx, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
 /// Service for the `then` combinator, chaining a computation onto the end of
@@ -69,11 +69,11 @@ impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B>
 where
     A: ServiceFactory<R, C>,
     B: ServiceFactory<
-        Result<A::Response, A::Error>,
-        C,
-        Error = A::Error,
-        InitError = A::InitError,
-    >,
+            Result<A::Response, A::Error>,
+            C,
+            Error = A::Error,
+            InitError = A::InitError,
+        >,
     C: Clone,
 {
     type Response = B::Response;
@@ -95,7 +95,7 @@ mod tests {
     use ntex_util::future::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
 
-    use crate::{chain, chain_factory, fn_factory, Service, ServiceCtx};
+    use crate::{Service, ServiceCtx, chain, chain_factory, fn_factory};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);

@@ -1,11 +1,11 @@
 //! Utilities for tracking time.
-use std::{cmp, future::poll_fn, future::Future, pin::Pin, task, task::Poll};
+use std::{cmp, future::Future, future::poll_fn, pin::Pin, task, task::Poll};
 
 mod types;
 mod wheel;
 
 pub use self::types::{Millis, Seconds};
-pub use self::wheel::{now, query_system_time, system_time, TimerHandle};
+pub use self::wheel::{TimerHandle, now, query_system_time, system_time};
 
 /// Waits until `duration` has elapsed.
 ///

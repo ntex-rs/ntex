@@ -8,12 +8,12 @@ use serde::de::DeserializeOwned;
 use coo_kie::{Cookie, ParseError as CookieParseError};
 
 use crate::http::error::PayloadError;
-use crate::http::header::{AsName, HeaderValue, CONTENT_LENGTH};
+use crate::http::header::{AsName, CONTENT_LENGTH, HeaderValue};
 use crate::http::{HeaderMap, HttpMessage, Payload, ResponseHead, StatusCode, Version};
 use crate::time::{Deadline, Millis};
 use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
-use super::{error::JsonPayloadError, ClientConfig};
+use super::{ClientConfig, error::JsonPayloadError};
 
 /// Client Response
 pub struct ClientResponse {

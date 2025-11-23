@@ -72,7 +72,7 @@ where
 mod tests {
     use std::rc::Rc;
 
-    use crate::{chain, fn_service, Pipeline};
+    use crate::{Pipeline, chain, fn_service};
 
     use super::*;
 

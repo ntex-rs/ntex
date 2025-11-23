@@ -149,7 +149,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{fn_factory, Pipeline, Service, ServiceCtx, ServiceFactory};
+    use crate::{Pipeline, Service, ServiceCtx, ServiceFactory, fn_factory};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);

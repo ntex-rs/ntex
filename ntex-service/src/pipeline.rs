@@ -1,6 +1,6 @@
 use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::{ctx::WaitersRef, Service, ServiceCtx};
+use crate::{Service, ServiceCtx, ctx::WaitersRef};
 
 #[derive(Debug)]
 /// Container for a service.
@@ -233,7 +233,7 @@ where
                 *st = State::Readiness(fut);
                 self.poll_ready(cx)
             }
-            State::Readiness(ref mut fut) => Pin::new(fut).poll(cx),
+            State::Readiness(fut) => Pin::new(fut).poll(cx),
             State::Shutdown(_) => panic!("Pipeline is shutding down"),
         }
     }
@@ -253,7 +253,7 @@ where
                 pl.state.waiters.shutdown();
                 self.poll_shutdown(cx)
             }
-            State::Shutdown(ref mut fut) => Pin::new(fut).poll(cx),
+            State::Shutdown(fut) => Pin::new(fut).poll(cx),
         }
     }
 

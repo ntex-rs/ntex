@@ -4,9 +4,9 @@ use std::{cell::Cell, cmp, io::Write, mem, ptr, ptr::copy_nonoverlapping, slice}
 use crate::http::body::BodySize;
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
-use crate::http::header::{Value, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
+use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
 use crate::http::message::{ConnectionType, RequestHeadType};
-use crate::http::{helpers, HeaderMap, Response, StatusCode, Version};
+use crate::http::{HeaderMap, Response, StatusCode, Version, helpers};
 use crate::util::{BufMut, BytesMut};
 
 const AVERAGE_HEADER_SIZE: usize = 30;
@@ -125,7 +125,7 @@ pub(super) trait MessageType: Sized {
             }
             let k = key.as_str().as_bytes();
             match value {
-                Value::One(ref val) => {
+                Value::One(val) => {
                     let v = val.as_ref();
                     let v_len = v.len();
                     let k_len = k.len();
@@ -151,7 +151,7 @@ pub(super) trait MessageType: Sized {
                     pos += len;
                     remaining -= len;
                 }
-                Value::Multi(ref vec) => {
+                Value::Multi(vec) => {
                     for val in vec {
                         let v = val.as_ref();
                         let v_len = v.len();
@@ -590,8 +590,8 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::http::header::{HeaderValue, AUTHORIZATION};
     use crate::http::RequestHead;
+    use crate::http::header::{AUTHORIZATION, HeaderValue};
     use crate::util::Bytes;
 
     #[test]

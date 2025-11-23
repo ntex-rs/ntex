@@ -6,10 +6,10 @@ use std::{
 use flate2::write::{GzEncoder, ZlibEncoder};
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
-use crate::http::header::{ContentEncoding, HeaderValue, CONTENT_ENCODING};
+use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderValue};
 use crate::http::{ResponseHead, StatusCode};
-use crate::rt::{spawn_blocking, JoinHandle};
-use crate::util::{dyn_rc_error, Bytes};
+use crate::rt::{JoinHandle, spawn_blocking};
+use crate::util::{Bytes, dyn_rc_error};
 
 use super::Writer;
 
@@ -82,7 +82,7 @@ enum EncoderBody<B> {
 impl<B> fmt::Debug for EncoderBody<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EncoderBody::Bytes(ref b) => write!(f, "EncoderBody::Bytes({b:?})"),
+            EncoderBody::Bytes(b) => write!(f, "EncoderBody::Bytes({b:?})"),
             EncoderBody::Stream(_) => write!(f, "EncoderBody::Stream(_)"),
             EncoderBody::BoxedStream(_) => write!(f, "EncoderBody::BoxedStream(_)"),
         }

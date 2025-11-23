@@ -20,6 +20,7 @@
     clippy::too_many_arguments,
     clippy::new_without_default,
     clippy::let_underscore_future,
+    unsafe_op_in_unsafe_fn,
     internal_features
 )]
 // Used for fake variadics
@@ -40,8 +41,8 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    chain, chain_factory, fn_service, IntoService, IntoServiceFactory, Middleware,
-    Pipeline, Service, ServiceCtx, ServiceFactory,
+    IntoService, IntoServiceFactory, Middleware, Pipeline, Service, ServiceCtx,
+    ServiceFactory, chain, chain_factory, fn_service,
 };
 
 pub use ntex_util::{channel, task};
@@ -86,7 +87,7 @@ pub mod server {
     //! General purpose tcp server
     pub use ntex_server::net::*;
 
-    pub use ntex_server::{signal, Signal};
+    pub use ntex_server::{Signal, signal};
 
     #[cfg(feature = "openssl")]
     pub use ntex_tls::openssl;
@@ -120,10 +121,8 @@ pub mod tls {
 pub mod util {
     use std::{error::Error, io, rc::Rc};
 
-    pub use ntex_bytes::{
-        Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef,
-    };
-    pub use ntex_util::{error::*, future::*, services::*, HashMap, HashSet};
+    pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec};
+    pub use ntex_util::{HashMap, HashSet, error::*, future::*, services::*};
 
     #[doc(hidden)]
     #[deprecated]
@@ -134,7 +133,9 @@ pub mod util {
         #[cfg(not(feature = "no-test-logging"))]
         if std::env::var("NTEX_NO_TEST_LOG").is_err() {
             if std::env::var("RUST_LOG").is_err() {
-                std::env::set_var("RUST_LOG", "trace");
+                unsafe {
+                    std::env::set_var("RUST_LOG", "trace");
+                }
             }
             let _ = env_logger::builder().is_test(true).try_init();
         }

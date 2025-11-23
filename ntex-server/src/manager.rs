@@ -1,11 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
-use async_channel::{unbounded, Receiver, Sender};
+use async_channel::{Receiver, Sender, unbounded};
 use core_affinity::CoreId;
 use ntex_rt::System;
 use ntex_util::future::join_all;
-use ntex_util::time::{sleep, timeout, Millis};
+use ntex_util::time::{Millis, sleep, timeout};
 
 use crate::server::ServerShared;
 use crate::signals::Signal;
@@ -285,8 +285,8 @@ struct DropHandle<F: ServerConfiguration>(ServerManager<F>);
 
 impl<T: ServerConfiguration> Drop for DropHandle<T> {
     fn drop(&mut self) {
-        self.0 .0.stopping.set(true);
-        self.0 .0.factory.terminate();
+        self.0.0.stopping.set(true);
+        self.0.0.factory.terminate();
     }
 }
 

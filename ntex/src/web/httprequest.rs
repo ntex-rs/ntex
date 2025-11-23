@@ -3,7 +3,7 @@ use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 use crate::http::{
     HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
 };
-use crate::io::{types, IoRef};
+use crate::io::{IoRef, types};
 use crate::router::Path;
 use crate::util::Extensions;
 
@@ -330,10 +330,10 @@ impl HttpRequestPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{header, StatusCode};
+    use crate::http::{StatusCode, header};
     use crate::router::ResourceDef;
 
-    use crate::web::test::{call_service, init_service, TestRequest};
+    use crate::web::test::{TestRequest, call_service, init_service};
     use crate::web::{self, App, HttpResponse};
 
     #[test]

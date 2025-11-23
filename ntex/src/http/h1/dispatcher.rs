@@ -1,5 +1,5 @@
 //! HTTP/1 protocol dispatcher
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{error, future, io, marker, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
@@ -13,7 +13,7 @@ use crate::http::{self, config::DispatcherConfig, request::Request, response::Re
 
 use super::control::{Control, ControlAck, ControlFlags, ControlResult};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{codec::Codec, Message, ProtocolError};
+use super::{Message, ProtocolError, codec::Codec};
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -214,7 +214,7 @@ where
                 }
                 // shutdown io
                 State::Stop { fut } => {
-                    if let Some(ref mut f) = fut {
+                    if let Some(f) = fut {
                         let _ = ready!(Pin::new(f).poll(cx));
                         fut.take();
                     }
@@ -594,7 +594,7 @@ where
             return Ok(());
         };
 
-        if let Some(ref cfg) = cfg {
+        if let Some(cfg) = cfg {
             if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
                 self.read_remains = 0;
             } else {
@@ -749,7 +749,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{cell::Cell, future::poll_fn, future::Future, sync::Arc};
+    use std::{cell::Cell, future::Future, future::poll_fn, sync::Arc};
 
     use ntex_h2::Config;
     use rand::Rng;
@@ -757,11 +757,11 @@ mod tests {
     use super::*;
     use crate::http::config::ServiceConfig;
     use crate::http::h1::{ClientCodec, DefaultControlService};
-    use crate::http::{body, ResponseHead, StatusCode};
+    use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
-    use crate::service::{fn_service, IntoService};
-    use crate::util::{lazy, stream_recv, Bytes, BytesMut};
-    use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis};
+    use crate::service::{IntoService, fn_service};
+    use crate::util::{Bytes, BytesMut, lazy, stream_recv};
+    use crate::{codec::Decoder, testing::Io, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
 

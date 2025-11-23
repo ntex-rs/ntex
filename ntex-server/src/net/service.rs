@@ -1,14 +1,14 @@
 use std::{fmt, sync::Arc, task::Context};
 
 use ntex_io::{Io, IoConfig};
-use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
-use ntex_util::{future::join_all, services::Counter, HashMap};
+use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed};
+use ntex_util::{HashMap, future::join_all, services::Counter};
 
 use crate::ServerConfiguration;
 
 use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService, OnAccept, OnWorkerStart};
-use super::{socket::Connection, Token, MAX_CONNS_COUNTER};
+use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
 
 pub(super) type BoxService = boxed::BoxService<Io, (), ()>;
 

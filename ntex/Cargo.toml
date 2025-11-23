@@ -14,8 +14,8 @@ categories = [
     "web-programming::websocket",
 ]
 license = "MIT OR Apache-2.0"
-edition = "2021"
-rust-version = "1.83"
+edition = "2024"
+rust-version = "1.85"
 
 [package.metadata.docs.rs]
 toolchain = "nightly"

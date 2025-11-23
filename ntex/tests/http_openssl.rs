@@ -1,17 +1,17 @@
 #![cfg(feature = "openssl")]
 use std::io;
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
 
-use futures_util::stream::{once, Stream, StreamExt};
+use futures_util::stream::{Stream, StreamExt, once};
 use tls_openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
 
 use ntex::codec::BytesCodec;
 use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::server as test_server;
-use ntex::http::{body, h1, HttpService, Method, Request, Response, StatusCode, Version};
-use ntex::service::{fn_service, ServiceFactory};
-use ntex::time::{sleep, timeout, Millis, Seconds};
+use ntex::http::{HttpService, Method, Request, Response, StatusCode, Version, body, h1};
+use ntex::service::{ServiceFactory, fn_service};
+use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, BytesMut, Ready};
 use ntex::{channel::oneshot, rt, web::error::InternalError, ws, ws::handshake_response};
 
