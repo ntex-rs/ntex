@@ -25,12 +25,6 @@ jobs:
       - name: Generate Cargo.lock
         run: cargo generate-lockfile
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ matrix.version }}-aarch64-apple-darwin-cargo-registry-trimmed-${{ hashFiles('**/Cargo.lock') }}
-
       - name: Cache cargo index
         uses: actions/cache@v4
         with:
