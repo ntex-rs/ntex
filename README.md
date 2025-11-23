@@ -6,7 +6,7 @@
 [![build status](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg?branch=master&event=push)](https://github.com/ntex-rs/ntex/actions/workflows/linux.yml/badge.svg) 
 [![crates.io](https://img.shields.io/crates/v/ntex.svg)](https://crates.io/crates/ntex) 
 [![Documentation](https://img.shields.io/docsrs/ntex/latest)](https://docs.rs/ntex) 
-[![Version](https://img.shields.io/badge/rustc-1.83+-lightgray.svg)](https://releases.rs/docs/1.83.0/) 
+[![Version](https://img.shields.io/badge/rustc-1.85+-lightgray.svg)](https://releases.rs/docs/1.85.0/) 
 ![License](https://img.shields.io/crates/l/ntex.svg) 
 [![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/master/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex) 
 [![Chat on Discord](https://img.shields.io/discord/919288597826387979?label=chat&logo=discord)](https://discord.gg/4GtaeP5Uqu) 
@@ -36,7 +36,7 @@ ntex = { version = "2", features = ["compio"] }
 
 * [Documentation](https://ntex.rs)
 * [Docs.rs](https://docs.rs/ntex)
-* Minimum supported Rust version: 1.83 or later
+* Minimum supported Rust version: 1.85 or later
 
 ## License
 
