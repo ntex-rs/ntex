@@ -56,7 +56,7 @@ pub fn active_stream_ops() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use ntex::{io::Io, io::IoConfig, time::sleep, time::Millis};
+    use ntex::{io::Io, io::IoConfig, time::Millis, time::sleep};
     use std::sync::{Arc, Mutex};
 
     use crate::connect::Connect;

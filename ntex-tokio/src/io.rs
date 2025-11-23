@@ -1,28 +1,28 @@
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{any, cell::RefCell, cmp, future::poll_fn, io, mem, pin::Pin, rc::Rc, rc::Weak};
 
-use ntex_bytes::{Buf, BufMut, BytesVec};
+use ntex_bytes::{BufMut, BytesVec};
 use ntex_io::{
-    types, Filter, Handle, Io, IoBoxed, IoStream, ReadContext, WriteContext,
-    WriteContextBuf,
+    Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types,
 };
 use ntex_util::time::Millis;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 
 impl IoStream for crate::TcpStream {
-    fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(RefCell::new(self.0));
-
-        let mut rio = Read(io.clone());
-        tokio::task::spawn_local(async move {
-            read.handle(&mut rio).await;
-        });
-        let mut wio = Write(io.clone());
-        tokio::task::spawn_local(async move {
-            write.handle(&mut wio).await;
-        });
+        tokio::task::spawn_local(run(io.clone(), ctx));
         Some(Box::new(HandleWrapper(io)))
+    }
+}
+
+#[cfg(unix)]
+impl IoStream for crate::UnixStream {
+    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
+        let io = Rc::new(RefCell::new(self.0));
+        tokio::task::spawn_local(run(io.clone(), ctx));
+        None
     }
 }
 
@@ -41,70 +41,119 @@ impl Handle for HandleWrapper {
     }
 }
 
-/// Read io task
-struct Read(Rc<RefCell<TcpStream>>);
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Status {
+    Shutdown,
+    Terminate,
+}
 
-impl ntex_io::AsyncRead for Read {
-    #[inline]
-    async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
-        // read data from socket
-        let result = poll_fn(|cx| {
-            let mut n = 0;
-            let mut io = self.0.borrow_mut();
-            loop {
-                return match poll_read_buf(Pin::new(&mut *io), cx, &mut buf)? {
-                    Poll::Pending => {
-                        if n > 0 {
-                            Poll::Ready(Ok(n))
-                        } else {
-                            Poll::Pending
-                        }
-                    }
-                    Poll::Ready(size) => {
-                        n += size;
-                        if size > 0 && buf.remaining_mut() > 0 {
-                            continue;
-                        }
-                        Poll::Ready(Ok(n))
-                    }
-                };
+async fn run<T>(io: Rc<RefCell<T>>, ctx: IoContext)
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    let st = poll_fn(|cx| turn(&mut *io.borrow_mut(), &ctx, cx)).await;
+
+    log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
+    if !ctx.is_stopped() {
+        let flush = st == Status::Shutdown;
+        let _ = poll_fn(|cx| {
+            if write(&mut *io.borrow_mut(), &ctx, cx) == Poll::Ready(Status::Terminate) {
+                Poll::Ready(())
+            } else {
+                ctx.shutdown(flush, cx)
             }
         })
         .await;
+    }
 
-        (buf, result)
+    let _ = poll_fn(|cx| Pin::new(&mut *io.borrow_mut()).poll_shutdown(cx)).await;
+
+    log::trace!("{}: Shutdown complete", ctx.tag());
+    if !ctx.is_stopped() {
+        ctx.stop(None);
     }
 }
 
-struct Write(Rc<RefCell<TcpStream>>);
+fn turn<T>(io: &mut T, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    let read = match ctx.poll_read_ready(cx) {
+        Poll::Ready(Readiness::Ready) => read(io, ctx, cx),
+        Poll::Ready(Readiness::Shutdown) | Poll::Ready(Readiness::Terminate) => {
+            Poll::Ready(())
+        }
+        Poll::Pending => Poll::Pending,
+    };
 
-impl ntex_io::AsyncWrite for Write {
-    #[inline]
-    async fn write(&mut self, buf: &mut WriteContextBuf) -> io::Result<()> {
-        poll_fn(|cx| {
-            if let Some(mut b) = buf.take() {
-                let result = flush_io(&mut *self.0.borrow_mut(), &mut b, cx);
-                buf.set(b);
-                result
-            } else {
-                Poll::Ready(Ok(()))
+    let write = match ctx.poll_write_ready(cx) {
+        Poll::Ready(Readiness::Ready) => write(io, ctx, cx),
+        Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
+        Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
+        Poll::Pending => Poll::Pending,
+    };
+
+    if read.is_pending() && write.is_pending() {
+        Poll::Pending
+    } else if write.is_ready() {
+        write
+    } else {
+        Poll::Ready(Status::Terminate)
+    }
+}
+
+fn write<T>(io: &mut T, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    if let Some(mut buf) = ctx.get_write_buf() {
+        let result = write_io(io, &mut buf, cx);
+        if ctx.release_write_buf(buf, result) == IoTaskStatus::Stop {
+            Poll::Ready(Status::Terminate)
+        } else {
+            Poll::Pending
+        }
+    } else {
+        Poll::Pending
+    }
+}
+
+fn read<T: AsyncRead + Unpin>(
+    io: &mut T,
+    ctx: &IoContext,
+    cx: &mut Context<'_>,
+) -> Poll<()> {
+    let mut buf = ctx.get_read_buf();
+
+    // read data from socket
+    let mut n = 0;
+    loop {
+        ctx.resize_read_buf(&mut buf);
+        let result = match read_buf(Pin::new(&mut *io), cx, &mut buf) {
+            Poll::Pending => {
+                if n > 0 {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
             }
-        })
-        .await
-    }
+            Poll::Ready(Ok(0)) => Poll::Ready(Err(None)),
+            Poll::Ready(Ok(size)) => {
+                n += size;
+                continue;
+            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
+        };
 
-    #[inline]
-    async fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-
-    #[inline]
-    async fn shutdown(&mut self) -> io::Result<()> {
-        poll_fn(|cx| Pin::new(&mut *self.0.borrow_mut()).poll_shutdown(cx)).await
+        return if matches!(ctx.release_read_buf(n, buf, result), IoTaskStatus::Stop) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        };
     }
 }
 
-pub fn poll_read_buf<T: AsyncRead>(
+fn read_buf<T: AsyncRead>(
     io: Pin<&mut T>,
     cx: &mut Context<'_>,
     buf: &mut BytesVec,
@@ -133,57 +182,41 @@ pub fn poll_read_buf<T: AsyncRead>(
 }
 
 /// Flush write buffer to underlying I/O stream.
-pub(super) fn flush_io<T: AsyncRead + AsyncWrite + Unpin>(
+fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
     io: &mut T,
     buf: &mut BytesVec,
     cx: &mut Context<'_>,
-) -> Poll<io::Result<()>> {
+) -> Poll<io::Result<usize>> {
     let len = buf.len();
 
     if len != 0 {
-        // log::trace!("Flushing framed transport: {:?}", buf.len());
+        // log::trace!("Flushing framed transport: {len:?}");
 
         let mut written = 0;
-        let result = loop {
-            break match Pin::new(&mut *io).poll_write(cx, &buf[written..]) {
-                Poll::Ready(Ok(n)) => {
-                    if n == 0 {
-                        Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::WriteZero,
-                            "failed to write frame to transport",
-                        )))
-                    } else {
-                        written += n;
-                        if written == len {
-                            buf.clear();
-                            Poll::Ready(Ok(()))
-                        } else {
-                            continue;
-                        }
-                    }
+        while let Poll::Ready(n) = Pin::new(&mut *io).poll_write(cx, &buf[written..])? {
+            if n == 0 {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write frame to transport",
+                )));
+            } else {
+                written += n;
+                if written == len {
+                    break;
                 }
-                Poll::Pending => {
-                    // remove written data
-                    buf.advance(written);
-                    Poll::Pending
-                }
-                Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            };
-        };
-        // log::trace!("flushed {} bytes", written);
+            }
+        }
+        // log::trace!("flushed {written} bytes");
 
         // flush
         if written > 0 {
-            match Pin::new(&mut *io).poll_flush(cx) {
-                Poll::Ready(Ok(_)) => result,
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            }
+            let _ = Pin::new(&mut *io).poll_flush(cx)?;
+            Poll::Ready(Ok(written))
         } else {
-            result
+            Poll::Pending
         }
     } else {
-        Poll::Ready(Ok(()))
+        Poll::Pending
     }
 }
 
@@ -269,90 +302,5 @@ impl SocketOptions {
         self.0
             .upgrade()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket is gone"))
-    }
-}
-
-#[cfg(unix)]
-mod unixstream {
-    use tokio::net::UnixStream;
-
-    use super::*;
-
-    impl IoStream for crate::UnixStream {
-        fn start(self, read: ReadContext, write: WriteContext) -> Option<Box<dyn Handle>> {
-            let io = Rc::new(RefCell::new(self.0));
-
-            let mut rio = Read(io.clone());
-            tokio::task::spawn_local(async move {
-                read.handle(&mut rio).await;
-            });
-            let mut wio = Write(io.clone());
-            tokio::task::spawn_local(async move {
-                write.handle(&mut wio).await;
-            });
-            None
-        }
-    }
-
-    struct Read(Rc<RefCell<UnixStream>>);
-
-    impl ntex_io::AsyncRead for Read {
-        #[inline]
-        async fn read(&mut self, mut buf: BytesVec) -> (BytesVec, io::Result<usize>) {
-            // read data from socket
-            let result = poll_fn(|cx| {
-                let mut n = 0;
-                let mut io = self.0.borrow_mut();
-                loop {
-                    return match poll_read_buf(Pin::new(&mut *io), cx, &mut buf)? {
-                        Poll::Pending => {
-                            if n > 0 {
-                                Poll::Ready(Ok(n))
-                            } else {
-                                Poll::Pending
-                            }
-                        }
-                        Poll::Ready(size) => {
-                            n += size;
-                            if n > 0 && buf.remaining_mut() > 0 {
-                                continue;
-                            }
-                            Poll::Ready(Ok(n))
-                        }
-                    };
-                }
-            })
-            .await;
-
-            (buf, result)
-        }
-    }
-
-    struct Write(Rc<RefCell<UnixStream>>);
-
-    impl ntex_io::AsyncWrite for Write {
-        #[inline]
-        async fn write(&mut self, buf: &mut WriteContextBuf) -> io::Result<()> {
-            poll_fn(|cx| {
-                if let Some(mut b) = buf.take() {
-                    let result = flush_io(&mut *self.0.borrow_mut(), &mut b, cx);
-                    buf.set(b);
-                    result
-                } else {
-                    Poll::Ready(Ok(()))
-                }
-            })
-            .await
-        }
-
-        #[inline]
-        async fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-
-        #[inline]
-        async fn shutdown(&mut self) -> io::Result<()> {
-            poll_fn(|cx| Pin::new(&mut *self.0.borrow_mut()).poll_shutdown(cx)).await
-        }
     }
 }

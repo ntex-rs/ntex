@@ -20,7 +20,7 @@ pub(super) struct InnerServiceConfig {
 impl Default for Config {
     fn default() -> Self {
         Self(Rc::new(InnerServiceConfig {
-            config: Cell::new(Some(IoConfig::default())),
+            config: Cell::new(None),
         }))
     }
 }

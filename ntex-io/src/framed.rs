@@ -107,7 +107,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{testing::IoTest, Io};
+    use crate::{Io, testing::IoTest};
 
     #[ntex::test]
     async fn framed() {

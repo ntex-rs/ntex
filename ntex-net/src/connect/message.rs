@@ -1,4 +1,4 @@
-use std::collections::{vec_deque, VecDeque};
+use std::collections::{VecDeque, vec_deque};
 use std::{fmt, iter::FusedIterator, net::SocketAddr};
 
 use ntex_bytes::ByteString;

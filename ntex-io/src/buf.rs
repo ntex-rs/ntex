@@ -3,7 +3,7 @@ use std::{cell::Cell, fmt};
 use ntex_bytes::BytesVec;
 use ntex_util::future::Either;
 
-use crate::{cfg::BufConfig, IoRef};
+use crate::{IoRef, cfg::BufConfig};
 
 #[derive(Default)]
 pub(crate) struct Buffer {

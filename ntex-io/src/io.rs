@@ -1,5 +1,5 @@
 use std::cell::{Cell, UnsafeCell};
-use std::future::{poll_fn, Future};
+use std::future::{Future, poll_fn};
 use std::task::{Context, Poll};
 use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 
@@ -11,9 +11,8 @@ use crate::cfg::{BufConfig, IoConfig};
 use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::flags::Flags;
 use crate::seal::{IoBoxed, Sealed};
-use crate::tasks::{ReadContext, WriteContext};
 use crate::timer::TimerHandle;
-use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
+use crate::{Decoded, FilterLayer, Handle, IoContext, IoStatusUpdate, IoStream, RecvError};
 
 /// Interface object to underlying io stream
 pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
@@ -210,7 +209,7 @@ impl Io {
         let io_ref = IoRef(inner);
 
         // start io tasks
-        let hnd = io.start(ReadContext::new(&io_ref), WriteContext::new(&io_ref));
+        let hnd = io.start(IoContext::new(&io_ref));
         io_ref.0.handle.set(hnd);
 
         Io(UnsafeCell::new(io_ref), marker::PhantomData)
@@ -595,8 +594,12 @@ impl<F> Io<F> {
                 };
             }
         }
-        st.remove_flags(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
-        Poll::Ready(Ok(()))
+        if flags.is_stopped() {
+            Poll::Ready(Err(st.error_or_disconnected()))
+        } else {
+            st.remove_flags(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
+            Poll::Ready(Ok(()))
+        }
     }
 
     #[inline]
@@ -990,7 +993,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{testing::IoTest, ReadBuf, WriteBuf};
+    use crate::{ReadBuf, WriteBuf, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";

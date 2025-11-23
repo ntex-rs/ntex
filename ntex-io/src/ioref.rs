@@ -5,8 +5,8 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::time::Seconds;
 
 use crate::{
-    timer, types, Decoded, Filter, FilterCtx, Flags, IoConfig, IoRef, OnDisconnect,
-    WriteBuf,
+    Decoded, Filter, FilterCtx, Flags, IoConfig, IoRef, OnDisconnect, WriteBuf, timer,
+    types,
 };
 
 impl IoRef {
@@ -322,15 +322,15 @@ impl fmt::Debug for IoRef {
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::{future::poll_fn, future::Future, pin::Pin, rc::Rc, task::Poll};
+    use std::{future::Future, future::poll_fn, pin::Pin, rc::Rc, task::Poll};
 
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
     use ntex_util::future::lazy;
-    use ntex_util::time::{sleep, Millis};
+    use ntex_util::time::{Millis, sleep};
 
     use super::*;
-    use crate::{testing::IoTest, FilterCtx, FilterReadStatus, Io};
+    use crate::{FilterCtx, FilterReadStatus, Io, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -466,9 +466,11 @@ mod tests {
 
         assert!(state.is_closed());
         assert!(state.write(TEXT.as_bytes()).is_err());
-        assert!(state
-            .with_write_buf(|buf| buf.extend_from_slice(BIN))
-            .is_err());
+        assert!(
+            state
+                .with_write_buf(|buf| buf.extend_from_slice(BIN))
+                .is_err()
+        );
     }
 
     #[derive(Debug)]

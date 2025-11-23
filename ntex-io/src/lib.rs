@@ -22,7 +22,6 @@ mod tasks;
 mod timer;
 mod utils;
 
-use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
 
 pub use self::buf::{FilterCtx, ReadBuf, WriteBuf};
@@ -32,30 +31,12 @@ pub use self::filter::{Base, Filter, FilterReadStatus, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::tasks::{IoContext, ReadContext, WriteContext, WriteContextBuf};
+pub use self::tasks::IoContext;
 pub use self::timer::TimerHandle;
-pub use self::utils::{seal, Decoded};
-
-#[deprecated]
-#[doc(hidden)]
-pub type DispatcherConfig = cfg::IoConfig;
+pub use self::utils::{Decoded, seal};
 
 #[doc(hidden)]
 pub use self::flags::Flags;
-
-#[doc(hidden)]
-pub trait AsyncRead {
-    async fn read(&mut self, buf: BytesVec) -> (BytesVec, IoResult<usize>);
-}
-
-#[doc(hidden)]
-pub trait AsyncWrite {
-    async fn write(&mut self, buf: &mut WriteContextBuf) -> IoResult<()>;
-
-    async fn flush(&mut self) -> IoResult<()>;
-
-    async fn shutdown(&mut self) -> IoResult<()>;
-}
 
 /// Filter ready state
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -123,7 +104,7 @@ pub trait FilterLayer: fmt::Debug + 'static {
 }
 
 pub trait IoStream {
-    fn start(self, _: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>>;
+    fn start(self, _: IoContext) -> Option<Box<dyn Handle>>;
 }
 
 pub trait Handle {
@@ -137,6 +118,8 @@ pub enum IoTaskStatus {
     Io,
     /// Pause io task
     Pause,
+    /// Stop io task
+    Stop,
 }
 
 /// Io status
@@ -238,10 +221,14 @@ mod tests {
         let err = T::Disconnect(Some(io::Error::other("err")));
         assert!(format!("{err:?}").contains("DispatchItem::Disconnect"));
 
-        assert!(format!("{:?}", T::WBackPressureEnabled)
-            .contains("DispatchItem::WBackPressureEnabled"));
-        assert!(format!("{:?}", T::WBackPressureDisabled)
-            .contains("DispatchItem::WBackPressureDisabled"));
+        assert!(
+            format!("{:?}", T::WBackPressureEnabled)
+                .contains("DispatchItem::WBackPressureEnabled")
+        );
+        assert!(
+            format!("{:?}", T::WBackPressureDisabled)
+                .contains("DispatchItem::WBackPressureDisabled")
+        );
         assert!(
             format!("{:?}", T::KeepAliveTimeout).contains("DispatchItem::KeepAliveTimeout")
         );

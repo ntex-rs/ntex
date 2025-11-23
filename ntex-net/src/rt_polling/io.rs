@@ -1,28 +1,26 @@
 use std::{any, future::poll_fn, task::Poll};
 
-use ntex_io::{types, Handle, ReadContext, Readiness, WriteContext};
+use ntex_io::{Handle, IoContext, Readiness, types};
 use ntex_rt::spawn;
 
 use super::driver::{StreamCtl, StreamOps};
 
 impl ntex_io::IoStream for super::TcpStream {
-    fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
-        let context = read.context();
-        let ctl = StreamOps::current().register(io, context.clone());
+        let ctl = StreamOps::current().register(io, ctx.clone());
         let ctl2 = ctl.clone();
-        spawn(async move { run(ctl, context).await });
+        spawn(async move { run(ctl, ctx).await });
 
         Some(Box::new(HandleWrapper(ctl2)))
     }
 }
 
 impl ntex_io::IoStream for super::UnixStream {
-    fn start(self, read: ReadContext, _: WriteContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
-        let context = read.context();
-        let ctl = StreamOps::current().register(io, context.clone());
-        spawn(async move { run(ctl, context).await });
+        let ctl = StreamOps::current().register(io, ctx.clone());
+        spawn(async move { run(ctl, ctx).await });
 
         None
     }
