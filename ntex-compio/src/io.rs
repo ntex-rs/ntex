@@ -4,8 +4,8 @@ use compio_buf::{BufResult, IoBuf, IoBufMut, SetBufInit};
 use compio_io::{AsyncRead, AsyncWrite};
 use compio_net::TcpStream;
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::{types, Handle, IoContext, IoStream, IoTaskStatus, Readiness};
-use ntex_util::future::{select, Either};
+use ntex_io::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
+use ntex_util::future::{Either, select};
 
 impl IoStream for crate::TcpStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
