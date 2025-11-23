@@ -5,9 +5,9 @@ use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::message::{RequestHeadType, ResponseHead};
-use crate::http::{h2::payload, payload::Payload, Method, Version};
-use crate::time::{timeout_checked, Millis};
-use crate::util::{select, ByteString, Bytes, Either};
+use crate::http::{Method, Version, h2::payload, payload::Payload};
+use crate::time::{Millis, timeout_checked};
+use crate::util::{ByteString, Bytes, Either, select};
 
 use super::error::{ConnectError, SendRequestError};
 

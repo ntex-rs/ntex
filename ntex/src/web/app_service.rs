@@ -4,8 +4,8 @@ use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::ServiceChainFactory;
-use crate::service::{fn_service, Middleware, Service, ServiceCtx, ServiceFactory};
-use crate::util::{join, BoxFuture, Extensions};
+use crate::service::{Middleware, Service, ServiceCtx, ServiceFactory, fn_service};
+use crate::util::{BoxFuture, Extensions, join};
 
 use super::config::AppConfig;
 use super::error::ErrorRenderer;
@@ -28,11 +28,11 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
@@ -50,11 +50,11 @@ where
     T: Middleware<AppService<F::Service, Err>> + 'static,
     T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
@@ -72,11 +72,11 @@ where
     T: Middleware<AppService<F::Service, Err>> + 'static,
     T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     type Response = WebResponse;
@@ -320,10 +320,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    use crate::web::test::{init_service, TestRequest};
+    use crate::web::test::{TestRequest, init_service};
     use crate::web::{self, App, HttpResponse};
 
     struct DropData(Arc<AtomicBool>);

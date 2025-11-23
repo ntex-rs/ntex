@@ -12,7 +12,7 @@ use super::accept::AcceptLoop;
 use super::config::{Config, ServiceConfig};
 use super::factory::{self, FactoryServiceType};
 use super::factory::{OnAccept, OnAcceptWrapper, OnWorkerStart, OnWorkerStartWrapper};
-use super::{socket::Listener, Connection, ServerStatus, Stream, StreamServer, Token};
+use super::{Connection, ServerStatus, Stream, StreamServer, Token, socket::Listener};
 
 /// Streaming service builder
 ///

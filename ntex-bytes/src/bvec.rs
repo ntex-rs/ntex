@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 use std::{fmt, ptr};
 
 use crate::storage::StorageVec;
-use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut, Bytes, BytesMut};
+use crate::{Buf, BufMut, Bytes, BytesMut, buf::IntoIter, buf::UninitSlice, debug};
 
 /// A unique reference to a contiguous slice of memory.
 ///

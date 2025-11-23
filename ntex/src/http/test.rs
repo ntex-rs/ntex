@@ -11,8 +11,8 @@ use crate::io::{Io, IoConfig};
 use crate::server::Server;
 use crate::service::ServiceFactory;
 #[cfg(feature = "ws")]
-use crate::ws::{error::WsClientError, WsClient, WsConnection};
-use crate::{rt::System, time::sleep, time::Millis, time::Seconds, util::Bytes};
+use crate::ws::{WsClient, WsConnection, error::WsClientError};
+use crate::{rt::System, time::Millis, time::Seconds, time::sleep, util::Bytes};
 
 use super::client::{Client, ClientRequest, ClientResponse, Connector};
 use super::error::{HttpError, PayloadError};

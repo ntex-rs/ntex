@@ -35,11 +35,7 @@ impl Millis {
     where
         F: FnOnce(Millis) -> R,
     {
-        if self.0 == 0 {
-            None
-        } else {
-            Some(f(*self))
-        }
+        if self.0 == 0 { None } else { Some(f(*self)) }
     }
 }
 

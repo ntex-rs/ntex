@@ -4,8 +4,8 @@ use std::{future::Future, pin::Pin, str, task::Context, task::Poll};
 use encoding_rs::UTF_8;
 use mime::Mime;
 
-use crate::http::{error, header, HttpMessage};
-use crate::util::{stream_recv, BoxFuture, Bytes, BytesMut, Stream};
+use crate::http::{HttpMessage, error, header};
+use crate::util::{BoxFuture, Bytes, BytesMut, Stream, stream_recv};
 use crate::web::error::{ErrorRenderer, PayloadError};
 use crate::web::{FromRequest, HttpRequest};
 
@@ -405,7 +405,7 @@ impl Future for HttpMessageBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::web::test::{from_request, TestRequest};
+    use crate::web::test::{TestRequest, from_request};
 
     #[crate::rt_test]
     async fn test_payload_config() {

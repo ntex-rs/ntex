@@ -1,15 +1,15 @@
 #![cfg(feature = "rustls")]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 
+use ntex::http::HttpService;
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
-use ntex::http::HttpService;
-use ntex::service::{chain_factory, map_config, ServiceFactory};
+use ntex::service::{ServiceFactory, chain_factory, map_config};
 use ntex::util::Ready;
-use ntex::web::{self, dev::AppConfig, App, HttpResponse};
+use ntex::web::{self, App, HttpResponse, dev::AppConfig};
 
 mod rustls_utils;
 

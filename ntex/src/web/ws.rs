@@ -3,9 +3,9 @@ use std::{fmt, rc::Rc};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
-use crate::http::{body::BodySize, h1, StatusCode};
+use crate::http::{StatusCode, body::BodySize, h1};
 use crate::service::{
-    apply_fn, chain_factory, fn_factory_with_config, IntoServiceFactory, ServiceFactory,
+    IntoServiceFactory, ServiceFactory, apply_fn, chain_factory, fn_factory_with_config,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};

@@ -1,8 +1,8 @@
 use std::{cell::Cell, cell::RefCell, error, fmt, marker, rc::Rc, task::Context};
 
-use crate::io::{types, Filter, Io, IoRef};
+use crate::io::{Filter, Io, IoRef, types};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::{channel::oneshot, util::join, util::HashSet};
+use crate::{channel::oneshot, util::HashSet, util::join};
 
 use super::body::MessageBody;
 use super::builder::HttpServiceBuilder;

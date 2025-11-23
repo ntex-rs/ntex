@@ -2,7 +2,7 @@
 use std::{cmp, str::FromStr};
 
 use crate::http::encoding::Encoder;
-use crate::http::header::{ContentEncoding, ACCEPT_ENCODING};
+use crate::http::header::{ACCEPT_ENCODING, ContentEncoding};
 use crate::service::{Middleware, Service, ServiceCtx};
 use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 

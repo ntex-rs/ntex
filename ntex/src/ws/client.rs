@@ -8,16 +8,16 @@ use crate::connect::rustls;
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use base64::{engine::general_purpose::STANDARD as base64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use nanorand::{Rng, WyRand};
 
 use crate::connect::{Connect, ConnectError, Connector};
-use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
-use crate::http::{body::BodySize, client, client::ClientResponse, error::HttpError, h1};
+use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
+use crate::http::{body::BodySize, client, client::ClientResponse, error::HttpError, h1};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, IoConfig, Layer, Sealed};
-use crate::service::{apply_fn, fn_service, IntoService, Pipeline, Service};
-use crate::time::{timeout, Millis};
+use crate::service::{IntoService, Pipeline, Service, apply_fn, fn_service};
+use crate::time::{Millis, timeout};
 use crate::{channel::mpsc, rt, util::Ready, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};

@@ -3,17 +3,17 @@ use std::{error::Error, future::Future, net, pin::Pin, rc::Rc};
 
 use serde::Serialize;
 
+use crate::http::RequestHeadType;
 use crate::http::body::{Body, BodyStream};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::RequestHeadType;
 use crate::time::Millis;
 use crate::util::{BoxFuture, Bytes, Stream};
 
 #[cfg(feature = "compress")]
-use crate::http::encoding::Decoder;
-#[cfg(feature = "compress")]
 use crate::http::Payload;
+#[cfg(feature = "compress")]
+use crate::http::encoding::Decoder;
 
 use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
 use super::{ClientConfig, ClientResponse};

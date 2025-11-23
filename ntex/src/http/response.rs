@@ -6,11 +6,11 @@ use serde::Serialize;
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use crate::http::StatusCode;
 use crate::http::body::{Body, BodyStream, MessageBody, ResponseBody};
 use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{ConnectionType, Message, ResponseHead};
-use crate::http::StatusCode;
 use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
 /// An HTTP Response

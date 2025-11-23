@@ -8,7 +8,7 @@ use tls_openssl::ssl::SslAcceptorBuilder;
 mod rustls_utils;
 
 use ntex::web::{self, App, HttpResponse, HttpServer};
-use ntex::{io::IoConfig, rt, server::TestServer, time::sleep, time::Seconds};
+use ntex::{io::IoConfig, rt, server::TestServer, time::Seconds, time::sleep};
 
 #[cfg(unix)]
 #[ntex::test]

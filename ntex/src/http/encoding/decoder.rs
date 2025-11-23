@@ -4,8 +4,8 @@ use flate2::write::{GzDecoder, ZlibDecoder};
 
 use super::Writer;
 use crate::http::error::PayloadError;
-use crate::http::header::{ContentEncoding, HeaderMap, CONTENT_ENCODING};
-use crate::rt::{spawn_blocking, JoinHandle};
+use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderMap};
+use crate::rt::{JoinHandle, spawn_blocking};
 use crate::util::{Bytes, Stream};
 
 const INPLACE: usize = 2049;
@@ -139,22 +139,14 @@ impl ContentDecoder {
             ContentDecoder::Gzip(ref mut decoder) => match decoder.try_finish() {
                 Ok(_) => {
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
+                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
                 }
                 Err(e) => Err(e),
             },
             ContentDecoder::Deflate(ref mut decoder) => match decoder.try_finish() {
                 Ok(_) => {
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
+                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
                 }
                 Err(e) => Err(e),
             },
@@ -167,11 +159,7 @@ impl ContentDecoder {
                 Ok(_) => {
                     decoder.flush()?;
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
+                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
                 }
                 Err(e) => Err(e),
             },
@@ -179,11 +167,7 @@ impl ContentDecoder {
                 Ok(_) => {
                     decoder.flush()?;
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() {
-                        Ok(Some(b))
-                    } else {
-                        Ok(None)
-                    }
+                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
                 }
                 Err(e) => Err(e),
             },

@@ -2,12 +2,12 @@ use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, 
 
 use ntex_io::{Io, IoConfig};
 use ntex_service::{IntoServiceFactory, ServiceFactory};
-use ntex_util::{future::BoxFuture, future::Ready, HashMap};
+use ntex_util::{HashMap, future::BoxFuture, future::Ready};
 
 use super::factory::{
     self, BoxServerService, FactoryService, FactoryServiceType, NetService,
 };
-use super::{builder::bind_addr, socket::Listener, Token};
+use super::{Token, builder::bind_addr, socket::Listener};
 
 #[derive(Clone, Debug)]
 pub struct Config(Rc<InnerServiceConfig>);

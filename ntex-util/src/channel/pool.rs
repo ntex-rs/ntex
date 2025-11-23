@@ -2,7 +2,7 @@
 use slab::Slab;
 use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
-use super::{cell::Cell, Canceled};
+use super::{Canceled, cell::Cell};
 use crate::task::LocalWaker;
 
 /// Creates a new futures-aware, pool of one-shot's.

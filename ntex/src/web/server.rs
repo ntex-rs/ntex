@@ -6,11 +6,11 @@ use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{
-    self, body::MessageBody, HttpService, KeepAlive, Request, Response, ResponseError,
+    self, HttpService, KeepAlive, Request, Response, ResponseError, body::MessageBody,
 };
-use crate::io::{cfg::FrameReadRate, IoConfig};
+use crate::io::{IoConfig, cfg::FrameReadRate};
 use crate::server::{Server, ServerBuilder};
-use crate::service::{map_config, IntoServiceFactory, ServiceFactory};
+use crate::service::{IntoServiceFactory, ServiceFactory, map_config};
 use crate::time::Seconds;
 
 use super::config::AppConfig;

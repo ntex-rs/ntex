@@ -2,7 +2,7 @@ use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time};
 
 use ntex_h2::{self as h2};
 
-use crate::time::{sleep, Millis, Seconds};
+use crate::time::{Millis, Seconds, sleep};
 use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

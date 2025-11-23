@@ -306,11 +306,11 @@ where
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::http::Response as HttpResponse;
     use crate::http::body::{Body, ResponseBody};
     use crate::http::header::CONTENT_TYPE;
-    use crate::http::Response as HttpResponse;
     use crate::web;
-    use crate::web::test::{init_service, TestRequest};
+    use crate::web::test::{TestRequest, init_service};
 
     fn responder<T: Responder<DefaultError>>(responder: T) -> impl Responder<DefaultError> {
         responder

@@ -6,7 +6,7 @@ use ntex_io::{Filter, Io, Layer};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{services::Counter, time::Millis};
 
-use crate::{rustls::TlsServerFilter, MAX_SSL_ACCEPT_COUNTER};
+use crate::{MAX_SSL_ACCEPT_COUNTER, rustls::TlsServerFilter};
 
 #[derive(Debug)]
 /// Support `SSL` connections via rustls package

@@ -1,14 +1,14 @@
-use std::task::{ready, Poll};
+use std::task::{Poll, ready};
 use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::error::PayloadError;
-use crate::http::header::{HeaderMap, HeaderValue, HOST};
+use crate::http::header::{HOST, HeaderMap, HeaderValue};
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::{Payload, PayloadStream};
-use crate::http::{h1, Version};
+use crate::http::{Version, h1};
 use crate::io::{IoBoxed, RecvError};
-use crate::time::{timeout_checked, Millis};
+use crate::time::{Millis, timeout_checked};
 use crate::util::{BufMut, Bytes, BytesMut, Stream};
 
 use super::connection::{Connection, ConnectionType};

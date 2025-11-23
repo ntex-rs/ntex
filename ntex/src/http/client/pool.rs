@@ -5,13 +5,13 @@ use std::{cell::RefCell, collections::VecDeque, future, pin, rc::Rc, task::ready
 use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
-use crate::io::{types::HttpProtocol, IoBoxed};
+use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::service::{Pipeline, PipelineCall, Service, ServiceCtx};
 use crate::util::{ByteString, HashMap, HashSet};
 use crate::{channel::pool, rt::spawn, task::LocalWaker, time::now};
 
 use super::connection::{Connection, ConnectionType};
-use super::{error::ConnectError, h2proto::H2Client, Connect};
+use super::{Connect, error::ConnectError, h2proto::H2Client};
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub(super) struct Key {
@@ -616,7 +616,7 @@ mod tests {
     use std::future::Future;
 
     use super::*;
-    use crate::time::{sleep, Millis};
+    use crate::time::{Millis, sleep};
     use crate::{io as nio, service::fn_service, testing::Io, util::lazy};
 
     #[crate::rt_test]
@@ -702,9 +702,11 @@ mod tests {
 
         // drop waiter, no interest in connection
         let mut fut = Box::pin(pool.call(req.clone()));
-        assert!(lazy(|cx| pin::Pin::new(&mut fut).poll(cx))
-            .await
-            .is_pending());
+        assert!(
+            lazy(|cx| pin::Pin::new(&mut fut).poll(cx))
+                .await
+                .is_pending()
+        );
         drop(fut);
         sleep(Millis(50)).await;
         pool.get_ref().inner.borrow_mut().check_availibility();

@@ -10,7 +10,7 @@ pub use url_pkg::ParseError as UrlParseError;
 
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
-use crate::http::{error, header, StatusCode};
+use crate::http::{StatusCode, error, header};
 use crate::util::{BytesMut, Either};
 
 pub use super::error_default::{DefaultError, Error};
@@ -108,7 +108,7 @@ pub enum UrlencodedError {
     Chunked,
     /// Payload size is bigger than allowed. (default: 256kB)
     #[error(
-        "Urlencoded payload size is bigger ({size} bytes) than allowed (default: {limit} bytes)",
+        "Urlencoded payload size is bigger ({size} bytes) than allowed (default: {limit} bytes)"
     )]
     Overflow { size: usize, limit: usize },
     /// Payload size is unknown

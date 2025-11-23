@@ -5,7 +5,7 @@ use std::{collections::VecDeque, fmt, future::poll_fn, pin::Pin, rc::Rc, rc::Wea
 
 use ntex_bytes::Bytes;
 
-use crate::{task::LocalWaker, Stream};
+use crate::{Stream, task::LocalWaker};
 
 /// max buffer size 32k
 const MAX_BUFFER_SIZE: usize = 32_768;

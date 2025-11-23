@@ -149,7 +149,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::web::test::{from_request, TestRequest};
+    use crate::web::test::{TestRequest, from_request};
 
     #[derive(serde::Deserialize, Debug, thiserror::Error)]
     #[error("Id({id})")]

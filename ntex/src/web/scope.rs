@@ -3,9 +3,9 @@ use std::{cell::RefCell, fmt, rc::Rc, task::Context};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
-use crate::service::{chain_factory, dev::ServiceChainFactory, IntoServiceFactory};
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
-use crate::util::{join, Extensions};
+use crate::service::{IntoServiceFactory, chain_factory, dev::ServiceChainFactory};
+use crate::util::{Extensions, join};
 
 use super::app::Filter;
 use super::config::ServiceConfig;
@@ -87,11 +87,11 @@ impl<Err: ErrorRenderer> Scope<Err> {
 impl<Err, M, T> Scope<Err, M, T>
 where
     T: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     /// Add match guard to a scope.
@@ -312,10 +312,10 @@ where
     >
     where
         U: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-        >,
+                WebRequest<Err>,
+                Response = WebRequest<Err>,
+                Error = Err::Container,
+            >,
         F: IntoServiceFactory<U, WebRequest<Err>>,
     {
         Scope {
@@ -592,15 +592,15 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
 #[cfg(test)]
 mod tests {
     use crate::http::body::{Body, ResponseBody};
-    use crate::http::header::{HeaderValue, CONTENT_TYPE};
+    use crate::http::header::{CONTENT_TYPE, HeaderValue};
     use crate::http::{Method, StatusCode};
     use crate::service::fn_service;
     use crate::util::{Bytes, Ready};
+    use crate::web::DefaultError;
     use crate::web::middleware::DefaultHeaders;
     use crate::web::request::WebRequest;
-    use crate::web::test::{call_service, init_service, read_body, TestRequest};
-    use crate::web::DefaultError;
-    use crate::web::{self, guard, App, HttpRequest, HttpResponse};
+    use crate::web::test::{TestRequest, call_service, init_service, read_body};
+    use crate::web::{self, App, HttpRequest, HttpResponse, guard};
 
     #[crate::rt_test]
     async fn test_scope() {

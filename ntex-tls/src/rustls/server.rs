@@ -5,7 +5,7 @@ use ntex_io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use ntex_util::{time, time::Millis};
 use tls_rust::{ServerConfig, ServerConnection};
 
-use crate::{rustls::Stream, Servername};
+use crate::{Servername, rustls::Stream};
 
 #[derive(Debug)]
 /// An implementation of SSL streams

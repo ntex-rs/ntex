@@ -2,8 +2,8 @@ use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 
 use bitflags::bitflags;
 
-use crate::http::{h1::Codec, header::HeaderMap, Method, StatusCode, Uri, Version};
-use crate::io::{types, IoBoxed, IoRef};
+use crate::http::{Method, StatusCode, Uri, Version, h1::Codec, header::HeaderMap};
+use crate::io::{IoBoxed, IoRef, types};
 use crate::util::Extensions;
 
 /// Represents various types of connection

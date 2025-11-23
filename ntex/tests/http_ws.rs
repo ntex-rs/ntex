@@ -2,7 +2,7 @@ use std::{cell::Cell, io, sync::Arc, sync::Mutex};
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
-use ntex::http::{body, h1, test, HttpService, Request, Response, StatusCode};
+use ntex::http::{HttpService, Request, Response, StatusCode, body, h1, test};
 use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
 use ntex::service::{Pipeline, Service, ServiceCtx};
 use ntex::time::Seconds;
@@ -148,20 +148,22 @@ async fn test_simple() {
         ws::Frame::Continuation(ws::Item::FirstText(Bytes::from_static(b"text")))
     );
 
-    assert!(io
-        .send(
+    assert!(
+        io.send(
             ws::Message::Continuation(ws::Item::FirstText("text".into())),
             &codec,
         )
         .await
-        .is_err());
-    assert!(io
-        .send(
+        .is_err()
+    );
+    assert!(
+        io.send(
             ws::Message::Continuation(ws::Item::FirstBinary("text".into())),
             &codec,
         )
         .await
-        .is_err());
+        .is_err()
+    );
 
     io.send(
         ws::Message::Continuation(ws::Item::Continue("text".into())),
@@ -187,21 +189,23 @@ async fn test_simple() {
         ws::Frame::Continuation(ws::Item::Last(Bytes::from_static(b"text")))
     );
 
-    assert!(io
-        .send(
+    assert!(
+        io.send(
             ws::Message::Continuation(ws::Item::Continue("text".into())),
             &codec,
         )
         .await
-        .is_err());
+        .is_err()
+    );
 
-    assert!(io
-        .send(
+    assert!(
+        io.send(
             ws::Message::Continuation(ws::Item::Last("text".into())),
             &codec,
         )
         .await
-        .is_err());
+        .is_err()
+    );
 
     io.send(
         ws::Message::Continuation(ws::Item::FirstBinary(Bytes::from_static(b"bin"))),

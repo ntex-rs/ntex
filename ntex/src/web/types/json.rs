@@ -1,13 +1,13 @@
 //! Json extractor/responder
 use std::{fmt, future::Future, ops, pin::Pin, sync::Arc, task::Context, task::Poll};
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
 use crate::http::header::CONTENT_LENGTH;
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::{stream_recv, BoxFuture, BytesMut};
+use crate::util::{BoxFuture, BytesMut, stream_recv};
 use crate::web::error::{ErrorRenderer, JsonError, JsonPayloadError, WebResponseError};
 use crate::web::{FromRequest, HttpRequest, Responder};
 
@@ -382,7 +382,7 @@ mod tests {
     use super::*;
     use crate::http::header;
     use crate::util::Bytes;
-    use crate::web::test::{from_request, respond_to, TestRequest};
+    use crate::web::test::{TestRequest, from_request, respond_to};
 
     #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug, thiserror::Error)]
     #[error("MyObject({name})")]
@@ -474,8 +474,10 @@ mod tests {
             .to_http_parts();
 
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
-        assert!(format!("{}", s.err().unwrap())
-            .contains("Json payload size is bigger than allowed"));
+        assert!(
+            format!("{}", s.err().unwrap())
+                .contains("Json payload size is bigger than allowed")
+        );
 
         let (req, mut pl) = TestRequest::default()
             .header(

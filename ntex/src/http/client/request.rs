@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, net, rc::Rc};
 
-use base64::{engine::general_purpose::STANDARD as base64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as base64};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 use serde::Serialize;
@@ -13,7 +13,7 @@ use crate::{time::Millis, util::Bytes, util::Stream};
 
 use super::error::{FreezeRequestError, InvalidUrl};
 use super::sender::{PrepForSendingError, SendClientRequest};
-use super::{frozen::FrozenClientRequest, ClientConfig};
+use super::{ClientConfig, frozen::FrozenClientRequest};
 
 /// An HTTP Client request builder
 ///
@@ -326,11 +326,7 @@ impl ClientRequest {
     where
         F: FnOnce(ClientRequest) -> ClientRequest,
     {
-        if value {
-            f(self)
-        } else {
-            self
-        }
+        if value { f(self) } else { self }
     }
 
     /// This method calls provided closure with builder reference if

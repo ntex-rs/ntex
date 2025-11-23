@@ -2,7 +2,7 @@ use std::{env, io};
 
 use futures_util::StreamExt;
 use log::info;
-use ntex::http::{header::HeaderValue, HttpService, Request, Response};
+use ntex::http::{HttpService, Request, Response, header::HeaderValue};
 use ntex::util::BytesMut;
 
 async fn handle_request(mut req: Request) -> Result<Response, io::Error> {

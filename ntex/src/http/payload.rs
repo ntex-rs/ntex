@@ -102,10 +102,12 @@ mod tests {
             format!("{:?}", Payload::H1(crate::channel::bstream::channel().1))
                 .contains("Payload::H1")
         );
-        assert!(format!(
-            "{:?}",
-            Payload::Stream(Box::pin(crate::channel::bstream::channel().1))
-        )
-        .contains("Payload::Stream"));
+        assert!(
+            format!(
+                "{:?}",
+                Payload::Stream(Box::pin(crate::channel::bstream::channel().1))
+            )
+            .contains("Payload::Stream")
+        );
     }
 }

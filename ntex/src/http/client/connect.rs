@@ -1,6 +1,6 @@
 use std::{fmt, net, rc::Rc};
 
-use crate::http::{body::Body, RequestHeadType};
+use crate::http::{RequestHeadType, body::Body};
 use crate::{service::Pipeline, service::Service, time::Millis, util::BoxFuture};
 
 use super::error::{ConnectError, SendRequestError};

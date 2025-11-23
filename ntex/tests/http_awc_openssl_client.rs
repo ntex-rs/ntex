@@ -1,5 +1,5 @@
 #![cfg(feature = "openssl")]
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
 use tls_openssl::ssl::{
     AlpnError, SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode,
@@ -9,7 +9,7 @@ use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Version};
 use ntex::service::{chain_factory, map_config};
-use ntex::web::{self, dev::AppConfig, App, HttpResponse};
+use ntex::web::{self, App, HttpResponse, dev::AppConfig};
 use ntex::{time::Seconds, util::Ready};
 
 fn ssl_acceptor() -> SslAcceptor {

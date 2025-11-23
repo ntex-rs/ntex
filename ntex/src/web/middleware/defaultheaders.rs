@@ -2,7 +2,7 @@
 use std::rc::Rc;
 
 use crate::http::error::HttpError;
-use crate::http::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
+use crate::http::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use crate::service::{Middleware, Service, ServiceCtx};
 use crate::web::{WebRequest, WebResponse};
 
@@ -143,7 +143,7 @@ mod tests {
     use super::*;
     use crate::service::{IntoService, Pipeline};
     use crate::util::lazy;
-    use crate::web::test::{ok_service, TestRequest};
+    use crate::web::test::{TestRequest, ok_service};
     use crate::web::{DefaultError, Error, HttpResponse};
 
     #[crate::rt_test]

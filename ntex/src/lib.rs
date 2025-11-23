@@ -40,8 +40,8 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    chain, chain_factory, fn_service, IntoService, IntoServiceFactory, Middleware,
-    Pipeline, Service, ServiceCtx, ServiceFactory,
+    IntoService, IntoServiceFactory, Middleware, Pipeline, Service, ServiceCtx,
+    ServiceFactory, chain, chain_factory, fn_service,
 };
 
 pub use ntex_util::{channel, task};
@@ -86,7 +86,7 @@ pub mod server {
     //! General purpose tcp server
     pub use ntex_server::net::*;
 
-    pub use ntex_server::{signal, Signal};
+    pub use ntex_server::{Signal, signal};
 
     #[cfg(feature = "openssl")]
     pub use ntex_tls::openssl;
@@ -123,7 +123,7 @@ pub mod util {
     pub use ntex_bytes::{
         Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec, Pool, PoolId, PoolRef,
     };
-    pub use ntex_util::{error::*, future::*, services::*, HashMap, HashSet};
+    pub use ntex_util::{HashMap, HashSet, error::*, future::*, services::*};
 
     #[doc(hidden)]
     #[deprecated]

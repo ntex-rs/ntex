@@ -11,7 +11,7 @@ use crate::http::{Method, Version};
 use crate::util::{Bytes, BytesMut};
 
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{decoder, encoder, reserve_readbuf, Message, MessageType};
+use super::{Message, MessageType, decoder, encoder, reserve_readbuf};
 
 bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]

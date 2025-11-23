@@ -2,7 +2,7 @@ use std::{cell::Cell, convert::Infallible, fmt, marker, task::Context, task::Pol
 
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
-use crate::time::{now, sleep, Millis, Sleep};
+use crate::time::{Millis, Sleep, now, sleep};
 
 /// KeepAlive service factory
 ///

@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::http::test::server as test_server;
-use ntex::http::{client::error::SendRequestError, HttpService, Method, Request, Response};
+use ntex::http::{HttpService, Method, Request, Response, client::error::SendRequestError};
 use ntex::service::ServiceFactory;
 use ntex::{time, util::Bytes, util::Ready};
 

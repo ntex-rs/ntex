@@ -6,10 +6,10 @@ use std::{
 use flate2::write::{GzEncoder, ZlibEncoder};
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
-use crate::http::header::{ContentEncoding, HeaderValue, CONTENT_ENCODING};
+use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderValue};
 use crate::http::{ResponseHead, StatusCode};
-use crate::rt::{spawn_blocking, JoinHandle};
-use crate::util::{dyn_rc_error, Bytes};
+use crate::rt::{JoinHandle, spawn_blocking};
+use crate::util::{Bytes, dyn_rc_error};
 
 use super::Writer;
 

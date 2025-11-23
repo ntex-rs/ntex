@@ -31,12 +31,12 @@ where
     pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<A, AC, B, AR, BR>
     where
         B: ServiceFactory<
-            BR,
-            AC,
-            Response = A::Response,
-            Error = A::Error,
-            InitError = A::InitError,
-        >,
+                BR,
+                AC,
+                Response = A::Response,
+                Error = A::Error,
+                InitError = A::InitError,
+            >,
         F: IntoServiceFactory<B, BR, AC>,
     {
         VariantFactory2 {

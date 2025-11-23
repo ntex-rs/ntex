@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::router::{IntoPattern, ResourceDef};
-use crate::service::{boxed, IntoServiceFactory, ServiceFactory};
+use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 use crate::util::Extensions;
 
 use super::config::AppConfig;
@@ -347,8 +347,8 @@ mod m {
 mod tests {
     use super::*;
     use crate::http::{Method, StatusCode};
-    use crate::web::test::{init_service, TestRequest};
-    use crate::web::{self, guard, App, DefaultError, HttpResponse};
+    use crate::web::test::{TestRequest, init_service};
+    use crate::web::{self, App, DefaultError, HttpResponse, guard};
 
     #[test]
     fn test_service_request() {
