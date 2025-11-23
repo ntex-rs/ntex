@@ -1,12 +1,12 @@
-use std::{fmt, io, task::Context, task::Poll};
+use std::{cell::Cell, fmt, io, task::Context, task::Poll};
 
 use ntex_bytes::{Buf, BytesVec};
-use ntex_util::time::Seconds;
+use ntex_util::time::{Sleep, sleep};
 
 use crate::{FilterCtx, Flags, IoRef, IoTaskStatus, Readiness};
 
 /// Context for io read task
-pub struct IoContext(IoRef);
+pub struct IoContext(IoRef, Cell<Option<Sleep>>);
 
 impl fmt::Debug for IoContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -16,7 +16,7 @@ impl fmt::Debug for IoContext {
 
 impl IoContext {
     pub(crate) fn new(io: &IoRef) -> Self {
-        Self(io.clone())
+        Self(io.clone(), Cell::new(None))
     }
 
     #[doc(hidden)]
@@ -39,15 +39,9 @@ impl IoContext {
     }
 
     #[inline]
-    /// Get disconnect timeout
-    pub fn disconnect_timeout(&self) -> Seconds {
-        self.0.cfg().disconnect_timeout()
-    }
-
-    #[inline]
     /// Check readiness for read operations
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        self.shutdown_filters();
+        self.shutdown_filters(cx);
         self.0.filter().poll_read_ready(cx)
     }
 
@@ -200,7 +194,6 @@ impl IoContext {
                     inner.io_stopped(None);
                     IoTaskStatus::Stop
                 } else {
-                    self.shutdown_filters();
                     if full {
                         IoTaskStatus::Pause
                     } else {
@@ -217,7 +210,6 @@ impl IoContext {
                     inner.io_stopped(Some(e));
                     IoTaskStatus::Stop
                 } else {
-                    self.shutdown_filters();
                     if full {
                         IoTaskStatus::Pause
                     } else {
@@ -325,7 +317,7 @@ impl IoContext {
         }
     }
 
-    fn shutdown_filters(&self) {
+    fn shutdown_filters(&self, cx: &mut Context<'_>) {
         let io = &self.0;
         let st = &self.0.0;
         let flags = st.flags.get();
@@ -334,7 +326,6 @@ impl IoContext {
         {
             match io.filter().shutdown(FilterCtx::new(io, &st.buffer)) {
                 Ok(Poll::Ready(())) => {
-                    st.write_task.wake();
                     st.dispatch_task.wake();
                     st.insert_flags(Flags::IO_STOPPING);
                 }
@@ -345,9 +336,20 @@ impl IoContext {
                     if flags.contains(Flags::RD_PAUSED)
                         || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
                     {
-                        st.write_task.wake();
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
+                    } else {
+                        // filter shutdown timeout
+                        let timeout = self
+                            .1
+                            .take()
+                            .unwrap_or_else(|| sleep(io.cfg().disconnect_timeout()));
+                        if timeout.poll_elapsed(cx).is_ready() {
+                            st.dispatch_task.wake();
+                            st.insert_flags(Flags::IO_STOPPING);
+                        } else {
+                            self.1.set(Some(timeout));
+                        }
                     }
                 }
                 Err(err) => {
@@ -366,6 +368,6 @@ impl IoContext {
 
 impl Clone for IoContext {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(self.0.clone(), Cell::new(None))
     }
 }

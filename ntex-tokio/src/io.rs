@@ -5,7 +5,7 @@ use ntex_bytes::{BufMut, BytesVec};
 use ntex_io::{
     Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types,
 };
-use ntex_util::time::{Millis, timeout_checked};
+use ntex_util::time::Millis;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 
@@ -56,17 +56,13 @@ where
     log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
-        let _ = timeout_checked(
-            ctx.disconnect_timeout(),
-            poll_fn(|cx| {
-                if write(&mut *io.borrow_mut(), &ctx, cx) == Poll::Ready(Status::Terminate)
-                {
-                    Poll::Ready(())
-                } else {
-                    ctx.shutdown(flush, cx)
-                }
-            }),
-        )
+        let _ = poll_fn(|cx| {
+            if write(&mut *io.borrow_mut(), &ctx, cx) == Poll::Ready(Status::Terminate) {
+                Poll::Ready(())
+            } else {
+                ctx.shutdown(flush, cx)
+            }
+        })
         .await;
     }
 
