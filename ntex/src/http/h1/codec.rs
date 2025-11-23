@@ -12,7 +12,7 @@ use crate::http::response::Response;
 use crate::http::{Method, Version};
 use crate::util::BytesMut;
 
-use super::{decoder, decoder::PayloadType, encoder, Message};
+use super::{Message, decoder, decoder::PayloadType, encoder};
 
 bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -194,7 +194,7 @@ impl Encoder for Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{h1::PayloadItem, HttpMessage};
+    use crate::http::{HttpMessage, h1::PayloadItem};
     use crate::util::Bytes;
 
     #[test]

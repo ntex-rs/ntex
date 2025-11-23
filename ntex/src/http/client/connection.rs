@@ -3,7 +3,7 @@ use std::{fmt, time};
 use crate::http::body::MessageBody;
 use crate::http::message::{RequestHeadType, ResponseHead};
 use crate::http::payload::Payload;
-use crate::io::{types::HttpProtocol, IoBoxed};
+use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::time::Millis;
 
 use super::{error::SendRequestError, h1proto, h2proto, pool::Acquired};

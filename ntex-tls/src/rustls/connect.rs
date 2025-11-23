@@ -3,7 +3,7 @@ use std::{fmt, io, sync::Arc};
 use ntex_io::{Io, IoConfig, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnector};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
-use tls_rust::{pki_types::ServerName, ClientConfig};
+use tls_rust::{ClientConfig, pki_types::ServerName};
 
 use super::TlsClientFilter;
 

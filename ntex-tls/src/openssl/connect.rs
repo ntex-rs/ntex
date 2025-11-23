@@ -5,7 +5,7 @@ use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnect
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use tls_openssl::ssl::SslConnector as BaseSslConnector;
 
-use super::{connect as connect_io, SslFilter};
+use super::{SslFilter, connect as connect_io};
 
 pub struct SslConnector<T> {
     connector: Pipeline<BaseConnector<T>>,

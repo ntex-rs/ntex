@@ -252,11 +252,11 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
         C: Clone,
         F: IntoServiceFactory<U, Result<T::Response, T::Error>, C>,
         U: ServiceFactory<
-            Result<T::Response, T::Error>,
-            C,
-            Error = T::Error,
-            InitError = T::InitError,
-        >,
+                Result<T::Response, T::Error>,
+                C,
+                Error = T::Error,
+                InitError = T::InitError,
+            >,
     {
         ServiceChainFactory {
             factory: ThenFactory::new(self.factory, factory.into_factory()),

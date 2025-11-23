@@ -2,7 +2,7 @@
 use std::{error, fmt, io, io::Write, rc::Rc, string::FromUtf8Error};
 
 use ntex_h2::{self as h2};
-use ntex_http::{header, StatusCode};
+use ntex_http::{StatusCode, header};
 
 // re-export for convinience
 pub use crate::channel::Canceled;
@@ -10,7 +10,7 @@ pub use ntex_http::error::Error as HttpError;
 
 use crate::http::body::Body;
 use crate::http::response::Response;
-use crate::util::{clone_io_error, BytesMut, Either};
+use crate::util::{BytesMut, Either, clone_io_error};
 
 /// Error that can be converted to `Response`
 pub trait ResponseError: fmt::Display + fmt::Debug {

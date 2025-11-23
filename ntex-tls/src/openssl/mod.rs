@@ -2,7 +2,7 @@
 use std::{any, cell::RefCell, cmp, error::Error, io, task::Poll};
 
 use ntex_bytes::{BufMut, BytesVec};
-use ntex_io::{types, Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
+use ntex_io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf, types};
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
 
@@ -184,23 +184,24 @@ impl FilterLayer for SslFilter {
     fn process_write_buf(&self, wb: &WriteBuf<'_>) -> io::Result<()> {
         wb.with_src(|b| {
             if let Some(src) = b {
-                self.with_buffers(wb, || loop {
-                    if src.is_empty() {
-                        return Ok(());
-                    }
-                    let ssl_result = self.inner.borrow_mut().ssl_write(src);
-                    match ssl_result {
-                        Ok(v) => {
-                            src.split_to(v);
-                            continue;
+                self.with_buffers(wb, || {
+                    loop {
+                        if src.is_empty() {
+                            return Ok(());
                         }
-                        Err(e) => {
-                            return match e.code() {
-                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => {
-                                    Ok(())
-                                }
-                                _ => Err(map_to_ioerr(e)),
-                            };
+                        let ssl_result = self.inner.borrow_mut().ssl_write(src);
+                        match ssl_result {
+                            Ok(v) => {
+                                src.split_to(v);
+                                continue;
+                            }
+                            Err(e) => {
+                                return match e.code() {
+                                    ssl::ErrorCode::WANT_READ
+                                    | ssl::ErrorCode::WANT_WRITE => Ok(()),
+                                    _ => Err(map_to_ioerr(e)),
+                                };
+                            }
                         }
                     }
                 })

@@ -97,7 +97,7 @@ impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
 #[cfg(test)]
 mod tests {
     use crate::http::StatusCode;
-    use crate::web::test::{init_service, TestRequest};
+    use crate::web::test::{TestRequest, init_service};
     use crate::web::{self, App, HttpResponse};
 
     #[crate::rt_test]
@@ -129,7 +129,7 @@ mod tests {
     #[cfg(feature = "tokio")]
     #[crate::rt_test]
     async fn test_state_drop() {
-        use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+        use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
         struct TestData(Arc<AtomicUsize>);
 

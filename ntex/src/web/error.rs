@@ -10,7 +10,7 @@ pub use url_pkg::ParseError as UrlParseError;
 
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
-use crate::http::{error, header, StatusCode};
+use crate::http::{StatusCode, error, header};
 use crate::util::{BytesMut, Either};
 
 pub use super::error_default::{DefaultError, Error};
@@ -65,15 +65,15 @@ where
 {
     fn status_code(&self) -> StatusCode {
         match self {
-            Either::Left(ref a) => a.status_code(),
-            Either::Right(ref b) => b.status_code(),
+            Either::Left(a) => a.status_code(),
+            Either::Right(b) => b.status_code(),
         }
     }
 
     fn error_response(&self, req: &HttpRequest) -> HttpResponse {
         match self {
-            Either::Left(ref a) => a.error_response(req),
-            Either::Right(ref b) => b.error_response(req),
+            Either::Left(a) => a.error_response(req),
+            Either::Right(b) => b.error_response(req),
         }
     }
 }
@@ -108,7 +108,7 @@ pub enum UrlencodedError {
     Chunked,
     /// Payload size is bigger than allowed. (default: 256kB)
     #[error(
-        "Urlencoded payload size is bigger ({size} bytes) than allowed (default: {limit} bytes)",
+        "Urlencoded payload size is bigger ({size} bytes) than allowed (default: {limit} bytes)"
     )]
     Overflow { size: usize, limit: usize },
     /// Payload size is unknown

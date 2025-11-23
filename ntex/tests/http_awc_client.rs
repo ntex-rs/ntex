@@ -1,21 +1,21 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use coo_kie::Cookie;
-use flate2::{read::GzDecoder, write::GzEncoder, write::ZlibEncoder, Compression};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
 use rand::Rng;
 
 use ntex::http::client::error::SendRequestError;
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
-use ntex::http::{header, HttpMessage, HttpService};
+use ntex::http::{HttpMessage, HttpService, header};
 use ntex::service::{chain_factory, map_config};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
-use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
-use ntex::{time::sleep, time::Millis, time::Seconds, util::Bytes, util::Ready};
+use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
+use ntex::{time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \

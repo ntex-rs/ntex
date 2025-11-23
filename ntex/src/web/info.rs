@@ -1,7 +1,7 @@
 use std::cell::Ref;
 
-use crate::http::header::{self, HeaderName};
 use crate::http::RequestHead;
+use crate::http::header::{self, HeaderName};
 use crate::web::config::AppConfig;
 
 const X_FORWARDED_FOR: &[u8] = b"x-forwarded-for";

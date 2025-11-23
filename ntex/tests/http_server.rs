@@ -1,14 +1,14 @@
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
 use std::{io, io::Read, io::Write, net};
 
 use futures_util::future::{self, FutureExt};
-use futures_util::stream::{once, StreamExt};
+use futures_util::stream::{StreamExt, once};
 use regex::Regex;
 
 use ntex::http::header::{self, HeaderName, HeaderValue};
-use ntex::http::{body, h1::Control, test::server as test_server};
 use ntex::http::{HttpService, KeepAlive, Method, Request, Response, StatusCode, Version};
-use ntex::time::{sleep, timeout, Millis, Seconds};
+use ntex::http::{body, h1::Control, test::server as test_server};
+use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::{
     channel::oneshot, rt, service::fn_service, util::Bytes, util::Ready, web::error,
 };

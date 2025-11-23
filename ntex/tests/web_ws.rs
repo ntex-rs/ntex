@@ -3,7 +3,7 @@ use std::io;
 use ntex::http::StatusCode;
 use ntex::service::{fn_factory_with_config, fn_service};
 use ntex::util::{ByteString, Bytes};
-use ntex::web::{self, test, ws, App, HttpRequest, HttpResponse};
+use ntex::web::{self, App, HttpRequest, HttpResponse, test, ws};
 use ntex::ws::error::WsClientError;
 
 async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {

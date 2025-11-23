@@ -3,36 +3,35 @@ use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::http::body::MessageBody;
 use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
-use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
+use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
 #[cfg(feature = "ws")]
 use crate::io::{IoConfig, Sealed};
 use crate::router::{Path, ResourceDef};
 use crate::service::{
-    map_config, IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory,
+    IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory, map_config,
 };
-use crate::time::{sleep, Millis, Seconds};
-use crate::util::{stream_recv, Bytes, BytesMut, Extensions, Ready, Stream};
+use crate::time::{Millis, Seconds, sleep};
+use crate::util::{Bytes, BytesMut, Extensions, Ready, Stream, stream_recv};
 #[cfg(feature = "ws")]
-use crate::ws::{error::WsClientError, WsClient, WsConnection};
+use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{rt::System, server::Server};
 
 use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
 use crate::web::rmap::ResourceMap;
-use crate::web::{config::AppConfig, service::AppState};
 use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
+use crate::web::{config::AppConfig, service::AppState};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<Err: ErrorRenderer>(
-) -> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible>
-{
+pub fn ok_service<Err: ErrorRenderer>()
+-> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible> {
     default_service::<Err>(StatusCode::OK)
 }
 
@@ -976,7 +975,7 @@ mod tests {
     use std::convert::Infallible;
 
     use super::*;
-    use crate::http::{header, HttpMessage};
+    use crate::http::{HttpMessage, header};
     use crate::web::{self, App};
 
     #[crate::rt_test]

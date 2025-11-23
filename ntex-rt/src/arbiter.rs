@@ -1,9 +1,9 @@
 #![allow(clippy::let_underscore_future)]
 use std::any::{Any, TypeId};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, thread};
 
-use async_channel::{unbounded, Receiver, Sender};
+use async_channel::{Receiver, Sender, unbounded};
 
 use crate::system::{FnExec, Id, System, SystemCommand};
 

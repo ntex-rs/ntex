@@ -166,7 +166,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{fn_factory, Pipeline};
+    use crate::{Pipeline, fn_factory};
 
     #[derive(Debug, Clone)]
     struct Srv(bool, Rc<Cell<usize>>);
@@ -176,11 +176,7 @@ mod tests {
         type Error = ();
 
         async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-            if self.0 {
-                Err(())
-            } else {
-                Ok(())
-            }
+            if self.0 { Err(()) } else { Ok(()) }
         }
 
         async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {

@@ -1,7 +1,7 @@
 //! A one-shot, futures-aware channel.
-use std::{future::poll_fn, future::Future, pin::Pin, task::Context, task::Poll};
+use std::{future::Future, future::poll_fn, pin::Pin, task::Context, task::Poll};
 
-use super::{cell::Cell, Canceled};
+use super::{Canceled, cell::Cell};
 use crate::task::LocalWaker;
 
 /// Creates a new futures-aware, one-shot channel.

@@ -1,7 +1,7 @@
 use std::{cell::Cell, marker::PhantomData, mem, task::Poll};
 
 use ntex_http::header::{HeaderName, HeaderValue};
-use ntex_http::{header, Method, StatusCode, Uri, Version};
+use ntex_http::{Method, StatusCode, Uri, Version, header};
 
 use crate::codec::Decoder;
 use crate::http::error::DecodeError;
@@ -784,8 +784,8 @@ fn uninit_array<T, const LEN: usize>() -> [mem::MaybeUninit<T>; LEN] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::header::SET_COOKIE;
     use crate::http::HttpMessage;
+    use crate::http::header::SET_COOKIE;
 
     impl PayloadType {
         fn unwrap(self) -> PayloadDecoder {

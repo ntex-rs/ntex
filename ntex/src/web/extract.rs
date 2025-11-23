@@ -190,7 +190,7 @@ mod tests {
     use crate::http::header;
     use crate::util::Bytes;
     use crate::web::error::UrlencodedError;
-    use crate::web::test::{from_request, TestRequest};
+    use crate::web::test::{TestRequest, from_request};
     use crate::web::types::{Form, FormConfig};
 
     #[derive(serde::Deserialize, Debug, PartialEq)]

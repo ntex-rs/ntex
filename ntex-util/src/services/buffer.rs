@@ -1,6 +1,6 @@
 //! Service that buffers incomming requests.
 use std::cell::{Cell, RefCell};
-use std::task::{ready, Poll, Waker};
+use std::task::{Poll, Waker, ready};
 use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
 
 use ntex_service::{Middleware, Pipeline, PipelineBinding, Service, ServiceCtx};
@@ -302,7 +302,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{apply, fn_factory, Pipeline, ServiceFactory};
+    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
     use std::{rc::Rc, time::Duration};
 
     use super::*;

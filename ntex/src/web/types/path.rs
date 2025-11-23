@@ -173,7 +173,7 @@ where
 mod tests {
     use super::*;
     use crate::router::Router;
-    use crate::web::test::{from_request, TestRequest};
+    use crate::web::test::{TestRequest, from_request};
 
     #[derive(thiserror::Error, serde::Deserialize, Debug)]
     #[error("MyStruct({key}, {value})")]

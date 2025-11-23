@@ -51,8 +51,8 @@ pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
 #[allow(dead_code)]
 #[cfg(feature = "tokio")]
 mod tokio {
-    use std::future::{poll_fn, Future};
-    pub use tok_io::task::{spawn_blocking, JoinError, JoinHandle};
+    use std::future::{Future, poll_fn};
+    pub use tok_io::task::{JoinError, JoinHandle, spawn_blocking};
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
@@ -135,8 +135,8 @@ mod tokio {
 #[allow(dead_code)]
 #[cfg(feature = "compio")]
 mod compio {
-    use std::task::{ready, Context, Poll};
-    use std::{fmt, future::poll_fn, future::Future, pin::Pin};
+    use std::task::{Context, Poll, ready};
+    use std::{fmt, future::Future, future::poll_fn, pin::Pin};
 
     use compio_driver::DriverType;
     use compio_runtime::Runtime;
@@ -287,8 +287,8 @@ mod compio {
 #[allow(dead_code)]
 #[cfg(feature = "neon")]
 mod neon {
-    use std::task::{ready, Context, Poll};
-    use std::{fmt, future::poll_fn, future::Future, pin::Pin};
+    use std::task::{Context, Poll, ready};
+    use std::{fmt, future::Future, future::poll_fn, pin::Pin};
 
     use ntex_neon::Runtime;
 

@@ -8,7 +8,7 @@ use std::{io::Read, io::Write, net, sync::mpsc, thread, time};
 
 use ntex::codec::BytesCodec;
 use ntex::io::{Io, IoConfig};
-use ntex::server::{build, TestServer};
+use ntex::server::{TestServer, build};
 use ntex::service::fn_service;
 use ntex::util::{Bytes, Ready};
 

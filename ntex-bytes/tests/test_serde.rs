@@ -1,6 +1,6 @@
 #![deny(warnings, rust_2018_idioms)]
 
-use serde_test::{assert_tokens, Token};
+use serde_test::{Token, assert_tokens};
 
 #[test]
 fn test_ser_de_empty() {

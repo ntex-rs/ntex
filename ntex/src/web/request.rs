@@ -1,9 +1,9 @@
 use std::{cell::Ref, cell::RefMut, fmt, marker::PhantomData, net, rc::Rc};
 
 use crate::http::{
-    header, HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version,
+    HeaderMap, HttpMessage, Method, Payload, RequestHead, Response, Uri, Version, header,
 };
-use crate::io::{types, IoRef};
+use crate::io::{IoRef, types};
 use crate::router::{Path, Resource};
 use crate::util::Extensions;
 
@@ -297,9 +297,9 @@ impl<Err: ErrorRenderer> fmt::Debug for WebRequest<Err> {
 
 #[cfg(test)]
 mod tests {
-    use crate::http::{self, header, HttpMessage};
-    use crate::web::test::TestRequest;
+    use crate::http::{self, HttpMessage, header};
     use crate::web::HttpResponse;
+    use crate::web::test::TestRequest;
 
     #[test]
     fn test_request() {

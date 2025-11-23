@@ -6,7 +6,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Method, RequestHead, RequestHeadType, Uri};
 use crate::{time::Millis, util::Bytes, util::Stream};
 
-use super::{sender::SendClientRequest, ClientConfig};
+use super::{ClientConfig, sender::SendClientRequest};
 
 /// `FrozenClientRequest` struct represents clonable client request.
 /// It could be used to send same request multiple times.

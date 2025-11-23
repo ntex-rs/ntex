@@ -52,12 +52,12 @@ where
     ChooseFn: Fn(&C) -> bool,
     SFLeft: ServiceFactory<R, C>,
     SFRight: ServiceFactory<
-        R,
-        C,
-        Response = SFLeft::Response,
-        InitError = SFLeft::InitError,
-        Error = SFLeft::Error,
-    >,
+            R,
+            C,
+            Response = SFLeft::Response,
+            InitError = SFLeft::InitError,
+            Error = SFLeft::Error,
+        >,
 {
     type Response = SFLeft::Response;
     type Error = SFLeft::Error;

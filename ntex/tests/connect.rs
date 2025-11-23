@@ -1,7 +1,7 @@
 use std::{io, rc::Rc};
 
-use ntex::io::{types::PeerAddr, Io};
-use ntex::service::{chain_factory, fn_service, Pipeline, ServiceFactory};
+use ntex::io::{Io, types::PeerAddr};
+use ntex::service::{Pipeline, ServiceFactory, chain_factory, fn_service};
 use ntex::{codec::BytesCodec, connect::Connect};
 use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
 

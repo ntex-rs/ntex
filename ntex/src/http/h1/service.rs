@@ -4,9 +4,9 @@ use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
-use crate::io::{types, Filter, Io, IoRef};
+use crate::io::{Filter, Io, IoRef, types};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
-use crate::{channel::oneshot, util::join, util::HashSet};
+use crate::{channel::oneshot, util::HashSet, util::join};
 
 use super::control::{Control, ControlAck};
 use super::default::DefaultControlService;

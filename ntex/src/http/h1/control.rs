@@ -1,7 +1,7 @@
 use std::{fmt, future::Future, io, rc::Rc};
 
 use crate::http::message::CurrentIo;
-use crate::http::{body::Body, h1::Codec, Request, Response, ResponseError};
+use crate::http::{Request, Response, ResponseError, body::Body, h1::Codec};
 use crate::io::{Filter, Io, IoBoxed, IoRef};
 
 pub enum Control<F, Err> {

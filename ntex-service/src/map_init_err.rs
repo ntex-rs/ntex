@@ -69,7 +69,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{chain_factory, fn_factory_with_config, fn_service, ServiceFactory};
+    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, fn_service};
 
     #[ntex::test]
     async fn map_init_err() {

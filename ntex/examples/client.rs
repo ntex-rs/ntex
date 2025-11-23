@@ -1,4 +1,4 @@
-use ntex::http::client::{error::SendRequestError, Client};
+use ntex::http::client::{Client, error::SendRequestError};
 
 #[ntex::main]
 async fn main() -> Result<(), SendRequestError> {

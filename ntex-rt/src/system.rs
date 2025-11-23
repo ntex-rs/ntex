@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
 
@@ -186,8 +186,7 @@ impl SystemConfig {
                 *result_inner.borrow_mut() = Some(r);
             }));
         }
-        let res = result.borrow_mut().take().unwrap();
-        res
+        result.borrow_mut().take().unwrap()
     }
 }
 

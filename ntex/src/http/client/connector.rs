@@ -3,12 +3,12 @@ use std::{fmt, task::Context, time::Duration};
 use ntex_h2::{self as h2};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::service::{apply_fn, boxed, Service, ServiceCtx};
+use crate::service::{Service, ServiceCtx, apply_fn, boxed};
 use crate::time::{Millis, Seconds};
 use crate::util::{join, timeout::TimeoutError, timeout::TimeoutService};
 use crate::{http::Uri, io::IoBoxed};
 
-use super::{connection::Connection, error::ConnectError, pool::ConnectionPool, Connect};
+use super::{Connect, connection::Connection, error::ConnectError, pool::ConnectionPool};
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::SslConnector as OpensslConnector;

@@ -1,4 +1,4 @@
-use ntex::http::client::{error::SendRequestError, Client, Connector};
+use ntex::http::client::{Client, Connector, error::SendRequestError};
 use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
 
 #[ntex::main]
