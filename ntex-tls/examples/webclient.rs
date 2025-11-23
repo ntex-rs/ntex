@@ -3,7 +3,6 @@ use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
 
 #[ntex::main]
 async fn main() -> Result<(), SendRequestError> {
-    // std::env::set_var("RUST_LOG", "ntex=trace");
     env_logger::init();
     println!("Connecting to openssl webserver: 127.0.0.1:8443");
 
