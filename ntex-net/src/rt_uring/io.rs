@@ -1,6 +1,6 @@
 use std::{any, future::poll_fn, task::Poll};
 
-use ntex_io::{types, Handle, IoContext, ReadContext, Readiness};
+use ntex_io::{Handle, IoContext, ReadContext, Readiness, types};
 use ntex_rt::spawn;
 
 use super::driver::{StreamCtl, StreamOps};

@@ -14,8 +14,7 @@ use crate::io::{types, Filter, Io, IoBoxed, IoRef};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 use crate::util::{Bytes, BytesMut, HashMap, HashSet};
 
-use super::payload::{Payload, PayloadSender};
-use super::DefaultControlService;
+use super::{payload::Payload, payload::PayloadSender, DefaultControlService};
 
 /// `ServiceFactory` implementation for HTTP2 transport
 pub struct H2Service<F, S, B, C> {
@@ -270,7 +269,8 @@ where
         };
 
         log::trace!(
-            "New http2 connection, peer address {:?}, inflight: {inflight}",
+            "{}: New http2 connection, peer address {:?}, inflight: {inflight}",
+            io.tag(),
             io.query::<types::PeerAddr>().get()
         );
         let control = self.control.create(()).await.map_err(|e| {
@@ -370,7 +370,11 @@ where
                 eof,
             } => {
                 let pl = if !eof {
-                    log::debug!("Creating local payload stream for {:?}", stream.id());
+                    log::debug!(
+                        "{}: Creating local payload stream for {:?}",
+                        self.io.tag(),
+                        stream.id()
+                    );
                     let (sender, payload) = Payload::create(stream.empty_capacity());
                     self.streams.borrow_mut().insert(stream.id(), sender);
                     Some(payload)
@@ -380,16 +384,29 @@ where
                 (self.io.clone(), pseudo, headers, eof, pl)
             }
             h2::MessageKind::Data(data, cap) => {
-                log::debug!("Got data chunk for {:?}: {:?}", stream.id(), data.len());
+                log::debug!(
+                    "{}: Got data chunk for {:?}: {:?}",
+                    self.io.tag(),
+                    stream.id(),
+                    data.len()
+                );
                 if let Some(sender) = self.streams.borrow_mut().get_mut(&stream.id()) {
                     sender.feed_data(data, cap)
                 } else {
-                    log::error!("Payload stream does not exists for {:?}", stream.id());
+                    log::error!(
+                        "{}: Payload stream does not exists for {:?}",
+                        self.io.tag(),
+                        stream.id()
+                    );
                 };
                 return Ok(());
             }
             h2::MessageKind::Eof(item) => {
-                log::debug!("Got payload eof for {:?}: {item:?}", stream.id());
+                log::debug!(
+                    "{}: Got payload eof for {:?}: {item:?}",
+                    self.io.tag(),
+                    stream.id()
+                );
                 if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     match item {
                         h2::StreamEof::Data(data) => {
@@ -404,7 +421,7 @@ where
                 return Ok(());
             }
             h2::MessageKind::Disconnect(err) => {
-                log::debug!("Connection is disconnected {err:?}");
+                log::debug!("{}: Connection is disconnected {err:?}", self.io.tag(),);
                 if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     sender.set_error(
                         io::Error::new(io::ErrorKind::UnexpectedEof, err).into(),
@@ -417,7 +434,8 @@ where
         let cfg = self.config.clone();
 
         log::trace!(
-            "{:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
+            "{}: {:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
+            self.io.tag(),
             stream.id()
         );
         let mut req = if let Some(pl) = payload {
@@ -454,7 +472,10 @@ where
         let mut size = body.size();
         prepare_response(&cfg.timer, head, &mut size);
 
-        log::debug!("Received service response: {head:?} payload: {size:?}");
+        log::debug!(
+            "{}: Received service response: {head:?} payload: {size:?}",
+            self.io.tag()
+        );
 
         let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
         if size.is_eof() || is_head_req {
@@ -465,13 +486,18 @@ where
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                     None => {
-                        log::debug!("{:?} closing payload stream", stream.id());
+                        log::debug!(
+                            "{}: {:?} closing payload stream",
+                            self.io.tag(),
+                            stream.id()
+                        );
                         stream.send_payload(Bytes::new(), true).await?;
                         break;
                     }
                     Some(Ok(chunk)) => {
                         log::debug!(
-                            "{:?} sending data chunk {:?} bytes",
+                            "{}: {:?} sending data chunk {:?} bytes",
+                            self.io.tag(),
                             stream.id(),
                             chunk.len()
                         );
@@ -480,7 +506,10 @@ where
                         }
                     }
                     Some(Err(e)) => {
-                        log::error!("Response payload stream error: {e:?}");
+                        log::error!(
+                            "{}: Response payload stream error: {e:?}",
+                            self.io.tag()
+                        );
                         return Err(H2Error::Stream(e));
                     }
                 }

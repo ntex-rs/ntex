@@ -1,7 +1,7 @@
 use std::{cell::RefCell, io, os::fd::RawFd, rc::Rc};
 
 use ntex_neon::driver::io_uring::{opcode, types::Fd};
-use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
+use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
 use ntex_util::channel::oneshot::Sender;
 use slab::Slab;
 use socket2::SockAddr;

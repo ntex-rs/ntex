@@ -1,8 +1,8 @@
 use std::{collections::VecDeque, fmt, io, net::SocketAddr};
 
-use ntex_io::{types, Io, IoConfig};
+use ntex_io::{Io, IoConfig, types};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{future::Either, time::timeout_checked, time::Millis};
+use ntex_util::{future::Either, time::Millis, time::timeout_checked};
 
 use super::{Address, Connect, ConnectError, Resolver};
 use crate::tcp_connect;
@@ -153,7 +153,8 @@ async fn connect<T: Address>(
                 Err(err) => {
                     log::trace!(
                         "{}: TCP connector - failed to connect to {:?} port: {port} err: {err:?}",
-                        cfg.tag(), req.host(),
+                        cfg.tag(),
+                        req.host(),
                     );
                     if addrs.is_empty() {
                         return Err(err.into());

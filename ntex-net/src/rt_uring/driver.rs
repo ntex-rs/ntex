@@ -3,7 +3,7 @@ use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::P
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_neon::driver::io_uring::{cqueue, opcode, opcode2, squeue::Entry, types::Fd};
-use ntex_neon::{driver::DriverApi, driver::Handler, Runtime};
+use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
 use ntex_util::channel::pool;
 use slab::Slab;
 use socket2::Socket;
@@ -319,9 +319,6 @@ impl StreamOpsStorage {
         if let Some(item) = self.streams.get_mut(id) {
             if item.rd_op.is_none() {
                 let mut buf = ctx.get_read_buf();
-                if buf.remaining_mut() < self.lw {
-                    buf.reserve(self.hw);
-                }
                 let s = buf.chunk_mut();
                 let buf_ptr = s.as_mut_ptr();
                 let buf_len = s.len() as u32;

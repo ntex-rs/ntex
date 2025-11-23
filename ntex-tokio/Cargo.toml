@@ -6,10 +6,11 @@ description = "tokio intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
 homepage = "https://ntex.rs"
 repository = "https://github.com/ntex-rs/ntex.git"
-documentation = "https://docs.rs/ntex-rt-tokio/"
+documentation = "https://docs.rs/ntex-tokio/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 
 [lib]
 name = "ntex_tokio"

@@ -1,7 +1,7 @@
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ntex_bytes::{buf::BufMut, BytesVec};
+use ntex_bytes::{BytesVec, buf::BufMut};
 use ntex_util::time::Seconds;
 
 const DEFAULT_TAG: &str = "IO";

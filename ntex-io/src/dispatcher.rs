@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 #![allow(clippy::let_underscore_future)]
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{cell::Cell, future::Future, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
@@ -539,17 +539,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
+    use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
     use std::{cell::RefCell, io};
 
     use ntex_bytes::{Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_service::ServiceCtx;
-    use ntex_util::{time::sleep, time::Millis};
+    use ntex_util::{time::Millis, time::sleep};
     use rand::Rng;
 
     use super::*;
-    use crate::{testing::IoTest, Flags, Io, IoConfig, IoRef};
+    use crate::{Flags, Io, IoConfig, IoRef, testing::IoTest};
 
     pub(crate) struct State(IoRef);
 
@@ -563,8 +563,8 @@ mod tests {
         }
 
         fn close(&self) {
-            self.0 .0.insert_flags(Flags::DSP_STOP);
-            self.0 .0.dispatch_task.wake();
+            self.0.0.insert_flags(Flags::DSP_STOP);
+            self.0.0.dispatch_task.wake();
         }
     }
 
@@ -696,10 +696,11 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
-        assert!(st
-            .io()
-            .encode(Bytes::from_static(b"test"), &BytesCodec)
-            .is_ok());
+        assert!(
+            st.io()
+                .encode(Bytes::from_static(b"test"), &BytesCodec)
+                .is_ok()
+        );
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
