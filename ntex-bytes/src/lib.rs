@@ -61,7 +61,6 @@ mod bytes;
 mod bytesmut;
 mod debug;
 mod hex;
-mod pool;
 mod serde;
 mod storage;
 mod string;
@@ -70,6 +69,3 @@ pub use crate::bvec::BytesVec;
 pub use crate::bytes::Bytes;
 pub use crate::bytesmut::BytesMut;
 pub use crate::string::ByteString;
-
-#[doc(hidden)]
-pub use crate::pool::{Pool, PoolId, PoolRef};

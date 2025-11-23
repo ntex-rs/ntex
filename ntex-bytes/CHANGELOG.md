@@ -1,5 +1,9 @@
 # Changes
 
+## [0.1.32] (2025-11-xx)
+
+* Drop pool support
+
 ## [0.1.31] (2025-11-15)
 
 * Refactor code structure
