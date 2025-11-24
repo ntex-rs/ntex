@@ -233,6 +233,11 @@ impl BufConfig {
         }
     }
 
+    /// Get buffer with capacity
+    pub fn buf_with_capacity(&self, cap: usize) -> BytesVec {
+        BytesVec::with_capacity(cap)
+    }
+
     #[inline]
     /// Resize buffer
     pub fn resize(&self, buf: &mut BytesVec) {
