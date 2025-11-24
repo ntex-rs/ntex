@@ -617,7 +617,7 @@ mod tests {
 
     use super::*;
     use crate::time::{Millis, sleep};
-    use crate::{io as nio, service::fn_service, testing::Io, util::lazy};
+    use crate::{io as nio, service::fn_service, testing::IoTest, util::lazy};
 
     #[crate::rt_test]
     async fn test_basics() {
@@ -627,7 +627,7 @@ mod tests {
         let pool = Pipeline::new(
             ConnectionPool::new(
                 fn_service(move |req| {
-                    let (client, server) = Io::create();
+                    let (client, server) = IoTest::create();
                     store2.borrow_mut().push((req, server));
                     Box::pin(async move {
                         Ok(IoBoxed::from(nio::Io::new(

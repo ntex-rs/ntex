@@ -219,7 +219,6 @@ impl<Err> WebRequest<Err> {
         Rc::get_mut(&mut (self.req).0).unwrap().payload = payload;
     }
 
-    #[doc(hidden)]
     /// Set new app state container
     pub(super) fn set_state_container(&mut self, state: AppState) {
         Rc::get_mut(&mut (self.req).0).unwrap().app_state = state;
