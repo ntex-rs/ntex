@@ -60,7 +60,7 @@ pub fn active_stream_ops() -> usize {
 #[cfg(all(target_os = "linux", feature = "neon"))]
 #[cfg(test)]
 mod tests {
-    use ntex::{io::Io, io::SharedConfig, time::Millis, time::sleep};
+    use ntex::{io::Io, io::IoConfig, io::SharedConfig, time::Millis, time::sleep};
     use std::sync::{Arc, Mutex};
 
     use crate::connect::Connect;
