@@ -14,22 +14,14 @@ thread_local! {
 
 type Storage = (String, HashMap<TypeId, Box<dyn Any + Send + Sync>>);
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct Cfg<T: 'static>(&'static T);
-
-impl<T: 'static> Copy for Cfg<T> {}
-
-impl<T: 'static> Clone for Cfg<T> {
-    fn clone(&self) -> Self {
-        Self(self.0)
-    }
-}
 
 impl<T: 'static> ops::Deref for Cfg<T> {
     type Target = T;
 
     fn deref(&self) -> &'static T {
-        &self.0
+        self.0
     }
 }
 
@@ -106,13 +98,13 @@ impl SharedConfigBuilder {
             self.add(IoConfig::new());
         }
 
-        let map = mem::take(&mut self.0);
-        let cfg: *mut IoConfig = self
-            .0
+        let mut map = mem::take(&mut self.0);
+        let cfg = map
             .1
             .get_mut(&TypeId::of::<IoConfig>())
-            .and_then(|boxed| boxed.downcast_mut())
+            .and_then(|boxed| boxed.downcast_mut::<IoConfig>())
             .unwrap();
+        let cfg: *mut _ = cfg;
 
         let map_ref = Box::leak(Box::new(map));
 
@@ -166,6 +158,7 @@ impl Default for &'static IoConfig {
 
 impl IoConfig {
     #[inline]
+    #[allow(clippy::new_without_default)]
     /// Create new config object
     pub fn new() -> IoConfig {
         let idx1 = IDX.fetch_add(1, Ordering::SeqCst);

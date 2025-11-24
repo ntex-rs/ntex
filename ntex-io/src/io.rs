@@ -7,7 +7,7 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::{future::Either, task::LocalWaker};
 
 use crate::buf::Stack;
-use crate::cfg::{BufConfig, Cfg, IoConfig, SharedConfig};
+use crate::cfg::{BufConfig, IoConfig, SharedConfig};
 use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::flags::Flags;
 use crate::seal::{IoBoxed, Sealed};
@@ -276,14 +276,8 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Set io config
-    pub fn set_config(&self, cfg: Cfg<IoConfig>) {
-        self.st().cfg.set(cfg.into_static());
-    }
-
-    #[inline]
     /// Set shared io config
-    pub fn set_shared_config(&self, cfg: SharedConfig) {
+    pub fn set_config(&self, cfg: SharedConfig) {
         self.st().cfg.set(cfg.get::<IoConfig>().into_static());
     }
 }

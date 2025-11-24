@@ -108,7 +108,7 @@ where
 
     // create ws service
     let srv = factory.into_factory().create(sink.clone()).await?;
-    io.set_shared_config(CFG.with(|cfg| *cfg));
+    io.set_config(CFG.with(|cfg| *cfg));
 
     // start websockets service dispatcher
     let _ = rt::spawn(async move {

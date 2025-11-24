@@ -131,7 +131,7 @@ mod tests {
         let _ = SslConnector::<&'static str>::new(ssl.build());
         let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::with(ssl.build(), Default::default())
-            .config(ntex_io::IoConfig::new("IO"))
+            .config(ntex_io::SharedConfig::new("IO"))
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap();

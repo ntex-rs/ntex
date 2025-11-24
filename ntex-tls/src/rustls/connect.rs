@@ -144,7 +144,7 @@ mod tests {
             .with_no_client_auth();
         let _ = TlsConnector::<&'static str>::new(config.clone()).clone();
         let factory = TlsConnector::with(Arc::new(config), Default::default())
-            .config(IoConfig::new("IO"))
+            .config(SharedConfig::new("IO"))
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap().bind();

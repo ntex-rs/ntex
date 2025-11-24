@@ -184,7 +184,7 @@ mod tests {
         });
 
         let srv = Connector::default()
-            .config(IoConfig::new("T"))
+            .config(SharedConfig::new("T"))
             .timeout(Millis(5000));
         let result = srv.connect("").await;
         assert!(result.is_err());

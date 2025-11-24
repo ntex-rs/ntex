@@ -632,7 +632,7 @@ mod tests {
                     Box::pin(async move {
                         Ok(IoBoxed::from(nio::Io::new(
                             client,
-                            nio::IoConfig::default(),
+                            nio::SharedConfig::default(),
                         )))
                     })
                 }),
