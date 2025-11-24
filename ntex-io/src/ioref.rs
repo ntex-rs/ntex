@@ -31,7 +31,7 @@ impl IoRef {
 
     #[inline]
     /// Get configuration
-    pub fn cfg(&self) -> IoConfig {
+    pub fn cfg(&self) -> &IoConfig {
         self.0.cfg.get()
     }
 

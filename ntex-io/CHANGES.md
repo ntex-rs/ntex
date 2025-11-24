@@ -1,8 +1,8 @@
 # Changes
 
-## [2.16.0] - 2025-11-xx
+## [3.0.0] - 2025-11-xx
 
-* New io configuration subsystem
+* New configuration subsystem
 
 * Refactor io layer support
 

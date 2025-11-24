@@ -8,7 +8,7 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 use crate::http::{
     self, HttpService, KeepAlive, Request, Response, ResponseError, body::MessageBody,
 };
-use crate::io::{IoConfig, cfg::FrameReadRate};
+use crate::io::{SharedConfig, cfg::FrameReadRate};
 use crate::server::{Server, ServerBuilder};
 use crate::service::{IntoServiceFactory, ServiceFactory, map_config};
 use crate::time::Seconds;
@@ -22,7 +22,7 @@ struct Config {
     ssl_handshake_timeout: Seconds,
     headers_read_rate: Option<FrameReadRate>,
     payload_read_rate: Option<FrameReadRate>,
-    cfg: IoConfig,
+    cfg: SharedConfig,
 }
 
 impl Config {
@@ -100,7 +100,7 @@ where
                     max_timeout: Seconds(13),
                 }),
                 payload_read_rate: None,
-                cfg: IoConfig::default(),
+                cfg: SharedConfig::default(),
             })),
             backlog: 1024,
             builder: ServerBuilder::default(),
@@ -314,7 +314,7 @@ where
     }
 
     /// Set io config for named service.
-    pub fn config(self, cfg: IoConfig) -> Self {
+    pub fn config(self, cfg: SharedConfig) -> Self {
         self.config.lock().unwrap().cfg = cfg;
         self
     }

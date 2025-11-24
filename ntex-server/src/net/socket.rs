@@ -1,6 +1,6 @@
 use std::{fmt, io, net};
 
-use ntex_io::{Io, IoConfig};
+use ntex_io::{Io, SharedConfig};
 
 use super::Token;
 
@@ -12,7 +12,7 @@ pub enum Stream {
 }
 
 impl Stream {
-    pub(crate) fn convert(self, cfg: IoConfig) -> Result<Io, io::Error> {
+    pub(crate) fn convert(self, cfg: SharedConfig) -> Result<Io, io::Error> {
         match self {
             Stream::Tcp(stream) => ntex_net::from_tcp_stream(stream, cfg),
             #[cfg(unix)]

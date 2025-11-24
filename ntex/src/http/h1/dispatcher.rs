@@ -784,7 +784,7 @@ mod tests {
             Config::server(),
         );
         Dispatcher::new(
-            nio::Io::new(stream, nio::IoConfig::default()),
+            nio::Io::new(stream, nio::SharedConfig::default()),
             Rc::new(DispatcherConfig::new(
                 config,
                 service.into_service(),
@@ -802,7 +802,7 @@ mod tests {
         B: MessageBody + 'static,
     {
         crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
-            nio::Io::new(stream, nio::IoConfig::default()),
+            nio::Io::new(stream, nio::SharedConfig::default()),
             Rc::new(DispatcherConfig::new(
                 ServiceConfig::default(),
                 service.into_service(),
@@ -830,7 +830,7 @@ mod tests {
             Config::server(),
         );
         let mut h1 = Dispatcher::<_, _, _, _>::new(
-            nio::Io::new(server, nio::IoConfig::default()),
+            nio::Io::new(server, nio::SharedConfig::default()),
             Rc::new(DispatcherConfig::new(
                 config,
                 fn_service(|_| {
@@ -1012,9 +1012,12 @@ mod tests {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
         h1.inner.io.set_config(
-            nio::IoConfig::build("TEST")
-                .set_read_buf(15 * 1024, 1024, 16)
-                .set_write_buf(15 * 1024, 1024, 16)
+            nio::SharedConfig::build("TEST")
+                .add(
+                    nio::IoConfig::new()
+                        .set_read_buf(15 * 1024, 1024, 16)
+                        .set_write_buf(15 * 1024, 1024, 16),
+                )
                 .finish(),
         );
 
@@ -1237,7 +1240,7 @@ mod tests {
         config.payload_read_rate(Seconds(1), Seconds(2), 512);
 
         let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
-            nio::Io::new(server, nio::IoConfig::default()),
+            nio::Io::new(server, nio::SharedConfig::default()),
             Rc::new(DispatcherConfig::new(
                 config,
                 svc.into_service(),

@@ -15,7 +15,7 @@ use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
 use crate::http::{body::BodySize, client, client::ClientResponse, error::HttpError, h1};
-use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, IoConfig, Layer, Sealed};
+use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Sealed, SharedConfig};
 use crate::service::{IntoService, Pipeline, Service, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
 use crate::{channel::mpsc, rt, util::Ready, ws};
@@ -24,7 +24,7 @@ use super::error::{WsClientBuilderError, WsClientError, WsError};
 use super::transport::WsTransport;
 
 thread_local! {
-    static CFG: IoConfig = IoConfig::new("WS-CLIENT");
+    static CFG: SharedConfig = SharedConfig::new("WS-CLIENT");
 }
 
 /// `WebSocket` client builder

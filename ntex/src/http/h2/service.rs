@@ -10,7 +10,7 @@ use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
-use crate::io::{Filter, Io, IoBoxed, IoRef, types};
+use crate::io::{Filter, Io, IoBoxed, IoRef, SharedConfig, types};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 use crate::util::{Bytes, BytesMut, HashMap, HashSet};
 
@@ -26,13 +26,13 @@ pub struct H2Service<F, S, B, C> {
 
 impl<F, S, B> H2Service<F, S, B, DefaultControlService>
 where
-    S: ServiceFactory<Request>,
+    S: ServiceFactory<Request, SharedConfig>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
+    pub(crate) fn with_config<U: IntoServiceFactory<S, Request, SharedConfig>>(
         cfg: ServiceConfig,
         service: U,
     ) -> Self {
@@ -57,12 +57,13 @@ mod openssl {
     impl<F, S, B, C> H2Service<Layer<SslFilter, F>, S, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request> + 'static,
+        S: ServiceFactory<Request, SharedConfig> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
+        C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>
+            + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
     {
@@ -72,6 +73,7 @@ mod openssl {
             acceptor: ssl::SslAcceptor,
         ) -> impl ServiceFactory<
             Io<F>,
+            SharedConfig,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -96,12 +98,13 @@ mod rustls {
     impl<F, S, B, C> H2Service<Layer<TlsServerFilter, F>, S, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request> + 'static,
+        S: ServiceFactory<Request, SharedConfig> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
+        C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>
+            + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
     {
@@ -111,6 +114,7 @@ mod rustls {
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
             Io<F>,
+            SharedConfig,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -130,19 +134,19 @@ mod rustls {
 impl<F, S, B, C> H2Service<F, S, B, C>
 where
     F: Filter,
-    S: ServiceFactory<Request> + 'static,
+    S: ServiceFactory<Request, SharedConfig> + 'static,
     S::Response: Into<Response<B>>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
+    C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
     /// Provide http/2 control service
     pub fn control<CT>(self, ctl: CT) -> H2Service<F, S, B, CT>
     where
-        CT: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
+        CT: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {
@@ -155,15 +159,16 @@ where
     }
 }
 
-impl<F, S, B, C> ServiceFactory<Io<F>> for H2Service<F, S, B, C>
+impl<F, S, B, C> ServiceFactory<Io<F>, SharedConfig> for H2Service<F, S, B, C>
 where
     F: Filter,
-    S: ServiceFactory<Request> + 'static,
+    S: ServiceFactory<Request, SharedConfig> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
+    C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>
+        + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -172,10 +177,10 @@ where
     type InitError = ();
     type Service = H2ServiceHandler<F, S::Service, B, C>;
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
         let service = self
             .srv
-            .create(())
+            .create(cfg)
             .await
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
 
@@ -183,6 +188,7 @@ where
         let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, ()));
 
         Ok(H2ServiceHandler {
+            cfg,
             config,
             control: self.ctl.clone(),
             inflight: RefCell::new(Default::default()),
@@ -195,6 +201,7 @@ where
 
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<F, S: Service<Request>, B, C> {
+    cfg: SharedConfig,
     config: Rc<DispatcherConfig<S, ()>>,
     control: Rc<C>,
     inflight: RefCell<HashSet<IoRef>>,
@@ -210,7 +217,8 @@ where
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
+    C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>
+        + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -273,7 +281,7 @@ where
             io.tag(),
             io.query::<types::PeerAddr>().get()
         );
-        let control = self.control.create(()).await.map_err(|e| {
+        let control = self.control.create(self.cfg).await.map_err(|e| {
             DispatchError::Control(crate::util::str_rc_error(format!(
                 "Cannot construct control service: {e:?}"
             )))

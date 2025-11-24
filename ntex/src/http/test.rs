@@ -7,7 +7,7 @@ use coo_kie::{Cookie, CookieJar};
 use crate::channel::bstream;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
-use crate::io::{Io, IoConfig};
+use crate::io::{Io, SharedConfig};
 use crate::server::Server;
 use crate::service::ServiceFactory;
 #[cfg(feature = "ws")]
@@ -226,7 +226,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 pub fn server<F, R>(factory: F) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io> + 'static,
+    R: ServiceFactory<Io, SharedConfig> + 'static,
 {
     let (tx, rx) = mpsc::channel();
 
@@ -240,7 +240,7 @@ where
         sys.run(move || {
             let srv = crate::server::build()
                 .listen("test", tcp, move |_| factory())?
-                .set_config("test", IoConfig::new("HTTP-TEST-SRV"))
+                .set_config("test", SharedConfig::new("HTTP-TEST-SRV"))
                 .workers(1)
                 .disable_signals()
                 .run();

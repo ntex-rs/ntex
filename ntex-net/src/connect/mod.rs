@@ -10,7 +10,7 @@ pub use self::message::{Address, Connect};
 pub use self::resolve::Resolver;
 pub use self::service::Connector;
 
-use ntex_io::{Io, IoConfig};
+use ntex_io::{Io, SharedConfig};
 
 /// Resolve and connect to remote host
 pub async fn connect<T, U>(message: U) -> Result<Io, ConnectError>
@@ -22,7 +22,7 @@ where
 }
 
 /// Resolve and connect to remote host
-pub async fn connect_with<T, U>(message: U, cfg: IoConfig) -> Result<Io, ConnectError>
+pub async fn connect_with<T, U>(message: U, cfg: SharedConfig) -> Result<Io, ConnectError>
 where
     T: Address,
     Connect<T>: From<U>,

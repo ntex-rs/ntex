@@ -1,6 +1,6 @@
 use std::{fmt, io};
 
-use ntex_io::{Io, IoConfig, Layer};
+use ntex_io::{Io, Layer, SharedConfig};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnector};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use tls_openssl::ssl::SslConnector as BaseSslConnector;
@@ -30,7 +30,7 @@ impl<T: Address> SslConnector<T> {
     }
 
     /// Set io configuration
-    pub fn config(mut self, cfg: IoConfig) -> Self {
+    pub fn config(mut self, cfg: SharedConfig) -> Self {
         self.connector = self.connector.get_ref().config(cfg).into();
         self
     }
@@ -131,7 +131,7 @@ mod tests {
         let _ = SslConnector::<&'static str>::new(ssl.build());
         let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::with(ssl.build(), Default::default())
-            .config(ntex_io::IoConfig::new("IO"))
+            .config(ntex_io::SharedConfig::new("IO"))
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap();

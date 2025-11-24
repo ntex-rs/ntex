@@ -1,6 +1,7 @@
 use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, rc::Rc};
 
 use crate::http::Request;
+use crate::io::SharedConfig;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
@@ -455,11 +456,14 @@ where
         self,
     ) -> impl ServiceFactory<
         Request,
+        SharedConfig,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     > {
-        IntoServiceFactory::<AppFactory<M, F, Err>, Request>::into_factory(self)
+        IntoServiceFactory::<AppFactory<M, F, Err>, Request, SharedConfig>::into_factory(
+            self,
+        )
     }
 
     /// Construct service factory suitable for `http::HttpService`.
@@ -485,6 +489,7 @@ where
         cfg: AppConfig,
     ) -> impl ServiceFactory<
         Request,
+        SharedConfig,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
@@ -533,7 +538,8 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request> for App<M, F, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, SharedConfig>
+    for App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
@@ -604,7 +610,7 @@ mod tests {
         let srv = App::new()
             .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
             .finish()
-            .pipeline(())
+            .pipeline(SharedConfig::default())
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
@@ -628,7 +634,7 @@ mod tests {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .with_config(Default::default())
-            .pipeline(())
+            .pipeline(SharedConfig::default())
             .await
             .unwrap();
 

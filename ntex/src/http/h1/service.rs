@@ -4,7 +4,7 @@ use crate::http::body::MessageBody;
 use crate::http::config::{DispatcherConfig, ServiceConfig};
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
-use crate::io::{Filter, Io, IoRef, types};
+use crate::io::{Filter, Io, IoRef, SharedConfig, types};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 use crate::{channel::oneshot, util::HashSet, util::join};
 
@@ -22,14 +22,14 @@ pub struct H1Service<F, S, B, C> {
 
 impl<F, S, B> H1Service<F, S, B, DefaultControlService>
 where
-    S: ServiceFactory<Request> + 'static,
+    S: ServiceFactory<Request, SharedConfig> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
+    pub(crate) fn with_config<U: IntoServiceFactory<S, Request, SharedConfig>>(
         cfg: ServiceConfig,
         service: U,
     ) -> Self {
@@ -53,13 +53,16 @@ mod openssl {
     impl<F, S, B, C> H1Service<Layer<SslFilter, F>, S, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request> + 'static,
+        S: ServiceFactory<Request, SharedConfig> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<Control<Layer<SslFilter, F>, S::Error>, Response = ControlAck>
-            + 'static,
+        C: ServiceFactory<
+                Control<Layer<SslFilter, F>, S::Error>,
+                SharedConfig,
+                Response = ControlAck,
+            > + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
     {
@@ -69,6 +72,7 @@ mod openssl {
             acceptor: ssl::SslAcceptor,
         ) -> impl ServiceFactory<
             Io<F>,
+            SharedConfig,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -93,13 +97,14 @@ mod rustls {
     impl<F, S, B, C> H1Service<Layer<TlsServerFilter, F>, S, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request> + 'static,
+        S: ServiceFactory<Request, SharedConfig> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
         C: ServiceFactory<
                 Control<Layer<TlsServerFilter, F>, S::Error>,
+                SharedConfig,
                 Response = ControlAck,
             > + 'static,
         C::Error: Error,
@@ -111,6 +116,7 @@ mod rustls {
             config: ServerConfig,
         ) -> impl ServiceFactory<
             Io<F>,
+            SharedConfig,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -127,19 +133,19 @@ mod rustls {
 impl<F, S, B, C> H1Service<F, S, B, C>
 where
     F: Filter,
-    S: ServiceFactory<Request>,
+    S: ServiceFactory<Request, SharedConfig>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
     B: MessageBody,
-    C: ServiceFactory<Control<F, S::Error>, Response = ControlAck>,
+    C: ServiceFactory<Control<F, S::Error>, SharedConfig, Response = ControlAck>,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
     /// Provide http/1 control service
     pub fn control<C1>(self, ctl: C1) -> H1Service<F, S, B, C1>
     where
-        C1: ServiceFactory<Control<F, S::Error>, Response = ControlAck>,
+        C1: ServiceFactory<Control<F, S::Error>, SharedConfig, Response = ControlAck>,
         C1::Error: Error,
         C1::InitError: fmt::Debug,
     {
@@ -152,15 +158,15 @@ where
     }
 }
 
-impl<F, S, B, C> ServiceFactory<Io<F>> for H1Service<F, S, B, C>
+impl<F, S, B, C> ServiceFactory<Io<F>, SharedConfig> for H1Service<F, S, B, C>
 where
     F: Filter,
-    S: ServiceFactory<Request> + 'static,
+    S: ServiceFactory<Request, SharedConfig> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
     B: MessageBody,
-    C: ServiceFactory<Control<F, S::Error>, Response = ControlAck> + 'static,
+    C: ServiceFactory<Control<F, S::Error>, SharedConfig, Response = ControlAck> + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -169,15 +175,15 @@ where
     type InitError = ();
     type Service = H1ServiceHandler<F, S::Service, B, C::Service>;
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
         let service = self
             .srv
-            .create(())
+            .create(cfg)
             .await
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
         let control = self
             .ctl
-            .create(())
+            .create(cfg)
             .await
             .map_err(|e| log::error!("Cannot construct control service: {e:?}"))?;
 

@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, fmt, io, net::SocketAddr};
 
-use ntex_io::{Io, IoConfig, types};
+use ntex_io::{Io, SharedConfig, types};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{future::Either, time::Millis, time::timeout_checked};
 
@@ -9,7 +9,7 @@ use crate::tcp_connect;
 
 /// Basic tcp stream connector
 pub struct Connector<T> {
-    cfg: IoConfig,
+    cfg: SharedConfig,
     timeout: Millis,
     resolver: Resolver<T>,
 }
@@ -20,14 +20,14 @@ impl<T> Connector<T> {
     /// Construct new connect service with default dns resolver
     pub fn new() -> Self {
         Connector {
-            cfg: IoConfig::default(),
+            cfg: SharedConfig::default(),
             resolver: Resolver::new(),
             timeout: Millis::ZERO,
         }
     }
 
     /// Construct new connect service with default dns resolver
-    pub fn with(cfg: IoConfig) -> Self {
+    pub fn with(cfg: SharedConfig) -> Self {
         Connector {
             cfg,
             resolver: Resolver::new(),
@@ -38,7 +38,7 @@ impl<T> Connector<T> {
     /// Set io configuration
     ///
     /// Set config for new io object.
-    pub fn config(mut self, cfg: IoConfig) -> Self {
+    pub fn config(mut self, cfg: SharedConfig) -> Self {
         self.cfg = cfg;
         self
     }
@@ -135,7 +135,7 @@ async fn connect<T: Address>(
     req: T,
     port: u16,
     addr: Either<SocketAddr, VecDeque<SocketAddr>>,
-    cfg: IoConfig,
+    cfg: SharedConfig,
 ) -> Result<Io, ConnectError> {
     log::trace!(
         "{}: TCP connector - connecting to {:?} addr:{addr:?} port:{port}",
@@ -184,7 +184,7 @@ mod tests {
         });
 
         let srv = Connector::default()
-            .config(IoConfig::new("T"))
+            .config(SharedConfig::new("T"))
             .timeout(Millis(5000));
         let result = srv.connect("").await;
         assert!(result.is_err());

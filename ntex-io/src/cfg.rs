@@ -1,34 +1,123 @@
-use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{any::Any, any::TypeId, cell::UnsafeCell, mem, ops};
 
 use ntex_bytes::{BytesVec, buf::BufMut};
-use ntex_util::time::Seconds;
+use ntex_util::{HashMap, time::Seconds};
 
-const DEFAULT_TAG: &str = "IO";
 const DEFAULT_CACHE_SIZE: usize = 128;
 static IDX: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
-    static DEFAULT_CFG: IoConfig = {
-        IoConfig::new(DEFAULT_TAG)
-    };
-    static CACHE: LocalCache = {
-        LocalCache::new()
+    static CACHE: LocalCache = LocalCache::new();
+    static DEFAULT_MAP: &'static Storage = Box::leak(Box::new(("IO".to_string(), HashMap::default())));
+}
+
+type Storage = (String, HashMap<TypeId, Box<dyn Any + Send + Sync>>);
+
+#[derive(Copy, Clone, Debug)]
+pub struct Cfg<T: 'static>(&'static T);
+
+impl<T: 'static> ops::Deref for Cfg<T> {
+    type Target = T;
+
+    fn deref(&self) -> &'static T {
+        self.0
+    }
+}
+
+impl<T: 'static> Cfg<T> {
+    pub fn into_static(&self) -> &'static T {
+        self.0
     }
 }
 
 #[derive(Copy, Clone, Debug)]
 /// Shared configuration
-pub struct IoConfig(&'static IoConfigInner);
+pub struct SharedConfig(&'static Storage);
 
 #[derive(Debug)]
-/// Construct shared configuration
-pub struct IoConfigBuilder(IoConfigInner);
+pub struct SharedConfigBuilder(Storage);
+
+impl SharedConfig {
+    /// Construct new configuration
+    pub fn new<T: AsRef<str>>(tag: T) -> SharedConfig {
+        Self::build(tag).finish()
+    }
+
+    /// Construct new configuration
+    pub fn build<T: AsRef<str>>(tag: T) -> SharedConfigBuilder {
+        SharedConfigBuilder((tag.as_ref().to_string(), HashMap::default()))
+    }
+
+    #[inline]
+    /// Get tag
+    pub fn tag(&self) -> &'static str {
+        self.0.0.as_ref()
+    }
+
+    /// Get a reference to a previously inserted on configuration.
+    pub fn get<T>(&self) -> Cfg<T>
+    where
+        &'static T: Default,
+    {
+        self.0
+            .1
+            .get(&TypeId::of::<T>())
+            .and_then(|boxed| boxed.downcast_ref())
+            .map(Cfg)
+            .unwrap_or_else(|| Cfg(<&'static T>::default()))
+    }
+}
+
+impl Default for SharedConfig {
+    fn default() -> Self {
+        Self(DEFAULT_MAP.with(|cfg| *cfg))
+    }
+}
+
+impl SharedConfigBuilder {
+    /// Insert a type into this configuration.
+    ///
+    /// If a config of this type already existed, it will
+    /// be replaced.
+    pub fn add<T>(&mut self, val: T) -> &mut Self
+    where
+        T: Send + Sync + 'static,
+        &'static T: Default,
+    {
+        self.0
+            .1
+            .insert(TypeId::of::<T>(), Box::new(val))
+            .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok());
+        self
+    }
+
+    /// Build static ref
+    pub fn finish(&mut self) -> SharedConfig {
+        if !self.0.1.contains_key(&TypeId::of::<IoConfig>()) {
+            self.add(IoConfig::new());
+        }
+
+        let mut map = mem::take(&mut self.0);
+        let cfg = map
+            .1
+            .get_mut(&TypeId::of::<IoConfig>())
+            .and_then(|boxed| boxed.downcast_mut::<IoConfig>())
+            .unwrap();
+        let cfg: *mut _ = cfg;
+
+        let map_ref = Box::leak(Box::new(map));
+
+        unsafe {
+            (*cfg).config = map_ref;
+        }
+        SharedConfig(map_ref)
+    }
+}
 
 #[derive(Clone, Debug)]
-/// Shared configuration
-struct IoConfigInner {
-    tag: String,
+/// Base io configuration
+pub struct IoConfig {
     keepalive_timeout: Seconds,
     disconnect_timeout: Seconds,
     frame_read_rate: Option<FrameReadRate>,
@@ -36,6 +125,9 @@ struct IoConfigInner {
     // io read/write cache and params
     read_buf: BufConfig,
     write_buf: BufConfig,
+
+    // shared config
+    config: &'static Storage,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -54,26 +146,24 @@ pub struct BufConfig {
     cache_size: usize,
 }
 
-impl Default for IoConfig {
-    /// Get default config
-    fn default() -> IoConfig {
+impl Default for &'static IoConfig {
+    fn default() -> &'static IoConfig {
+        thread_local! {
+            static DEFAULT_CFG: &'static IoConfig =
+                Box::leak(Box::new(IoConfig::new()));
+        }
         DEFAULT_CFG.with(|cfg| *cfg)
     }
 }
 
 impl IoConfig {
     #[inline]
+    #[allow(clippy::new_without_default)]
     /// Create new config object
-    pub fn new<T: AsRef<str>>(tag: T) -> IoConfig {
-        IoConfig::build(tag).finish()
-    }
-
-    /// Construct new configuration
-    pub fn build<T: AsRef<str>>(tag: T) -> IoConfigBuilder {
+    pub fn new() -> IoConfig {
         let idx1 = IDX.fetch_add(1, Ordering::SeqCst);
         let idx2 = IDX.fetch_add(1, Ordering::SeqCst);
-        IoConfigBuilder(IoConfigInner {
-            tag: tag.as_ref().to_string(),
+        IoConfig {
             keepalive_timeout: Seconds(0),
             disconnect_timeout: Seconds(1),
             frame_read_rate: None,
@@ -92,51 +182,44 @@ impl IoConfig {
                 idx: idx2,
                 cache_size: DEFAULT_CACHE_SIZE,
             },
-        })
+            config: DEFAULT_MAP.with(|cfg| *cfg),
+        }
     }
 
     #[inline]
-    /// Get keep-alive timeout
-    pub fn tag(&self) -> &'static str {
-        self.0.tag.as_ref()
+    /// Get tag
+    pub fn tag(&self) -> &str {
+        self.config.0.as_ref()
     }
 
     #[inline]
     /// Get keep-alive timeout
     pub fn keepalive_timeout(&self) -> Seconds {
-        self.0.keepalive_timeout
+        self.keepalive_timeout
     }
 
     #[inline]
     /// Get disconnect timeout
     pub fn disconnect_timeout(&self) -> Seconds {
-        self.0.disconnect_timeout
+        self.disconnect_timeout
     }
 
     #[inline]
     /// Get frame read params
-    pub fn frame_read_rate(&self) -> Option<&'static FrameReadRate> {
-        self.0.frame_read_rate.as_ref()
+    pub fn frame_read_rate(&self) -> Option<&FrameReadRate> {
+        self.frame_read_rate.as_ref()
     }
 
     #[inline]
     /// Get read buffer parameters
-    pub fn read_buf(&self) -> &'static BufConfig {
-        &self.0.read_buf
+    pub fn read_buf(&self) -> &BufConfig {
+        &self.read_buf
     }
 
     #[inline]
     /// Get write buffer parameters
-    pub fn write_buf(&self) -> &'static BufConfig {
-        &self.0.write_buf
-    }
-}
-
-impl IoConfigBuilder {
-    /// Set tag
-    pub fn set_tag<T: AsRef<str>>(&mut self, tag: T) -> &mut Self {
-        self.0.tag = tag.as_ref().to_string();
-        self
+    pub fn write_buf(&self) -> &BufConfig {
+        &self.write_buf
     }
 
     /// Set keep-alive timeout in seconds.
@@ -144,8 +227,8 @@ impl IoConfigBuilder {
     /// To disable timeout set value to 0.
     ///
     /// By default keep-alive timeout is set to 30 seconds.
-    pub fn set_keepalive_timeout(&mut self, timeout: Seconds) -> &mut Self {
-        self.0.keepalive_timeout = timeout;
+    pub fn set_keepalive_timeout(mut self, timeout: Seconds) -> Self {
+        self.keepalive_timeout = timeout;
         self
     }
 
@@ -157,8 +240,8 @@ impl IoConfigBuilder {
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 1 seconds.
-    pub fn set_disconnect_timeout(&mut self, timeout: Seconds) -> &mut Self {
-        self.0.disconnect_timeout = timeout;
+    pub fn set_disconnect_timeout(mut self, timeout: Seconds) -> Self {
+        self.disconnect_timeout = timeout;
         self
     }
 
@@ -170,12 +253,12 @@ impl IoConfigBuilder {
     ///
     /// By default frame read rate is disabled.
     pub fn set_frame_read_rate(
-        &mut self,
+        mut self,
         timeout: Seconds,
         max_timeout: Seconds,
         rate: u32,
-    ) -> &mut Self {
-        self.0.frame_read_rate = Some(FrameReadRate {
+    ) -> Self {
+        self.frame_read_rate = Some(FrameReadRate {
             timeout,
             max_timeout,
             rate,
@@ -187,15 +270,15 @@ impl IoConfigBuilder {
     ///
     /// By default high watermark is set to 16Kb, low watermark 1kb.
     pub fn set_read_buf(
-        &mut self,
+        mut self,
         high_watermark: usize,
         low_watermark: usize,
         cache_size: usize,
-    ) -> &mut Self {
-        self.0.read_buf.cache_size = cache_size;
-        self.0.read_buf.high = high_watermark;
-        self.0.read_buf.low = low_watermark;
-        self.0.read_buf.half = high_watermark >> 1;
+    ) -> Self {
+        self.read_buf.cache_size = cache_size;
+        self.read_buf.high = high_watermark;
+        self.read_buf.low = low_watermark;
+        self.read_buf.half = high_watermark >> 1;
         self
     }
 
@@ -203,21 +286,16 @@ impl IoConfigBuilder {
     ///
     /// By default high watermark is set to 16Kb, low watermark 1kb.
     pub fn set_write_buf(
-        &mut self,
+        mut self,
         high_watermark: usize,
         low_watermark: usize,
         cache_size: usize,
-    ) -> &mut Self {
-        self.0.write_buf.cache_size = cache_size;
-        self.0.write_buf.high = high_watermark;
-        self.0.write_buf.low = low_watermark;
-        self.0.write_buf.half = high_watermark >> 1;
+    ) -> Self {
+        self.write_buf.cache_size = cache_size;
+        self.write_buf.high = high_watermark;
+        self.write_buf.low = low_watermark;
+        self.write_buf.half = high_watermark >> 1;
         self
-    }
-
-    /// Build static ref
-    pub fn finish(&self) -> IoConfig {
-        IoConfig(Box::leak(Box::new(self.0.clone())))
     }
 }
 

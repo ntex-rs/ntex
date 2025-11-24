@@ -7,7 +7,7 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_util::{future::Either, task::LocalWaker};
 
 use crate::buf::Stack;
-use crate::cfg::{BufConfig, IoConfig};
+use crate::cfg::{BufConfig, IoConfig, SharedConfig};
 use crate::filter::{Base, Filter, Layer, NullFilter};
 use crate::flags::Flags;
 use crate::seal::{IoBoxed, Sealed};
@@ -22,7 +22,7 @@ pub struct IoRef(pub(super) Rc<IoState>);
 
 pub(crate) struct IoState {
     filter: FilterPtr,
-    pub(super) cfg: Cell<IoConfig>,
+    pub(super) cfg: Cell<&'static IoConfig>,
     pub(super) flags: Cell<Flags>,
     pub(super) error: Cell<Option<io::Error>>,
     pub(super) read_task: LocalWaker,
@@ -190,9 +190,9 @@ impl fmt::Debug for IoState {
 impl Io {
     #[inline]
     /// Create `Io` instance
-    pub fn new<I: IoStream>(io: I, cfg: IoConfig) -> Self {
+    pub fn new<I: IoStream>(io: I, cfg: SharedConfig) -> Self {
         let inner = Rc::new(IoState {
-            cfg: Cell::new(cfg),
+            cfg: Cell::new(cfg.get::<IoConfig>().into_static()),
             filter: FilterPtr::null(),
             flags: Cell::new(Flags::WR_PAUSED),
             error: Cell::new(None),
@@ -219,7 +219,7 @@ impl Io {
 impl<I: IoStream> From<I> for Io {
     #[inline]
     fn from(io: I) -> Io {
-        Io::new(io, IoConfig::default())
+        Io::new(io, SharedConfig::default())
     }
 }
 
@@ -234,7 +234,7 @@ impl<F> Io<F> {
 
     fn take_io_ref(&self) -> IoRef {
         let inner = Rc::new(IoState {
-            cfg: Cell::new(IoConfig::default()),
+            cfg: Cell::new(SharedConfig::default().get::<IoConfig>().into_static()),
             filter: FilterPtr::null(),
             flags: Cell::new(
                 Flags::DSP_STOP
@@ -276,9 +276,9 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Set io config
-    pub fn set_config(&self, cfg: IoConfig) {
-        self.st().cfg.set(cfg);
+    /// Set shared io config
+    pub fn set_config(&self, cfg: SharedConfig) {
+        self.st().cfg.set(cfg.get::<IoConfig>().into_static());
     }
 }
 
