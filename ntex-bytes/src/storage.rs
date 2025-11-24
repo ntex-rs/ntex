@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, mem, ptr, ptr::NonNull, slice};
 
-use crate::BytesMut;
+use crate::{BytesMut, info::Info, info::Kind};
 
 // Both `Bytes` and `BytesMut` are backed by `Storage` and functions are delegated
 // to `Storage` functions. The `Bytes` and `BytesMut` shims ensure that functions
@@ -695,7 +695,7 @@ impl Storage {
         // to ensure that if `arc` is currently set to point to a `Shared`,
         // that the current thread acquires the associated memory.
         let arc: *mut Shared = self.arc.as_ptr();
-        let kind = arc as usize & KIND_MASK;
+        let kind = self.kind();
 
         if kind == KIND_ARC {
             let old_size = (*arc).ref_count.fetch_add(1, Relaxed);
@@ -859,6 +859,33 @@ impl Storage {
         }
 
         imp(self.arc.as_ptr())
+    }
+
+    pub(crate) fn info(&self) -> Info {
+        let kind = self.kind();
+
+        let (id, refs, capacity) = unsafe {
+            if kind == KIND_VEC {
+                let ptr = self.shared_vec();
+                (ptr as usize, (*ptr).ref_count.load(Relaxed), (*ptr).cap)
+            } else if kind == KIND_ARC {
+                let ptr = self.arc.as_ptr();
+                (
+                    ptr as usize,
+                    (*ptr).ref_count.load(Relaxed),
+                    (*ptr).vec.capacity(),
+                )
+            } else {
+                (0, 0, 0)
+            }
+        };
+
+        Info {
+            id,
+            refs,
+            capacity,
+            kind: Kind::from_raw(kind),
+        }
     }
 }
 
@@ -1298,6 +1325,17 @@ struct Abort;
 impl Drop for Abort {
     fn drop(&mut self) {
         panic!();
+    }
+}
+
+impl Kind {
+    fn from_raw(n: usize) -> Kind {
+        match n {
+            KIND_ARC => Kind::Arc,
+            KIND_INLINE => Kind::Inline,
+            KIND_STATIC => Kind::Static,
+            _ => Kind::Vec,
+        }
     }
 }
 

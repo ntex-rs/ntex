@@ -518,6 +518,12 @@ impl Bytes {
     pub fn iter(&'_ self) -> std::slice::Iter<'_, u8> {
         self.chunk().iter()
     }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn info(&self) -> crate::info::Info {
+        self.storage.info()
+    }
 }
 
 impl Buf for Bytes {

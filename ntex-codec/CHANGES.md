@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] - 2025-11-24
+
+* Use ntex-bytes 1.0
+
 ## [0.6.2] - 2022-01-30
 
 * Add BytesVec support
