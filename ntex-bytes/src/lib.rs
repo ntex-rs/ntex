@@ -70,3 +70,22 @@ pub use crate::bvec::BytesVec;
 pub use crate::bytes::Bytes;
 pub use crate::bytesmut::BytesMut;
 pub use crate::string::ByteString;
+
+#[doc(hidden)]
+pub mod info {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub struct Info {
+        pub id: usize,
+        pub refs: usize,
+        pub kind: Kind,
+        pub capacity: usize,
+    }
+
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub enum Kind {
+        Arc,
+        Inline,
+        Static,
+        Vec,
+    }
+}

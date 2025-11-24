@@ -1,8 +1,8 @@
 # Changes
 
-## [0.1.32] (2025-11-xx)
+## [1.0.0] (2025-11-24)
 
-* Drop pool support
+* Drop memory pool support
 
 ## [0.1.31] (2025-11-15)
 
