@@ -171,6 +171,7 @@ fn test_on_worker_start() {
                         });
                     Ok::<_, io::Error>(())
                 })
+                .await
                 .unwrap()
                 .on_worker_start(move || {
                     let _ = num2.fetch_add(1, Relaxed);
