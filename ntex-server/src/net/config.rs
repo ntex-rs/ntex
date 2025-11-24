@@ -26,12 +26,6 @@ impl Default for Config {
 }
 
 impl Config {
-    #[deprecated]
-    /// Set io tag for the service.
-    pub fn tag(&self, _: &'static str) -> &Self {
-        self
-    }
-
     /// Set io config for the service.
     pub fn config(&self, cfg: IoConfig) -> &Self {
         self.0.config.set(Some(cfg));

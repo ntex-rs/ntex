@@ -377,10 +377,6 @@ mod neon {
         }
     }
 
-    #[doc(hidden)]
-    #[deprecated]
-    pub type Task<T> = JoinHandle<T>;
-
     enum Either<T> {
         Task(ntex_neon::Task<T>),
         Blocking(ntex_neon::JoinHandle<T>),

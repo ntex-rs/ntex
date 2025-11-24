@@ -312,12 +312,6 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    #[deprecated]
-    /// Set io tag for named service.
-    pub fn set_tag<N: AsRef<str>>(self, name: N, tag: &'static str) -> Self {
-        self.set_config(name, IoConfig::new(tag))
-    }
-
     /// Set io config for named service.
     pub fn set_config<N: AsRef<str>>(mut self, name: N, cfg: IoConfig) -> Self {
         let mut token = None;

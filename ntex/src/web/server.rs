@@ -319,12 +319,6 @@ where
         self
     }
 
-    #[deprecated]
-    /// Set io tag for web server
-    pub fn tag(self, _: &'static str) -> Self {
-        self
-    }
-
     /// Use listener for accepting incoming connection requests
     ///
     /// HttpServer does not change any configuration for TcpListener,

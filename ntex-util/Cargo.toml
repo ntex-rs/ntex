@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "2.15.0"
+version = "3.0.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -17,11 +17,11 @@ name = "ntex_util"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "0.1"
+ntex-bytes = "1"
 ntex-service = "3.5"
-ntex-rt = "0.4"
+ntex-rt = "3"
 
-ahash = { workspace = true }
+foldhash = { workspace = true }
 bitflags = { workspace = true }
 log = { workspace = true }
 slab = { workspace = true }
@@ -31,6 +31,6 @@ pin-project-lite = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-ntex = "2"
+ntex = "3"
 ntex-macros = "0.1.3"
 futures-util = {workspace = true }

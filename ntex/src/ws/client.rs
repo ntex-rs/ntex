@@ -292,7 +292,7 @@ impl WsClientBuilder<Base, ()> {
                 max_size: 65_536,
                 server_mode: false,
                 timeout: Millis(5_000),
-                connector: Connector::<Uri>::default().cfg(CFG.with(|c| *c)),
+                connector: Connector::<Uri>::default().config(CFG.with(|c| *c)),
                 _t: marker::PhantomData,
             }),
             #[cfg(feature = "cookie")]
