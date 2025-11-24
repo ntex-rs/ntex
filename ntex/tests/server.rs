@@ -152,7 +152,7 @@ fn test_on_worker_start() {
         sys.run(move || {
             let srv = build()
                 .disable_signals()
-                .configure(move |cfg| {
+                .configure(move |cfg| async move {
                     let num = num.clone();
                     let lst = net::TcpListener::bind(addr3).unwrap();
                     cfg.bind("addr1", addr1)
@@ -211,7 +211,7 @@ fn test_configure_async() {
             ntex_rt::spawn(async move {
                 let srv = build()
                     .disable_signals()
-                    .configure_async(move |cfg| {
+                    .configure(move |cfg| async move {
                         let num = num.clone();
                         let lst = net::TcpListener::bind(addr3).unwrap();
                         cfg.bind("addr1", addr1)
