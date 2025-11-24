@@ -69,7 +69,7 @@ no-test-logging = []
 [dependencies]
 ntex-codec = "1.0"
 ntex-http = "1.0"
-ntex-router = "0.5"
+ntex-router = "1.0"
 ntex-service = "3.5"
 ntex-macros = "0.1"
 ntex-util = "3.0"
