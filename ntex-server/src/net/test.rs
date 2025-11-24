@@ -1,5 +1,5 @@
 //! Test server
-use std::{io, net, thread};
+use std::{fmt, io, marker::PhantomData, net, thread};
 
 use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
@@ -8,6 +8,91 @@ use ntex_service::ServiceFactory;
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use super::{Server, ServerBuilder};
+
+/// Test server builder
+pub struct TestServerBuilder<F, R> {
+    factory: F,
+    config: IoConfig,
+    client_config: IoConfig,
+    _t: PhantomData<R>,
+}
+
+impl<F, R> fmt::Debug for TestServerBuilder<F, R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TestServerBuilder")
+            .field("config", &self.config)
+            .field("client_config", &self.client_config)
+            .finish()
+    }
+}
+
+impl<F, R> TestServerBuilder<F, R>
+where
+    F: Fn() -> R + Send + Clone + 'static,
+    R: ServiceFactory<Io> + 'static,
+{
+    pub fn new(factory: F) -> Self {
+        Self {
+            factory,
+            config: IoConfig::new("TEST-SERVER"),
+            client_config: IoConfig::new("TEST-CLIENT"),
+            _t: PhantomData,
+        }
+    }
+
+    /// Set server io configuration
+    pub fn config(mut self, cfg: IoConfig) -> Self {
+        self.config = cfg;
+        self
+    }
+
+    /// Set client io configuration
+    pub fn client_config(mut self, cfg: IoConfig) -> Self {
+        self.client_config = cfg;
+        self
+    }
+
+    /// Start test server
+    pub fn start(self) -> TestServer {
+        let factory = self.factory;
+        let config = self.config;
+
+        let (tx, rx) = oneshot::channel();
+        // run server in separate thread
+        thread::spawn(move || {
+            let sys = System::new("ntex-test-server");
+            let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let local_addr = tcp.local_addr().unwrap();
+            let system = sys.system();
+
+            sys.run(move || {
+                let server = ServerBuilder::new()
+                    .listen("test", tcp, move |_| factory())?
+                    .set_config("test", config)
+                    .workers(1)
+                    .disable_signals()
+                    .run();
+
+                ntex_rt::spawn(async move {
+                    ntex_util::time::sleep(ntex_util::time::Millis(75)).await;
+                    tx.send((system, local_addr, server))
+                        .expect("Failed to send Server to TestServer");
+                });
+
+                Ok(())
+            })
+        });
+
+        let (system, addr, server) = rx.recv().unwrap();
+
+        TestServer {
+            addr,
+            server,
+            system,
+            cfg: self.client_config,
+        }
+    }
+}
 
 /// Start test server
 ///
@@ -45,40 +130,7 @@ where
     F: Fn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io> + 'static,
 {
-    let (tx, rx) = oneshot::channel();
-    // run server in separate thread
-    thread::spawn(move || {
-        let sys = System::new("ntex-test-server");
-        let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let local_addr = tcp.local_addr().unwrap();
-        let system = sys.system();
-
-        sys.run(move || {
-            let server = ServerBuilder::new()
-                .listen("test", tcp, move |_| factory())?
-                .set_config("test", IoConfig::new("TEST-SERVER"))
-                .workers(1)
-                .disable_signals()
-                .run();
-
-            ntex_rt::spawn(async move {
-                ntex_util::time::sleep(ntex_util::time::Millis(75)).await;
-                tx.send((system, local_addr, server))
-                    .expect("Failed to send Server to TestServer");
-            });
-
-            Ok(())
-        })
-    });
-
-    let (system, addr, server) = rx.recv().unwrap();
-
-    TestServer {
-        addr,
-        server,
-        system,
-        cfg: IoConfig::new("TEST-CLIENT"),
-    }
+    TestServerBuilder::new(factory).start()
 }
 
 /// Start new server with server builder
