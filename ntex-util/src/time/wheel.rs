@@ -87,7 +87,6 @@ pub fn system_time() -> SystemTime {
 /// If low resolution system time is not set, use system time.
 /// This method does not start timer driver.
 #[inline]
-#[doc(hidden)]
 pub fn query_system_time() -> SystemTime {
     TIMER.with(|t| t.with_mod(|inner| t.system_time(inner)))
 }

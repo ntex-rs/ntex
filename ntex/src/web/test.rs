@@ -11,8 +11,9 @@ use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
+use crate::io::IoConfig;
 #[cfg(feature = "ws")]
-use crate::io::{IoConfig, Sealed};
+use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
 use crate::service::{
     IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory, map_config,

@@ -181,7 +181,7 @@ impl IoTest {
             let mut remote = guard.borrow_mut();
             remote.read = IoTestState::Close;
             remote.waker.wake();
-            log::trace!("close remote socket");
+            log::debug!("close remote socket");
         }
         sleep(Millis(35)).await;
     }
@@ -347,7 +347,7 @@ impl Drop for IoTest {
         let mut remote = guard.borrow_mut();
         remote.read = IoTestState::Close;
         remote.waker.wake();
-        log::trace!("drop remote socket");
+        log::debug!("drop remote socket");
     }
 }
 
@@ -379,7 +379,7 @@ enum Status {
 async fn run(io: Rc<IoTest>, ctx: IoContext) {
     let st = poll_fn(|cx| turn(&io, &ctx, cx)).await;
 
-    log::trace!("{}: Shuting down io", ctx.tag());
+    log::debug!("{}: Shuting down io", ctx.tag());
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
@@ -400,7 +400,7 @@ async fn run(io: Rc<IoTest>, ctx: IoContext) {
         .flags
         .insert(IoTestFlags::CLOSED);
 
-    log::trace!("{}: Shutdown complete", ctx.tag());
+    log::debug!("{}: Shutdown complete", ctx.tag());
     if !ctx.is_stopped() {
         ctx.stop(None);
     }
@@ -433,7 +433,7 @@ fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
 
 fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
     if let Some(mut buf) = ctx.get_write_buf() {
-        let result = write_io(io, &mut buf, cx);
+        let result = write_io(io, &mut buf, cx, ctx.tag());
         if ctx.release_write_buf(buf, result) == IoTaskStatus::Stop {
             Poll::Ready(Status::Terminate)
         } else {
@@ -487,16 +487,17 @@ pub(super) fn write_io(
     io: &IoTest,
     buf: &mut BytesVec,
     cx: &mut Context<'_>,
+    tag: &'static str,
 ) -> Poll<io::Result<usize>> {
     let len = buf.len();
 
     if len != 0 {
-        log::trace!("flushing framed transport: {len}");
+        log::debug!("{tag}: flushing framed transport: {len}");
 
         let mut written = 0;
         while let Poll::Ready(n) = io.poll_write_buf(cx, &buf[written..])? {
             if n == 0 {
-                log::trace!("disconnected during flush, written {written}");
+                log::trace!("{tag}: disconnected during flush, written {written}");
                 return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::WriteZero,
                     "failed to write frame to transport",
@@ -508,7 +509,7 @@ pub(super) fn write_io(
                 }
             }
         }
-        log::trace!("flushed {written} bytes");
+        log::debug!("{tag}: flushed {written} bytes");
         if written > 0 {
             Poll::Ready(Ok(written))
         } else {

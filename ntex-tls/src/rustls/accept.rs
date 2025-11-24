@@ -26,15 +26,6 @@ impl TlsAcceptor {
         }
     }
 
-    #[deprecated]
-    #[doc(hidden)]
-    /// Set io tag
-    ///
-    /// Set tag to opened io object.
-    pub fn tag(self, _: &'static str) -> Self {
-        self
-    }
-
     /// Set handshake timeout.
     ///
     /// Default is set to 5 seconds.

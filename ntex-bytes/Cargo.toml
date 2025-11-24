@@ -1,7 +1,7 @@
 [package]
 name = "ntex-bytes"
-version = "0.1.32"
-authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Carl Lerche <me@carllerche.com>"]
+version = "1.0.0"
+authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
 repository = "https://github.com/ntex-rs/ntex"
@@ -19,14 +19,10 @@ default = []
 simd = ["simdutf8"]
 
 [dependencies]
-bitflags = { workspace = true }
 bytes = "1"
 serde = { workspace = true }
-futures-core = { workspace = true }
 simdutf8 = { version = "0.1.5", optional = true }
 
 [dev-dependencies]
 serde_test = "1"
 serde_json = "1"
-ntex = "2"
-ntex-bytes = { path = "." }

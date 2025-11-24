@@ -1,7 +1,7 @@
 use serde::de::{self, Deserializer, Error as DeError, Visitor};
 use serde::forward_to_deserialize_any;
 
-use crate::{path::Path, path::PathIter, ResourcePath};
+use crate::{ResourcePath, path::Path, path::PathIter};
 
 macro_rules! unsupported_type {
     ($trait_fn:ident, $name:expr) => {

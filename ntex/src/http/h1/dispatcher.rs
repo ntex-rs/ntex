@@ -761,13 +761,13 @@ mod tests {
     use crate::io::{self as nio, Base};
     use crate::service::{IntoService, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
-    use crate::{codec::Decoder, testing::Io, time::Millis, time::sleep};
+    use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
 
     /// Create http/1 dispatcher.
     pub(crate) fn h1<F, S, B>(
-        stream: Io,
+        stream: IoTest,
         service: F,
     ) -> Dispatcher<Base, S, B, DefaultControlService>
     where
@@ -793,7 +793,7 @@ mod tests {
         )
     }
 
-    pub(crate) fn spawn_h1<F, S, B>(stream: Io, service: F)
+    pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, service: F)
     where
         F: IntoService<S, Request>,
         S: Service<Request> + 'static,
@@ -817,7 +817,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_on_request() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1.0\r\n\r\n");
 
@@ -857,7 +857,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_req_parse_err() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
@@ -882,7 +882,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| async {
@@ -910,7 +910,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline_with_payload() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
 
@@ -941,7 +941,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline_with_delay() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| async {
@@ -984,7 +984,7 @@ mod tests {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         spawn_h1(server, move |_| {
             num2.fetch_add(1, Ordering::Relaxed);
             async { Ok::<_, io::Error>(Response::Ok().finish()) }
@@ -1005,7 +1005,7 @@ mod tests {
     /// max http message size is 32k (no payload)
     #[crate::rt_test]
     async fn test_read_large_message() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
 
         let mut h1 = h1(server, |_| {
@@ -1044,7 +1044,7 @@ mod tests {
         let mark = Arc::new(AtomicBool::new(false));
         let mark2 = mark.clone();
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         spawn_h1(server, move |mut req: Request| {
             let m = mark2.clone();
@@ -1100,7 +1100,7 @@ mod tests {
             }
         }
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         let mut h1 = h1(server, move |_| {
             let n = num2.clone();
             Box::pin(async move {
@@ -1158,7 +1158,7 @@ mod tests {
             }
         }
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut h1 = h1(server, |_| {
             Box::pin(async {
@@ -1185,7 +1185,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_service_error() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
 
@@ -1208,7 +1208,7 @@ mod tests {
         let err_mark = Arc::new(AtomicUsize::new(0));
         let err_mark2 = err_mark.clone();
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
 
         let svc = move |mut req: Request| {
@@ -1271,7 +1271,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_unconsumed_payload() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
 

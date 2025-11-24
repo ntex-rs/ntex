@@ -24,8 +24,8 @@ authors = ["ntex contributors <team@ntex.rs>"]
 repository = "https://github.com/ntex-rs/ntex"
 documentation = "https://docs.rs/ntex/"
 license = "MIT OR Apache-2.0"
-edition = "2021"
-rust-version = "1.83"
+edition = "2024"
+rust-version = "1.85"
 
 [patch.crates-io]
 ntex = { path = "ntex" }
@@ -48,7 +48,6 @@ ntex-tokio = { path = "ntex-tokio" }
 ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "io-config" }
 
 [workspace.dependencies]
-ahash = "0.8.10"
 async-channel = "2"
 async-task = "4.5.0"
 atomic-waker = "1.1"
@@ -63,6 +62,7 @@ crossbeam-channel = "0.5.8"
 crossbeam-queue = "0.3.8"
 encoding_rs = "0.8"
 env_logger = { version = "0.11", default-features = false }
+foldhash = "0.2.0"
 futures-core = { version = "0.3", default-features = false, features = ["alloc"] }
 futures-util = { version = "0.3.29", default-features = false, features = ["alloc"] }
 futures-timer = "3.0"

@@ -30,15 +30,8 @@ impl<T: Address> SslConnector<T> {
     }
 
     /// Set io configuration
-    pub fn cfg(mut self, cfg: IoConfig) -> Self {
-        self.connector = self.connector.get_ref().cfg(cfg).into();
-        self
-    }
-
-    #[deprecated]
-    #[doc(hidden)]
-    /// Set io tag
-    pub fn tag(self, _: &'static str) -> Self {
+    pub fn config(mut self, cfg: IoConfig) -> Self {
+        self.connector = self.connector.get_ref().config(cfg).into();
         self
     }
 }
@@ -123,7 +116,6 @@ impl<T: Address> Service<Connect<T>> for SslConnector<T> {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -139,7 +131,7 @@ mod tests {
         let _ = SslConnector::<&'static str>::new(ssl.build());
         let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::with(ssl.build(), Default::default())
-            .cfg(ntex_io::IoConfig::new("IO"))
+            .config(ntex_io::IoConfig::new("IO"))
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap();

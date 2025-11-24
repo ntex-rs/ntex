@@ -108,8 +108,6 @@ pub mod io {
 
 pub mod testing {
     //! IO testing utilities.
-    #[doc(hidden)]
-    pub use ntex_io::testing::IoTest as Io;
     pub use ntex_io::testing::IoTest;
 }
 
@@ -123,10 +121,6 @@ pub mod util {
 
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec};
     pub use ntex_util::{HashMap, HashSet, error::*, future::*, services::*};
-
-    #[doc(hidden)]
-    #[deprecated]
-    pub use std::task::ready;
 
     #[doc(hidden)]
     pub fn enable_test_logging() {

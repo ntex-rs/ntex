@@ -190,15 +190,6 @@ impl HeaderValue {
         }
     }
 
-    #[deprecated]
-    #[doc(hidden)]
-    pub fn from_maybe_shared<T>(src: T) -> Result<HeaderValue, InvalidHeaderValue>
-    where
-        Bytes: From<T>,
-    {
-        HeaderValue::from_shared(src)
-    }
-
     fn try_from_generic<T: AsRef<[u8]>, F: FnOnce(T) -> Bytes>(
         src: T,
         into: F,
@@ -744,7 +735,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::op_ref, clippy::cmp_owned, deprecated)]
+    #[allow(clippy::op_ref, clippy::cmp_owned)]
     fn test_basics() {
         assert!(HeaderValue::from_str("").unwrap().is_empty());
 
@@ -752,7 +743,7 @@ mod tests {
         let hdr2 = HeaderValue::from(&hdr);
         assert_eq!(hdr, hdr2);
 
-        let hdr3 = HeaderValue::from_maybe_shared(Bytes::from_static(b"upgrade")).unwrap();
+        let hdr3 = HeaderValue::from_shared(Bytes::from_static(b"upgrade")).unwrap();
         assert_eq!(hdr, hdr3);
 
         let hdr = http::header::HeaderValue::from_bytes(b"upgrade").unwrap();

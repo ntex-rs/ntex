@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "2.16.0"
+version = "3.0.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
@@ -17,15 +17,15 @@ name = "ntex_io"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-codec = "0.6"
-ntex-bytes = "0.1.31"
-ntex-util = "2.15"
-ntex-service = "3.4"
+ntex-codec = "1.0"
+ntex-bytes = "1.0"
+ntex-util = "3"
+ntex-service = "3.5"
 
 bitflags = { workspace = true }
 log = { workspace = true }
 pin-project-lite = { workspace = true }
 
 [dev-dependencies]
-ntex = "2"
+ntex = "3"
 rand = { workspace = true }

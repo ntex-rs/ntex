@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.18.0"
+version = "3.0.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -67,19 +67,19 @@ ws = ["dep:sha1"]
 no-test-logging = []
 
 [dependencies]
-ntex-codec = "0.6"
-ntex-http = "0.1.15"
-ntex-router = "0.5"
+ntex-codec = "1.0"
+ntex-http = "1.0"
+ntex-router = "1.0"
 ntex-service = "3.5"
 ntex-macros = "0.1"
-ntex-util = "2.15"
-ntex-bytes = "0.1.31"
-ntex-server = "2.9"
-ntex-h2 = "1.15"
-ntex-rt = "0.4.33"
-ntex-io = "2.16"
-ntex-net = "2.10"
-ntex-tls = "2.7"
+ntex-util = "3.0"
+ntex-bytes = "1.0"
+ntex-server = "3.0"
+ntex-h2 = "3.0"
+ntex-rt = "3.0"
+ntex-io = "3.0"
+ntex-net = "3.0"
+ntex-tls = "3.0"
 
 base64 = { workspace = true }
 bitflags = { workspace = true }

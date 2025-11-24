@@ -10,10 +10,6 @@ pub fn new<T>() -> Pool<T> {
     Pool(Cell::new(Slab::new()))
 }
 
-#[doc(hidden)]
-/// Futures-aware, pool of one-shot's.
-pub type OneshotsPool<T> = Pool<T>;
-
 /// Futures-aware, pool of one-shot's.
 pub struct Pool<T>(Cell<Slab<Inner<T>>>);
 

@@ -45,15 +45,8 @@ impl<T: Address> TlsConnector<T> {
     }
 
     /// Set io configuration
-    pub fn cfg(mut self, cfg: IoConfig) -> Self {
-        self.connector = self.connector.get_ref().cfg(cfg).into();
-        self
-    }
-
-    #[deprecated]
-    #[doc(hidden)]
-    /// Set io tag
-    pub fn tag(self, _: &'static str) -> Self {
+    pub fn config(mut self, cfg: IoConfig) -> Self {
+        self.connector = self.connector.get_ref().config(cfg).into();
         self
     }
 }
@@ -132,7 +125,6 @@ impl<T: Address> Service<Connect<T>> for TlsConnector<T> {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -152,7 +144,7 @@ mod tests {
             .with_no_client_auth();
         let _ = TlsConnector::<&'static str>::new(config.clone()).clone();
         let factory = TlsConnector::with(Arc::new(config), Default::default())
-            .cfg(IoConfig::new("IO"))
+            .config(IoConfig::new("IO"))
             .clone();
 
         let srv = factory.pipeline(&()).await.unwrap().bind();

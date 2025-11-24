@@ -104,12 +104,12 @@ impl ClientRequest {
         self
     }
 
+    #[inline]
     /// Get HTTP method of this request
     pub fn get_method(&self) -> &Method {
         &self.head.method
     }
 
-    #[doc(hidden)]
     /// Set HTTP version of this request.
     ///
     /// By default requests's HTTP version depends on network stream
@@ -119,6 +119,7 @@ impl ClientRequest {
         self
     }
 
+    #[inline]
     /// Get HTTP version of this request.
     pub fn get_version(&self) -> &Version {
         &self.head.version

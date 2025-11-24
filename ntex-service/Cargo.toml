@@ -25,8 +25,8 @@ async-fn = []
 slab = { workspace = true }
 
 [dev-dependencies]
-ntex = "2"
-ntex-util = "2"
+ntex = "3"
+ntex-util = "3"
 
 [build-dependencies]
 version_check = "0.9"

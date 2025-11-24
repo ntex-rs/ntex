@@ -35,10 +35,10 @@ impl<T> Connector<T> {
         }
     }
 
-    /// Set io config
+    /// Set io configuration
     ///
     /// Set config for new io object.
-    pub fn cfg(mut self, cfg: IoConfig) -> Self {
+    pub fn config(mut self, cfg: IoConfig) -> Self {
         self.cfg = cfg;
         self
     }
@@ -184,7 +184,7 @@ mod tests {
         });
 
         let srv = Connector::default()
-            .cfg(IoConfig::new("T"))
+            .config(IoConfig::new("T"))
             .timeout(Millis(5000));
         let result = srv.connect("").await;
         assert!(result.is_err());

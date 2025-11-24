@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use regex::{escape, Regex};
+use regex::{Regex, escape};
 
 use super::IntoPattern;
 
@@ -65,18 +65,18 @@ impl Eq for Segment {}
 impl PartialEq for Segment {
     fn eq(&self, other: &Self) -> bool {
         match self {
-            Segment::Static(ref p1) => match other {
+            Segment::Static(p1) => match other {
                 Segment::Static(p2) => p1 == p2,
                 _ => false,
             },
             Segment::Dynamic {
-                pattern: ref p1,
+                pattern: p1,
                 tail: t1,
                 ..
             } => match other {
                 Segment::Static { .. } => false,
                 Segment::Dynamic {
-                    pattern: ref p2,
+                    pattern: p2,
                     tail: t2,
                     ..
                 } => p1.as_str() == p2.as_str() && t1 == t2,
