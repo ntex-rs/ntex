@@ -7,7 +7,7 @@ use std::{io, sync::Arc};
 use std::{io::Read, io::Write, net, sync::mpsc, thread, time};
 
 use ntex::codec::BytesCodec;
-use ntex::io::{Io, IoConfig};
+use ntex::io::{Io, SharedConfig};
 use ntex::server::{TestServer, build};
 use ntex::service::fn_service;
 use ntex::util::{Bytes, Ready};
@@ -90,7 +90,7 @@ async fn test_run() {
                     })
                 })
                 .unwrap()
-                .set_config("test", IoConfig::new("SRV"))
+                .set_config("test", SharedConfig::new("SRV"))
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())

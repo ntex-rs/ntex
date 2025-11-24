@@ -11,9 +11,9 @@ use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
-use crate::io::IoConfig;
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
+use crate::io::SharedConfig;
 use crate::router::{Path, ResourceDef};
 use crate::service::{
     IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory, map_config,
@@ -688,7 +688,7 @@ where
                 },
             }
             .unwrap()
-            .set_config("test", IoConfig::new("WEB-SRV"))
+            .set_config("test", SharedConfig::new("WEB-SRV"))
             .run();
 
             crate::rt::spawn(async move {

@@ -9,11 +9,14 @@ use crate::service::{
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
-use crate::{io::DispatchItem, io::IoConfig, rt, time::Seconds, util::Either, util::Ready};
+use crate::{
+    io::DispatchItem, io::IoConfig, io::SharedConfig, rt, time::Seconds, util::Either,
+    util::Ready,
+};
 
 thread_local! {
-    static CFG: IoConfig = IoConfig::build("WS")
-        .set_keepalive_timeout(Seconds::ZERO)
+    static CFG: SharedConfig = SharedConfig::build("WS")
+        .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO))
         .finish();
 }
 
@@ -105,7 +108,7 @@ where
 
     // create ws service
     let srv = factory.into_factory().create(sink.clone()).await?;
-    io.set_config(CFG.with(|cfg| *cfg));
+    io.set_shared_config(CFG.with(|cfg| *cfg));
 
     // start websockets service dispatcher
     let _ = rt::spawn(async move {

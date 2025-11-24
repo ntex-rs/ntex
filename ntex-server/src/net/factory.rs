@@ -1,18 +1,19 @@
 use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
-use ntex_io::{Io, IoConfig};
+use ntex_io::{Io, SharedConfig};
 use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed};
 use ntex_util::future::{BoxFuture, Ready};
 
 use super::{Config, Token, socket::Stream};
 
-pub(super) type BoxServerService = boxed::BoxServiceFactory<(), Io, (), (), ()>;
+pub(super) type BoxServerService = boxed::BoxServiceFactory<SharedConfig, Io, (), (), ()>;
 pub(crate) type FactoryServiceType = Box<dyn FactoryService>;
 
 #[derive(Debug)]
 pub(crate) struct NetService {
     pub(crate) name: Arc<str>,
-    pub(crate) tokens: Vec<(Token, IoConfig)>,
+    pub(crate) tokens: Vec<(Token, SharedConfig)>,
+    pub(crate) config: SharedConfig,
     pub(crate) factory: BoxServerService,
 }
 
@@ -21,7 +22,7 @@ pub(crate) trait FactoryService: Send {
         ""
     }
 
-    fn set_config(&mut self, _: Token, _: IoConfig) {}
+    fn set_config(&mut self, _: Token, _: SharedConfig) {}
 
     fn clone_factory(&self) -> Box<dyn FactoryService>;
 
@@ -30,7 +31,7 @@ pub(crate) trait FactoryService: Send {
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
 where
-    S: ServiceFactory<Io> + 'static,
+    S: ServiceFactory<Io, SharedConfig> + 'static,
 {
     boxed::factory(ServerServiceFactory {
         name: Arc::from(name),
@@ -40,12 +41,12 @@ where
 
 pub(crate) fn create_factory_service<F, R>(
     name: String,
-    tokens: Vec<(Token, IoConfig)>,
+    tokens: Vec<(Token, SharedConfig)>,
     factory: F,
 ) -> Box<dyn FactoryService>
 where
     F: Fn(Config) -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io> + 'static,
+    R: ServiceFactory<Io, SharedConfig> + 'static,
 {
     Box::new(Factory {
         tokens,
@@ -59,7 +60,7 @@ where
 
 struct Factory<F, R, E> {
     name: String,
-    tokens: Vec<(Token, IoConfig)>,
+    tokens: Vec<(Token, SharedConfig)>,
     factory: F,
     _t: PhantomData<(R, E)>,
 }
@@ -83,7 +84,7 @@ where
         })
     }
 
-    fn set_config(&mut self, token: Token, cfg: IoConfig) {
+    fn set_config(&mut self, token: Token, cfg: SharedConfig) {
         for item in &mut self.tokens {
             if item.0 == token {
                 item.1 = cfg;
@@ -111,6 +112,7 @@ where
                 tokens,
                 factory,
                 name: Arc::from(name),
+                config: cfg.get_config().unwrap_or_default(),
             }])
         })
     }
@@ -121,18 +123,18 @@ struct ServerServiceFactory<S> {
     factory: S,
 }
 
-impl<S> ServiceFactory<Io> for ServerServiceFactory<S>
+impl<S> ServiceFactory<Io, SharedConfig> for ServerServiceFactory<S>
 where
-    S: ServiceFactory<Io>,
+    S: ServiceFactory<Io, SharedConfig>,
 {
     type Response = ();
     type Error = ();
     type Service = ServerService<S::Service>;
     type InitError = ();
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
         self.factory
-            .create(())
+            .create(cfg)
             .await
             .map(|inner| ServerService { inner })
             .map_err(|_| log::error!("Cannot construct {:?} service", self.name))

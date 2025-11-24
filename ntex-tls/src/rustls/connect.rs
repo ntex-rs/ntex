@@ -1,6 +1,6 @@
 use std::{fmt, io, sync::Arc};
 
-use ntex_io::{Io, IoConfig, Layer};
+use ntex_io::{Io, Layer, SharedConfig};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnector};
 use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
 use tls_rust::{ClientConfig, pki_types::ServerName};
@@ -45,7 +45,7 @@ impl<T: Address> TlsConnector<T> {
     }
 
     /// Set io configuration
-    pub fn config(mut self, cfg: IoConfig) -> Self {
+    pub fn config(mut self, cfg: SharedConfig) -> Self {
         self.connector = self.connector.get_ref().config(cfg).into();
         self
     }

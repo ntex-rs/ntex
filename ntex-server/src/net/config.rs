@@ -1,6 +1,6 @@
 use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, rc::Rc};
 
-use ntex_io::{Io, IoConfig};
+use ntex_io::{Io, SharedConfig};
 use ntex_service::{IntoServiceFactory, ServiceFactory};
 use ntex_util::{HashMap, future::BoxFuture, future::Ready};
 
@@ -14,7 +14,7 @@ pub struct Config(Rc<InnerServiceConfig>);
 
 #[derive(Debug)]
 pub(super) struct InnerServiceConfig {
-    pub(super) config: Cell<Option<IoConfig>>,
+    pub(super) config: Cell<Option<SharedConfig>>,
 }
 
 impl Default for Config {
@@ -27,12 +27,12 @@ impl Default for Config {
 
 impl Config {
     /// Set io config for the service.
-    pub fn config(&self, cfg: IoConfig) -> &Self {
+    pub fn config(&self, cfg: SharedConfig) -> &Self {
         self.0.config.set(Some(cfg));
         self
     }
 
-    pub(super) fn get_config(&self) -> Option<IoConfig> {
+    pub(super) fn get_config(&self) -> Option<SharedConfig> {
         self.0.config.get()
     }
 }
@@ -43,7 +43,8 @@ pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
 #[derive(Debug)]
 struct Socket {
     name: String,
-    sockets: Vec<(Token, Listener, IoConfig)>,
+    config: SharedConfig,
+    sockets: Vec<(Token, Listener, SharedConfig)>,
 }
 
 pub(super) struct ServiceConfigInner {
@@ -86,13 +87,14 @@ impl ServiceConfig {
         let sockets = bind_addr(addr, inner.backlog)?;
         let socket = Socket {
             name: name.as_ref().to_string(),
+            config: SharedConfig::default(),
             sockets: sockets
                 .into_iter()
                 .map(|lst| {
                     (
                         inner.token.next(),
                         Listener::from_tcp(lst),
-                        IoConfig::default(),
+                        SharedConfig::default(),
                     )
                 })
                 .collect(),
@@ -107,10 +109,11 @@ impl ServiceConfig {
         let mut inner = self.0.borrow_mut();
         let socket = Socket {
             name: name.as_ref().to_string(),
+            config: SharedConfig::default(),
             sockets: vec![(
                 inner.token.next(),
                 Listener::from_tcp(lst),
-                IoConfig::default(),
+                SharedConfig::default(),
             )],
         };
         inner.sockets.push(socket);
@@ -118,16 +121,12 @@ impl ServiceConfig {
         self
     }
 
-    /// Set io tag for configured service.
-    pub fn set_tag<N: AsRef<str>>(&self, name: N, tag: &'static str) -> &Self {
-        self.set_config(name, IoConfig::new(tag))
-    }
-
     /// Set io config for configured service.
-    pub fn set_config<N: AsRef<str>>(&self, name: N, cfg: IoConfig) -> &Self {
+    pub fn config<N: AsRef<str>>(&self, name: N, cfg: SharedConfig) -> &Self {
         let mut inner = self.0.borrow_mut();
         for sock in &mut inner.sockets {
             if sock.name == name.as_ref() {
+                sock.config = cfg;
                 for item in &mut sock.sockets {
                     item.2 = cfg;
                 }
@@ -163,6 +162,7 @@ impl ServiceConfig {
                 Entry {
                     idx,
                     name: s.name.clone(),
+                    config: s.config,
                     tokens: s
                         .sockets
                         .iter()
@@ -182,8 +182,8 @@ impl ServiceConfig {
             inner.token,
             sockets,
             Box::new(ConfiguredService {
-                rt: inner.apply.take().unwrap(),
                 names,
+                rt: inner.apply.take().unwrap(),
             }),
         )
     }
@@ -221,6 +221,7 @@ impl FactoryService for ConfiguredService {
                     for entry in names.values() {
                         if entry.idx == services.len() {
                             res.push(NetService {
+                                config: entry.config,
                                 name: std::sync::Arc::from(entry.name.clone()),
                                 tokens: entry.tokens.clone(),
                                 factory: svc,
@@ -245,7 +246,8 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 struct Entry {
     idx: usize,
     name: String,
-    tokens: Vec<(Token, IoConfig)>,
+    config: SharedConfig,
+    tokens: Vec<(Token, SharedConfig)>,
 }
 
 struct ServiceRuntimeInner {
@@ -286,8 +288,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&self, name: &str, service: F)
     where
-        F: IntoServiceFactory<T, Io>,
-        T: ServiceFactory<Io> + 'static,
+        F: IntoServiceFactory<T, Io, SharedConfig>,
+        T: ServiceFactory<Io, SharedConfig> + 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
@@ -300,6 +302,14 @@ impl ServiceRuntime {
             ));
         } else {
             panic!("Unknown service: {name:?}");
+        }
+    }
+
+    /// Set io config for configured service.
+    pub fn config(&self, name: &str, cfg: SharedConfig) {
+        let mut inner = self.0.borrow_mut();
+        if let Some(entry) = inner.names.get_mut(name) {
+            entry.config = cfg;
         }
     }
 }

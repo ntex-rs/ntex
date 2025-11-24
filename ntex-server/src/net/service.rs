@@ -1,6 +1,6 @@
 use std::{fmt, sync::Arc, task::Context};
 
-use ntex_io::{Io, IoConfig};
+use ntex_io::{Io, SharedConfig};
 use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed};
 use ntex_util::{HashMap, future::join_all, services::Counter};
 
@@ -126,7 +126,7 @@ impl ServiceFactory<Connection> for StreamService {
         let mut services = Vec::new();
 
         for info in &self.services {
-            match info.factory.create(()).await {
+            match info.factory.create(info.config).await {
                 Ok(svc) => {
                     log::trace!("Constructed server service for {:?}", info.tokens);
                     services.push(svc);
@@ -152,7 +152,7 @@ impl ServiceFactory<Connection> for StreamService {
 }
 
 pub struct StreamServiceImpl {
-    tokens: HashMap<Token, (usize, Arc<str>, IoConfig)>,
+    tokens: HashMap<Token, (usize, Arc<str>, SharedConfig)>,
     services: Vec<BoxService>,
     conns: Counter,
     on_accept: Option<Box<dyn OnAccept + Send>>,

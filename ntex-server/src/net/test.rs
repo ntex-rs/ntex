@@ -1,7 +1,7 @@
 //! Test server
 use std::{fmt, io, marker::PhantomData, net, thread};
 
-use ntex_io::{Io, IoConfig};
+use ntex_io::{Io, SharedConfig};
 use ntex_net::tcp_connect;
 use ntex_rt::System;
 use ntex_service::ServiceFactory;
@@ -12,8 +12,8 @@ use super::{Server, ServerBuilder};
 /// Test server builder
 pub struct TestServerBuilder<F, R> {
     factory: F,
-    config: IoConfig,
-    client_config: IoConfig,
+    config: SharedConfig,
+    client_config: SharedConfig,
     _t: PhantomData<R>,
 }
 
@@ -29,25 +29,25 @@ impl<F, R> fmt::Debug for TestServerBuilder<F, R> {
 impl<F, R> TestServerBuilder<F, R>
 where
     F: Fn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io> + 'static,
+    R: ServiceFactory<Io, SharedConfig> + 'static,
 {
     pub fn new(factory: F) -> Self {
         Self {
             factory,
-            config: IoConfig::new("TEST-SERVER"),
-            client_config: IoConfig::new("TEST-CLIENT"),
+            config: SharedConfig::new("TEST-SERVER"),
+            client_config: SharedConfig::new("TEST-CLIENT"),
             _t: PhantomData,
         }
     }
 
     /// Set server io configuration
-    pub fn config(mut self, cfg: IoConfig) -> Self {
+    pub fn config(mut self, cfg: SharedConfig) -> Self {
         self.config = cfg;
         self
     }
 
     /// Set client io configuration
-    pub fn client_config(mut self, cfg: IoConfig) -> Self {
+    pub fn client_config(mut self, cfg: SharedConfig) -> Self {
         self.client_config = cfg;
         self
     }
@@ -128,7 +128,7 @@ where
 pub fn test_server<F, R>(factory: F) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io> + 'static,
+    R: ServiceFactory<Io, SharedConfig> + 'static,
 {
     TestServerBuilder::new(factory).start()
 }
@@ -157,7 +157,7 @@ where
         system,
         server,
         addr: "127.0.0.1:0".parse().unwrap(),
-        cfg: IoConfig::new("TEST-CLIENT"),
+        cfg: SharedConfig::new("TEST-CLIENT"),
     }
 }
 
@@ -167,7 +167,7 @@ pub struct TestServer {
     addr: net::SocketAddr,
     system: System,
     server: Server,
-    cfg: IoConfig,
+    cfg: SharedConfig,
 }
 
 impl TestServer {
