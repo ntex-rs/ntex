@@ -212,6 +212,12 @@ impl IoConfig {
     }
 
     #[inline]
+    /// Shared config
+    pub fn shared_config(&self) -> SharedConfig {
+        SharedConfig(self.config)
+    }
+
+    #[inline]
     /// Get connect timeout
     pub fn connect_timeout(&self) -> Millis {
         self.connect_timeout

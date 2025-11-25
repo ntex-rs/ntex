@@ -56,17 +56,13 @@ impl Default for &'static HttpServiceConfig {
 
 impl Default for HttpServiceConfig {
     fn default() -> Self {
-        Self::new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE, Millis(5_000))
+        Self::new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
     }
 }
 
 impl HttpServiceConfig {
     /// Create instance of `HttpServiceConfig`
-    pub fn new(
-        keep_alive: KeepAlive,
-        client_timeout: Seconds,
-        ssl_handshake_timeout: Millis,
-    ) -> HttpServiceConfig {
+    pub fn new(keep_alive: KeepAlive, client_timeout: Seconds) -> HttpServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (val, true),
             KeepAlive::Os => (Seconds::ZERO, true),
@@ -79,7 +75,6 @@ impl HttpServiceConfig {
         };
 
         HttpServiceConfig {
-            ssl_handshake_timeout,
             keep_alive,
             ka_enabled,
             headers_read_rate: Some(FrameReadRate {
@@ -143,18 +138,6 @@ impl HttpServiceConfig {
             rate.timeout = timeout;
             self.headers_read_rate = Some(rate);
         }
-        self
-    }
-
-    /// Set server ssl handshake timeout.
-    ///
-    /// Defines a timeout for connection ssl handshake negotiation.
-    /// To disable timeout set value to 0.
-    ///
-    /// By default handshake timeout is set to 5 seconds.
-    pub fn ssl_handshake_timeout(&mut self, timeout: Seconds) -> &mut Self {
-        self.ssl_handshake_timeout = timeout.into();
-        self.h2config.handshake_timeout(timeout);
         self
     }
 
@@ -265,7 +248,7 @@ impl<S, C> DispatcherConfig<S, C> {
     }
 
     pub(super) fn shutdown(&self) {
-        self.config.h2config.shutdown();
+        // self.config.h2config.shutdown();
 
         let mut flags = self.flags.get();
         flags.insert(Flags::SHUTDOWN);

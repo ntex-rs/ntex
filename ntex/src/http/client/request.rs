@@ -11,9 +11,9 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version};
 use crate::{time::Millis, util::Bytes, util::Stream};
 
-use super::error::{FreezeRequestError, InvalidUrl};
-use super::sender::{PrepForSendingError, SendClientRequest};
-use super::{ClientConfig, frozen::FrozenClientRequest};
+use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
+use super::sender::PrepForSendingError;
+use super::{ClientInner, ClientResponse, frozen::FrozenClientRequest};
 
 /// An HTTP Client request builder
 ///
@@ -45,12 +45,12 @@ pub struct ClientRequest {
     cookies: Option<CookieJar>,
     response_decompress: bool,
     timeout: Millis,
-    config: Rc<ClientConfig>,
+    config: Rc<ClientInner>,
 }
 
 impl ClientRequest {
     /// Create new client request builder.
-    pub(super) fn new<U>(method: Method, uri: U, config: Rc<ClientConfig>) -> Self
+    pub(super) fn new<U>(method: Method, uri: U, config: Rc<ClientInner>) -> Self
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -380,91 +380,90 @@ impl ClientRequest {
     }
 
     /// Complete request construction and send body.
-    pub fn send_body<B>(self, body: B) -> SendClientRequest
+    pub async fn send_body<B>(self, body: B) -> Result<ClientResponse, SendRequestError>
     where
         B: Into<Body>,
     {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send_body(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-            body,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send_body(
+                slf.addr,
+                slf.response_decompress,
+                slf.timeout,
+                slf.config,
+                body,
+            )
+            .await
     }
 
     /// Set a JSON body and generate `ClientRequest`
-    pub fn send_json<T: Serialize>(self, value: &T) -> SendClientRequest {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+    pub async fn send_json<T: Serialize>(
+        self,
+        value: &T,
+    ) -> Result<ClientResponse, SendRequestError> {
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send_json(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-            value,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send_json(
+                slf.addr,
+                slf.response_decompress,
+                slf.timeout,
+                slf.config,
+                value,
+            )
+            .await
     }
 
     /// Set a urlencoded body and generate `ClientRequest`
     ///
     /// `ClientRequestBuilder` can not be used after this call.
-    pub fn send_form<T: Serialize>(self, value: &T) -> SendClientRequest {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+    pub async fn send_form<T: Serialize>(
+        self,
+        value: &T,
+    ) -> Result<ClientResponse, SendRequestError> {
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send_form(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-            value,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send_form(
+                slf.addr,
+                slf.response_decompress,
+                slf.timeout,
+                slf.config,
+                value,
+            )
+            .await
     }
 
     /// Set an streaming body and generate `ClientRequest`.
-    pub fn send_stream<S, E>(self, stream: S) -> SendClientRequest
+    pub async fn send_stream<S, E>(
+        self,
+        stream: S,
+    ) -> Result<ClientResponse, SendRequestError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
     {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send_stream(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-            stream,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send_stream(
+                slf.addr,
+                slf.response_decompress,
+                slf.timeout,
+                slf.config,
+                stream,
+            )
+            .await
     }
 
     /// Set an empty body and generate `ClientRequest`.
-    pub fn send(self) -> SendClientRequest {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+    pub async fn send(self) -> Result<ClientResponse, SendRequestError> {
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send(slf.addr, slf.response_decompress, slf.timeout, slf.config)
+            .await
     }
 
     #[allow(unused_mut)]

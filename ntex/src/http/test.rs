@@ -4,10 +4,12 @@ use std::{net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use ntex_tls::TlsConfiguration;
+
 use crate::channel::bstream;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
-use crate::io::{Io, SharedConfig};
+use crate::io::{Io, IoConfig, SharedConfig};
 use crate::server::Server;
 use crate::service::ServiceFactory;
 #[cfg(feature = "ws")]
@@ -223,7 +225,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server<F, R>(factory: F) -> TestServer
+pub async fn server<F, R>(factory: F) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedConfig> + 'static,
@@ -258,9 +260,10 @@ where
         addr,
         system,
         server,
-        client: Client::build().finish(),
+        client: Client::build().finish(Default::default()).await.unwrap(),
     }
     .set_client_timeout(Seconds(90), Millis(90_000))
+    .await
 }
 
 #[derive(Debug)]
@@ -274,7 +277,21 @@ pub struct TestServer {
 
 impl TestServer {
     /// Set client timeout
-    pub fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
+    pub async fn set_client_timeout(
+        mut self,
+        timeout: Seconds,
+        connect_timeout: Millis,
+    ) -> Self {
+        let cfg = SharedConfig::build("TEST-CLIENT")
+            .add(IoConfig::new().set_connect_timeout(connect_timeout))
+            .add(TlsConfiguration::new().set_handshake_timeout(timeout))
+            .add(
+                ntex_h2::ServiceConfig::new()
+                    .max_header_list_size(256 * 1024)
+                    .max_header_continuation_frames(96),
+            )
+            .finish();
+
         let client = {
             let connector = {
                 #[cfg(feature = "openssl")]
@@ -286,25 +303,19 @@ impl TestServer {
                     let _ = builder
                         .set_alpn_protos(b"\x02h2\x08http/1.1")
                         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
-                    Connector::default()
-                        .timeout(connect_timeout)
-                        .openssl(builder.build())
-                        .configure_http2(|cfg| {
-                            cfg.max_header_list_size(256 * 1024);
-                            cfg.max_header_continuation_frames(96);
-                        })
-                        .finish()
+                    Connector::default().openssl(builder.build())
                 }
                 #[cfg(not(feature = "openssl"))]
                 {
-                    Connector::default().timeout(connect_timeout).finish()
+                    Connector::default()
                 }
             };
 
             Client::build()
-                .timeout(timeout)
-                .connector(connector)
-                .finish()
+                .connector::<&str>(connector)
+                .finish(cfg)
+                .await
+                .unwrap()
         };
 
         self.client = client;

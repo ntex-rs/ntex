@@ -62,7 +62,9 @@ impl<T: Address> Connector<T> {
             }
         })
         .await
-        .map_err(|_| ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Timeout")))
+        .map_err(|_| {
+            ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Connect timeout"))
+        })
         .and_then(|item| item)
     }
 }

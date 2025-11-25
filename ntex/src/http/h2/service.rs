@@ -313,13 +313,7 @@ where
 {
     let ioref = io.get_ref();
 
-    let _ = server::handle_one(
-        io,
-        config.config.h2config.clone(),
-        control,
-        PublishService::new(ioref, config),
-    )
-    .await;
+    let _ = server::handle_one(io, PublishService::new(ioref, config), control).await;
 
     Ok(())
 }

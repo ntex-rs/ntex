@@ -24,6 +24,14 @@ pub enum JsonPayloadError {
     Payload(#[from] PayloadError),
 }
 
+/// A set of errors that can occur while building HTTP client
+#[derive(Error, Debug)]
+pub enum ClientBuilderError {
+    /// Connector failed
+    #[error("Cannot construct connector")]
+    ConnectorFailed,
+}
+
 /// A set of errors that can occur while connecting to an HTTP host
 #[derive(Error, Debug)]
 pub enum ConnectError {

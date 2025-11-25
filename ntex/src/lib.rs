@@ -37,8 +37,8 @@ pub use ntex_service::{forward_poll, forward_ready, forward_shutdown};
 pub mod http;
 //pub mod web;
 
-//#[cfg(feature = "ws")]
-//pub mod ws;
+#[cfg(feature = "ws")]
+pub mod ws;
 
 pub use self::service::{
     IntoService, IntoServiceFactory, Middleware, Pipeline, Service, ServiceCtx,
