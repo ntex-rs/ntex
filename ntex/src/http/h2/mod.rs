@@ -3,7 +3,7 @@ mod default;
 pub(super) mod payload;
 mod service;
 
-pub use ntex_h2::{Config, Control, ControlAck};
+pub use ntex_h2::{Control, ControlAck, ServiceConfig as Http2ServiceConfig};
 
 #[doc(hidden)]
 pub use ntex_h2::{ControlMessage, ControlResult};

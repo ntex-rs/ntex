@@ -5,7 +5,7 @@ use ntex_h2::{self as h2, frame::StreamId, server};
 
 use crate::channel::oneshot;
 use crate::http::body::{BodySize, MessageBody};
-use crate::http::config::{DispatcherConfig, ServiceConfig};
+use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
@@ -20,7 +20,6 @@ use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 pub struct H2Service<F, S, B, C> {
     srv: S,
     ctl: Rc<C>,
-    cfg: ServiceConfig,
     _t: marker::PhantomData<(F, B)>,
 }
 
@@ -32,12 +31,8 @@ where
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S, Request, SharedConfig>>(
-        cfg: ServiceConfig,
-        service: U,
-    ) -> Self {
+    pub(crate) fn new<U: IntoServiceFactory<S, Request, SharedConfig>>(service: U) -> Self {
         H2Service {
-            cfg,
             srv: service.into_factory(),
             ctl: Rc::new(DefaultControlService),
             _t: marker::PhantomData,
@@ -152,7 +147,6 @@ where
     {
         H2Service {
             ctl: Rc::new(ctl),
-            cfg: self.cfg,
             srv: self.srv,
             _t: marker::PhantomData,
         }
@@ -185,7 +179,7 @@ where
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
 
         let (tx, rx) = oneshot::channel();
-        let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, ()));
+        let config = Rc::new(DispatcherConfig::new(cfg.get(), service, ()));
 
         Ok(H2ServiceHandler {
             cfg,
@@ -321,7 +315,7 @@ where
 
     let _ = server::handle_one(
         io,
-        config.h2config.clone(),
+        config.config.h2config.clone(),
         control,
         PublishService::new(ioref, config),
     )
@@ -478,7 +472,7 @@ where
 
         let head = res.head_mut();
         let mut size = body.size();
-        prepare_response(&cfg.timer, head, &mut size);
+        prepare_response(head, &mut size);
 
         log::debug!(
             "{}: Received service response: {head:?} payload: {size:?}",
@@ -534,7 +528,7 @@ const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 #[allow(clippy::declare_interior_mutable_const)]
 const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
 
-fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut BodySize) {
+fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
     // Content length
     match head.status {
         StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
@@ -571,7 +565,7 @@ fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut Bod
     // set date header
     if !head.headers.contains_key(header::DATE) {
         let mut bytes = BytesMut::with_capacity(29);
-        timer.set_date(|date| bytes.extend_from_slice(date));
+        DateService.set_date(|date| bytes.extend_from_slice(date));
         head.headers.insert(header::DATE, unsafe {
             HeaderValue::from_shared_unchecked(bytes.freeze())
         });

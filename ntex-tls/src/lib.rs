@@ -9,7 +9,7 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
-use ntex_util::services::Counter;
+use ntex_util::{services::Counter, time::Millis, time::Seconds};
 
 /// Sets the maximum per-worker concurrent ssl connection establish process.
 ///
@@ -39,3 +39,44 @@ pub struct PskIdentity(pub Vec<u8>);
 /// Used in conjunction with [`ntex_io::Filter::query`]:
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Servername(pub String);
+
+#[derive(Debug, Clone)]
+/// Tls service configuration
+pub struct TlsConfiguration {
+    handshake_timeout: Millis,
+}
+
+impl Default for &'static TlsConfiguration {
+    fn default() -> Self {
+        thread_local! {
+            static DEFAULT: &'static TlsConfiguration = Box::leak(Box::new(TlsConfiguration::new()));
+        }
+        DEFAULT.with(|cfg| *cfg)
+    }
+}
+
+impl TlsConfiguration {
+    /// Create instance of `TlsConfiguration`
+    pub fn new() -> Self {
+        TlsConfiguration {
+            handshake_timeout: Millis(5_000),
+        }
+    }
+
+    #[inline]
+    /// Get tls handshake timeout.
+    pub fn handshake_timeout(&self) -> Millis {
+        self.handshake_timeout
+    }
+
+    /// Set tls handshake timeout.
+    ///
+    /// Defines a timeout for connection tls handshake negotiation.
+    /// To disable timeout set value to 0.
+    ///
+    /// By default handshake timeout is set to 5 seconds.
+    pub fn set_handshake_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
+        self.handshake_timeout = timeout.into().into();
+        self
+    }
+}

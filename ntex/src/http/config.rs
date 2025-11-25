@@ -1,9 +1,7 @@
-use std::{cell::Cell, ptr::copy_nonoverlapping, rc::Rc, time};
-
-use ntex_h2::{self as h2};
+use std::{cell::Cell, ptr::copy_nonoverlapping, time};
 
 use crate::time::{Millis, Seconds, sleep};
-use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
+use crate::{io::Cfg, io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -40,35 +38,35 @@ impl From<Option<usize>> for KeepAlive {
 
 #[derive(Debug, Clone)]
 /// Http service configuration
-pub struct ServiceConfig {
+pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
-    pub(super) ssl_handshake_timeout: Millis,
-    pub(super) h2config: h2::Config,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
-    pub(super) timer: DateService,
 }
 
-impl Default for ServiceConfig {
+impl Default for &'static HttpServiceConfig {
     fn default() -> Self {
-        Self::new(
-            KeepAlive::Timeout(Seconds(5)),
-            Seconds::ONE,
-            Millis(5_000),
-            h2::Config::server(),
-        )
+        thread_local! {
+            static DEFAULT: &'static HttpServiceConfig = Box::leak(Box::new(HttpServiceConfig::default()));
+        }
+        DEFAULT.with(|cfg| *cfg)
     }
 }
 
-impl ServiceConfig {
-    /// Create instance of `ServiceConfig`
+impl Default for HttpServiceConfig {
+    fn default() -> Self {
+        Self::new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE, Millis(5_000))
+    }
+}
+
+impl HttpServiceConfig {
+    /// Create instance of `HttpServiceConfig`
     pub fn new(
         keep_alive: KeepAlive,
         client_timeout: Seconds,
         ssl_handshake_timeout: Millis,
-        h2config: h2::Config,
-    ) -> ServiceConfig {
+    ) -> HttpServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (val, true),
             KeepAlive::Os => (Seconds::ZERO, true),
@@ -80,32 +78,16 @@ impl ServiceConfig {
             Seconds::ZERO
         };
 
-        ServiceConfig {
+        HttpServiceConfig {
             ssl_handshake_timeout,
-            h2config,
             keep_alive,
             ka_enabled,
-            timer: DateService::new(),
             headers_read_rate: Some(FrameReadRate {
                 rate: 256,
                 timeout: client_timeout,
                 max_timeout: client_timeout + Seconds(15),
             }),
             payload_read_rate: None,
-        }
-    }
-
-    pub(crate) fn client_timeout(&mut self, timeout: Seconds) {
-        if timeout.is_zero() {
-            self.headers_read_rate = None;
-        } else {
-            let mut rate = self.headers_read_rate.unwrap_or(FrameReadRate {
-                rate: 256,
-                timeout: Seconds(5),
-                max_timeout: Seconds(15),
-            });
-            rate.timeout = timeout;
-            self.headers_read_rate = Some(rate);
         }
     }
 
@@ -137,6 +119,30 @@ impl ServiceConfig {
     pub fn keepalive_timeout(&mut self, timeout: Seconds) -> &mut Self {
         self.keep_alive = timeout;
         self.ka_enabled = !timeout.is_zero();
+        self
+    }
+
+    /// Set request headers read timeout.
+    ///
+    /// Defines a timeout for reading client request header. If a client does not transmit
+    /// the entire set headers within this time, the request is terminated with
+    /// the 408 (Request Time-out) error.
+    ///
+    /// To disable timeout set value to 0.
+    ///
+    /// By default client timeout is set to 3 seconds.
+    pub fn client_timeout(mut self, timeout: Seconds) -> Self {
+        if timeout.is_zero() {
+            self.headers_read_rate = None;
+        } else {
+            let mut rate = self.headers_read_rate.unwrap_or(FrameReadRate {
+                rate: 256,
+                timeout: Seconds(5),
+                max_timeout: Seconds(15),
+            });
+            rate.timeout = timeout;
+            self.headers_read_rate = Some(rate);
+        }
         self
     }
 
@@ -215,31 +221,29 @@ bitflags::bitflags! {
 
 pub(super) struct DispatcherConfig<S, C> {
     flags: Cell<Flags>,
+    pub(super) config: &'static HttpServiceConfig,
     pub(super) service: Pipeline<S>,
     pub(super) control: Pipeline<C>,
-    pub(super) keep_alive: Seconds,
-    pub(super) h2config: h2::Config,
-    pub(super) headers_read_rate: Option<FrameReadRate>,
-    pub(super) payload_read_rate: Option<FrameReadRate>,
-    pub(super) timer: DateService,
 }
 
 impl<S, C> DispatcherConfig<S, C> {
-    pub(super) fn new(cfg: ServiceConfig, service: S, control: C) -> Self {
+    pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self {
+        let config = config.into_static();
         DispatcherConfig {
             service: service.into(),
             control: control.into(),
-            keep_alive: cfg.keep_alive,
-            headers_read_rate: cfg.headers_read_rate,
-            payload_read_rate: cfg.payload_read_rate,
-            h2config: cfg.h2config.clone(),
-            timer: cfg.timer.clone(),
-            flags: Cell::new(if cfg.ka_enabled {
+            flags: Cell::new(if config.ka_enabled {
                 Flags::KA_ENABLED
             } else {
                 Flags::empty()
             }),
+            config,
         }
+    }
+
+    /// Return state of connection keep-alive functionality
+    pub(super) fn keep_alive(&self) -> Seconds {
+        self.config.keep_alive
     }
 
     /// Return state of connection keep-alive functionality
@@ -248,7 +252,11 @@ impl<S, C> DispatcherConfig<S, C> {
     }
 
     pub(super) fn headers_read_rate(&self) -> Option<&FrameReadRate> {
-        self.headers_read_rate.as_ref()
+        self.config.headers_read_rate.as_ref()
+    }
+
+    pub(super) fn payload_read_rate(&self) -> Option<&FrameReadRate> {
+        self.config.payload_read_rate.as_ref()
     }
 
     /// Service is shuting down
@@ -257,7 +265,7 @@ impl<S, C> DispatcherConfig<S, C> {
     }
 
     pub(super) fn shutdown(&self) {
-        self.h2config.shutdown();
+        self.config.h2config.shutdown();
 
         let mut flags = self.flags.get();
         flags.insert(Flags::SHUTDOWN);
@@ -272,13 +280,11 @@ const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] = [
     b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'\r', b'\n', b'\r', b'\n',
 ];
 
-#[derive(Debug, Clone)]
-pub struct DateService(Rc<DateServiceInner>);
+#[derive(Debug, Copy, Clone)]
+pub struct DateService;
 
-impl Default for DateService {
-    fn default() -> Self {
-        DateService(Rc::new(DateServiceInner::new()))
-    }
+thread_local! {
+    static DATE: DateServiceInner = DateServiceInner::new();
 }
 
 #[derive(Debug)]
@@ -309,44 +315,48 @@ impl DateServiceInner {
 }
 
 impl DateService {
-    fn new() -> Self {
-        DateService(Rc::new(DateServiceInner::new()))
-    }
-
     fn check_date(&self) {
-        if !self.0.current.get() {
-            self.0.update();
+        DATE.with(|date| {
+            if !date.current.get() {
+                date.update();
 
-            // periodic date update
-            let s = self.clone();
-            let _ = crate::rt::spawn(async move {
-                sleep(Millis(500)).await;
-                s.0.current.set(false);
-            });
-        }
+                // periodic date update
+                let _ = crate::rt::spawn(async move {
+                    sleep(Millis(500)).await;
+                    DATE.with(|date| {
+                        date.current.set(false);
+                    });
+                });
+            }
+        })
     }
 
     pub(super) fn set_date<F: FnMut(&[u8])>(&self, mut f: F) {
         self.check_date();
-        let date = self.0.current_date.get();
-        f(&date[6..35])
+
+        DATE.with(|date| {
+            let date = date.current_date.get();
+            f(&date[6..35])
+        })
     }
 
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         self.check_date();
 
-        // SAFETY: reserves exact size
-        let len = dst.len();
-        dst.reserve(DATE_VALUE_LENGTH_HDR);
-        unsafe {
-            copy_nonoverlapping(
-                self.0.current_date.as_ptr().cast(),
-                dst.as_mut_ptr().add(len),
-                DATE_VALUE_LENGTH_HDR,
-            );
-            dst.set_len(len + DATE_VALUE_LENGTH_HDR)
-        }
+        DATE.with(|date| {
+            // SAFETY: reserves exact size
+            let len = dst.len();
+            dst.reserve(DATE_VALUE_LENGTH_HDR);
+            unsafe {
+                copy_nonoverlapping(
+                    date.current_date.as_ptr().cast(),
+                    dst.as_mut_ptr().add(len),
+                    DATE_VALUE_LENGTH_HDR,
+                );
+                dst.set_len(len + DATE_VALUE_LENGTH_HDR)
+            }
+        })
     }
 }
 
@@ -356,11 +366,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_date() {
-        let date = DateService::default();
         let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
-        date.set_date_header(&mut buf1);
+        DateService.set_date_header(&mut buf1);
         let mut buf2 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
-        date.set_date_header(&mut buf2);
+        DateService.set_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
     }
 

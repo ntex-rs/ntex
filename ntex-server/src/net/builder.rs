@@ -291,8 +291,8 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    /// Set io config for named service.
-    pub fn set_config<N: AsRef<str>>(mut self, name: N, cfg: SharedConfig) -> Self {
+    /// Set shared config for named service.
+    pub fn config<N: AsRef<str>>(mut self, name: N, cfg: SharedConfig) -> Self {
         let mut token = None;
         for sock in &self.sockets {
             if sock.1 == name.as_ref() {

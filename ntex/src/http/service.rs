@@ -5,8 +5,7 @@ use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 use crate::{channel::oneshot, util::HashSet, util::join};
 
 use super::body::MessageBody;
-use super::builder::HttpServiceBuilder;
-use super::config::{DispatcherConfig, ServiceConfig};
+use super::config::DispatcherConfig;
 use super::error::{DispatchError, H2Error, ResponseError};
 use super::request::Request;
 use super::response::Response;
@@ -21,30 +20,9 @@ pub struct HttpService<
     C2 = h2::DefaultControlService,
 > {
     srv: S,
-    cfg: ServiceConfig,
     h1_control: C1,
     h2_control: Rc<C2>,
     _t: marker::PhantomData<(F, B)>,
-}
-
-impl<F, S, B> HttpService<F, S, B>
-where
-    S: ServiceFactory<Request, SharedConfig> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
-    B: MessageBody,
-{
-    /// Create builder for `HttpService` instance.
-    pub fn build() -> HttpServiceBuilder<F, S> {
-        HttpServiceBuilder::new()
-    }
-
-    #[doc(hidden)]
-    /// Create builder for `HttpService` instance.
-    pub fn build_with_config(cfg: ServiceConfig) -> HttpServiceBuilder<F, S> {
-        HttpServiceBuilder::with_config(cfg)
-    }
 }
 
 impl<F, S, B> HttpService<F, S, B>
@@ -58,29 +36,36 @@ where
 {
     /// Create new `HttpService` instance.
     pub fn new<U: IntoServiceFactory<S, Request, SharedConfig>>(service: U) -> Self {
-        let cfg = ServiceConfig::default();
-
         HttpService {
-            cfg,
             srv: service.into_factory(),
             h1_control: h1::DefaultControlService,
             h2_control: Rc::new(h2::DefaultControlService),
             _t: marker::PhantomData,
         }
     }
+}
 
-    /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S, Request, SharedConfig>>(
-        cfg: ServiceConfig,
+impl<F, S, B> HttpService<F, S, B>
+where
+    F: Filter,
+    S: ServiceFactory<Request, SharedConfig> + 'static,
+    S::Error: ResponseError,
+    S::InitError: fmt::Debug,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
+{
+    /// Create *http service* for HTTP/1 protocol.
+    pub fn h1<U: IntoServiceFactory<S, Request, SharedConfig>>(
         service: U,
-    ) -> Self {
-        HttpService {
-            cfg,
-            srv: service.into_factory(),
-            h1_control: h1::DefaultControlService,
-            h2_control: Rc::new(h2::DefaultControlService),
-            _t: marker::PhantomData,
-        }
+    ) -> h1::H1Service<F, S, B, h1::DefaultControlService> {
+        h1::H1Service::new(service)
+    }
+
+    /// Create *http service* for HTTP/2 protocol.
+    pub fn h2<U: IntoServiceFactory<S, Request, SharedConfig>>(
+        service: U,
+    ) -> h2::H2Service<F, S, B, h2::DefaultControlService> {
+        h2::H2Service::new(service)
     }
 }
 
@@ -113,7 +98,6 @@ where
         HttpService {
             h1_control: control,
             h2_control: self.h2_control,
-            cfg: self.cfg,
             srv: self.srv,
             _t: marker::PhantomData,
         }
@@ -129,7 +113,6 @@ where
         HttpService {
             h1_control: self.h1_control,
             h2_control: Rc::new(control),
-            cfg: self.cfg,
             srv: self.srv,
             _t: marker::PhantomData,
         }
@@ -176,7 +159,6 @@ mod openssl {
             InitError = (),
         > {
             SslAcceptor::new(acceptor)
-                .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
                 .and_then(self.map_err(SslError::Service))
@@ -227,7 +209,6 @@ mod rustls {
             config.alpn_protocols = protos;
 
             TlsAcceptor::from(config)
-                .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
                 .and_then(self.map_err(SslError::Service))
@@ -270,7 +251,7 @@ where
             .map_err(|e| log::error!("Cannot construct control service: {e:?}"))?;
 
         let (tx, rx) = oneshot::channel();
-        let config = DispatcherConfig::new(self.cfg.clone(), service, control);
+        let config = DispatcherConfig::new(cfg.get(), service, control);
 
         Ok(HttpServiceHandler {
             cfg,

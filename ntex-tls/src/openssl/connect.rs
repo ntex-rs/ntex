@@ -1,117 +1,104 @@
-use std::{fmt, io};
+use std::io;
 
-use ntex_io::{Io, Layer, SharedConfig};
-use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnector};
-use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
-use tls_openssl::ssl::SslConnector as BaseSslConnector;
+use ntex_io::{Cfg, Io, Layer, SharedConfig};
+use ntex_net::connect::{Address, Connect, ConnectError, Connector};
+use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_util::time::timeout_checked;
+use tls_openssl::ssl::SslConnector as OpensslConnector;
 
 use super::{SslFilter, connect as connect_io};
+use crate::TlsConfiguration;
 
-pub struct SslConnector<T> {
-    connector: Pipeline<BaseConnector<T>>,
-    openssl: BaseSslConnector,
+#[derive(Clone, Debug)]
+pub struct SslConnector<S> {
+    connector: S,
+    openssl: OpensslConnector,
 }
 
-impl<T: Address> SslConnector<T> {
+#[derive(Clone, Debug)]
+pub struct SslConnectorService<S> {
+    svc: S,
+    cfg: Cfg<TlsConfiguration>,
+    openssl: OpensslConnector,
+}
+
+impl<A: Address> SslConnector<Connector<A>> {
     /// Construct new OpensslConnectService factory
-    pub fn new(connector: BaseSslConnector) -> Self {
+    pub fn new(connector: OpensslConnector) -> Self {
         SslConnector {
-            connector: BaseConnector::default().into(),
             openssl: connector,
-        }
-    }
-
-    /// Construct new openssl connector
-    pub fn with(config: BaseSslConnector, base: BaseConnector<T>) -> Self {
-        SslConnector {
-            openssl: config,
-            connector: base.into(),
-        }
-    }
-
-    /// Set io configuration
-    pub fn config(mut self, cfg: SharedConfig) -> Self {
-        self.connector = self.connector.get_ref().config(cfg).into();
-        self
-    }
-}
-
-impl<T: Address> SslConnector<T> {
-    /// Resolve and connect to remote host
-    pub async fn connect<U>(&self, message: U) -> Result<Io<Layer<SslFilter>>, ConnectError>
-    where
-        Connect<T>: From<U>,
-    {
-        let message = Connect::from(message);
-        let host = message.host().split(':').next().unwrap().to_string();
-        let conn = self.connector.call(message);
-        let openssl = self.openssl.clone();
-
-        let io = conn.await?;
-        let tag = io.tag();
-        log::trace!("{tag}: SSL Handshake start for: {host:?}");
-
-        match openssl.configure() {
-            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e).into()),
-            Ok(config) => {
-                let ssl = config
-                    .into_ssl(&host)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                match connect_io(io, ssl).await {
-                    Ok(io) => {
-                        log::trace!("{tag}: SSL Handshake success: {host:?}");
-                        Ok(io)
-                    }
-                    Err(e) => {
-                        log::trace!("{tag}: SSL Handshake error: {e:?}");
-                        Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{e}"))
-                            .into())
-                    }
-                }
-            }
+            connector: Connector::default(),
         }
     }
 }
 
-impl<T> Clone for SslConnector<T> {
-    fn clone(&self) -> Self {
-        Self {
-            connector: self.connector.clone(),
-            openssl: self.openssl.clone(),
-        }
-    }
-}
-
-impl<T> fmt::Debug for SslConnector<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SslConnector(openssl)")
-            .field("connector", &self.connector)
-            .field("openssl", &self.openssl)
-            .finish()
-    }
-}
-
-impl<T: Address, C> ServiceFactory<Connect<T>, C> for SslConnector<T> {
+impl<A: Address, S> ServiceFactory<Connect<A>, SharedConfig> for SslConnector<S>
+where
+    S: ServiceFactory<Connect<A>, SharedConfig, Response = Io, Error = ConnectError>,
+{
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
-    type Service = SslConnector<T>;
-    type InitError = ();
+    type Service = SslConnectorService<S::Service>;
+    type InitError = S::InitError;
 
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        Ok(self.clone())
+    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+        let svc = self.connector.create(cfg).await?;
+
+        Ok(SslConnectorService {
+            svc,
+            cfg: cfg.get(),
+            openssl: self.openssl.clone(),
+        })
     }
 }
 
-impl<T: Address> Service<Connect<T>> for SslConnector<T> {
+impl<A: Address, S> Service<Connect<A>> for SslConnectorService<S>
+where
+    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
+{
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
 
     async fn call(
         &self,
-        req: Connect<T>,
-        _: ServiceCtx<'_, Self>,
+        message: Connect<A>,
+        ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        self.connect(req).await
+        let host = message.host().split(':').next().unwrap().to_string();
+
+        let io = ctx.call(&self.svc, message).await?;
+        let tag = io.tag();
+        log::trace!("{tag}: SSL Handshake start for: {host:?}");
+
+        match self.openssl.configure() {
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e).into()),
+            Ok(config) => {
+                let ssl = config
+                    .into_ssl(&host)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+                match timeout_checked(self.cfg.handshake_timeout(), connect_io(io, ssl))
+                    .await
+                {
+                    Ok(Ok(io)) => {
+                        log::trace!("{tag}: SSL Handshake success: {host:?}");
+                        Ok(io)
+                    }
+                    Ok(Err(e)) => {
+                        log::trace!("{tag}: SSL Handshake error: {e:?}");
+                        Err(e.into())
+                    }
+                    Err(_) => {
+                        log::trace!("{tag}: SSL Handshake timeout");
+                        Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "SSL Handshake timeout",
+                        )
+                        .into())
+                    }
+                }
+            }
+        }
     }
 }
 

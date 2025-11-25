@@ -10,7 +10,7 @@ use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
-use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
+use crate::http::{HttpService, HttpServiceConfig, Method, Payload, Request, StatusCode, Uri, Version};
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::io::SharedConfig;
@@ -612,53 +612,50 @@ where
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
-            let builder = crate::server::build().workers(1).disable_signals();
+            let builder = crate::server::build().workers(1).disable_signals().config(
+                "test",
+                SharedConfig::build("WEB-SRV")
+                    .add(HttpServiceConfig::new().headers_read_rate(
+                        ctimeout,
+                        Seconds::ZERO,
+                        256,
+                    ))
+                    .finish(),
+            );
 
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h1(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h2(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .finish(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
                     }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h1(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h2(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .finish(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
                 },
@@ -666,29 +663,22 @@ where
                 StreamType::Rustls(config) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h1(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h2(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .finish(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
                 },
             }
             .unwrap()
-            .set_config("test", SharedConfig::new("WEB-SRV"))
             .run();
 
             crate::rt::spawn(async move {

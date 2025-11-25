@@ -83,6 +83,23 @@ impl ops::Add<Millis> for std::time::Duration {
     }
 }
 
+impl From<u32> for Millis {
+    #[inline]
+    fn from(s: u32) -> Millis {
+        Millis(s)
+    }
+}
+
+impl From<usize> for Millis {
+    #[inline]
+    fn from(s: usize) -> Millis {
+        Self(s.try_into().unwrap_or_else(|_| {
+            log::error!("Values is too large {s:?}");
+            u32::MAX
+        }))
+    }
+}
+
 impl From<Seconds> for Millis {
     #[inline]
     fn from(s: Seconds) -> Millis {
@@ -182,6 +199,23 @@ impl From<Seconds> for std::time::Duration {
     #[inline]
     fn from(d: Seconds) -> std::time::Duration {
         std::time::Duration::from_secs(d.0 as u64)
+    }
+}
+
+impl From<u16> for Seconds {
+    #[inline]
+    fn from(secs: u16) -> Seconds {
+        Self(secs)
+    }
+}
+
+impl From<usize> for Seconds {
+    #[inline]
+    fn from(secs: usize) -> Seconds {
+        Self(secs.try_into().unwrap_or_else(|_| {
+            log::error!("Seconds value is too large {secs:?}");
+            u16::MAX
+        }))
     }
 }
 

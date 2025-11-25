@@ -90,7 +90,7 @@ where
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, C>>) -> Self {
-        let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
+        let codec = Codec::new(config.keep_alive_enabled());
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
@@ -587,9 +587,9 @@ where
     fn handle_timeout(&mut self) -> Result<(), ProtocolError> {
         // check read rate
         let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            &self.config.headers_read_rate
+            &self.config.headers_read_rate()
         } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            &self.config.payload_read_rate
+            &self.config.payload_read_rate()
         } else {
             return Ok(());
         };
@@ -662,16 +662,16 @@ where
                     log::debug!(
                         "{}: Start keep-alive timer {:?}",
                         self.io.tag(),
-                        self.config.keep_alive
+                        self.config.keep_alive()
                     );
                     self.flags.insert(Flags::READ_KA_TIMEOUT);
-                    self.io.start_timer(self.config.keep_alive);
+                    self.io.start_timer(self.config.keep_alive());
                 }
             } else {
                 self.io.close();
                 return Some(self.stop());
             }
-        } else if let Some(ref cfg) = self.config.headers_read_rate {
+        } else if let Some(ref cfg) = self.config.headers_read_rate() {
             log::debug!(
                 "{}: Start headers read timer {:?}",
                 self.io.tag(),
@@ -696,7 +696,7 @@ where
         if self.flags.contains(Flags::READ_PL_TIMEOUT) {
             self.read_remains = decoded.remains as u32;
             self.read_consumed += decoded.consumed as u32;
-        } else if let Some(ref cfg) = self.config.payload_read_rate {
+        } else if let Some(ref cfg) = self.config.payload_read_rate() {
             log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
 
             // start payload timer
@@ -751,11 +751,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::{cell::Cell, future::Future, future::poll_fn, sync::Arc};
 
-    use ntex_h2::Config;
+    use ntex_h2::ServiceConfig;
     use rand::Rng;
 
     use super::*;
-    use crate::http::config::ServiceConfig;
+    use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{ClientCodec, DefaultControlService};
     use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};

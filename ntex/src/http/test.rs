@@ -240,7 +240,7 @@ where
         sys.run(move || {
             let srv = crate::server::build()
                 .listen("test", tcp, move |_| factory())?
-                .set_config("test", SharedConfig::new("HTTP-TEST-SRV"))
+                .config("test", SharedConfig::new("HTTP-TEST-SRV"))
                 .workers(1)
                 .disable_signals()
                 .run();

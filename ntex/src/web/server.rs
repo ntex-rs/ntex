@@ -5,10 +5,8 @@ use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 #[cfg(feature = "rustls")]
 use tls_rustls::ServerConfig as RustlsServerConfig;
 
-use crate::http::{
-    self, HttpService, KeepAlive, Request, Response, ResponseError, body::MessageBody,
-};
-use crate::io::{SharedConfig, cfg::FrameReadRate};
+use crate::http::{HttpService, Request, Response, ResponseError, body::MessageBody};
+use crate::io::SharedConfig;
 use crate::server::{Server, ServerBuilder};
 use crate::service::{IntoServiceFactory, ServiceFactory, map_config};
 use crate::time::Seconds;
@@ -17,28 +15,7 @@ use super::config::AppConfig;
 
 struct Config {
     host: Option<String>,
-    keep_alive: KeepAlive,
-    client_disconnect: Seconds,
-    ssl_handshake_timeout: Seconds,
-    headers_read_rate: Option<FrameReadRate>,
-    payload_read_rate: Option<FrameReadRate>,
     cfg: SharedConfig,
-}
-
-impl Config {
-    #[allow(clippy::wrong_self_convention)]
-    fn into_cfg(&self) -> http::ServiceConfig {
-        let mut svc_cfg = http::ServiceConfig::default();
-        svc_cfg.keepalive(self.keep_alive);
-        svc_cfg.ssl_handshake_timeout(self.ssl_handshake_timeout);
-        if let Some(hdrs) = self.headers_read_rate {
-            svc_cfg.headers_read_rate(hdrs.timeout, hdrs.max_timeout, hdrs.rate);
-        }
-        if let Some(hdrs) = self.payload_read_rate {
-            svc_cfg.payload_read_rate(hdrs.timeout, hdrs.max_timeout, hdrs.rate);
-        }
-        svc_cfg
-    }
 }
 
 /// An HTTP Server.
@@ -91,15 +68,6 @@ where
             factory,
             config: Arc::new(Mutex::new(Config {
                 host: None,
-                keep_alive: KeepAlive::Timeout(Seconds(5)),
-                client_disconnect: Seconds(1),
-                ssl_handshake_timeout: Seconds(5),
-                headers_read_rate: Some(FrameReadRate {
-                    rate: 256,
-                    timeout: Seconds(1),
-                    max_timeout: Seconds(13),
-                }),
-                payload_read_rate: None,
                 cfg: SharedConfig::default(),
             })),
             backlog: 1024,
@@ -152,116 +120,6 @@ where
     /// By default max connections is set to a 256.
     pub fn maxconnrate(self, num: usize) -> Self {
         ntex_tls::max_concurrent_ssl_accept(num);
-        self
-    }
-
-    /// Set server keep-alive setting.
-    ///
-    /// By default keep alive is set to a 5 seconds.
-    pub fn keep_alive<T: Into<KeepAlive>>(self, val: T) -> Self {
-        self.config.lock().unwrap().keep_alive = val.into();
-        self
-    }
-
-    /// Set request read timeout in seconds.
-    ///
-    /// Defines a timeout for reading client request headers. If a client does not transmit
-    /// the entire set headers within this time, the request is terminated with
-    /// the 408 (Request Time-out) error.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default client timeout is set to 3 seconds.
-    pub fn client_timeout(self, timeout: Seconds) -> Self {
-        {
-            let mut cfg = self.config.lock().unwrap();
-
-            if timeout.is_zero() {
-                cfg.headers_read_rate = None;
-            } else {
-                let mut rate = cfg.headers_read_rate.unwrap_or(FrameReadRate {
-                    rate: 256,
-                    timeout: Seconds(5),
-                    max_timeout: Seconds(15),
-                });
-                rate.timeout = timeout;
-                cfg.headers_read_rate = Some(rate);
-            }
-        }
-        self
-    }
-
-    /// Set server connection disconnect timeout in seconds.
-    ///
-    /// Defines a timeout for shutdown connection. If a shutdown procedure does not complete
-    /// within this time, the request is dropped.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default client timeout is set to 5 seconds.
-    pub fn disconnect_timeout(self, val: Seconds) -> Self {
-        self.config.lock().unwrap().client_disconnect = val;
-        self
-    }
-
-    /// Set server ssl handshake timeout in seconds.
-    ///
-    /// Defines a timeout for connection ssl handshake negotiation.
-    /// To disable timeout set value to 0.
-    ///
-    /// By default handshake timeout is set to 5 seconds.
-    pub fn ssl_handshake_timeout(self, val: Seconds) -> Self {
-        self.config.lock().unwrap().ssl_handshake_timeout = val;
-        self
-    }
-
-    /// Set read rate parameters for request headers.
-    ///
-    /// Set max timeout for reading request headers. If the client
-    /// sends `rate` amount of data, increase the timeout by 1 second for every.
-    /// But no more than `max_timeout` timeout.
-    ///
-    /// By default headers read rate is set to 1sec with max timeout 5sec.
-    pub fn headers_read_rate(
-        self,
-        timeout: Seconds,
-        max_timeout: Seconds,
-        rate: u32,
-    ) -> Self {
-        if !timeout.is_zero() {
-            self.config.lock().unwrap().headers_read_rate = Some(FrameReadRate {
-                rate,
-                timeout,
-                max_timeout,
-            });
-        } else {
-            self.config.lock().unwrap().headers_read_rate = None;
-        }
-        self
-    }
-
-    /// Set read rate parameters for request's payload.
-    ///
-    /// Set time pariod for reading payload. Client must
-    /// sends `rate` amount of data per one time period.
-    /// But no more than `max_timeout` timeout.
-    ///
-    /// By default payload read rate is disabled.
-    pub fn payload_read_rate(
-        self,
-        timeout: Seconds,
-        max_timeout: Seconds,
-        rate: u32,
-    ) -> Self {
-        if !timeout.is_zero() {
-            self.config.lock().unwrap().payload_read_rate = Some(FrameReadRate {
-                rate,
-                timeout,
-                max_timeout,
-            });
-        } else {
-            self.config.lock().unwrap().payload_read_rate = None;
-        }
         self
     }
 
@@ -339,8 +197,7 @@ where
                     );
                     r.config(c.cfg);
 
-                    HttpService::build_with_config(c.into_cfg())
-                        .finish(map_config(factory(), move |_| cfg.clone()))
+                    HttpService::new(map_config(factory(), move |_| cfg.clone()))
                 })?;
         Ok(self)
     }
@@ -378,8 +235,7 @@ where
                     );
                     r.config(c.cfg);
 
-                    HttpService::build_with_config(c.into_cfg())
-                        .finish(map_config(factory(), move |_| cfg.clone()))
+                    HttpService::new(map_config(factory(), move |_| cfg.clone()))
                         .openssl(acceptor.clone())
                 })?;
         Ok(self)
@@ -419,8 +275,7 @@ where
                 );
                 r.config(c.cfg);
 
-                HttpService::build_with_config(c.into_cfg())
-                    .finish(map_config(factory(), move |_| cfg.clone()))
+                HttpService::new(map_config(factory(), move |_| cfg.clone()))
                     .rustls(config.clone())
             },
         )?;
@@ -527,8 +382,7 @@ where
             );
             r.config(c.cfg);
 
-            HttpService::build_with_config(c.into_cfg())
-                .finish(map_config(factory(), move |_| config.clone()))
+            HttpService::new(map_config(factory(), move |_| config.clone()))
         })?;
         Ok(self)
     }
@@ -558,8 +412,7 @@ where
                 );
                 r.config(c.cfg);
 
-                HttpService::build_with_config(c.into_cfg())
-                    .finish(map_config(factory(), move |_| config.clone()))
+                HttpService::new(map_config(factory(), move |_| config.clone()))
             },
         )?;
         Ok(self)
