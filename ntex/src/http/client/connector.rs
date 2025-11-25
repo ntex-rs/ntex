@@ -5,7 +5,7 @@ use crate::io::SharedConfig;
 use crate::service::{Service, ServiceCtx, ServiceFactory, apply_fn_factory, boxed};
 use crate::{http::Uri, io::IoBoxed, time::Seconds, util::join};
 
-use super::{Connect, error::ConnectError, pool::ConnectionPool};
+use super::{Connect, Connection, error::ConnectError, pool::ConnectionPool};
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::SslConnector as OpensslConnector;
@@ -184,7 +184,7 @@ impl Connector {
 }
 
 impl ServiceFactory<Connect, SharedConfig> for Connector {
-    type Response = <ConnectionPool as Service<Connect>>::Response;
+    type Response = Connection;
     type Error = ConnectError;
     type Service = ConnectorService;
     type InitError = ();
@@ -220,7 +220,7 @@ pub struct ConnectorService {
 }
 
 impl Service<Connect> for ConnectorService {
-    type Response = <ConnectionPool as Service<Connect>>::Response;
+    type Response = Connection;
     type Error = ConnectError;
 
     #[inline]

@@ -380,7 +380,8 @@ impl TestServer {
         WsClient::build(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))
-            .finish()
+            .finish(Default::default())
+            .await
             .unwrap()
             .connect()
             .await
@@ -419,7 +420,7 @@ impl TestServer {
             .timeout(Seconds(30))
             .openssl(builder.build())
             .take()
-            .finish()
+            .finish(Default::default())
             .unwrap()
             .connect()
             .await

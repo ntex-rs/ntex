@@ -69,6 +69,8 @@ pub enum WsClientBuilderError {
     UnknownScheme,
     #[error("Missing host name")]
     MissingHost,
+    #[error("Cannot create connector")]
+    CannotCreateConnector,
     #[error("Url parse error: {0}")]
     Http(#[from] HttpError),
 }

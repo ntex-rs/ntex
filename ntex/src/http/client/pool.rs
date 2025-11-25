@@ -53,7 +53,6 @@ pub(super) struct ConnectionPool {
 
 #[derive(Debug)]
 pub(super) struct Inner {
-    config: SharedConfig,
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
     limit: usize,
@@ -77,7 +76,6 @@ impl ConnectionPool {
             pool: pool::new(),
         }));
         let inner = Rc::new(RefCell::new(Inner {
-            config,
             conn_lifetime,
             conn_keep_alive,
             limit,
@@ -111,7 +109,7 @@ impl ConnectionPool {
 impl Drop for ConnectionPool {
     fn drop(&mut self) {
         self.stop.take();
-        self.inner.borrow().waker.send(());
+        let _ = self.inner.borrow().waker.send(());
     }
 }
 
@@ -155,7 +153,7 @@ impl Service<Connect> for ConnectionPool {
     #[inline]
     async fn shutdown(&self) {
         self.stop.take();
-        self.svc.shutdown();
+        let _ = self.svc.shutdown();
     }
 
     async fn call(
@@ -335,7 +333,7 @@ impl Inner {
         let mut waiters = self.waiters.borrow_mut();
         waiters.cleanup();
         if !waiters.waiters.is_empty() && self.acquired < self.limit {
-            self.waker.send(());
+            let _ = self.waker.send(());
         }
     }
 }
