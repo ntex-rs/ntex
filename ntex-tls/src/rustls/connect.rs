@@ -6,7 +6,7 @@ use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::time::timeout_checked;
 use tls_rust::{ClientConfig, pki_types::ServerName};
 
-use crate::{TlsConfiguration, rustls::TlsClientFilter};
+use crate::{TlsConfig, rustls::TlsClientFilter};
 
 /// Rustls connector factory
 pub struct TlsConnector<S> {
@@ -17,7 +17,7 @@ pub struct TlsConnector<S> {
 #[derive(Clone, Debug)]
 pub struct TlsConnectorService<S> {
     svc: S,
-    cfg: Cfg<TlsConfiguration>,
+    cfg: Cfg<TlsConfig>,
     config: Arc<ClientConfig>,
 }
 
@@ -140,12 +140,15 @@ mod tests {
         let config = ClientConfig::builder()
             .with_root_certificates(cert_store)
             .with_no_client_auth();
-        let _ = TlsConnector::<&'static str>::new(config.clone()).clone();
-        let factory = TlsConnector::with(Arc::new(config), Default::default())
-            .config(SharedConfig::new("IO"))
-            .clone();
+        let _: TlsConnector<Connector<&'static str>> =
+            TlsConnector::new(config.clone()).clone();
+        let factory = TlsConnector::from(Arc::new(config)).clone();
 
-        let srv = factory.pipeline(&()).await.unwrap().bind();
+        let srv = factory
+            .pipeline(SharedConfig::new("IO"))
+            .await
+            .unwrap()
+            .bind();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

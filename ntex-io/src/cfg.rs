@@ -27,7 +27,7 @@ impl<T: 'static> Copy for Cfg<T> {}
 
 impl<T: 'static> Clone for Cfg<T> {
     fn clone(&self) -> Self {
-        Self(self.0)
+        *self
     }
 }
 
@@ -129,6 +129,24 @@ impl SharedConfigBuilder {
             (*cfg).config = map_ref;
         }
         SharedConfig(map_ref)
+    }
+}
+
+impl From<()> for SharedConfig {
+    fn from(_: ()) -> SharedConfig {
+        SharedConfig::default()
+    }
+}
+
+impl From<SharedConfigBuilder> for SharedConfig {
+    fn from(mut cfg: SharedConfigBuilder) -> SharedConfig {
+        cfg.finish()
+    }
+}
+
+impl From<&mut SharedConfigBuilder> for SharedConfig {
+    fn from(cfg: &mut SharedConfigBuilder) -> SharedConfig {
+        cfg.finish()
     }
 }
 

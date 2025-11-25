@@ -74,7 +74,6 @@ mod openssl {
             InitError = (),
         > {
             SslAcceptor::new(acceptor)
-                .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
                 .and_then(self.map_err(SslError::Service))
@@ -118,7 +117,6 @@ mod rustls {
             config.alpn_protocols = protos;
 
             TlsAcceptor::from(config)
-                .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
                 .and_then(self.map_err(SslError::Service))

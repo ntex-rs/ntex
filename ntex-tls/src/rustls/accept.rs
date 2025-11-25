@@ -6,7 +6,7 @@ use ntex_io::{Cfg, Filter, Io, Layer, SharedConfig};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::services::Counter;
 
-use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfiguration, rustls::TlsServerFilter};
+use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 
 #[derive(Clone, Debug)]
 /// Support `SSL` connections via rustls package
@@ -49,7 +49,7 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedConfig> for TlsAcceptor {
 #[derive(Debug)]
 /// RusTLS based `Acceptor` service
 pub struct TlsAcceptorService {
-    cfg: Cfg<TlsConfiguration>,
+    cfg: Cfg<TlsConfig>,
     config: Arc<ServerConfig>,
     conns: Counter,
 }

@@ -10,7 +10,9 @@ use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
-use crate::http::{HttpService, HttpServiceConfig, Method, Payload, Request, StatusCode, Uri, Version};
+use crate::http::{
+    HttpService, HttpServiceConfig, Method, Payload, Request, StatusCode, Uri, Version,
+};
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::io::SharedConfig;
@@ -543,7 +545,7 @@ impl TestRequest {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server<F, I, S, B>(factory: F) -> TestServer
+pub async fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, AppConfig>,
@@ -553,7 +555,7 @@ where
     S::Response: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
-    server_with(TestServerConfig::default(), factory)
+    server_with(TestServerConfig::default(), factory).await
 }
 
 /// Start test server with custom configuration
@@ -581,7 +583,7 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub async fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, AppConfig>,
@@ -615,7 +617,7 @@ where
             let builder = crate::server::build().workers(1).disable_signals().config(
                 "test",
                 SharedConfig::build("WEB-SRV")
-                    .add(HttpServiceConfig::new().headers_read_rate(
+                    .add(HttpServiceConfig::default().headers_read_rate(
                         ctimeout,
                         Seconds::ZERO,
                         256,
@@ -691,6 +693,16 @@ where
 
     let (system, server, addr) = rx.recv().unwrap();
 
+    let cfg = SharedConfig::build("TEST-CLIENT")
+        .add(ntex_io::IoConfig::new().set_connect_timeout(Millis(90_000)))
+        .add(ntex_tls::TlsConfig::new().set_handshake_timeout(Seconds(5)))
+        .add(
+            ntex_h2::ServiceConfig::new()
+                .max_header_list_size(256 * 1024)
+                .max_header_continuation_frames(96),
+        )
+        .finish();
+
     let client = {
         let connector = {
             #[cfg(feature = "openssl")]
@@ -704,24 +716,19 @@ where
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
                 Connector::default()
                     .lifetime(Seconds::ZERO)
-                    .keep_alive(Seconds(60))
-                    .timeout(Millis(90_000))
                     .openssl(builder.build())
-                    .finish()
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::default()
-                    .lifetime(Seconds::ZERO)
-                    .timeout(Millis(90_000))
-                    .finish()
+                Connector::default().lifetime(Seconds::ZERO)
             }
         };
 
         Client::build()
-            .connector(connector)
-            .timeout(Seconds(90))
-            .finish()
+            .connector::<&str>(connector)
+            .finish(cfg)
+            .await
+            .unwrap()
     };
 
     TestServer {
@@ -918,7 +925,8 @@ impl TestServer {
                     .timeout(Seconds(60))
                     .openssl(builder.build())
                     .take()
-                    .finish()
+                    .finish(Default::default())
+                    .await
                     .unwrap()
                     .connect()
                     .await
@@ -932,7 +940,8 @@ impl TestServer {
             WsClient::build(self.url(path))
                 .address(self.addr)
                 .timeout(Seconds(60))
-                .finish()
+                .finish(Default::default())
+                .await
                 .unwrap()
                 .connect()
                 .await
@@ -1187,7 +1196,8 @@ mod tests {
                         .to(|| async { HttpResponse::Ok() }),
                 )),
             )
-        });
+        })
+        .await;
 
         assert_eq!(srv.put("/").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(

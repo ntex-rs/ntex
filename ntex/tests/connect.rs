@@ -1,6 +1,6 @@
 use std::{io, rc::Rc};
 
-use ntex::io::{Io, types::PeerAddr};
+use ntex::io::{Io, SharedConfig, types::PeerAddr};
 use ntex::service::{Pipeline, ServiceFactory, chain_factory, fn_service};
 use ntex::{codec::BytesCodec, connect::Connect};
 use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
@@ -66,7 +66,12 @@ async fn test_openssl_string() {
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
 
-    let conn = Pipeline::new(ntex::connect::openssl::SslConnector::new(builder.build()));
+    let conn = Pipeline::new(
+        ntex::connect::openssl::SslConnector::new(builder.build())
+            .create(SharedConfig::default())
+            .await
+            .unwrap(),
+    );
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
@@ -115,7 +120,12 @@ async fn test_openssl_read_before_error() {
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
 
-    let conn = Pipeline::new(ntex::connect::openssl::SslConnector::new(builder.build()));
+    let conn = Pipeline::new(
+        ntex::connect::openssl::SslConnector::new(builder.build())
+            .create(SharedConfig::default())
+            .await
+            .unwrap(),
+    );
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     let item = io.recv(&Rc::new(BytesCodec)).await.unwrap().unwrap();
@@ -165,9 +175,12 @@ async fn test_rustls_string() {
         )
     });
 
-    let conn = Pipeline::new(ntex::connect::rustls::TlsConnector::new(
-        rustls_utils::tls_connector(),
-    ));
+    let conn = Pipeline::new(
+        ntex::connect::rustls::TlsConnector::new(rustls_utils::tls_connector())
+            .create(SharedConfig::default())
+            .await
+            .unwrap(),
+    );
     let addr = format!("localhost:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
@@ -228,7 +241,7 @@ async fn test_create() {
     });
 
     let factory = ntex::connect::Connector::new();
-    let conn = factory.pipeline(()).await.unwrap();
+    let conn = factory.pipeline(SharedConfig::default()).await.unwrap();
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }

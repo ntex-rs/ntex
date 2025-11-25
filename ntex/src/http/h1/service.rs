@@ -136,14 +136,15 @@ where
     C::InitError: fmt::Debug,
 {
     /// Provide http/1 control service
-    pub fn control<C1>(self, ctl: C1) -> H1Service<F, S, B, C1>
+    pub fn control<C1, U>(self, ctl: U) -> H1Service<F, S, B, C1>
     where
+        U: IntoServiceFactory<C1, Control<F, S::Error>, SharedConfig>,
         C1: ServiceFactory<Control<F, S::Error>, SharedConfig, Response = ControlAck>,
         C1::Error: Error,
         C1::InitError: fmt::Debug,
     {
         H1Service {
-            ctl,
+            ctl: ctl.into_factory(),
             srv: self.srv,
             _t: marker::PhantomData,
         }

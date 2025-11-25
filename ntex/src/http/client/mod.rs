@@ -97,7 +97,7 @@ impl Default for ClientConfig {
 impl Client {
     /// Create new client instance with default settings.
     pub async fn new() -> Client {
-        Client::build().finish(Default::default()).await.unwrap()
+        Client::build().finish(()).await.unwrap()
     }
 
     /// Build client instance.

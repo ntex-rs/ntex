@@ -27,8 +27,8 @@ impl Default for Config {
 
 impl Config {
     /// Set io config for the service.
-    pub fn config(&self, cfg: SharedConfig) -> &Self {
-        self.0.config.set(Some(cfg));
+    pub fn config<T: Into<SharedConfig>>(&self, cfg: T) -> &Self {
+        self.0.config.set(Some(cfg.into()));
         self
     }
 

@@ -271,11 +271,17 @@ impl Service<Connect> for ConnectorService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{service::Pipeline, util::lazy};
+    use crate::{io::SharedConfig, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_readiness() {
-        let conn = Pipeline::new(Connector::default().finish()).bind();
+        let conn = Pipeline::new(
+            Connector::default()
+                .create(SharedConfig::default())
+                .await
+                .unwrap(),
+        )
+        .bind();
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }

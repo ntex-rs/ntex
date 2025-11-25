@@ -58,7 +58,7 @@ impl RequestHeadType {
         let con = config
             .connector
             .call(Connect {
-                addr: addr,
+                addr,
                 uri: self.as_ref().uri.clone(),
             })
             .await?;
@@ -66,7 +66,8 @@ impl RequestHeadType {
         if timeout.is_zero() {
             timeout = config.config.timeout;
         }
-        let res =
+        #[allow(unused_mut)]
+        let mut res =
             con.send_request(self, body.into(), timeout)
                 .await
                 .map(|(head, payload)| {
@@ -74,7 +75,7 @@ impl RequestHeadType {
                 })?;
 
         #[cfg(feature = "compress")]
-        if *_response_decompress {
+        if _response_decompress {
             let payload = res.take_payload();
             res.set_payload(Payload::from_stream(Decoder::from_headers(
                 payload,

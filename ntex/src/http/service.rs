@@ -35,7 +35,10 @@ where
     B: MessageBody,
 {
     /// Create new `HttpService` instance.
-    pub fn new<U: IntoServiceFactory<S, Request, SharedConfig>>(service: U) -> Self {
+    pub fn new<U>(service: U) -> Self
+    where
+        U: IntoServiceFactory<S, Request, SharedConfig>,
+    {
         HttpService {
             srv: service.into_factory(),
             h1_control: h1::DefaultControlService,
@@ -85,8 +88,9 @@ where
     C2::InitError: fmt::Debug,
 {
     /// Provide http/1 control service.
-    pub fn h1_control<CT>(self, control: CT) -> HttpService<F, S, B, CT, C2>
+    pub fn h1_control<CT, U>(self, control: U) -> HttpService<F, S, B, CT, C2>
     where
+        U: IntoServiceFactory<CT, h1::Control<F, S::Error>, SharedConfig>,
         CT: ServiceFactory<
                 h1::Control<F, S::Error>,
                 SharedConfig,
@@ -96,7 +100,7 @@ where
         CT::InitError: fmt::Debug,
     {
         HttpService {
-            h1_control: control,
+            h1_control: control.into_factory(),
             h2_control: self.h2_control,
             srv: self.srv,
             _t: marker::PhantomData,
@@ -104,15 +108,16 @@ where
     }
 
     /// Provide http/1 control service.
-    pub fn h2_control<CT>(self, control: CT) -> HttpService<F, S, B, C1, CT>
+    pub fn h2_control<CT, U>(self, control: U) -> HttpService<F, S, B, C1, CT>
     where
+        U: IntoServiceFactory<CT, h2::Control<H2Error>, SharedConfig>,
         CT: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>,
         CT::Error: error::Error,
         CT::InitError: fmt::Debug,
     {
         HttpService {
             h1_control: self.h1_control,
-            h2_control: Rc::new(control),
+            h2_control: Rc::new(control.into_factory()),
             srv: self.srv,
             _t: marker::PhantomData,
         }

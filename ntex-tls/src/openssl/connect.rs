@@ -7,7 +7,7 @@ use ntex_util::time::timeout_checked;
 use tls_openssl::ssl::SslConnector as OpensslConnector;
 
 use super::{SslFilter, connect as connect_io};
-use crate::TlsConfiguration;
+use crate::TlsConfig;
 
 #[derive(Clone, Debug)]
 pub struct SslConnector<S> {
@@ -18,7 +18,7 @@ pub struct SslConnector<S> {
 #[derive(Clone, Debug)]
 pub struct SslConnectorService<S> {
     svc: S,
-    cfg: Cfg<TlsConfiguration>,
+    cfg: Cfg<TlsConfig>,
     openssl: OpensslConnector,
 }
 
@@ -114,14 +114,15 @@ mod tests {
             ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
-        let _ = SslConnector::<&'static str>::new(ssl.build());
-        let ssl = BaseSslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = SslConnector::with(ssl.build(), Default::default())
-            .config(ntex_io::SharedConfig::new("IO"))
-            .clone();
+        let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
+        let _: SslConnector<Connector<&'static str>> = SslConnector::new(ssl.build());
+        let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
+        let factory = SslConnector::new(ssl.build()).clone();
 
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory
+            .pipeline(ntex_io::SharedConfig::new("IO"))
+            .await
+            .unwrap();
         // always ready
         assert!(srv.ready().await.is_ok());
         let result = srv

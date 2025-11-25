@@ -292,7 +292,12 @@ impl ServerBuilder {
     }
 
     /// Set shared config for named service.
-    pub fn config<N: AsRef<str>>(mut self, name: N, cfg: SharedConfig) -> Self {
+    pub fn config<N, U>(mut self, name: N, cfg: U) -> Self
+    where
+        N: AsRef<str>,
+        U: Into<SharedConfig>,
+    {
+        let cfg = cfg.into();
         let mut token = None;
         for sock in &self.sockets {
             if sock.1 == name.as_ref() {

@@ -4,7 +4,7 @@ use ntex::http::client::{Client, error::SendRequestError};
 async fn main() -> Result<(), SendRequestError> {
     env_logger::init();
 
-    let client = Client::new();
+    let client = Client::new().await;
 
     // Create request builder, configure request and send
     let mut response = client

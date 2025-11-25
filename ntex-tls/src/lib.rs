@@ -42,23 +42,24 @@ pub struct Servername(pub String);
 
 #[derive(Debug, Clone)]
 /// Tls service configuration
-pub struct TlsConfiguration {
+pub struct TlsConfig {
     handshake_timeout: Millis,
 }
 
-impl Default for &'static TlsConfiguration {
+impl Default for &'static TlsConfig {
     fn default() -> Self {
         thread_local! {
-            static DEFAULT: &'static TlsConfiguration = Box::leak(Box::new(TlsConfiguration::new()));
+            static DEFAULT: &'static TlsConfig = Box::leak(Box::new(TlsConfig::new()));
         }
         DEFAULT.with(|cfg| *cfg)
     }
 }
 
-impl TlsConfiguration {
-    /// Create instance of `TlsConfiguration`
+impl TlsConfig {
+    #[allow(clippy::new_without_default)]
+    /// Create instance of `TlsConfig`
     pub fn new() -> Self {
-        TlsConfiguration {
+        TlsConfig {
             handshake_timeout: Millis(5_000),
         }
     }

@@ -90,6 +90,13 @@ impl From<u32> for Millis {
     }
 }
 
+impl From<i32> for Millis {
+    #[inline]
+    fn from(i: i32) -> Millis {
+        Millis(if i < 0 { 0 } else { i as u32 })
+    }
+}
+
 impl From<usize> for Millis {
     #[inline]
     fn from(s: usize) -> Millis {
@@ -206,6 +213,13 @@ impl From<u16> for Seconds {
     #[inline]
     fn from(secs: u16) -> Seconds {
         Self(secs)
+    }
+}
+
+impl From<i32> for Seconds {
+    #[inline]
+    fn from(i: i32) -> Seconds {
+        Seconds(if i < 0 { 0 } else { i as u16 })
     }
 }
 

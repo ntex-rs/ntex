@@ -2,7 +2,9 @@ use std::{cell::Cell, io, sync::Arc, sync::Mutex};
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
-use ntex::http::{HttpService, Request, Response, StatusCode, body, h1, test};
+use ntex::http::{
+    HttpService, HttpServiceConfig, Request, Response, StatusCode, body, h1, test,
+};
 use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig, SharedConfig};
 use ntex::service::{Pipeline, Service, ServiceCtx};
 use ntex::time::Seconds;
@@ -81,28 +83,33 @@ async fn service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>, io
 #[ntex::test]
 async fn test_simple() {
     let ws_service = WsService::new();
-    let mut srv = test::server({
-        let ws_service = ws_service.clone();
-        move || {
-            let ws_service = Pipeline::new(ws_service.clone());
-            HttpService::build()
-                .keep_alive(1)
+    let mut srv = test::server_with_config(
+        {
+            let ws_service = ws_service.clone();
+            move || {
+                let ws_service = Pipeline::new(ws_service.clone());
+                HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
+                    .control(move |req: h1::Control<_, _>| {
+                        let ack = if let h1::Control::Upgrade(upg) = req {
+                            let ws_service = ws_service.clone();
+                            upg.handle(|req, io, codec| async move {
+                                ws_service.call((req, io, codec)).await
+                            })
+                        } else {
+                            req.ack()
+                        };
+                        async move { Ok::<_, io::Error>(ack) }
+                    })
+            }
+        },
+        SharedConfig::build("SRV").add(
+            HttpServiceConfig::new()
+                .keepalive(1)
                 .headers_read_rate(Seconds(1), Seconds::ZERO, 16)
-                .payload_read_rate(Seconds(1), Seconds::ZERO, 16)
-                .h1_control(move |req: h1::Control<_, _>| {
-                    let ack = if let h1::Control::Upgrade(upg) = req {
-                        let ws_service = ws_service.clone();
-                        upg.handle(|req, io, codec| async move {
-                            ws_service.call((req, io, codec)).await
-                        })
-                    } else {
-                        req.ack()
-                    };
-                    async move { Ok::<_, io::Error>(ack) }
-                })
-                .h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-        }
-    });
+                .payload_read_rate(Seconds(1), Seconds::ZERO, 16),
+        ),
+    )
+    .await;
 
     // client service
     let conn = srv.ws().await.unwrap();
@@ -262,8 +269,8 @@ async fn test_simple() {
 #[ntex::test]
 async fn test_transport() {
     let mut srv = test_server(|| {
-        HttpService::build()
-            .h1_control(move |req: h1::Control<_, _>| {
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -289,9 +296,10 @@ async fn test_transport() {
                     req.ack()
                 };
                 async move { Ok::<_, io::Error>(ack) }
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-    });
+            },
+        )
+    })
+    .await;
 
     // client service
     let io = srv.ws().await.unwrap().into_inner().0;

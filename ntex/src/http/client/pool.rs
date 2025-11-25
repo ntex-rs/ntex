@@ -353,60 +353,62 @@ async fn run_connection_pool(
             return;
         }
 
-        let mut cleanup = false;
-        let mut waiters = waiters.borrow_mut();
+        {
+            let mut cleanup = false;
+            let mut waiters = waiters.borrow_mut();
 
-        // check waiters
-        for (key, waiters) in &mut waiters.waiters {
-            while let Some((req, tx)) = waiters.front() {
-                // is waiter still alive
-                if tx.is_canceled() {
-                    log::trace!("{tag}: Waiter for {:?} is gone, cleanup", req.uri);
-                    cleanup = true;
-                    waiters.pop_front();
-                    continue;
-                };
+            // check waiters
+            for (key, waiters) in &mut waiters.waiters {
+                while let Some((req, tx)) = waiters.front() {
+                    // is waiter still alive
+                    if tx.is_canceled() {
+                        log::trace!("{tag}: Waiter for {:?} is gone, cleanup", req.uri);
+                        cleanup = true;
+                        waiters.pop_front();
+                        continue;
+                    };
 
-                let result = inner.borrow_mut().acquire(key);
-                match result {
-                    Acquire::NotAvailable => break,
-                    Acquire::Acquired(io, created) => {
-                        log::trace!(
-                            "{tag}: Use existing {:?} connection for {:?}, wake up waiter",
-                            io,
-                            req.uri
-                        );
-                        cleanup = true;
-                        let (_, tx) = waiters.pop_front().unwrap();
-                        let _ = tx.send(Ok(Connection::new(
-                            io,
-                            created,
-                            Some(Acquired::new(key.clone(), inner.clone())),
-                        )));
-                    }
-                    Acquire::Available => {
-                        log::trace!(
-                            "{tag}: Connecting to {:?} and wake up waiter",
-                            req.uri
-                        );
-                        cleanup = true;
-                        let (connect, tx) = waiters.pop_front().unwrap();
-                        let uri = connect.uri.clone();
-                        OpenConnection::spawn(
-                            key.clone(),
-                            tx,
-                            uri,
-                            inner.clone(),
-                            svc.clone(),
-                            connect,
-                        );
+                    let result = inner.borrow_mut().acquire(key);
+                    match result {
+                        Acquire::NotAvailable => break,
+                        Acquire::Acquired(io, created) => {
+                            log::trace!(
+                                "{tag}: Use existing {:?} connection for {:?}, wake up waiter",
+                                io,
+                                req.uri
+                            );
+                            cleanup = true;
+                            let (_, tx) = waiters.pop_front().unwrap();
+                            let _ = tx.send(Ok(Connection::new(
+                                io,
+                                created,
+                                Some(Acquired::new(key.clone(), inner.clone())),
+                            )));
+                        }
+                        Acquire::Available => {
+                            log::trace!(
+                                "{tag}: Connecting to {:?} and wake up waiter",
+                                req.uri
+                            );
+                            cleanup = true;
+                            let (connect, tx) = waiters.pop_front().unwrap();
+                            let uri = connect.uri.clone();
+                            OpenConnection::spawn(
+                                key.clone(),
+                                tx,
+                                uri,
+                                inner.clone(),
+                                svc.clone(),
+                                connect,
+                            );
+                        }
                     }
                 }
             }
-        }
 
-        if cleanup {
-            waiters.cleanup()
+            if cleanup {
+                waiters.cleanup()
+            }
         }
 
         let result = select(
@@ -642,7 +644,7 @@ mod tests {
 
         let pool = Pipeline::new(
             ConnectionPool::new(
-                fn_service(move |req| {
+                Pipeline::new(boxed::service(fn_service(move |req| {
                     let (client, server) = IoTest::create();
                     store2.borrow_mut().push((req, server));
                     Box::pin(async move {
@@ -651,11 +653,11 @@ mod tests {
                             nio::SharedConfig::default(),
                         )))
                     })
-                }),
+                }))),
                 Duration::from_secs(10),
                 Duration::from_secs(10),
                 1,
-                h2::Config::client(),
+                SharedConfig::default(),
             )
             .clone(),
         )

@@ -5,7 +5,7 @@ use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{services::Counter, time};
 use tls_openssl::ssl;
 
-use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfiguration, openssl::SslFilter};
+use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, openssl::SslFilter};
 
 #[derive(Clone)]
 /// Support `TLS` server connections via openssl package
@@ -57,7 +57,7 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedConfig> for SslAcceptor {
 /// `openssl` feature enables `Acceptor` type
 pub struct SslAcceptorService {
     acceptor: ssl::SslAcceptor,
-    cfg: Cfg<TlsConfiguration>,
+    cfg: Cfg<TlsConfig>,
     conns: Counter,
 }
 

@@ -56,13 +56,17 @@ impl Default for &'static HttpServiceConfig {
 
 impl Default for HttpServiceConfig {
     fn default() -> Self {
-        Self::new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
+        Self::new()
     }
 }
 
 impl HttpServiceConfig {
     /// Create instance of `HttpServiceConfig`
-    pub fn new(keep_alive: KeepAlive, client_timeout: Seconds) -> HttpServiceConfig {
+    pub fn new() -> HttpServiceConfig {
+        Self::_new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
+    }
+
+    fn _new(keep_alive: KeepAlive, client_timeout: Seconds) -> HttpServiceConfig {
         let (keep_alive, ka_enabled) = match keep_alive {
             KeepAlive::Timeout(val) => (val, true),
             KeepAlive::Os => (Seconds::ZERO, true),
@@ -89,7 +93,7 @@ impl HttpServiceConfig {
     /// Set server keep-alive setting
     ///
     /// By default keep alive is set to a 5 seconds.
-    pub fn keepalive<W: Into<KeepAlive>>(&mut self, val: W) -> &mut Self {
+    pub fn keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
         let (keep_alive, ka_enabled) = match val.into() {
             KeepAlive::Timeout(val) => (val, true),
             KeepAlive::Os => (Seconds::ZERO, true),
@@ -111,7 +115,7 @@ impl HttpServiceConfig {
     /// To disable timeout set value to 0.
     ///
     /// By default keep-alive timeout is set to 30 seconds.
-    pub fn keepalive_timeout(&mut self, timeout: Seconds) -> &mut Self {
+    pub fn keepalive_timeout(mut self, timeout: Seconds) -> Self {
         self.keep_alive = timeout;
         self.ka_enabled = !timeout.is_zero();
         self
@@ -149,11 +153,11 @@ impl HttpServiceConfig {
     ///
     /// By default headers read rate is set to 1sec with max timeout 5sec.
     pub fn headers_read_rate(
-        &mut self,
+        mut self,
         timeout: Seconds,
         max_timeout: Seconds,
         rate: u32,
-    ) -> &mut Self {
+    ) -> Self {
         if !timeout.is_zero() {
             self.headers_read_rate = Some(FrameReadRate {
                 rate,
@@ -174,11 +178,11 @@ impl HttpServiceConfig {
     ///
     /// By default payload read rate is disabled.
     pub fn payload_read_rate(
-        &mut self,
+        mut self,
         timeout: Seconds,
         max_timeout: Seconds,
         rate: u32,
-    ) -> &mut Self {
+    ) -> Self {
         if !timeout.is_zero() {
             self.payload_read_rate = Some(FrameReadRate {
                 rate,

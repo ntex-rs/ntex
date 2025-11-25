@@ -161,6 +161,8 @@ async fn connect<T: Address>(
 mod tests {
     use super::*;
 
+    use ntex_util::time::Millis;
+
     #[ntex::test]
     async fn test_connect() {
         let server = ntex::server::test_server(|| {
@@ -168,8 +170,13 @@ mod tests {
         });
 
         let srv = Connector::default()
-            .config(SharedConfig::new("T"))
-            .timeout(Millis(5000));
+            .create(
+                SharedConfig::build("T")
+                    .add(IoConfig::new().set_connect_timeout(Millis(5000)))
+                    .finish(),
+            )
+            .await
+            .unwrap();
         let result = srv.connect("").await;
         assert!(result.is_err());
         let result = srv.connect("localhost:99999").await;

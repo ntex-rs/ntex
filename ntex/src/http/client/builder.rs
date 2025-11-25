@@ -144,9 +144,12 @@ impl ClientBuilder {
     }
 
     /// Finish build process and create `Client` instance.
-    pub async fn finish(self, cfg: SharedConfig) -> Result<Client, ClientBuilderError> {
+    pub async fn finish<T: Into<SharedConfig>>(
+        self,
+        cfg: T,
+    ) -> Result<Client, ClientBuilderError> {
         self.connector
-            .create(cfg)
+            .create(cfg.into())
             .await
             .map_err(|_| ClientBuilderError::ConnectorFailed)
             .map(|connector| {

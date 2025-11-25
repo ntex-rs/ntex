@@ -4,7 +4,7 @@ use std::{net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
-use ntex_tls::TlsConfiguration;
+use ntex_tls::TlsConfig;
 
 use crate::channel::bstream;
 #[cfg(feature = "ws")]
@@ -230,6 +230,45 @@ where
     F: Fn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedConfig> + 'static,
 {
+    server_with_config(factory, SharedConfig::new("HTTP-TEST-SRV")).await
+}
+
+/// Start test server
+///
+/// `TestServer` is very simple test server that simplify process of writing
+/// integration tests cases for ntex web applications.
+///
+/// # Examples
+///
+/// ```rust
+/// use ntex::http;
+/// use ntex::web::{self, App, HttpResponse};
+///
+/// async fn my_handler() -> Result<HttpResponse, std::io::Error> {
+///     Ok(HttpResponse::Ok().into())
+/// }
+///
+/// #[ntex::test]
+/// async fn test_example() {
+///     let mut srv = http::test::server(
+///         || http::HttpService::new(
+///             App::new().service(
+///                 web::resource("/").to(my_handler))
+///         )
+///     );
+///
+///     let req = srv.get("/");
+///     let response = req.send().await.unwrap();
+///     assert!(response.status().is_success());
+/// }
+/// ```
+pub async fn server_with_config<F, R, U>(factory: F, cfg: U) -> TestServer
+where
+    F: Fn() -> R + Send + Clone + 'static,
+    R: ServiceFactory<Io, SharedConfig> + 'static,
+    U: Into<SharedConfig>,
+{
+    let cfg = cfg.into();
     let (tx, rx) = mpsc::channel();
 
     // run server in separate thread
@@ -242,7 +281,7 @@ where
         sys.run(move || {
             let srv = crate::server::build()
                 .listen("test", tcp, move |_| factory())?
-                .config("test", SharedConfig::new("HTTP-TEST-SRV"))
+                .config("test", cfg)
                 .workers(1)
                 .disable_signals()
                 .run();
@@ -260,7 +299,7 @@ where
         addr,
         system,
         server,
-        client: Client::build().finish(Default::default()).await.unwrap(),
+        client: Client::build().finish(()).await.unwrap(),
     }
     .set_client_timeout(Seconds(90), Millis(90_000))
     .await
@@ -284,7 +323,7 @@ impl TestServer {
     ) -> Self {
         let cfg = SharedConfig::build("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
-            .add(TlsConfiguration::new().set_handshake_timeout(timeout))
+            .add(TlsConfig::new().set_handshake_timeout(timeout))
             .add(
                 ntex_h2::ServiceConfig::new()
                     .max_header_list_size(256 * 1024)
@@ -421,6 +460,7 @@ impl TestServer {
             .openssl(builder.build())
             .take()
             .finish(Default::default())
+            .await
             .unwrap()
             .connect()
             .await

@@ -1,9 +1,8 @@
 use std::io;
 
 use log::info;
-use ntex::http::header::HeaderValue;
-use ntex::http::{HttpService, Response};
-use ntex::{server, time::Seconds, util::Ready};
+use ntex::http::{HttpService, HttpServiceConfig, Response, header::HeaderValue};
+use ntex::{io::SharedConfig, server, time::Seconds, util::Ready};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod};
 
 #[ntex::main]
@@ -37,16 +36,19 @@ async fn main() -> io::Result<()> {
     // start server
     server::ServerBuilder::new()
         .bind("basic", "127.0.0.1:8443", move |_| {
-            HttpService::build()
-                .client_timeout(Seconds(1))
-                .h2(|req| {
-                    info!("{:?}", req);
-                    let mut res = Response::Ok();
-                    res.header("x-head", HeaderValue::from_static("dummy value!"));
-                    Ready::Ok::<_, io::Error>(res.body("Hello world!"))
-                })
-                .openssl(acceptor.clone())
+            HttpService::new(|req| {
+                info!("{:?}", req);
+                let mut res = Response::Ok();
+                res.header("x-head", HeaderValue::from_static("dummy value!"));
+                Ready::Ok::<_, io::Error>(res.body("Hello world!"))
+            })
+            .openssl(acceptor.clone())
         })?
+        .config(
+            "basic",
+            SharedConfig::build("EXAMPLE")
+                .add(HttpServiceConfig::new().client_timeout(Seconds(1))),
+        )
         .workers(1)
         .run()
         .await

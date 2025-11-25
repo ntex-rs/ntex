@@ -172,8 +172,8 @@ where
     }
 
     /// Set io config for named service.
-    pub fn config(self, cfg: SharedConfig) -> Self {
-        self.config.lock().unwrap().cfg = cfg;
+    pub fn config<T: Into<SharedConfig>>(self, cfg: T) -> Self {
+        self.config.lock().unwrap().cfg = cfg.into();
         self
     }
 
