@@ -1,6 +1,7 @@
 use std::{io::Result, net, net::SocketAddr};
 
-use ntex_io::{Io, SharedConfig};
+use ntex_io::Io;
+use ntex_service::cfg::SharedConfig;
 use socket2::Socket;
 
 pub(crate) mod connect;
@@ -14,13 +15,13 @@ struct TcpStream(Socket);
 struct UnixStream(Socket);
 
 /// Opens a TCP connection to a remote host.
-pub async fn tcp_connect(addr: SocketAddr, cfg: SharedConfig) -> Result<Io> {
+pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> Result<Io> {
     let sock = crate::helpers::connect(addr).await?;
     Ok(Io::new(TcpStream(crate::helpers::prep_socket(sock)?), cfg))
 }
 
 /// Opens a unix stream connection.
-pub async fn unix_connect<'a, P>(addr: P, cfg: SharedConfig) -> Result<Io>
+pub async fn unix_connect<'a, P>(addr: P, cfg: SharedCfg) -> Result<Io>
 where
     P: AsRef<std::path::Path> + 'a,
 {
@@ -29,7 +30,7 @@ where
 }
 
 /// Convert std TcpStream to tokio's TcpStream
-pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedConfig) -> Result<Io> {
+pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> Result<Io> {
     stream.set_nodelay(true)?;
     Ok(Io::new(
         TcpStream(crate::helpers::prep_socket(Socket::from(stream))?),
@@ -40,7 +41,7 @@ pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedConfig) -> Result<Io> 
 /// Convert std UnixStream to tokio's UnixStream
 pub fn from_unix_stream(
     stream: std::os::unix::net::UnixStream,
-    cfg: SharedConfig,
+    cfg: SharedCfg,
 ) -> Result<Io> {
     Ok(Io::new(
         UnixStream(crate::helpers::prep_socket(Socket::from(stream))?),
@@ -56,7 +57,9 @@ pub fn active_stream_ops() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use ntex::{io::Io, io::IoConfig, io::SharedConfig, time::Millis, time::sleep};
+    use super::*;
+
+    use ntex::{io::Io, io::IoConfig, time::Millis, time::sleep};
     use std::sync::{Arc, Mutex};
 
     use crate::connect::Connect;
@@ -104,9 +107,9 @@ mod tests {
             })
         });
 
-        let cfg = SharedConfig::build("NEON-URING")
+        let cfg = SharedCfg::new("NEON-URING")
             .add(IoConfig::new().set_read_buf(24, 12, 16))
-            .finish();
+            .into();
 
         let msg = Connect::new(server.addr());
         let io = crate::connect::connect_with(msg, cfg).await.unwrap();

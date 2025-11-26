@@ -7,9 +7,9 @@ use std::{io, sync::Arc};
 use std::{io::Read, io::Write, net, sync::mpsc, thread, time};
 
 use ntex::codec::BytesCodec;
-use ntex::io::{Io, SharedConfig};
+use ntex::io::Io;
 use ntex::server::{TestServer, build};
-use ntex::service::fn_service;
+use ntex::service::{cfg::SharedCfg, fn_service};
 use ntex::util::{Bytes, Ready};
 
 #[test]
@@ -90,7 +90,7 @@ async fn test_run() {
                     })
                 })
                 .unwrap()
-                .config("test", SharedConfig::new("SRV"))
+                .config("test", SharedCfg::new("SRV"))
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())
@@ -233,7 +233,7 @@ fn test_configure_async() {
                             .bind("addr2", addr2)
                             .unwrap()
                             .listen("addr3", lst)
-                            .config("addr1", SharedConfig::new("srv-addr1"))
+                            .config("addr1", SharedCfg::new("srv-addr1"))
                             .on_worker_start(move |rt| {
                                 assert!(format!("{:?}", rt).contains("ServiceRuntime"));
                                 let num = num.clone();

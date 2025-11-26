@@ -1,19 +1,19 @@
 use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
-use ntex_io::{Io, SharedConfig};
-use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed};
+use ntex_io::Io;
+use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
 use ntex_util::future::{BoxFuture, Ready};
 
 use super::{Config, Token, socket::Stream};
 
-pub(super) type BoxServerService = boxed::BoxServiceFactory<SharedConfig, Io, (), (), ()>;
+pub(super) type BoxServerService = boxed::BoxServiceFactory<SharedCfg, Io, (), (), ()>;
 pub(crate) type FactoryServiceType = Box<dyn FactoryService>;
 
 #[derive(Debug)]
 pub(crate) struct NetService {
     pub(crate) name: Arc<str>,
-    pub(crate) tokens: Vec<(Token, SharedConfig)>,
-    pub(crate) config: SharedConfig,
+    pub(crate) tokens: Vec<(Token, SharedCfg)>,
+    pub(crate) config: SharedCfg,
     pub(crate) factory: BoxServerService,
 }
 
@@ -22,7 +22,7 @@ pub(crate) trait FactoryService: Send {
         ""
     }
 
-    fn set_config(&mut self, _: Token, _: SharedConfig) {}
+    fn set_config(&mut self, _: Token, _: SharedCfg) {}
 
     fn clone_factory(&self) -> Box<dyn FactoryService>;
 
@@ -31,7 +31,7 @@ pub(crate) trait FactoryService: Send {
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
 where
-    S: ServiceFactory<Io, SharedConfig> + 'static,
+    S: ServiceFactory<Io, SharedCfg> + 'static,
 {
     boxed::factory(ServerServiceFactory {
         name: Arc::from(name),
@@ -41,12 +41,12 @@ where
 
 pub(crate) fn create_factory_service<F, R>(
     name: String,
-    tokens: Vec<(Token, SharedConfig)>,
+    tokens: Vec<(Token, SharedCfg)>,
     factory: F,
 ) -> Box<dyn FactoryService>
 where
     F: Fn(Config) -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedConfig> + 'static,
+    R: ServiceFactory<Io, SharedCfg> + 'static,
 {
     Box::new(Factory {
         tokens,
@@ -60,7 +60,7 @@ where
 
 struct Factory<F, R, E> {
     name: String,
-    tokens: Vec<(Token, SharedConfig)>,
+    tokens: Vec<(Token, SharedCfg)>,
     factory: F,
     _t: PhantomData<(R, E)>,
 }
@@ -84,7 +84,7 @@ where
         })
     }
 
-    fn set_config(&mut self, token: Token, cfg: SharedConfig) {
+    fn set_config(&mut self, token: Token, cfg: SharedCfg) {
         for item in &mut self.tokens {
             if item.0 == token {
                 item.1 = cfg;
@@ -123,16 +123,16 @@ struct ServerServiceFactory<S> {
     factory: S,
 }
 
-impl<S> ServiceFactory<Io, SharedConfig> for ServerServiceFactory<S>
+impl<S> ServiceFactory<Io, SharedCfg> for ServerServiceFactory<S>
 where
-    S: ServiceFactory<Io, SharedConfig>,
+    S: ServiceFactory<Io, SharedCfg>,
 {
     type Response = ();
     type Error = ();
     type Service = ServerService<S::Service>;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         self.factory
             .create(cfg)
             .await

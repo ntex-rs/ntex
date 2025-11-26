@@ -1,7 +1,9 @@
 use std::io;
 
-use ntex::io::{SharedConfig, types::PeerAddr};
-use ntex::{Pipeline, ServiceFactory, codec, connect, util::Bytes, util::Either};
+use ntex::io::types::PeerAddr;
+use ntex::{
+    Pipeline, ServiceFactory, SharedCfg, codec, connect, util::Bytes, util::Either,
+};
 use ntex_tls::TlsConfig;
 use tls_rust::{ClientConfig, RootCertStore};
 
@@ -20,9 +22,9 @@ async fn main() -> io::Result<()> {
     let connector = Pipeline::new(
         connect::rustls::TlsConnector::new(config.clone())
             .create(
-                SharedConfig::build("CLIENT")
+                SharedCfg::new("CLIENT")
                     .add(TlsConfig::new().set_handshake_timeout(10))
-                    .finish(),
+                    .into(),
             )
             .await
             .unwrap(),

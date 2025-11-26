@@ -5,8 +5,8 @@ use ntex::http::test::server as test_server;
 use ntex::http::{
     HttpService, HttpServiceConfig, Request, Response, StatusCode, body, h1, test,
 };
-use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig, SharedConfig};
-use ntex::service::{Pipeline, Service, ServiceCtx};
+use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
+use ntex::service::{Pipeline, Service, ServiceCtx, cfg::SharedCfg};
 use ntex::time::Seconds;
 use ntex::util::{ByteString, Bytes, Ready};
 use ntex::ws::{self, handshake, handshake_response};
@@ -53,9 +53,7 @@ impl Service<(Request, Io, h1::Codec)> for WsService {
             .unwrap();
 
         io.set_config(
-            SharedConfig::build("WS-SRV")
-                .add(IoConfig::new().set_keepalive_timeout(Seconds(0)))
-                .finish(),
+            SharedCfg::new("WS-SRV").add(IoConfig::new().set_keepalive_timeout(Seconds(0))),
         );
         Dispatcher::new(io.seal(), ws::Codec::new(), service)
             .await
@@ -102,7 +100,7 @@ async fn test_simple() {
                     })
             }
         },
-        SharedConfig::build("SRV").add(
+        SharedCfg::new("SRV").add(
             HttpServiceConfig::new()
                 .keepalive(1)
                 .headers_read_rate(Seconds(1), Seconds::ZERO, 16)

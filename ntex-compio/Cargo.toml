@@ -21,6 +21,7 @@ ntex-bytes = "1"
 ntex-io = "3"
 ntex-util = "3"
 ntex-rt = "3"
+ntex-service = "3.6"
 log = { workspace = true }
 
 compio-buf = "0.7"

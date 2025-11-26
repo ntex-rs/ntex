@@ -1,7 +1,8 @@
 use std::io;
 
-use ntex_io::{Cfg, Io, Layer, SharedConfig};
+use ntex_io::{Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
+use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::time::timeout_checked;
 use tls_openssl::ssl::SslConnector as OpensslConnector;
@@ -32,16 +33,16 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, S> ServiceFactory<Connect<A>, SharedConfig> for SslConnector<S>
+impl<A: Address, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector<S>
 where
-    S: ServiceFactory<Connect<A>, SharedConfig, Response = Io, Error = ConnectError>,
+    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
 {
     type Response = Io<Layer<SslFilter>>;
     type Error = ConnectError;
     type Service = SslConnectorService<S::Service>;
     type InitError = S::InitError;
 
-    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let svc = self.connector.create(cfg).await?;
 
         Ok(SslConnectorService {
@@ -119,10 +120,7 @@ mod tests {
         let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::new(ssl.build()).clone();
 
-        let srv = factory
-            .pipeline(ntex_io::SharedConfig::new("IO"))
-            .await
-            .unwrap();
+        let srv = factory.pipeline(SharedCfg::default()).await.unwrap();
         // always ready
         assert!(srv.ready().await.is_ok());
         let result = srv

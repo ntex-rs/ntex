@@ -757,8 +757,8 @@ mod tests {
     use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{ClientCodec, DefaultControlService};
     use crate::http::{ResponseHead, StatusCode, body};
-    use crate::io::{self as nio, Base, SharedConfig};
-    use crate::service::{IntoService, fn_service};
+    use crate::io::{self as nio, Base};
+    use crate::service::{IntoService, cfg::SharedCfg, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
@@ -776,15 +776,15 @@ mod tests {
         S::Response: Into<Response<B>>,
         B: MessageBody,
     {
-        let config = SharedConfig::build("DBG")
+        let config: SharedCfg = SharedCfg::new("DBG")
             .add(
                 HttpServiceConfig::new()
                     .keepalive(Seconds(5))
                     .client_timeout(Seconds(1)),
             )
-            .finish();
+            .into();
         Dispatcher::new(
-            nio::Io::new(stream, nio::SharedConfig::default()),
+            nio::Io::new(stream, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
                 config.get(),
                 service.into_service(),
@@ -802,9 +802,9 @@ mod tests {
         B: MessageBody + 'static,
     {
         crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
-            nio::Io::new(stream, nio::SharedConfig::default()),
+            nio::Io::new(stream, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
-                SharedConfig::default().get(),
+                SharedCfg::default().get(),
                 service.into_service(),
                 DefaultControlService,
             )),
@@ -823,15 +823,15 @@ mod tests {
 
         let data = Rc::new(Cell::new(false));
         let data2 = data.clone();
-        let config = SharedConfig::build("DBG")
+        let config: SharedCfg = SharedCfg::new("DBG")
             .add(
                 HttpServiceConfig::new()
                     .keepalive(Seconds(5))
                     .client_timeout(Seconds(1)),
             )
-            .finish();
+            .into();
         let mut h1 = Dispatcher::<_, _, _, _>::new(
-            nio::Io::new(server, nio::SharedConfig::default()),
+            nio::Io::new(server, config),
             Rc::new(DispatcherConfig::new(
                 config.get(),
                 fn_service(|_| {
@@ -1013,13 +1013,11 @@ mod tests {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
         h1.inner.io.set_config(
-            nio::SharedConfig::build("TEST")
-                .add(
-                    nio::IoConfig::new()
-                        .set_read_buf(15 * 1024, 1024, 16)
-                        .set_write_buf(15 * 1024, 1024, 16),
-                )
-                .finish(),
+            SharedCfg::new("TEST").add(
+                nio::IoConfig::new()
+                    .set_read_buf(15 * 1024, 1024, 16)
+                    .set_write_buf(15 * 1024, 1024, 16),
+            ),
         );
 
         let mut decoder = ClientCodec::default();
@@ -1232,17 +1230,17 @@ mod tests {
             }
         };
 
-        let config = SharedConfig::build("SVC")
+        let config: SharedCfg = SharedCfg::new("SVC")
             .add(
                 HttpServiceConfig::new()
                     .keepalive(Seconds(5))
                     .client_timeout(Seconds(1))
                     .payload_read_rate(Seconds(1), Seconds(2), 512),
             )
-            .finish();
+            .into();
 
         let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
-            nio::Io::new(server, nio::SharedConfig::default()),
+            nio::Io::new(server, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
                 config.get(),
                 svc.into_service(),

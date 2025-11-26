@@ -9,8 +9,8 @@ use ntex::http::client::error::SendRequestError;
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, header};
-use ntex::io::{IoConfig, SharedConfig};
-use ntex::service::{chain_factory, map_config};
+use ntex::io::IoConfig;
+use ntex::service::{cfg::SharedCfg, chain_factory, map_config};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
 use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
@@ -175,7 +175,7 @@ async fn test_timeout() {
     let client = Client::build()
         .connector::<&str>(connector)
         .response_timeout(Seconds(1))
-        .finish(SharedConfig::build("SVC").add(IoConfig::new().set_connect_timeout(15)))
+        .finish(SharedCfg::new("SVC").add(IoConfig::new().set_connect_timeout(15)))
         .await
         .unwrap();
 
@@ -198,7 +198,7 @@ async fn test_timeout_override() {
 
     let client = Client::build()
         .response_timeout(Seconds(50))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
     let request = client.get(srv.url("/")).timeout(Seconds(1)).send();
@@ -230,7 +230,7 @@ async fn test_connection_reuse() {
 
     let client = Client::build()
         .response_timeout(Seconds(30))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 
@@ -270,7 +270,7 @@ async fn test_connection_force_close() {
 
     let client = Client::build()
         .response_timeout(Seconds(30))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 
@@ -282,7 +282,7 @@ async fn test_connection_force_close() {
     // req 2
     let client = Client::build()
         .response_timeout(Seconds(30))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
     let req = client.post(srv.url("/")).force_close();
@@ -315,7 +315,7 @@ async fn test_connection_server_close() {
 
     let client = Client::build()
         .response_timeout(Seconds(30))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 
@@ -357,7 +357,7 @@ async fn test_connection_wait_queue() {
     let client = Client::build()
         .response_timeout(Seconds(30))
         .connector::<&str>(Connector::default().limit(1))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 
@@ -405,7 +405,7 @@ async fn test_connection_wait_queue_force_close() {
     let client = Client::build()
         .response_timeout(Seconds(30))
         .connector::<&str>(Connector::default().limit(1))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 
@@ -462,7 +462,7 @@ async fn test_no_decompress() {
 
     let client = Client::build()
         .response_timeout(Seconds(30))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 
@@ -744,7 +744,7 @@ async fn client_read_until_eof() {
     // client request
     let req = Client::build()
         .response_timeout(Seconds(30))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap()
         .get(format!("http://{addr}/").as_str());

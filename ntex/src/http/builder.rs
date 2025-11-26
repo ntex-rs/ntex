@@ -7,7 +7,7 @@ use crate::http::h1::{self, H1Service};
 use crate::http::h2::{self, H2Service};
 use crate::http::{request::Request, response::Response, service::HttpService};
 use crate::service::{IntoServiceFactory, ServiceFactory};
-use crate::{io::Filter, io::SharedConfig, time::Seconds};
+use crate::{io::Filter, io::SharedCfg, time::Seconds};
 
 /// A http service builder
 ///
@@ -38,13 +38,13 @@ impl<F, S> HttpServiceBuilder<F, S, h1::DefaultControlService, h2::DefaultContro
 impl<F, S, C1, C2> HttpServiceBuilder<F, S, C1, C2>
 where
     F: Filter,
-    S: ServiceFactory<Request, SharedConfig> + 'static,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    C1: ServiceFactory<h1::Control<F, S::Error>, SharedConfig, Response = h1::ControlAck>,
+    C1: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck>,
     C1::Error: Error,
     C1::InitError: fmt::Debug,
-    C2: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>,
+    C2: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
     C2::Error: Error,
     C2::InitError: fmt::Debug,
 {
@@ -118,10 +118,10 @@ where
     /// Provide control service for http/1.
     pub fn h1_control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, CT, C2>
     where
-        CF: IntoServiceFactory<CT, h1::Control<F, S::Error>, SharedConfig>,
+        CF: IntoServiceFactory<CT, h1::Control<F, S::Error>, SharedCfg>,
         CT: ServiceFactory<
             h1::Control<F, S::Error>,
-            SharedConfig,
+            SharedCfg,
             Response = h1::ControlAck,
         >,
         CT::Error: Error,
@@ -139,7 +139,7 @@ where
     pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, C1>
     where
         B: MessageBody,
-        SF: IntoServiceFactory<S, Request, SharedConfig>,
+        SF: IntoServiceFactory<S, Request, SharedCfg>,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
@@ -150,8 +150,8 @@ where
     /// Provide control service for http/2 protocol.
     pub fn h2_control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, C1, CT>
     where
-        CF: IntoServiceFactory<CT, h2::Control<H2Error>, SharedConfig>,
-        CT: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>,
+        CF: IntoServiceFactory<CT, h2::Control<H2Error>, SharedCfg>,
+        CT: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {
@@ -176,7 +176,7 @@ where
     pub fn h2<B, SF>(self, service: SF) -> H2Service<F, S, B, C2>
     where
         B: MessageBody + 'static,
-        SF: IntoServiceFactory<S, Request, SharedConfig>,
+        SF: IntoServiceFactory<S, Request, SharedCfg>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
@@ -188,7 +188,7 @@ where
     pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, C1, C2>
     where
         B: MessageBody + 'static,
-        SF: IntoServiceFactory<S, Request, SharedConfig>,
+        SF: IntoServiceFactory<S, Request, SharedCfg>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,

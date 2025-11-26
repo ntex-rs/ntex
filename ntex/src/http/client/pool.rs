@@ -5,7 +5,8 @@ use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, future, pin, rc
 use ntex_h2::{self as h2};
 
 use crate::http::uri::{Authority, Scheme, Uri};
-use crate::io::{IoBoxed, SharedConfig, types::HttpProtocol};
+use crate::io::{IoBoxed, types::HttpProtocol};
+use crate::service::cfg::SharedCfg;
 use crate::service::{Pipeline, PipelineCall, Service, ServiceCtx, boxed};
 use crate::util::{ByteString, Either, HashMap, HashSet, select};
 use crate::{channel::inplace, channel::oneshot, channel::pool, rt::spawn, time::now};
@@ -50,7 +51,7 @@ struct ConnectionPoolInner {
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
     stop: Rc<Cell<Option<oneshot::Sender<()>>>>,
-    config: SharedConfig,
+    config: SharedCfg,
 }
 
 #[derive(Debug)]
@@ -72,7 +73,7 @@ impl ConnectionPool {
         conn_lifetime: Duration,
         conn_keep_alive: Duration,
         limit: usize,
-        config: SharedConfig,
+        config: SharedCfg,
     ) -> Self {
         let waiters = Rc::new(RefCell::new(Waiters {
             waiters: HashMap::default(),
@@ -346,7 +347,7 @@ async fn run_connection_pool(
     svc: Pipeline<Connector>,
     inner: Rc<RefCell<Inner>>,
     waiters: Rc<RefCell<Waiters>>,
-    config: SharedConfig,
+    config: SharedCfg,
     mut stop: oneshot::Receiver<()>,
 ) {
     let tag = config.tag();
@@ -659,16 +660,13 @@ mod tests {
                     let (client, server) = IoTest::create();
                     store2.borrow_mut().push((req, server));
                     Box::pin(async move {
-                        Ok(IoBoxed::from(nio::Io::new(
-                            client,
-                            nio::SharedConfig::default(),
-                        )))
+                        Ok(IoBoxed::from(nio::Io::new(client, SharedCfg::default())))
                     })
                 }))),
                 Duration::from_secs(10),
                 Duration::from_secs(10),
                 1,
-                SharedConfig::default(),
+                SharedCfg::default(),
             )
             .clone(),
         )

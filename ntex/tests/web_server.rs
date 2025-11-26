@@ -7,6 +7,7 @@ use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
 use rand::{Rng, distr::Alphanumeric};
 use thiserror::Error;
 
+use ntex::SharedCfg;
 use ntex::http::header::{
     ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, ContentEncoding,
     TRANSFER_ENCODING,
@@ -14,7 +15,7 @@ use ntex::http::header::{
 use ntex::http::{
     ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body, client,
 };
-use ntex::io::{IoConfig, SharedConfig};
+use ntex::io::IoConfig;
 use ntex::time::{Millis, Seconds, Sleep, sleep};
 use ntex::util::{Bytes, Ready, Stream};
 
@@ -888,14 +889,13 @@ async fn test_web_server() {
                 )
             })
             .config(
-                SharedConfig::build("TEST")
+                SharedCfg::new("TEST")
                     .add(IoConfig::new().set_disconnect_timeout(Seconds(1)))
                     .add(
                         HttpServiceConfig::new()
                             .headers_read_rate(Seconds(1), Seconds(5), 128)
                             .payload_read_rate(Seconds(1), Seconds(5), 128),
-                    )
-                    .finish(),
+                    ),
             )
             .listen(tcp)
             .unwrap()
@@ -907,7 +907,7 @@ async fn test_web_server() {
 
     let client = client::Client::build()
         .response_timeout(Seconds(30))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 
@@ -939,7 +939,7 @@ async fn web_no_ws_with_response_payload() {
 
     let client = client::Client::build()
         .response_timeout(Seconds(30))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
     let mut response = client

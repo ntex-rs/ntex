@@ -1,7 +1,8 @@
 use std::{cell::Cell, ptr::copy_nonoverlapping, time};
 
+use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{io::Cfg, io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
+use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -43,20 +44,26 @@ pub struct HttpServiceConfig {
     pub(super) ka_enabled: bool,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
+
+    config: CfgContext,
 }
 
-impl Default for &'static HttpServiceConfig {
-    fn default() -> Self {
+impl Configuration for HttpServiceConfig {
+    const NAME: &str = "Http service configuration";
+
+    fn default() -> &'static Self {
         thread_local! {
-            static DEFAULT: &'static HttpServiceConfig = Box::leak(Box::new(HttpServiceConfig::default()));
+            static DEFAULT: &'static HttpServiceConfig = Box::leak(Box::new(HttpServiceConfig::new()));
         }
         DEFAULT.with(|cfg| *cfg)
     }
-}
 
-impl Default for HttpServiceConfig {
-    fn default() -> Self {
-        Self::new()
+    fn ctx(&self) -> &CfgContext {
+        &self.config
+    }
+
+    fn set_ctx(&mut self, ctx: CfgContext) {
+        self.config = ctx;
     }
 }
 
@@ -87,6 +94,7 @@ impl HttpServiceConfig {
                 max_timeout: client_timeout + Seconds(15),
             }),
             payload_read_rate: None,
+            config: CfgContext::default(),
         }
     }
 

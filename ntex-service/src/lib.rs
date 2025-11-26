@@ -11,6 +11,7 @@ use std::{rc::Rc, task::Context};
 mod and_then;
 mod apply;
 pub mod boxed;
+pub mod cfg;
 mod chain;
 mod ctx;
 mod fn_shutdown;

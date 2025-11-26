@@ -15,16 +15,13 @@ use crate::http::{
 };
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
-use crate::io::SharedConfig;
 use crate::router::{Path, ResourceDef};
-use crate::service::{
-    IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory, map_config,
-};
+use crate::service::{IntoService, IntoServiceFactory, Pipeline, map_config};
 use crate::time::{Millis, Seconds, sleep};
 use crate::util::{Bytes, BytesMut, Extensions, Ready, Stream, stream_recv};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
-use crate::{rt::System, server::Server};
+use crate::{Service, ServiceFactory, SharedCfg, rt::System, server::Server};
 
 use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
@@ -674,13 +671,11 @@ where
             .unwrap()
             .config(
                 "test",
-                SharedConfig::build("WEB-SRV").add(
-                    HttpServiceConfig::default().headers_read_rate(
-                        ctimeout,
-                        Seconds::ZERO,
-                        256,
-                    ),
-                ),
+                SharedCfg::new("WEB-SRV").add(HttpServiceConfig::new().headers_read_rate(
+                    ctimeout,
+                    Seconds::ZERO,
+                    256,
+                )),
             )
             .run();
 
@@ -694,7 +689,7 @@ where
 
     let (system, server, addr) = rx.recv().unwrap();
 
-    let cfg = SharedConfig::build("TEST-CLIENT")
+    let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
         .add(ntex_io::IoConfig::new().set_connect_timeout(Millis(90_000)))
         .add(ntex_tls::TlsConfig::new().set_handshake_timeout(Seconds(5)))
         .add(
@@ -702,7 +697,7 @@ where
                 .max_header_list_size(256 * 1024)
                 .max_header_continuation_frames(96),
         )
-        .finish();
+        .into();
 
     let client = {
         let connector = {

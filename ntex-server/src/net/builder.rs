@@ -2,8 +2,8 @@ use std::{fmt, future::Future, io, net, sync::Arc};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use ntex_io::{Io, SharedConfig};
-use ntex_service::ServiceFactory;
+use ntex_io::Io;
+use ntex_service::{ServiceFactory, cfg::SharedCfg};
 use ntex_util::time::Millis;
 
 use crate::{Server, WorkerPool};
@@ -199,7 +199,7 @@ impl ServerBuilder {
         U: net::ToSocketAddrs,
         N: AsRef<str>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedConfig> + 'static,
+        R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -208,7 +208,7 @@ impl ServerBuilder {
             let token = self.token.next();
             self.sockets
                 .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
-            tokens.push((token, SharedConfig::default()));
+            tokens.push((token, SharedCfg::default()));
         }
 
         self.services.push(factory::create_factory_service(
@@ -227,7 +227,7 @@ impl ServerBuilder {
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedConfig> + 'static,
+        R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -256,12 +256,12 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedConfig> + 'static,
+        R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, SharedConfig::default())],
+            vec![(token, SharedCfg::default())],
             factory,
         ));
         self.sockets
@@ -278,12 +278,12 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedConfig> + 'static,
+        R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, SharedConfig::default())],
+            vec![(token, SharedCfg::default())],
             factory,
         ));
         self.sockets
@@ -295,7 +295,7 @@ impl ServerBuilder {
     pub fn config<N, U>(mut self, name: N, cfg: U) -> Self
     where
         N: AsRef<str>,
-        U: Into<SharedConfig>,
+        U: Into<SharedCfg>,
     {
         let cfg = cfg.into();
         let mut token = None;

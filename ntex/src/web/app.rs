@@ -1,9 +1,9 @@
 use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, rc::Rc};
 
 use crate::http::Request;
-use crate::io::SharedConfig;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
+use crate::service::cfg::SharedCfg;
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
 use crate::service::{
     IntoServiceFactory, chain_factory, dev::ServiceChainFactory, map_config,
@@ -456,14 +456,12 @@ where
         self,
     ) -> impl ServiceFactory<
         Request,
-        SharedConfig,
+        SharedCfg,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     > {
-        IntoServiceFactory::<AppFactory<M, F, Err>, Request, SharedConfig>::into_factory(
-            self,
-        )
+        IntoServiceFactory::<AppFactory<M, F, Err>, Request, SharedCfg>::into_factory(self)
     }
 
     /// Construct service factory suitable for `http::HttpService`.
@@ -489,7 +487,7 @@ where
         cfg: AppConfig,
     ) -> impl ServiceFactory<
         Request,
-        SharedConfig,
+        SharedCfg,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
@@ -538,7 +536,7 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, SharedConfig>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, SharedCfg>
     for App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>> + 'static,
@@ -610,7 +608,7 @@ mod tests {
         let srv = App::new()
             .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
             .finish()
-            .pipeline(SharedConfig::default())
+            .pipeline(SharedCfg::default())
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
@@ -634,7 +632,7 @@ mod tests {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .with_config(Default::default())
-            .pipeline(SharedConfig::default())
+            .pipeline(SharedCfg::default())
             .await
             .unwrap();
 

@@ -23,6 +23,7 @@ async-fn = []
 
 [dependencies]
 slab = { workspace = true }
+foldhash = { workspace = true }
 
 [dev-dependencies]
 ntex = "3"

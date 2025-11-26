@@ -25,7 +25,7 @@ mod utils;
 use ntex_codec::{Decoder, Encoder};
 
 pub use self::buf::{FilterCtx, ReadBuf, WriteBuf};
-pub use self::cfg::{Cfg, IoConfig, SharedConfig, SharedConfigBuilder};
+pub use self::cfg::IoConfig;
 pub use self::dispatcher::Dispatcher;
 pub use self::filter::{Base, Filter, FilterReadStatus, Layer};
 pub use self::framed::Framed;

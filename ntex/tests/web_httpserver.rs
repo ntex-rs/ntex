@@ -9,9 +9,7 @@ mod rustls_utils;
 
 use ntex::http::HttpServiceConfig;
 use ntex::web::{self, App, HttpResponse, HttpServer};
-use ntex::{
-    io::IoConfig, io::SharedConfig, rt, server::TestServer, time::Seconds, time::sleep,
-};
+use ntex::{io::IoConfig, rt, server::TestServer, time::Seconds, time::sleep};
 use ntex_tls::TlsConfig;
 
 #[cfg(unix)]
@@ -38,7 +36,7 @@ async fn test_run() {
             .stop_runtime()
             .disable_signals()
             .config(
-                SharedConfig::build("WEB")
+                ntex::SharedCfg::new("WEB")
                     .add(
                         HttpServiceConfig::new()
                             .keepalive(10)
@@ -60,11 +58,7 @@ async fn test_run() {
 
     let client = client::Client::build()
         .connector::<&str>(client::Connector::default())
-        .finish(
-            SharedConfig::build("DBG")
-                .add(IoConfig::new().set_connect_timeout(30))
-                .finish(),
-        )
+        .finish(ntex::SharedCfg::new("DBG").add(IoConfig::new().set_connect_timeout(30)))
         .await
         .unwrap();
 
@@ -108,7 +102,7 @@ async fn client() -> ntex::http::client::Client {
         .connector::<&str>(
             ntex::http::client::Connector::default().openssl(builder.build()),
         )
-        .finish(SharedConfig::build("TEST").add(IoConfig::new().set_connect_timeout(30)))
+        .finish(ntex::SharedCfg::new("TEST").add(IoConfig::new().set_connect_timeout(30)))
         .await
         .unwrap()
 }
@@ -239,10 +233,10 @@ async fn test_bind_uds() {
     let client = client::Client::build()
         .connector::<&str>(client::Connector::default().connector(
             ntex::service::fn_service(|_| async {
-                Ok(rt::unix_connect("/tmp/uds-test", SharedConfig::default()).await?)
+                Ok(rt::unix_connect("/tmp/uds-test", ntex::SharedCfg::default()).await?)
             }),
         ))
-        .finish(())
+        .finish(ntex::SharedCfg::default())
         .await
         .unwrap();
     let response = client.get("http://localhost").send().await.unwrap();
@@ -291,10 +285,10 @@ async fn test_listen_uds() {
     let client = client::Client::build()
         .connector::<&str>(client::Connector::default().connector(
             ntex::service::fn_service(|_| async {
-                Ok(rt::unix_connect("/tmp/uds-test2", SharedConfig::default()).await?)
+                Ok(rt::unix_connect("/tmp/uds-test2", ntex::SharedCfg::default()).await?)
             }),
         ))
-        .finish(())
+        .finish(ntex::SharedCfg::default())
         .await
         .unwrap();
     let response = client.get("http://localhost").send().await.unwrap();

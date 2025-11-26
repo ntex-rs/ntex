@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.0] - 2025-11-xx
+
+* Add shared configuration system
+
 ## [3.5.0] - 2025-06-14
 
 * Use AsyncFn for fn-services

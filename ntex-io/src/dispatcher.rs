@@ -544,12 +544,12 @@ mod tests {
 
     use ntex_bytes::{Bytes, BytesMut};
     use ntex_codec::BytesCodec;
-    use ntex_service::ServiceCtx;
+    use ntex_service::{ServiceCtx, cfg::SharedCfg};
     use ntex_util::{time::Millis, time::sleep};
     use rand::Rng;
 
     use super::*;
-    use crate::{Flags, Io, IoConfig, IoRef, SharedConfig, testing::IoTest};
+    use crate::{Flags, Io, IoConfig, IoRef, testing::IoTest};
 
     pub(crate) struct State(IoRef);
 
@@ -815,13 +815,11 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedConfig::build("TEST")
-                .add(
-                    IoConfig::new()
-                        .set_read_buf(8 * 1024, 1024, 16)
-                        .set_write_buf(16 * 1024, 1024, 16),
-                )
-                .finish(),
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_read_buf(8 * 1024, 1024, 16)
+                    .set_write_buf(16 * 1024, 1024, 16),
+            ),
         );
 
         let (disp, state) = Dispatcher::debug(
@@ -888,13 +886,11 @@ mod tests {
         let (disp, state) = Dispatcher::debug(
             Io::new(
                 server,
-                SharedConfig::build("TEST")
-                    .add(
-                        IoConfig::new()
-                            .set_keepalive_timeout(Seconds::ZERO)
-                            .set_read_buf(1024, 512, 16),
-                    )
-                    .finish(),
+                SharedCfg::new("TEST").add(
+                    IoConfig::new()
+                        .set_keepalive_timeout(Seconds::ZERO)
+                        .set_read_buf(1024, 512, 16),
+                ),
             ),
             BytesCodec,
             ntex_util::services::inflight::InFlightService::new(
@@ -940,13 +936,11 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
-        let cfg = SharedConfig::build("DBG")
-            .add(
-                IoConfig::new()
-                    .set_disconnect_timeout(Seconds(1))
-                    .set_keepalive_timeout(Seconds(1)),
-            )
-            .finish();
+        let cfg = SharedCfg::new("DBG").add(
+            IoConfig::new()
+                .set_disconnect_timeout(Seconds(1))
+                .set_keepalive_timeout(Seconds(1)),
+        );
 
         let (disp, state) = Dispatcher::debug(
             Io::new(server, cfg),
@@ -991,13 +985,11 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
-        let cfg = SharedConfig::build("DBG")
-            .add(
-                IoConfig::new()
-                    .set_keepalive_timeout(Seconds(1))
-                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
-            )
-            .finish();
+        let cfg = SharedCfg::new("DBG").add(
+            IoConfig::new()
+                .set_keepalive_timeout(Seconds(1))
+                .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+        );
 
         let (disp, state) = Dispatcher::debug(
             Io::new(server, cfg),
@@ -1044,13 +1036,11 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
-        let cfg = SharedConfig::build("DBG")
-            .add(
-                IoConfig::new()
-                    .set_keepalive_timeout(Seconds(2))
-                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
-            )
-            .finish();
+        let cfg = SharedCfg::new("DBG").add(
+            IoConfig::new()
+                .set_keepalive_timeout(Seconds(2))
+                .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+        );
 
         let (disp, _) = Dispatcher::debug(
             Io::new(server, cfg),
@@ -1105,13 +1095,11 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedConfig::build("TEST")
-                .add(
-                    IoConfig::new()
-                        .set_keepalive_timeout(Seconds::ZERO)
-                        .set_frame_read_rate(Seconds(1), Seconds(2), 2),
-                )
-                .finish(),
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+            ),
         );
 
         let (disp, state) = Dispatcher::debug(
@@ -1167,9 +1155,7 @@ mod tests {
 
         let io = Io::new(
             server,
-            SharedConfig::build("DBG")
-                .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO))
-                .finish(),
+            SharedCfg::new("DBG").add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
         );
         let ioref = io.get_ref();
 

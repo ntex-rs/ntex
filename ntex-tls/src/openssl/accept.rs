@@ -1,6 +1,7 @@
 use std::{cell::RefCell, error::Error, fmt, io};
 
-use ntex_io::{Cfg, Filter, Io, Layer, SharedConfig};
+use ntex_io::{Filter, Io, Layer};
+use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{services::Counter, time};
 use tls_openssl::ssl;
@@ -34,13 +35,13 @@ impl From<ssl::SslAcceptor> for SslAcceptor {
     }
 }
 
-impl<F: Filter> ServiceFactory<Io<F>, SharedConfig> for SslAcceptor {
+impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for SslAcceptor {
     type Response = Io<Layer<SslFilter, F>>;
     type Error = Box<dyn Error>;
     type Service = SslAcceptorService;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ok(SslAcceptorService {
                 acceptor: self.acceptor.clone(),

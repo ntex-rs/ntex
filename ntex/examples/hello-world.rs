@@ -3,7 +3,7 @@ use std::io;
 use log::info;
 use ntex::http::header::HeaderValue;
 use ntex::http::{HttpService, HttpServiceConfig, Response};
-use ntex::{io::SharedConfig, time::Seconds, util::Ready};
+use ntex::{SharedCfg, time::Seconds, util::Ready};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -20,9 +20,11 @@ async fn main() -> io::Result<()> {
         })?
         .config(
             "hello-world",
-            SharedConfig::build("HELLO-WORLD").add(
-                HttpServiceConfig::new().headers_read_rate(Seconds(1), Seconds(5), 128),
-            ),
+            SharedCfg::new("HELLO-WORLD").add(HttpServiceConfig::new().headers_read_rate(
+                Seconds(1),
+                Seconds(5),
+                128,
+            )),
         )
         .run()
         .await

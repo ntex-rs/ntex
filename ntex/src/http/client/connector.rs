@@ -1,9 +1,8 @@
 use std::{task::Context, time::Duration};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::io::SharedConfig;
 use crate::service::{Service, ServiceCtx, ServiceFactory, apply_fn_factory, boxed};
-use crate::{http::Uri, io::IoBoxed, time::Seconds, util::join};
+use crate::{SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::{Connect, Connection, error::ConnectError, pool::ConnectionPool};
 
@@ -14,7 +13,7 @@ use tls_openssl::ssl::SslConnector as OpensslConnector;
 use tls_rustls::ClientConfig;
 
 type BoxedConnector =
-    boxed::BoxServiceFactory<SharedConfig, Connect, IoBoxed, ConnectError, ()>;
+    boxed::BoxServiceFactory<SharedCfg, Connect, IoBoxed, ConnectError, ()>;
 
 #[derive(Debug)]
 /// Manages http client network connectivity.
@@ -141,11 +140,8 @@ impl Connector {
     /// Use custom connector to open un-secured connections.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
-        T: ServiceFactory<
-                TcpConnect<Uri>,
-                SharedConfig,
-                Error = crate::connect::ConnectError,
-            > + 'static,
+        T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Error = crate::connect::ConnectError>
+            + 'static,
         IoBoxed: From<T::Response>,
     {
         self.connector = boxed::factory(
@@ -162,11 +158,8 @@ impl Connector {
     /// Use custom connector to open secure connections.
     pub fn secure_connector<T>(mut self, connector: T) -> Self
     where
-        T: ServiceFactory<
-                TcpConnect<Uri>,
-                SharedConfig,
-                Error = crate::connect::ConnectError,
-            > + 'static,
+        T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Error = crate::connect::ConnectError>
+            + 'static,
         IoBoxed: From<T::Response>,
     {
         self.secure_connector = Some(boxed::factory(
@@ -181,13 +174,13 @@ impl Connector {
     }
 }
 
-impl ServiceFactory<Connect, SharedConfig> for Connector {
+impl ServiceFactory<Connect, SharedCfg> for Connector {
     type Response = Connection;
     type Error = ConnectError;
     type Service = ConnectorService;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let tcp_pool = ConnectionPool::new(
             self.connector.create(cfg).await?.into(),
             self.conn_lifetime,
@@ -269,13 +262,13 @@ impl Service<Connect> for ConnectorService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{io::SharedConfig, service::Pipeline, util::lazy};
+    use crate::{service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_readiness() {
         let conn = Pipeline::new(
             Connector::default()
-                .create(SharedConfig::default())
+                .create(SharedCfg::default())
                 .await
                 .unwrap(),
         )

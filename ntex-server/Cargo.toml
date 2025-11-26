@@ -19,7 +19,7 @@ path = "src/lib.rs"
 [dependencies]
 ntex-io = "3"
 ntex-net = "3"
-ntex-service = "3.5"
+ntex-service = "3.6"
 ntex-rt = "3"
 ntex-util = "3"
 

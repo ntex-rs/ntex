@@ -9,9 +9,9 @@ use ntex_tls::TlsConfig;
 use crate::channel::bstream;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
-use crate::io::{Io, IoConfig, SharedConfig};
+use crate::io::{Io, IoConfig};
 use crate::server::Server;
-use crate::service::ServiceFactory;
+use crate::service::{ServiceFactory, cfg::SharedCfg};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{rt::System, time::Millis, time::Seconds, time::sleep, util::Bytes};
@@ -228,9 +228,9 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 pub async fn server<F, R>(factory: F) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedConfig> + 'static,
+    R: ServiceFactory<Io, SharedCfg> + 'static,
 {
-    server_with_config(factory, SharedConfig::new("HTTP-TEST-SRV")).await
+    server_with_config(factory, SharedCfg::new("HTTP-TEST-SRV")).await
 }
 
 /// Start test server
@@ -265,8 +265,8 @@ where
 pub async fn server_with_config<F, R, U>(factory: F, cfg: U) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedConfig> + 'static,
-    U: Into<SharedConfig>,
+    R: ServiceFactory<Io, SharedCfg> + 'static,
+    U: Into<SharedCfg>,
 {
     let cfg = cfg.into();
     let (tx, rx) = mpsc::channel();
@@ -299,7 +299,7 @@ where
         addr,
         system,
         server,
-        client: Client::build().finish(()).await.unwrap(),
+        client: Client::build().finish(SharedCfg::default()).await.unwrap(),
     }
     .set_client_timeout(Seconds(90), Millis(90_000))
     .await
@@ -321,7 +321,7 @@ impl TestServer {
         timeout: Seconds,
         connect_timeout: Millis,
     ) -> Self {
-        let cfg = SharedConfig::build("TEST-CLIENT")
+        let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))
             .add(
@@ -329,7 +329,7 @@ impl TestServer {
                     .max_header_list_size(256 * 1024)
                     .max_header_continuation_frames(96),
             )
-            .finish();
+            .into();
 
         let client = {
             let connector = {
