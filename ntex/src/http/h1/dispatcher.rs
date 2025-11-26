@@ -90,7 +90,7 @@ where
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, C>>) -> Self {
-        let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
+        let codec = Codec::new(config.keep_alive_enabled());
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
@@ -587,9 +587,9 @@ where
     fn handle_timeout(&mut self) -> Result<(), ProtocolError> {
         // check read rate
         let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            &self.config.headers_read_rate
+            &self.config.headers_read_rate()
         } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            &self.config.payload_read_rate
+            &self.config.payload_read_rate()
         } else {
             return Ok(());
         };
@@ -662,16 +662,16 @@ where
                     log::debug!(
                         "{}: Start keep-alive timer {:?}",
                         self.io.tag(),
-                        self.config.keep_alive
+                        self.config.keep_alive()
                     );
                     self.flags.insert(Flags::READ_KA_TIMEOUT);
-                    self.io.start_timer(self.config.keep_alive);
+                    self.io.start_timer(self.config.keep_alive());
                 }
             } else {
                 self.io.close();
                 return Some(self.stop());
             }
-        } else if let Some(ref cfg) = self.config.headers_read_rate {
+        } else if let Some(cfg) = self.config.headers_read_rate() {
             log::debug!(
                 "{}: Start headers read timer {:?}",
                 self.io.tag(),
@@ -696,7 +696,7 @@ where
         if self.flags.contains(Flags::READ_PL_TIMEOUT) {
             self.read_remains = decoded.remains as u32;
             self.read_consumed += decoded.consumed as u32;
-        } else if let Some(ref cfg) = self.config.payload_read_rate {
+        } else if let Some(cfg) = self.config.payload_read_rate() {
             log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
 
             // start payload timer
@@ -751,14 +751,13 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::{cell::Cell, future::Future, future::poll_fn, sync::Arc};
 
-    use ntex_h2::Config;
     use rand::Rng;
 
     use super::*;
-    use crate::http::config::ServiceConfig;
+    use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{ClientCodec, DefaultControlService};
     use crate::http::{ResponseHead, StatusCode, body};
-    use crate::io::{self as nio, Base};
+    use crate::io::{self as nio, Base, SharedConfig};
     use crate::service::{IntoService, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
@@ -777,16 +776,17 @@ mod tests {
         S::Response: Into<Response<B>>,
         B: MessageBody,
     {
-        let config = ServiceConfig::new(
-            Seconds(5).into(),
-            Seconds(1),
-            Millis(5_000),
-            Config::server(),
-        );
+        let config = SharedConfig::build("DBG")
+            .add(
+                HttpServiceConfig::new()
+                    .keepalive(Seconds(5))
+                    .client_timeout(Seconds(1)),
+            )
+            .finish();
         Dispatcher::new(
             nio::Io::new(stream, nio::SharedConfig::default()),
             Rc::new(DispatcherConfig::new(
-                config,
+                config.get(),
                 service.into_service(),
                 DefaultControlService,
             )),
@@ -804,7 +804,7 @@ mod tests {
         crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
             nio::Io::new(stream, nio::SharedConfig::default()),
             Rc::new(DispatcherConfig::new(
-                ServiceConfig::default(),
+                SharedConfig::default().get(),
                 service.into_service(),
                 DefaultControlService,
             )),
@@ -823,16 +823,17 @@ mod tests {
 
         let data = Rc::new(Cell::new(false));
         let data2 = data.clone();
-        let config = ServiceConfig::new(
-            Seconds(5).into(),
-            Seconds(1),
-            Millis(5_000),
-            Config::server(),
-        );
+        let config = SharedConfig::build("DBG")
+            .add(
+                HttpServiceConfig::new()
+                    .keepalive(Seconds(5))
+                    .client_timeout(Seconds(1)),
+            )
+            .finish();
         let mut h1 = Dispatcher::<_, _, _, _>::new(
             nio::Io::new(server, nio::SharedConfig::default()),
             Rc::new(DispatcherConfig::new(
-                config,
+                config.get(),
                 fn_service(|_| {
                     Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
                 }),
@@ -1231,18 +1232,19 @@ mod tests {
             }
         };
 
-        let mut config = ServiceConfig::new(
-            Seconds(5).into(),
-            Seconds(1),
-            Millis(5_000),
-            Config::server(),
-        );
-        config.payload_read_rate(Seconds(1), Seconds(2), 512);
+        let config = SharedConfig::build("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .keepalive(Seconds(5))
+                    .client_timeout(Seconds(1))
+                    .payload_read_rate(Seconds(1), Seconds(2), 512),
+            )
+            .finish();
 
         let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
             nio::Io::new(server, nio::SharedConfig::default()),
             Rc::new(DispatcherConfig::new(
-                config,
+                config.get(),
                 svc.into_service(),
                 fn_service(move |msg: Control<_, _>| {
                     if let Control::ProtocolError(ref err) = msg {

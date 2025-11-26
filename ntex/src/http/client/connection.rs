@@ -13,6 +13,15 @@ pub(super) enum ConnectionType {
     H2(h2proto::H2Client),
 }
 
+impl ConnectionType {
+    pub(super) fn tag(&self) -> &'static str {
+        match &self {
+            ConnectionType::H1(io) => io.tag(),
+            ConnectionType::H2(io) => io.tag(),
+        }
+    }
+}
+
 impl fmt::Debug for ConnectionType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -32,9 +41,9 @@ pub struct Connection {
 
 impl fmt::Debug for Connection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.io {
-            Some(ConnectionType::H1(_)) => write!(f, "H1Connection"),
-            Some(ConnectionType::H2(_)) => write!(f, "H2Connection"),
+        match &self.io {
+            Some(ConnectionType::H1(io)) => write!(f, "{}: Connection(h1)", io.tag()),
+            Some(ConnectionType::H2(io)) => write!(f, "{}: Connection(h2)", io.tag()),
             None => write!(f, "Connection(Empty)"),
         }
     }
@@ -63,6 +72,8 @@ impl Connection {
                 },
                 close,
             );
+        } else {
+            log::debug!("{:?}: http pool is not set, dropping", self);
         }
     }
 

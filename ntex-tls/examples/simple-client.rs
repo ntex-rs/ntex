@@ -1,6 +1,7 @@
 use std::io;
 
-use ntex::{codec, connect, util::Bytes, util::Either};
+use ntex::service::{Pipeline, ServiceFactory};
+use ntex::{codec, connect, io::SharedConfig, util::Bytes, util::Either};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 
 #[ntex::main]
@@ -20,9 +21,14 @@ async fn main() -> io::Result<()> {
     builder.set_verify(SslVerifyMode::NONE);
 
     // openssl connector
-    let connector = connect::openssl::SslConnector::new(builder.build());
+    let connector = Pipeline::new(
+        connect::openssl::SslConnector::new(builder.build())
+            .create(SharedConfig::default())
+            .await
+            .unwrap(),
+    );
 
-    let io = connector.connect("127.0.0.1:8443").await.unwrap();
+    let io = connector.call("127.0.0.1:8443".into()).await.unwrap();
     println!("Connected to ssl server");
     io.send(Bytes::from_static(b"hello"), &codec::BytesCodec)
         .await

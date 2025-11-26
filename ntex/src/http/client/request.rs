@@ -11,9 +11,9 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version};
 use crate::{time::Millis, util::Bytes, util::Stream};
 
-use super::error::{FreezeRequestError, InvalidUrl};
-use super::sender::{PrepForSendingError, SendClientRequest};
-use super::{ClientConfig, frozen::FrozenClientRequest};
+use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
+use super::sender::PrepForSendingError;
+use super::{ClientInner, ClientResponse, frozen::FrozenClientRequest};
 
 /// An HTTP Client request builder
 ///
@@ -26,6 +26,7 @@ use super::{ClientConfig, frozen::FrozenClientRequest};
 /// #[ntex::main]
 /// async fn main() {
 ///    let response = Client::new()
+///         .await
 ///         .get("http://www.rust-lang.org") // <- Create request builder
 ///         .header("User-Agent", "ntex::web")
 ///         .send()                          // <- Send http request
@@ -45,12 +46,12 @@ pub struct ClientRequest {
     cookies: Option<CookieJar>,
     response_decompress: bool,
     timeout: Millis,
-    config: Rc<ClientConfig>,
+    config: Rc<ClientInner>,
 }
 
 impl ClientRequest {
     /// Create new client request builder.
-    pub(super) fn new<U>(method: Method, uri: U, config: Rc<ClientConfig>) -> Self
+    pub(super) fn new<U>(method: Method, uri: U, config: Rc<ClientInner>) -> Self
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -149,6 +150,7 @@ impl ClientRequest {
     /// #[ntex::main]
     /// async fn main() {
     ///     let req = Client::new()
+    ///         .await
     ///         .get("http://www.rust-lang.org")
     ///         .header("X-TEST", "value")
     ///         .header(http::header::CONTENT_TYPE, "application/json");
@@ -278,7 +280,7 @@ impl ClientRequest {
     ///
     /// #[ntex::main]
     /// async fn main() {
-    ///     let resp = Client::new().get("https://www.rust-lang.org")
+    ///     let resp = Client::new().await.get("https://www.rust-lang.org")
     ///         .cookie(
     ///             cookie::Cookie::build(("name", "value"))
     ///                 .domain("www.rust-lang.org")
@@ -380,91 +382,90 @@ impl ClientRequest {
     }
 
     /// Complete request construction and send body.
-    pub fn send_body<B>(self, body: B) -> SendClientRequest
+    pub async fn send_body<B>(self, body: B) -> Result<ClientResponse, SendRequestError>
     where
         B: Into<Body>,
     {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send_body(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-            body,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send_body(
+                slf.addr,
+                slf.response_decompress,
+                slf.timeout,
+                slf.config,
+                body,
+            )
+            .await
     }
 
     /// Set a JSON body and generate `ClientRequest`
-    pub fn send_json<T: Serialize>(self, value: &T) -> SendClientRequest {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+    pub async fn send_json<T: Serialize>(
+        self,
+        value: &T,
+    ) -> Result<ClientResponse, SendRequestError> {
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send_json(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-            value,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send_json(
+                slf.addr,
+                slf.response_decompress,
+                slf.timeout,
+                slf.config,
+                value,
+            )
+            .await
     }
 
     /// Set a urlencoded body and generate `ClientRequest`
     ///
     /// `ClientRequestBuilder` can not be used after this call.
-    pub fn send_form<T: Serialize>(self, value: &T) -> SendClientRequest {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+    pub async fn send_form<T: Serialize>(
+        self,
+        value: &T,
+    ) -> Result<ClientResponse, SendRequestError> {
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send_form(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-            value,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send_form(
+                slf.addr,
+                slf.response_decompress,
+                slf.timeout,
+                slf.config,
+                value,
+            )
+            .await
     }
 
     /// Set an streaming body and generate `ClientRequest`.
-    pub fn send_stream<S, E>(self, stream: S) -> SendClientRequest
+    pub async fn send_stream<S, E>(
+        self,
+        stream: S,
+    ) -> Result<ClientResponse, SendRequestError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
     {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send_stream(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-            stream,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send_stream(
+                slf.addr,
+                slf.response_decompress,
+                slf.timeout,
+                slf.config,
+                stream,
+            )
+            .await
     }
 
     /// Set an empty body and generate `ClientRequest`.
-    pub fn send(self) -> SendClientRequest {
-        let slf = match self.prep_for_sending() {
-            Ok(slf) => slf,
-            Err(e) => return e.into(),
-        };
+    pub async fn send(self) -> Result<ClientResponse, SendRequestError> {
+        let slf = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head).send(
-            slf.addr,
-            slf.response_decompress,
-            slf.timeout,
-            slf.config,
-        )
+        RequestHeadType::Owned(slf.head)
+            .send(slf.addr, slf.response_decompress, slf.timeout, slf.config)
+            .await
     }
 
     #[allow(unused_mut)]
@@ -545,11 +546,11 @@ impl fmt::Debug for ClientRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::client::Client;
+    use crate::{http::client::Client, io::SharedConfig};
 
     #[crate::rt_test]
     async fn test_debug() {
-        let request = Client::new().get("/").header("x-test", "111");
+        let request = Client::new().await.get("/").header("x-test", "111");
         let repr = format!("{request:?}");
         assert!(repr.contains("ClientRequest"));
         assert!(repr.contains("x-test"));
@@ -559,6 +560,7 @@ mod tests {
     #[allow(clippy::let_underscore_future)]
     async fn test_basics() {
         let mut req = Client::new()
+            .await
             .put("/")
             .version(Version::HTTP_2)
             .header(header::DATE, "data")
@@ -589,7 +591,9 @@ mod tests {
     async fn test_client_header() {
         let req = Client::build()
             .header(header::CONTENT_TYPE, "111")
-            .finish()
+            .finish(SharedConfig::default())
+            .await
+            .unwrap()
             .get("/");
 
         assert_eq!(
@@ -607,7 +611,9 @@ mod tests {
     async fn test_client_header_override() {
         let req = Client::build()
             .header(header::CONTENT_TYPE, "111")
-            .finish()
+            .finish(SharedConfig::default())
+            .await
+            .unwrap()
             .get("/")
             .set_header(header::CONTENT_TYPE, "222");
 
@@ -625,6 +631,7 @@ mod tests {
     #[crate::rt_test]
     async fn client_basic_auth() {
         let req = Client::new()
+            .await
             .get("/")
             .basic_auth("username", Some("password"));
         assert_eq!(
@@ -637,7 +644,7 @@ mod tests {
             "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
         );
 
-        let req = Client::new().get("/").basic_auth("username", None);
+        let req = Client::new().await.get("/").basic_auth("username", None);
         assert_eq!(
             req.head
                 .headers
@@ -651,7 +658,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn client_bearer_auth() {
-        let req = Client::new().get("/").bearer_auth("someS3cr3tAutht0k3n");
+        let req = Client::new()
+            .await
+            .get("/")
+            .bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(
             req.head
                 .headers
@@ -666,6 +676,7 @@ mod tests {
     #[crate::rt_test]
     async fn client_query() {
         let req = Client::new()
+            .await
             .get("/")
             .query(&[("key1", "val1"), ("key2", "val2")])
             .unwrap();

@@ -4,10 +4,12 @@ use std::{net, str::FromStr, sync::mpsc, thread};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
+use ntex_tls::TlsConfig;
+
 use crate::channel::bstream;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
-use crate::io::{Io, SharedConfig};
+use crate::io::{Io, IoConfig, SharedConfig};
 use crate::server::Server;
 use crate::service::ServiceFactory;
 #[cfg(feature = "ws")]
@@ -223,11 +225,50 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server<F, R>(factory: F) -> TestServer
+pub async fn server<F, R>(factory: F) -> TestServer
 where
     F: Fn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedConfig> + 'static,
 {
+    server_with_config(factory, SharedConfig::new("HTTP-TEST-SRV")).await
+}
+
+/// Start test server
+///
+/// `TestServer` is very simple test server that simplify process of writing
+/// integration tests cases for ntex web applications.
+///
+/// # Examples
+///
+/// ```rust
+/// use ntex::http;
+/// use ntex::web::{self, App, HttpResponse};
+///
+/// async fn my_handler() -> Result<HttpResponse, std::io::Error> {
+///     Ok(HttpResponse::Ok().into())
+/// }
+///
+/// #[ntex::test]
+/// async fn test_example() {
+///     let mut srv = http::test::server(
+///         || http::HttpService::new(
+///             App::new().service(
+///                 web::resource("/").to(my_handler))
+///         )
+///     );
+///
+///     let req = srv.get("/");
+///     let response = req.send().await.unwrap();
+///     assert!(response.status().is_success());
+/// }
+/// ```
+pub async fn server_with_config<F, R, U>(factory: F, cfg: U) -> TestServer
+where
+    F: Fn() -> R + Send + Clone + 'static,
+    R: ServiceFactory<Io, SharedConfig> + 'static,
+    U: Into<SharedConfig>,
+{
+    let cfg = cfg.into();
     let (tx, rx) = mpsc::channel();
 
     // run server in separate thread
@@ -240,7 +281,7 @@ where
         sys.run(move || {
             let srv = crate::server::build()
                 .listen("test", tcp, move |_| factory())?
-                .set_config("test", SharedConfig::new("HTTP-TEST-SRV"))
+                .config("test", cfg)
                 .workers(1)
                 .disable_signals()
                 .run();
@@ -258,9 +299,10 @@ where
         addr,
         system,
         server,
-        client: Client::build().finish(),
+        client: Client::build().finish(()).await.unwrap(),
     }
     .set_client_timeout(Seconds(90), Millis(90_000))
+    .await
 }
 
 #[derive(Debug)]
@@ -274,7 +316,21 @@ pub struct TestServer {
 
 impl TestServer {
     /// Set client timeout
-    pub fn set_client_timeout(mut self, timeout: Seconds, connect_timeout: Millis) -> Self {
+    pub async fn set_client_timeout(
+        mut self,
+        timeout: Seconds,
+        connect_timeout: Millis,
+    ) -> Self {
+        let cfg = SharedConfig::build("TEST-CLIENT")
+            .add(IoConfig::new().set_connect_timeout(connect_timeout))
+            .add(TlsConfig::new().set_handshake_timeout(timeout))
+            .add(
+                ntex_h2::ServiceConfig::new()
+                    .max_header_list_size(256 * 1024)
+                    .max_header_continuation_frames(96),
+            )
+            .finish();
+
         let client = {
             let connector = {
                 #[cfg(feature = "openssl")]
@@ -286,25 +342,19 @@ impl TestServer {
                     let _ = builder
                         .set_alpn_protos(b"\x02h2\x08http/1.1")
                         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
-                    Connector::default()
-                        .timeout(connect_timeout)
-                        .openssl(builder.build())
-                        .configure_http2(|cfg| {
-                            cfg.max_header_list_size(256 * 1024);
-                            cfg.max_header_continuation_frames(96);
-                        })
-                        .finish()
+                    Connector::default().openssl(builder.build())
                 }
                 #[cfg(not(feature = "openssl"))]
                 {
-                    Connector::default().timeout(connect_timeout).finish()
+                    Connector::default()
                 }
             };
 
             Client::build()
-                .timeout(timeout)
-                .connector(connector)
-                .finish()
+                .connector::<&str>(connector)
+                .finish(cfg)
+                .await
+                .unwrap()
         };
 
         self.client = client;
@@ -369,7 +419,8 @@ impl TestServer {
         WsClient::build(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))
-            .finish()
+            .finish(Default::default())
+            .await
             .unwrap()
             .connect()
             .await
@@ -408,7 +459,8 @@ impl TestServer {
             .timeout(Seconds(30))
             .openssl(builder.build())
             .take()
-            .finish()
+            .finish(Default::default())
+            .await
             .unwrap()
             .connect()
             .await

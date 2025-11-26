@@ -2,36 +2,24 @@ use std::{io, sync::Arc};
 
 use tls_rust::ServerConfig;
 
-use ntex_io::{Filter, Io, Layer};
+use ntex_io::{Cfg, Filter, Io, Layer, SharedConfig};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{services::Counter, time::Millis};
+use ntex_util::services::Counter;
 
-use crate::{MAX_SSL_ACCEPT_COUNTER, rustls::TlsServerFilter};
+use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// Support `SSL` connections via rustls package
 ///
 /// `rust-tls` feature enables `RustlsAcceptor` type
 pub struct TlsAcceptor {
     config: Arc<ServerConfig>,
-    timeout: Millis,
 }
 
 impl TlsAcceptor {
     /// Create rustls based `Acceptor` service factory
     pub fn new(config: Arc<ServerConfig>) -> Self {
-        Self {
-            config,
-            timeout: Millis(5_000),
-        }
-    }
-
-    /// Set handshake timeout.
-    ///
-    /// Default is set to 5 seconds.
-    pub fn timeout<U: Into<Millis>>(mut self, timeout: U) -> Self {
-        self.timeout = timeout.into();
-        self
+        Self { config }
     }
 }
 
@@ -41,26 +29,17 @@ impl From<ServerConfig> for TlsAcceptor {
     }
 }
 
-impl Clone for TlsAcceptor {
-    fn clone(&self) -> Self {
-        Self {
-            config: self.config.clone(),
-            timeout: self.timeout,
-        }
-    }
-}
-
-impl<F: Filter, C> ServiceFactory<Io<F>, C> for TlsAcceptor {
+impl<F: Filter> ServiceFactory<Io<F>, SharedConfig> for TlsAcceptor {
     type Response = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
     type Service = TlsAcceptorService;
     type InitError = ();
 
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ok(TlsAcceptorService {
+                cfg: cfg.get(),
                 config: self.config.clone(),
-                timeout: self.timeout,
                 conns: conns.clone(),
             })
         })
@@ -70,8 +49,8 @@ impl<F: Filter, C> ServiceFactory<Io<F>, C> for TlsAcceptor {
 #[derive(Debug)]
 /// RusTLS based `Acceptor` service
 pub struct TlsAcceptorService {
+    cfg: Cfg<TlsConfig>,
     config: Arc<ServerConfig>,
-    timeout: Millis,
     conns: Counter,
 }
 
@@ -92,6 +71,11 @@ impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let _guard = self.conns.get();
-        super::TlsServerFilter::create(io, self.config.clone(), self.timeout).await
+        super::TlsServerFilter::create(
+            io,
+            self.config.clone(),
+            self.cfg.handshake_timeout(),
+        )
+        .await
     }
 }

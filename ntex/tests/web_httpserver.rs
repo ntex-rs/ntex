@@ -7,8 +7,12 @@ use tls_openssl::ssl::SslAcceptorBuilder;
 #[cfg(feature = "rustls")]
 mod rustls_utils;
 
+use ntex::http::HttpServiceConfig;
 use ntex::web::{self, App, HttpResponse, HttpServer};
-use ntex::{io::SharedConfig, rt, server::TestServer, time::Seconds, time::sleep};
+use ntex::{
+    io::IoConfig, io::SharedConfig, rt, server::TestServer, time::Seconds, time::sleep,
+};
+use ntex_tls::TlsConfig;
 
 #[cfg(unix)]
 #[ntex::test]
@@ -30,13 +34,19 @@ async fn test_run() {
             .backlog(1)
             .maxconn(10)
             .maxconnrate(10)
-            .keep_alive(10)
-            .client_timeout(Seconds(5))
-            .disconnect_timeout(Seconds(1))
-            .ssl_handshake_timeout(Seconds(1))
             .server_hostname("localhost")
             .stop_runtime()
             .disable_signals()
+            .config(
+                SharedConfig::build("WEB")
+                    .add(
+                        HttpServiceConfig::new()
+                            .keepalive(10)
+                            .client_timeout(Seconds(5)),
+                    )
+                    .add(IoConfig::new().set_disconnect_timeout(Seconds(1)))
+                    .add(TlsConfig::new().set_handshake_timeout(Seconds(1))),
+            )
             .bind(format!("{addr}"))
             .unwrap()
             .run();
@@ -49,8 +59,14 @@ async fn test_run() {
     use ntex::http::client;
 
     let client = client::Client::build()
-        .connector(client::Connector::default().timeout(Seconds(100)).finish())
-        .finish();
+        .connector::<&str>(client::Connector::default())
+        .finish(
+            SharedConfig::build("DBG")
+                .add(IoConfig::new().set_connect_timeout(30))
+                .finish(),
+        )
+        .await
+        .unwrap();
 
     let host = format!("http://{addr}");
     let response = client.get(host.clone()).send().await.unwrap();
@@ -79,7 +95,7 @@ fn ssl_acceptor() -> std::io::Result<SslAcceptorBuilder> {
 }
 
 #[cfg(feature = "openssl")]
-fn client() -> ntex::http::client::Client {
+async fn client() -> ntex::http::client::Client {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
@@ -88,14 +104,13 @@ fn client() -> ntex::http::client::Client {
         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
     ntex::http::client::Client::build()
-        .timeout(Seconds(30))
-        .connector(
-            ntex::http::client::Connector::default()
-                .timeout(Seconds(30))
-                .openssl(builder.build())
-                .finish(),
+        .response_timeout(Seconds(30))
+        .connector::<&str>(
+            ntex::http::client::Connector::default().openssl(builder.build()),
         )
-        .finish()
+        .finish(SharedConfig::build("TEST").add(IoConfig::new().set_connect_timeout(30)))
+        .await
+        .unwrap()
 }
 
 #[ntex::test]
@@ -133,7 +148,7 @@ async fn test_openssl() {
     let (srv, sys) = rx.recv().unwrap();
     thread::sleep(Duration::from_millis(100));
 
-    let client = client();
+    let client = client().await;
     let host = format!("https://{addr}");
     let response = client.get(host.clone()).send().await.unwrap();
     assert!(response.status().is_success());
@@ -179,7 +194,7 @@ async fn test_rustls() {
     });
     let (srv, sys) = rx.recv().unwrap();
 
-    let client = client();
+    let client = client().await;
     let host = format!("https://localhost:{}", addr.port());
     let response = client.get(host).send().await.unwrap();
     assert!(response.status().is_success());
@@ -222,14 +237,14 @@ async fn test_bind_uds() {
     use ntex::http::client;
 
     let client = client::Client::build()
-        .connector(
-            client::Connector::default()
-                .connector(ntex::service::fn_service(|_| async {
-                    Ok(rt::unix_connect("/tmp/uds-test", SharedConfig::default()).await?)
-                }))
-                .finish(),
-        )
-        .finish();
+        .connector::<&str>(client::Connector::default().connector(
+            ntex::service::fn_service(|_| async {
+                Ok(rt::unix_connect("/tmp/uds-test", SharedConfig::default()).await?)
+            }),
+        ))
+        .finish(())
+        .await
+        .unwrap();
     let response = client.get("http://localhost").send().await.unwrap();
     assert!(response.status().is_success());
 
@@ -274,14 +289,14 @@ async fn test_listen_uds() {
     use ntex::http::client;
 
     let client = client::Client::build()
-        .connector(
-            client::Connector::default()
-                .connector(ntex::service::fn_service(|_| async {
-                    Ok(rt::unix_connect("/tmp/uds-test2", SharedConfig::default()).await?)
-                }))
-                .finish(),
-        )
-        .finish();
+        .connector::<&str>(client::Connector::default().connector(
+            ntex::service::fn_service(|_| async {
+                Ok(rt::unix_connect("/tmp/uds-test2", SharedConfig::default()).await?)
+            }),
+        ))
+        .finish(())
+        .await
+        .unwrap();
     let response = client.get("http://localhost").send().await.unwrap();
     assert!(response.status().is_success());
 

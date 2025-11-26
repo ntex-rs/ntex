@@ -164,7 +164,8 @@ mod tests {
             App::new().state(data).service(
                 web::resource("/").to(|_data: super::State<TestData>| async { "ok" }),
             )
-        });
+        })
+        .await;
 
         assert!(srv.get("/").send().await.unwrap().status().is_success());
         srv.stop().await;

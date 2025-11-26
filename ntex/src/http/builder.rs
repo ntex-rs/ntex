@@ -1,7 +1,7 @@
 use std::{error::Error, fmt, marker::PhantomData};
 
 use crate::http::body::MessageBody;
-use crate::http::config::{KeepAlive, ServiceConfig};
+use crate::http::config::{HttpServiceConfig, KeepAlive};
 use crate::http::error::{H2Error, ResponseError};
 use crate::http::h1::{self, H1Service};
 use crate::http::h2::{self, H2Service};
@@ -19,7 +19,6 @@ pub struct HttpServiceBuilder<
     C1 = h1::DefaultControlService,
     C2 = h2::DefaultControlService,
 > {
-    config: ServiceConfig,
     h1_control: C1,
     h2_control: C2,
     _t: PhantomData<(F, S)>,
@@ -28,14 +27,7 @@ pub struct HttpServiceBuilder<
 impl<F, S> HttpServiceBuilder<F, S, h1::DefaultControlService, h2::DefaultControlService> {
     /// Create instance of `ServiceConfigBuilder`
     pub fn new() -> Self {
-        HttpServiceBuilder::with_config(ServiceConfig::default())
-    }
-
-    #[doc(hidden)]
-    /// Create instance of `ServiceConfigBuilder`
-    pub fn with_config(config: ServiceConfig) -> Self {
         HttpServiceBuilder {
-            config,
             h1_control: h1::DefaultControlService,
             h2_control: h2::DefaultControlService,
             _t: PhantomData,
@@ -128,10 +120,10 @@ where
     where
         CF: IntoServiceFactory<CT, h1::Control<F, S::Error>, SharedConfig>,
         CT: ServiceFactory<
-                h1::Control<F, S::Error>,
-                SharedConfig,
-                Response = h1::ControlAck,
-            >,
+            h1::Control<F, S::Error>,
+            SharedConfig,
+            Response = h1::ControlAck,
+        >,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {

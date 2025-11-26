@@ -4,7 +4,6 @@ use bitflags::bitflags;
 
 use crate::codec::{Decoder, Encoder};
 use crate::http::body::BodySize;
-use crate::http::config::DateService;
 use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::message::{ConnectionType, RequestHeadType, ResponseHead};
 use crate::http::{Method, Version};
@@ -36,7 +35,6 @@ pub struct ClientPayloadCodec {
 
 #[derive(Debug)]
 struct ClientCodecInner {
-    timer: DateService,
     decoder: decoder::MessageDecoder<ResponseHead>,
     payload: RefCell<Option<PayloadDecoder>>,
     version: Cell<Version>,
@@ -49,7 +47,7 @@ struct ClientCodecInner {
 
 impl Default for ClientCodec {
     fn default() -> Self {
-        ClientCodec::new(DateService::default(), true)
+        ClientCodec::new(true)
     }
 }
 
@@ -57,7 +55,7 @@ impl ClientCodec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(timer: DateService, keep_alive: bool) -> Self {
+    pub fn new(keep_alive: bool) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -65,7 +63,6 @@ impl ClientCodec {
         };
         ClientCodec {
             inner: ClientCodecInner {
-                timer,
                 decoder: decoder::MessageDecoder::default(),
                 payload: RefCell::new(None),
                 version: Cell::new(Version::HTTP_11),
@@ -223,7 +220,6 @@ impl Encoder for ClientCodec {
                     inner.version.get(),
                     length,
                     inner.ctype.get(),
-                    &inner.timer,
                 )?;
             }
             Message::Chunk(Some(bytes)) => {

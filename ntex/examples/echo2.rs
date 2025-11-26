@@ -23,7 +23,7 @@ async fn main() -> io::Result<()> {
 
     ntex::server::build()
         .bind("echo", "127.0.0.1:8080", |_| {
-            HttpService::build().h2(handle_request)
+            HttpService::h2(handle_request)
         })?
         .run()
         .await

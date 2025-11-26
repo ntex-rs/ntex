@@ -25,7 +25,6 @@ bitflags! {
 
 /// HTTP/1 Codec
 pub struct Codec {
-    timer: DateService,
     decoder: decoder::MessageDecoder<Request>,
     version: Cell<Version>,
     ctype: Cell<ConnectionType>,
@@ -37,14 +36,13 @@ pub struct Codec {
 
 impl Default for Codec {
     fn default() -> Self {
-        Codec::new(DateService::default(), false)
+        Codec::new(false)
     }
 }
 
 impl Clone for Codec {
     fn clone(&self) -> Self {
         Codec {
-            timer: self.timer.clone(),
             decoder: self.decoder.clone(),
             version: self.version.clone(),
             ctype: self.ctype.clone(),
@@ -70,7 +68,7 @@ impl Codec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(timer: DateService, keep_alive: bool) -> Self {
+    pub fn new(keep_alive: bool) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -78,7 +76,6 @@ impl Codec {
         };
 
         Codec {
-            timer,
             flags: Cell::new(flags),
             decoder: decoder::MessageDecoder::default(),
             version: Cell::new(Version::HTTP_11),
@@ -102,7 +99,7 @@ impl Codec {
     #[inline]
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
-        self.timer.set_date_header(dst)
+        DateService.set_date_header(dst)
     }
 
     fn insert_flags(&self, f: Flags) {
@@ -176,7 +173,6 @@ impl Encoder for Codec {
                     self.version.get(),
                     length,
                     self.ctype.get(),
-                    &self.timer,
                 )?;
                 // self.headers_size = (dst.len() - len) as u32;
             }

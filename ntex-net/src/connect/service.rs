@@ -1,55 +1,38 @@
 use std::{collections::VecDeque, fmt, io, net::SocketAddr};
 
-use ntex_io::{Io, SharedConfig, types};
+use ntex_io::{Cfg, Io, IoConfig, SharedConfig, types};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{future::Either, time::Millis, time::timeout_checked};
+use ntex_util::{future::Either, time::timeout_checked};
 
 use super::{Address, Connect, ConnectError, Resolver};
 use crate::tcp_connect;
 
 /// Basic tcp stream connector
 pub struct Connector<T> {
-    cfg: SharedConfig,
-    timeout: Millis,
+    cfg: Cfg<IoConfig>,
+    shared: SharedConfig,
     resolver: Resolver<T>,
 }
 
 impl<T> Copy for Connector<T> {}
 
 impl<T> Connector<T> {
-    /// Construct new connect service with default dns resolver
+    /// Construct new connect service with default configuration
     pub fn new() -> Self {
         Connector {
-            cfg: SharedConfig::default(),
+            cfg: Default::default(),
+            shared: Default::default(),
             resolver: Resolver::new(),
-            timeout: Millis::ZERO,
         }
     }
 
-    /// Construct new connect service with default dns resolver
+    /// Construct new connect service with custom configuration
     pub fn with(cfg: SharedConfig) -> Self {
         Connector {
-            cfg,
+            cfg: cfg.get(),
+            shared: cfg,
             resolver: Resolver::new(),
-            timeout: Millis::ZERO,
         }
-    }
-
-    /// Set io configuration
-    ///
-    /// Set config for new io object.
-    pub fn config(mut self, cfg: SharedConfig) -> Self {
-        self.cfg = cfg;
-        self
-    }
-
-    /// Connect timeout.
-    ///
-    /// i.e. max time to connect to remote host including dns name resolution.
-    /// Timeout is disabled by default
-    pub fn timeout<U: Into<Millis>>(mut self, timeout: U) -> Self {
-        self.timeout = timeout.into();
-        self
     }
 }
 
@@ -59,27 +42,29 @@ impl<T: Address> Connector<T> {
     where
         Connect<T>: From<U>,
     {
-        timeout_checked(self.timeout, async {
+        timeout_checked(self.cfg.connect_timeout(), async {
             // resolve first
             let address = self
                 .resolver
-                .lookup_with_tag(message.into(), self.cfg.tag())
+                .lookup_with_tag(message.into(), self.shared.tag())
                 .await?;
 
             let port = address.port();
             let Connect { req, addr, .. } = address;
 
             if let Some(addr) = addr {
-                connect(req, port, addr, self.cfg).await
+                connect(req, port, addr, self.shared).await
             } else if let Some(addr) = req.addr() {
-                connect(req, addr.port(), Either::Left(addr), self.cfg).await
+                connect(req, addr.port(), Either::Left(addr), self.shared).await
             } else {
                 log::error!("{}: TCP connector: got unresolved address", self.cfg.tag());
                 Err(ConnectError::Unresolved)
             }
         })
         .await
-        .map_err(|_| ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Timeout")))
+        .map_err(|_| {
+            ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Connect timeout"))
+        })
         .and_then(|item| item)
     }
 }
@@ -100,20 +85,19 @@ impl<T> fmt::Debug for Connector<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Connector")
             .field("cfg", &self.cfg)
-            .field("timeout", &self.timeout)
             .field("resolver", &self.resolver)
             .finish()
     }
 }
 
-impl<T: Address, C> ServiceFactory<Connect<T>, C> for Connector<T> {
+impl<T: Address> ServiceFactory<Connect<T>, SharedConfig> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
 
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        Ok(*self)
+    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+        Ok(Connector::with(cfg))
     }
 }
 
@@ -177,6 +161,8 @@ async fn connect<T: Address>(
 mod tests {
     use super::*;
 
+    use ntex_util::time::Millis;
+
     #[ntex::test]
     async fn test_connect() {
         let server = ntex::server::test_server(|| {
@@ -184,8 +170,13 @@ mod tests {
         });
 
         let srv = Connector::default()
-            .config(SharedConfig::new("T"))
-            .timeout(Millis(5000));
+            .create(
+                SharedConfig::build("T")
+                    .add(IoConfig::new().set_connect_timeout(Millis(5000)))
+                    .finish(),
+            )
+            .await
+            .unwrap();
         let result = srv.connect("").await;
         assert!(result.is_err());
         let result = srv.connect("localhost:99999").await;

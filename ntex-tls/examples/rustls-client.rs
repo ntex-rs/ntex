@@ -1,6 +1,8 @@
 use std::io;
 
-use ntex::{codec, connect, io::types::PeerAddr, util::Bytes, util::Either};
+use ntex::io::{SharedConfig, types::PeerAddr};
+use ntex::{Pipeline, ServiceFactory, codec, connect, util::Bytes, util::Either};
+use ntex_tls::TlsConfig;
 use tls_rust::{ClientConfig, RootCertStore};
 
 #[ntex::main]
@@ -15,10 +17,19 @@ async fn main() -> io::Result<()> {
         .with_no_client_auth();
 
     // rustls connector
-    let connector = connect::rustls::TlsConnector::new(config.clone());
+    let connector = Pipeline::new(
+        connect::rustls::TlsConnector::new(config.clone())
+            .create(
+                SharedConfig::build("CLIENT")
+                    .add(TlsConfig::new().set_handshake_timeout(10))
+                    .finish(),
+            )
+            .await
+            .unwrap(),
+    );
 
     //let io = connector.connect("www.rust-lang.org:443").await.unwrap();
-    let io = connector.connect("127.0.0.1:8443").await.unwrap();
+    let io = connector.call("127.0.0.1:8443".into()).await.unwrap();
     println!("Connected to tls server {:?}", io.query::<PeerAddr>().get());
     io.send(Bytes::from_static(b"GET /\r\n\r\n"), &codec::BytesCodec)
         .await

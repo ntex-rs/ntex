@@ -1,14 +1,11 @@
-use std::{fmt, task::Context, time::Duration};
-
-use ntex_h2::{self as h2};
+use std::{task::Context, time::Duration};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::service::{Service, ServiceCtx, apply_fn, boxed};
-use crate::time::{Millis, Seconds};
-use crate::util::{join, timeout::TimeoutError, timeout::TimeoutService};
-use crate::{http::Uri, io::IoBoxed};
+use crate::io::SharedConfig;
+use crate::service::{Service, ServiceCtx, ServiceFactory, apply_fn_factory, boxed};
+use crate::{http::Uri, io::IoBoxed, time::Seconds, util::join};
 
-use super::{Connect, connection::Connection, error::ConnectError, pool::ConnectionPool};
+use super::{Connect, Connection, error::ConnectError, pool::ConnectionPool};
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::SslConnector as OpensslConnector;
@@ -16,7 +13,8 @@ use tls_openssl::ssl::SslConnector as OpensslConnector;
 #[cfg(feature = "rustls")]
 use tls_rustls::ClientConfig;
 
-type BoxedConnector = boxed::BoxService<TcpConnect<Uri>, IoBoxed, ConnectError>;
+type BoxedConnector =
+    boxed::BoxServiceFactory<SharedConfig, Connect, IoBoxed, ConnectError, ()>;
 
 #[derive(Debug)]
 /// Manages http client network connectivity.
@@ -26,20 +24,16 @@ type BoxedConnector = boxed::BoxService<TcpConnect<Uri>, IoBoxed, ConnectError>;
 ///
 /// ```rust,no_run
 /// use ntex::http::client::Connector;
-/// use ntex::time::Millis;
 ///
 /// let connector = Connector::default()
-///      .timeout(Millis(5_000))
-///      .finish();
+///      .keep_alive(5_000);
 /// ```
 pub struct Connector {
-    timeout: Millis,
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
     limit: usize,
-    h2config: h2::Config,
     connector: BoxedConnector,
-    ssl_connector: Option<BoxedConnector>,
+    secure_connector: Option<BoxedConnector>,
 }
 
 impl Default for Connector {
@@ -51,17 +45,17 @@ impl Default for Connector {
 impl Connector {
     pub fn new() -> Connector {
         let conn = Connector {
-            connector: boxed::service(
-                TcpConnector::new()
-                    .map(IoBoxed::from)
-                    .map_err(ConnectError::from),
+            connector: boxed::factory(
+                apply_fn_factory(TcpConnector::new(), |msg: Connect, svc| async move {
+                    svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
+                })
+                .map(IoBoxed::from)
+                .map_err(ConnectError::from),
             ),
-            ssl_connector: None,
-            timeout: Millis(1_000),
+            secure_connector: None,
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
             limit: 100,
-            h2config: h2::Config::client(),
         };
 
         #[cfg(feature = "openssl")]
@@ -98,15 +92,6 @@ impl Connector {
 }
 
 impl Connector {
-    /// Connection timeout.
-    ///
-    /// i.e. max time to connect to remote host including dns name resolution.
-    /// Set to 1 second by default.
-    pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
-        self.timeout = timeout.into();
-        self
-    }
-
     #[cfg(feature = "openssl")]
     /// Use openssl connector for secured connections.
     pub fn openssl(self, connector: OpensslConnector) -> Self {
@@ -138,8 +123,8 @@ impl Connector {
     /// the delay between repeated usages of the same connection
     /// exceeds this period, the connection is closed.
     /// Default keep-alive period is 15 seconds.
-    pub fn keep_alive(mut self, dur: Seconds) -> Self {
-        self.conn_keep_alive = dur.into();
+    pub fn keep_alive<T: Into<Seconds>>(mut self, dur: T) -> Self {
+        self.conn_keep_alive = dur.into().into();
         self
     }
 
@@ -148,107 +133,92 @@ impl Connector {
     /// Connection lifetime is max lifetime of any opened connection
     /// until it is closed regardless of keep-alive period.
     /// Default lifetime period is 75 seconds.
-    pub fn lifetime(mut self, dur: Seconds) -> Self {
-        self.conn_lifetime = dur.into();
-        self
-    }
-
-    #[doc(hidden)]
-    /// Configure http2 connection settings
-    pub fn configure_http2<O, R>(self, f: O) -> Self
-    where
-        O: FnOnce(&h2::Config) -> R,
-    {
-        let _ = f(&self.h2config);
+    pub fn lifetime<T: Into<Seconds>>(mut self, dur: T) -> Self {
+        self.conn_lifetime = dur.into().into();
         self
     }
 
     /// Use custom connector to open un-secured connections.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
-        T: Service<TcpConnect<Uri>, Error = crate::connect::ConnectError> + 'static,
+        T: ServiceFactory<
+                TcpConnect<Uri>,
+                SharedConfig,
+                Error = crate::connect::ConnectError,
+            > + 'static,
         IoBoxed: From<T::Response>,
     {
-        self.connector =
-            boxed::service(connector.map(IoBoxed::from).map_err(ConnectError::from));
+        self.connector = boxed::factory(
+            apply_fn_factory(connector, |msg: Connect, svc| async move {
+                svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
+            })
+            .map(IoBoxed::from)
+            .map_err(ConnectError::from)
+            .map_init_err(|_| ()),
+        );
         self
     }
 
     /// Use custom connector to open secure connections.
     pub fn secure_connector<T>(mut self, connector: T) -> Self
     where
-        T: Service<TcpConnect<Uri>, Error = crate::connect::ConnectError> + 'static,
+        T: ServiceFactory<
+                TcpConnect<Uri>,
+                SharedConfig,
+                Error = crate::connect::ConnectError,
+            > + 'static,
         IoBoxed: From<T::Response>,
     {
-        self.ssl_connector = Some(boxed::service(
-            connector.map(IoBoxed::from).map_err(ConnectError::from),
+        self.secure_connector = Some(boxed::factory(
+            apply_fn_factory(connector, |msg: Connect, svc| async move {
+                svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
+            })
+            .map(IoBoxed::from)
+            .map_err(ConnectError::from)
+            .map_init_err(|_| ()),
         ));
         self
     }
+}
 
-    /// Finish configuration process and create connector service.
-    /// The Connector builder always concludes by calling `finish()` last in
-    /// its combinator chain.
-    pub fn finish(
-        self,
-    ) -> impl Service<Connect, Response = Connection, Error = ConnectError> + fmt::Debug
-    {
-        let tcp_service = connector(self.connector, self.timeout);
+impl ServiceFactory<Connect, SharedConfig> for Connector {
+    type Response = Connection;
+    type Error = ConnectError;
+    type Service = ConnectorService;
+    type InitError = ();
 
-        let ssl_pool = if let Some(ssl_connector) = self.ssl_connector {
-            let srv = connector(ssl_connector, self.timeout);
+    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+        let tcp_pool = ConnectionPool::new(
+            self.connector.create(cfg).await?.into(),
+            self.conn_lifetime,
+            self.conn_keep_alive,
+            self.limit,
+            cfg,
+        );
+        let ssl_pool = if let Some(ref connector) = self.secure_connector {
             Some(ConnectionPool::new(
-                srv,
+                connector.create(cfg).await?.into(),
                 self.conn_lifetime,
                 self.conn_keep_alive,
                 self.limit,
-                self.h2config.clone(),
+                cfg,
             ))
         } else {
             None
         };
-
-        InnerConnector {
-            tcp_pool: ConnectionPool::new(
-                tcp_service,
-                self.conn_lifetime,
-                self.conn_keep_alive,
-                self.limit,
-                self.h2config.clone(),
-            ),
-            ssl_pool,
-        }
+        Ok(ConnectorService { tcp_pool, ssl_pool })
     }
 }
 
-fn connector(
-    connector: BoxedConnector,
-    timeout: Millis,
-) -> impl Service<Connect, Response = IoBoxed, Error = ConnectError> + fmt::Debug {
-    TimeoutService::new(
-        timeout,
-        apply_fn(connector, |msg: Connect, svc| async move {
-            svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
-        })
-        .map_err(ConnectError::from),
-    )
-    .map_err(|e| match e {
-        TimeoutError::Service(e) => e,
-        TimeoutError::Timeout => ConnectError::Timeout,
-    })
-}
-
+/// Manages http client network connectivity.
 #[derive(Debug)]
-struct InnerConnector<T> {
-    tcp_pool: ConnectionPool<T>,
-    ssl_pool: Option<ConnectionPool<T>>,
+pub struct ConnectorService {
+    tcp_pool: ConnectionPool,
+    ssl_pool: Option<ConnectionPool>,
 }
 
-impl<T> Service<Connect> for InnerConnector<T>
-where
-    T: Service<Connect, Response = IoBoxed, Error = ConnectError> + 'static,
-{
-    type Response = <ConnectionPool<T> as Service<Connect>>::Response;
+impl Service<Connect> for ConnectorService {
+    type Response = Connection;
     type Error = ConnectError;
 
     #[inline]
@@ -299,11 +269,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{service::Pipeline, util::lazy};
+    use crate::{io::SharedConfig, service::Pipeline, util::lazy};
 
     #[crate::rt_test]
     async fn test_readiness() {
-        let conn = Pipeline::new(Connector::default().finish()).bind();
+        let conn = Pipeline::new(
+            Connector::default()
+                .create(SharedConfig::default())
+                .await
+                .unwrap(),
+        )
+        .bind();
         assert!(lazy(|cx| conn.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| conn.poll_shutdown(cx).is_ready()).await);
     }

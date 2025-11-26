@@ -1,7 +1,7 @@
 use std::{cell::Cell, cell::RefCell, error::Error, fmt, marker, rc::Rc, task::Context};
 
 use crate::http::body::MessageBody;
-use crate::http::config::{DispatcherConfig, ServiceConfig};
+use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, ResponseError};
 use crate::http::{request::Request, response::Response};
 use crate::io::{Filter, Io, IoRef, SharedConfig, types};
@@ -16,7 +16,6 @@ use super::dispatcher::Dispatcher;
 pub struct H1Service<F, S, B, C> {
     srv: S,
     ctl: C,
-    cfg: ServiceConfig,
     _t: marker::PhantomData<(F, B)>,
 }
 
@@ -29,12 +28,8 @@ where
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S, Request, SharedConfig>>(
-        cfg: ServiceConfig,
-        service: U,
-    ) -> Self {
+    pub(crate) fn new<U: IntoServiceFactory<S, Request, SharedConfig>>(service: U) -> Self {
         H1Service {
-            cfg,
             srv: service.into_factory(),
             ctl: DefaultControlService,
             _t: marker::PhantomData,
@@ -78,7 +73,6 @@ mod openssl {
             InitError = (),
         > {
             SslAcceptor::new(acceptor)
-                .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
                 .and_then(self.map_err(SslError::Service))
@@ -122,7 +116,6 @@ mod rustls {
             InitError = (),
         > {
             TlsAcceptor::from(config)
-                .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
                 .and_then(self.map_err(SslError::Service))
@@ -143,15 +136,15 @@ where
     C::InitError: fmt::Debug,
 {
     /// Provide http/1 control service
-    pub fn control<C1>(self, ctl: C1) -> H1Service<F, S, B, C1>
+    pub fn control<C1, U>(self, ctl: U) -> H1Service<F, S, B, C1>
     where
+        U: IntoServiceFactory<C1, Control<F, S::Error>, SharedConfig>,
         C1: ServiceFactory<Control<F, S::Error>, SharedConfig, Response = ControlAck>,
         C1::Error: Error,
         C1::InitError: fmt::Debug,
     {
         H1Service {
-            ctl,
-            cfg: self.cfg,
+            ctl: ctl.into_factory(),
             srv: self.srv,
             _t: marker::PhantomData,
         }
@@ -188,7 +181,7 @@ where
             .map_err(|e| log::error!("Cannot construct control service: {e:?}"))?;
 
         let (tx, rx) = oneshot::channel();
-        let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, control));
+        let config = Rc::new(DispatcherConfig::new(cfg.get(), service, control));
 
         Ok(H1ServiceHandler {
             config,

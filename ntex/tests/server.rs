@@ -90,7 +90,7 @@ async fn test_run() {
                     })
                 })
                 .unwrap()
-                .set_config("test", SharedConfig::new("SRV"))
+                .config("test", SharedConfig::new("SRV"))
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())

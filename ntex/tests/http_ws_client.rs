@@ -30,8 +30,8 @@ async fn ws_service(
 #[ntex::test]
 async fn test_simple() {
     let mut srv = test_server(|| {
-        HttpService::build()
-            .h1_control(|req: h1::Control<_, _>| async move {
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -50,9 +50,10 @@ async fn test_simple() {
                     req.ack()
                 };
                 Ok::<_, io::Error>(ack)
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-    });
+            },
+        )
+    })
+    .await;
 
     // client service
     let (io, codec, _) = srv.ws().await.unwrap().into_inner();
@@ -88,8 +89,8 @@ async fn test_simple() {
 #[ntex::test]
 async fn test_transport() {
     let mut srv = test_server(|| {
-        HttpService::build()
-            .h1_control(|req: h1::Control<_, _>| async move {
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -113,9 +114,10 @@ async fn test_transport() {
                     req.ack()
                 };
                 Ok::<_, io::Error>(ack)
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-    });
+            },
+        )
+    })
+    .await;
 
     // client service
     let io = srv.ws().await.unwrap().into_transport();
@@ -130,8 +132,8 @@ async fn test_transport() {
 #[ntex::test]
 async fn test_keepalive_timeout() {
     let srv = test_server(|| {
-        HttpService::build()
-            .h1_control(|req: h1::Control<_, _>| async move {
+        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).control(
+            |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -161,15 +163,17 @@ async fn test_keepalive_timeout() {
                     req.ack()
                 };
                 Ok::<_, io::Error>(ack)
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-    });
+            },
+        )
+    })
+    .await;
 
     // client service
     let con = ws::WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
-        .finish()
+        .finish(Default::default())
+        .await
         .unwrap()
         .connect()
         .await
@@ -195,7 +199,7 @@ async fn test_upgrade_handler_with_await() {
     }
 
     let srv = test_server(|| {
-        HttpService::build().finish(App::new().service(web::resource("/").route(web::to(
+        HttpService::new(App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // some async context switch
                 ntex::time::sleep(ntex::time::Seconds::ZERO).await;
@@ -209,12 +213,14 @@ async fn test_upgrade_handler_with_await() {
                 .await
             },
         ))))
-    });
+    })
+    .await;
 
     let _ = ws::WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(1))
-        .finish()
+        .finish(Default::default())
+        .await
         .unwrap()
         .connect()
         .await

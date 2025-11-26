@@ -55,7 +55,6 @@ pub(super) trait MessageType: Sized {
         version: Version,
         mut length: BodySize,
         ctype: ConnectionType,
-        timer: &DateService,
     ) -> Result<(), EncodeError> {
         let chunked = self.chunked();
         let mut skip_len = length != BodySize::Stream;
@@ -187,7 +186,7 @@ pub(super) trait MessageType: Sized {
 
         // optimized date header, set_date writes \r\n
         if !has_date {
-            timer.set_date_header(dst);
+            DateService.set_date_header(dst);
         } else {
             // msg eof
             dst.extend_from_slice(b"\r\n");
@@ -293,7 +292,6 @@ impl<T: MessageType> MessageEncoder<T> {
         version: Version,
         length: BodySize,
         ctype: ConnectionType,
-        timer: &DateService,
     ) -> Result<(), EncodeError> {
         // transfer encoding
         if !head {
@@ -314,7 +312,7 @@ impl<T: MessageType> MessageEncoder<T> {
         }
 
         message.encode_status(dst)?;
-        message.encode_headers(dst, version, length, ctype, timer)
+        message.encode_headers(dst, version, length, ctype)
     }
 }
 
@@ -629,7 +627,6 @@ mod tests {
             Version::HTTP_11,
             BodySize::Empty,
             ConnectionType::Close,
-            &DateService::default(),
         );
         let data = String::from_utf8(Vec::from(bytes.split().as_ref())).unwrap();
         assert!(data.contains("content-length: 0\r\n"));

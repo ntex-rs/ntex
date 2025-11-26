@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{any::Any, any::TypeId, cell::UnsafeCell, mem, ops};
 
 use ntex_bytes::{BytesVec, buf::BufMut};
-use ntex_util::{HashMap, time::Seconds};
+use ntex_util::{HashMap, time::Millis, time::Seconds};
 
 const DEFAULT_CACHE_SIZE: usize = 128;
 static IDX: AtomicUsize = AtomicUsize::new(0);
@@ -14,8 +14,22 @@ thread_local! {
 
 type Storage = (String, HashMap<TypeId, Box<dyn Any + Send + Sync>>);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Debug)]
 pub struct Cfg<T: 'static>(&'static T);
+
+impl<T: 'static> Cfg<T> {
+    pub fn into_static(&self) -> &'static T {
+        self.0
+    }
+}
+
+impl<T: 'static> Copy for Cfg<T> {}
+
+impl<T: 'static> Clone for Cfg<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 
 impl<T: 'static> ops::Deref for Cfg<T> {
     type Target = T;
@@ -25,9 +39,12 @@ impl<T: 'static> ops::Deref for Cfg<T> {
     }
 }
 
-impl<T: 'static> Cfg<T> {
-    pub fn into_static(&self) -> &'static T {
-        self.0
+impl<T: 'static> Default for Cfg<T>
+where
+    &'static T: Default,
+{
+    fn default() -> Self {
+        Self(<&'static T>::default())
     }
 }
 
@@ -115,9 +132,28 @@ impl SharedConfigBuilder {
     }
 }
 
+impl From<()> for SharedConfig {
+    fn from(_: ()) -> SharedConfig {
+        SharedConfig::default()
+    }
+}
+
+impl From<SharedConfigBuilder> for SharedConfig {
+    fn from(mut cfg: SharedConfigBuilder) -> SharedConfig {
+        cfg.finish()
+    }
+}
+
+impl From<&mut SharedConfigBuilder> for SharedConfig {
+    fn from(cfg: &mut SharedConfigBuilder) -> SharedConfig {
+        cfg.finish()
+    }
+}
+
 #[derive(Clone, Debug)]
 /// Base io configuration
 pub struct IoConfig {
+    connect_timeout: Millis,
     keepalive_timeout: Seconds,
     disconnect_timeout: Seconds,
     frame_read_rate: Option<FrameReadRate>,
@@ -164,6 +200,7 @@ impl IoConfig {
         let idx1 = IDX.fetch_add(1, Ordering::SeqCst);
         let idx2 = IDX.fetch_add(1, Ordering::SeqCst);
         IoConfig {
+            connect_timeout: Millis::ZERO,
             keepalive_timeout: Seconds(0),
             disconnect_timeout: Seconds(1),
             frame_read_rate: None,
@@ -190,6 +227,18 @@ impl IoConfig {
     /// Get tag
     pub fn tag(&self) -> &str {
         self.config.0.as_ref()
+    }
+
+    #[inline]
+    /// Shared config
+    pub fn shared_config(&self) -> SharedConfig {
+        SharedConfig(self.config)
+    }
+
+    #[inline]
+    /// Get connect timeout
+    pub fn connect_timeout(&self) -> Millis {
+        self.connect_timeout
     }
 
     #[inline]
@@ -222,13 +271,23 @@ impl IoConfig {
         &self.write_buf
     }
 
+    /// Set connect timeout in seconds.
+    ///
+    /// To disable timeout set value to 0.
+    ///
+    /// By default connect timeout is disabled.
+    pub fn set_connect_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
+        self.connect_timeout = timeout.into();
+        self
+    }
+
     /// Set keep-alive timeout in seconds.
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default keep-alive timeout is set to 30 seconds.
-    pub fn set_keepalive_timeout(mut self, timeout: Seconds) -> Self {
-        self.keepalive_timeout = timeout;
+    /// By default keep-alive timeout is disabled.
+    pub fn set_keepalive_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
+        self.keepalive_timeout = timeout.into();
         self
     }
 
@@ -240,8 +299,8 @@ impl IoConfig {
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 1 seconds.
-    pub fn set_disconnect_timeout(mut self, timeout: Seconds) -> Self {
-        self.disconnect_timeout = timeout;
+    pub fn set_disconnect_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
+        self.disconnect_timeout = timeout.into();
         self
     }
 
