@@ -40,7 +40,7 @@ pub use self::response::{ClientResponse, JsonBody, MessageBody};
 pub use self::test::TestResponse;
 
 use crate::http::{HeaderMap, Method, RequestHead, Uri, error::HttpError};
-use crate::{service::Pipeline, time::Millis};
+use crate::{SharedCfg, service::Pipeline, time::Millis};
 
 #[derive(Debug, Clone)]
 pub struct Connect {
@@ -97,7 +97,7 @@ impl Default for ClientConfig {
 impl Client {
     /// Create new client instance with default settings.
     pub async fn new() -> Client {
-        Client::build().finish(()).await.unwrap()
+        Client::build().finish(SharedCfg::default()).await.unwrap()
     }
 
     /// Build client instance.

@@ -1,153 +1,15 @@
+use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{any::Any, any::TypeId, cell::UnsafeCell, mem, ops};
 
 use ntex_bytes::{BytesVec, buf::BufMut};
-use ntex_util::{HashMap, time::Millis, time::Seconds};
+use ntex_service::cfg::{CfgContext, Configuration};
+use ntex_util::{time::Millis, time::Seconds};
 
 const DEFAULT_CACHE_SIZE: usize = 128;
 static IDX: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     static CACHE: LocalCache = LocalCache::new();
-    static DEFAULT_MAP: &'static Storage = Box::leak(Box::new(("IO".to_string(), HashMap::default())));
-}
-
-type Storage = (String, HashMap<TypeId, Box<dyn Any + Send + Sync>>);
-
-#[derive(Debug)]
-pub struct Cfg<T: 'static>(&'static T);
-
-impl<T: 'static> Cfg<T> {
-    pub fn into_static(&self) -> &'static T {
-        self.0
-    }
-}
-
-impl<T: 'static> Copy for Cfg<T> {}
-
-impl<T: 'static> Clone for Cfg<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T: 'static> ops::Deref for Cfg<T> {
-    type Target = T;
-
-    fn deref(&self) -> &'static T {
-        self.0
-    }
-}
-
-impl<T: 'static> Default for Cfg<T>
-where
-    &'static T: Default,
-{
-    fn default() -> Self {
-        Self(<&'static T>::default())
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-/// Shared configuration
-pub struct SharedConfig(&'static Storage);
-
-#[derive(Debug)]
-pub struct SharedConfigBuilder(Storage);
-
-impl SharedConfig {
-    /// Construct new configuration
-    pub fn new<T: AsRef<str>>(tag: T) -> SharedConfig {
-        Self::build(tag).finish()
-    }
-
-    /// Construct new configuration
-    pub fn build<T: AsRef<str>>(tag: T) -> SharedConfigBuilder {
-        SharedConfigBuilder((tag.as_ref().to_string(), HashMap::default()))
-    }
-
-    #[inline]
-    /// Get tag
-    pub fn tag(&self) -> &'static str {
-        self.0.0.as_ref()
-    }
-
-    /// Get a reference to a previously inserted on configuration.
-    pub fn get<T>(&self) -> Cfg<T>
-    where
-        &'static T: Default,
-    {
-        self.0
-            .1
-            .get(&TypeId::of::<T>())
-            .and_then(|boxed| boxed.downcast_ref())
-            .map(Cfg)
-            .unwrap_or_else(|| Cfg(<&'static T>::default()))
-    }
-}
-
-impl Default for SharedConfig {
-    fn default() -> Self {
-        Self(DEFAULT_MAP.with(|cfg| *cfg))
-    }
-}
-
-impl SharedConfigBuilder {
-    /// Insert a type into this configuration.
-    ///
-    /// If a config of this type already existed, it will
-    /// be replaced.
-    pub fn add<T>(&mut self, val: T) -> &mut Self
-    where
-        T: Send + Sync + 'static,
-        &'static T: Default,
-    {
-        self.0
-            .1
-            .insert(TypeId::of::<T>(), Box::new(val))
-            .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok());
-        self
-    }
-
-    /// Build static ref
-    pub fn finish(&mut self) -> SharedConfig {
-        if !self.0.1.contains_key(&TypeId::of::<IoConfig>()) {
-            self.add(IoConfig::new());
-        }
-
-        let mut map = mem::take(&mut self.0);
-        let cfg = map
-            .1
-            .get_mut(&TypeId::of::<IoConfig>())
-            .and_then(|boxed| boxed.downcast_mut::<IoConfig>())
-            .unwrap();
-        let cfg: *mut _ = cfg;
-
-        let map_ref = Box::leak(Box::new(map));
-
-        unsafe {
-            (*cfg).config = map_ref;
-        }
-        SharedConfig(map_ref)
-    }
-}
-
-impl From<()> for SharedConfig {
-    fn from(_: ()) -> SharedConfig {
-        SharedConfig::default()
-    }
-}
-
-impl From<SharedConfigBuilder> for SharedConfig {
-    fn from(mut cfg: SharedConfigBuilder) -> SharedConfig {
-        cfg.finish()
-    }
-}
-
-impl From<&mut SharedConfigBuilder> for SharedConfig {
-    fn from(cfg: &mut SharedConfigBuilder) -> SharedConfig {
-        cfg.finish()
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -163,7 +25,27 @@ pub struct IoConfig {
     write_buf: BufConfig,
 
     // shared config
-    config: &'static Storage,
+    pub(crate) config: CfgContext,
+}
+
+impl Configuration for IoConfig {
+    const NAME: &str = "IO Configuration";
+
+    fn default() -> &'static Self {
+        thread_local! {
+            static DEFAULT_CFG: &'static IoConfig =
+                Box::leak(Box::new(IoConfig::new()));
+        }
+        DEFAULT_CFG.with(|cfg| *cfg)
+    }
+
+    fn ctx(&self) -> &CfgContext {
+        &self.config
+    }
+
+    fn set_ctx(&mut self, ctx: CfgContext) {
+        self.config = ctx;
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -180,16 +62,6 @@ pub struct BufConfig {
     pub half: usize,
     idx: usize,
     cache_size: usize,
-}
-
-impl Default for &'static IoConfig {
-    fn default() -> &'static IoConfig {
-        thread_local! {
-            static DEFAULT_CFG: &'static IoConfig =
-                Box::leak(Box::new(IoConfig::new()));
-        }
-        DEFAULT_CFG.with(|cfg| *cfg)
-    }
 }
 
 impl IoConfig {
@@ -219,20 +91,14 @@ impl IoConfig {
                 idx: idx2,
                 cache_size: DEFAULT_CACHE_SIZE,
             },
-            config: DEFAULT_MAP.with(|cfg| *cfg),
+            config: CfgContext::default(),
         }
     }
 
     #[inline]
     /// Get tag
     pub fn tag(&self) -> &str {
-        self.config.0.as_ref()
-    }
-
-    #[inline]
-    /// Shared config
-    pub fn shared_config(&self) -> SharedConfig {
-        SharedConfig(self.config)
+        self.config.tag()
     }
 
     #[inline]

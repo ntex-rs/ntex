@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
     .bind("0.0.0.0:8081")?
     .workers(4)
     .config(
-        ntex::io::SharedConfig::build("MY-SERVER")
+        ntex::SharedCfg::new("MY-SERVER")
             .add(http::HttpServiceConfig::new().keepalive(http::KeepAlive::Disabled)),
     )
     .run()

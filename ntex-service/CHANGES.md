@@ -1,5 +1,13 @@
 # Changes
 
+## [3.6.0] - 2025-11-26
+
+* MSRV 1.85
+
+* Drop support for rust without AsyncFn
+
+* Add shared configuration system
+
 ## [3.5.0] - 2025-06-14
 
 * Use AsyncFn for fn-services

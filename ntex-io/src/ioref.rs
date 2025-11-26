@@ -2,11 +2,12 @@ use std::{any, fmt, hash, io};
 
 use ntex_bytes::BytesVec;
 use ntex_codec::{Decoder, Encoder};
+use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::{
-    Decoded, Filter, FilterCtx, Flags, IoConfig, IoRef, OnDisconnect, SharedConfig,
-    WriteBuf, timer, types,
+    Decoded, Filter, FilterCtx, Flags, IoConfig, IoRef, OnDisconnect, WriteBuf, timer,
+    types,
 };
 
 impl IoRef {
@@ -37,8 +38,8 @@ impl IoRef {
 
     #[inline]
     /// Get shared configuration
-    pub fn shared(&self) -> SharedConfig {
-        self.0.cfg.get().shared_config()
+    pub fn shared(&self) -> SharedCfg {
+        self.0.cfg.get().config.shared()
     }
 
     #[inline]

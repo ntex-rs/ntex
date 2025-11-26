@@ -20,7 +20,7 @@ path = "src/lib.rs"
 ntex-codec = "1.0"
 ntex-bytes = "1.0"
 ntex-util = "3"
-ntex-service = "3.5"
+ntex-service = "3.6"
 
 bitflags = { workspace = true }
 log = { workspace = true }

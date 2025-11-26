@@ -9,6 +9,7 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
+use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{services::Counter, time::Millis, time::Seconds};
 
 /// Sets the maximum per-worker concurrent ssl connection establish process.
@@ -44,14 +45,25 @@ pub struct Servername(pub String);
 /// Tls service configuration
 pub struct TlsConfig {
     handshake_timeout: Millis,
+    config: CfgContext,
 }
 
-impl Default for &'static TlsConfig {
-    fn default() -> Self {
+impl Configuration for TlsConfig {
+    const NAME: &str = "TLS Configuration";
+
+    fn default() -> &'static Self {
         thread_local! {
             static DEFAULT: &'static TlsConfig = Box::leak(Box::new(TlsConfig::new()));
         }
         DEFAULT.with(|cfg| *cfg)
+    }
+
+    fn ctx(&self) -> &CfgContext {
+        &self.config
+    }
+
+    fn set_ctx(&mut self, ctx: CfgContext) {
+        self.config = ctx;
     }
 }
 
@@ -61,6 +73,7 @@ impl TlsConfig {
     pub fn new() -> Self {
         TlsConfig {
             handshake_timeout: Millis(5_000),
+            config: CfgContext::default(),
         }
     }
 

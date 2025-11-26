@@ -1,7 +1,7 @@
 use std::{fmt, sync::Arc, task::Context};
 
-use ntex_io::{Io, SharedConfig};
-use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed};
+use ntex_io::Io;
+use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter};
 
 use crate::ServerConfiguration;
@@ -152,7 +152,7 @@ impl ServiceFactory<Connection> for StreamService {
 }
 
 pub struct StreamServiceImpl {
-    tokens: HashMap<Token, (usize, Arc<str>, SharedConfig)>,
+    tokens: HashMap<Token, (usize, Arc<str>, SharedCfg)>,
     services: Vec<BoxService>,
     conns: Counter,
     on_accept: Option<Box<dyn OnAccept + Send>>,

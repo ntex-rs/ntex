@@ -2,7 +2,8 @@ use std::{io, sync::Arc};
 
 use tls_rust::ServerConfig;
 
-use ntex_io::{Cfg, Filter, Io, Layer, SharedConfig};
+use ntex_io::{Filter, Io, Layer};
+use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::services::Counter;
 
@@ -29,13 +30,13 @@ impl From<ServerConfig> for TlsAcceptor {
     }
 }
 
-impl<F: Filter> ServiceFactory<Io<F>, SharedConfig> for TlsAcceptor {
+impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for TlsAcceptor {
     type Response = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
     type Service = TlsAcceptorService;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ok(TlsAcceptorService {
                 cfg: cfg.get(),

@@ -30,7 +30,7 @@ rustls-ring = ["tls_rust", "tls_rust/ring", "tls_rust/std"]
 ntex-bytes = "1"
 ntex-io = "3"
 ntex-util = "3"
-ntex-service = "3.5"
+ntex-service = "3.6"
 ntex-net = "3"
 
 log = { workspace = true }

@@ -3,8 +3,8 @@ use std::io;
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Response, body::BodySize, h1};
-use ntex::io::{DispatchItem, Dispatcher, IoConfig, SharedConfig};
-use ntex::service::{fn_factory_with_config, fn_service};
+use ntex::io::{DispatchItem, Dispatcher, IoConfig};
+use ntex::service::{cfg::SharedCfg, fn_factory_with_config, fn_service};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes, util::Ready};
@@ -147,9 +147,8 @@ async fn test_keepalive_timeout() {
 
                         // start websocket service
                         io.set_config(
-                            SharedConfig::build("WS-SRV")
-                                .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO))
-                                .finish(),
+                            SharedCfg::new("WS-SRV")
+                                .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
                         );
 
                         Dispatcher::new(

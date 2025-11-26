@@ -1,5 +1,5 @@
+use ntex::SharedCfg;
 use ntex::http::client::{Client, Connector, error::SendRequestError};
-use ntex::io::SharedConfig;
 use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
 
 #[ntex::main]
@@ -25,7 +25,7 @@ async fn main() -> Result<(), SendRequestError> {
     // create client
     let client = Client::build()
         .connector::<&str>(Connector::default().openssl(builder.build()))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 

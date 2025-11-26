@@ -1,8 +1,8 @@
 use std::{io, rc::Rc};
 
-use ntex::io::{Io, SharedConfig, types::PeerAddr};
+use ntex::io::{Io, types::PeerAddr};
 use ntex::service::{Pipeline, ServiceFactory, chain_factory, fn_service};
-use ntex::{codec::BytesCodec, connect::Connect};
+use ntex::{SharedCfg, codec::BytesCodec, connect::Connect};
 use ntex::{server::build_test_server, server::test_server, time, util::Bytes};
 
 #[cfg(feature = "rustls")]
@@ -68,7 +68,7 @@ async fn test_openssl_string() {
 
     let conn = Pipeline::new(
         ntex::connect::openssl::SslConnector::new(builder.build())
-            .create(SharedConfig::default())
+            .create(SharedCfg::default())
             .await
             .unwrap(),
     );
@@ -122,7 +122,7 @@ async fn test_openssl_read_before_error() {
 
     let conn = Pipeline::new(
         ntex::connect::openssl::SslConnector::new(builder.build())
-            .create(SharedConfig::default())
+            .create(SharedCfg::default())
             .await
             .unwrap(),
     );
@@ -177,7 +177,7 @@ async fn test_rustls_string() {
 
     let conn = Pipeline::new(
         ntex::connect::rustls::TlsConnector::new(rustls_utils::tls_connector())
-            .create(SharedConfig::default())
+            .create(SharedCfg::default())
             .await
             .unwrap(),
     );
@@ -241,7 +241,7 @@ async fn test_create() {
     });
 
     let factory = ntex::connect::Connector::new();
-    let conn = factory.pipeline(SharedConfig::default()).await.unwrap();
+    let conn = factory.pipeline(SharedCfg::default()).await.unwrap();
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }

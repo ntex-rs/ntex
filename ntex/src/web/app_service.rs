@@ -1,9 +1,9 @@
 use std::{cell::RefCell, marker, rc::Rc, task::Context};
 
 use crate::http::{Request, Response};
-use crate::io::SharedConfig;
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::service::cfg::SharedCfg;
 use crate::service::dev::ServiceChainFactory;
 use crate::service::{Middleware, Service, ServiceCtx, ServiceFactory, fn_service};
 use crate::util::{BoxFuture, Extensions, join};
@@ -46,7 +46,7 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, F, Err> ServiceFactory<Request, SharedConfig> for AppFactory<T, F, Err>
+impl<T, F, Err> ServiceFactory<Request, SharedCfg> for AppFactory<T, F, Err>
 where
     T: Middleware<AppService<F::Service, Err>> + 'static,
     T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
@@ -63,7 +63,7 @@ where
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
 
-    async fn create(&self, _: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
         ServiceFactory::create(self, AppConfig::default()).await
     }
 }

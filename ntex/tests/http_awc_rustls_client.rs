@@ -7,8 +7,7 @@ use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use ntex::http::HttpService;
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
-use ntex::io::SharedConfig;
-use ntex::service::{ServiceFactory, chain_factory, map_config};
+use ntex::service::{ServiceFactory, cfg::SharedCfg, chain_factory, map_config};
 use ntex::util::Ready;
 use ntex::web::{self, App, HttpResponse, dev::AppConfig};
 
@@ -67,7 +66,7 @@ async fn test_connection_reuse_h2() {
 
     let client = Client::build()
         .connector::<&str>(Connector::default().rustls(config))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 

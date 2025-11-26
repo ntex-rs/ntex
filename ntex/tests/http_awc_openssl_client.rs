@@ -10,7 +10,7 @@ use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Version};
 use ntex::service::{chain_factory, map_config};
 use ntex::web::{self, App, HttpResponse, dev::AppConfig};
-use ntex::{io::SharedConfig, time::Seconds, util::Ready};
+use ntex::{SharedCfg, time::Seconds, util::Ready};
 
 fn ssl_acceptor() -> SslAcceptor {
     // load ssl keys
@@ -65,7 +65,7 @@ async fn test_connection_reuse_h2() {
 
     let client = Client::build()
         .connector::<&str>(Connector::default().openssl(builder.build()))
-        .finish(SharedConfig::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap();
 

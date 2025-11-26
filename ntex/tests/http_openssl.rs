@@ -10,8 +10,7 @@ use ntex::http::error::PayloadError;
 use ntex::http::header::{self, HeaderName, HeaderValue};
 use ntex::http::test::{self, server as test_server};
 use ntex::http::{HttpService, Method, Request, Response, StatusCode, Version, body, h1};
-use ntex::io::SharedConfig;
-use ntex::service::{ServiceFactory, fn_service};
+use ntex::service::{ServiceFactory, cfg::SharedCfg, fn_service};
 use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, BytesMut, Ready};
 use ntex::{channel::oneshot, rt, web::error::InternalError, ws, ws::handshake_response};
@@ -475,7 +474,7 @@ async fn test_ssl_handshake_timeout() {
                 .openssl(ssl_acceptor())
                 .map_err(|_| ())
         },
-        SharedConfig::build("SVC").add(TlsConfig::new().set_handshake_timeout(Seconds(1))),
+        SharedCfg::new("SVC").add(TlsConfig::new().set_handshake_timeout(Seconds(1))),
     )
     .await;
 

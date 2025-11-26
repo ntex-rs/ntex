@@ -546,7 +546,7 @@ impl fmt::Debug for ClientRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{http::client::Client, io::SharedConfig};
+    use crate::{SharedCfg, http::client::Client};
 
     #[crate::rt_test]
     async fn test_debug() {
@@ -591,7 +591,7 @@ mod tests {
     async fn test_client_header() {
         let req = Client::build()
             .header(header::CONTENT_TYPE, "111")
-            .finish(SharedConfig::default())
+            .finish(SharedCfg::default())
             .await
             .unwrap()
             .get("/");
@@ -611,7 +611,7 @@ mod tests {
     async fn test_client_header_override() {
         let req = Client::build()
             .header(header::CONTENT_TYPE, "111")
-            .finish(SharedConfig::default())
+            .finish(SharedCfg::default())
             .await
             .unwrap()
             .get("/")

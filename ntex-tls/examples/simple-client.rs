@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::service::{Pipeline, ServiceFactory};
-use ntex::{codec, connect, io::SharedConfig, util::Bytes, util::Either};
+use ntex::{SharedCfg, codec, connect, util::Bytes, util::Either};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod, SslVerifyMode};
 
 #[ntex::main]
@@ -23,7 +23,7 @@ async fn main() -> io::Result<()> {
     // openssl connector
     let connector = Pipeline::new(
         connect::openssl::SslConnector::new(builder.build())
-            .create(SharedConfig::default())
+            .create(SharedCfg::default())
             .await
             .unwrap(),
     );

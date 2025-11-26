@@ -1,7 +1,8 @@
 use std::{fmt, io, sync::Arc};
 
-use ntex_io::{Cfg, Io, Layer, SharedConfig};
+use ntex_io::{Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
+use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::time::timeout_checked;
 use tls_rust::{ClientConfig, pki_types::ServerName};
@@ -62,17 +63,17 @@ impl<S: fmt::Debug> fmt::Debug for TlsConnector<S> {
     }
 }
 
-impl<A, S> ServiceFactory<Connect<A>, SharedConfig> for TlsConnector<S>
+impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for TlsConnector<S>
 where
     A: Address,
-    S: ServiceFactory<Connect<A>, SharedConfig, Response = Io, Error = ConnectError>,
+    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
 {
     type Response = Io<Layer<TlsClientFilter>>;
     type Error = ConnectError;
     type Service = TlsConnectorService<S::Service>;
     type InitError = S::InitError;
 
-    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let svc = self.connector.create(cfg).await?;
 
         Ok(TlsConnectorService {
@@ -144,11 +145,7 @@ mod tests {
             TlsConnector::new(config.clone()).clone();
         let factory = TlsConnector::from(Arc::new(config)).clone();
 
-        let srv = factory
-            .pipeline(SharedConfig::new("IO"))
-            .await
-            .unwrap()
-            .bind();
+        let srv = factory.pipeline(SharedCfg::default()).await.unwrap().bind();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

@@ -6,16 +6,15 @@ use tls_openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder};
 use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{HttpService, Request, Response, ResponseError, body::MessageBody};
-use crate::io::SharedConfig;
 use crate::server::{Server, ServerBuilder};
-use crate::service::{IntoServiceFactory, ServiceFactory, map_config};
+use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg, map_config};
 use crate::time::Seconds;
 
 use super::config::AppConfig;
 
 struct Config {
     host: Option<String>,
-    cfg: SharedConfig,
+    cfg: SharedCfg,
 }
 
 /// An HTTP Server.
@@ -68,7 +67,7 @@ where
             factory,
             config: Arc::new(Mutex::new(Config {
                 host: None,
-                cfg: SharedConfig::default(),
+                cfg: SharedCfg::default(),
             })),
             backlog: 1024,
             builder: ServerBuilder::default(),
@@ -172,7 +171,7 @@ where
     }
 
     /// Set io config for named service.
-    pub fn config<T: Into<SharedConfig>>(self, cfg: T) -> Self {
+    pub fn config<T: Into<SharedCfg>>(self, cfg: T) -> Self {
         self.config.lock().unwrap().cfg = cfg.into();
         self
     }

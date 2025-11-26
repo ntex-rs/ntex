@@ -2,7 +2,7 @@ use std::io;
 
 use log::info;
 use ntex::http::{HttpService, HttpServiceConfig, Response, header::HeaderValue};
-use ntex::{io::SharedConfig, server, time::Seconds, util::Ready};
+use ntex::{SharedCfg, server, time::Seconds, util::Ready};
 use tls_openssl::ssl::{self, SslFiletype, SslMethod};
 
 #[ntex::main]
@@ -46,7 +46,7 @@ async fn main() -> io::Result<()> {
         })?
         .config(
             "basic",
-            SharedConfig::build("EXAMPLE")
+            SharedCfg::new("EXAMPLE")
                 .add(HttpServiceConfig::new().client_timeout(Seconds(1))),
         )
         .workers(1)

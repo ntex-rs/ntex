@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue};
-use crate::{io::SharedConfig, service::ServiceFactory, time::Millis};
+use crate::{SharedCfg, service::ServiceFactory, time::Millis};
 
 use super::error::ClientBuilderError;
 use super::{Client, ClientConfig, ClientInner, Connector};
@@ -144,7 +144,7 @@ impl ClientBuilder {
     }
 
     /// Finish build process and create `Client` instance.
-    pub async fn finish<T: Into<SharedConfig>>(
+    pub async fn finish<T: Into<SharedCfg>>(
         self,
         cfg: T,
     ) -> Result<Client, ClientBuilderError> {

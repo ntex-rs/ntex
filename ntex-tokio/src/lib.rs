@@ -1,6 +1,7 @@
 use std::{io::Result, net, net::SocketAddr};
 
-use ntex_io::{Io, SharedConfig};
+use ntex_io::Io;
+use ntex_service::cfg::SharedCfg;
 
 mod io;
 
@@ -12,7 +13,7 @@ struct TcpStream(tokio::net::TcpStream);
 struct UnixStream(tokio::net::UnixStream);
 
 /// Opens a TCP connection to a remote host.
-pub async fn tcp_connect(addr: SocketAddr, cfg: SharedConfig) -> Result<Io> {
+pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> Result<Io> {
     let sock = tokio::net::TcpStream::connect(addr).await?;
     sock.set_nodelay(true)?;
     Ok(Io::new(TcpStream(sock), cfg))
@@ -20,7 +21,7 @@ pub async fn tcp_connect(addr: SocketAddr, cfg: SharedConfig) -> Result<Io> {
 
 #[cfg(unix)]
 /// Opens a unix stream connection.
-pub async fn unix_connect<'a, P>(addr: P, cfg: SharedConfig) -> Result<Io>
+pub async fn unix_connect<'a, P>(addr: P, cfg: SharedCfg) -> Result<Io>
 where
     P: AsRef<std::path::Path> + 'a,
 {
@@ -29,7 +30,7 @@ where
 }
 
 /// Convert std TcpStream to tokio's TcpStream
-pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedConfig) -> Result<Io> {
+pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> Result<Io> {
     stream.set_nonblocking(true)?;
     stream.set_nodelay(true)?;
     Ok(Io::new(
@@ -42,7 +43,7 @@ pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedConfig) -> Result<Io> 
 /// Convert std UnixStream to tokio's UnixStream
 pub fn from_unix_stream(
     stream: std::os::unix::net::UnixStream,
-    cfg: SharedConfig,
+    cfg: SharedCfg,
 ) -> Result<Io> {
     stream.set_nonblocking(true)?;
     Ok(Io::new(

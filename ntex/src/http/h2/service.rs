@@ -10,8 +10,10 @@ use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
-use crate::io::{Filter, Io, IoBoxed, IoRef, SharedConfig, types};
-use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
+use crate::io::{Filter, Io, IoBoxed, IoRef, types};
+use crate::service::{
+    IntoServiceFactory, Service, ServiceCtx, ServiceFactory, cfg::SharedCfg,
+};
 use crate::util::{Bytes, BytesMut, HashMap, HashSet};
 
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
@@ -25,13 +27,13 @@ pub struct H2Service<F, S, B, C> {
 
 impl<F, S, B> H2Service<F, S, B, DefaultControlService>
 where
-    S: ServiceFactory<Request, SharedConfig>,
+    S: ServiceFactory<Request, SharedCfg>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn new<U: IntoServiceFactory<S, Request, SharedConfig>>(service: U) -> Self {
+    pub(crate) fn new<U: IntoServiceFactory<S, Request, SharedCfg>>(service: U) -> Self {
         H2Service {
             srv: service.into_factory(),
             ctl: Rc::new(DefaultControlService),
@@ -52,12 +54,12 @@ mod openssl {
     impl<F, S, B, C> H2Service<Layer<SslFilter, F>, S, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request, SharedConfig> + 'static,
+        S: ServiceFactory<Request, SharedCfg> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>
+        C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
             + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
@@ -68,7 +70,7 @@ mod openssl {
             acceptor: ssl::SslAcceptor,
         ) -> impl ServiceFactory<
             Io<F>,
-            SharedConfig,
+            SharedCfg,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -92,12 +94,12 @@ mod rustls {
     impl<F, S, B, C> H2Service<Layer<TlsServerFilter, F>, S, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request, SharedConfig> + 'static,
+        S: ServiceFactory<Request, SharedCfg> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>
+        C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
             + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
@@ -108,7 +110,7 @@ mod rustls {
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
             Io<F>,
-            SharedConfig,
+            SharedCfg,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -127,19 +129,19 @@ mod rustls {
 impl<F, S, B, C> H2Service<F, S, B, C>
 where
     F: Filter,
-    S: ServiceFactory<Request, SharedConfig> + 'static,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Response: Into<Response<B>>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>,
+    C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
     /// Provide http/2 control service
     pub fn control<CT>(self, ctl: CT) -> H2Service<F, S, B, CT>
     where
-        CT: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>,
+        CT: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {
@@ -151,16 +153,15 @@ where
     }
 }
 
-impl<F, S, B, C> ServiceFactory<Io<F>, SharedConfig> for H2Service<F, S, B, C>
+impl<F, S, B, C> ServiceFactory<Io<F>, SharedCfg> for H2Service<F, S, B, C>
 where
     F: Filter,
-    S: ServiceFactory<Request, SharedConfig> + 'static,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>
-        + 'static,
+    C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck> + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -169,7 +170,7 @@ where
     type InitError = ();
     type Service = H2ServiceHandler<F, S::Service, B, C>;
 
-    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let service = self
             .srv
             .create(cfg)
@@ -193,7 +194,7 @@ where
 
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<F, S: Service<Request>, B, C> {
-    cfg: SharedConfig,
+    cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, ()>>,
     control: Rc<C>,
     inflight: RefCell<HashSet<IoRef>>,
@@ -209,8 +210,7 @@ where
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, SharedConfig, Response = h2::ControlAck>
-        + 'static,
+    C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck> + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {

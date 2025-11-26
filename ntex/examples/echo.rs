@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use log::info;
 use ntex::http::header::HeaderValue;
 use ntex::http::{HttpService, HttpServiceConfig, Request, Response};
-use ntex::{io::SharedConfig, time::Seconds, util::BytesMut};
+use ntex::{SharedCfg, time::Seconds, util::BytesMut};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
@@ -28,7 +28,7 @@ async fn main() -> io::Result<()> {
         })?
         .config(
             "echo",
-            SharedConfig::build("ECHO").add(HttpServiceConfig::new().headers_read_rate(
+            SharedCfg::new("ECHO").add(HttpServiceConfig::new().headers_read_rate(
                 Seconds(1),
                 Seconds(5),
                 128,

@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, fmt, io, net::SocketAddr};
 
-use ntex_io::{Cfg, Io, IoConfig, SharedConfig, types};
+use ntex_io::{Io, IoConfig, types};
+use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{future::Either, time::timeout_checked};
 
@@ -10,7 +11,7 @@ use crate::tcp_connect;
 /// Basic tcp stream connector
 pub struct Connector<T> {
     cfg: Cfg<IoConfig>,
-    shared: SharedConfig,
+    shared: SharedCfg,
     resolver: Resolver<T>,
 }
 
@@ -27,7 +28,7 @@ impl<T> Connector<T> {
     }
 
     /// Construct new connect service with custom configuration
-    pub fn with(cfg: SharedConfig) -> Self {
+    pub fn with(cfg: SharedCfg) -> Self {
         Connector {
             cfg: cfg.get(),
             shared: cfg,
@@ -90,13 +91,13 @@ impl<T> fmt::Debug for Connector<T> {
     }
 }
 
-impl<T: Address> ServiceFactory<Connect<T>, SharedConfig> for Connector<T> {
+impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
     type Service = Connector<T>;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Connector::with(cfg))
     }
 }
@@ -119,7 +120,7 @@ async fn connect<T: Address>(
     req: T,
     port: u16,
     addr: Either<SocketAddr, VecDeque<SocketAddr>>,
-    cfg: SharedConfig,
+    cfg: SharedCfg,
 ) -> Result<Io, ConnectError> {
     log::trace!(
         "{}: TCP connector - connecting to {:?} addr:{addr:?} port:{port}",
@@ -171,9 +172,9 @@ mod tests {
 
         let srv = Connector::default()
             .create(
-                SharedConfig::build("T")
+                SharedCfg::new("T")
                     .add(IoConfig::new().set_connect_timeout(Millis(5000)))
-                    .finish(),
+                    .into(),
             )
             .await
             .unwrap();

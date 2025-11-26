@@ -36,9 +36,10 @@ where
 mod tests {
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
+    use ntex_service::cfg::SharedCfg;
 
     use super::*;
-    use crate::{FilterCtx, SharedConfig, buf::Stack, filter::NullFilter, testing::IoTest};
+    use crate::{FilterCtx, buf::Stack, filter::NullFilter, testing::IoTest};
 
     #[ntex::test]
     async fn test_utils() {
@@ -57,7 +58,7 @@ mod tests {
         .pipeline(())
         .await
         .unwrap();
-        let _ = svc.call(Io::new(server, SharedConfig::default())).await;
+        let _ = svc.call(Io::new(server, SharedCfg::default())).await;
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, b"RES".as_ref());
@@ -66,7 +67,7 @@ mod tests {
     #[ntex::test]
     async fn test_null_filter() {
         let (_, server) = IoTest::create();
-        let io = Io::new(server, SharedConfig::default());
+        let io = Io::new(server, SharedCfg::default());
         let ioref = io.get_ref();
         let stack = Stack::new();
         assert!(NullFilter.query(std::any::TypeId::of::<()>()).is_none());

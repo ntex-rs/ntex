@@ -1,7 +1,7 @@
 use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, rc::Rc};
 
-use ntex_io::{Io, SharedConfig};
-use ntex_service::{IntoServiceFactory, ServiceFactory};
+use ntex_io::Io;
+use ntex_service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
 use ntex_util::{HashMap, future::BoxFuture, future::Ready};
 
 use super::factory::{
@@ -14,7 +14,7 @@ pub struct Config(Rc<InnerServiceConfig>);
 
 #[derive(Debug)]
 pub(super) struct InnerServiceConfig {
-    pub(super) config: Cell<Option<SharedConfig>>,
+    pub(super) config: Cell<Option<SharedCfg>>,
 }
 
 impl Default for Config {
@@ -27,12 +27,12 @@ impl Default for Config {
 
 impl Config {
     /// Set io config for the service.
-    pub fn config<T: Into<SharedConfig>>(&self, cfg: T) -> &Self {
+    pub fn config<T: Into<SharedCfg>>(&self, cfg: T) -> &Self {
         self.0.config.set(Some(cfg.into()));
         self
     }
 
-    pub(super) fn get_config(&self) -> Option<SharedConfig> {
+    pub(super) fn get_config(&self) -> Option<SharedCfg> {
         self.0.config.get()
     }
 }
@@ -43,8 +43,8 @@ pub struct ServiceConfig(pub(super) Rc<RefCell<ServiceConfigInner>>);
 #[derive(Debug)]
 struct Socket {
     name: String,
-    config: SharedConfig,
-    sockets: Vec<(Token, Listener, SharedConfig)>,
+    config: SharedCfg,
+    sockets: Vec<(Token, Listener, SharedCfg)>,
 }
 
 pub(super) struct ServiceConfigInner {
@@ -87,14 +87,14 @@ impl ServiceConfig {
         let sockets = bind_addr(addr, inner.backlog)?;
         let socket = Socket {
             name: name.as_ref().to_string(),
-            config: SharedConfig::default(),
+            config: SharedCfg::default(),
             sockets: sockets
                 .into_iter()
                 .map(|lst| {
                     (
                         inner.token.next(),
                         Listener::from_tcp(lst),
-                        SharedConfig::default(),
+                        SharedCfg::default(),
                     )
                 })
                 .collect(),
@@ -109,11 +109,11 @@ impl ServiceConfig {
         let mut inner = self.0.borrow_mut();
         let socket = Socket {
             name: name.as_ref().to_string(),
-            config: SharedConfig::default(),
+            config: SharedCfg::default(),
             sockets: vec![(
                 inner.token.next(),
                 Listener::from_tcp(lst),
-                SharedConfig::default(),
+                SharedCfg::default(),
             )],
         };
         inner.sockets.push(socket);
@@ -122,7 +122,12 @@ impl ServiceConfig {
     }
 
     /// Set io config for configured service.
-    pub fn config<N: AsRef<str>>(&self, name: N, cfg: SharedConfig) -> &Self {
+    pub fn config<N, T>(&self, name: N, cfg: T) -> &Self
+    where
+        N: AsRef<str>,
+        T: Into<SharedCfg>,
+    {
+        let cfg = cfg.into();
         let mut inner = self.0.borrow_mut();
         for sock in &mut inner.sockets {
             if sock.name == name.as_ref() {
@@ -246,8 +251,8 @@ pub struct ServiceRuntime(Rc<RefCell<ServiceRuntimeInner>>);
 struct Entry {
     idx: usize,
     name: String,
-    config: SharedConfig,
-    tokens: Vec<(Token, SharedConfig)>,
+    config: SharedCfg,
+    tokens: Vec<(Token, SharedCfg)>,
 }
 
 struct ServiceRuntimeInner {
@@ -288,8 +293,8 @@ impl ServiceRuntime {
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
     pub fn service<T, F>(&self, name: &str, service: F)
     where
-        F: IntoServiceFactory<T, Io, SharedConfig>,
-        T: ServiceFactory<Io, SharedConfig> + 'static,
+        F: IntoServiceFactory<T, Io, SharedCfg>,
+        T: ServiceFactory<Io, SharedCfg> + 'static,
         T::Service: 'static,
         T::InitError: fmt::Debug,
     {
@@ -306,7 +311,7 @@ impl ServiceRuntime {
     }
 
     /// Set io config for configured service.
-    pub fn config(&self, name: &str, cfg: SharedConfig) {
+    pub fn config(&self, name: &str, cfg: SharedCfg) {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
             entry.config = cfg;
