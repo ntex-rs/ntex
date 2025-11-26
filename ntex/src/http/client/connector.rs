@@ -24,11 +24,9 @@ type BoxedConnector =
 ///
 /// ```rust,no_run
 /// use ntex::http::client::Connector;
-/// use ntex::time::Millis;
 ///
 /// let connector = Connector::default()
-///      .timeout(Millis(5_000))
-///      .finish();
+///      .keep_alive(5_000);
 /// ```
 pub struct Connector {
     conn_lifetime: Duration,
@@ -125,8 +123,8 @@ impl Connector {
     /// the delay between repeated usages of the same connection
     /// exceeds this period, the connection is closed.
     /// Default keep-alive period is 15 seconds.
-    pub fn keep_alive(mut self, dur: Seconds) -> Self {
-        self.conn_keep_alive = dur.into();
+    pub fn keep_alive<T: Into<Seconds>>(mut self, dur: T) -> Self {
+        self.conn_keep_alive = dur.into().into();
         self
     }
 
@@ -135,8 +133,8 @@ impl Connector {
     /// Connection lifetime is max lifetime of any opened connection
     /// until it is closed regardless of keep-alive period.
     /// Default lifetime period is 75 seconds.
-    pub fn lifetime(mut self, dur: Seconds) -> Self {
-        self.conn_lifetime = dur.into();
+    pub fn lifetime<T: Into<Seconds>>(mut self, dur: T) -> Self {
+        self.conn_lifetime = dur.into().into();
         self
     }
 

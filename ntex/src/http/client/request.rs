@@ -26,6 +26,7 @@ use super::{ClientInner, ClientResponse, frozen::FrozenClientRequest};
 /// #[ntex::main]
 /// async fn main() {
 ///    let response = Client::new()
+///         .await
 ///         .get("http://www.rust-lang.org") // <- Create request builder
 ///         .header("User-Agent", "ntex::web")
 ///         .send()                          // <- Send http request
@@ -149,6 +150,7 @@ impl ClientRequest {
     /// #[ntex::main]
     /// async fn main() {
     ///     let req = Client::new()
+    ///         .await
     ///         .get("http://www.rust-lang.org")
     ///         .header("X-TEST", "value")
     ///         .header(http::header::CONTENT_TYPE, "application/json");
@@ -278,7 +280,7 @@ impl ClientRequest {
     ///
     /// #[ntex::main]
     /// async fn main() {
-    ///     let resp = Client::new().get("https://www.rust-lang.org")
+    ///     let resp = Client::new().await.get("https://www.rust-lang.org")
     ///         .cookie(
     ///             cookie::Cookie::build(("name", "value"))
     ///                 .domain("www.rust-lang.org")

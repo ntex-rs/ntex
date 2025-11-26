@@ -6,7 +6,7 @@
 //!
 //! #[ntex::main]
 //! async fn main() {
-//!    let mut client = Client::default();
+//!    let mut client = Client::new().await;
 //!
 //!    let response = client.get("http://www.rust-lang.org") // <- Create request builder
 //!        .header("User-Agent", "ntex::web")
@@ -55,7 +55,7 @@ pub struct Connect {
 ///
 /// #[ntex::main]
 /// async fn main() {
-///     let mut client = Client::default();
+///     let mut client = Client::new().await;
 ///
 ///     let res = client.get("http://www.rust-lang.org") // <- Create request builder
 ///         .header("User-Agent", "ntex::web")
