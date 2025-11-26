@@ -255,6 +255,10 @@ impl H2Client {
         Self { client }
     }
 
+    pub(super) fn tag(&self) -> &'static str {
+        self.client.tag()
+    }
+
     pub(super) fn close(&self) {
         self.client.close()
     }
