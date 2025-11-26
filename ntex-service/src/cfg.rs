@@ -209,10 +209,7 @@ mod tests {
         impl Configuration for TestCfg {
             const NAME: &str = "TEST";
             fn default() -> &'static Self {
-                thread_local! {
-                    static DEFAULT_CFG: &'static TestCfg = Box::leak(Box::new(TestCfg::new()));
-                }
-                DEFAULT_CFG.with(|cfg| *cfg)
+                panic!()
             }
             fn ctx(&self) -> &CfgContext {
                 &self.config
@@ -261,5 +258,7 @@ mod tests {
         let t = cfg.get::<TestCfg>();
         assert_eq!(t.tag(), "TEST");
         assert_eq!(t.shared(), cfg);
+        let t: Cfg<TestCfg> = Default::default();
+        assert_eq!(t.tag(), "--");
     }
 }
