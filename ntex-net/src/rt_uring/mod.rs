@@ -1,7 +1,7 @@
 use std::{io::Result, net, net::SocketAddr};
 
 use ntex_io::Io;
-use ntex_service::cfg::SharedConfig;
+use ntex_service::cfg::SharedCfg;
 use socket2::Socket;
 
 pub(crate) mod connect;
