@@ -1,17 +1,18 @@
 //! Shared configuration for services
 #![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
-use std::{any::Any, any::TypeId, fmt, ops};
+use std::{any::Any, any::TypeId, fmt, ops, ptr};
 
 type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
 
 thread_local! {
     static DEFAULT_CFG: &'static Storage = Box::leak(Box::new(
-        Storage { tag: "--".to_string(), data: HashMap::default()}));
+        Storage { tag: "--".to_string(), building: false, data: HashMap::default()}));
 }
 
 #[derive(Debug)]
 struct Storage {
     tag: String,
+    building: bool,
     data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
@@ -49,6 +50,14 @@ impl Default for CfgContext {
 pub struct Cfg<T: Configuration>(&'static T);
 
 impl<T: Configuration> Cfg<T> {
+    pub fn tag(&self) -> &'static str {
+        self.0.ctx().tag()
+    }
+
+    pub fn shared(&self) -> SharedCfg {
+        self.0.ctx().shared()
+    }
+
     pub fn into_static(&self) -> &'static T {
         self.0
     }
@@ -86,6 +95,14 @@ pub struct SharedCfgBuilder {
     storage: Option<Box<Storage>>,
 }
 
+impl Eq for SharedCfg {}
+
+impl PartialEq for SharedCfg {
+    fn eq(&self, other: &Self) -> bool {
+        ptr::from_ref(self.0) == ptr::from_ref(other.0)
+    }
+}
+
 impl SharedCfg {
     /// Construct new configuration
     pub fn new<T: AsRef<str>>(tag: T) -> SharedCfgBuilder {
@@ -99,10 +116,15 @@ impl SharedCfg {
     }
 
     /// Get a reference to a previously inserted on configuration.
+    ///
+    /// Panics if shared config is building
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
     {
+        if self.0.building {
+            panic!("Cannot access shared config while building");
+        }
         self.0
             .data
             .get(&TypeId::of::<T>())
@@ -122,6 +144,7 @@ impl SharedCfgBuilder {
     fn new(tag: String) -> SharedCfgBuilder {
         let storage = Box::into_raw(Box::new(Storage {
             tag,
+            building: true,
             data: HashMap::default(),
         }));
         unsafe {
@@ -150,7 +173,8 @@ impl SharedCfgBuilder {
 
 impl Drop for SharedCfgBuilder {
     fn drop(&mut self) {
-        if let Some(st) = self.storage.take() {
+        if let Some(mut st) = self.storage.take() {
+            st.building = false;
             let _ = Box::leak(st);
         }
     }
@@ -158,6 +182,84 @@ impl Drop for SharedCfgBuilder {
 
 impl From<SharedCfgBuilder> for SharedCfg {
     fn from(mut cfg: SharedCfgBuilder) -> SharedCfg {
-        SharedCfg(Box::leak(cfg.storage.take().unwrap()))
+        let mut st = cfg.storage.take().unwrap();
+        st.building = false;
+        SharedCfg(Box::leak(st))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn access_cfg_in_building_state() {
+        #[derive(Debug)]
+        struct TestCfg {
+            config: CfgContext,
+        }
+        impl TestCfg {
+            fn new() -> Self {
+                Self {
+                    config: CfgContext::default(),
+                }
+            }
+        }
+        impl Configuration for TestCfg {
+            const NAME: &str = "TEST";
+            fn default() -> &'static Self {
+                thread_local! {
+                    static DEFAULT_CFG: &'static TestCfg = Box::leak(Box::new(TestCfg::new()));
+                }
+                DEFAULT_CFG.with(|cfg| *cfg)
+            }
+            fn ctx(&self) -> &CfgContext {
+                &self.config
+            }
+            fn set_ctx(&mut self, ctx: CfgContext) {
+                self.config = ctx;
+                let _ = ctx.shared().get::<TestCfg>();
+            }
+        }
+
+        SharedCfg::new("TEST").add(TestCfg::new());
+    }
+
+    #[test]
+    fn shared_cfg() {
+        #[derive(Debug)]
+        struct TestCfg {
+            config: CfgContext,
+        }
+        impl TestCfg {
+            fn new() -> Self {
+                Self {
+                    config: CfgContext::default(),
+                }
+            }
+        }
+        impl Configuration for TestCfg {
+            const NAME: &str = "TEST";
+            fn default() -> &'static Self {
+                thread_local! {
+                    static DEFAULT_CFG: &'static TestCfg = Box::leak(Box::new(TestCfg::new()));
+                }
+                DEFAULT_CFG.with(|cfg| *cfg)
+            }
+            fn ctx(&self) -> &CfgContext {
+                &self.config
+            }
+            fn set_ctx(&mut self, ctx: CfgContext) {
+                self.config = ctx;
+            }
+        }
+
+        let cfg: SharedCfg = SharedCfg::new("TEST").add(TestCfg::new()).into();
+
+        assert_eq!(cfg.tag(), "TEST");
+        let t = cfg.get::<TestCfg>();
+        assert_eq!(t.tag(), "TEST");
+        assert_eq!(t.shared(), cfg);
     }
 }
