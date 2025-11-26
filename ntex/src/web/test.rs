@@ -614,16 +614,7 @@ where
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
-            let builder = crate::server::build().workers(1).disable_signals().config(
-                "test",
-                SharedConfig::build("WEB-SRV")
-                    .add(HttpServiceConfig::default().headers_read_rate(
-                        ctimeout,
-                        Seconds::ZERO,
-                        256,
-                    ))
-                    .finish(),
-            );
+            let builder = crate::server::build().workers(1).disable_signals();
 
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
@@ -681,6 +672,16 @@ where
                 },
             }
             .unwrap()
+            .config(
+                "test",
+                SharedConfig::build("WEB-SRV").add(
+                    HttpServiceConfig::default().headers_read_rate(
+                        ctimeout,
+                        Seconds::ZERO,
+                        256,
+                    ),
+                ),
+            )
             .run();
 
             crate::rt::spawn(async move {
