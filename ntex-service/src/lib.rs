@@ -25,9 +25,6 @@ mod pipeline;
 mod then;
 mod util;
 
-#[cfg(not(feature = "async-fn"))]
-mod fn_service;
-
 #[cfg(feature = "async-fn")]
 #[path = "fn_service_async.rs"]
 mod fn_service;

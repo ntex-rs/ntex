@@ -1,6 +1,8 @@
 # Changes
 
-## [3.6.0] - 2025-11-xx
+## [3.6.0] - 2025-11-26
+
+* MSRV 1.85
 
 * Add shared configuration system
 
