@@ -1,9 +1,5 @@
 # Changes
 
-## [3.6.3] - 2025-11-27
-
-* Add Service::pipeline() helper method
-
 ## [3.6.2] - 2025-11-27
 
 * Fix default config context

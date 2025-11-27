@@ -165,12 +165,6 @@ pub trait Service<Req> {
     {
         chain(dev::MapErr::new(self, f))
     }
-
-    #[inline]
-    /// Create pipeline for this service
-    fn pipeline(self) -> Pipeline<Self> where Self: Sized {
-        Pipeline::new(self)
-    }
 }
 
 /// Factory for creating `Service`s.
