@@ -62,15 +62,15 @@ pub enum ProtocolError {
 
 /// Websocket client error
 #[derive(Error, Clone, Debug)]
-pub enum WsClientBuilderError {
+pub enum WsClientBuilderError<E> {
+    #[error("Cannot create connector {0}")]
+    Connector(E),
     #[error("Missing url scheme")]
     MissingScheme,
     #[error("Unknown url scheme")]
     UnknownScheme,
     #[error("Missing host name")]
     MissingHost,
-    #[error("Cannot create connector")]
-    CannotCreateConnector,
     #[error("Url parse error: {0}")]
     Http(#[from] HttpError),
 }

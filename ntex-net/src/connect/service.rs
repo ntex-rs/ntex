@@ -5,7 +5,7 @@ use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{future::Either, time::timeout_checked};
 
-use super::{Address, Connect, ConnectError, Resolver};
+use super::{Address, Connect, ConnectError, ConnectServiceError, Resolver};
 use crate::tcp_connect;
 
 /// Basic tcp stream connector
@@ -95,7 +95,7 @@ impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
     type Service = Connector<T>;
-    type InitError = ();
+    type InitError = ConnectServiceError;
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Connector::with(cfg))

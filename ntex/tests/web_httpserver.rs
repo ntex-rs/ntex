@@ -226,14 +226,20 @@ async fn test_bind_uds() {
     });
     let (srv, sys) = rx.recv().unwrap();
 
-    use ntex::client;
+    use ntex::{ServiceFactory, client};
 
     let client = client::Client::build()
-        .connector::<&str>(client::Connector::default().connector(
-            ntex::service::fn_service(|_| async {
-                Ok(rt::unix_connect("/tmp/uds-test", ntex::SharedCfg::default()).await?)
-            }),
-        ))
+        .connector::<&str>(
+            client::Connector::default().connector(
+                ntex::service::fn_service(|_| async {
+                    Ok(
+                        rt::unix_connect("/tmp/uds-test", ntex::SharedCfg::default())
+                            .await?,
+                    )
+                })
+                .map_init_err(|_| unreachable!()),
+            ),
+        )
         .finish(ntex::SharedCfg::default())
         .await
         .unwrap();
@@ -278,14 +284,20 @@ async fn test_listen_uds() {
     });
     let (srv, sys) = rx.recv().unwrap();
 
-    use ntex::client;
+    use ntex::{ServiceFactory, client};
 
     let client = client::Client::build()
-        .connector::<&str>(client::Connector::default().connector(
-            ntex::service::fn_service(|_| async {
-                Ok(rt::unix_connect("/tmp/uds-test2", ntex::SharedCfg::default()).await?)
-            }),
-        ))
+        .connector::<&str>(
+            client::Connector::default().connector(
+                ntex::service::fn_service(|_| async {
+                    Ok(
+                        rt::unix_connect("/tmp/uds-test2", ntex::SharedCfg::default())
+                            .await?,
+                    )
+                })
+                .map_init_err(|_| unreachable!()),
+            ),
+        )
         .finish(ntex::SharedCfg::default())
         .await
         .unwrap();
