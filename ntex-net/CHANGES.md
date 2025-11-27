@@ -1,6 +1,6 @@
 # Changes
 
-## [2.10.0] - 2025-11-xx
+## [3.0.0-pre.0] - 2025-11-27
 
 * New io configuration subsystem
 

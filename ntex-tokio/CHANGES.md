@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.0] - 2025-11-27
+
+* Update ntex-net version
+
 ## [0.5.4] - 2025-07-28
 
 * Better handling for zero reads
