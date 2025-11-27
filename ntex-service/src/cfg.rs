@@ -275,16 +275,9 @@ mod tests {
 
     #[test]
     fn shared_cfg() {
-        #[derive(Debug)]
+        #[derive(Default, Debug)]
         struct TestCfg {
             config: CfgContext,
-        }
-        impl Default for TestCfg {
-            fn default() -> Self {
-                Self {
-                    config: CfgContext::default(),
-                }
-            }
         }
         impl Configuration for TestCfg {
             const NAME: &str = "TEST";
