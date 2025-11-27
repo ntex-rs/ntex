@@ -77,12 +77,7 @@ impl WsClient<Base, ()> {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter,
-        T: ServiceFactory<
-                Connect<Uri>,
-                SharedCfg,
-                Response = Io<F>,
-                Error = ConnectError,
-            >,
+        T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
