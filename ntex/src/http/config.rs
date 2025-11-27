@@ -260,7 +260,7 @@ impl<S, C> DispatcherConfig<S, C> {
     }
 
     pub(super) fn shutdown(&self) {
-        // self.config.h2config.shutdown();
+        ntex_h2::ServiceConfig::shutdown();
 
         let mut flags = self.flags.get();
         flags.insert(Flags::SHUTDOWN);

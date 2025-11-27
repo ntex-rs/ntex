@@ -17,5 +17,5 @@ syn = { version = "^1", features = ["full", "parsing"] }
 proc-macro2 = "^1"
 
 [dev-dependencies]
-ntex = "3"
+ntex = "3.0.0-pre.0"
 futures = "0.3"

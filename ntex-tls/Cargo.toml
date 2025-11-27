@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "3.0.0"
+version = "3.0.0-pre.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]
@@ -28,10 +28,10 @@ rustls-ring = ["tls_rust", "tls_rust/ring", "tls_rust/std"]
 
 [dependencies]
 ntex-bytes = "1"
-ntex-io = "3"
+ntex-io = "3.0.0-pre.0"
 ntex-util = "3"
 ntex-service = "3.6"
-ntex-net = "3"
+ntex-net = "3.0.0-pre.0"
 
 log = { workspace = true }
 
@@ -42,7 +42,7 @@ tls_openssl = { version = "0.10", package = "openssl", optional = true }
 tls_rust = { version = "0.23", package = "rustls", default-features = false, optional = true }
 
 [dev-dependencies]
-ntex = { version = "3", features = ["openssl", "rustls"] }
+ntex = { version = "3.0.0-pre.0", features = ["openssl", "rustls"] }
 env_logger = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
