@@ -3,6 +3,7 @@ use std::{cell::RefCell, fmt, rc::Rc, task::Context};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::service::cfg::SharedCfg;
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
 use crate::service::{IntoServiceFactory, chain_factory, dev::ServiceChainFactory};
 use crate::util::{Extensions, join};
@@ -24,7 +25,7 @@ type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
+    BoxServiceFactory<SharedCfg, WebRequest<Err>, WebResponse, Err::Container, ()>;
 
 /// Resources scope.
 ///
@@ -57,7 +58,7 @@ type HttpNewService<Err: ErrorRenderer> =
 ///
 pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: ServiceChainFactory<T, WebRequest<Err>>,
+    filter: ServiceChainFactory<T, WebRequest<Err>, SharedCfg>,
     rdef: Vec<String>,
     state: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
@@ -88,6 +89,7 @@ impl<Err, M, T> Scope<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -276,9 +278,13 @@ where
     /// If default resource is not registered, app's default resource is being used.
     pub fn default_service<F, S>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<S, WebRequest<Err>>,
-        S: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
-            + 'static,
+        F: IntoServiceFactory<S, WebRequest<Err>, SharedCfg>,
+        S: ServiceFactory<
+                WebRequest<Err>,
+                SharedCfg,
+                Response = WebResponse,
+                Error = Err::Container,
+            > + 'static,
         S::InitError: fmt::Debug,
     {
         // create and configure default resource
@@ -305,6 +311,7 @@ where
         M,
         impl ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -313,10 +320,11 @@ where
     where
         U: ServiceFactory<
                 WebRequest<Err>,
+                SharedCfg,
                 Response = WebRequest<Err>,
                 Error = Err::Container,
             >,
-        F: IntoServiceFactory<U, WebRequest<Err>>,
+        F: IntoServiceFactory<U, WebRequest<Err>, SharedCfg>,
     {
         Scope {
             filter: self
@@ -362,6 +370,7 @@ impl<Err, M, T> WebServiceFactory<Err> for Scope<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -380,7 +389,7 @@ where
             AppState::new(
                 state,
                 Some(config.state().clone()),
-                config.state().config().clone(),
+                *config.state().config(),
             )
         });
 
@@ -448,12 +457,14 @@ struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
     routing: ScopeRouterFactory<Err>,
 }
 
-impl<M, F, Err> ServiceFactory<WebRequest<Err>> for ScopeServiceFactory<M, F, Err>
+impl<M, F, Err> ServiceFactory<WebRequest<Err>, SharedCfg>
+    for ScopeServiceFactory<M, F, Err>
 where
     M: Middleware<ScopeService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -465,10 +476,10 @@ where
     type Service = M::Service;
     type InitError = ();
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(self.middleware.create(ScopeService {
-            filter: self.filter.create(()).await?,
-            routing: self.routing.create(()).await?,
+            filter: self.filter.create(cfg).await?,
+            routing: self.routing.create(cfg).await?,
         }))
     }
 }
@@ -518,25 +529,27 @@ struct ScopeRouterFactory<Err: ErrorRenderer> {
     case_insensitive: bool,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<Err> {
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
+    for ScopeRouterFactory<Err>
+{
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
     type Service = ScopeRouter<Err>;
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         // create http services
         let mut router = Router::build();
         if self.case_insensitive {
             router.case_insensitive();
         }
         for (path, factory, guards) in &mut self.services.iter() {
-            let service = factory.create(()).await?;
+            let service = factory.create(cfg).await?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
         let default = if let Some(ref default) = self.default {
-            Some(default.create(()).await?)
+            Some(default.create(cfg).await?)
         } else {
             None
         };

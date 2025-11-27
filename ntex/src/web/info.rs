@@ -1,8 +1,10 @@
 use std::cell::Ref;
 
+use crate::Cfg;
 use crate::http::RequestHead;
 use crate::http::header::{self, HeaderName};
-use crate::web::config::AppConfig;
+
+use super::config::WebAppConfig;
 
 const X_FORWARDED_FOR: &[u8] = b"x-forwarded-for";
 const X_FORWARDED_HOST: &[u8] = b"x-forwarded-host";
@@ -19,7 +21,7 @@ pub struct ConnectionInfo {
 
 impl ConnectionInfo {
     /// Create *ConnectionInfo* instance for a request.
-    pub fn get<'a>(req: &'a RequestHead, cfg: &AppConfig) -> Ref<'a, Self> {
+    pub fn get<'a>(req: &'a RequestHead, cfg: &Cfg<WebAppConfig>) -> Ref<'a, Self> {
         if !req.extensions().contains::<ConnectionInfo>() {
             req.extensions_mut().insert(ConnectionInfo::new(req, cfg));
         }
@@ -27,7 +29,7 @@ impl ConnectionInfo {
     }
 
     #[allow(clippy::cognitive_complexity)]
-    fn new(req: &RequestHead, cfg: &AppConfig) -> ConnectionInfo {
+    fn new(req: &RequestHead, cfg: &Cfg<WebAppConfig>) -> ConnectionInfo {
         let mut host = None;
         let mut scheme = None;
         let mut remote = None;

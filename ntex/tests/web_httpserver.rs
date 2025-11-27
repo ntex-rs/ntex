@@ -120,10 +120,7 @@ async fn test_openssl() {
         sys.run(move || {
             let srv = HttpServer::new(|| {
                 App::new().service(web::resource("/").route(web::to(
-                    |req: HttpRequest| async move {
-                        assert!(req.app_config().secure());
-                        HttpResponse::Ok().body("test")
-                    },
+                    |_: HttpRequest| async move { HttpResponse::Ok().body("test") },
                 )))
             })
             .workers(1)
@@ -167,10 +164,7 @@ async fn test_rustls() {
         sys.run(move || {
             let srv = HttpServer::new(|| {
                 App::new().service(web::resource("/").route(web::to(
-                    |req: HttpRequest| async move {
-                        assert!(req.app_config().secure());
-                        HttpResponse::Ok().body("test")
-                    },
+                    |_: HttpRequest| async move { HttpResponse::Ok().body("test") },
                 )))
             })
             .workers(1)

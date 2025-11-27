@@ -7,10 +7,8 @@ use tls_rustls::ServerConfig as RustlsServerConfig;
 
 use crate::http::{HttpService, Request, Response, ResponseError, body::MessageBody};
 use crate::server::{Server, ServerBuilder};
-use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg, map_config};
+use crate::service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
 use crate::time::Seconds;
-
-use super::config::AppConfig;
 
 struct Config {
     host: Option<String>,
@@ -37,8 +35,8 @@ struct Config {
 pub struct HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, AppConfig>,
-    S: ServiceFactory<Request, AppConfig>,
+    I: IntoServiceFactory<S, Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
@@ -54,8 +52,8 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, AppConfig>,
-    S: ServiceFactory<Request, AppConfig> + 'static,
+    I: IntoServiceFactory<S, Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
@@ -188,15 +186,8 @@ where
         self.builder =
             self.builder
                 .listen(format!("ntex-web-service-{addr}"), lst, move |r| {
-                    let c = cfg.lock().unwrap();
-                    let cfg = AppConfig::new(
-                        false,
-                        addr,
-                        c.host.clone().unwrap_or_else(|| format!("{addr}")),
-                    );
-                    r.config(c.cfg);
-
-                    HttpService::new(map_config(factory(), move |_| cfg.clone()))
+                    r.config(cfg.lock().unwrap().cfg);
+                    HttpService::new(factory())
                 })?;
         Ok(self)
     }
@@ -226,16 +217,8 @@ where
         self.builder =
             self.builder
                 .listen(format!("ntex-web-service-{addr}"), lst, move |r| {
-                    let c = cfg.lock().unwrap();
-                    let cfg = AppConfig::new(
-                        true,
-                        addr,
-                        c.host.clone().unwrap_or_else(|| format!("{addr}")),
-                    );
-                    r.config(c.cfg);
-
-                    HttpService::new(map_config(factory(), move |_| cfg.clone()))
-                        .openssl(acceptor.clone())
+                    r.config(cfg.lock().unwrap().cfg);
+                    HttpService::new(factory()).openssl(acceptor.clone())
                 })?;
         Ok(self)
     }
@@ -266,16 +249,8 @@ where
             format!("ntex-web-rustls-service-{addr}"),
             lst,
             move |r| {
-                let c = cfg.lock().unwrap();
-                let cfg = AppConfig::new(
-                    true,
-                    addr,
-                    c.host.clone().unwrap_or_else(|| format!("{addr}")),
-                );
-                r.config(c.cfg);
-
-                HttpService::new(map_config(factory(), move |_| cfg.clone()))
-                    .rustls(config.clone())
+                r.config(cfg.lock().unwrap().cfg);
+                HttpService::new(factory()).rustls(config.clone())
             },
         )?;
         Ok(self)
@@ -367,21 +342,11 @@ where
     pub fn listen_uds(mut self, lst: std::os::unix::net::UnixListener) -> io::Result<Self> {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
-        let socket_addr =
-            net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
         self.builder = self.builder.listen_uds(addr, lst, move |r| {
-            let c = cfg.lock().unwrap();
-            let config = AppConfig::new(
-                false,
-                socket_addr,
-                c.host.clone().unwrap_or_else(|| format!("{socket_addr}")),
-            );
-            r.config(c.cfg);
-
-            HttpService::new(map_config(factory(), move |_| config.clone()))
+            r.config(cfg.lock().unwrap().cfg);
+            HttpService::new(factory())
         })?;
         Ok(self)
     }
@@ -396,22 +361,13 @@ where
     {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
-        let socket_addr =
-            net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
         self.builder = self.builder.bind_uds(
             format!("ntex-web-service-{:?}", addr.as_ref()),
             addr,
             move |r| {
-                let c = cfg.lock().unwrap();
-                let config = AppConfig::new(
-                    false,
-                    socket_addr,
-                    c.host.clone().unwrap_or_else(|| format!("{socket_addr}")),
-                );
-                r.config(c.cfg);
-
-                HttpService::new(map_config(factory(), move |_| config.clone()))
+                r.config(cfg.lock().unwrap().cfg);
+                HttpService::new(factory())
             },
         )?;
         Ok(self)
@@ -421,8 +377,8 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, AppConfig>,
-    S: ServiceFactory<Request, AppConfig>,
+    I: IntoServiceFactory<S, Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,

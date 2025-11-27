@@ -129,7 +129,7 @@ pub mod dev {
     //! traits by adding a glob import to the top of ntex::web heavy modules:
 
     pub use crate::web::app_service::AppService;
-    pub use crate::web::config::AppConfig;
+    pub use crate::web::config::WebAppConfig;
     pub use crate::web::info::ConnectionInfo;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::route::IntoRoutes;
