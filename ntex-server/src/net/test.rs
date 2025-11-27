@@ -102,9 +102,7 @@ where
 /// # Examples
 ///
 /// ```rust
-/// use ntex::http;
-/// use ntex::http::client::Client;
-/// use ntex::server;
+/// use ntex::{server, http, client::Client};
 /// use ntex::web::{self, App, HttpResponse};
 ///
 /// async fn my_handler() -> Result<HttpResponse, std::io::Error> {

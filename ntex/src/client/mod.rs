@@ -1,8 +1,7 @@
 //! HTTP Client
 //!
 //! ```rust
-//! use futures_util::future::{lazy, Future};
-//! use ntex::http::client::Client;
+//! use ntex::client::Client;
 //!
 //! #[ntex::main]
 //! async fn main() {
@@ -51,7 +50,7 @@ pub struct Connect {
 /// An HTTP Client
 ///
 /// ```rust
-/// use ntex::http::client::Client;
+/// use ntex::client::Client;
 ///
 /// #[ntex::main]
 /// async fn main() {

@@ -22,7 +22,7 @@ type BoxedConnector =
 /// construction that finishes by calling the `.finish()` method.
 ///
 /// ```rust,no_run
-/// use ntex::http::client::Connector;
+/// use ntex::client::Connector;
 ///
 /// let connector = Connector::default()
 ///      .keep_alive(5_000);
