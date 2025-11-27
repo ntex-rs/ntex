@@ -130,7 +130,10 @@ impl SharedCfg {
             .get(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast_ref())
             .map(Cfg)
-            .unwrap_or_else(|| Cfg(T::default()))
+            .unwrap_or_else(|| {
+                log::info!("Configuration {:?} does not exist, using default", T::NAME);
+                Cfg(T::default())
+            })
     }
 }
 
@@ -165,8 +168,7 @@ impl SharedCfgBuilder {
             .as_mut()
             .unwrap()
             .data
-            .insert(TypeId::of::<T>(), Box::new(val))
-            .and_then(|item| item.downcast::<T>().map(|boxed| *boxed).ok());
+            .insert(TypeId::of::<T>(), Box::new(val));
         self
     }
 }

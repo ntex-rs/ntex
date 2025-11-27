@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity, clippy::let_underscore_future)]
 //! A runtime implementation that runs everything on the current thread.
-use std::{cell::RefCell, ptr};
+use std::{cell::Cell, ptr};
 
 mod arbiter;
 mod builder;
@@ -11,22 +11,60 @@ pub use self::builder::{Builder, SystemRunner};
 pub use self::system::{Id, PingRecord, System};
 
 thread_local! {
-    static CB: RefCell<(TBefore, TEnter, TExit, TAfter)> = RefCell::new((
-        Box::new(|| {None}), Box::new(|_| {ptr::null()}), Box::new(|_| {}), Box::new(|_| {}))
-    );
+    static CB: Cell<*const Callbacks> = const { Cell::new(ptr::null()) };
 }
 
-type TBefore = Box<dyn Fn() -> Option<*const ()>>;
-type TEnter = Box<dyn Fn(*const ()) -> *const ()>;
-type TExit = Box<dyn Fn(*const ())>;
-type TAfter = Box<dyn Fn(*const ())>;
+struct Callbacks {
+    before: Box<dyn Fn() -> Option<*const ()>>,
+    enter: Box<dyn Fn(*const ()) -> *const ()>,
+    exit: Box<dyn Fn(*const ())>,
+    after: Box<dyn Fn(*const ())>,
+}
+
+struct Data {
+    cb: &'static Callbacks,
+    ptr: *const (),
+}
+
+impl Data {
+    fn load() -> Option<Data> {
+        let cb = CB.with(|cb| cb.get());
+
+        if let Some(cb) = unsafe { cb.as_ref() } {
+            if let Some(ptr) = (*cb.before)() {
+                return Some(Data { cb, ptr });
+            }
+        }
+        None
+    }
+
+    fn run<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let ptr = (*self.cb.enter)(self.ptr);
+        let result = f();
+        (*self.cb.exit)(ptr);
+        result
+    }
+}
+
+impl Drop for Data {
+    fn drop(&mut self) {
+        (*self.cb.after)(self.ptr)
+    }
+}
 
 /// # Safety
 ///
-/// The user must ensure that the pointer returned by `before` is `'static`. It will become
-/// owned by the spawned task for the life of the task. Ownership of the pointer will be
-/// returned to the user at the end of the task via `after`. The pointer is opaque to the
-/// runtime.
+/// The user must ensure that the pointer returned by `before` has a `'static` lifetime.
+/// This pointer will be owned by the spawned task for the duration of that task, and
+/// ownership will be returned to the user at the end of the task via `after`.
+/// The pointer remains opaque to the runtime.
+///
+/// # Panics
+///
+/// Panics if spawn callbacks have already been set.
 pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
     before: FBefore,
     enter: FEnter,
@@ -39,12 +77,16 @@ pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
     FAfter: Fn(*const ()) + 'static,
 {
     CB.with(|cb| {
-        *cb.borrow_mut() = (
-            Box::new(before),
-            Box::new(enter),
-            Box::new(exit),
-            Box::new(after),
-        );
+        let new: *mut Callbacks = Box::leak(Box::new(Callbacks {
+            before: Box::new(before),
+            enter: Box::new(enter),
+            exit: Box::new(exit),
+            after: Box::new(after),
+        }));
+
+        if !cb.replace(new).is_null() {
+            panic!("Spawn callbacks already set");
+        }
     });
 }
 
@@ -84,23 +126,15 @@ mod tokio {
     where
         F: Future + 'static,
     {
-        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
-        tok_io::task::spawn_local(async move {
-            if let Some(ptr) = ptr {
+        let data = crate::Data::load();
+        if let Some(mut data) = data {
+            tok_io::task::spawn_local(async move {
                 tok_io::pin!(f);
-                let result = poll_fn(|ctx| {
-                    let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
-                    let result = f.as_mut().poll(ctx);
-                    crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
-                    result
-                })
-                .await;
-                crate::CB.with(|cb| (cb.borrow().3)(ptr));
-                result
-            } else {
-                f.await
-            }
-        })
+                poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await
+            })
+        } else {
+            tok_io::task::spawn_local(f)
+        }
     }
 
     #[derive(Clone, Debug)]
@@ -180,23 +214,14 @@ mod compio {
     where
         F: Future + 'static,
     {
-        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
-        let fut = compio_runtime::spawn(async move {
-            if let Some(ptr) = ptr {
+        let fut = if let Some(mut data) = crate::Data::load() {
+            compio_runtime::spawn(async move {
                 let mut f = std::pin::pin!(f);
-                let result = poll_fn(|ctx| {
-                    let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
-                    let result = f.as_mut().poll(ctx);
-                    crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
-                    result
-                })
-                .await;
-                crate::CB.with(|cb| (cb.borrow().3)(ptr));
-                result
-            } else {
-                f.await
-            }
-        });
+                poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await
+            })
+        } else {
+            compio_runtime::spawn(f)
+        };
 
         JoinHandle {
             fut: Some(Either::Compio(fut)),
@@ -316,23 +341,14 @@ mod neon {
     where
         F: Future + 'static,
     {
-        let ptr = crate::CB.with(|cb| (cb.borrow().0)());
-        let task = ntex_neon::spawn(async move {
-            if let Some(ptr) = ptr {
+        let task = if let Some(mut data) = crate::Data::load() {
+            ntex_neon::spawn(async move {
                 let mut f = std::pin::pin!(f);
-                let result = poll_fn(|ctx| {
-                    let new_ptr = crate::CB.with(|cb| (cb.borrow().1)(ptr));
-                    let result = f.as_mut().poll(ctx);
-                    crate::CB.with(|cb| (cb.borrow().2)(new_ptr));
-                    result
-                })
-                .await;
-                crate::CB.with(|cb| (cb.borrow().3)(ptr));
-                result
-            } else {
-                f.await
-            }
-        });
+                poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await
+            })
+        } else {
+            ntex_neon::spawn(f)
+        };
 
         JoinHandle {
             task: Some(Either::Task(task)),
