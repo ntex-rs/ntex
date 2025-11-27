@@ -4,8 +4,8 @@ use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
-use crate::http::message::{RequestHeadType, ResponseHead};
-use crate::http::{Method, Version, h2::payload, payload::Payload};
+use crate::http::{Method, Payload, Version, h2::Payload as H2Payload};
+use crate::http::{RequestHeadType, ResponseHead};
 use crate::time::{Millis, timeout_checked};
 use crate::util::{ByteString, Bytes, Either, select};
 
@@ -129,8 +129,7 @@ async fn get_response(
                             stream.tag(),
                             stream.id()
                         );
-                        let (mut pl, payload) =
-                            payload::Payload::create(stream.empty_capacity());
+                        let (mut pl, payload) = H2Payload::create(stream.empty_capacity());
 
                         let _ = crate::rt::spawn(async move {
                             loop {

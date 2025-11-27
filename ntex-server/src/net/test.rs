@@ -41,14 +41,14 @@ where
     }
 
     /// Set server io configuration
-    pub fn config(mut self, cfg: SharedCfg) -> Self {
-        self.config = cfg;
+    pub fn config<T: Into<SharedCfg>>(mut self, cfg: T) -> Self {
+        self.config = cfg.into();
         self
     }
 
     /// Set client io configuration
-    pub fn client_config(mut self, cfg: SharedCfg) -> Self {
-        self.client_config = cfg;
+    pub fn client_config<T: Into<SharedCfg>>(mut self, cfg: T) -> Self {
+        self.client_config = cfg.into();
         self
     }
 
@@ -102,9 +102,7 @@ where
 /// # Examples
 ///
 /// ```rust
-/// use ntex::http;
-/// use ntex::http::client::Client;
-/// use ntex::server;
+/// use ntex::{server, http, client::Client};
 /// use ntex::web::{self, App, HttpResponse};
 ///
 /// async fn my_handler() -> Result<HttpResponse, std::io::Error> {

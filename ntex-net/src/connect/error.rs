@@ -1,5 +1,12 @@
 use std::io;
 
+#[derive(thiserror::Error, Debug, Copy, Clone)]
+pub enum ConnectServiceError {
+    /// Cannot create connect service
+    #[error("Cannot create connect service")]
+    CannotCreateService,
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum ConnectError {
     /// Failed to resolve the hostname

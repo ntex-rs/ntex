@@ -1,6 +1,4 @@
 //! Http protocol support.
-// mod builder;
-pub mod client;
 mod config;
 #[cfg(feature = "compress")]
 pub mod encoding;
@@ -21,8 +19,6 @@ pub mod test;
 
 pub(crate) use self::message::Message;
 
-//pub use self::builder::HttpServiceBuilder;
-pub use self::client::Client;
 pub use self::config::{DateService, HttpServiceConfig, KeepAlive};
 pub use self::error::ResponseError;
 pub use self::httpmessage::HttpMessage;

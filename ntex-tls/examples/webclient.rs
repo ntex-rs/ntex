@@ -1,5 +1,5 @@
 use ntex::SharedCfg;
-use ntex::http::client::{Client, Connector, error::SendRequestError};
+use ntex::client::{Client, Connector, error::SendRequestError};
 use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
 
 #[ntex::main]

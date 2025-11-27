@@ -91,6 +91,10 @@ where
     type Response = Io<Layer<TlsClientFilter>>;
     type Error = ConnectError;
 
+    ntex_service::forward_ready!(svc);
+    ntex_service::forward_poll!(svc);
+    ntex_service::forward_shutdown!(svc);
+
     async fn call(
         &self,
         req: Connect<A>,

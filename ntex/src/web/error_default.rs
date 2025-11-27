@@ -5,6 +5,7 @@ use serde::de::value::Error as DeError;
 use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
 
+use crate::client;
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
 use crate::http::{self, StatusCode, header};
@@ -226,13 +227,13 @@ impl WebResponseError<DefaultError> for http::error::ContentTypeError {
 }
 
 /// Convert `SendRequestError` to a server `Response`
-impl WebResponseError<DefaultError> for http::client::error::SendRequestError {
+impl WebResponseError<DefaultError> for client::error::SendRequestError {
     fn status_code(&self) -> StatusCode {
         match *self {
-            http::client::error::SendRequestError::Connect(
-                http::client::error::ConnectError::Timeout,
+            client::error::SendRequestError::Connect(
+                client::error::ConnectError::Timeout,
             ) => StatusCode::GATEWAY_TIMEOUT,
-            http::client::error::SendRequestError::Connect(_) => StatusCode::BAD_REQUEST,
+            client::error::SendRequestError::Connect(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

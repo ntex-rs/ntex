@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 
+use ntex::client::{Client, Connector};
 use ntex::http::HttpService;
-use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::service::{ServiceFactory, cfg::SharedCfg, chain_factory, map_config};
 use ntex::util::Ready;

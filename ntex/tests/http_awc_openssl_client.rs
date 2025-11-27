@@ -5,9 +5,8 @@ use tls_openssl::ssl::{
     AlpnError, SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode,
 };
 
-use ntex::http::client::{Client, Connector};
-use ntex::http::test::server as test_server;
-use ntex::http::{HttpService, Version};
+use ntex::client::{Client, Connector};
+use ntex::http::{HttpService, Version, test::server as test_server};
 use ntex::service::{chain_factory, map_config};
 use ntex::web::{self, App, HttpResponse, dev::AppConfig};
 use ntex::{SharedCfg, time::Seconds, util::Ready};

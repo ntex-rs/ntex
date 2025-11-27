@@ -5,8 +5,8 @@ use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
 use coo_kie::Cookie;
 use serde::{Serialize, de::DeserializeOwned};
 
+use crate::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::body::MessageBody;
-use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;

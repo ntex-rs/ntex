@@ -11,10 +11,11 @@ use coo_kie::{Cookie, CookieJar};
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use nanorand::{Rng, WyRand};
 
+use crate::client::{self, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
-use crate::http::{body::BodySize, client, client::ClientResponse, error::HttpError, h1};
+use crate::http::{body::BodySize, error::HttpError, h1};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
@@ -76,13 +77,7 @@ impl WsClient<Base, ()> {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter,
-        T: ServiceFactory<
-                Connect<Uri>,
-                SharedCfg,
-                Response = Io<F>,
-                Error = ConnectError,
-                InitError = (),
-            >,
+        T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
@@ -309,13 +304,7 @@ impl WsClientBuilder<Base, ()> {
 
 impl<F, T> WsClientBuilder<F, T>
 where
-    T: ServiceFactory<
-            Connect<Uri>,
-            SharedCfg,
-            Response = Io<F>,
-            Error = ConnectError,
-            InitError = (),
-        >,
+    T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
 {
     /// Set socket address of the server.
     ///
@@ -497,13 +486,7 @@ where
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
         F1: Filter,
-        T1: ServiceFactory<
-                Connect<Uri>,
-                SharedCfg,
-                Response = Io<F1>,
-                Error = ConnectError,
-                InitError = (),
-            >,
+        T1: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F1>, Error = ConnectError>,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 
@@ -561,7 +544,7 @@ where
     pub async fn finish(
         &mut self,
         cfg: SharedCfg,
-    ) -> Result<WsClient<F, T::Service>, WsClientBuilderError> {
+    ) -> Result<WsClient<F, T::Service>, WsClientBuilderError<T::InitError>> {
         if let Some(e) = self.err.take() {
             return Err(WsClientBuilderError::Http(e));
         }
@@ -640,7 +623,7 @@ where
             .connector
             .create(cfg)
             .await
-            .map_err(|_| WsClientBuilderError::CannotCreateConnector)?;
+            .map_err(WsClientBuilderError::Connector)?;
 
         Ok(WsClient {
             connector: connector.into(),

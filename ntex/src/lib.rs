@@ -34,6 +34,7 @@ pub(crate) use ntex_macros::rt_test_internal as rt_test;
 
 pub use ntex_service::{forward_poll, forward_ready, forward_shutdown};
 
+pub mod client;
 pub mod http;
 pub mod web;
 

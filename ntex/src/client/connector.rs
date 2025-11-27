@@ -1,4 +1,4 @@
-use std::{task::Context, time::Duration};
+use std::{error::Error, task::Context, time::Duration};
 
 use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::service::{Service, ServiceCtx, ServiceFactory, apply_fn_factory, boxed};
@@ -13,7 +13,7 @@ use tls_openssl::ssl::SslConnector as OpensslConnector;
 use tls_rustls::ClientConfig;
 
 type BoxedConnector =
-    boxed::BoxServiceFactory<SharedCfg, Connect, IoBoxed, ConnectError, ()>;
+    boxed::BoxServiceFactory<SharedCfg, Connect, IoBoxed, ConnectError, Box<dyn Error>>;
 
 #[derive(Debug)]
 /// Manages http client network connectivity.
@@ -22,7 +22,7 @@ type BoxedConnector =
 /// construction that finishes by calling the `.finish()` method.
 ///
 /// ```rust,no_run
-/// use ntex::http::client::Connector;
+/// use ntex::client::Connector;
 ///
 /// let connector = Connector::default()
 ///      .keep_alive(5_000);
@@ -49,7 +49,8 @@ impl Connector {
                     svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
                 })
                 .map(IoBoxed::from)
-                .map_err(ConnectError::from),
+                .map_err(ConnectError::from)
+                .map_init_err(|e| Box::new(e) as Box<dyn Error>),
             ),
             secure_connector: None,
             conn_lifetime: Duration::from_secs(75),
@@ -142,6 +143,7 @@ impl Connector {
     where
         T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Error = crate::connect::ConnectError>
             + 'static,
+        T::InitError: Error,
         IoBoxed: From<T::Response>,
     {
         self.connector = boxed::factory(
@@ -150,7 +152,7 @@ impl Connector {
             })
             .map(IoBoxed::from)
             .map_err(ConnectError::from)
-            .map_init_err(|_| ()),
+            .map_init_err(|e| Box::new(e) as Box<dyn Error>),
         );
         self
     }
@@ -160,6 +162,7 @@ impl Connector {
     where
         T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Error = crate::connect::ConnectError>
             + 'static,
+        T::InitError: Error,
         IoBoxed: From<T::Response>,
     {
         self.secure_connector = Some(boxed::factory(
@@ -168,7 +171,7 @@ impl Connector {
             })
             .map(IoBoxed::from)
             .map_err(ConnectError::from)
-            .map_init_err(|_| ()),
+            .map_init_err(|e| Box::new(e) as Box<dyn Error>),
         ));
         self
     }
@@ -178,7 +181,7 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
     type Response = Connection;
     type Error = ConnectError;
     type Service = ConnectorService;
-    type InitError = ();
+    type InitError = Box<dyn Error>;
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let tcp_pool = ConnectionPool::new(

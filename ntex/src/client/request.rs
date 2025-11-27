@@ -21,7 +21,7 @@ use super::{ClientInner, ClientResponse, frozen::FrozenClientRequest};
 /// builder-like pattern.
 ///
 /// ```rust
-/// use ntex::http::client::Client;
+/// use ntex::client::Client;
 ///
 /// #[ntex::main]
 /// async fn main() {
@@ -144,8 +144,7 @@ impl ClientRequest {
     /// To override header use `set_header()` method.
     ///
     /// ```rust
-    /// use ntex::http;
-    /// use ntex::http::client::Client;
+    /// use ntex::{http, client::Client};
     ///
     /// #[ntex::main]
     /// async fn main() {
@@ -276,7 +275,7 @@ impl ClientRequest {
     ///
     /// ```rust
     /// use coo_kie as cookie;
-    /// use ntex::http::client::Client;
+    /// use ntex::client::Client;
     ///
     /// #[ntex::main]
     /// async fn main() {
@@ -546,7 +545,7 @@ impl fmt::Debug for ClientRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SharedCfg, http::client::Client};
+    use crate::{SharedCfg, client::Client};
 
     #[crate::rt_test]
     async fn test_debug() {

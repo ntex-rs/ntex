@@ -420,8 +420,7 @@ mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
 
-    use crate::http::client::test::TestResponse;
-    use crate::http::header;
+    use crate::{client::test::TestResponse, http::header};
 
     #[crate::rt_test]
     async fn test_body() {

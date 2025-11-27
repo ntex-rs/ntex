@@ -1,8 +1,7 @@
 use std::{fmt, time};
 
 use crate::http::body::MessageBody;
-use crate::http::message::{RequestHeadType, ResponseHead};
-use crate::http::payload::Payload;
+use crate::http::{Payload, RequestHeadType, ResponseHead};
 use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::time::Millis;
 
