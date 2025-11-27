@@ -45,9 +45,6 @@ ntex-util = { path = "ntex-util" }
 ntex-compio = { path = "ntex-compio" }
 ntex-tokio = { path = "ntex-tokio" }
 
-ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "io-config" }
-#ntex-h2 = { path = "../dev/ntex-h2" }
-
 [workspace.dependencies]
 async-channel = "2"
 async-task = "4.5.0"
