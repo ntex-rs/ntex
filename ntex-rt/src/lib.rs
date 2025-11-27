@@ -127,7 +127,7 @@ mod tokio {
         F: Future + 'static,
     {
         let data = crate::Data::load();
-        if let Some(data) = data {
+        if let Some(mut data) = data {
             tok_io::task::spawn_local(async move {
                 tok_io::pin!(f);
                 poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await
@@ -214,7 +214,7 @@ mod compio {
     where
         F: Future + 'static,
     {
-        let fut = if let Some(data) = crate::Data::load() {
+        let fut = if let Some(mut data) = crate::Data::load() {
             compio_runtime::spawn(async move {
                 let mut f = std::pin::pin!(f);
                 poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await
