@@ -1,5 +1,11 @@
 # Changes
 
+## [3.0.0] - 2025-11-27
+
+* Update ntex-bytes
+
+* Remove deprecated api
+
 ## [2.15.0] - 2025-10-10
 
 * Fix readiness check for Variant service
