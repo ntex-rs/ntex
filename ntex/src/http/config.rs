@@ -48,15 +48,14 @@ pub struct HttpServiceConfig {
     config: CfgContext,
 }
 
+impl Default for HttpServiceConfig {
+    fn default() -> Self {
+        HttpServiceConfig::new()
+    }
+}
+
 impl Configuration for HttpServiceConfig {
     const NAME: &str = "Http service configuration";
-
-    fn default() -> &'static Self {
-        thread_local! {
-            static DEFAULT: &'static HttpServiceConfig = Box::leak(Box::new(HttpServiceConfig::new()));
-        }
-        DEFAULT.with(|cfg| *cfg)
-    }
 
     fn ctx(&self) -> &CfgContext {
         &self.config
