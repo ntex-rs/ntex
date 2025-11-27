@@ -5,40 +5,36 @@ use ntex_h2::{self as h2, frame::StreamId, server};
 
 use crate::channel::oneshot;
 use crate::http::body::{BodySize, MessageBody};
-use crate::http::config::{DispatcherConfig, ServiceConfig};
+use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::message::{CurrentIo, ResponseHead};
 use crate::http::{DateService, Method, Request, Response, StatusCode, Uri, Version};
-use crate::io::{types, Filter, Io, IoBoxed, IoRef};
-use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
+use crate::io::{Filter, Io, IoBoxed, IoRef, types};
+use crate::service::{
+    IntoServiceFactory, Service, ServiceCtx, ServiceFactory, cfg::SharedCfg,
+};
 use crate::util::{Bytes, BytesMut, HashMap, HashSet};
 
-use super::payload::{Payload, PayloadSender};
-use super::DefaultControlService;
+use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
 /// `ServiceFactory` implementation for HTTP2 transport
 pub struct H2Service<F, S, B, C> {
     srv: S,
     ctl: Rc<C>,
-    cfg: ServiceConfig,
     _t: marker::PhantomData<(F, B)>,
 }
 
 impl<F, S, B> H2Service<F, S, B, DefaultControlService>
 where
-    S: ServiceFactory<Request>,
+    S: ServiceFactory<Request, SharedCfg>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Create new `HttpService` instance with config.
-    pub(crate) fn with_config<U: IntoServiceFactory<S, Request>>(
-        cfg: ServiceConfig,
-        service: U,
-    ) -> Self {
+    pub(crate) fn new<U: IntoServiceFactory<S, Request, SharedCfg>>(service: U) -> Self {
         H2Service {
-            cfg,
             srv: service.into_factory(),
             ctl: Rc::new(DefaultControlService),
             _t: marker::PhantomData,
@@ -58,12 +54,13 @@ mod openssl {
     impl<F, S, B, C> H2Service<Layer<SslFilter, F>, S, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request> + 'static,
+        S: ServiceFactory<Request, SharedCfg> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
+        C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
+            + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
     {
@@ -73,12 +70,12 @@ mod openssl {
             acceptor: ssl::SslAcceptor,
         ) -> impl ServiceFactory<
             Io<F>,
+            SharedCfg,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
         > {
             SslAcceptor::new(acceptor)
-                .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(SslError::Ssl)
                 .map_init_err(|_| panic!())
                 .and_then(self.map_err(SslError::Service))
@@ -97,12 +94,13 @@ mod rustls {
     impl<F, S, B, C> H2Service<Layer<TlsServerFilter, F>, S, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request> + 'static,
+        S: ServiceFactory<Request, SharedCfg> + 'static,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
+        C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
+            + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
     {
@@ -112,6 +110,7 @@ mod rustls {
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
             Io<F>,
+            SharedCfg,
             Response = (),
             Error = SslError<DispatchError>,
             InitError = (),
@@ -120,7 +119,6 @@ mod rustls {
             config.alpn_protocols = protos;
 
             TlsAcceptor::from(config)
-                .timeout(self.cfg.ssl_handshake_timeout)
                 .map_err(|e| SslError::Ssl(Box::new(e)))
                 .map_init_err(|_| panic!())
                 .and_then(self.map_err(SslError::Service))
@@ -131,40 +129,39 @@ mod rustls {
 impl<F, S, B, C> H2Service<F, S, B, C>
 where
     F: Filter,
-    S: ServiceFactory<Request> + 'static,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Response: Into<Response<B>>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
+    C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
     /// Provide http/2 control service
     pub fn control<CT>(self, ctl: CT) -> H2Service<F, S, B, CT>
     where
-        CT: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
+        CT: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {
         H2Service {
             ctl: Rc::new(ctl),
-            cfg: self.cfg,
             srv: self.srv,
             _t: marker::PhantomData,
         }
     }
 }
 
-impl<F, S, B, C> ServiceFactory<Io<F>> for H2Service<F, S, B, C>
+impl<F, S, B, C> ServiceFactory<Io<F>, SharedCfg> for H2Service<F, S, B, C>
 where
     F: Filter,
-    S: ServiceFactory<Request> + 'static,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
+    C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck> + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -173,17 +170,18 @@ where
     type InitError = ();
     type Service = H2ServiceHandler<F, S::Service, B, C>;
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let service = self
             .srv
-            .create(())
+            .create(cfg)
             .await
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
 
         let (tx, rx) = oneshot::channel();
-        let config = Rc::new(DispatcherConfig::new(self.cfg.clone(), service, ()));
+        let config = Rc::new(DispatcherConfig::new(cfg.get(), service, ()));
 
         Ok(H2ServiceHandler {
+            cfg,
             config,
             control: self.ctl.clone(),
             inflight: RefCell::new(Default::default()),
@@ -196,6 +194,7 @@ where
 
 /// `Service` implementation for http/2 transport
 pub struct H2ServiceHandler<F, S: Service<Request>, B, C> {
+    cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, ()>>,
     control: Rc<C>,
     inflight: RefCell<HashSet<IoRef>>,
@@ -211,7 +210,7 @@ where
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
+    C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck> + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -270,10 +269,11 @@ where
         };
 
         log::trace!(
-            "New http2 connection, peer address {:?}, inflight: {inflight}",
+            "{}: New http2 connection, peer address {:?}, inflight: {inflight}",
+            io.tag(),
             io.query::<types::PeerAddr>().get()
         );
-        let control = self.control.create(()).await.map_err(|e| {
+        let control = self.control.create(self.cfg).await.map_err(|e| {
             DispatchError::Control(crate::util::str_rc_error(format!(
                 "Cannot construct control service: {e:?}"
             )))
@@ -309,16 +309,9 @@ where
     C2: Service<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
     C2::Error: Error,
 {
-    io.set_disconnect_timeout(config.client_disconnect);
     let ioref = io.get_ref();
 
-    let _ = server::handle_one(
-        io,
-        config.h2config.clone(),
-        control,
-        PublishService::new(ioref, config),
-    )
-    .await;
+    let _ = server::handle_one(io, PublishService::new(ioref, config), control).await;
 
     Ok(())
 }
@@ -371,7 +364,11 @@ where
                 eof,
             } => {
                 let pl = if !eof {
-                    log::debug!("Creating local payload stream for {:?}", stream.id());
+                    log::debug!(
+                        "{}: Creating local payload stream for {:?}",
+                        self.io.tag(),
+                        stream.id()
+                    );
                     let (sender, payload) = Payload::create(stream.empty_capacity());
                     self.streams.borrow_mut().insert(stream.id(), sender);
                     Some(payload)
@@ -381,16 +378,29 @@ where
                 (self.io.clone(), pseudo, headers, eof, pl)
             }
             h2::MessageKind::Data(data, cap) => {
-                log::debug!("Got data chunk for {:?}: {:?}", stream.id(), data.len());
+                log::debug!(
+                    "{}: Got data chunk for {:?}: {:?}",
+                    self.io.tag(),
+                    stream.id(),
+                    data.len()
+                );
                 if let Some(sender) = self.streams.borrow_mut().get_mut(&stream.id()) {
                     sender.feed_data(data, cap)
                 } else {
-                    log::error!("Payload stream does not exists for {:?}", stream.id());
+                    log::error!(
+                        "{}: Payload stream does not exists for {:?}",
+                        self.io.tag(),
+                        stream.id()
+                    );
                 };
                 return Ok(());
             }
             h2::MessageKind::Eof(item) => {
-                log::debug!("Got payload eof for {:?}: {item:?}", stream.id());
+                log::debug!(
+                    "{}: Got payload eof for {:?}: {item:?}",
+                    self.io.tag(),
+                    stream.id()
+                );
                 if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     match item {
                         h2::StreamEof::Data(data) => {
@@ -405,7 +415,7 @@ where
                 return Ok(());
             }
             h2::MessageKind::Disconnect(err) => {
-                log::debug!("Connection is disconnected {err:?}");
+                log::debug!("{}: Connection is disconnected {err:?}", self.io.tag(),);
                 if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     sender.set_error(
                         io::Error::new(io::ErrorKind::UnexpectedEof, err).into(),
@@ -418,7 +428,8 @@ where
         let cfg = self.config.clone();
 
         log::trace!(
-            "{:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
+            "{}: {:?} got request (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
+            self.io.tag(),
             stream.id()
         );
         let mut req = if let Some(pl) = payload {
@@ -453,9 +464,12 @@ where
 
         let head = res.head_mut();
         let mut size = body.size();
-        prepare_response(&cfg.timer, head, &mut size);
+        prepare_response(head, &mut size);
 
-        log::debug!("Received service response: {head:?} payload: {size:?}");
+        log::debug!(
+            "{}: Received service response: {head:?} payload: {size:?}",
+            self.io.tag()
+        );
 
         let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
         if size.is_eof() || is_head_req {
@@ -466,13 +480,18 @@ where
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                     None => {
-                        log::debug!("{:?} closing payload stream", stream.id());
+                        log::debug!(
+                            "{}: {:?} closing payload stream",
+                            self.io.tag(),
+                            stream.id()
+                        );
                         stream.send_payload(Bytes::new(), true).await?;
                         break;
                     }
                     Some(Ok(chunk)) => {
                         log::debug!(
-                            "{:?} sending data chunk {:?} bytes",
+                            "{}: {:?} sending data chunk {:?} bytes",
+                            self.io.tag(),
                             stream.id(),
                             chunk.len()
                         );
@@ -481,7 +500,10 @@ where
                         }
                     }
                     Some(Err(e)) => {
-                        log::error!("Response payload stream error: {e:?}");
+                        log::error!(
+                            "{}: Response payload stream error: {e:?}",
+                            self.io.tag()
+                        );
                         return Err(H2Error::Stream(e));
                     }
                 }
@@ -498,7 +520,7 @@ const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 #[allow(clippy::declare_interior_mutable_const)]
 const PROXY_CONNECTION: HeaderName = HeaderName::from_static("proxy-connection");
 
-fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut BodySize) {
+fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
     // Content length
     match head.status {
         StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
@@ -535,7 +557,7 @@ fn prepare_response(timer: &DateService, head: &mut ResponseHead, size: &mut Bod
     // set date header
     if !head.headers.contains_key(header::DATE) {
         let mut bytes = BytesMut::with_capacity(29);
-        timer.set_date(|date| bytes.extend_from_slice(date));
+        DateService.set_date(|date| bytes.extend_from_slice(date));
         head.headers.insert(header::DATE, unsafe {
             HeaderValue::from_shared_unchecked(bytes.freeze())
         });

@@ -1,5 +1,5 @@
 #![cfg(feature = "openssl")]
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
 use tls_openssl::ssl::{
     AlpnError, SslAcceptor, SslConnector, SslFiletype, SslMethod, SslVerifyMode,
@@ -9,8 +9,8 @@ use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Version};
 use ntex::service::{chain_factory, map_config};
-use ntex::web::{self, dev::AppConfig, App, HttpResponse};
-use ntex::{time::Seconds, util::Ready};
+use ntex::web::{self, App, HttpResponse, dev::AppConfig};
+use ntex::{SharedCfg, time::Seconds, util::Ready};
 
 fn ssl_acceptor() -> SslAcceptor {
     // load ssl keys
@@ -45,16 +45,16 @@ async fn test_connection_reuse_h2() {
             Ready::Ok(io)
         })
         .and_then(
-            HttpService::build()
-                .h2(map_config(
-                    App::new().service(
-                        web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
-                    ),
-                    |_| AppConfig::default(),
-                ))
-                .openssl(ssl_acceptor()), //.map_err(|_| ()),
+            HttpService::h2(map_config(
+                App::new().service(
+                    web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
+                ),
+                |_| AppConfig::default(),
+            ))
+            .openssl(ssl_acceptor()), //.map_err(|_| ()),
         )
-    });
+    })
+    .await;
 
     // disable ssl verification
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
@@ -64,13 +64,10 @@ async fn test_connection_reuse_h2() {
         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
     let client = Client::build()
-        .connector(
-            Connector::default()
-                .timeout(Seconds(30))
-                .openssl(builder.build())
-                .finish(),
-        )
-        .finish();
+        .connector::<&str>(Connector::default().openssl(builder.build()))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     // req 1
     let request = client.get(srv.surl("/")).timeout(Seconds(30)).send();

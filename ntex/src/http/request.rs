@@ -3,8 +3,8 @@ use std::{cell::Ref, cell::RefMut, fmt, mem, net};
 use crate::http::header::{self, HeaderMap};
 use crate::http::httpmessage::HttpMessage;
 use crate::http::message::{Message, RequestHead};
-use crate::http::{payload::Payload, Method, Uri, Version};
-use crate::io::{types, IoRef};
+use crate::http::{Method, Uri, Version, payload::Payload};
+use crate::io::{IoRef, types};
 use crate::util::Extensions;
 
 /// Request

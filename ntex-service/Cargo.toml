@@ -1,6 +1,6 @@
 [package]
 name = "ntex-service"
-version = "3.5.0"
+version = "3.6.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex service"
 keywords = ["network", "framework", "async", "futures"]
@@ -9,9 +9,8 @@ repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-service/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
-edition = "2021"
-build = "build.rs"
-rust-version = "1.75"
+edition = "2024"
+rust-version = "1.85"
 
 [lib]
 name = "ntex_service"
@@ -19,14 +18,12 @@ path = "src/lib.rs"
 
 [features]
 default = []
-async-fn = []
 
 [dependencies]
+log = { workspace = true }
 slab = { workspace = true }
+foldhash = { workspace = true }
 
 [dev-dependencies]
-ntex = "2"
-ntex-util = "2"
-
-[build-dependencies]
-version_check = "0.9"
+ntex = "3.0.0-pre.0"
+ntex-util = "3"

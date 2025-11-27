@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
-use std::{any, cmp, future::poll_fn, ops::Deref, ops::DerefMut, task::ready, task::Poll};
+use std::{any, cmp, future::poll_fn, ops::Deref, ops::DerefMut, task::Poll, task::ready};
 
 use ntex_bytes::BufMut;
-use ntex_io::{types, Io, ReadBuf, WriteBuf};
+use ntex_io::{Io, ReadBuf, WriteBuf, types};
 use tls_rust::{ConnectionCommon, SideData};
 
 use super::{PeerCert, PeerCertChain};
@@ -72,7 +72,7 @@ where
                         let n = match self.session.read_tls(&mut cursor) {
                             Ok(n) => n,
                             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                                break
+                                break;
                             }
                             Err(err) => return Err(err),
                         };
@@ -115,7 +115,7 @@ where
                                 Ok(0) => continue 'outer,
                                 Ok(_) => continue,
                                 Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                                    break
+                                    break;
                                 }
                                 Err(err) => return Err(err),
                             }

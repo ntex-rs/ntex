@@ -1,21 +1,20 @@
-use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{collections::HashMap, io::Read, io::Write, sync::Arc};
 
 use coo_kie::Cookie;
-use flate2::{read::GzDecoder, write::GzEncoder, write::ZlibEncoder, Compression};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
 use rand::Rng;
 
 use ntex::http::client::error::SendRequestError;
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
-use ntex::http::{header, HttpMessage, HttpService};
-use ntex::service::{chain_factory, map_config};
+use ntex::http::{HttpMessage, HttpService, header};
+use ntex::io::IoConfig;
+use ntex::service::{cfg::SharedCfg, chain_factory, map_config};
 use ntex::web::dev::AppConfig;
 use ntex::web::middleware::Compress;
-use ntex::web::{self, test, App, BodyEncoding, Error, HttpRequest, HttpResponse};
-use ntex::{time::sleep, time::Millis, time::Seconds, util::Bytes, util::Ready};
+use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
+use ntex::{time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -45,7 +44,8 @@ async fn test_simple() {
         App::new().service(
             web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
         )
-    });
+    })
+    .await;
 
     let request = srv.get("/").header("x-test", "111").send();
     let mut response = request.await.unwrap();
@@ -69,7 +69,8 @@ async fn test_freeze() {
         App::new().service(
             web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
         )
-    });
+    })
+    .await;
 
     // prep request
     let request = srv.get("/").header("x-test", "111").freeze().unwrap();
@@ -105,13 +106,15 @@ async fn test_json() {
         App::new().service(web::resource("/").route(web::to(
             |_: web::types::Json<String>| async { HttpResponse::Ok() },
         )))
-    });
+    })
+    .await;
 
-    let request = srv
+    let response = srv
         .get("/")
         .header("x-test", "111")
-        .send_json(&"TEST".to_string());
-    let response = request.await.unwrap();
+        .send_json(&"TEST".to_string())
+        .await
+        .unwrap();
     assert!(response.status().is_success());
 
     // same with frozen request
@@ -134,7 +137,8 @@ async fn test_form() {
         App::new().service(web::resource("/").route(web::to(
             |_: web::types::Form<HashMap<String, String>>| async { HttpResponse::Ok() },
         )))
-    });
+    })
+    .await;
 
     let mut data = HashMap::new();
     let _ = data.insert("key".to_string(), "TEST".to_string());
@@ -163,17 +167,17 @@ async fn test_timeout() {
             sleep(Millis(2000)).await;
             HttpResponse::Ok().body(STR)
         })))
-    });
+    })
+    .await;
 
-    let connector = Connector::default()
-        .connector(ntex::connect::Connector::new())
-        .timeout(Seconds(15))
-        .finish();
+    let connector = Connector::default().connector(ntex::connect::Connector::new());
 
     let client = Client::build()
-        .connector(connector)
-        .timeout(Seconds(1))
-        .finish();
+        .connector::<&str>(connector)
+        .response_timeout(Seconds(1))
+        .finish(SharedCfg::new("SVC").add(IoConfig::new().set_connect_timeout(15)))
+        .await
+        .unwrap();
 
     let request = client.get(srv.url("/")).send();
     match request.await {
@@ -189,9 +193,14 @@ async fn test_timeout_override() {
             sleep(Millis(2000)).await;
             HttpResponse::Ok().body(STR)
         })))
-    });
+    })
+    .await;
 
-    let client = Client::build().timeout(Seconds(50)).finish();
+    let client = Client::build()
+        .response_timeout(Seconds(50))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
     let request = client.get(srv.url("/")).timeout(Seconds(1)).send();
     match request.await {
         Err(SendRequestError::Timeout) => (),
@@ -216,9 +225,14 @@ async fn test_connection_reuse() {
             ),
             |_| AppConfig::default(),
         )))
-    });
+    })
+    .await;
 
-    let client = Client::build().timeout(Seconds(30)).finish();
+    let client = Client::build()
+        .response_timeout(Seconds(30))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -251,9 +265,14 @@ async fn test_connection_force_close() {
             ),
             |_| AppConfig::default(),
         )))
-    });
+    })
+    .await;
 
-    let client = Client::build().timeout(Seconds(30)).finish();
+    let client = Client::build()
+        .response_timeout(Seconds(30))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     // req 1
     let request = client.get(srv.url("/")).force_close().send();
@@ -261,7 +280,11 @@ async fn test_connection_force_close() {
     assert!(response.status().is_success());
 
     // req 2
-    let client = Client::build().timeout(Seconds(30)).finish();
+    let client = Client::build()
+        .response_timeout(Seconds(30))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
     let req = client.post(srv.url("/")).force_close();
     let response = req.send().await.unwrap();
     assert!(response.status().is_success());
@@ -287,9 +310,14 @@ async fn test_connection_server_close() {
             }))),
             |_| AppConfig::default(),
         )))
-    });
+    })
+    .await;
 
-    let client = Client::build().timeout(Seconds(30)).finish();
+    let client = Client::build()
+        .response_timeout(Seconds(30))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -323,12 +351,15 @@ async fn test_connection_wait_queue() {
             ),
             |_| AppConfig::default(),
         )))
-    });
+    })
+    .await;
 
     let client = Client::build()
-        .timeout(Seconds(30))
-        .connector(Connector::default().limit(1).finish())
-        .finish();
+        .response_timeout(Seconds(30))
+        .connector::<&str>(Connector::default().limit(1))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -368,12 +399,15 @@ async fn test_connection_wait_queue_force_close() {
             }))),
             |_| AppConfig::default(),
         )))
-    });
+    })
+    .await;
 
     let client = Client::build()
-        .timeout(Seconds(30))
-        .connector(Connector::default().limit(1).finish())
-        .finish();
+        .response_timeout(Seconds(30))
+        .connector::<&str>(Connector::default().limit(1))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     // req 1
     let request = client.get(srv.url("/")).send();
@@ -406,7 +440,8 @@ async fn test_with_query_parameter() {
                 HttpResponse::BadRequest()
             }
         }))
-    });
+    })
+    .await;
 
     let res = srv.get("/?qp=5").send().await.unwrap();
     assert!(res.status().is_success());
@@ -422,9 +457,14 @@ async fn test_no_decompress() {
                 res.encoding(header::ContentEncoding::Gzip);
                 res
             })))
-    });
+    })
+    .await;
 
-    let client = Client::build().timeout(Seconds(30)).finish();
+    let client = Client::build()
+        .response_timeout(Seconds(30))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     let mut res = client
         .get(srv.url("/"))
@@ -470,7 +510,8 @@ async fn test_client_gzip_encoding() {
                 .header("content-encoding", "gzip")
                 .body(data)
         })))
-    });
+    })
+    .await;
 
     // client request
     let mut response = srv.post("/").send().await.unwrap();
@@ -493,7 +534,8 @@ async fn test_client_gzip_encoding_large() {
                 .header("content-encoding", "gzip")
                 .body(data)
         })))
-    });
+    })
+    .await;
 
     // client request
     let mut response = srv.post("/").send().await.unwrap();
@@ -523,7 +565,8 @@ async fn test_client_gzip_encoding_large_random() {
                     .header("content-encoding", "gzip")
                     .body(data)
             })))
-    });
+    })
+    .await;
 
     // client request
     let mut response = srv.post("/").send_body(data.clone()).await.unwrap();
@@ -546,7 +589,8 @@ async fn test_client_deflate_encoding() {
                 .header("content-encoding", "deflate")
                 .body(data)
         })))
-    });
+    })
+    .await;
 
     // client request
     let mut response = srv.post("/").send_body(STR).await.unwrap();
@@ -575,7 +619,8 @@ async fn test_client_deflate_encoding_large_random() {
                 .header("content-encoding", "deflate")
                 .body(data)
         })))
-    });
+    })
+    .await;
 
     // client request
     let mut response = srv.post("/").send_body(data.clone()).await.unwrap();
@@ -661,7 +706,8 @@ async fn test_client_cookie_handling() {
                 }
             })),
         )
-    });
+    })
+    .await;
 
     let request = srv.get("/").cookie(cookie1.clone()).cookie(cookie2.clone());
     let response = request.send().await.unwrap();
@@ -697,8 +743,10 @@ async fn client_read_until_eof() {
 
     // client request
     let req = Client::build()
-        .timeout(Seconds(30))
-        .finish()
+        .response_timeout(Seconds(30))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap()
         .get(format!("http://{addr}/").as_str());
     let mut response = req.send().await.unwrap();
     assert!(response.status().is_success());
@@ -728,7 +776,8 @@ async fn client_basic_auth() {
                 }
             }),
         )
-    });
+    })
+    .await;
 
     // set authorization header to Basic <base64 encoded username:password>
     let request = srv.get("/").basic_auth("username", Some("password"));
@@ -756,7 +805,8 @@ async fn client_bearer_auth() {
                 }
             }),
         )
-    });
+    })
+    .await;
 
     // set authorization header to Bearer <token>
     let request = srv.get("/").bearer_auth("someS3cr3tAutht0k3n");

@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] - 2025-11-24
+
+* Use ntex-bytes 1.0
+
 ## [0.5.3] - 2024-01-16
 
 * Update http dependency

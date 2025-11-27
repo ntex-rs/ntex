@@ -4,7 +4,7 @@ use std::{cell::Cell, cmp, io, task::Poll};
 use crate::codec::{Decoder, Encoder};
 use crate::io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use crate::service::{Service, ServiceCtx};
-use crate::util::{BufMut, PoolRef};
+use crate::util::BufMut;
 
 use super::{CloseCode, CloseReason, Codec, Frame, Item, Message};
 
@@ -20,7 +20,6 @@ bitflags::bitflags! {
 #[derive(Clone, Debug)]
 /// An implementation of WebSockets streams
 pub struct WsTransport {
-    pool: PoolRef,
     codec: Codec,
     flags: Cell<Flags>,
 }
@@ -28,10 +27,7 @@ pub struct WsTransport {
 impl WsTransport {
     /// Create websockets transport
     pub fn create<F: Filter>(io: Io<F>, codec: Codec) -> Io<Layer<WsTransport, F>> {
-        let pool = io.memory_pool();
-
         io.add_filter(WsTransport {
-            pool,
             codec,
             flags: Cell::new(Flags::empty()),
         })
@@ -90,7 +86,7 @@ impl FilterLayer for WsTransport {
 
             loop {
                 // make sure we've got room
-                self.pool.resize_read_buf(&mut dst);
+                buf.cfg().resize(&mut dst);
 
                 let frame = if let Some(frame) =
                     self.codec.decode_vec(&mut src).map_err(|e| {
@@ -160,10 +156,10 @@ impl FilterLayer for WsTransport {
         if let Some(src) = buf.take_src() {
             buf.with_dst(|dst| {
                 // make sure we've got room
-                let (hw, lw) = self.pool.write_params().unpack();
+                let cfg = buf.cfg();
                 let remaining = dst.remaining_mut();
-                if remaining < lw {
-                    dst.reserve(cmp::max(hw, dst.len() + 12) - remaining);
+                if remaining < cfg.low {
+                    dst.reserve(cmp::max(cfg.high, dst.len() + 12) - remaining);
                 }
 
                 // Encoder ws::Codec do not fail

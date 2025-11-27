@@ -5,13 +5,13 @@ use ntex_io::DispatcherConfig;
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
-use crate::http::{body::BodySize, h1, StatusCode};
+use crate::http::{StatusCode, body::BodySize, h1};
 use crate::service::{
-    apply_fn, chain_factory, fn_factory_with_config, IntoServiceFactory, ServiceFactory,
+    IntoServiceFactory, ServiceFactory, apply_fn, chain_factory, fn_factory_with_config,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
-use crate::{io::DispatchItem, rt, util::Either, util::Ready};
+use crate::{io::DispatchItem, rt, time::Seconds, util::Either, util::Ready};
 
 // ================================================================================================
 // Private Helper Function to Avoid Repetition
@@ -176,10 +176,13 @@ where
     // Create the WebSocket service
     let srv = factory.into_factory().create(sink.clone()).await?;
 
-    // Start the WebSocket service dispatcher in a background task
+    let cfg = crate::io::DispatcherConfig::default();
+    cfg.set_keepalive_timeout(Seconds::ZERO);
+
+    // start websockets service dispatcher
     let _ = rt::spawn(async move {
         let res = crate::io::Dispatcher::new(io, codec, srv, &cfg).await;
-        log::trace!("WebSocket handler terminated: {res:?}");
+        log::trace!("Ws handler is terminated: {res:?}");
     });
 
     // Return an empty OK response, as the connection has been upgraded.

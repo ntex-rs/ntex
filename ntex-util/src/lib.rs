@@ -11,9 +11,5 @@ pub mod time;
 pub use futures_core::Stream;
 pub use ntex_rt::spawn;
 
-pub type HashMap<K, V> = std::collections::HashMap<K, V, ahash::RandomState>;
-pub type HashSet<V> = std::collections::HashSet<V, ahash::RandomState>;
-
-#[doc(hidden)]
-#[deprecated]
-pub use std::task::ready;
+pub type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
+pub type HashSet<V> = std::collections::HashSet<V, foldhash::fast::RandomState>;

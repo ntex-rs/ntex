@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0] - 2025-11-xx
+
+* New configuration subsystem
+
 ## [2.8.1] - 2025-05-27
 
 * Clear events list for accept loop

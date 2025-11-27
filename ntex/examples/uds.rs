@@ -1,4 +1,4 @@
-use ntex::web::{self, middleware, App, HttpRequest, HttpResponse, HttpServer};
+use ntex::web::{self, App, HttpRequest, HttpResponse, HttpServer, middleware};
 
 #[web::get("/resource1/{name}/index.html")]
 async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
@@ -19,7 +19,6 @@ async fn no_params() -> &'static str {
 #[cfg(unix)]
 #[ntex::main]
 async fn main() -> std::io::Result<()> {
-    std::env::set_var("RUST_LOG", "ntex=info");
     env_logger::init();
 
     HttpServer::new(|| {

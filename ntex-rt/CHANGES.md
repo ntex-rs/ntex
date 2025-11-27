@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0] - 2025-11-27
+
+* Update MSRV
+
 ## [0.4.33] - 2025-11-12
 
 * Upgrade to compio 0.16

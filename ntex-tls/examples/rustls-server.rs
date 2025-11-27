@@ -7,7 +7,6 @@ use tls_rust::ServerConfig;
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    std::env::set_var("RUST_LOG", "trace");
     env_logger::init();
 
     println!("Started openssl echp server: 127.0.0.1:8443");

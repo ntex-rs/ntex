@@ -1,18 +1,22 @@
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{future::Future, io, io::Read, io::Write, pin::Pin};
 
+use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
-use flate2::Compression;
-use rand::{distr::Alphanumeric, Rng};
+use rand::{Rng, distr::Alphanumeric};
 use thiserror::Error;
 
+use ntex::SharedCfg;
 use ntex::http::header::{
-    ContentEncoding, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
+    ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, ContentEncoding,
     TRANSFER_ENCODING,
 };
-use ntex::http::{body::Body, client, ConnectionType, Method, StatusCode};
-use ntex::time::{sleep, Millis, Seconds, Sleep};
+use ntex::http::{
+    ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body, client,
+};
+use ntex::io::IoConfig;
+use ntex::time::{Millis, Seconds, Sleep, sleep};
 use ntex::util::{Bytes, Ready, Stream};
 
 use ntex::web::{self, middleware::Compress, test};
@@ -85,7 +89,8 @@ async fn test_body() {
         App::new().service(
             web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
         )
-    });
+    })
+    .await;
 
     let mut response = srv.get("/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -104,7 +109,8 @@ async fn test_body_gzip() {
                 web::resource("/")
                     .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
             )
-    });
+    })
+    .await;
 
     let mut response = srv
         .get("/")
@@ -133,7 +139,8 @@ async fn test_body_gzip2() {
             .service(web::resource("/").route(web::to(|| async {
                 HttpResponse::Ok().body(STR).into_body::<Body>()
             })))
-    });
+    })
+    .await;
 
     let mut response = srv
         .get("/")
@@ -172,7 +179,8 @@ async fn test_body_encoding_override() {
 
                 response
             })))
-    });
+    })
+    .await;
 
     // Builder
     let mut response = srv
@@ -225,7 +233,8 @@ async fn test_body_gzip_large() {
             .service(web::resource("/").route(web::to(move || {
                 Ready::Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
             })))
-    });
+    })
+    .await;
 
     let mut response = srv
         .get("/")
@@ -262,7 +271,8 @@ async fn test_body_gzip_large_random() {
             .service(web::resource("/").route(web::to(move || {
                 Ready::Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
             })))
-    });
+    })
+    .await;
 
     let mut response = srv
         .get("/")
@@ -293,7 +303,8 @@ async fn test_body_chunked_implicit() {
                 HttpResponse::Ok()
                     .streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
             })))
-    });
+    })
+    .await;
 
     let mut response = srv
         .get("/")
@@ -327,7 +338,8 @@ async fn test_head_binary() {
                     HttpResponse::Ok().content_length(100).body(STR)
                 })),
         )
-    });
+    })
+    .await;
 
     let mut response = srv.head("/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -351,7 +363,8 @@ async fn test_no_chunking() {
                 .content_length(STR.len() as u64)
                 .streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
         })))
-    });
+    })
+    .await;
 
     let mut response = srv.get("/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -371,7 +384,8 @@ async fn test_body_deflate() {
                 web::resource("/")
                     .route(web::to(move || async { HttpResponse::Ok().body(STR) })),
             )
-    });
+    })
+    .await;
 
     // client request
     let mut response = srv
@@ -400,7 +414,8 @@ async fn test_encoding() {
             .service(web::resource("/").route(web::to(move |body: Bytes| async {
                 HttpResponse::Ok().body(body)
             })))
-    });
+    })
+    .await;
 
     // client request
     let mut e = GzEncoder::new(Vec::new(), Compression::default());
@@ -425,7 +440,8 @@ async fn test_gzip_encoding() {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
-    });
+    })
+    .await;
 
     // client request
     let mut e = GzEncoder::new(Vec::new(), Compression::default());
@@ -451,7 +467,8 @@ async fn test_gzip_encoding_large() {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
-    });
+    })
+    .await;
 
     // client request
     let mut e = GzEncoder::new(Vec::new(), Compression::default());
@@ -482,7 +499,8 @@ async fn test_reading_gzip_encoding_large_random() {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
-    });
+    })
+    .await;
 
     // client request
     let mut e = GzEncoder::new(Vec::new(), Compression::default());
@@ -508,7 +526,8 @@ async fn test_reading_deflate_encoding() {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
-    });
+    })
+    .await;
 
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
     e.write_all(STR.as_ref()).unwrap();
@@ -534,7 +553,8 @@ async fn test_reading_deflate_encoding_large() {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
-    });
+    })
+    .await;
 
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
     e.write_all(data.as_ref()).unwrap();
@@ -565,7 +585,8 @@ async fn test_reading_deflate_encoding_large_random() {
         App::new().service(web::resource("/").route(web::to(move |body: Bytes| async {
             HttpResponse::Ok().body(body)
         })))
-    });
+    })
+    .await;
 
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
     e.write_all(data.as_ref()).unwrap();
@@ -601,7 +622,8 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
                     .encoding(ContentEncoding::Identity)
                     .body(bytes)
             })))
-        });
+        })
+        .await;
 
     // encode data
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -642,7 +664,8 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
                     .body(bytes)
             })))
         },
-    );
+    )
+    .await;
 
     // encode data
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -683,7 +706,8 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
                     .body(bytes)
             })))
         },
-    );
+    )
+    .await;
 
     // encode data
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -708,8 +732,8 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
 
 #[ntex::test]
 async fn test_server_cookies() {
-    use ntex::http::header::SET_COOKIE;
     use ntex::http::HttpMessage;
+    use ntex::http::header::SET_COOKIE;
 
     let srv = test::server(|| {
         App::new().service(web::resource("/").to(|| async {
@@ -719,7 +743,8 @@ async fn test_server_cookies() {
                 .cookie(coo_kie::Cookie::new("second", "second_value"))
                 .finish()
         }))
-    });
+    })
+    .await;
 
     let first_cookie = coo_kie::Cookie::build(("first", "first_value")).http_only(true);
     let second_cookie = coo_kie::Cookie::new("second", "second_value");
@@ -760,7 +785,8 @@ async fn test_slow_request() {
     let srv = test::server_with(test::config().client_timeout(Seconds(1)), || {
         App::new()
             .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
-    });
+    })
+    .await;
 
     let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
     let mut data = String::new();
@@ -824,7 +850,8 @@ async fn test_custom_error() {
         App::with(JsonRenderer)
             .service(web::resource("/").route(web::get().to(test)))
             .service(web::resource("/err").route(web::get().to(test_err)))
-    });
+    })
+    .await;
 
     let mut response = srv.get("/").send().await.unwrap();
     assert!(response.status().is_success());
@@ -861,10 +888,15 @@ async fn test_web_server() {
                         .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
                 )
             })
-            .headers_read_rate(Seconds(1), Seconds(5), 128)
-            .payload_read_rate(Seconds(1), Seconds(5), 128)
-            .disconnect_timeout(Seconds(1))
-            .memory_pool(ntex_bytes::PoolId::P1)
+            .config(
+                SharedCfg::new("TEST")
+                    .add(IoConfig::new().set_disconnect_timeout(Seconds(1)))
+                    .add(
+                        HttpServiceConfig::new()
+                            .headers_read_rate(Seconds(1), Seconds(5), 128)
+                            .payload_read_rate(Seconds(1), Seconds(5), 128),
+                    ),
+            )
             .listen(tcp)
             .unwrap()
             .run()
@@ -873,7 +905,11 @@ async fn test_web_server() {
     });
     let (system, addr) = rx.recv().unwrap();
 
-    let client = client::Client::build().timeout(Seconds(30)).finish();
+    let client = client::Client::build()
+        .response_timeout(Seconds(30))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     let response = client
         .request(Method::GET, format!("http://{addr:?}/"))
@@ -898,9 +934,14 @@ async fn web_no_ws_with_response_payload() {
                 web::resource("/f")
                     .route(web::get().to(move || async { HttpResponse::Ok().body(STR) })),
             )
-    });
+    })
+    .await;
 
-    let client = client::Client::build().timeout(Seconds(30)).finish();
+    let client = client::Client::build()
+        .response_timeout(Seconds(30))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
     let mut response = client
         .request(Method::GET, format!("http://{:?}/f", srv.addr()))
         .header("sec-websocket-version", "13")

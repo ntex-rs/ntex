@@ -11,7 +11,7 @@ pub struct Resolver<T>(marker::PhantomData<T>);
 
 impl<T> Resolver<T> {
     /// Create new resolver instance with custom configuration and options.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Resolver(marker::PhantomData)
     }
 }

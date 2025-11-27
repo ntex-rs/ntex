@@ -1,22 +1,21 @@
-use std::task::{Context, Poll};
-use std::{error::Error, future::Future, net, pin::Pin, rc::Rc};
+use std::{error::Error, net, rc::Rc};
 
 use serde::Serialize;
 
+use crate::http::RequestHeadType;
 use crate::http::body::{Body, BodyStream};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::RequestHeadType;
 use crate::time::Millis;
-use crate::util::{BoxFuture, Bytes, Stream};
+use crate::util::{Bytes, Stream};
 
-#[cfg(feature = "compress")]
-use crate::http::encoding::Decoder;
 #[cfg(feature = "compress")]
 use crate::http::Payload;
+#[cfg(feature = "compress")]
+use crate::http::encoding::Decoder;
 
 use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
-use super::{ClientConfig, ClientResponse};
+use super::{ClientInner, ClientResponse, Connect};
 
 #[derive(thiserror::Error, Clone, Debug)]
 pub(crate) enum PrepForSendingError {
@@ -44,122 +43,59 @@ impl From<PrepForSendingError> for SendRequestError {
     }
 }
 
-/// Future that sends request's payload and resolves to a server response.
-#[must_use = "futures do nothing unless polled"]
-pub enum SendClientRequest {
-    Fut(
-        BoxFuture<'static, Result<ClientResponse, SendRequestError>>,
-        bool,
-    ),
-    Err(Option<SendRequestError>),
-}
-
-impl SendClientRequest {
-    pub(crate) fn new(
-        send: BoxFuture<'static, Result<ClientResponse, SendRequestError>>,
-        response_decompress: bool,
-    ) -> SendClientRequest {
-        SendClientRequest::Fut(send, response_decompress)
-    }
-}
-
-impl Future for SendClientRequest {
-    type Output = Result<ClientResponse, SendRequestError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        match this {
-            SendClientRequest::Fut(send, _response_decompress) => {
-                let res = match Pin::new(send).poll(cx) {
-                    Poll::Ready(res) => res,
-                    Poll::Pending => return Poll::Pending,
-                };
-
-                #[cfg(feature = "compress")]
-                let res = res.map(|mut res| {
-                    if *_response_decompress {
-                        let payload = res.take_payload();
-                        res.set_payload(Payload::from_stream(Decoder::from_headers(
-                            payload,
-                            &res.head.headers,
-                        )))
-                    }
-                    res
-                });
-
-                Poll::Ready(res)
-            }
-            SendClientRequest::Err(ref mut e) => match e.take() {
-                Some(e) => Poll::Ready(Err(e)),
-                None => panic!("Attempting to call completed future"),
-            },
-        }
-    }
-}
-
-impl From<SendRequestError> for SendClientRequest {
-    fn from(e: SendRequestError) -> Self {
-        SendClientRequest::Err(Some(e))
-    }
-}
-
-impl From<HttpError> for SendClientRequest {
-    fn from(e: HttpError) -> Self {
-        SendClientRequest::Err(Some(e.into()))
-    }
-}
-
-impl From<PrepForSendingError> for SendClientRequest {
-    fn from(e: PrepForSendingError) -> Self {
-        SendClientRequest::Err(Some(e.into()))
-    }
-}
-
 impl RequestHeadType {
-    pub(super) fn send_body<B>(
+    pub(super) async fn send_body<B>(
         self,
         addr: Option<net::SocketAddr>,
-        response_decompress: bool,
+        _response_decompress: bool,
         mut timeout: Millis,
-        config: Rc<ClientConfig>,
+        config: Rc<ClientInner>,
         body: B,
-    ) -> SendClientRequest
+    ) -> Result<ClientResponse, SendRequestError>
     where
         B: Into<Body>,
     {
+        let con = config
+            .connector
+            .call(Connect {
+                addr,
+                uri: self.as_ref().uri.clone(),
+            })
+            .await?;
+
         if timeout.is_zero() {
-            timeout = config.timeout;
+            timeout = config.config.timeout;
         }
-        let body = body.into();
-
-        let fut = Box::pin(async move {
-            config
-                .clone()
-                .connector
-                .send_request(self, body, addr, timeout, config)
+        #[allow(unused_mut)]
+        let mut res =
+            con.send_request(self, body.into(), timeout)
                 .await
-        });
+                .map(|(head, payload)| {
+                    ClientResponse::new(head, payload, config.config.clone())
+                })?;
 
-        SendClientRequest::new(fut, response_decompress)
+        #[cfg(feature = "compress")]
+        if _response_decompress {
+            let payload = res.take_payload();
+            res.set_payload(Payload::from_stream(Decoder::from_headers(
+                payload,
+                &res.head.headers,
+            )))
+        }
+        Ok(res)
     }
 
-    pub(super) fn send_json<T: Serialize>(
+    pub(super) async fn send_json<T: Serialize>(
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         timeout: Millis,
-        config: Rc<ClientConfig>,
+        config: Rc<ClientInner>,
         value: &T,
-    ) -> SendClientRequest {
-        let body = match serde_json::to_string(value) {
-            Ok(body) => body,
-            Err(e) => return SendRequestError::Error(Rc::new(e)).into(),
-        };
-
-        if let Err(e) = self.set_header_if_none(header::CONTENT_TYPE, "application/json") {
-            return e.into();
-        }
+    ) -> Result<ClientResponse, SendRequestError> {
+        let body = serde_json::to_string(value)
+            .map_err(|e| SendRequestError::Error(Rc::new(e)))?;
+        self.set_header_if_none(header::CONTENT_TYPE, "application/json")?;
 
         self.send_body(
             addr,
@@ -168,27 +104,22 @@ impl RequestHeadType {
             config,
             Body::Bytes(Bytes::from(body)),
         )
+        .await
     }
 
-    pub(super) fn send_form<T: Serialize>(
+    pub(super) async fn send_form<T: Serialize>(
         mut self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         timeout: Millis,
-        config: Rc<ClientConfig>,
+        config: Rc<ClientInner>,
         value: &T,
-    ) -> SendClientRequest {
-        let body = match serde_urlencoded::to_string(value) {
-            Ok(body) => body,
-            Err(e) => return SendRequestError::Error(Rc::new(e)).into(),
-        };
+    ) -> Result<ClientResponse, SendRequestError> {
+        let body = serde_urlencoded::to_string(value)
+            .map_err(|e| SendRequestError::Error(Rc::new(e)))?;
 
         // set content-type
-        if let Err(e) = self
-            .set_header_if_none(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        {
-            return e.into();
-        }
+        self.set_header_if_none(header::CONTENT_TYPE, "application/x-www-form-urlencoded")?;
 
         self.send_body(
             addr,
@@ -197,16 +128,17 @@ impl RequestHeadType {
             config,
             Body::Bytes(Bytes::from(body)),
         )
+        .await
     }
 
-    pub(super) fn send_stream<S, E>(
+    pub(super) async fn send_stream<S, E>(
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         timeout: Millis,
-        config: Rc<ClientConfig>,
+        config: Rc<ClientInner>,
         stream: S,
-    ) -> SendClientRequest
+    ) -> Result<ClientResponse, SendRequestError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
@@ -218,16 +150,18 @@ impl RequestHeadType {
             config,
             Body::from_message(BodyStream::new(stream)),
         )
+        .await
     }
 
-    pub(super) fn send(
+    pub(super) async fn send(
         self,
         addr: Option<net::SocketAddr>,
         response_decompress: bool,
         timeout: Millis,
-        config: Rc<ClientConfig>,
-    ) -> SendClientRequest {
+        config: Rc<ClientInner>,
+    ) -> Result<ClientResponse, SendRequestError> {
         self.send_body(addr, response_decompress, timeout, config, Body::None)
+            .await
     }
 
     fn set_header_if_none<V>(&mut self, key: HeaderName, value: V) -> Result<(), HttpError>

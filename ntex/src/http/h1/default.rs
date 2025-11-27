@@ -2,7 +2,7 @@ use std::io;
 
 use crate::http::ResponseError;
 use crate::io::Filter;
-use crate::service::{Service, ServiceCtx, ServiceFactory};
+use crate::service::{Service, ServiceCtx, ServiceFactory, cfg::SharedCfg};
 
 use super::control::{Control, ControlAck};
 
@@ -10,7 +10,7 @@ use super::control::{Control, ControlAck};
 /// Default control service
 pub struct DefaultControlService;
 
-impl<F, Err> ServiceFactory<Control<F, Err>> for DefaultControlService
+impl<F, Err> ServiceFactory<Control<F, Err>, SharedCfg> for DefaultControlService
 where
     F: Filter,
     Err: ResponseError,
@@ -21,7 +21,7 @@ where
     type InitError = io::Error;
 
     #[inline]
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(DefaultControlService)
     }
 }

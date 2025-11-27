@@ -1,5 +1,5 @@
 //! Http protocol support.
-mod builder;
+// mod builder;
 pub mod client;
 mod config;
 #[cfg(feature = "compress")]
@@ -21,9 +21,9 @@ pub mod test;
 
 pub(crate) use self::message::Message;
 
-pub use self::builder::HttpServiceBuilder;
+//pub use self::builder::HttpServiceBuilder;
 pub use self::client::Client;
-pub use self::config::{DateService, KeepAlive, ServiceConfig};
+pub use self::config::{DateService, HttpServiceConfig, KeepAlive};
 pub use self::error::ResponseError;
 pub use self::httpmessage::HttpMessage;
 pub use self::message::{ConnectionType, RequestHead, RequestHeadType, ResponseHead};
@@ -35,4 +35,4 @@ pub use crate::io::types::HttpProtocol;
 
 // re-exports
 pub use ntex_http::uri::{self, Uri};
-pub use ntex_http::{body, HeaderMap, Method, StatusCode, Version};
+pub use ntex_http::{HeaderMap, Method, StatusCode, Version, body};

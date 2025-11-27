@@ -29,7 +29,7 @@
 
 use std::fmt;
 
-use crate::http::{header, Method, RequestHead, Uri};
+use crate::http::{Method, RequestHead, Uri, header};
 
 /// Trait defines resource guards. Guards are used for route selection.
 ///

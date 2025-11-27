@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, mem, ptr, ptr::NonNull, slice};
 
-use crate::BytesMut;
+use crate::{BytesMut, info::Info, info::Kind};
 
 // Both `Bytes` and `BytesMut` are backed by `Storage` and functions are delegated
 // to `Storage` functions. The `Bytes` and `BytesMut` shims ensure that functions
@@ -321,17 +321,17 @@ impl Storage {
 
     #[inline]
     unsafe fn from_ptr_inline(src: *const u8, len: usize) -> Storage {
-        let mut inner = Storage {
+        let mut st = Storage {
             arc: NonNull::new_unchecked(KIND_INLINE as *mut Shared),
             ptr: ptr::null_mut(),
             len: 0,
             cap: 0,
         };
 
-        let dst = inner.inline_ptr();
+        let dst = st.inline_ptr();
         ptr::copy(src, dst, len);
-        inner.set_inline_len(len);
-        inner
+        st.set_inline_len(len);
+        st
     }
 
     /// Return a slice for the handle's view into the shared buffer
@@ -695,7 +695,7 @@ impl Storage {
         // to ensure that if `arc` is currently set to point to a `Shared`,
         // that the current thread acquires the associated memory.
         let arc: *mut Shared = self.arc.as_ptr();
-        let kind = arc as usize & KIND_MASK;
+        let kind = self.kind();
 
         if kind == KIND_ARC {
             let old_size = (*arc).ref_count.fetch_add(1, Relaxed);
@@ -860,6 +860,33 @@ impl Storage {
 
         imp(self.arc.as_ptr())
     }
+
+    pub(crate) fn info(&self) -> Info {
+        let kind = self.kind();
+
+        let (id, refs, capacity) = unsafe {
+            if kind == KIND_VEC {
+                let ptr = self.shared_vec();
+                (ptr as usize, (*ptr).ref_count.load(Relaxed), (*ptr).cap)
+            } else if kind == KIND_ARC {
+                let ptr = self.arc.as_ptr();
+                (
+                    ptr as usize,
+                    (*ptr).ref_count.load(Relaxed),
+                    (*ptr).vec.capacity(),
+                )
+            } else {
+                (0, 0, 0)
+            }
+        };
+
+        Info {
+            id,
+            refs,
+            capacity,
+            kind: Kind::from_raw(kind),
+        }
+    }
 }
 
 unsafe impl Send for Storage {}
@@ -992,13 +1019,26 @@ impl StorageVec {
         }
     }
 
+    pub(crate) fn into_storage(self) -> Storage {
+        unsafe {
+            Storage {
+                ptr: self.as_ptr(),
+                len: self.len(),
+                cap: self.capacity(),
+                arc: NonNull::new_unchecked(
+                    (self.0.as_ptr() as usize ^ KIND_VEC) as *mut Shared,
+                ),
+            }
+        }
+    }
+
     pub(crate) fn with_bytes_mut<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
         unsafe {
             let mut buf = BytesMut {
-                inner: Storage {
+                storage: Storage {
                     ptr: self.as_ptr(),
                     len: self.len(),
                     cap: self.capacity(),
@@ -1012,14 +1052,14 @@ impl StorageVec {
 
             // convert BytesMut back to StorageVec
             // only KIND_VEC could be converted to self, otherwise we have to copy data
-            let storage = match buf.inner.kind() {
+            let storage = match buf.storage.kind() {
                 KIND_VEC => {
-                    let ptr = buf.inner.shared_vec();
-                    let offset = buf.inner.ptr as usize - ptr as usize;
+                    let ptr = buf.storage.shared_vec();
+                    let offset = buf.storage.ptr as usize - ptr as usize;
 
                     // we cannot use shared vec if BytesMut points to inside of vec
-                    if buf.inner.cap < (*ptr).cap - offset {
-                        StorageVec::from_slice(buf.inner.as_ref())
+                    if buf.storage.cap < (*ptr).cap - offset {
+                        StorageVec::from_slice(buf.storage.as_ref())
                     } else {
                         // BytesMut owns rest of the vec, so it can be re-used
                         (*ptr).len = buf.len() as u32;
@@ -1029,7 +1069,7 @@ impl StorageVec {
                     }
                 }
                 KIND_INLINE | KIND_STATIC | KIND_ARC => {
-                    StorageVec::from_slice(buf.inner.as_ref())
+                    StorageVec::from_slice(buf.storage.as_ref())
                 }
                 _ => panic!(),
             };
@@ -1288,6 +1328,17 @@ impl Drop for Abort {
     }
 }
 
+impl Kind {
+    fn from_raw(n: usize) -> Kind {
+        match n {
+            KIND_ARC => Kind::Arc,
+            KIND_INLINE => Kind::Inline,
+            KIND_STATIC => Kind::Static,
+            _ => Kind::Vec,
+        }
+    }
+}
+
 #[inline(never)]
 #[cold]
 fn abort() {
@@ -1300,23 +1351,24 @@ mod tests {
     use super::*;
     use crate::*;
 
-    const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
+    const LONG: &[u8] =
+        b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb";
 
     #[test]
     fn trimdown() {
         let mut b = Bytes::from(LONG.to_vec());
-        assert_eq!(b.inner.capacity(), 263);
-        unsafe { b.inner.set_len(68) };
+        assert_eq!(b.storage.capacity(), 263);
+        unsafe { b.storage.set_len(68) };
         assert_eq!(b.len(), 68);
         assert_eq!(&b[..], &LONG[..68]);
-        assert_eq!(b.inner.capacity(), 263);
+        assert_eq!(b.storage.capacity(), 263);
         b.trimdown();
         assert_eq!(&b[..], &LONG[..68]);
-        assert_eq!(b.inner.capacity(), 72);
+        assert_eq!(b.storage.capacity(), 72);
 
-        unsafe { b.inner.set_len(16) };
+        unsafe { b.storage.set_len(16) };
         assert_eq!(&b[..], &LONG[..16]);
         b.trimdown();
         assert!(b.is_inline());
@@ -1355,7 +1407,7 @@ mod tests {
         bv.extend_from_slice(b"hello world.");
         bv.extend_from_slice(b"hello world.");
         bv.extend_from_slice(b"hello world.");
-        let p1 = unsafe { bv.inner.as_ptr() as usize };
+        let p1 = unsafe { bv.storage.as_ptr() as usize };
 
         bv.advance(48);
         assert!(bv.is_empty());
@@ -1363,7 +1415,7 @@ mod tests {
         bv.reserve(48);
         assert!(bv.is_empty());
         assert!(bv.capacity() == 48);
-        let p2 = unsafe { bv.inner.as_ptr() as usize };
+        let p2 = unsafe { bv.storage.as_ptr() as usize };
         assert!(p1 == p2);
     }
 }

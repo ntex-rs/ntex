@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "2.9.0"
+version = "3.0.0-pre.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -9,8 +9,8 @@ repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-connect/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 
 [lib]
 name = "ntex_net"
@@ -32,15 +32,15 @@ io-uring = ["ntex-neon/io-uring", "socket2"]
 io-uring-compat = []
 
 [dependencies]
-ntex-service = "3.5"
-ntex-bytes = "0.1"
-ntex-http = "0.1"
-ntex-io = "2.15.1"
-ntex-rt = "0.4.33"
-ntex-util = "2.12"
+ntex-service = "3.6"
+ntex-bytes = "1"
+ntex-http = "1"
+ntex-io = "3.0.0-pre.0"
+ntex-rt = "3"
+ntex-util = "3"
 
-ntex-tokio = { version = "0.5.3", optional = true }
-ntex-compio = { version = "0.5.0", optional = true }
+ntex-tokio = { version = "3.0.0-pre.0", optional = true }
+ntex-compio = { version = "3.0.0-pre.0", optional = true }
 ntex-neon = { version = "0.1.35", optional = true }
 
 bitflags = { workspace = true }
@@ -52,5 +52,5 @@ socket2 = { workspace = true, optional = true, features = ["all"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-ntex = "2"
+ntex = "3.0.0-pre.0"
 oneshot = "0.1"

@@ -67,11 +67,13 @@ fn xor_short(buf: ShortSlice<'_>, mask: u64) {
 #[inline]
 // Unsafe: caller must ensure the buffer has the correct size and alignment
 unsafe fn cast_slice(buf: &mut [u8]) -> &mut [u64] {
-    // Assert correct size and alignment in debug builds
-    debug_assert!(buf.len().trailing_zeros() >= 3);
-    debug_assert!((buf.as_ptr() as usize).trailing_zeros() >= 3);
+    unsafe {
+        // Assert correct size and alignment in debug builds
+        debug_assert!(buf.len().trailing_zeros() >= 3);
+        debug_assert!((buf.as_ptr() as usize).trailing_zeros() >= 3);
 
-    slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u64, buf.len() >> 3)
+        slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u64, buf.len() >> 3)
+    }
 }
 
 #[inline]

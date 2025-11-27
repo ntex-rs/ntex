@@ -1,6 +1,6 @@
 use std::{borrow, cmp, fmt, hash, mem, ops};
 
-use crate::{buf::IntoIter, debug, storage::Storage, storage::INLINE_CAP, Buf, BytesMut};
+use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
 
 /// A reference counted contiguous slice of memory.
 ///
@@ -96,7 +96,7 @@ use crate::{buf::IntoIter, debug, storage::Storage, storage::INLINE_CAP, Buf, By
 /// [^1]: Small enough: 31 bytes on 64 bit systems, 15 on 32 bit systems.
 ///
 pub struct Bytes {
-    pub(crate) inner: Storage,
+    pub(crate) storage: Storage,
 }
 
 /*
@@ -121,7 +121,7 @@ impl Bytes {
     #[inline]
     pub const fn new() -> Bytes {
         Bytes {
-            inner: Storage::empty(),
+            storage: Storage::empty(),
         }
     }
 
@@ -141,7 +141,7 @@ impl Bytes {
     #[inline]
     pub const fn from_static(bytes: &'static [u8]) -> Bytes {
         Bytes {
-            inner: Storage::from_static(bytes),
+            storage: Storage::from_static(bytes),
         }
     }
 
@@ -157,7 +157,7 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.storage.len()
     }
 
     /// Returns true if the `Bytes` has a length of 0.
@@ -172,7 +172,7 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.storage.is_empty()
     }
 
     /// Return true if the `Bytes` uses inline allocation
@@ -186,13 +186,13 @@ impl Bytes {
     /// assert!(!Bytes::from(&[0; 1024][..]).is_inline());
     /// ```
     pub fn is_inline(&self) -> bool {
-        self.inner.is_inline()
+        self.storage.is_inline()
     }
 
     /// Creates `Bytes` instance from slice, by copying it.
     pub fn copy_from_slice(data: &[u8]) -> Self {
         Bytes {
-            inner: Storage::from_slice(data),
+            storage: Storage::from_slice(data),
         }
     }
 
@@ -248,13 +248,13 @@ impl Bytes {
         if begin <= end && end <= len {
             if end - begin <= INLINE_CAP {
                 Some(Bytes {
-                    inner: Storage::from_slice(&self[begin..end]),
+                    storage: Storage::from_slice(&self[begin..end]),
                 })
             } else {
                 let mut ret = self.clone();
                 unsafe {
-                    ret.inner.set_end(end);
-                    ret.inner.set_start(begin);
+                    ret.storage.set_end(end);
+                    ret.storage.set_start(begin);
                 }
                 Some(ret)
             }
@@ -348,7 +348,7 @@ impl Bytes {
                 Some(mem::take(self))
             } else {
                 Some(Bytes {
-                    inner: self.inner.split_off(at, true),
+                    storage: self.storage.split_off(at, true),
                 })
             }
         } else {
@@ -395,7 +395,7 @@ impl Bytes {
                 Some(Bytes::new())
             } else {
                 Some(Bytes {
-                    inner: self.inner.split_to(at, true),
+                    storage: self.storage.split_to(at, true),
                 })
             }
         } else {
@@ -425,7 +425,7 @@ impl Bytes {
     /// [`split_off`]: #method.split_off
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len, true);
+        self.storage.truncate(len, true);
     }
 
     /// Shortens the buffer to `len` bytes and dropping the rest.
@@ -443,7 +443,7 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn trimdown(&mut self) {
-        self.inner.trimdown();
+        self.storage.trimdown();
     }
 
     /// Clears the buffer, removing all data.
@@ -459,7 +459,7 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn clear(&mut self) {
-        self.inner = Storage::empty();
+        self.storage = Storage::empty();
     }
 
     /// Attempts to convert into a `BytesMut` handle.
@@ -491,8 +491,10 @@ impl Bytes {
     /// assert_eq!(&a[..4], b"bary");
     /// ```
     pub fn try_mut(self) -> Result<BytesMut, Bytes> {
-        if self.inner.is_mut_safe() {
-            Ok(BytesMut { inner: self.inner })
+        if self.storage.is_mut_safe() {
+            Ok(BytesMut {
+                storage: self.storage,
+            })
         } else {
             Err(self)
         }
@@ -516,6 +518,12 @@ impl Bytes {
     pub fn iter(&'_ self) -> std::slice::Iter<'_, u8> {
         self.chunk().iter()
     }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn info(&self) -> crate::info::Info {
+        self.storage.info()
+    }
 }
 
 impl Buf for Bytes {
@@ -526,14 +534,14 @@ impl Buf for Bytes {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(cnt <= self.inner.len(), "cannot advance past `remaining`");
+        assert!(cnt <= self.storage.len(), "cannot advance past `remaining`");
         unsafe {
-            self.inner.set_start(cnt);
+            self.storage.set_start(cnt);
         }
     }
 }
@@ -546,14 +554,14 @@ impl bytes::buf::Buf for Bytes {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(cnt <= self.inner.len(), "cannot advance past `remaining`");
+        assert!(cnt <= self.storage.len(), "cannot advance past `remaining`");
         unsafe {
-            self.inner.set_start(cnt);
+            self.storage.set_start(cnt);
         }
     }
 }
@@ -561,7 +569,7 @@ impl bytes::buf::Buf for Bytes {
 impl Clone for Bytes {
     fn clone(&self) -> Bytes {
         Bytes {
-            inner: self.inner.clone(),
+            storage: self.storage.clone(),
         }
     }
 }
@@ -569,7 +577,7 @@ impl Clone for Bytes {
 impl AsRef<[u8]> for Bytes {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 }
 
@@ -578,7 +586,7 @@ impl ops::Deref for Bytes {
 
     #[inline]
     fn deref(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 }
 
@@ -599,11 +607,11 @@ impl From<Vec<u8>> for Bytes {
     fn from(src: Vec<u8>) -> Bytes {
         if src.len() <= INLINE_CAP {
             Bytes {
-                inner: Storage::from_slice(&src),
+                storage: Storage::from_slice(&src),
             }
         } else {
             Bytes {
-                inner: Storage::from_vec(src),
+                storage: Storage::from_vec(src),
             }
         }
     }
@@ -613,11 +621,11 @@ impl From<String> for Bytes {
     fn from(src: String) -> Bytes {
         if src.len() <= INLINE_CAP {
             Bytes {
-                inner: Storage::from_slice(src.as_bytes()),
+                storage: Storage::from_slice(src.as_bytes()),
             }
         } else {
             Bytes {
-                inner: Storage::from_vec(src.into_bytes()),
+                storage: Storage::from_vec(src.into_bytes()),
             }
         }
     }
@@ -657,7 +665,7 @@ impl Eq for Bytes {}
 
 impl PartialEq for Bytes {
     fn eq(&self, other: &Bytes) -> bool {
-        self.inner.as_ref() == other.inner.as_ref()
+        self.storage.as_ref() == other.storage.as_ref()
     }
 }
 
@@ -669,7 +677,7 @@ impl PartialOrd for Bytes {
 
 impl Ord for Bytes {
     fn cmp(&self, other: &Bytes) -> cmp::Ordering {
-        self.inner.as_ref().cmp(other.inner.as_ref())
+        self.storage.as_ref().cmp(other.storage.as_ref())
     }
 }
 
@@ -682,7 +690,7 @@ impl Default for Bytes {
 
 impl fmt::Debug for Bytes {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
+        fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
     }
 }
 
@@ -728,25 +736,25 @@ impl<'a> IntoIterator for &'a Bytes {
 
 impl PartialEq<[u8]> for Bytes {
     fn eq(&self, other: &[u8]) -> bool {
-        self.inner.as_ref() == other
+        self.storage.as_ref() == other
     }
 }
 
 impl<const N: usize> PartialEq<[u8; N]> for Bytes {
     fn eq(&self, other: &[u8; N]) -> bool {
-        self.inner.as_ref() == other.as_ref()
+        self.storage.as_ref() == other.as_ref()
     }
 }
 
 impl PartialOrd<[u8]> for Bytes {
     fn partial_cmp(&self, other: &[u8]) -> Option<cmp::Ordering> {
-        self.inner.as_ref().partial_cmp(other)
+        self.storage.as_ref().partial_cmp(other)
     }
 }
 
 impl<const N: usize> PartialOrd<[u8; N]> for Bytes {
     fn partial_cmp(&self, other: &[u8; N]) -> Option<cmp::Ordering> {
-        self.inner.as_ref().partial_cmp(other.as_ref())
+        self.storage.as_ref().partial_cmp(other.as_ref())
     }
 }
 
@@ -782,13 +790,13 @@ impl<const N: usize> PartialOrd<Bytes> for [u8; N] {
 
 impl PartialEq<str> for Bytes {
     fn eq(&self, other: &str) -> bool {
-        self.inner.as_ref() == other.as_bytes()
+        self.storage.as_ref() == other.as_bytes()
     }
 }
 
 impl PartialOrd<str> for Bytes {
     fn partial_cmp(&self, other: &str) -> Option<cmp::Ordering> {
-        self.inner.as_ref().partial_cmp(other.as_bytes())
+        self.storage.as_ref().partial_cmp(other.as_bytes())
     }
 }
 
@@ -812,7 +820,7 @@ impl PartialEq<Vec<u8>> for Bytes {
 
 impl PartialOrd<Vec<u8>> for Bytes {
     fn partial_cmp(&self, other: &Vec<u8>) -> Option<cmp::Ordering> {
-        self.inner.as_ref().partial_cmp(&other[..])
+        self.storage.as_ref().partial_cmp(&other[..])
     }
 }
 
@@ -836,7 +844,7 @@ impl PartialEq<String> for Bytes {
 
 impl PartialOrd<String> for Bytes {
     fn partial_cmp(&self, other: &String) -> Option<cmp::Ordering> {
-        self.inner.as_ref().partial_cmp(other.as_bytes())
+        self.storage.as_ref().partial_cmp(other.as_bytes())
     }
 }
 

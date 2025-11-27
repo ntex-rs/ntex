@@ -1,6 +1,6 @@
-use futures::{future, Future};
+use futures::{Future, future};
 use ntex::http::{Method, StatusCode};
-use ntex::web::{test, types::Path, App, Error, HttpResponse, HttpResponseBuilder};
+use ntex::web::{App, Error, HttpResponse, HttpResponseBuilder, test, types::Path};
 use ntex_macros::{
     web_connect, web_delete, web_get, web_head, web_options, web_patch, web_post, web_put,
     web_trace,
@@ -79,7 +79,8 @@ async fn test_params() {
             .service(get_param_test)
             .service(put_param_test)
             .service(delete_param_test)
-    });
+    })
+    .await;
 
     let request = srv.request(Method::GET, srv.url("/test/it"));
     let response = request.send().await.unwrap();
@@ -106,7 +107,8 @@ async fn test_body() {
             .service(trace_test)
             .service(patch_test)
             .service(test_handler)
-    });
+    })
+    .await;
     let request = srv.request(Method::GET, srv.url("/test"));
     let response = request.send().await.unwrap();
     assert!(response.status().is_success());
@@ -144,7 +146,7 @@ async fn test_body() {
 
 #[ntex::test]
 async fn test_auto_async() {
-    let srv = test::server(|| App::new().service(auto_async));
+    let srv = test::server(|| App::new().service(auto_async)).await;
 
     let request = srv.request(Method::GET, srv.url("/test"));
     let response = request.send().await.unwrap();

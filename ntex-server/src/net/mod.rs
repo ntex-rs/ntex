@@ -11,11 +11,11 @@ mod socket;
 mod test;
 
 pub use self::accept::{AcceptLoop, AcceptNotify, AcceptorCommand};
-pub use self::builder::{bind_addr, create_tcp_listener, ServerBuilder};
+pub use self::builder::{ServerBuilder, bind_addr, create_tcp_listener};
 pub use self::config::{Config, ServiceConfig, ServiceRuntime};
 pub use self::service::StreamServer;
 pub use self::socket::{Connection, Stream};
-pub use self::test::{build_test_server, test_server, TestServer};
+pub use self::test::{TestServer, TestServerBuilder, build_test_server, test_server};
 
 pub type Server = crate::Server<Connection>;
 

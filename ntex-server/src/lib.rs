@@ -12,7 +12,7 @@ mod wrk;
 
 pub use self::pool::WorkerPool;
 pub use self::server::Server;
-pub use self::signals::{signal, Signal};
+pub use self::signals::{Signal, signal};
 pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
 
 /// Worker id

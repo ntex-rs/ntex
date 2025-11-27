@@ -1,6 +1,6 @@
 [package]
 name = "ntex-server"
-version = "2.8.1"
+version = "3.0.0-pre.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Server for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -9,18 +9,19 @@ repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-server/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 
 [lib]
 name = "ntex_server"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "0.1"
-ntex-net = "2"
-ntex-service = "3.4"
-ntex-rt = "0.4"
-ntex-util = "2.8"
+ntex-io = "3.0.0-pre.0"
+ntex-net = "3.0.0-pre.0"
+ntex-service = "3.6"
+ntex-rt = "3"
+ntex-util = "3"
 
 async-channel = { workspace = true }
 atomic-waker = { workspace = true }
@@ -31,8 +32,7 @@ log = { workspace = true }
 socket2 = { workspace = true }
 
 [dev-dependencies]
-ntex = "2"
-ntex-macros = "0.1.3"
+ntex = "3.0.0-pre.0"
 
 [target.'cfg(target_family = "unix")'.dependencies]
 signal-hook = { version = "0.3", features=["iterator"] }

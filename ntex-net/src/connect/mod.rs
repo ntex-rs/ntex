@@ -11,6 +11,7 @@ pub use self::resolve::Resolver;
 pub use self::service::Connector;
 
 use ntex_io::Io;
+use ntex_service::cfg::SharedCfg;
 
 /// Resolve and connect to remote host
 pub async fn connect<T, U>(message: U) -> Result<Io, ConnectError>
@@ -19,4 +20,13 @@ where
     Connect<T>: From<U>,
 {
     Connector::new().connect(message).await
+}
+
+/// Resolve and connect to remote host
+pub async fn connect_with<T, U>(message: U, cfg: SharedCfg) -> Result<Io, ConnectError>
+where
+    T: Address,
+    Connect<T>: From<U>,
+{
+    Connector::with(cfg).connect(message).await
 }

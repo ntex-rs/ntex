@@ -107,7 +107,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{testing::IoTest, Io};
+    use crate::{Io, testing::IoTest};
 
     #[ntex::test]
     async fn framed() {
@@ -115,7 +115,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         client.write(b"chunk-0");
 
-        let server = Framed::new(Io::new(server), BytesCodec);
+        let server = Framed::new(Io::from(server), BytesCodec);
         server.get_codec();
         server.get_io();
         assert!(format!("{server:?}").contains("Framed"));

@@ -7,8 +7,8 @@ use serde_urlencoded::ser::Error as FormError;
 
 use crate::http::body::Body;
 use crate::http::helpers::Writer;
-use crate::http::{self, header, StatusCode};
-use crate::util::{timeout::TimeoutError, BytesMut};
+use crate::http::{self, StatusCode, header};
+use crate::util::{BytesMut, timeout::TimeoutError};
 #[cfg(feature = "ws")]
 use crate::ws::error::HandshakeError;
 

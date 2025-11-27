@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 #![allow(clippy::let_underscore_future)]
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{cell::Cell, future::Future, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
@@ -10,104 +10,6 @@ use ntex_util::{future::Either, spawn, time::Seconds};
 use crate::{Decoded, DispatchItem, IoBoxed, IoStatusUpdate, RecvError};
 
 type Response<U> = <U as Encoder>::Item;
-
-#[derive(Clone, Debug)]
-/// Shared dispatcher configuration
-pub struct DispatcherConfig(Rc<DispatcherConfigInner>);
-
-#[derive(Debug)]
-struct DispatcherConfigInner {
-    keepalive_timeout: Cell<Seconds>,
-    disconnect_timeout: Cell<Seconds>,
-    frame_read_enabled: Cell<bool>,
-    frame_read_rate: Cell<u16>,
-    frame_read_timeout: Cell<Seconds>,
-    frame_read_max_timeout: Cell<Seconds>,
-}
-
-impl Default for DispatcherConfig {
-    fn default() -> Self {
-        DispatcherConfig(Rc::new(DispatcherConfigInner {
-            keepalive_timeout: Cell::new(Seconds(30)),
-            disconnect_timeout: Cell::new(Seconds(1)),
-            frame_read_rate: Cell::new(0),
-            frame_read_enabled: Cell::new(false),
-            frame_read_timeout: Cell::new(Seconds::ZERO),
-            frame_read_max_timeout: Cell::new(Seconds::ZERO),
-        }))
-    }
-}
-
-impl DispatcherConfig {
-    #[inline]
-    /// Get keep-alive timeout
-    pub fn keepalive_timeout(&self) -> Seconds {
-        self.0.keepalive_timeout.get()
-    }
-
-    #[inline]
-    /// Get disconnect timeout
-    pub fn disconnect_timeout(&self) -> Seconds {
-        self.0.disconnect_timeout.get()
-    }
-
-    #[inline]
-    /// Get frame read rate
-    pub fn frame_read_rate(&self) -> Option<(Seconds, Seconds, u16)> {
-        if self.0.frame_read_enabled.get() {
-            Some((
-                self.0.frame_read_timeout.get(),
-                self.0.frame_read_max_timeout.get(),
-                self.0.frame_read_rate.get(),
-            ))
-        } else {
-            None
-        }
-    }
-
-    /// Set keep-alive timeout in seconds.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default keep-alive timeout is set to 30 seconds.
-    pub fn set_keepalive_timeout(&self, timeout: Seconds) -> &Self {
-        self.0.keepalive_timeout.set(timeout);
-        self
-    }
-
-    /// Set connection disconnect timeout.
-    ///
-    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
-    /// within this time, the connection get dropped.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default disconnect timeout is set to 1 seconds.
-    pub fn set_disconnect_timeout(&self, timeout: Seconds) -> &Self {
-        self.0.disconnect_timeout.set(timeout);
-        self
-    }
-
-    /// Set read rate parameters for single frame.
-    ///
-    /// Set read timeout, max timeout and rate for reading payload. If the client
-    /// sends `rate` amount of data within `timeout` period of time, extend timeout by `timeout` seconds.
-    /// But no more than `max_timeout` timeout.
-    ///
-    /// By default frame read rate is disabled.
-    pub fn set_frame_read_rate(
-        &self,
-        timeout: Seconds,
-        max_timeout: Seconds,
-        rate: u16,
-    ) -> &Self {
-        self.0.frame_read_enabled.set(!timeout.is_zero());
-        self.0.frame_read_timeout.set(timeout);
-        self.0.frame_read_max_timeout.set(max_timeout);
-        self.0.frame_read_rate.set(rate);
-        self
-    }
-}
 
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
@@ -144,7 +46,6 @@ where
     error: Option<S::Error>,
     shared: Rc<DispatcherShared<S, U>>,
     response: Option<PipelineCall<S, DispatchItem<U>>>,
-    cfg: DispatcherConfig,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
@@ -198,20 +99,13 @@ where
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F>(
-        io: Io,
-        codec: U,
-        service: F,
-        cfg: &DispatcherConfig,
-    ) -> Dispatcher<S, U>
+    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Dispatcher<S, U>
     where
         IoBoxed: From<Io>,
         F: IntoService<S, DispatchItem<U>>,
     {
         let io = IoBoxed::from(io);
-        io.set_disconnect_timeout(cfg.disconnect_timeout());
-
-        let flags = if cfg.keepalive_timeout().is_zero() {
+        let flags = if io.cfg().keepalive_timeout().is_zero() {
             Flags::empty()
         } else {
             Flags::KA_ENABLED
@@ -229,7 +123,6 @@ where
         Dispatcher {
             inner: DispatcherInner {
                 shared,
-                cfg: cfg.clone(),
                 response: None,
                 error: None,
                 read_remains: 0,
@@ -578,48 +471,49 @@ where
                 log::trace!(
                     "{}: Start keep-alive timer {:?}",
                     self.shared.io.tag(),
-                    self.cfg.keepalive_timeout()
+                    self.shared.io.cfg().keepalive_timeout()
                 );
                 self.shared.insert_flags(Flags::KA_TIMEOUT);
-                self.shared.io.start_timer(self.cfg.keepalive_timeout());
+                self.shared
+                    .io
+                    .start_timer(self.shared.io.cfg().keepalive_timeout());
             }
-        } else if let Some((timeout, max, _)) = self.cfg.frame_read_rate() {
+        } else if let Some(params) = self.shared.io.cfg().frame_read_rate() {
             // we got new data but not enough to parse single frame
             // start read timer
             self.shared.insert_flags(Flags::READ_TIMEOUT);
 
             self.read_remains = decoded.remains as u32;
             self.read_remains_prev = 0;
-            self.read_max_timeout = max;
-            self.shared.io.start_timer(timeout);
+            self.read_max_timeout = params.max_timeout;
+            self.shared.io.start_timer(params.timeout);
         }
     }
 
     fn handle_timeout(&mut self) -> Result<(), DispatchItem<U>> {
         // check read timer
         if self.shared.contains(Flags::READ_TIMEOUT) {
-            if let Some((timeout, max, rate)) = self.cfg.frame_read_rate() {
-                let total = (self.read_remains - self.read_remains_prev)
-                    .try_into()
-                    .unwrap_or(u16::MAX);
+            if let Some(params) = self.shared.io.cfg().frame_read_rate() {
+                let total = self.read_remains - self.read_remains_prev;
 
                 // read rate, start timer for next period
-                if total > rate {
+                if total > params.rate {
                     self.read_remains_prev = self.read_remains;
                     self.read_remains = 0;
 
-                    if !max.is_zero() {
-                        self.read_max_timeout =
-                            Seconds(self.read_max_timeout.0.saturating_sub(timeout.0));
+                    if !params.max_timeout.is_zero() {
+                        self.read_max_timeout = Seconds(
+                            self.read_max_timeout.0.saturating_sub(params.timeout.0),
+                        );
                     }
 
-                    if max.is_zero() || !self.read_max_timeout.is_zero() {
+                    if params.max_timeout.is_zero() || !self.read_max_timeout.is_zero() {
                         log::trace!(
                             "{}: Frame read rate {:?}, extend timer",
                             self.shared.io.tag(),
                             total
                         );
-                        self.shared.io.start_timer(timeout);
+                        self.shared.io.start_timer(params.timeout);
                         return Ok(());
                     }
                     log::trace!(
@@ -645,17 +539,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{atomic::AtomicBool, atomic::Ordering::Relaxed, Arc, Mutex};
+    use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
     use std::{cell::RefCell, io};
 
-    use ntex_bytes::{Bytes, BytesMut, PoolId, PoolRef};
+    use ntex_bytes::{Bytes, BytesMut};
     use ntex_codec::BytesCodec;
-    use ntex_service::ServiceCtx;
-    use ntex_util::{time::sleep, time::Millis};
+    use ntex_service::{ServiceCtx, cfg::SharedCfg};
+    use ntex_util::{time::Millis, time::sleep};
     use rand::Rng;
 
     use super::*;
-    use crate::{testing::IoTest, Flags, Io, IoRef};
+    use crate::{Flags, Io, IoConfig, IoRef, testing::IoTest};
 
     pub(crate) struct State(IoRef);
 
@@ -669,12 +563,8 @@ mod tests {
         }
 
         fn close(&self) {
-            self.0 .0.insert_flags(Flags::DSP_STOP);
-            self.0 .0.dispatch_task.wake();
-        }
-
-        fn set_memory_pool(&self, pool: PoolRef) {
-            self.0 .0.pool.set(pool);
+            self.0.0.insert_flags(Flags::DSP_STOP);
+            self.0.0.dispatch_task.wake();
         }
     }
 
@@ -711,34 +601,18 @@ mod tests {
     {
         /// Construct new `Dispatcher` instance
         pub(crate) fn debug(io: Io, codec: U, service: S) -> (Self, State) {
-            let cfg = DispatcherConfig::default()
-                .set_keepalive_timeout(Seconds(1))
-                .clone();
-            Self::debug_cfg(io, codec, service, cfg)
-        }
-
-        /// Construct new `Dispatcher` instance
-        pub(crate) fn debug_cfg(
-            state: Io,
-            codec: U,
-            service: S,
-            cfg: DispatcherConfig,
-        ) -> (Self, State) {
-            state.set_disconnect_timeout(cfg.disconnect_timeout());
-            state.set_tag("DBG");
-
-            let flags = if cfg.keepalive_timeout().is_zero() {
+            let flags = if io.cfg().keepalive_timeout().is_zero() {
                 super::Flags::empty()
             } else {
                 super::Flags::KA_ENABLED
             };
 
-            let inner = State(state.get_ref());
-            state.start_timer(Seconds::ONE);
+            let inner = State(io.get_ref());
+            io.start_timer(Seconds::ONE);
 
             let shared = Rc::new(DispatcherShared {
                 codec,
-                io: state.into(),
+                io: io.into(),
                 flags: Cell::new(flags),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
@@ -748,7 +622,6 @@ mod tests {
             (
                 Dispatcher {
                     inner: DispatcherInner {
-                        cfg,
                         shared,
                         error: None,
                         st: DispatcherState::Processing,
@@ -770,7 +643,7 @@ mod tests {
         client.write("GET /test HTTP/1\r\n\r\n");
 
         let (disp, _) = Dispatcher::debug(
-            Io::new(server),
+            Io::from(server),
             BytesCodec,
             ntex_service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
                 sleep(Millis(50)).await;
@@ -806,7 +679,7 @@ mod tests {
         client.write("GET /test HTTP/1\r\n\r\n");
 
         let (disp, st) = Dispatcher::debug(
-            Io::new(server),
+            Io::from(server),
             BytesCodec,
             ntex_service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
                 if let DispatchItem::Item(msg) = msg {
@@ -823,10 +696,11 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"GET /test HTTP/1\r\n\r\n"));
 
-        assert!(st
-            .io()
-            .encode(Bytes::from_static(b"test"), &BytesCodec)
-            .is_ok());
+        assert!(
+            st.io()
+                .encode(Bytes::from_static(b"test"), &BytesCodec)
+                .is_ok()
+        );
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
@@ -842,7 +716,7 @@ mod tests {
         client.write("GET /test HTTP/1\r\n\r\n");
 
         let (disp, state) = Dispatcher::debug(
-            Io::new(server),
+            Io::from(server),
             BytesCodec,
             ntex_service::fn_service(|_: DispatchItem<BytesCodec>| async move {
                 Err::<Option<Bytes>, _>(())
@@ -901,7 +775,7 @@ mod tests {
         }
 
         let (disp, state) =
-            Dispatcher::debug(Io::new(server), BytesCodec, Srv(counter.clone()));
+            Dispatcher::debug(Io::from(server), BytesCodec, Srv(counter.clone()));
         spawn(async move {
             let res = disp.await;
             assert_eq!(res, Err("test"));
@@ -939,8 +813,17 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_read_buf(8 * 1024, 1024, 16)
+                    .set_write_buf(16 * 1024, 1024, 16),
+            ),
+        );
+
         let (disp, state) = Dispatcher::debug(
-            Io::new(server),
+            io,
             BytesCodec,
             ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 let data = data2.clone();
@@ -967,10 +850,6 @@ mod tests {
                 }
             }),
         );
-        let pool = PoolId::P10.pool_ref();
-        pool.set_read_params(8 * 1024, 1024);
-        pool.set_write_params(16 * 1024, 1024);
-        state.set_memory_pool(pool);
 
         spawn(async move {
             let _ = disp.await;
@@ -991,9 +870,9 @@ mod tests {
         sleep(Millis(50)).await;
         assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 55296);
 
-        client.remote_buffer_cap(45056);
+        client.remote_buffer_cap(48056);
         sleep(Millis(50)).await;
-        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 10240);
+        assert_eq!(state.io().with_write_buf(|buf| buf.len()).unwrap(), 7240);
 
         // backpressure disabled
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1, 2]);
@@ -1005,7 +884,14 @@ mod tests {
         client.remote_buffer_cap(0);
 
         let (disp, state) = Dispatcher::debug(
-            Io::new(server),
+            Io::new(
+                server,
+                SharedCfg::new("TEST").add(
+                    IoConfig::new()
+                        .set_keepalive_timeout(Seconds::ZERO)
+                        .set_read_buf(1024, 512, 16),
+                ),
+            ),
             BytesCodec,
             ntex_util::services::inflight::InFlightService::new(
                 1,
@@ -1019,10 +905,6 @@ mod tests {
                 }),
             ),
         );
-        disp.inner.cfg.set_keepalive_timeout(Seconds::ZERO);
-        let pool = PoolId::P10.pool_ref();
-        pool.set_read_params(1024, 512);
-        state.set_memory_pool(pool);
 
         let (tx, rx) = ntex::channel::oneshot::channel();
         ntex::rt::spawn(async move {
@@ -1054,13 +936,14 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
-        let cfg = DispatcherConfig::default()
-            .set_disconnect_timeout(Seconds(1))
-            .set_keepalive_timeout(Seconds(1))
-            .clone();
+        let cfg = SharedCfg::new("DBG").add(
+            IoConfig::new()
+                .set_disconnect_timeout(Seconds(1))
+                .set_keepalive_timeout(Seconds(1)),
+        );
 
-        let (disp, state) = Dispatcher::debug_cfg(
-            Io::new(server),
+        let (disp, state) = Dispatcher::debug(
+            Io::new(server, cfg),
             BytesCodec,
             ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 let data = data2.clone();
@@ -1078,7 +961,6 @@ mod tests {
                     Ok(None)
                 }
             }),
-            cfg,
         );
         spawn(async move {
             let _ = disp.await;
@@ -1103,13 +985,14 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
-        let cfg = DispatcherConfig::default()
-            .set_keepalive_timeout(Seconds(1))
-            .set_frame_read_rate(Seconds(1), Seconds(2), 2)
-            .clone();
+        let cfg = SharedCfg::new("DBG").add(
+            IoConfig::new()
+                .set_keepalive_timeout(Seconds(1))
+                .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+        );
 
-        let (disp, state) = Dispatcher::debug_cfg(
-            Io::new(server),
+        let (disp, state) = Dispatcher::debug(
+            Io::new(server, cfg),
             BCodec(8),
             ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
                 let data = data2.clone();
@@ -1127,7 +1010,6 @@ mod tests {
                     Ok(None)
                 }
             }),
-            cfg,
         );
         spawn(async move {
             let _ = disp.await;
@@ -1154,13 +1036,14 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
-        let cfg = DispatcherConfig::default()
-            .set_keepalive_timeout(Seconds(2))
-            .set_frame_read_rate(Seconds(1), Seconds(2), 2)
-            .clone();
+        let cfg = SharedCfg::new("DBG").add(
+            IoConfig::new()
+                .set_keepalive_timeout(Seconds(2))
+                .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+        );
 
-        let (disp, _) = Dispatcher::debug_cfg(
-            Io::new(server),
+        let (disp, _) = Dispatcher::debug(
+            Io::new(server, cfg),
             BCodec(1),
             ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
                 let data = data2.clone();
@@ -1178,7 +1061,6 @@ mod tests {
                     Ok(None)
                 }
             }),
-            cfg,
         );
         spawn(async move {
             let _ = disp.await;
@@ -1211,8 +1093,17 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
+        let io = Io::new(
+            server,
+            SharedCfg::new("TEST").add(
+                IoConfig::new()
+                    .set_keepalive_timeout(Seconds::ZERO)
+                    .set_frame_read_rate(Seconds(1), Seconds(2), 2),
+            ),
+        );
+
         let (disp, state) = Dispatcher::debug(
-            Io::new(server),
+            io,
             BCodec(8),
             ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
                 let data = data2.clone();
@@ -1232,10 +1123,6 @@ mod tests {
             }),
         );
         spawn(async move {
-            disp.inner
-                .cfg
-                .set_keepalive_timeout(Seconds::ZERO)
-                .set_frame_read_rate(Seconds(1), Seconds(2), 2);
             let _ = disp.await;
         });
 
@@ -1266,10 +1153,13 @@ mod tests {
         let data = Arc::new(Mutex::new(RefCell::new(Vec::new())));
         let data2 = data.clone();
 
-        let io = Io::new(server);
+        let io = Io::new(
+            server,
+            SharedCfg::new("DBG").add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
+        );
         let ioref = io.get_ref();
 
-        let (disp, state) = Dispatcher::debug_cfg(
+        let (disp, state) = Dispatcher::debug(
             io,
             BCodec(1),
             ntex_service::fn_service(move |msg: DispatchItem<BCodec>| {
@@ -1293,9 +1183,6 @@ mod tests {
                     Ok(None)
                 }
             }),
-            DispatcherConfig::default()
-                .set_keepalive_timeout(Seconds::ZERO)
-                .clone(),
         );
         spawn(async move {
             let _ = disp.await;
@@ -1320,7 +1207,7 @@ mod tests {
         client.write("GET /test HTTP/1\r\n\r\n");
 
         let (disp, _) = Dispatcher::debug(
-            Io::new(server),
+            Io::from(server),
             BytesCodec,
             ntex_service::fn_service(move |msg: DispatchItem<BytesCodec>| {
                 handled2.store(true, Relaxed);

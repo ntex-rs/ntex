@@ -38,8 +38,8 @@ impl fmt::Debug for Payload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Payload::None => write!(f, "Payload::None"),
-            Payload::H1(ref pl) => write!(f, "Payload::H1({pl:?})"),
-            Payload::H2(ref pl) => write!(f, "Payload::H2({pl:?})"),
+            Payload::H1(pl) => write!(f, "Payload::H1({pl:?})"),
+            Payload::H2(pl) => write!(f, "Payload::H2({pl:?})"),
             Payload::Stream(_) => write!(f, "Payload::Stream(..)"),
         }
     }
@@ -75,9 +75,9 @@ impl Payload {
     ) -> Poll<Option<Result<Bytes, PayloadError>>> {
         match self {
             Payload::None => Poll::Ready(None),
-            Payload::H1(ref mut pl) => pl.poll_read(cx),
-            Payload::H2(ref mut pl) => pl.poll_read(cx),
-            Payload::Stream(ref mut pl) => Pin::new(pl).poll_next(cx),
+            Payload::H1(pl) => pl.poll_read(cx),
+            Payload::H2(pl) => pl.poll_read(cx),
+            Payload::Stream(pl) => Pin::new(pl).poll_next(cx),
         }
     }
 }
@@ -102,10 +102,12 @@ mod tests {
             format!("{:?}", Payload::H1(crate::channel::bstream::channel().1))
                 .contains("Payload::H1")
         );
-        assert!(format!(
-            "{:?}",
-            Payload::Stream(Box::pin(crate::channel::bstream::channel().1))
-        )
-        .contains("Payload::Stream"));
+        assert!(
+            format!(
+                "{:?}",
+                Payload::Stream(Box::pin(crate::channel::bstream::channel().1))
+            )
+            .contains("Payload::Stream")
+        );
     }
 }

@@ -1,6 +1,7 @@
 use std::{fmt, io, net};
 
-use ntex_net::{self as rt, Io};
+use ntex_io::Io;
+use ntex_service::cfg::SharedCfg;
 
 use super::Token;
 
@@ -11,14 +12,12 @@ pub enum Stream {
     Uds(std::os::unix::net::UnixStream),
 }
 
-impl TryFrom<Stream> for Io {
-    type Error = io::Error;
-
-    fn try_from(sock: Stream) -> Result<Self, Self::Error> {
-        match sock {
-            Stream::Tcp(stream) => rt::from_tcp_stream(stream),
+impl Stream {
+    pub(crate) fn convert(self, cfg: SharedCfg) -> Result<Io, io::Error> {
+        match self {
+            Stream::Tcp(stream) => ntex_net::from_tcp_stream(stream, cfg),
             #[cfg(unix)]
-            Stream::Uds(stream) => rt::from_unix_stream(stream),
+            Stream::Uds(stream) => ntex_net::from_unix_stream(stream, cfg),
         }
     }
 }

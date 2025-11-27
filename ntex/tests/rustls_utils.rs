@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use std::{fs::File, io::BufReader, sync::Arc};
 
-use tls_rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use tls_rustls::ClientConfig;
+use tls_rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
 pub fn tls_connector() -> ClientConfig {
     ClientConfig::builder()

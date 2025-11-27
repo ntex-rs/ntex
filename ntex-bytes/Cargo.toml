@@ -1,15 +1,15 @@
 [package]
 name = "ntex-bytes"
-version = "0.1.31"
-authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Carl Lerche <me@carllerche.com>"]
+version = "1.0.0"
+authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
 repository = "https://github.com/ntex-rs/ntex"
 readme = "README.md"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 
 [features]
@@ -19,14 +19,10 @@ default = []
 simd = ["simdutf8"]
 
 [dependencies]
-bitflags = { workspace = true }
 bytes = "1"
 serde = { workspace = true }
-futures-core = { workspace = true }
 simdutf8 = { version = "0.1.5", optional = true }
 
 [dev-dependencies]
 serde_test = "1"
 serde_json = "1"
-ntex = "2"
-ntex-bytes = { path = "." }

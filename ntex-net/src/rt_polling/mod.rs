@@ -1,7 +1,7 @@
 use std::{io::Result, net, net::SocketAddr};
 
-use ntex_bytes::PoolRef;
 use ntex_io::Io;
+use ntex_service::cfg::SharedCfg;
 use socket2::Socket;
 
 pub(crate) mod connect;
@@ -18,54 +18,38 @@ struct TcpStream(socket2::Socket);
 struct UnixStream(socket2::Socket);
 
 /// Opens a TCP connection to a remote host.
-pub async fn tcp_connect(addr: SocketAddr) -> Result<Io> {
+pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> Result<Io> {
     let sock = crate::helpers::connect(addr).await?;
-    Ok(Io::new(TcpStream(crate::helpers::prep_socket(sock)?)))
-}
-
-/// Opens a TCP connection to a remote host and use specified memory pool.
-pub async fn tcp_connect_in(addr: SocketAddr, pool: PoolRef) -> Result<Io> {
-    let sock = crate::helpers::connect(addr).await?;
-    Ok(Io::with_memory_pool(
-        TcpStream(crate::helpers::prep_socket(sock)?),
-        pool,
-    ))
+    Ok(Io::new(TcpStream(crate::helpers::prep_socket(sock)?), cfg))
 }
 
 /// Opens a unix stream connection.
-pub async fn unix_connect<'a, P>(addr: P) -> Result<Io>
+pub async fn unix_connect<'a, P>(addr: P, cfg: SharedCfg) -> Result<Io>
 where
     P: AsRef<std::path::Path> + 'a,
 {
     let sock = crate::helpers::connect_unix(addr).await?;
-    Ok(Io::new(UnixStream(crate::helpers::prep_socket(sock)?)))
-}
-
-/// Opens a unix stream connection and specified memory pool.
-pub async fn unix_connect_in<'a, P>(addr: P, pool: PoolRef) -> Result<Io>
-where
-    P: AsRef<std::path::Path> + 'a,
-{
-    let sock = crate::helpers::connect_unix(addr).await?;
-    Ok(Io::with_memory_pool(
-        UnixStream(crate::helpers::prep_socket(sock)?),
-        pool,
-    ))
+    Ok(Io::new(UnixStream(crate::helpers::prep_socket(sock)?), cfg))
 }
 
 /// Convert std TcpStream to TcpStream
-pub fn from_tcp_stream(stream: net::TcpStream) -> Result<Io> {
+pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> Result<Io> {
     stream.set_nodelay(true)?;
-    Ok(Io::new(TcpStream(crate::helpers::prep_socket(
-        Socket::from(stream),
-    )?)))
+    Ok(Io::new(
+        TcpStream(crate::helpers::prep_socket(Socket::from(stream))?),
+        cfg,
+    ))
 }
 
 /// Convert std UnixStream to UnixStream
-pub fn from_unix_stream(stream: std::os::unix::net::UnixStream) -> Result<Io> {
-    Ok(Io::new(UnixStream(crate::helpers::prep_socket(
-        Socket::from(stream),
-    )?)))
+pub fn from_unix_stream(
+    stream: std::os::unix::net::UnixStream,
+    cfg: SharedCfg,
+) -> Result<Io> {
+    Ok(Io::new(
+        UnixStream(crate::helpers::prep_socket(Socket::from(stream))?),
+        cfg,
+    ))
 }
 
 #[doc(hidden)]
@@ -77,7 +61,7 @@ pub fn active_stream_ops() -> usize {
 #[cfg(all(target_os = "linux", feature = "neon"))]
 #[cfg(test)]
 mod tests {
-    use ntex::{io::Io, time::sleep, time::Millis, util::PoolId};
+    use ntex::{SharedCfg, io::Io, io::IoConfig, time::Millis, time::sleep};
     use std::sync::{Arc, Mutex};
 
     use crate::connect::Connect;
@@ -106,7 +90,6 @@ mod tests {
 
     #[ntex::test]
     async fn idle_disconnect() {
-        PoolId::P5.set_read_params(24, 12);
         let (tx, rx) = ::oneshot::channel();
         let tx = Arc::new(Mutex::new(Some(tx)));
 
@@ -124,9 +107,12 @@ mod tests {
             })
         });
 
+        let cfg = SharedCfg::new("NEON")
+            .add(IoConfig::new().set_read_buf(24, 12, 16))
+            .into();
+
         let msg = Connect::new(server.addr());
-        let io = crate::connect::connect(msg).await.unwrap();
-        io.set_memory_pool(PoolId::P5.into());
+        let io = crate::connect::connect_with(msg, cfg).await.unwrap();
         rx.await.unwrap();
 
         io.on_disconnect().await;

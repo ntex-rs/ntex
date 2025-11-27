@@ -1,102 +1,52 @@
 use std::{fmt, io, sync::Arc};
 
-use ntex_bytes::PoolId;
 use ntex_io::{Io, Layer};
-use ntex_net::connect::{Address, Connect, ConnectError, Connector as BaseConnector};
-use ntex_service::{Pipeline, Service, ServiceCtx, ServiceFactory};
-use tls_rust::{pki_types::ServerName, ClientConfig};
+use ntex_net::connect::{Address, Connect, ConnectError, Connector};
+use ntex_service::cfg::{Cfg, SharedCfg};
+use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_util::time::timeout_checked;
+use tls_rust::{ClientConfig, pki_types::ServerName};
 
-use super::TlsClientFilter;
+use crate::{TlsConfig, rustls::TlsClientFilter};
 
 /// Rustls connector factory
-pub struct TlsConnector<T> {
-    connector: Pipeline<BaseConnector<T>>,
+pub struct TlsConnector<S> {
+    connector: S,
     config: Arc<ClientConfig>,
 }
 
-impl<T: Address> From<Arc<ClientConfig>> for TlsConnector<T> {
+#[derive(Clone, Debug)]
+pub struct TlsConnectorService<S> {
+    svc: S,
+    cfg: Cfg<TlsConfig>,
+    config: Arc<ClientConfig>,
+}
+
+impl<A: Address> From<Arc<ClientConfig>> for TlsConnector<Connector<A>> {
     fn from(config: Arc<ClientConfig>) -> Self {
         TlsConnector {
             config,
-            connector: BaseConnector::default().into(),
+            connector: Connector::default(),
         }
     }
 }
 
-impl<'a, T: Address> From<&'a Arc<ClientConfig>> for TlsConnector<T> {
+impl<'a, A: Address> From<&'a Arc<ClientConfig>> for TlsConnector<Connector<A>> {
     fn from(config: &'a Arc<ClientConfig>) -> Self {
         TlsConnector {
             config: config.clone(),
-            connector: BaseConnector::default().into(),
+            connector: Connector::default(),
         }
     }
 }
 
-impl<T: Address> TlsConnector<T> {
+impl<A: Address> TlsConnector<Connector<A>> {
     pub fn new(config: ClientConfig) -> Self {
         TlsConnector::from(Arc::new(config))
     }
-
-    /// Construct new tls connector
-    pub fn with(config: Arc<ClientConfig>, base: BaseConnector<T>) -> Self {
-        TlsConnector {
-            config,
-            connector: base.into(),
-        }
-    }
-
-    /// Set io tag
-    ///
-    /// Set tag to opened io object.
-    pub fn tag(mut self, tag: &'static str) -> Self {
-        self.connector = self.connector.get_ref().tag(tag).into();
-        self
-    }
-
-    #[deprecated]
-    #[doc(hidden)]
-    /// Set memory pool.
-    ///
-    /// Use specified memory pool for memory allocations. By default P0
-    /// memory pool is used.
-    pub fn memory_pool(self, _: PoolId) -> Self {
-        self
-    }
 }
 
-impl<T: Address> TlsConnector<T> {
-    /// Resolve and connect to remote host
-    pub async fn connect<U>(
-        &self,
-        message: U,
-    ) -> Result<Io<Layer<TlsClientFilter>>, ConnectError>
-    where
-        Connect<T>: From<U>,
-    {
-        let req = Connect::from(message);
-        let host = req.host().split(':').next().unwrap().to_owned();
-        let io = self.connector.call(req).await?;
-        let tag = io.tag();
-
-        log::trace!("{tag}: SSL Handshake start for: {host:?}");
-
-        let config = self.config.clone();
-        let host = ServerName::try_from(host).map_err(io::Error::other)?;
-
-        match TlsClientFilter::create(io, config, host.clone()).await {
-            Ok(io) => {
-                log::trace!("{tag}: TLS Handshake success: {host:?}");
-                Ok(io)
-            }
-            Err(e) => {
-                log::trace!("{tag}: TLS Handshake error: {e:?}");
-                Err(e.into())
-            }
-        }
-    }
-}
-
-impl<T> Clone for TlsConnector<T> {
+impl<S: Clone> Clone for TlsConnector<S> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -105,7 +55,7 @@ impl<T> Clone for TlsConnector<T> {
     }
 }
 
-impl<T> fmt::Debug for TlsConnector<T> {
+impl<S: fmt::Debug> fmt::Debug for TlsConnector<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TlsConnector(rustls)")
             .field("connector", &self.connector)
@@ -113,32 +63,67 @@ impl<T> fmt::Debug for TlsConnector<T> {
     }
 }
 
-impl<T: Address, C> ServiceFactory<Connect<T>, C> for TlsConnector<T> {
+impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for TlsConnector<S>
+where
+    A: Address,
+    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
+{
     type Response = Io<Layer<TlsClientFilter>>;
     type Error = ConnectError;
-    type Service = TlsConnector<T>;
-    type InitError = ();
+    type Service = TlsConnectorService<S::Service>;
+    type InitError = S::InitError;
 
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        Ok(self.clone())
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+        let svc = self.connector.create(cfg).await?;
+
+        Ok(TlsConnectorService {
+            svc,
+            cfg: cfg.get(),
+            config: self.config.clone(),
+        })
     }
 }
 
-impl<T: Address> Service<Connect<T>> for TlsConnector<T> {
+impl<A: Address, S> Service<Connect<A>> for TlsConnectorService<S>
+where
+    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
+{
     type Response = Io<Layer<TlsClientFilter>>;
     type Error = ConnectError;
 
     async fn call(
         &self,
-        req: Connect<T>,
-        _: ServiceCtx<'_, Self>,
+        req: Connect<A>,
+        ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        self.connect(req).await
+        let host = req.host().split(':').next().unwrap().to_owned();
+
+        let io = ctx.call(&self.svc, req).await?;
+        let tag = io.tag();
+        log::trace!("{tag}: TLS Handshake start for: {host:?}");
+
+        let config = self.config.clone();
+        let host = ServerName::try_from(host).map_err(io::Error::other)?;
+
+        let connect_fut = TlsClientFilter::create(io, config, host.clone());
+        match timeout_checked(self.cfg.handshake_timeout(), connect_fut).await {
+            Ok(Ok(io)) => {
+                log::trace!("{tag}: TLS Handshake success: {host:?}");
+                Ok(io)
+            }
+            Ok(Err(e)) => {
+                log::trace!("{tag}: TLS Handshake error: {e:?}");
+                Err(e.into())
+            }
+            Err(_) => {
+                log::trace!("{tag}: TLS Handshake timeout");
+                Err(io::Error::new(io::ErrorKind::TimedOut, "SSL Handshake timeout").into())
+            }
+        }
     }
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -156,13 +141,11 @@ mod tests {
         let config = ClientConfig::builder()
             .with_root_certificates(cert_store)
             .with_no_client_auth();
-        let _ = TlsConnector::<&'static str>::new(config.clone()).clone();
-        let factory = TlsConnector::with(Arc::new(config), Default::default())
-            .memory_pool(PoolId::P5)
-            .tag("IO")
-            .clone();
+        let _: TlsConnector<Connector<&'static str>> =
+            TlsConnector::new(config.clone()).clone();
+        let factory = TlsConnector::from(Arc::new(config)).clone();
 
-        let srv = factory.pipeline(&()).await.unwrap().bind();
+        let srv = factory.pipeline(SharedCfg::default()).await.unwrap().bind();
         // always ready
         assert!(lazy(|cx| srv.poll_ready(cx)).await.is_ready());
         let result = srv

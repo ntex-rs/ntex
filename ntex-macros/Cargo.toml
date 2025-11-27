@@ -1,11 +1,12 @@
 [package]
 name = "ntex-macros"
-version = "0.1.4"
+version = "0.2.0"
 description = "ntex proc macros"
 readme = "README.md"
 authors = ["ntex contributors <team@ntex.rs>"]
 license = "MIT OR Apache-2.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 
 [lib]
 proc-macro = true
@@ -16,5 +17,5 @@ syn = { version = "^1", features = ["full", "parsing"] }
 proc-macro2 = "^1"
 
 [dev-dependencies]
-ntex = "2"
+ntex = "3.0.0-pre.0"
 futures = "0.3"

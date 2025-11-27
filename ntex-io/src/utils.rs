@@ -1,4 +1,4 @@
-use ntex_service::{chain_factory, fn_service, ServiceFactory};
+use ntex_service::{ServiceFactory, chain_factory, fn_service};
 use ntex_util::future::Ready;
 
 use crate::{Filter, Io, IoBoxed};
@@ -36,9 +36,10 @@ where
 mod tests {
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
+    use ntex_service::cfg::SharedCfg;
 
     use super::*;
-    use crate::{buf::Stack, filter::NullFilter, testing::IoTest, FilterCtx};
+    use crate::{FilterCtx, buf::Stack, filter::NullFilter, testing::IoTest};
 
     #[ntex::test]
     async fn test_utils() {
@@ -57,7 +58,7 @@ mod tests {
         .pipeline(())
         .await
         .unwrap();
-        let _ = svc.call(Io::new(server)).await;
+        let _ = svc.call(Io::new(server, SharedCfg::default())).await;
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, b"RES".as_ref());
@@ -66,14 +67,16 @@ mod tests {
     #[ntex::test]
     async fn test_null_filter() {
         let (_, server) = IoTest::create();
-        let io = Io::new(server);
+        let io = Io::new(server, SharedCfg::default());
         let ioref = io.get_ref();
         let stack = Stack::new();
         assert!(NullFilter.query(std::any::TypeId::of::<()>()).is_none());
-        assert!(NullFilter
-            .shutdown(FilterCtx::new(&ioref, &stack))
-            .unwrap()
-            .is_ready());
+        assert!(
+            NullFilter
+                .shutdown(FilterCtx::new(&ioref, &stack))
+                .unwrap()
+                .is_ready()
+        );
         assert_eq!(
             std::future::poll_fn(|cx| NullFilter.poll_read_ready(cx)).await,
             crate::Readiness::Terminate
@@ -82,9 +85,11 @@ mod tests {
             std::future::poll_fn(|cx| NullFilter.poll_write_ready(cx)).await,
             crate::Readiness::Terminate
         );
-        assert!(NullFilter
-            .process_write_buf(FilterCtx::new(&ioref, &stack))
-            .is_ok());
+        assert!(
+            NullFilter
+                .process_write_buf(FilterCtx::new(&ioref, &stack))
+                .is_ok()
+        );
         assert_eq!(
             NullFilter
                 .process_read_buf(FilterCtx::new(&ioref, &stack), 0)

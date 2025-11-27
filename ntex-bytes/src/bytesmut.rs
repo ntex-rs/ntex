@@ -1,6 +1,6 @@
 use std::{borrow, fmt, ops, ptr};
 
-use crate::{buf::IntoIter, buf::UninitSlice, debug, storage::Storage, Buf, BufMut, Bytes};
+use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, debug, storage::Storage};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -45,7 +45,7 @@ use crate::{buf::IntoIter, buf::UninitSlice, debug, storage::Storage, Buf, BufMu
 /// assert_eq!(b, b"hello");
 /// ```
 pub struct BytesMut {
-    pub(crate) inner: Storage,
+    pub(crate) storage: Storage,
 }
 
 /*
@@ -86,14 +86,14 @@ impl BytesMut {
     #[inline]
     pub fn with_capacity(capacity: usize) -> BytesMut {
         BytesMut {
-            inner: Storage::with_capacity(capacity),
+            storage: Storage::with_capacity(capacity),
         }
     }
 
     /// Creates a new `BytesMut` from slice, by copying it.
     pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
         BytesMut {
-            inner: Storage::from_slice(src.as_ref()),
+            storage: Storage::from_slice(src.as_ref()),
         }
     }
 
@@ -101,7 +101,7 @@ impl BytesMut {
     /// Convert a `Vec` into a `BytesMut`
     pub fn from_vec(src: Vec<u8>) -> BytesMut {
         BytesMut {
-            inner: Storage::from_vec(src),
+            storage: Storage::from_vec(src),
         }
     }
 
@@ -127,7 +127,7 @@ impl BytesMut {
     #[inline]
     pub fn new() -> BytesMut {
         BytesMut {
-            inner: Storage::empty_inline(),
+            storage: Storage::empty_inline(),
         }
     }
 
@@ -143,7 +143,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.storage.len()
     }
 
     /// Returns true if the `BytesMut` has a length of 0.
@@ -158,7 +158,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.storage.is_empty()
     }
 
     /// Returns the number of bytes the `BytesMut` can hold without reallocating.
@@ -173,7 +173,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner.capacity()
+        self.storage.capacity()
     }
 
     /// Converts `self` into an immutable `Bytes`.
@@ -203,7 +203,7 @@ impl BytesMut {
     #[inline]
     pub fn freeze(self) -> Bytes {
         Bytes {
-            inner: self.inner.freeze(),
+            storage: self.storage.freeze(),
         }
     }
 
@@ -235,7 +235,7 @@ impl BytesMut {
     /// Panics if `at > capacity`.
     pub fn split_off(&mut self, at: usize) -> BytesMut {
         BytesMut {
-            inner: self.inner.split_off(at, false),
+            storage: self.storage.split_off(at, false),
         }
     }
 
@@ -305,7 +305,7 @@ impl BytesMut {
     pub fn split_to_checked(&mut self, at: usize) -> Option<BytesMut> {
         if at <= self.len() {
             Some(BytesMut {
-                inner: self.inner.split_to(at, false),
+                storage: self.storage.split_to(at, false),
             })
         } else {
             None
@@ -333,7 +333,7 @@ impl BytesMut {
     ///
     /// [`split_off`]: #method.split_off
     pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len, false);
+        self.storage.truncate(len, false);
     }
 
     /// Clears the buffer, removing all data.
@@ -380,7 +380,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn resize(&mut self, new_len: usize, value: u8) {
-        self.inner.resize(new_len, value);
+        self.storage.resize(new_len, value);
     }
 
     /// Sets the length of the buffer.
@@ -416,7 +416,7 @@ impl BytesMut {
     #[inline]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn set_len(&mut self, len: usize) {
-        self.inner.set_len(len)
+        self.storage.set_len(len)
     }
 
     /// Reserves capacity for at least `additional` more bytes to be inserted
@@ -475,7 +475,7 @@ impl BytesMut {
     /// Panics if the new capacity overflows `usize`.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
-        self.inner.reserve(additional);
+        self.storage.reserve(additional);
     }
 
     /// Appends given bytes to this object.
@@ -518,6 +518,12 @@ impl BytesMut {
     pub fn iter(&'_ self) -> std::slice::Iter<'_, u8> {
         self.chunk().iter()
     }
+
+    #[inline]
+    #[doc(hidden)]
+    pub fn info(&self) -> crate::info::Info {
+        self.storage.info()
+    }
 }
 
 impl Buf for BytesMut {
@@ -528,14 +534,14 @@ impl Buf for BytesMut {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(cnt <= self.inner.len(), "cannot advance past `remaining`");
+        assert!(cnt <= self.storage.len(), "cannot advance past `remaining`");
         unsafe {
-            self.inner.set_start(cnt);
+            self.storage.set_start(cnt);
         }
     }
 }
@@ -551,7 +557,7 @@ impl BufMut for BytesMut {
         let new_len = self.len() + cnt;
 
         // This call will panic if `cnt` is too big
-        self.inner.set_len(new_len);
+        self.storage.set_len(new_len);
     }
 
     #[inline]
@@ -560,7 +566,7 @@ impl BufMut for BytesMut {
 
         unsafe {
             // This will never panic as `len` can never become invalid
-            let ptr = &mut self.inner.as_raw()[len..];
+            let ptr = &mut self.storage.as_raw()[len..];
 
             UninitSlice::from_raw_parts_mut(ptr.as_mut_ptr(), self.capacity() - len)
         }
@@ -580,7 +586,7 @@ impl BufMut for BytesMut {
     #[inline]
     fn put_u8(&mut self, n: u8) {
         self.reserve(1);
-        self.inner.put_u8(n);
+        self.storage.put_u8(n);
     }
 
     #[inline]
@@ -598,7 +604,7 @@ impl bytes::buf::Buf for BytesMut {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 
     #[inline]
@@ -623,7 +629,7 @@ unsafe impl bytes::buf::BufMut for BytesMut {
         let len = self.len();
         unsafe {
             // This will never panic as `len` can never become invalid
-            let ptr = &mut self.inner.as_raw()[len..];
+            let ptr = &mut self.storage.as_raw()[len..];
             bytes::buf::UninitSlice::from_raw_parts_mut(
                 ptr.as_mut_ptr(),
                 self.capacity() - len,
@@ -650,14 +656,14 @@ unsafe impl bytes::buf::BufMut for BytesMut {
 impl AsRef<[u8]> for BytesMut {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 }
 
 impl AsMut<[u8]> for BytesMut {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
-        self.inner.as_mut()
+        self.storage.as_mut()
     }
 }
 
@@ -673,7 +679,7 @@ impl ops::Deref for BytesMut {
 impl ops::DerefMut for BytesMut {
     #[inline]
     fn deref_mut(&mut self) -> &mut [u8] {
-        self.inner.as_mut()
+        self.storage.as_mut()
     }
 }
 
@@ -752,7 +758,7 @@ impl Eq for BytesMut {}
 impl PartialEq for BytesMut {
     #[inline]
     fn eq(&self, other: &BytesMut) -> bool {
-        self.inner.as_ref() == other.inner.as_ref()
+        self.storage.as_ref() == other.storage.as_ref()
     }
 }
 
@@ -779,7 +785,7 @@ impl borrow::BorrowMut<[u8]> for BytesMut {
 
 impl fmt::Debug for BytesMut {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
+        fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
     }
 }
 

@@ -6,7 +6,7 @@
 //!
 //! #[ntex::main]
 //! async fn main() {
-//!    let mut client = Client::default();
+//!    let mut client = Client::new().await;
 //!
 //!    let response = client.get("http://www.rust-lang.org") // <- Create request builder
 //!        .header("User-Agent", "ntex::web")
@@ -19,7 +19,6 @@
 use std::rc::Rc;
 
 mod builder;
-pub mod connect;
 mod connection;
 mod connector;
 pub mod error;
@@ -34,17 +33,14 @@ mod test;
 
 pub use self::builder::ClientBuilder;
 pub use self::connection::Connection;
-pub use self::connector::Connector;
+pub use self::connector::{Connector, ConnectorService};
 pub use self::frozen::{FrozenClientRequest, FrozenSendBuilder};
 pub use self::request::ClientRequest;
 pub use self::response::{ClientResponse, JsonBody, MessageBody};
-pub use self::sender::SendClientRequest;
 pub use self::test::TestResponse;
 
-use crate::http::{error::HttpError, HeaderMap, Method, RequestHead, Uri};
-use crate::time::Millis;
-
-use self::connect::{Connect as HttpConnect, ConnectorWrapper};
+use crate::http::{HeaderMap, Method, RequestHead, Uri, error::HttpError};
+use crate::{SharedCfg, service::Pipeline, time::Millis};
 
 #[derive(Debug, Clone)]
 pub struct Connect {
@@ -59,7 +55,7 @@ pub struct Connect {
 ///
 /// #[ntex::main]
 /// async fn main() {
-///     let mut client = Client::default();
+///     let mut client = Client::new().await;
 ///
 ///     let res = client.get("http://www.rust-lang.org") // <- Create request builder
 ///         .header("User-Agent", "ntex::web")
@@ -69,13 +65,18 @@ pub struct Connect {
 ///      println!("Response: {:?}", res);
 /// }
 /// ```
-#[derive(Debug, Clone, Default)]
-pub struct Client(Rc<ClientConfig>);
+#[derive(Debug, Clone)]
+pub struct Client(Rc<ClientInner>);
+
+#[derive(Debug)]
+pub(crate) struct ClientInner {
+    config: Rc<ClientConfig>,
+    connector: Pipeline<ConnectorService>,
+}
 
 #[derive(Debug)]
 #[doc(hidden)]
 pub struct ClientConfig {
-    pub(self) connector: Box<dyn HttpConnect>,
     pub headers: HeaderMap,
     pub timeout: Millis,
     pub response_pl_limit: usize,
@@ -84,20 +85,19 @@ pub struct ClientConfig {
 
 impl Default for ClientConfig {
     fn default() -> Self {
-        ClientConfig {
+        Self {
             headers: HeaderMap::new(),
             timeout: Millis(5_000),
             response_pl_limit: 262_144,
             response_pl_timeout: Millis(10_000),
-            connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
         }
     }
 }
 
 impl Client {
     /// Create new client instance with default settings.
-    pub fn new() -> Client {
-        Client::default()
+    pub async fn new() -> Client {
+        Client::build().finish(SharedCfg::default()).await.unwrap()
     }
 
     /// Build client instance.
@@ -113,7 +113,7 @@ impl Client {
     {
         let mut req = ClientRequest::new(method, url, self.0.clone());
 
-        for (key, value) in self.0.headers.iter() {
+        for (key, value) in self.0.config.headers.iter() {
             req = req.set_header_if_none(key.clone(), value.clone());
         }
         req

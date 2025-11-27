@@ -3,10 +3,11 @@ use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, rc::Rc};
 use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
-use crate::service::{
-    chain_factory, dev::ServiceChainFactory, map_config, IntoServiceFactory,
-};
+use crate::service::cfg::SharedCfg;
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
+use crate::service::{
+    IntoServiceFactory, chain_factory, dev::ServiceChainFactory, map_config,
+};
 use crate::util::{BoxFuture, Extensions};
 
 use super::app_service::{AppFactory, AppService};
@@ -74,11 +75,11 @@ impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
 impl<M, T, Err> App<M, T, Err>
 where
     T: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     /// Set application level arbitrary state item.
@@ -351,10 +352,10 @@ where
     >
     where
         S: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-        >,
+                WebRequest<Err>,
+                Response = WebRequest<Err>,
+                Error = Err::Container,
+            >,
         U: IntoServiceFactory<S, WebRequest<Err>>,
     {
         App {
@@ -426,11 +427,11 @@ where
     M: Middleware<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     /// Construct service factory with default `AppConfig`, suitable for `http::HttpService`.
@@ -441,7 +442,7 @@ where
     /// #[ntex::main]
     /// async fn main() -> std::io::Result<()> {
     ///     server::build().bind("http", "127.0.0.1:0", |_|
-    ///         http::HttpService::build().finish(
+    ///         http::HttpService::new(
     ///             web::App::new()
     ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
     ///                 .finish()
@@ -455,11 +456,12 @@ where
         self,
     ) -> impl ServiceFactory<
         Request,
+        SharedCfg,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
     > {
-        IntoServiceFactory::<AppFactory<M, F, Err>, Request>::into_factory(self)
+        IntoServiceFactory::<AppFactory<M, F, Err>, Request, SharedCfg>::into_factory(self)
     }
 
     /// Construct service factory suitable for `http::HttpService`.
@@ -470,7 +472,7 @@ where
     /// #[ntex::main]
     /// async fn main() -> std::io::Result<()> {
     ///     server::build().bind("http", "127.0.0.1:0", |_|
-    ///         http::HttpService::build().finish(
+    ///         http::HttpService::new(
     ///             web::App::new()
     ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))
     ///                 .with_config(web::dev::AppConfig::default())
@@ -485,6 +487,7 @@ where
         cfg: AppConfig,
     ) -> impl ServiceFactory<
         Request,
+        SharedCfg,
         Response = WebResponse,
         Error = Err::Container,
         InitError = (),
@@ -512,11 +515,11 @@ where
     M: Middleware<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     fn into_factory(self) -> AppFactory<M, F, Err> {
@@ -533,16 +536,17 @@ where
     }
 }
 
-impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request> for App<M, F, Err>
+impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, SharedCfg>
+    for App<M, F, Err>
 where
     M: Middleware<AppService<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     fn into_factory(self) -> AppFactory<M, F, Err> {
@@ -594,9 +598,9 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for Filter<Err> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{header, header::HeaderValue, Method, StatusCode};
-    use crate::web::test::{call_service, init_service, read_body, TestRequest};
-    use crate::web::{self, middleware::DefaultHeaders, HttpRequest, HttpResponse};
+    use crate::http::{Method, StatusCode, header, header::HeaderValue};
+    use crate::web::test::{TestRequest, call_service, init_service, read_body};
+    use crate::web::{self, HttpRequest, HttpResponse, middleware::DefaultHeaders};
     use crate::{service::fn_service, util::Ready};
 
     #[crate::rt_test]
@@ -604,7 +608,7 @@ mod tests {
         let srv = App::new()
             .service(web::resource("/test").to(|| async { HttpResponse::Ok() }))
             .finish()
-            .pipeline(())
+            .pipeline(SharedCfg::default())
             .await
             .unwrap();
         let req = TestRequest::with_uri("/test").to_request();
@@ -628,7 +632,7 @@ mod tests {
                 Ok(r.into_response(HttpResponse::MethodNotAllowed()))
             })
             .with_config(Default::default())
-            .pipeline(())
+            .pipeline(SharedCfg::default())
             .await
             .unwrap();
 

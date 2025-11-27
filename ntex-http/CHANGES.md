@@ -1,5 +1,11 @@
 # Changes
 
+## [1.0.0] - 2025-11-24
+
+* Use ntex-bytes 1.0
+
+* Use foldhash instead of ahash
+
 ## [0.1.15] - 2025-09-10
 
 * Use ahash instead of fxhash

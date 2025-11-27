@@ -1,5 +1,5 @@
 //! Websockets protocol helpers
-use crate::http::{header, Method, StatusCode};
+use crate::http::{Method, StatusCode, header};
 use crate::http::{RequestHead, Response, ResponseBuilder};
 
 use super::error::HandshakeError;

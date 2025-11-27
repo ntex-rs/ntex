@@ -4,11 +4,11 @@ use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
-use crate::service::{chain, chain_factory, ServiceCtx};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
+use crate::service::{ServiceCtx, chain, chain_factory};
 use crate::util::Extensions;
 
-use super::dev::{insert_slash, WebServiceConfig, WebServiceFactory};
+use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
 use super::extract::FromRequest;
 use super::handler::Handler;
 use super::route::{IntoRoutes, Route, RouteService};
@@ -74,11 +74,11 @@ impl<Err: ErrorRenderer> Resource<Err> {
 impl<Err, M, T> Resource<Err, M, T>
 where
     T: ServiceFactory<
-        WebRequest<Err>,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
+            WebRequest<Err>,
+            Response = WebRequest<Err>,
+            Error = Err::Container,
+            InitError = (),
+        >,
     Err: ErrorRenderer,
 {
     /// Set resource name.
@@ -247,10 +247,10 @@ where
     >
     where
         U: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-        >,
+                WebRequest<Err>,
+                Response = WebRequest<Err>,
+                Error = Err::Container,
+            >,
         F: IntoServiceFactory<U, WebRequest<Err>>,
     {
         Resource {
@@ -489,10 +489,10 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {
 mod tests {
     use crate::http::header::{self, HeaderValue};
     use crate::http::{Method, StatusCode};
-    use crate::time::{sleep, Millis};
+    use crate::time::{Millis, sleep};
     use crate::web::middleware::DefaultHeaders;
-    use crate::web::test::{call_service, init_service, TestRequest};
-    use crate::web::{self, guard, request::WebRequest, App, DefaultError, HttpResponse};
+    use crate::web::test::{TestRequest, call_service, init_service};
+    use crate::web::{self, App, DefaultError, HttpResponse, guard, request::WebRequest};
     use crate::{service::fn_service, util::Ready};
 
     #[crate::rt_test]

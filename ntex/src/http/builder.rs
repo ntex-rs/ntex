@@ -1,13 +1,13 @@
 use std::{error::Error, fmt, marker::PhantomData};
 
 use crate::http::body::MessageBody;
-use crate::http::config::{KeepAlive, ServiceConfig};
+use crate::http::config::{HttpServiceConfig, KeepAlive};
 use crate::http::error::{H2Error, ResponseError};
 use crate::http::h1::{self, H1Service};
 use crate::http::h2::{self, H2Service};
 use crate::http::{request::Request, response::Response, service::HttpService};
 use crate::service::{IntoServiceFactory, ServiceFactory};
-use crate::{io::Filter, time::Seconds};
+use crate::{io::Filter, io::SharedCfg, time::Seconds};
 
 /// A http service builder
 ///
@@ -19,7 +19,6 @@ pub struct HttpServiceBuilder<
     C1 = h1::DefaultControlService,
     C2 = h2::DefaultControlService,
 > {
-    config: ServiceConfig,
     h1_control: C1,
     h2_control: C2,
     _t: PhantomData<(F, S)>,
@@ -28,14 +27,7 @@ pub struct HttpServiceBuilder<
 impl<F, S> HttpServiceBuilder<F, S, h1::DefaultControlService, h2::DefaultControlService> {
     /// Create instance of `ServiceConfigBuilder`
     pub fn new() -> Self {
-        HttpServiceBuilder::with_config(ServiceConfig::default())
-    }
-
-    #[doc(hidden)]
-    /// Create instance of `ServiceConfigBuilder`
-    pub fn with_config(config: ServiceConfig) -> Self {
         HttpServiceBuilder {
-            config,
             h1_control: h1::DefaultControlService,
             h2_control: h2::DefaultControlService,
             _t: PhantomData,
@@ -46,13 +38,13 @@ impl<F, S> HttpServiceBuilder<F, S, h1::DefaultControlService, h2::DefaultContro
 impl<F, S, C1, C2> HttpServiceBuilder<F, S, C1, C2>
 where
     F: Filter,
-    S: ServiceFactory<Request> + 'static,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    C1: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+    C1: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck>,
     C1::Error: Error,
     C1::InitError: fmt::Debug,
-    C2: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
+    C2: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
     C2::Error: Error,
     C2::InitError: fmt::Debug,
 {
@@ -78,19 +70,6 @@ where
         self
     }
 
-    /// Set server connection disconnect timeout in seconds.
-    ///
-    /// Defines a timeout for disconnect connection. If a disconnect procedure does not complete
-    /// within this time, the connection get dropped.
-    ///
-    /// To disable timeout set value to 0.
-    ///
-    /// By default disconnect timeout is set to 1 seconds.
-    pub fn disconnect_timeout(mut self, timeout: Seconds) -> Self {
-        self.config.disconnect_timeout(timeout);
-        self
-    }
-
     /// Set server ssl handshake timeout.
     ///
     /// Defines a timeout for connection ssl handshake negotiation.
@@ -113,7 +92,7 @@ where
         mut self,
         timeout: Seconds,
         max_timeout: Seconds,
-        rate: u16,
+        rate: u32,
     ) -> Self {
         self.config.headers_read_rate(timeout, max_timeout, rate);
         self
@@ -130,7 +109,7 @@ where
         mut self,
         timeout: Seconds,
         max_timeout: Seconds,
-        rate: u16,
+        rate: u32,
     ) -> Self {
         self.config.payload_read_rate(timeout, max_timeout, rate);
         self
@@ -139,8 +118,12 @@ where
     /// Provide control service for http/1.
     pub fn h1_control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, CT, C2>
     where
-        CF: IntoServiceFactory<CT, h1::Control<F, S::Error>>,
-        CT: ServiceFactory<h1::Control<F, S::Error>, Response = h1::ControlAck>,
+        CF: IntoServiceFactory<CT, h1::Control<F, S::Error>, SharedCfg>,
+        CT: ServiceFactory<
+            h1::Control<F, S::Error>,
+            SharedCfg,
+            Response = h1::ControlAck,
+        >,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {
@@ -156,7 +139,7 @@ where
     pub fn h1<B, SF>(self, service: SF) -> H1Service<F, S, B, C1>
     where
         B: MessageBody,
-        SF: IntoServiceFactory<S, Request>,
+        SF: IntoServiceFactory<S, Request, SharedCfg>,
         S::Error: ResponseError,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>>,
@@ -167,8 +150,8 @@ where
     /// Provide control service for http/2 protocol.
     pub fn h2_control<CF, CT>(self, control: CF) -> HttpServiceBuilder<F, S, C1, CT>
     where
-        CF: IntoServiceFactory<CT, h2::Control<H2Error>>,
-        CT: ServiceFactory<h2::Control<H2Error>, Response = h2::ControlAck>,
+        CF: IntoServiceFactory<CT, h2::Control<H2Error>, SharedCfg>,
+        CT: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
         CT::Error: Error,
         CT::InitError: fmt::Debug,
     {
@@ -193,7 +176,7 @@ where
     pub fn h2<B, SF>(self, service: SF) -> H2Service<F, S, B, C2>
     where
         B: MessageBody + 'static,
-        SF: IntoServiceFactory<S, Request>,
+        SF: IntoServiceFactory<S, Request, SharedCfg>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,
@@ -205,7 +188,7 @@ where
     pub fn finish<B, SF>(self, service: SF) -> HttpService<F, S, B, C1, C2>
     where
         B: MessageBody + 'static,
-        SF: IntoServiceFactory<S, Request>,
+        SF: IntoServiceFactory<S, Request, SharedCfg>,
         S::Error: ResponseError + 'static,
         S::InitError: fmt::Debug,
         S::Response: Into<Response<B>> + 'static,

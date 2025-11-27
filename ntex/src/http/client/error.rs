@@ -8,7 +8,7 @@ use thiserror::Error;
 use tls_openssl::ssl::{Error as SslError, HandshakeError};
 
 use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
-use crate::util::{clone_io_error, Either};
+use crate::util::{Either, clone_io_error};
 
 /// A set of errors that can occur during parsing json payloads
 #[derive(Error, Debug)]
@@ -22,6 +22,14 @@ pub enum JsonPayloadError {
     /// Payload error
     #[error("Error that occur during reading payload: {0}")]
     Payload(#[from] PayloadError),
+}
+
+/// A set of errors that can occur while building HTTP client
+#[derive(Error, Debug)]
+pub enum ClientBuilderError {
+    /// Connector failed
+    #[error("Cannot construct connector")]
+    ConnectorFailed,
 }
 
 /// A set of errors that can occur while connecting to an HTTP host

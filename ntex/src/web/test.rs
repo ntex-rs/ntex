@@ -3,36 +3,35 @@ use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::http::body::MessageBody;
 use crate::http::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::error::{HttpError, PayloadError, ResponseError};
-use crate::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
+use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
-use crate::http::{HttpService, Method, Payload, Request, StatusCode, Uri, Version};
+use crate::http::{
+    HttpService, HttpServiceConfig, Method, Payload, Request, StatusCode, Uri, Version,
+};
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
-use crate::service::{
-    map_config, IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory,
-};
-use crate::time::{sleep, Millis, Seconds};
-use crate::util::{stream_recv, Bytes, BytesMut, Extensions, Ready, Stream};
+use crate::service::{IntoService, IntoServiceFactory, Pipeline, map_config};
+use crate::time::{Millis, Seconds, sleep};
+use crate::util::{Bytes, BytesMut, Extensions, Ready, Stream, stream_recv};
 #[cfg(feature = "ws")]
-use crate::ws::{error::WsClientError, WsClient, WsConnection};
-use crate::{rt::System, server::Server};
+use crate::ws::{WsClient, WsConnection, error::WsClientError};
+use crate::{Service, ServiceFactory, SharedCfg, rt::System, server::Server};
 
 use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
 use crate::web::rmap::ResourceMap;
-use crate::web::{config::AppConfig, service::AppState};
 use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
+use crate::web::{config::AppConfig, service::AppState};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<Err: ErrorRenderer>(
-) -> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible>
-{
+pub fn ok_service<Err: ErrorRenderer>()
+-> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible> {
     default_service::<Err>(StatusCode::OK)
 }
 
@@ -543,7 +542,7 @@ impl TestRequest {
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server<F, I, S, B>(factory: F) -> TestServer
+pub async fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, AppConfig>,
@@ -553,7 +552,7 @@ where
     S::Response: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
-    server_with(TestServerConfig::default(), factory)
+    server_with(TestServerConfig::default(), factory).await
 }
 
 /// Start test server with custom configuration
@@ -581,7 +580,7 @@ where
 ///     assert!(response.status().is_success());
 /// }
 /// ```
-pub fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
+pub async fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, AppConfig>,
@@ -619,46 +618,34 @@ where
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h1(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h2(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg =
                             AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .finish(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
                     }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h1(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h2(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .finish(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
                             .openssl(acceptor.clone())
                     }),
                 },
@@ -666,29 +653,30 @@ where
                 StreamType::Rustls(config) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h1(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .h2(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
                         let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::build()
-                            .headers_read_rate(ctimeout, Seconds::ZERO, 256)
-                            .finish(map_config(factory(), move |_| cfg.clone()))
+                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
                             .rustls(config.clone())
                     }),
                 },
             }
             .unwrap()
-            .set_tag("test", "WEB-SRV")
+            .config(
+                "test",
+                SharedCfg::new("WEB-SRV").add(HttpServiceConfig::new().headers_read_rate(
+                    ctimeout,
+                    Seconds::ZERO,
+                    256,
+                )),
+            )
             .run();
 
             crate::rt::spawn(async move {
@@ -700,6 +688,16 @@ where
     });
 
     let (system, server, addr) = rx.recv().unwrap();
+
+    let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
+        .add(ntex_io::IoConfig::new().set_connect_timeout(Millis(90_000)))
+        .add(ntex_tls::TlsConfig::new().set_handshake_timeout(Seconds(5)))
+        .add(
+            ntex_h2::ServiceConfig::new()
+                .max_header_list_size(256 * 1024)
+                .max_header_continuation_frames(96),
+        )
+        .into();
 
     let client = {
         let connector = {
@@ -714,25 +712,19 @@ where
                     .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
                 Connector::default()
                     .lifetime(Seconds::ZERO)
-                    .keep_alive(Seconds(60))
-                    .timeout(Millis(90_000))
-                    .disconnect_timeout(Seconds(5))
                     .openssl(builder.build())
-                    .finish()
             }
             #[cfg(not(feature = "openssl"))]
             {
-                Connector::default()
-                    .lifetime(Seconds::ZERO)
-                    .timeout(Millis(90_000))
-                    .finish()
+                Connector::default().lifetime(Seconds::ZERO)
             }
         };
 
         Client::build()
-            .connector(connector)
-            .timeout(Seconds(90))
-            .finish()
+            .connector::<&str>(connector)
+            .finish(cfg)
+            .await
+            .unwrap()
     };
 
     TestServer {
@@ -929,7 +921,8 @@ impl TestServer {
                     .timeout(Seconds(60))
                     .openssl(builder.build())
                     .take()
-                    .finish()
+                    .finish(Default::default())
+                    .await
                     .unwrap()
                     .connect()
                     .await
@@ -943,7 +936,8 @@ impl TestServer {
             WsClient::build(self.url(path))
                 .address(self.addr)
                 .timeout(Seconds(60))
-                .finish()
+                .finish(Default::default())
+                .await
                 .unwrap()
                 .connect()
                 .await
@@ -977,7 +971,7 @@ mod tests {
     use std::convert::Infallible;
 
     use super::*;
-    use crate::http::{header, HttpMessage};
+    use crate::http::{HttpMessage, header};
     use crate::web::{self, App};
 
     #[crate::rt_test]
@@ -1198,7 +1192,8 @@ mod tests {
                         .to(|| async { HttpResponse::Ok() }),
                 )),
             )
-        });
+        })
+        .await;
 
         assert_eq!(srv.put("/").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(

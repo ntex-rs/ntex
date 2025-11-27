@@ -2,17 +2,13 @@
 use slab::Slab;
 use std::{fmt, future::Future, pin::Pin, task::Context, task::Poll};
 
-use super::{cell::Cell, Canceled};
+use super::{Canceled, cell::Cell};
 use crate::task::LocalWaker;
 
 /// Creates a new futures-aware, pool of one-shot's.
 pub fn new<T>() -> Pool<T> {
     Pool(Cell::new(Slab::new()))
 }
-
-#[doc(hidden)]
-/// Futures-aware, pool of one-shot's.
-pub type OneshotsPool<T> = Pool<T>;
 
 /// Futures-aware, pool of one-shot's.
 pub struct Pool<T>(Cell<Slab<Inner<T>>>);

@@ -124,8 +124,8 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApplyMiddleware")
-            .field("service", &self.0 .1)
-            .field("middleware", &self.0 .0)
+            .field("service", &self.0.1)
+            .field("middleware", &self.0.0)
             .finish()
     }
 }
@@ -144,7 +144,7 @@ where
 
     #[inline]
     async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        Ok(self.0 .0.create(self.0 .1.create(cfg).await?))
+        Ok(self.0.0.create(self.0.1.create(cfg).await?))
     }
 }
 
@@ -194,7 +194,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{fn_service, Pipeline, ServiceCtx};
+    use crate::{Pipeline, ServiceCtx, fn_service};
 
     #[derive(Debug, Clone)]
     struct Tr<R>(PhantomData<R>, Rc<Cell<usize>>);

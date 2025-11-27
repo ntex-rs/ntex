@@ -2,10 +2,10 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::{cell::Cell, cell::RefCell, ops, rc::Rc, time::Duration, time::Instant};
 
-use ntex_util::time::{now, sleep, Seconds};
-use ntex_util::{spawn, HashSet};
+use ntex_util::time::{Seconds, now, sleep};
+use ntex_util::{HashSet, spawn};
 
-use crate::{io::IoState, IoRef};
+use crate::{IoRef, io::IoState};
 
 const CAP: usize = 64;
 const SEC: Duration = Duration::from_secs(1);

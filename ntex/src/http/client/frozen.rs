@@ -1,12 +1,11 @@
 use std::{error::Error, fmt, net, rc::Rc};
 
-use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::{Method, RequestHead, RequestHeadType, Uri};
+use crate::http::{Method, RequestHead, RequestHeadType, Uri, body::Body};
 use crate::{time::Millis, util::Bytes, util::Stream};
 
-use super::{sender::SendClientRequest, ClientConfig};
+use super::{ClientInner, ClientResponse, error::SendRequestError};
 
 /// `FrozenClientRequest` struct represents clonable client request.
 /// It could be used to send same request multiple times.
@@ -16,7 +15,7 @@ pub struct FrozenClientRequest {
     pub(super) addr: Option<net::SocketAddr>,
     pub(super) response_decompress: bool,
     pub(super) timeout: Millis,
-    pub(super) config: Rc<ClientConfig>,
+    pub(super) config: Rc<ClientInner>,
 }
 
 impl FrozenClientRequest {
@@ -36,64 +35,83 @@ impl FrozenClientRequest {
     }
 
     /// Send a body.
-    pub fn send_body<B>(&self, body: B) -> SendClientRequest
+    pub async fn send_body<B>(&self, body: B) -> Result<ClientResponse, SendRequestError>
     where
         B: Into<Body>,
     {
-        RequestHeadType::Rc(self.head.clone(), None).send_body(
-            self.addr,
-            self.response_decompress,
-            self.timeout,
-            self.config.clone(),
-            body,
-        )
+        RequestHeadType::Rc(self.head.clone(), None)
+            .send_body(
+                self.addr,
+                self.response_decompress,
+                self.timeout,
+                self.config.clone(),
+                body,
+            )
+            .await
     }
 
     /// Send a json body.
-    pub fn send_json<T: serde::Serialize>(&self, value: &T) -> SendClientRequest {
-        RequestHeadType::Rc(self.head.clone(), None).send_json(
-            self.addr,
-            self.response_decompress,
-            self.timeout,
-            self.config.clone(),
-            value,
-        )
+    pub async fn send_json<T: serde::Serialize>(
+        &self,
+        value: &T,
+    ) -> Result<ClientResponse, SendRequestError> {
+        RequestHeadType::Rc(self.head.clone(), None)
+            .send_json(
+                self.addr,
+                self.response_decompress,
+                self.timeout,
+                self.config.clone(),
+                value,
+            )
+            .await
     }
 
     /// Send an urlencoded body.
-    pub fn send_form<T: serde::Serialize>(&self, value: &T) -> SendClientRequest {
-        RequestHeadType::Rc(self.head.clone(), None).send_form(
-            self.addr,
-            self.response_decompress,
-            self.timeout,
-            self.config.clone(),
-            value,
-        )
+    pub async fn send_form<T: serde::Serialize>(
+        &self,
+        value: &T,
+    ) -> Result<ClientResponse, SendRequestError> {
+        RequestHeadType::Rc(self.head.clone(), None)
+            .send_form(
+                self.addr,
+                self.response_decompress,
+                self.timeout,
+                self.config.clone(),
+                value,
+            )
+            .await
     }
 
     /// Send a streaming body.
-    pub fn send_stream<S, E>(&self, stream: S) -> SendClientRequest
+    pub async fn send_stream<S, E>(
+        &self,
+        stream: S,
+    ) -> Result<ClientResponse, SendRequestError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
     {
-        RequestHeadType::Rc(self.head.clone(), None).send_stream(
-            self.addr,
-            self.response_decompress,
-            self.timeout,
-            self.config.clone(),
-            stream,
-        )
+        RequestHeadType::Rc(self.head.clone(), None)
+            .send_stream(
+                self.addr,
+                self.response_decompress,
+                self.timeout,
+                self.config.clone(),
+                stream,
+            )
+            .await
     }
 
     /// Send an empty body.
-    pub fn send(&self) -> SendClientRequest {
-        RequestHeadType::Rc(self.head.clone(), None).send(
-            self.addr,
-            self.response_decompress,
-            self.timeout,
-            self.config.clone(),
-        )
+    pub async fn send(&self) -> Result<ClientResponse, SendRequestError> {
+        RequestHeadType::Rc(self.head.clone(), None)
+            .send(
+                self.addr,
+                self.response_decompress,
+                self.timeout,
+                self.config.clone(),
+            )
+            .await
     }
 
     /// Create a `FrozenSendBuilder` with extra headers
@@ -169,83 +187,102 @@ impl FrozenSendBuilder {
     }
 
     /// Complete request construction and send a body.
-    pub fn send_body<B>(self, body: B) -> SendClientRequest
+    pub async fn send_body<B>(self, body: B) -> Result<ClientResponse, SendRequestError>
     where
         B: Into<Body>,
     {
         if let Some(e) = self.err {
-            return e.into();
+            return Err(e.into());
         }
 
-        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send_body(
-            self.req.addr,
-            self.req.response_decompress,
-            self.req.timeout,
-            self.req.config,
-            body,
-        )
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers))
+            .send_body(
+                self.req.addr,
+                self.req.response_decompress,
+                self.req.timeout,
+                self.req.config,
+                body,
+            )
+            .await
     }
 
     /// Complete request construction and send a json body.
-    pub fn send_json<T: serde::Serialize>(self, value: &T) -> SendClientRequest {
+    pub async fn send_json<T: serde::Serialize>(
+        self,
+        value: &T,
+    ) -> Result<ClientResponse, SendRequestError> {
         if let Some(e) = self.err {
-            return e.into();
+            return Err(e.into());
         }
 
-        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send_json(
-            self.req.addr,
-            self.req.response_decompress,
-            self.req.timeout,
-            self.req.config,
-            value,
-        )
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers))
+            .send_json(
+                self.req.addr,
+                self.req.response_decompress,
+                self.req.timeout,
+                self.req.config,
+                value,
+            )
+            .await
     }
 
     /// Complete request construction and send an urlencoded body.
-    pub fn send_form<T: serde::Serialize>(self, value: &T) -> SendClientRequest {
+    pub async fn send_form<T: serde::Serialize>(
+        self,
+        value: &T,
+    ) -> Result<ClientResponse, SendRequestError> {
         if let Some(e) = self.err {
-            return e.into();
+            return Err(e.into());
         }
 
-        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send_form(
-            self.req.addr,
-            self.req.response_decompress,
-            self.req.timeout,
-            self.req.config,
-            value,
-        )
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers))
+            .send_form(
+                self.req.addr,
+                self.req.response_decompress,
+                self.req.timeout,
+                self.req.config,
+                value,
+            )
+            .await
     }
 
     /// Complete request construction and send a streaming body.
-    pub fn send_stream<S, E>(self, stream: S) -> SendClientRequest
+    pub async fn send_stream<S, E>(
+        self,
+        stream: S,
+    ) -> Result<ClientResponse, SendRequestError>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
     {
         if let Some(e) = self.err {
-            return e.into();
+            return Err(e.into());
         }
 
-        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send_stream(
-            self.req.addr,
-            self.req.response_decompress,
-            self.req.timeout,
-            self.req.config,
-            stream,
-        )
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers))
+            .send_stream(
+                self.req.addr,
+                self.req.response_decompress,
+                self.req.timeout,
+                self.req.config,
+                stream,
+            )
+            .await
     }
 
     /// Complete request construction and send an empty body.
-    pub fn send(self) -> SendClientRequest {
+    pub async fn send(self) -> Result<ClientResponse, SendRequestError> {
         if let Some(e) = self.err {
-            return e.into();
+            return Err(e.into());
         }
 
-        RequestHeadType::Rc(self.req.head, Some(self.extra_headers)).send(
-            self.req.addr,
-            self.req.response_decompress,
-            self.req.timeout,
-            self.req.config,
-        )
+        RequestHeadType::Rc(self.req.head, Some(self.extra_headers))
+            .send(
+                self.req.addr,
+                self.req.response_decompress,
+                self.req.timeout,
+                self.req.config,
+            )
+            .await
     }
 }

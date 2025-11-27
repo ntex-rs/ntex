@@ -2,13 +2,13 @@
 use std::{fmt, future::Future, ops, pin::Pin, task::Context, task::Poll};
 
 use encoding_rs::{Encoding, UTF_8};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
 use crate::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use crate::http::{HttpMessage, Payload, Response, StatusCode};
-use crate::util::{stream_recv, BoxFuture, BytesMut};
+use crate::util::{BoxFuture, BytesMut, stream_recv};
 use crate::web::error::{ErrorRenderer, UrlencodedError, WebResponseError};
 use crate::web::{FromRequest, HttpRequest, Responder};
 
@@ -335,7 +335,7 @@ mod tests {
     use super::*;
     use crate::http::header::HeaderValue;
     use crate::util::Bytes;
-    use crate::web::test::{from_request, respond_to, TestRequest};
+    use crate::web::test::{TestRequest, from_request, respond_to};
 
     #[derive(Deserialize, Serialize, Debug, PartialEq, thiserror::Error)]
     #[error("Info({hello})")]

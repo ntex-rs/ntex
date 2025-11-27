@@ -1,6 +1,6 @@
 [package]
 name = "ntex-compio"
-version = "0.5.0"
+version = "3.0.0-pre.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "compio runtime intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -9,18 +9,19 @@ repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-compio/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
-edition = "2021"
-rust-version = "1.75"
+edition = "2024"
+rust-version = "1.85"
 
 [lib]
 name = "ntex_compio"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "0.1"
-ntex-io = "2.5"
-ntex-util = "2"
-ntex-rt = "0.4.33"
+ntex-bytes = "1"
+ntex-io = "3.0.0-pre.0"
+ntex-util = "3"
+ntex-rt = "3"
+ntex-service = "3.6"
 log = { workspace = true }
 
 compio-buf = "0.7"

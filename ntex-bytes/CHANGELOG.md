@@ -1,5 +1,9 @@
 # Changes
 
+## [1.0.0] (2025-11-24)
+
+* Drop memory pool support
+
 ## [0.1.31] (2025-11-15)
 
 * Refactor code structure

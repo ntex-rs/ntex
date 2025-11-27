@@ -2,8 +2,8 @@ use std::{fmt, future::Future, io, net, sync::Arc};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
-use ntex_net::Io;
-use ntex_service::ServiceFactory;
+use ntex_io::Io;
+use ntex_service::{ServiceFactory, cfg::SharedCfg};
 use ntex_util::time::Millis;
 
 use crate::{Server, WorkerPool};
@@ -12,7 +12,7 @@ use super::accept::AcceptLoop;
 use super::config::{Config, ServiceConfig};
 use super::factory::{self, FactoryServiceType};
 use super::factory::{OnAccept, OnAcceptWrapper, OnWorkerStart, OnWorkerStartWrapper};
-use super::{socket::Listener, Connection, ServerStatus, Stream, StreamServer, Token};
+use super::{Connection, ServerStatus, Stream, StreamServer, Token, socket::Listener};
 
 /// Streaming service builder
 ///
@@ -144,33 +144,12 @@ impl ServerBuilder {
         self
     }
 
-    /// Execute external configuration as part of the server building
-    /// process.
-    ///
-    /// This function is useful for moving parts of configuration to a
-    /// different module or even library.
-    pub fn configure<F>(mut self, f: F) -> io::Result<ServerBuilder>
-    where
-        F: Fn(&mut ServiceConfig) -> io::Result<()>,
-    {
-        let mut cfg = ServiceConfig::new(self.token, self.backlog);
-
-        f(&mut cfg)?;
-
-        let (token, sockets, factory) = cfg.into_factory();
-        self.token = token;
-        self.sockets.extend(sockets);
-        self.services.push(factory);
-
-        Ok(self)
-    }
-
     /// Execute external async configuration as part of the server building
     /// process.
     ///
     /// This function is useful for moving parts of configuration to a
     /// different module or even library.
-    pub async fn configure_async<F, R>(mut self, f: F) -> io::Result<ServerBuilder>
+    pub async fn configure<F, R>(mut self, f: F) -> io::Result<ServerBuilder>
     where
         F: Fn(ServiceConfig) -> R,
         R: Future<Output = io::Result<()>>,
@@ -220,7 +199,7 @@ impl ServerBuilder {
         U: net::ToSocketAddrs,
         N: AsRef<str>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io> + 'static,
+        R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -229,7 +208,7 @@ impl ServerBuilder {
             let token = self.token.next();
             self.sockets
                 .push((token, name.as_ref().to_string(), Listener::from_tcp(lst)));
-            tokens.push((token, ""));
+            tokens.push((token, SharedCfg::default()));
         }
 
         self.services.push(factory::create_factory_service(
@@ -248,7 +227,7 @@ impl ServerBuilder {
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io> + 'static,
+        R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -277,12 +256,12 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io> + 'static,
+        R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, "")],
+            vec![(token, SharedCfg::default())],
             factory,
         ));
         self.sockets
@@ -299,12 +278,12 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: Fn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io> + 'static,
+        R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
             name.as_ref().to_string(),
-            vec![(token, "")],
+            vec![(token, SharedCfg::default())],
             factory,
         ));
         self.sockets
@@ -312,8 +291,13 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    /// Set io tag for named service.
-    pub fn set_tag<N: AsRef<str>>(mut self, name: N, tag: &'static str) -> Self {
+    /// Set shared config for named service.
+    pub fn config<N, U>(mut self, name: N, cfg: U) -> Self
+    where
+        N: AsRef<str>,
+        U: Into<SharedCfg>,
+    {
+        let cfg = cfg.into();
         let mut token = None;
         for sock in &self.sockets {
             if sock.1 == name.as_ref() {
@@ -325,7 +309,7 @@ impl ServerBuilder {
         if let Some(token) = token {
             for svc in &mut self.services {
                 if svc.name(token) == name.as_ref() {
-                    svc.set_tag(token, tag);
+                    svc.set_config(token, cfg);
                 }
             }
         } else {

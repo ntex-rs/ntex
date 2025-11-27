@@ -52,6 +52,7 @@
 
 #![deny(warnings, missing_debug_implementations, rust_2018_idioms)]
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
+#![allow(unsafe_op_in_unsafe_fn)]
 
 pub mod buf;
 pub use crate::buf::{Buf, BufMut};
@@ -61,7 +62,6 @@ mod bytes;
 mod bytesmut;
 mod debug;
 mod hex;
-mod pool;
 mod serde;
 mod storage;
 mod string;
@@ -72,4 +72,20 @@ pub use crate::bytesmut::BytesMut;
 pub use crate::string::ByteString;
 
 #[doc(hidden)]
-pub use crate::pool::{Pool, PoolId, PoolRef};
+pub mod info {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub struct Info {
+        pub id: usize,
+        pub refs: usize,
+        pub kind: Kind,
+        pub capacity: usize,
+    }
+
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub enum Kind {
+        Arc,
+        Inline,
+        Static,
+        Vec,
+    }
+}

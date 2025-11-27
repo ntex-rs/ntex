@@ -1,15 +1,15 @@
 #![cfg(feature = "rustls")]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tls_openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 
+use ntex::http::HttpService;
 use ntex::http::client::{Client, Connector};
 use ntex::http::test::server as test_server;
-use ntex::http::HttpService;
-use ntex::service::{chain_factory, map_config, ServiceFactory};
+use ntex::service::{ServiceFactory, cfg::SharedCfg, chain_factory, map_config};
 use ntex::util::Ready;
-use ntex::web::{self, dev::AppConfig, App, HttpResponse};
+use ntex::web::{self, App, HttpResponse, dev::AppConfig};
 
 mod rustls_utils;
 
@@ -47,17 +47,17 @@ async fn test_connection_reuse_h2() {
             Ready::Ok(io)
         })
         .and_then(
-            HttpService::build()
-                .h2(map_config(
-                    App::new().service(
-                        web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
-                    ),
-                    |_| AppConfig::default(),
-                ))
-                .openssl(ssl_acceptor())
-                .map_err(|_| ()),
+            HttpService::h2(map_config(
+                App::new().service(
+                    web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
+                ),
+                |_| AppConfig::default(),
+            ))
+            .openssl(ssl_acceptor())
+            .map_err(|_| ()),
         )
-    });
+    })
+    .await;
 
     // disable ssl verification
     let mut config = rustls_utils::tls_connector();
@@ -65,8 +65,10 @@ async fn test_connection_reuse_h2() {
     config.alpn_protocols = protos;
 
     let client = Client::build()
-        .connector(Connector::default().rustls(config).finish())
-        .finish();
+        .connector::<&str>(Connector::default().rustls(config))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     // req 1
     let _response = client.get(srv.surl("/")).send().await;

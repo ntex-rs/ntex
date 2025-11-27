@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "2.17.0"
+version = "3.0.0-pre.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -14,8 +14,8 @@ categories = [
     "web-programming::websocket",
 ]
 license = "MIT OR Apache-2.0"
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 
 [package.metadata.docs.rs]
 toolchain = "nightly"
@@ -67,19 +67,19 @@ ws = ["dep:sha1"]
 no-test-logging = []
 
 [dependencies]
-ntex-codec = "0.6"
-ntex-http = "0.1.15"
-ntex-router = "0.5"
-ntex-service = "3.5"
-ntex-macros = "0.1"
-ntex-util = "2.14"
-ntex-bytes = "0.1.31"
-ntex-server = "2.8.1"
-ntex-h2 = "1.14.2"
-ntex-rt = "0.4.33"
-ntex-io = "2.15.1"
-ntex-net = "2.9.0"
-ntex-tls = "2.3"
+ntex-codec = "1.0"
+ntex-http = "1.0"
+ntex-router = "1.0"
+ntex-service = "3.6"
+ntex-macros = "0.2"
+ntex-util = "3.0"
+ntex-bytes = "1.0"
+ntex-server = "3.0.0-pre.0"
+ntex-h2 = "3.0.0-pre.0"
+ntex-rt = "3.0"
+ntex-io = "3.0.0-pre.0"
+ntex-net = "3.0.0-pre.0"
+ntex-tls = "3.0.0-pre.0"
 
 base64 = { workspace = true }
 bitflags = { workspace = true }

@@ -1,4 +1,4 @@
-use std::{future::poll_fn, future::Future, pin, pin::Pin, task::Poll};
+use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
 
 use crate::{Service, ServiceCtx};
 

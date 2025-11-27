@@ -1,27 +1,31 @@
-use std::{env, io};
+use std::io;
 
 use log::info;
 use ntex::http::header::HeaderValue;
-use ntex::http::{HttpService, Response};
-use ntex::{time::Seconds, util::Ready};
+use ntex::http::{HttpService, HttpServiceConfig, Response};
+use ntex::{SharedCfg, time::Seconds, util::Ready};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    env::set_var("RUST_LOG", "ntex=trace,hello_world=info");
     env_logger::init();
 
     ntex::server::build()
         .bind("hello-world", "127.0.0.1:8080", |_| {
-            HttpService::build()
-                .headers_read_rate(Seconds(1), Seconds(3), 128)
-                .disconnect_timeout(Seconds(1))
-                .finish(|_req| {
-                    info!("{:?}", _req);
-                    let mut res = Response::Ok();
-                    res.header("x-head", HeaderValue::from_static("dummy value!"));
-                    Ready::Ok::<_, io::Error>(res.body("Hello world!"))
-                })
+            HttpService::new(|_req| {
+                info!("{:?}", _req);
+                let mut res = Response::Ok();
+                res.header("x-head", HeaderValue::from_static("dummy value!"));
+                Ready::Ok::<_, io::Error>(res.body("Hello world!"))
+            })
         })?
+        .config(
+            "hello-world",
+            SharedCfg::new("HELLO-WORLD").add(HttpServiceConfig::new().headers_read_rate(
+                Seconds(1),
+                Seconds(5),
+                128,
+            )),
+        )
         .run()
         .await
 }

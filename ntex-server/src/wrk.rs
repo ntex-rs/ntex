@@ -1,15 +1,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{ready, Context, Poll};
-use std::{cmp, future::poll_fn, future::Future, hash, pin::Pin, sync::Arc};
+use std::task::{Context, Poll, ready};
+use std::{cmp, future::Future, future::poll_fn, hash, pin::Pin, sync::Arc};
 
-use async_channel::{unbounded, Receiver, Sender};
+use async_channel::{Receiver, Sender, unbounded};
 use atomic_waker::AtomicWaker;
 use core_affinity::CoreId;
 
-use ntex_rt::{spawn, Arbiter};
+use ntex_rt::{Arbiter, spawn};
 use ntex_service::{Pipeline, PipelineBinding, Service, ServiceFactory};
-use ntex_util::future::{select, stream_recv, Either, Stream};
-use ntex_util::time::{sleep, timeout_checked, Millis};
+use ntex_util::future::{Either, Stream, select, stream_recv};
+use ntex_util::time::{Millis, sleep, timeout_checked};
 
 use crate::{ServerConfiguration, WorkerId};
 

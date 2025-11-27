@@ -61,9 +61,9 @@ pub trait Filter: 'static {
 
 impl Filter for Base {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        if let Some(hnd) = self.0 .0.handle.take() {
+        if let Some(hnd) = self.0.0.handle.take() {
             let res = hnd.query(id);
-            self.0 .0.handle.set(Some(hnd));
+            self.0.0.handle.set(Some(hnd));
             res
         } else {
             None
@@ -77,7 +77,7 @@ impl Filter for Base {
         if flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
             Poll::Ready(Readiness::Terminate)
         } else {
-            self.0 .0.read_task.register(cx.waker());
+            self.0.0.read_task.register(cx.waker());
 
             if flags.intersects(Flags::IO_STOPPING_FILTERS) {
                 Poll::Ready(Readiness::Ready)
@@ -96,7 +96,7 @@ impl Filter for Base {
         if flags.is_stopped() {
             Poll::Ready(Readiness::Terminate)
         } else {
-            self.0 .0.write_task.register(cx.waker());
+            self.0.0.write_task.register(cx.waker());
 
             if flags.contains(Flags::IO_STOPPING) {
                 Poll::Ready(Readiness::Shutdown)
@@ -127,14 +127,14 @@ impl Filter for Base {
                 let len = buf.len();
                 let flags = self.0.flags();
                 if len > 0 && flags.contains(Flags::WR_PAUSED) {
-                    self.0 .0.remove_flags(Flags::WR_PAUSED);
-                    self.0 .0.write_task.wake();
+                    self.0.0.remove_flags(Flags::WR_PAUSED);
+                    self.0.0.write_task.wake();
                 }
-                if len >= self.0.memory_pool().write_params_high()
+                if len >= self.0.cfg().write_buf().high
                     && !flags.contains(Flags::BUF_W_BACKPRESSURE)
                 {
-                    self.0 .0.insert_flags(Flags::BUF_W_BACKPRESSURE);
-                    self.0 .0.dispatch_task.wake();
+                    self.0.0.insert_flags(Flags::BUF_W_BACKPRESSURE);
+                    self.0.0.dispatch_task.wake();
                 }
             }
         });

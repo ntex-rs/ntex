@@ -133,7 +133,7 @@ impl Tree {
         } else {
             // insert into sub tree
             for child in &mut self.items {
-                if let Item::Subtree(ref mut tree) = child {
+                if let Item::Subtree(tree) = child {
                     if common_prefix(&tree.key, &key[p..]) > 0 {
                         tree.insert_path(key[p..].to_vec(), value);
                         return;
@@ -215,7 +215,7 @@ impl Tree {
                                 return Some(v);
                             }
                         }
-                        Item::Subtree(ref tree) => {
+                        Item::Subtree(tree) => {
                             let result = tree.find_inner_wrapped(
                                 "",
                                 resource,
@@ -270,7 +270,7 @@ impl Tree {
                                 return Some(v);
                             }
                         }
-                        Item::Subtree(ref tree) => {
+                        Item::Subtree(tree) => {
                             let result = tree.find_inner_wrapped(
                                 subtree_path,
                                 resource,
@@ -444,7 +444,7 @@ impl Tree {
                         if tail && is_match {
                             // checker
                             for val in &self.items {
-                                if let Item::Value(ref val) = val {
+                                if let Item::Value(val) = val {
                                     let v = val.value();
                                     if check(v, resource) {
                                         return Some((v, skip + idx));
@@ -470,7 +470,7 @@ impl Tree {
                         if key.is_empty() {
                             // checker
                             for val in &self.items {
-                                if let Item::Value(ref val) = val {
+                                if let Item::Value(val) = val {
                                     let v = match val {
                                         Value::Val(v) | Value::Prefix(v) => *v,
                                         Value::Slash(_) | Value::PrefixSlash(_) => continue,
@@ -532,7 +532,7 @@ impl Tree {
                                     return Some((v, skip - 1));
                                 }
                             }
-                            Item::Subtree(ref tree) => {
+                            Item::Subtree(tree) => {
                                 let result = tree.find_inner_wrapped(
                                     subtree_path,
                                     resource,

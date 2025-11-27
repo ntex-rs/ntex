@@ -1,14 +1,13 @@
 use std::{fmt, rc::Rc};
 
-use base64::{engine::general_purpose::STANDARD as base64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use crate::http::error::HttpError;
-use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::{service::Service, time::Millis};
+use crate::http::header::{self, HeaderName, HeaderValue};
+use crate::{SharedCfg, service::ServiceFactory, time::Millis};
 
-use super::connect::ConnectorWrapper;
-use super::error::ConnectError;
-use super::{Client, ClientConfig, Connect, Connection, Connector};
+use super::error::ClientBuilderError;
+use super::{Client, ClientConfig, ClientInner, Connector};
 
 /// An HTTP Client builder
 ///
@@ -16,10 +15,11 @@ use super::{Client, ClientConfig, Connect, Connection, Connector};
 /// builder-like pattern.
 #[derive(Debug)]
 pub struct ClientBuilder {
-    config: ClientConfig,
     default_headers: bool,
     allow_redirects: bool,
     max_redirects: usize,
+    config: ClientConfig,
+    connector: Connector,
 }
 
 impl Default for ClientBuilder {
@@ -34,49 +34,27 @@ impl ClientBuilder {
             default_headers: true,
             allow_redirects: true,
             max_redirects: 10,
-            config: ClientConfig {
-                headers: HeaderMap::new(),
-                timeout: Millis(5_000),
-                response_pl_limit: 262_144,
-                response_pl_timeout: Millis(10_000),
-                connector: Box::new(ConnectorWrapper(Connector::default().finish().into())),
-            },
+            config: ClientConfig::default(),
+            connector: Connector::default(),
         }
     }
 
     /// Use custom connector service.
-    pub fn connector<T>(mut self, connector: T) -> Self
-    where
-        T: Service<Connect, Response = Connection, Error = ConnectError>
-            + fmt::Debug
-            + 'static,
-    {
-        self.config.connector = Box::new(ConnectorWrapper(connector.into()));
+    pub fn connector<T>(mut self, connector: Connector) -> Self {
+        self.connector = connector;
         self
     }
 
-    /// Use custom connection.  Mainly used for mocking connections.
-    /// # Note
-    /// This overrides anything set with [`Self::connector`].
-    #[doc(hidden)]
-    pub fn connection(
-        mut self,
-        connection: impl super::connect::Connect + 'static,
-    ) -> Self {
-        self.config.connector = Box::new(connection);
-        self
-    }
-
-    /// Set request timeout.
+    /// Set response timeout.
     ///
-    /// Request timeout is the total time before a response must be received.
+    /// Response timeout is the total time before a response must be received.
     /// Default value is 5 seconds.
-    pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
+    pub fn response_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.config.timeout = timeout.into();
         self
     }
 
-    /// Disable request timeout.
+    /// Disable response timeout.
     pub fn disable_timeout(mut self) -> Self {
         self.config.timeout = Millis::ZERO;
         self
@@ -166,8 +144,20 @@ impl ClientBuilder {
     }
 
     /// Finish build process and create `Client` instance.
-    pub fn finish(self) -> Client {
-        Client(Rc::new(self.config))
+    pub async fn finish<T: Into<SharedCfg>>(
+        self,
+        cfg: T,
+    ) -> Result<Client, ClientBuilderError> {
+        self.connector
+            .create(cfg.into())
+            .await
+            .map_err(|_| ClientBuilderError::ConnectorFailed)
+            .map(|connector| {
+                Client(Rc::new(ClientInner {
+                    config: Rc::new(self.config),
+                    connector: connector.into(),
+                }))
+            })
     }
 }
 

@@ -4,8 +4,8 @@ use std::io;
 use thiserror::Error;
 
 use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
-use crate::http::{header::HeaderValue, header::ALLOW, Response, StatusCode};
-use crate::{connect::ConnectError, util::clone_io_error, util::Either};
+use crate::http::{Response, StatusCode, header::ALLOW, header::HeaderValue};
+use crate::{connect::ConnectError, util::Either, util::clone_io_error};
 
 use super::OpCode;
 
@@ -69,6 +69,8 @@ pub enum WsClientBuilderError {
     UnknownScheme,
     #[error("Missing host name")]
     MissingHost,
+    #[error("Cannot create connector")]
+    CannotCreateConnector,
     #[error("Url parse error: {0}")]
     Http(#[from] HttpError),
 }

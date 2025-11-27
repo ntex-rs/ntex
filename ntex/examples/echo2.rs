@@ -1,8 +1,8 @@
-use std::{env, io};
+use std::io;
 
 use futures_util::StreamExt;
 use log::info;
-use ntex::http::{header::HeaderValue, HttpService, Request, Response};
+use ntex::http::{HttpService, Request, Response, header::HeaderValue};
 use ntex::util::BytesMut;
 
 async fn handle_request(mut req: Request) -> Result<Response, io::Error> {
@@ -19,12 +19,11 @@ async fn handle_request(mut req: Request) -> Result<Response, io::Error> {
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
-    env::set_var("RUST_LOG", "trace");
     env_logger::init();
 
     ntex::server::build()
         .bind("echo", "127.0.0.1:8080", |_| {
-            HttpService::build().h2(handle_request)
+            HttpService::h2(handle_request)
         })?
         .run()
         .await

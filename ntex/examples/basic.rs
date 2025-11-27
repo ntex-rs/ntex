@@ -1,5 +1,5 @@
 use ntex::http;
-use ntex::web::{self, middleware, App, HttpRequest, HttpResponse, HttpServer};
+use ntex::web::{self, App, HttpRequest, HttpResponse, HttpServer, middleware};
 
 #[web::get("/resource1/{name}/index.html")]
 async fn index(req: HttpRequest, name: web::types::Path<String>) -> String {
@@ -19,7 +19,6 @@ async fn no_params() -> &'static str {
 
 #[ntex::main]
 async fn main() -> std::io::Result<()> {
-    std::env::set_var("RUST_LOG", "ntex=trace");
     env_logger::init();
 
     HttpServer::new(|| {
@@ -39,8 +38,10 @@ async fn main() -> std::io::Result<()> {
     })
     .bind("0.0.0.0:8081")?
     .workers(4)
-    .keep_alive(http::KeepAlive::Disabled)
-    .tag("MY-SERVER")
+    .config(
+        ntex::SharedCfg::new("MY-SERVER")
+            .add(http::HttpServiceConfig::new().keepalive(http::KeepAlive::Disabled)),
+    )
     .run()
     .await
 }

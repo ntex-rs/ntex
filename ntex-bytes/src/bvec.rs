@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 use std::{fmt, ptr};
 
 use crate::storage::StorageVec;
-use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut, Bytes, BytesMut};
+use crate::{Buf, BufMut, Bytes, BytesMut, buf::IntoIter, buf::UninitSlice, debug};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -48,7 +48,7 @@ use crate::{buf::IntoIter, buf::UninitSlice, debug, Buf, BufMut, Bytes, BytesMut
 /// assert_eq!(b, b"hello");
 /// ```
 pub struct BytesVec {
-    pub(crate) inner: StorageVec,
+    pub(crate) storage: StorageVec,
 }
 
 /*
@@ -88,14 +88,14 @@ impl BytesVec {
     #[inline]
     pub fn with_capacity(capacity: usize) -> BytesVec {
         BytesVec {
-            inner: StorageVec::with_capacity(capacity),
+            storage: StorageVec::with_capacity(capacity),
         }
     }
 
     /// Creates a new `BytesVec` from slice, by copying it.
     pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
         BytesVec {
-            inner: StorageVec::from_slice(src.as_ref()),
+            storage: StorageVec::from_slice(src.as_ref()),
         }
     }
 
@@ -121,7 +121,7 @@ impl BytesVec {
     #[inline]
     pub fn new() -> BytesVec {
         BytesVec {
-            inner: StorageVec::with_capacity(0),
+            storage: StorageVec::with_capacity(0),
         }
     }
 
@@ -137,7 +137,7 @@ impl BytesVec {
     /// ```
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.storage.len()
     }
 
     /// Returns true if the `BytesVec` has a length of 0.
@@ -152,7 +152,7 @@ impl BytesVec {
     /// ```
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.len() == 0
+        self.storage.len() == 0
     }
 
     /// Returns the number of bytes the `BytesVec` can hold without reallocating.
@@ -167,7 +167,7 @@ impl BytesVec {
     /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.inner.capacity()
+        self.storage.capacity()
     }
 
     /// Converts `self` into an immutable `Bytes`.
@@ -197,7 +197,7 @@ impl BytesVec {
     #[inline]
     pub fn freeze(self) -> Bytes {
         Bytes {
-            inner: self.inner.freeze(),
+            storage: self.storage.freeze(),
         }
     }
 
@@ -266,7 +266,7 @@ impl BytesVec {
     pub fn split_to_checked(&mut self, at: usize) -> Option<BytesMut> {
         if at <= self.len() {
             Some(BytesMut {
-                inner: self.inner.split_to(at, false),
+                storage: self.storage.split_to(at, false),
             })
         } else {
             None
@@ -294,7 +294,7 @@ impl BytesVec {
     ///
     /// [`split_off`]: #method.split_off
     pub fn truncate(&mut self, len: usize) {
-        self.inner.truncate(len);
+        self.storage.truncate(len);
     }
 
     /// Clears the buffer, removing all data.
@@ -341,7 +341,7 @@ impl BytesVec {
     /// ```
     #[inline]
     pub fn resize(&mut self, new_len: usize, value: u8) {
-        self.inner.resize(new_len, value);
+        self.storage.resize(new_len, value);
     }
 
     /// Sets the length of the buffer.
@@ -377,7 +377,7 @@ impl BytesVec {
     #[inline]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn set_len(&mut self, len: usize) {
-        self.inner.set_len(len)
+        self.storage.set_len(len)
     }
 
     /// Reserves capacity for at least `additional` more bytes to be inserted
@@ -436,7 +436,7 @@ impl BytesVec {
     /// Panics if the new capacity overflows `usize`.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
-        self.inner.reserve(additional);
+        self.storage.reserve(additional);
     }
 
     /// Appends given bytes to this object.
@@ -466,7 +466,7 @@ impl BytesVec {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.inner.with_bytes_mut(f)
+        self.storage.with_bytes_mut(f)
     }
 
     /// Returns an iterator over the bytes contained by the buffer.
@@ -498,19 +498,19 @@ impl Buf for BytesVec {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
         assert!(
-            cnt <= self.inner.len(),
+            cnt <= self.storage.len(),
             "cannot advance past `remaining` len:{} delta:{}",
-            self.inner.len(),
+            self.storage.len(),
             cnt
         );
         unsafe {
-            self.inner.set_start(cnt as u32);
+            self.storage.set_start(cnt as u32);
         }
     }
 }
@@ -524,7 +524,7 @@ impl BufMut for BytesVec {
     #[inline]
     unsafe fn advance_mut(&mut self, cnt: usize) {
         // This call will panic if `cnt` is too big
-        self.inner.set_len(self.len() + cnt);
+        self.storage.set_len(self.len() + cnt);
     }
 
     #[inline]
@@ -533,7 +533,7 @@ impl BufMut for BytesVec {
 
         unsafe {
             // This will never panic as `len` can never become invalid
-            let ptr = &mut self.inner.as_raw()[len..];
+            let ptr = &mut self.storage.as_raw()[len..];
             UninitSlice::from_raw_parts_mut(ptr.as_mut_ptr(), self.capacity() - len)
         }
     }
@@ -552,7 +552,7 @@ impl BufMut for BytesVec {
     #[inline]
     fn put_u8(&mut self, n: u8) {
         self.reserve(1);
-        self.inner.put_u8(n);
+        self.storage.put_u8(n);
     }
 
     #[inline]
@@ -570,7 +570,7 @@ impl bytes::buf::Buf for BytesVec {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 
     #[inline]
@@ -595,7 +595,7 @@ unsafe impl bytes::buf::BufMut for BytesVec {
         let len = self.len();
         unsafe {
             // This will never panic as `len` can never become invalid
-            let ptr = &mut self.inner.as_raw()[len..];
+            let ptr = &mut self.storage.as_raw()[len..];
             bytes::buf::UninitSlice::from_raw_parts_mut(
                 ptr.as_mut_ptr(),
                 self.capacity() - len,
@@ -622,14 +622,14 @@ unsafe impl bytes::buf::BufMut for BytesVec {
 impl AsRef<[u8]> for BytesVec {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        self.inner.as_ref()
+        self.storage.as_ref()
     }
 }
 
 impl AsMut<[u8]> for BytesVec {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
-        self.inner.as_mut()
+        self.storage.as_mut()
     }
 }
 
@@ -645,7 +645,7 @@ impl Deref for BytesVec {
 impl DerefMut for BytesVec {
     #[inline]
     fn deref_mut(&mut self) -> &mut [u8] {
-        self.inner.as_mut()
+        self.storage.as_mut()
     }
 }
 
@@ -654,7 +654,7 @@ impl Eq for BytesVec {}
 impl PartialEq for BytesVec {
     #[inline]
     fn eq(&self, other: &BytesVec) -> bool {
-        self.inner.as_ref() == other.inner.as_ref()
+        self.storage.as_ref() == other.storage.as_ref()
     }
 }
 
@@ -693,7 +693,7 @@ impl PartialEq<BytesMut> for BytesVec {
 
 impl fmt::Debug for BytesVec {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(self.inner.as_ref()), fmt)
+        fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
     }
 }
 
@@ -909,5 +909,14 @@ impl<'a> From<&'a str> for BytesVec {
     #[inline]
     fn from(src: &'a str) -> BytesVec {
         BytesVec::from(src.as_bytes())
+    }
+}
+
+impl From<BytesVec> for BytesMut {
+    #[inline]
+    fn from(src: BytesVec) -> BytesMut {
+        BytesMut {
+            storage: src.storage.into_storage(),
+        }
     }
 }

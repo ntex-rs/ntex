@@ -1,5 +1,11 @@
 # Changes
 
+## [3.0.0] - 2025-11-xx
+
+* New configuration subsystem
+
+* Refactor io layer support
+
 ## [2.15.1] - 2025-11-12
 
 * Resolve keep-alive handling for the dispatcher's idle state

@@ -2,9 +2,9 @@ use std::io;
 
 use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
-use ntex::http::{body::BodySize, h1, HttpService, Response};
-use ntex::io::{DispatchItem, Dispatcher, DispatcherConfig};
-use ntex::service::{fn_factory_with_config, fn_service};
+use ntex::http::{HttpService, Response, body::BodySize, h1};
+use ntex::io::{DispatchItem, Dispatcher, IoConfig};
+use ntex::service::{cfg::SharedCfg, fn_factory_with_config, fn_service};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes, util::Ready};
@@ -30,8 +30,8 @@ async fn ws_service(
 #[ntex::test]
 async fn test_simple() {
     let mut srv = test_server(|| {
-        HttpService::build()
-            .h1_control(|req: h1::Control<_, _>| async move {
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -44,21 +44,16 @@ async fn test_simple() {
                         .unwrap();
 
                         // start websocket service
-                        Dispatcher::new(
-                            io.seal(),
-                            ws::Codec::default(),
-                            ws_service,
-                            &Default::default(),
-                        )
-                        .await
+                        Dispatcher::new(io.seal(), ws::Codec::default(), ws_service).await
                     })
                 } else {
                     req.ack()
                 };
                 Ok::<_, io::Error>(ack)
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-    });
+            },
+        )
+    })
+    .await;
 
     // client service
     let (io, codec, _) = srv.ws().await.unwrap().into_inner();
@@ -94,8 +89,8 @@ async fn test_simple() {
 #[ntex::test]
 async fn test_transport() {
     let mut srv = test_server(|| {
-        HttpService::build()
-            .h1_control(|req: h1::Control<_, _>| async move {
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
+            |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -112,7 +107,6 @@ async fn test_transport() {
                             io.seal(),
                             ws::Codec::default(),
                             fn_service(ws_service),
-                            &Default::default(),
                         )
                         .await
                     })
@@ -120,9 +114,10 @@ async fn test_transport() {
                     req.ack()
                 };
                 Ok::<_, io::Error>(ack)
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-    });
+            },
+        )
+    })
+    .await;
 
     // client service
     let io = srv.ws().await.unwrap().into_transport();
@@ -137,8 +132,8 @@ async fn test_transport() {
 #[ntex::test]
 async fn test_keepalive_timeout() {
     let srv = test_server(|| {
-        HttpService::build()
-            .h1_control(|req: h1::Control<_, _>| async move {
+        HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).control(
+            |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
                     upg.handle(|req, io, codec| async move {
                         let res = handshake_response(req.head()).finish();
@@ -151,13 +146,15 @@ async fn test_keepalive_timeout() {
                         .unwrap();
 
                         // start websocket service
-                        let cfg = DispatcherConfig::default();
-                        cfg.set_keepalive_timeout(Seconds::ZERO);
+                        io.set_config(
+                            SharedCfg::new("WS-SRV")
+                                .add(IoConfig::new().set_keepalive_timeout(Seconds::ZERO)),
+                        );
+
                         Dispatcher::new(
                             io.seal(),
                             ws::Codec::default(),
                             fn_service(ws_service),
-                            &cfg,
                         )
                         .await
                     })
@@ -165,16 +162,17 @@ async fn test_keepalive_timeout() {
                     req.ack()
                 };
                 Ok::<_, io::Error>(ack)
-            })
-            .finish(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
-    });
+            },
+        )
+    })
+    .await;
 
     // client service
     let con = ws::WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
-        .keepalive_timeout(Seconds(1))
-        .finish()
+        .finish(Default::default())
+        .await
         .unwrap()
         .connect()
         .await
@@ -200,7 +198,7 @@ async fn test_upgrade_handler_with_await() {
     }
 
     let srv = test_server(|| {
-        HttpService::build().finish(App::new().service(web::resource("/").route(web::to(
+        HttpService::new(App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // some async context switch
                 ntex::time::sleep(ntex::time::Seconds::ZERO).await;
@@ -214,13 +212,14 @@ async fn test_upgrade_handler_with_await() {
                 .await
             },
         ))))
-    });
+    })
+    .await;
 
     let _ = ws::WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(1))
-        .keepalive_timeout(Seconds(1))
-        .finish()
+        .finish(Default::default())
+        .await
         .unwrap()
         .connect()
         .await

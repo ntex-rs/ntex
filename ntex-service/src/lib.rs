@@ -11,8 +11,10 @@ use std::{rc::Rc, task::Context};
 mod and_then;
 mod apply;
 pub mod boxed;
+pub mod cfg;
 mod chain;
 mod ctx;
+mod fn_service;
 mod fn_shutdown;
 mod macros;
 mod map;
@@ -24,20 +26,13 @@ mod pipeline;
 mod then;
 mod util;
 
-#[cfg(not(feature = "async-fn"))]
-mod fn_service;
-
-#[cfg(feature = "async-fn")]
-#[path = "fn_service_async.rs"]
-mod fn_service;
-
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::chain::{chain, chain_factory};
 pub use self::ctx::ServiceCtx;
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
-pub use self::middleware::{apply, Identity, Middleware, Stack};
+pub use self::middleware::{Identity, Middleware, Stack, apply};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall};
 
 #[allow(unused_variables)]

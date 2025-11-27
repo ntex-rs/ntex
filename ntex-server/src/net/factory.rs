@@ -1,21 +1,20 @@
 use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
-use ntex_bytes::PoolId;
-use ntex_net::Io;
-use ntex_service::{boxed, Service, ServiceCtx, ServiceFactory};
+use ntex_io::Io;
+use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
 use ntex_util::future::{BoxFuture, Ready};
 
-use super::{socket::Stream, Config, Token};
+use super::{Config, Token, socket::Stream};
 
-pub(super) type BoxServerService = boxed::BoxServiceFactory<(), Io, (), (), ()>;
+pub(super) type BoxServerService = boxed::BoxServiceFactory<SharedCfg, Io, (), (), ()>;
 pub(crate) type FactoryServiceType = Box<dyn FactoryService>;
 
 #[derive(Debug)]
 pub(crate) struct NetService {
     pub(crate) name: Arc<str>,
-    pub(crate) tokens: Vec<(Token, &'static str)>,
+    pub(crate) tokens: Vec<(Token, SharedCfg)>,
+    pub(crate) config: SharedCfg,
     pub(crate) factory: BoxServerService,
-    pub(crate) pool: PoolId,
 }
 
 pub(crate) trait FactoryService: Send {
@@ -23,7 +22,7 @@ pub(crate) trait FactoryService: Send {
         ""
     }
 
-    fn set_tag(&mut self, _: Token, _: &'static str) {}
+    fn set_config(&mut self, _: Token, _: SharedCfg) {}
 
     fn clone_factory(&self) -> Box<dyn FactoryService>;
 
@@ -32,7 +31,7 @@ pub(crate) trait FactoryService: Send {
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
 where
-    S: ServiceFactory<Io> + 'static,
+    S: ServiceFactory<Io, SharedCfg> + 'static,
 {
     boxed::factory(ServerServiceFactory {
         name: Arc::from(name),
@@ -42,12 +41,12 @@ where
 
 pub(crate) fn create_factory_service<F, R>(
     name: String,
-    tokens: Vec<(Token, &'static str)>,
+    tokens: Vec<(Token, SharedCfg)>,
     factory: F,
 ) -> Box<dyn FactoryService>
 where
     F: Fn(Config) -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io> + 'static,
+    R: ServiceFactory<Io, SharedCfg> + 'static,
 {
     Box::new(Factory {
         tokens,
@@ -61,7 +60,7 @@ where
 
 struct Factory<F, R, E> {
     name: String,
-    tokens: Vec<(Token, &'static str)>,
+    tokens: Vec<(Token, SharedCfg)>,
     factory: F,
     _t: PhantomData<(R, E)>,
 }
@@ -85,10 +84,10 @@ where
         })
     }
 
-    fn set_tag(&mut self, token: Token, tag: &'static str) {
+    fn set_config(&mut self, token: Token, cfg: SharedCfg) {
         for item in &mut self.tokens {
             if item.0 == token {
-                item.1 = tag;
+                item.1 = cfg;
             }
         }
     }
@@ -103,9 +102,9 @@ where
             let factory = factory_fut.await.map_err(|_| {
                 log::error!("Cannot create {name:?} service");
             })?;
-            if let Some(tag) = cfg.get_tag() {
+            if let Some(config) = cfg.get_config() {
                 for item in &mut tokens {
-                    item.1 = tag;
+                    item.1 = config;
                 }
             }
 
@@ -113,7 +112,7 @@ where
                 tokens,
                 factory,
                 name: Arc::from(name),
-                pool: cfg.get_pool_id(),
+                config: cfg.get_config().unwrap_or_default(),
             }])
         })
     }
@@ -124,18 +123,18 @@ struct ServerServiceFactory<S> {
     factory: S,
 }
 
-impl<S> ServiceFactory<Io> for ServerServiceFactory<S>
+impl<S> ServiceFactory<Io, SharedCfg> for ServerServiceFactory<S>
 where
-    S: ServiceFactory<Io>,
+    S: ServiceFactory<Io, SharedCfg>,
 {
     type Response = ();
     type Error = ();
     type Service = ServerService<S::Service>;
     type InitError = ();
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         self.factory
-            .create(())
+            .create(cfg)
             .await
             .map(|inner| ServerService { inner })
             .map_err(|_| log::error!("Cannot construct {:?} service", self.name))
@@ -219,7 +218,7 @@ pub(crate) trait OnAccept {
     fn clone_fn(&self) -> Box<dyn OnAccept + Send>;
 
     fn run(&self, name: Arc<str>, stream: Stream)
-        -> BoxFuture<'static, Result<Stream, ()>>;
+    -> BoxFuture<'static, Result<Stream, ()>>;
 }
 
 pub(super) struct OnAcceptWrapper<F, R, E> {

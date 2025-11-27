@@ -59,11 +59,11 @@ use syn::parse_macro_input;
 #[proc_macro_attribute]
 pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Get) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Get) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Creates route handler with `POST` method guard.
@@ -74,11 +74,11 @@ pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Post) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Post) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Creates route handler with `PUT` method guard.
@@ -89,11 +89,11 @@ pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Put) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Put) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Creates route handler with `DELETE` method guard.
@@ -104,11 +104,11 @@ pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Delete) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Delete) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Creates route handler with `HEAD` method guard.
@@ -119,11 +119,11 @@ pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Head) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Head) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Creates route handler with `CONNECT` method guard.
@@ -134,11 +134,11 @@ pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Connect) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Connect) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Creates route handler with `OPTIONS` method guard.
@@ -149,11 +149,11 @@ pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Options) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Options) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Creates route handler with `TRACE` method guard.
@@ -164,11 +164,11 @@ pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Trace) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Trace) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Creates route handler with `PATCH` method guard.
@@ -179,11 +179,11 @@ pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as syn::AttributeArgs);
-    let gen = match route::Route::new(args, input, route::MethodType::Patch) {
-        Ok(gen) => gen,
+    let gen_code = match route::Route::new(args, input, route::MethodType::Patch) {
+        Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
     };
-    gen.generate()
+    gen_code.generate()
 }
 
 /// Marks async function to be executed by ntex system.
@@ -331,6 +331,66 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
             #[test]
             #(#attrs)*
             fn #name() #ret {
+                ntex_rt::System::new("test")
+                    .block_on(async { #body })
+            }
+        }
+    };
+
+    result.into()
+}
+
+/// Marks async test function to be executed by ntex runtime.
+///
+/// ## Usage
+///
+/// ```no_run
+/// #[ntex::test]
+/// async fn my_test() {
+///     assert!(true);
+/// }
+/// ```
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(item as syn::ItemFn);
+
+    let ret = &input.sig.output;
+    let name = &input.sig.ident;
+    let body = &input.block;
+    let attrs = &input.attrs;
+    let mut has_test_attr = false;
+
+    for attr in attrs {
+        if attr.path.is_ident("test") {
+            has_test_attr = true;
+        }
+    }
+
+    if input.sig.asyncness.is_none() {
+        return syn::Error::new_spanned(
+            input.sig.fn_token,
+            format!("only async fn is supported, {}", input.sig.ident),
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let result = if has_test_attr {
+        quote! {
+            #(#attrs)*
+            fn #name() #ret {
+                crate::util::enable_test_logging();
+                ntex_rt::System::new("test")
+                    .block_on(async { #body })
+            }
+        }
+    } else {
+        quote! {
+            #[test]
+            #(#attrs)*
+            fn #name() #ret {
+                crate::util::enable_test_logging();
                 ntex_rt::System::new("test")
                     .block_on(async { #body })
             }

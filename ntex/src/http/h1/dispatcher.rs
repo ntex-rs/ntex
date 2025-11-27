@@ -1,5 +1,5 @@
 //! HTTP/1 protocol dispatcher
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::{error, future, io, marker, mem, pin::Pin, rc::Rc};
 
 use crate::io::{Decoded, Filter, Io, IoStatusUpdate, RecvError};
@@ -13,7 +13,7 @@ use crate::http::{self, config::DispatcherConfig, request::Request, response::Re
 
 use super::control::{Control, ControlAck, ControlFlags, ControlResult};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{codec::Codec, Message, ProtocolError};
+use super::{Message, ProtocolError, codec::Codec};
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -90,8 +90,7 @@ where
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, C>>) -> Self {
-        let codec = Codec::new(config.timer.clone(), config.keep_alive_enabled());
-        io.set_disconnect_timeout(config.client_disconnect);
+        let codec = Codec::new(config.keep_alive_enabled());
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
@@ -215,7 +214,7 @@ where
                 }
                 // shutdown io
                 State::Stop { fut } => {
-                    if let Some(ref mut f) = fut {
+                    if let Some(f) = fut {
                         let _ = ready!(Pin::new(f).poll(cx));
                         fut.take();
                     }
@@ -588,27 +587,20 @@ where
     fn handle_timeout(&mut self) -> Result<(), ProtocolError> {
         // check read rate
         let cfg = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-            &self.config.headers_read_rate
+            &self.config.headers_read_rate()
         } else if self.flags.contains(Flags::READ_PL_TIMEOUT) {
-            &self.config.payload_read_rate
+            &self.config.payload_read_rate()
         } else {
             return Ok(());
         };
 
-        if let Some(ref cfg) = cfg {
-            let total = if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
-                let total = (self.read_remains - self.read_consumed)
-                    .try_into()
-                    .unwrap_or(u16::MAX);
+        if let Some(cfg) = cfg {
+            if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
                 self.read_remains = 0;
-                total
             } else {
-                let total = (self.read_remains + self.read_consumed)
-                    .try_into()
-                    .unwrap_or(u16::MAX);
                 self.read_consumed = 0;
-                total
-            };
+            }
+            let total = self.read_remains - self.read_consumed;
 
             if total > cfg.rate {
                 // update max timeout
@@ -670,16 +662,16 @@ where
                     log::debug!(
                         "{}: Start keep-alive timer {:?}",
                         self.io.tag(),
-                        self.config.keep_alive
+                        self.config.keep_alive()
                     );
                     self.flags.insert(Flags::READ_KA_TIMEOUT);
-                    self.io.start_timer(self.config.keep_alive);
+                    self.io.start_timer(self.config.keep_alive());
                 }
             } else {
                 self.io.close();
                 return Some(self.stop());
             }
-        } else if let Some(ref cfg) = self.config.headers_read_rate {
+        } else if let Some(cfg) = self.config.headers_read_rate() {
             log::debug!(
                 "{}: Start headers read timer {:?}",
                 self.io.tag(),
@@ -704,7 +696,7 @@ where
         if self.flags.contains(Flags::READ_PL_TIMEOUT) {
             self.read_remains = decoded.remains as u32;
             self.read_consumed += decoded.consumed as u32;
-        } else if let Some(ref cfg) = self.config.payload_read_rate {
+        } else if let Some(cfg) = self.config.payload_read_rate() {
             log::debug!("{}: Start payload timer {:?}", self.io.tag(), cfg.timeout);
 
             // start payload timer
@@ -757,25 +749,24 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::{cell::Cell, future::poll_fn, future::Future, sync::Arc};
+    use std::{cell::Cell, future::Future, future::poll_fn, sync::Arc};
 
-    use ntex_h2::Config;
     use rand::Rng;
 
     use super::*;
-    use crate::http::config::ServiceConfig;
+    use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{ClientCodec, DefaultControlService};
-    use crate::http::{body, ResponseHead, StatusCode};
+    use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base};
-    use crate::service::{fn_service, IntoService};
-    use crate::util::{lazy, stream_recv, Bytes, BytesMut};
-    use crate::{codec::Decoder, testing::Io, time::sleep, time::Millis};
+    use crate::service::{IntoService, cfg::SharedCfg, fn_service};
+    use crate::util::{Bytes, BytesMut, lazy, stream_recv};
+    use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
 
     const BUFFER_SIZE: usize = 32_768;
 
     /// Create http/1 dispatcher.
     pub(crate) fn h1<F, S, B>(
-        stream: Io,
+        stream: IoTest,
         service: F,
     ) -> Dispatcher<Base, S, B, DefaultControlService>
     where
@@ -785,24 +776,24 @@ mod tests {
         S::Response: Into<Response<B>>,
         B: MessageBody,
     {
-        let config = ServiceConfig::new(
-            Seconds(5).into(),
-            Seconds(1),
-            Seconds::ZERO,
-            Millis(5_000),
-            Config::server(),
-        );
+        let config: SharedCfg = SharedCfg::new("DBG")
+            .add(
+                HttpServiceConfig::new()
+                    .keepalive(Seconds(5))
+                    .client_timeout(Seconds(1)),
+            )
+            .into();
         Dispatcher::new(
-            nio::Io::new(stream),
+            nio::Io::new(stream, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
-                config,
+                config.get(),
                 service.into_service(),
                 DefaultControlService,
             )),
         )
     }
 
-    pub(crate) fn spawn_h1<F, S, B>(stream: Io, service: F)
+    pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, service: F)
     where
         F: IntoService<S, Request>,
         S: Service<Request> + 'static,
@@ -811,9 +802,9 @@ mod tests {
         B: MessageBody + 'static,
     {
         crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
-            nio::Io::new(stream),
+            nio::Io::new(stream, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
-                ServiceConfig::default(),
+                SharedCfg::default().get(),
                 service.into_service(),
                 DefaultControlService,
             )),
@@ -826,23 +817,23 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_on_request() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1.0\r\n\r\n");
 
         let data = Rc::new(Cell::new(false));
         let data2 = data.clone();
-        let config = ServiceConfig::new(
-            Seconds(5).into(),
-            Seconds(1),
-            Seconds::ZERO,
-            Millis(5_000),
-            Config::server(),
-        );
+        let config: SharedCfg = SharedCfg::new("DBG")
+            .add(
+                HttpServiceConfig::new()
+                    .keepalive(Seconds(5))
+                    .client_timeout(Seconds(1)),
+            )
+            .into();
         let mut h1 = Dispatcher::<_, _, _, _>::new(
-            nio::Io::new(server),
+            nio::Io::new(server, config),
             Rc::new(DispatcherConfig::new(
-                config,
+                config.get(),
                 fn_service(|_| {
                     Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
                 }),
@@ -867,7 +858,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_req_parse_err() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
 
@@ -892,7 +883,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| async {
@@ -920,7 +911,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline_with_payload() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
 
@@ -951,7 +942,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_pipeline_with_delay() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut decoder = ClientCodec::default();
         spawn_h1(server, |_| async {
@@ -994,7 +985,7 @@ mod tests {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         spawn_h1(server, move |_| {
             num2.fetch_add(1, Ordering::Relaxed);
             async { Ok::<_, io::Error>(Response::Ok().finish()) }
@@ -1015,18 +1006,19 @@ mod tests {
     /// max http message size is 32k (no payload)
     #[crate::rt_test]
     async fn test_read_large_message() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
 
         let mut h1 = h1(server, |_| {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
-        crate::util::PoolId::P0
-            .set_read_params(15 * 1024, 1024)
-            .set_write_params(15 * 1024, 1024);
-        h1.inner
-            .io
-            .set_memory_pool(crate::util::PoolId::P0.pool_ref());
+        h1.inner.io.set_config(
+            SharedCfg::new("TEST").add(
+                nio::IoConfig::new()
+                    .set_read_buf(15 * 1024, 1024, 16)
+                    .set_write_buf(15 * 1024, 1024, 16),
+            ),
+        );
 
         let mut decoder = ClientCodec::default();
 
@@ -1054,7 +1046,7 @@ mod tests {
         let mark = Arc::new(AtomicBool::new(false));
         let mark2 = mark.clone();
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         spawn_h1(server, move |mut req: Request| {
             let m = mark2.clone();
@@ -1110,7 +1102,7 @@ mod tests {
             }
         }
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         let mut h1 = h1(server, move |_| {
             let n = num2.clone();
             Box::pin(async move {
@@ -1168,7 +1160,7 @@ mod tests {
             }
         }
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         let mut h1 = h1(server, |_| {
             Box::pin(async {
@@ -1195,7 +1187,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_service_error() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
 
@@ -1218,7 +1210,7 @@ mod tests {
         let err_mark = Arc::new(AtomicUsize::new(0));
         let err_mark2 = err_mark.clone();
 
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
 
         let svc = move |mut req: Request| {
@@ -1238,18 +1230,19 @@ mod tests {
             }
         };
 
-        let mut config = ServiceConfig::new(
-            Seconds(5).into(),
-            Seconds(1),
-            Seconds::ZERO,
-            Millis(5_000),
-            Config::server(),
-        );
-        config.payload_read_rate(Seconds(1), Seconds(2), 512);
+        let config: SharedCfg = SharedCfg::new("SVC")
+            .add(
+                HttpServiceConfig::new()
+                    .keepalive(Seconds(5))
+                    .client_timeout(Seconds(1))
+                    .payload_read_rate(Seconds(1), Seconds(2), 512),
+            )
+            .into();
+
         let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
-            nio::Io::new(server),
+            nio::Io::new(server, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
-                config,
+                config.get(),
                 svc.into_service(),
                 fn_service(move |msg: Control<_, _>| {
                     if let Control::ProtocolError(ref err) = msg {
@@ -1275,13 +1268,13 @@ mod tests {
             client.write(random_bytes);
             sleep(Millis(750)).await;
         }
-        assert!(mark.load(Ordering::Relaxed) == 1536);
-        assert!(err_mark.load(Ordering::Relaxed) == 1);
+        assert_eq!(mark.load(Ordering::Relaxed), 768);
+        assert_eq!(err_mark.load(Ordering::Relaxed), 1);
     }
 
     #[crate::rt_test]
     async fn test_unconsumed_payload() {
-        let (client, server) = Io::create();
+        let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
         client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
 

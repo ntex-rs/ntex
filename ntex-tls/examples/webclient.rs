@@ -1,9 +1,9 @@
-use ntex::http::client::{error::SendRequestError, Client, Connector};
+use ntex::SharedCfg;
+use ntex::http::client::{Client, Connector, error::SendRequestError};
 use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
 
 #[ntex::main]
 async fn main() -> Result<(), SendRequestError> {
-    // std::env::set_var("RUST_LOG", "ntex=trace");
     env_logger::init();
     println!("Connecting to openssl webserver: 127.0.0.1:8443");
 
@@ -24,8 +24,10 @@ async fn main() -> Result<(), SendRequestError> {
 
     // create client
     let client = Client::build()
-        .connector(Connector::default().openssl(builder.build()).finish())
-        .finish();
+        .connector::<&str>(Connector::default().openssl(builder.build()))
+        .finish(SharedCfg::default())
+        .await
+        .unwrap();
 
     // Create request builder, configure request and send
     let mut response = client

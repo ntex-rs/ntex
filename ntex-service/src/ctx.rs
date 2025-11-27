@@ -368,6 +368,16 @@ mod tests {
     }
 
     #[ntex::test]
+    #[should_panic]
+    async fn test_pipeline_binding_after_shutdown() {
+        let cnt = Rc::new(Cell::new(0));
+        let con = condition::Condition::new();
+        let srv = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
+        let _ = poll_fn(|cx| srv.poll_shutdown(cx)).await;
+        let _ = poll_fn(|cx| srv.poll_ready(cx)).await;
+    }
+
+    #[ntex::test]
     async fn test_shared_call() {
         let data = Rc::new(RefCell::new(Vec::new()));
 
@@ -376,11 +386,14 @@ mod tests {
 
         let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
         let srv2 = srv1.clone();
+        let _: Pipeline<_> = srv1.pipeline();
 
         let data1 = data.clone();
         ntex::rt::spawn(async move {
             let _ = poll_fn(|cx| srv1.poll_ready(cx)).await;
-            let i = srv1.call_nowait("srv1").await.unwrap();
+            let fut = srv1.call_nowait("srv1");
+            assert!(format!("{:?}", fut).contains("PipelineCall"));
+            let i = fut.await.unwrap();
             data1.borrow_mut().push(i);
         });
 

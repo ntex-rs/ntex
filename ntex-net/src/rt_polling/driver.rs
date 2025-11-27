@@ -3,7 +3,7 @@ use std::{cell::Cell, cell::RefCell, io, mem, os, os::fd::AsRawFd, rc::Rc, task:
 use ntex_bytes::BufMut;
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_neon::driver::{DriverApi, Event, Handler};
-use ntex_neon::{syscall, Runtime};
+use ntex_neon::{Runtime, syscall};
 use slab::Slab;
 use socket2::Socket;
 
@@ -115,7 +115,7 @@ impl Handler for StreamOpsHandler {
                         renew.readable = true;
                         io.flags.insert(Flags::RD);
                     }
-                    IoTaskStatus::Pause => {
+                    IoTaskStatus::Pause | IoTaskStatus::Stop => {
                         io.flags.remove(Flags::RD);
                     }
                 }
@@ -343,25 +343,26 @@ impl StreamItem {
             let fd = self.fd();
             let mut total = 0;
             loop {
-                // make sure we've got room
-                if buf.remaining_mut() < lw {
-                    buf.reserve(hw);
-                }
+                ctx.resize_read_buf(&mut buf);
+
                 let chunk = buf.chunk_mut();
                 let chunk_len = chunk.len();
                 let chunk_ptr = chunk.as_mut_ptr();
 
-                let res = syscall!(break libc::read(fd, chunk_ptr as _, chunk_len));
-                if let Poll::Ready(Ok(size)) = res {
-                    unsafe { buf.advance_mut(size) };
-                    total += size;
-                    if size == chunk_len {
-                        continue;
+                let res = match syscall!(break libc::read(fd, chunk_ptr as _, chunk_len)) {
+                    Poll::Ready(Ok(size)) => {
+                        unsafe { buf.advance_mut(size) };
+                        total += size;
+                        if size > 0 {
+                            continue;
+                        }
+                        Poll::Ready(Err(None))
                     }
-                }
-
+                    Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
+                    Poll::Pending => Poll::Pending,
+                };
                 log::trace!("{}: Read ({fd:?}), s: {total:?}, res: {res:?}", self.tag());
-                return ctx.release_read_buf(total, buf, res.map(|res| res.map(|_| ())));
+                return ctx.release_read_buf(total, buf, res);
             }
         } else {
             IoTaskStatus::Pause

@@ -24,7 +24,6 @@ pub enum Signal {
     Quit,
 }
 
-#[doc(hidden)]
 /// Register signal handler.
 pub fn signal() -> oneshot::Receiver<Signal> {
     let (tx, rx) = oneshot::channel();

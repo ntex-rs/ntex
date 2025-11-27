@@ -4,9 +4,9 @@ use std::{cell::Cell, cmp, io::Write, mem, ptr, ptr::copy_nonoverlapping, slice}
 use crate::http::body::BodySize;
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
-use crate::http::header::{Value, CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING};
+use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
 use crate::http::message::{ConnectionType, RequestHeadType};
-use crate::http::{helpers, HeaderMap, Response, StatusCode, Version};
+use crate::http::{HeaderMap, Response, StatusCode, Version, helpers};
 use crate::util::{BufMut, BytesMut};
 
 const AVERAGE_HEADER_SIZE: usize = 30;
@@ -55,7 +55,6 @@ pub(super) trait MessageType: Sized {
         version: Version,
         mut length: BodySize,
         ctype: ConnectionType,
-        timer: &DateService,
     ) -> Result<(), EncodeError> {
         let chunked = self.chunked();
         let mut skip_len = length != BodySize::Stream;
@@ -125,7 +124,7 @@ pub(super) trait MessageType: Sized {
             }
             let k = key.as_str().as_bytes();
             match value {
-                Value::One(ref val) => {
+                Value::One(val) => {
                     let v = val.as_ref();
                     let v_len = v.len();
                     let k_len = k.len();
@@ -151,7 +150,7 @@ pub(super) trait MessageType: Sized {
                     pos += len;
                     remaining -= len;
                 }
-                Value::Multi(ref vec) => {
+                Value::Multi(vec) => {
                     for val in vec {
                         let v = val.as_ref();
                         let v_len = v.len();
@@ -187,7 +186,7 @@ pub(super) trait MessageType: Sized {
 
         // optimized date header, set_date writes \r\n
         if !has_date {
-            timer.set_date_header(dst);
+            DateService.set_date_header(dst);
         } else {
             // msg eof
             dst.extend_from_slice(b"\r\n");
@@ -293,7 +292,6 @@ impl<T: MessageType> MessageEncoder<T> {
         version: Version,
         length: BodySize,
         ctype: ConnectionType,
-        timer: &DateService,
     ) -> Result<(), EncodeError> {
         // transfer encoding
         if !head {
@@ -314,7 +312,7 @@ impl<T: MessageType> MessageEncoder<T> {
         }
 
         message.encode_status(dst)?;
-        message.encode_headers(dst, version, length, ctype, timer)
+        message.encode_headers(dst, version, length, ctype)
     }
 }
 
@@ -590,8 +588,8 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::http::header::{HeaderValue, AUTHORIZATION};
     use crate::http::RequestHead;
+    use crate::http::header::{AUTHORIZATION, HeaderValue};
     use crate::util::Bytes;
 
     #[test]
@@ -629,7 +627,6 @@ mod tests {
             Version::HTTP_11,
             BodySize::Empty,
             ConnectionType::Close,
-            &DateService::default(),
         );
         let data = String::from_utf8(Vec::from(bytes.split().as_ref())).unwrap();
         assert!(data.contains("content-length: 0\r\n"));
