@@ -73,6 +73,26 @@ impl WebAppConfig {
     pub fn local_addr(&self) -> SocketAddr {
         self.addr
     }
+
+    /// Set server host name.
+    ///
+    /// By default host name is set to a "localhost" value.
+    pub fn set_host(mut self, host: String) -> Self {
+        self.host = host;
+        self
+    }
+
+    /// Connection is secure(https)
+    pub fn set_secure(mut self) -> Self {
+        self.secure = true;
+        self
+    }
+
+    /// Returns the socket address of the local half of this TCP connection
+    pub fn set_local_addr(mut self, addr: SocketAddr) -> Self {
+        self.addr = addr;
+        self
+    }
 }
 
 /// Service config is used for external configuration.
