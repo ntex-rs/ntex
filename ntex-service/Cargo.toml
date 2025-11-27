@@ -1,6 +1,6 @@
 [package]
 name = "ntex-service"
-version = "3.6.0"
+version = "3.6.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex service"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,9 +18,9 @@ path = "src/lib.rs"
 
 [features]
 default = []
-async-fn = []
 
 [dependencies]
+log = { workspace = true }
 slab = { workspace = true }
 foldhash = { workspace = true }
 

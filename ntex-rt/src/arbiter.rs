@@ -365,6 +365,9 @@ impl ArbiterController {
 
 #[cfg(test)]
 mod tests {
+    use futures_timer::Delay;
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -376,5 +379,65 @@ mod tests {
         assert!(Arbiter::contains_item::<&'static str>());
         assert!(Arbiter::get_value(|| 64u64) == 64);
         assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
+    }
+
+    #[test]
+    fn test_spawn_api() {
+        System::new("test").block_on(async {
+            let mut hnd = crate::spawn(async {
+                Delay::new(Duration::from_millis(25)).await;
+            });
+            assert!(!hnd.is_finished());
+            let _ = (&mut hnd).await;
+            assert!(hnd.is_finished());
+
+            let hnd = crate::Handle::current();
+            let res = hnd
+                .spawn(async {
+                    Delay::new(Duration::from_millis(25)).await;
+                    1
+                })
+                .await
+                .unwrap();
+            assert_eq!(res, 1);
+        });
+    }
+
+    #[test]
+    fn test_spawn_cb() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c = counter.clone();
+        let before = move || {
+            let _ = c.fetch_add(1, Ordering::Relaxed);
+            Some(c.as_ptr() as *const _)
+        };
+        let c = counter.clone();
+        let enter = move |_| {
+            let _ = c.fetch_add(1, Ordering::Relaxed);
+            c.as_ptr() as *const _
+        };
+        let c = counter.clone();
+        let exit = move |_| {
+            let _ = c.fetch_add(1, Ordering::Relaxed);
+        };
+        let c = counter.clone();
+        let after = move |_| {
+            let _ = c.fetch_add(1, Ordering::Relaxed);
+        };
+
+        unsafe {
+            crate::spawn_cbs(before, enter, exit, after);
+        }
+
+        System::new("test").block_on(async {
+            let mut hnd = crate::spawn(async {
+                Delay::new(Duration::from_millis(25)).await;
+            });
+            let _ = (&mut hnd).await;
+            assert!(hnd.is_finished());
+        });
+
+        let val = counter.load(Ordering::Relaxed);
+        assert_eq!(val, 16);
     }
 }

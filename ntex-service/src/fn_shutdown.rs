@@ -70,7 +70,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::{future::poll_fn, rc::Rc};
 
     use crate::{Pipeline, chain, fn_service};
 
@@ -81,7 +81,7 @@ mod tests {
         let is_called = Rc::new(Cell::new(false));
         let srv = fn_service(|_| async { Ok::<_, ()>("pipe") });
         let is_called2 = is_called.clone();
-        let on_shutdown = fn_shutdown(|| {
+        let on_shutdown = fn_shutdown(move || {
             is_called2.set(true);
         });
 
@@ -91,8 +91,14 @@ mod tests {
         assert_eq!(pipe.ready().await, Ok(()));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "pipe");
+        assert!(!pipe.is_shutdown());
         pipe.shutdown().await;
         assert!(is_called.get());
+        assert!(!pipe.is_shutdown());
+
+        let pipe = pipe.bind();
+        let _ = poll_fn(|cx| pipe.poll_shutdown(cx)).await;
+        assert!(pipe.is_shutdown());
 
         let _ = format!("{pipe:?}");
     }
