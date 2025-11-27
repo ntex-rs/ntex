@@ -184,7 +184,20 @@ mod tests {
 
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
+        let _ = format!("{srv:?}");
 
+        let cnt_sht = Rc::new(Cell::new(0));
+        let svc = Srv(cnt_sht.clone()).map(|_| "ok");
+        let srv = Pipeline::new(&svc);
+        let res = srv.call(()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "ok");
+
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
+
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 1);
         let _ = format!("{srv:?}");
     }
 

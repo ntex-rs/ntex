@@ -123,7 +123,7 @@ impl SharedCfg {
         T: Configuration,
     {
         if self.0.building {
-            panic!("Cannot access shared config while building");
+            panic!("{}: Cannot access shared config while building", self.tag());
         }
         self.0
             .data
@@ -131,7 +131,11 @@ impl SharedCfg {
             .and_then(|boxed| boxed.downcast_ref())
             .map(Cfg)
             .unwrap_or_else(|| {
-                log::info!("Configuration {:?} does not exist, using default", T::NAME);
+                log::info!(
+                    "{}: Configuration {:?} does not exist, using default",
+                    self.tag(),
+                    T::NAME
+                );
                 Cfg(T::default())
             })
     }

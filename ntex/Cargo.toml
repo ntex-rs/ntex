@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.0.0"
+version = "3.0.0-pre.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -74,12 +74,12 @@ ntex-service = "3.6"
 ntex-macros = "0.2"
 ntex-util = "3.0"
 ntex-bytes = "1.0"
-ntex-server = "3.0"
-ntex-h2 = "3.0"
+ntex-server = "3.0.0-pre.0"
+ntex-h2 = "3.0.0-pre.0"
 ntex-rt = "3.0"
-ntex-io = "3.0"
-ntex-net = "3.0"
-ntex-tls = "3.0"
+ntex-io = "3.0.0-pre.0"
+ntex-net = "3.0.0-pre.0"
+ntex-tls = "3.0.0-pre.0"
 
 base64 = { workspace = true }
 bitflags = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tokio"
-version = "3.0.0"
+version = "3.0.0-pre.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "tokio intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-bytes = "1"
-ntex-io = "3"
+ntex-io = "3.0.0-pre.0"
 ntex-util = "3"
 ntex-service = "3.6"
 log = { workspace = true }
