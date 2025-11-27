@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.2] - 2025-11-27
+
+* Fix default config context
+
 ## [3.6.0] - 2025-11-26
 
 * MSRV 1.85

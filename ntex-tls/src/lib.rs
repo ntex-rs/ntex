@@ -48,15 +48,14 @@ pub struct TlsConfig {
     config: CfgContext,
 }
 
+impl Default for TlsConfig {
+    fn default() -> Self {
+        TlsConfig::new()
+    }
+}
+
 impl Configuration for TlsConfig {
     const NAME: &str = "TLS Configuration";
-
-    fn default() -> &'static Self {
-        thread_local! {
-            static DEFAULT: &'static TlsConfig = Box::leak(Box::new(TlsConfig::new()));
-        }
-        DEFAULT.with(|cfg| *cfg)
-    }
 
     fn ctx(&self) -> &CfgContext {
         &self.config

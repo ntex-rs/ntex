@@ -279,6 +279,7 @@ where
 
         let system = sys.system();
         sys.run(move || {
+            println!("\n\n\n ==== {:?}", cfg);
             let srv = crate::server::build()
                 .listen("test", tcp, move |_| factory())?
                 .config("test", cfg)
