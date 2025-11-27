@@ -1,10 +1,11 @@
 use std::rc::Rc;
 
 use crate::router::{IntoPattern, ResourceDef};
+use crate::service::cfg::{Cfg, SharedCfg};
 use crate::service::{IntoServiceFactory, ServiceFactory, boxed};
 use crate::util::Extensions;
 
-use super::config::AppConfig;
+use super::config::WebAppConfig;
 use super::dev::insert_slash;
 use super::error::ErrorRenderer;
 use super::guard::{AllGuard, Guard};
@@ -44,7 +45,7 @@ where
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpServiceFactory<Err: ErrorRenderer> =
-    boxed::BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
+    boxed::BoxServiceFactory<SharedCfg, WebRequest<Err>, WebResponse, Err::Container, ()>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState(Rc<AppStateInner>);
@@ -53,14 +54,14 @@ pub(crate) struct AppState(Rc<AppStateInner>);
 struct AppStateInner {
     ext: Extensions,
     parent: Option<AppState>,
-    config: AppConfig,
+    config: Cfg<WebAppConfig>,
 }
 
 impl AppState {
     pub(crate) fn new(
         ext: Extensions,
         parent: Option<AppState>,
-        config: AppConfig,
+        config: Cfg<WebAppConfig>,
     ) -> Self {
         AppState(Rc::new(AppStateInner {
             ext,
@@ -69,7 +70,7 @@ impl AppState {
         }))
     }
 
-    pub(crate) fn config(&self) -> &AppConfig {
+    pub(crate) fn config(&self) -> &Cfg<WebAppConfig> {
         &self.0.config
     }
 
@@ -149,7 +150,7 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
     }
 
     /// Service configuration
-    pub fn config(&self) -> &AppConfig {
+    pub fn config(&self) -> &Cfg<WebAppConfig> {
         self.state.config()
     }
 
@@ -166,9 +167,10 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         factory: F,
         nested: Option<Rc<ResourceMap>>,
     ) where
-        F: IntoServiceFactory<S, WebRequest<Err>>,
+        F: IntoServiceFactory<S, WebRequest<Err>, SharedCfg>,
         S: ServiceFactory<
                 WebRequest<Err>,
+                SharedCfg,
                 Response = WebResponse,
                 Error = Err::Container,
                 InitError = (),
@@ -245,9 +247,13 @@ impl WebServiceAdapter {
     /// Set a service factory implementation and generate web service.
     pub fn finish<T, F, Err>(self, service: F) -> impl WebServiceFactory<Err>
     where
-        F: IntoServiceFactory<T, WebRequest<Err>>,
-        T: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
-            + 'static,
+        F: IntoServiceFactory<T, WebRequest<Err>, SharedCfg>,
+        T: ServiceFactory<
+                WebRequest<Err>,
+                SharedCfg,
+                Response = WebResponse,
+                Error = Err::Container,
+            > + 'static,
         Err: ErrorRenderer,
     {
         WebServiceImpl {
@@ -270,6 +276,7 @@ impl<T, Err> WebServiceFactory<Err> for WebServiceImpl<T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebResponse,
             Error = Err::Container,
             InitError = (),

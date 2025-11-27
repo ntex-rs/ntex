@@ -106,6 +106,7 @@ pub use crate::http::ResponseBuilder as HttpResponseBuilder;
 
 pub use self::app::App;
 pub use self::config::ServiceConfig;
+pub use self::config::WebAppConfig;
 pub use self::error::{
     DefaultError, Error, ErrorContainer, ErrorRenderer, WebResponseError,
 };
@@ -129,7 +130,6 @@ pub mod dev {
     //! traits by adding a glob import to the top of ntex::web heavy modules:
 
     pub use crate::web::app_service::AppService;
-    pub use crate::web::config::AppConfig;
     pub use crate::web::info::ConnectionInfo;
     pub use crate::web::rmap::ResourceMap;
     pub use crate::web::route::IntoRoutes;

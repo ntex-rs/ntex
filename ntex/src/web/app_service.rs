@@ -8,7 +8,6 @@ use crate::service::dev::ServiceChainFactory;
 use crate::service::{Middleware, Service, ServiceCtx, ServiceFactory, fn_service};
 use crate::util::{BoxFuture, Extensions, join};
 
-use super::config::AppConfig;
 use super::error::ErrorRenderer;
 use super::guard::Guard;
 use super::httprequest::{HttpRequest, HttpRequestPool};
@@ -21,7 +20,7 @@ type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
+    BoxServiceFactory<SharedCfg, WebRequest<Err>, WebResponse, Err::Container, ()>;
 type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extensions, ()>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
@@ -30,6 +29,7 @@ pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -37,7 +37,7 @@ where
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: ServiceChainFactory<F, WebRequest<Err>>,
+    pub(super) filter: ServiceChainFactory<F, WebRequest<Err>, SharedCfg>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
@@ -52,6 +52,7 @@ where
     T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -63,29 +64,7 @@ where
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
 
-    async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        ServiceFactory::create(self, AppConfig::default()).await
-    }
-}
-
-impl<T, F, Err> ServiceFactory<Request, AppConfig> for AppFactory<T, F, Err>
-where
-    T: Middleware<AppService<F::Service, Err>> + 'static,
-    T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
-    F: ServiceFactory<
-            WebRequest<Err>,
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-            InitError = (),
-        >,
-    Err: ErrorRenderer,
-{
-    type Response = WebResponse;
-    type Error = Err::Container;
-    type InitError = ();
-    type Service = AppFactoryService<T::Service, Err>;
-
-    async fn create(&self, config: AppConfig) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let services = std::mem::take(&mut *self.services.borrow_mut());
 
         // update resource default service
@@ -98,7 +77,7 @@ where
             ))
         });
 
-        let filter_fut = self.filter.create(());
+        let filter_fut = self.filter.create(cfg);
         let state_factories = self.state_factories.clone();
         let mut extensions = self.extensions.borrow_mut().take().unwrap_or_default();
         let middleware = self.middleware.clone();
@@ -115,7 +94,7 @@ where
                 .await
                 .map_err(|_| log::error!("Cannot initialize state factory"))?
         }
-        let state = AppState::new(extensions, None, config.clone());
+        let state = AppState::new(extensions, None, cfg.get());
 
         // App config
         let mut config = WebServiceConfig::new(state.clone(), default.clone());
@@ -148,7 +127,7 @@ where
         // create http services
         for (path, factory, guards) in &mut services.iter() {
             let service = factory
-                .create(())
+                .create(cfg)
                 .await
                 .map_err(|_| log::error!("Cannot construct app service"))?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
@@ -158,7 +137,7 @@ where
             router: router.finish(),
             default: Some(
                 default
-                    .create(())
+                    .create(cfg)
                     .await
                     .map_err(|_| log::error!("Cannot construct default service"))?,
             ),

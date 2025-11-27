@@ -8,8 +8,8 @@ use tls_openssl::ssl::SslAcceptorBuilder;
 mod rustls_utils;
 
 use ntex::http::HttpServiceConfig;
-use ntex::web::{self, App, HttpResponse, HttpServer};
-use ntex::{io::IoConfig, rt, server::TestServer, time::Seconds, time::sleep};
+use ntex::web::{self, App, HttpResponse, HttpServer, WebAppConfig};
+use ntex::{SharedCfg, io::IoConfig, rt, server::TestServer, time::Seconds, time::sleep};
 use ntex_tls::TlsConfig;
 
 #[cfg(unix)]
@@ -132,6 +132,7 @@ async fn test_openssl() {
             .disable_signals()
             .bind_openssl(format!("{addr}"), builder)
             .unwrap()
+            .config(SharedCfg::new("WEB").add(WebAppConfig::new().set_secure()))
             .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())
@@ -167,7 +168,7 @@ async fn test_rustls() {
         sys.run(move || {
             let srv = HttpServer::new(|| {
                 App::new().service(web::resource("/").route(web::to(
-                    |req: HttpRequest| async move {
+                    async |req: HttpRequest| {
                         assert!(req.app_config().secure());
                         HttpResponse::Ok().body("test")
                     },
@@ -179,6 +180,7 @@ async fn test_rustls() {
             .disable_signals()
             .bind_rustls(format!("{addr}"), config)
             .unwrap()
+            .config(SharedCfg::new("WEB").add(WebAppConfig::new().set_secure()))
             .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())

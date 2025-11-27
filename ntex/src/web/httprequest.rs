@@ -4,10 +4,9 @@ use crate::http::{
     HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
 };
 use crate::io::{IoRef, types};
-use crate::router::Path;
-use crate::util::Extensions;
+use crate::{Cfg, router::Path, util::Extensions};
 
-use super::config::AppConfig;
+use super::config::WebAppConfig;
 use super::error::ErrorRenderer;
 use super::extract::FromRequest;
 use super::info::ConnectionInfo;
@@ -206,7 +205,7 @@ impl HttpRequest {
 
     /// App config
     #[inline]
-    pub fn app_config(&self) -> &AppConfig {
+    pub fn app_config(&self) -> &Cfg<WebAppConfig> {
         self.0.app_state.config()
     }
 

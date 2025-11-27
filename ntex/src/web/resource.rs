@@ -3,6 +3,7 @@ use std::{cell::RefCell, fmt, rc::Rc};
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
+use crate::service::cfg::SharedCfg;
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
 use crate::service::{ServiceCtx, chain, chain_factory};
@@ -19,7 +20,7 @@ use super::{request::WebRequest, response::WebResponse};
 type HttpService<Err: ErrorRenderer> =
     BoxService<WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, ()>;
+    BoxServiceFactory<SharedCfg, WebRequest<Err>, WebResponse, Err::Container, ()>;
 type ResourcePipeline<F, Err> =
     ServiceChain<AndThen<F, ResourceRouter<Err>>, WebRequest<Err>>;
 
@@ -47,7 +48,7 @@ type ResourcePipeline<F, Err> =
 /// Default behavior could be overriden with `default_resource()` method.
 pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: ServiceChainFactory<T, WebRequest<Err>>,
+    filter: ServiceChainFactory<T, WebRequest<Err>, SharedCfg>,
     rdef: Vec<String>,
     name: Option<String>,
     routes: Vec<Route<Err>>,
@@ -75,6 +76,7 @@ impl<Err, M, T> Resource<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -240,6 +242,7 @@ where
         M,
         impl ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -248,10 +251,11 @@ where
     where
         U: ServiceFactory<
                 WebRequest<Err>,
+                SharedCfg,
                 Response = WebRequest<Err>,
                 Error = Err::Container,
             >,
-        F: IntoServiceFactory<U, WebRequest<Err>>,
+        F: IntoServiceFactory<U, WebRequest<Err>, SharedCfg>,
     {
         Resource {
             filter: self
@@ -292,9 +296,13 @@ where
     /// default handler from `App` or `Scope`.
     pub fn default_service<F, S>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<S, WebRequest<Err>>,
-        S: ServiceFactory<WebRequest<Err>, Response = WebResponse, Error = Err::Container>
-            + 'static,
+        F: IntoServiceFactory<S, WebRequest<Err>, SharedCfg>,
+        S: ServiceFactory<
+                WebRequest<Err>,
+                SharedCfg,
+                Response = WebResponse,
+                Error = Err::Container,
+            > + 'static,
         S::InitError: fmt::Debug,
     {
         // create and configure default resource
@@ -311,6 +319,7 @@ impl<Err, M, T> WebServiceFactory<Err> for Resource<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -338,7 +347,7 @@ where
             AppState::new(
                 state,
                 Some(config.state().clone()),
-                config.state().config().clone(),
+                *config.state().config(),
             )
         });
 
@@ -363,12 +372,14 @@ where
 
 impl<Err, M, F>
     IntoServiceFactory<
-        ResourceServiceFactory<Err, M, ServiceChainFactory<F, WebRequest<Err>>>,
+        ResourceServiceFactory<Err, M, ServiceChainFactory<F, WebRequest<Err>, SharedCfg>>,
         WebRequest<Err>,
+        SharedCfg,
     > for Resource<Err, M, F>
 where
     F: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -379,7 +390,8 @@ where
 {
     fn into_factory(
         self,
-    ) -> ResourceServiceFactory<Err, M, ServiceChainFactory<F, WebRequest<Err>>> {
+    ) -> ResourceServiceFactory<Err, M, ServiceChainFactory<F, WebRequest<Err>, SharedCfg>>
+    {
         let router_factory = ResourceRouterFactory {
             state: None,
             routes: self.routes,
@@ -401,12 +413,14 @@ pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
     routing: ResourceRouterFactory<Err>,
 }
 
-impl<Err, M, F> ServiceFactory<WebRequest<Err>> for ResourceServiceFactory<Err, M, F>
+impl<Err, M, F> ServiceFactory<WebRequest<Err>, SharedCfg>
+    for ResourceServiceFactory<Err, M, F>
 where
     M: Middleware<ResourcePipeline<F::Service, Err>> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
+            SharedCfg,
             Response = WebRequest<Err>,
             Error = Err::Container,
             InitError = (),
@@ -418,9 +432,9 @@ where
     type Service = M::Service;
     type InitError = ();
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
-        let filter = self.filter.create(()).await?;
-        let routing = self.routing.create(()).await?;
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+        let filter = self.filter.create(cfg).await?;
+        let routing = self.routing.create(cfg).await?;
         Ok(self.middleware.create(chain(filter).and_then(routing)))
     }
 }
@@ -431,15 +445,17 @@ struct ResourceRouterFactory<Err: ErrorRenderer> {
     state: Option<AppState>,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ResourceRouterFactory<Err> {
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
+    for ResourceRouterFactory<Err>
+{
     type Response = WebResponse;
     type Error = Err::Container;
     type InitError = ();
     type Service = ResourceRouter<Err>;
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let default = if let Some(ref default) = self.default {
-            Some(default.create(()).await?)
+            Some(default.create(cfg).await?)
         } else {
             None
         };

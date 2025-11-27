@@ -1,27 +1,56 @@
-use std::{net::SocketAddr, rc::Rc};
+use std::net::SocketAddr;
 
+use crate::service::cfg::{CfgContext, Configuration};
 use crate::{router::ResourceDef, util::Extensions};
 
-use super::resource::Resource;
-use super::route::Route;
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
-use super::{DefaultError, ErrorRenderer};
+use super::{DefaultError, ErrorRenderer, resource::Resource, route::Route};
 
 /// Application configuration
 #[derive(Debug, Clone)]
-pub struct AppConfig(Rc<AppConfigInner>);
-
-#[derive(Debug)]
-struct AppConfigInner {
+pub struct WebAppConfig {
     secure: bool,
     host: String,
     addr: SocketAddr,
+    config: CfgContext,
 }
 
-impl AppConfig {
-    /// Create an AppConfig instance.
-    pub fn new(secure: bool, addr: SocketAddr, host: String) -> Self {
-        AppConfig(Rc::new(AppConfigInner { secure, host, addr }))
+impl Default for WebAppConfig {
+    fn default() -> Self {
+        WebAppConfig::new()
+    }
+}
+
+impl Configuration for WebAppConfig {
+    const NAME: &str = "Web app configuration";
+
+    fn ctx(&self) -> &CfgContext {
+        &self.config
+    }
+
+    fn set_ctx(&mut self, ctx: CfgContext) {
+        self.config = ctx;
+    }
+}
+
+impl WebAppConfig {
+    /// Create an default WebAppConfig instance.
+    pub fn new() -> Self {
+        WebAppConfig::with(
+            false,
+            "127.0.0.1:8080".parse().unwrap(),
+            "localhost:8080".to_owned(),
+        )
+    }
+
+    /// Create an WebAppConfig instance.
+    pub fn with(secure: bool, addr: SocketAddr, host: String) -> Self {
+        WebAppConfig {
+            secure,
+            host,
+            addr,
+            config: CfgContext::default(),
+        }
     }
 
     /// Server host name.
@@ -32,27 +61,37 @@ impl AppConfig {
     ///
     /// By default host name is set to a "localhost" value.
     pub fn host(&self) -> &str {
-        &self.0.host
+        &self.host
     }
 
     /// Returns true if connection is secure(https)
     pub fn secure(&self) -> bool {
-        self.0.secure
+        self.secure
     }
 
     /// Returns the socket address of the local half of this TCP connection
     pub fn local_addr(&self) -> SocketAddr {
-        self.0.addr
+        self.addr
     }
-}
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        AppConfig::new(
-            false,
-            "127.0.0.1:8080".parse().unwrap(),
-            "localhost:8080".to_owned(),
-        )
+    /// Set server host name.
+    ///
+    /// By default host name is set to a "localhost" value.
+    pub fn set_host(mut self, host: String) -> Self {
+        self.host = host;
+        self
+    }
+
+    /// Connection is secure(https)
+    pub fn set_secure(mut self) -> Self {
+        self.secure = true;
+        self
+    }
+
+    /// Returns the socket address of the local half of this TCP connection
+    pub fn set_local_addr(mut self, addr: SocketAddr) -> Self {
+        self.addr = addr;
+        self
     }
 }
 

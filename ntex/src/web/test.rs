@@ -16,7 +16,7 @@ use crate::http::{
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
-use crate::service::{IntoService, IntoServiceFactory, Pipeline, map_config};
+use crate::service::{IntoService, IntoServiceFactory, Pipeline};
 use crate::time::{Millis, Seconds, sleep};
 use crate::util::{Bytes, BytesMut, Extensions, Ready, Stream, stream_recv};
 #[cfg(feature = "ws")]
@@ -27,7 +27,7 @@ use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
 use crate::web::rmap::ResourceMap;
 use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
-use crate::web::{config::AppConfig, service::AppState};
+use crate::web::{config::WebAppConfig, service::AppState};
 
 /// Create service that always responds with `HttpResponse::Ok()`
 pub fn ok_service<Err: ErrorRenderer>()
@@ -73,12 +73,14 @@ pub async fn init_service<R, S, E>(
     app: R,
 ) -> Pipeline<impl Service<Request, Response = WebResponse, Error = E>>
 where
-    R: IntoServiceFactory<S, Request, AppConfig>,
-    S: ServiceFactory<Request, AppConfig, Response = WebResponse, Error = E>,
+    R: IntoServiceFactory<S, Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg, Response = WebResponse, Error = E>,
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory();
-    srv.pipeline(AppConfig::default()).await.unwrap()
+    srv.pipeline(SharedCfg::new("WEB").add(WebAppConfig::new()).into())
+        .await
+        .unwrap()
 }
 
 /// Calls service and waits for response future completion.
@@ -302,7 +304,7 @@ pub async fn respond_to<T: Responder<DefaultError>>(
 pub struct TestRequest {
     req: HttpTestRequest,
     rmap: ResourceMap,
-    config: AppConfig,
+    config: SharedCfg,
     path: Path<Uri>,
     peer_addr: Option<SocketAddr>,
     app_state: Extensions,
@@ -313,7 +315,7 @@ impl Default for TestRequest {
         TestRequest {
             req: HttpTestRequest::default(),
             rmap: ResourceMap::new(ResourceDef::new("")),
-            config: AppConfig::default(),
+            config: SharedCfg::default(),
             path: Path::new(Uri::default()),
             peer_addr: None,
             app_state: Extensions::new(),
@@ -464,7 +466,7 @@ impl TestRequest {
     pub fn to_srv_request(mut self) -> WebRequest<DefaultError> {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
-        let app_state = AppState::new(self.app_state, None, self.config);
+        let app_state = AppState::new(self.app_state, None, self.config.get());
 
         WebRequest::new(HttpRequest::new(
             self.path,
@@ -485,7 +487,7 @@ impl TestRequest {
     pub fn to_http_request(mut self) -> HttpRequest {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
-        let app_state = AppState::new(self.app_state, None, self.config);
+        let app_state = AppState::new(self.app_state, None, self.config.get());
 
         HttpRequest::new(
             self.path,
@@ -501,7 +503,7 @@ impl TestRequest {
     pub fn to_http_parts(mut self) -> (HttpRequest, Payload) {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
-        let app_state = AppState::new(self.app_state, None, self.config);
+        let app_state = AppState::new(self.app_state, None, self.config.get());
 
         let req = HttpRequest::new(
             self.path,
@@ -545,8 +547,8 @@ impl TestRequest {
 pub async fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, AppConfig>,
-    S: ServiceFactory<Request, AppConfig> + 'static,
+    I: IntoServiceFactory<S, Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
@@ -583,8 +585,8 @@ where
 pub async fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: Fn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, AppConfig>,
-    S: ServiceFactory<Request, AppConfig> + 'static,
+    I: IntoServiceFactory<S, Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
     S::Response: Into<HttpResponse<B>>,
@@ -612,70 +614,65 @@ where
 
         sys.run(move || {
             let builder = crate::server::build().workers(1).disable_signals();
+            let secure = match cfg.stream {
+                StreamType::Tcp => false,
+                #[cfg(feature = "openssl")]
+                StreamType::Openssl(_) => true,
+                #[cfg(feature = "rustls")]
+                StreamType::Rustls(_) => true,
+            };
 
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
-                    }),
-                    HttpVer::Http2 => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
-                    }),
-                    HttpVer::Both => builder.listen("test", tcp, move |_| {
-                        let cfg =
-                            AppConfig::new(false, local_addr, format!("{local_addr}"));
-                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
-                    }),
+                    HttpVer::Http1 => {
+                        builder.listen("test", tcp, move |_| HttpService::h1(factory()))
+                    }
+                    HttpVer::Http2 => {
+                        builder.listen("test", tcp, move |_| HttpService::h2(factory()))
+                    }
+                    HttpVer::Both => {
+                        builder.listen("test", tcp, move |_| HttpService::new(factory()))
+                    }
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
-                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
-                            .openssl(acceptor.clone())
+                        HttpService::h1(factory()).openssl(acceptor.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
-                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
-                            .openssl(acceptor.clone())
+                        HttpService::h2(factory()).openssl(acceptor.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
-                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
-                            .openssl(acceptor.clone())
+                        HttpService::new(factory()).openssl(acceptor.clone())
                     }),
                 },
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(config) => match cfg.tp {
                     HttpVer::Http1 => builder.listen("test", tcp, move |_| {
-                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::h1(map_config(factory(), move |_| cfg.clone()))
-                            .rustls(config.clone())
+                        HttpService::h1(factory()).rustls(config.clone())
                     }),
                     HttpVer::Http2 => builder.listen("test", tcp, move |_| {
-                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::h2(map_config(factory(), move |_| cfg.clone()))
-                            .rustls(config.clone())
+                        HttpService::h2(factory()).rustls(config.clone())
                     }),
                     HttpVer::Both => builder.listen("test", tcp, move |_| {
-                        let cfg = AppConfig::new(true, local_addr, format!("{local_addr}"));
-                        HttpService::new(map_config(factory(), move |_| cfg.clone()))
-                            .rustls(config.clone())
+                        HttpService::new(factory()).rustls(config.clone())
                     }),
                 },
             }
             .unwrap()
             .config(
                 "test",
-                SharedCfg::new("WEB-SRV").add(HttpServiceConfig::new().headers_read_rate(
-                    ctimeout,
-                    Seconds::ZERO,
-                    256,
-                )),
+                SharedCfg::new("WEB-SRV")
+                    .add(HttpServiceConfig::new().headers_read_rate(
+                        ctimeout,
+                        Seconds::ZERO,
+                        256,
+                    ))
+                    .add(WebAppConfig::with(
+                        secure,
+                        local_addr,
+                        format!("{local_addr}"),
+                    )),
             )
             .run();
 
