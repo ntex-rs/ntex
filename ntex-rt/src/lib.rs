@@ -11,7 +11,7 @@ pub use self::builder::{Builder, SystemRunner};
 pub use self::system::{Id, PingRecord, System};
 
 thread_local! {
-    static CB: Cell<*const Callbacks> = Cell::new(ptr::null());
+    static CB: Cell<*const Callbacks> = const { Cell::new(ptr::null()) };
 }
 
 struct Callbacks {
