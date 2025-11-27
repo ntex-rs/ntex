@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.0] - 2025-11-27
+
+* Update ntex-net and ntex-io versions
+
 ## [2.6.0] - 2025-07-29
 
 * Fix the rustls handshake negotiation #620

@@ -67,16 +67,16 @@ ws = ["dep:sha1"]
 no-test-logging = []
 
 [dependencies]
-ntex-codec = "1.0"
-ntex-http = "1.0"
-ntex-router = "1.0"
+ntex-codec = "1"
+ntex-http = "1"
+ntex-router = "1"
 ntex-service = "3.6"
 ntex-macros = "0.2"
-ntex-util = "3.0"
-ntex-bytes = "1.0"
+ntex-util = "3"
+ntex-bytes = "1"
 ntex-server = "3.0.0-pre.0"
 ntex-h2 = "3.0.0-pre.0"
-ntex-rt = "3.0"
+ntex-rt = "3"
 ntex-io = "3.0.0-pre.0"
 ntex-net = "3.0.0-pre.0"
 ntex-tls = "3.0.0-pre.0"
