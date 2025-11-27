@@ -679,9 +679,8 @@ mod tests {
     use std::io;
 
     use super::*;
-    use crate::http;
-    use crate::http::client::error::{ConnectError, SendRequestError};
-    use crate::web::test::TestRequest;
+    use crate::client::error::{ConnectError, SendRequestError};
+    use crate::{http, web::test::TestRequest};
 
     #[test]
     fn test_into_error() {

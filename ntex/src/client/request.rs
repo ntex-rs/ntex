@@ -546,7 +546,7 @@ impl fmt::Debug for ClientRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SharedCfg, http::client::Client};
+    use crate::{SharedCfg, client::Client};
 
     #[crate::rt_test]
     async fn test_debug() {

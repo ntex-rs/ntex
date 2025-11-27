@@ -5,8 +5,7 @@ use coo_kie::Cookie;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
 use rand::Rng;
 
-use ntex::http::client::error::SendRequestError;
-use ntex::http::client::{Client, Connector};
+use ntex::client::{Client, Connector, error::SendRequestError};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, header};
 use ntex::io::IoConfig;

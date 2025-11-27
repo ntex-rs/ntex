@@ -7,17 +7,14 @@ use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
 use rand::{Rng, distr::Alphanumeric};
 use thiserror::Error;
 
-use ntex::SharedCfg;
 use ntex::http::header::{
     ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, ContentEncoding,
     TRANSFER_ENCODING,
 };
-use ntex::http::{
-    ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body, client,
-};
-use ntex::io::IoConfig;
+use ntex::http::{ConnectionType, HttpServiceConfig, Method, StatusCode, body::Body};
 use ntex::time::{Millis, Seconds, Sleep, sleep};
 use ntex::util::{Bytes, Ready, Stream};
+use ntex::{SharedCfg, client, io::IoConfig};
 
 use ntex::web::{self, middleware::Compress, test};
 use ntex::web::{App, BodyEncoding, HttpRequest, HttpResponse, WebResponseError};

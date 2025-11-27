@@ -4,6 +4,8 @@
 
 * New io configuration subsystem
 
+* Move http client to top level
+
 * Update MSRV 1.85
 
 ## [2.17.0] 2025-11-12

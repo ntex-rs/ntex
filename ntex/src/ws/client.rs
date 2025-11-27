@@ -11,10 +11,11 @@ use coo_kie::{Cookie, CookieJar};
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use nanorand::{Rng, WyRand};
 
+use crate::client::{self, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
-use crate::http::{body::BodySize, client, client::ClientResponse, error::HttpError, h1};
+use crate::http::{body::BodySize, error::HttpError, h1};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};

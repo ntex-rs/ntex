@@ -54,7 +54,7 @@ async fn test_run() {
     });
     let (srv, sys) = rx.recv().unwrap();
 
-    use ntex::http::client;
+    use ntex::client;
 
     let client = client::Client::build()
         .connector::<&str>(client::Connector::default())
@@ -89,7 +89,7 @@ fn ssl_acceptor() -> std::io::Result<SslAcceptorBuilder> {
 }
 
 #[cfg(feature = "openssl")]
-async fn client() -> ntex::http::client::Client {
+async fn client() -> ntex::client::Client {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
@@ -97,11 +97,9 @@ async fn client() -> ntex::http::client::Client {
         .set_alpn_protos(b"\x02h2\x08http/1.1")
         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-    ntex::http::client::Client::build()
+    ntex::client::Client::build()
         .response_timeout(Seconds(30))
-        .connector::<&str>(
-            ntex::http::client::Connector::default().openssl(builder.build()),
-        )
+        .connector::<&str>(ntex::client::Connector::default().openssl(builder.build()))
         .finish(ntex::SharedCfg::new("TEST").add(IoConfig::new().set_connect_timeout(30)))
         .await
         .unwrap()
@@ -228,7 +226,7 @@ async fn test_bind_uds() {
     });
     let (srv, sys) = rx.recv().unwrap();
 
-    use ntex::http::client;
+    use ntex::client;
 
     let client = client::Client::build()
         .connector::<&str>(client::Connector::default().connector(
@@ -280,7 +278,7 @@ async fn test_listen_uds() {
     });
     let (srv, sys) = rx.recv().unwrap();
 
-    use ntex::http::client;
+    use ntex::client;
 
     let client = client::Client::build()
         .connector::<&str>(client::Connector::default().connector(
