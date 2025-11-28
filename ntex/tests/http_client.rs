@@ -29,7 +29,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 
 #[ntex::test]
 async fn test_h1_v2() {
-    let srv = test_server(move || {
+    let srv = test_server(async move || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
@@ -55,7 +55,7 @@ async fn test_h1_v2() {
 
 #[ntex::test]
 async fn test_connection_close() {
-    let srv = test_server(move || {
+    let srv = test_server(async move || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
             .map(|_| ())
     })
@@ -72,7 +72,7 @@ async fn test_connection_close() {
 
 #[ntex::test]
 async fn test_with_query_parameter() {
-    let srv = test_server(move || {
+    let srv = test_server(async move || {
         HttpService::new(|req: Request| {
             if req.uri().query().unwrap().contains("qp=") {
                 Ready::Ok::<_, io::Error>(Response::Ok().finish())
@@ -91,7 +91,7 @@ async fn test_with_query_parameter() {
 
 #[ntex::test]
 async fn test_client_timeout() {
-    let srv = test_server(move || {
+    let srv = test_server(async move || {
         HttpService::new(|_| async {
             time::sleep(time::Seconds(10)).await;
             Ok::<_, io::Error>(Response::Ok().body(STR))

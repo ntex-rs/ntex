@@ -227,7 +227,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 /// ```
 pub async fn server<F, R>(factory: F) -> TestServer
 where
-    F: Fn() -> R + Send + Clone + 'static,
+    F: AsyncFn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedCfg> + 'static,
 {
     server_with_config(factory, SharedCfg::new("HTTP-TEST-SRV")).await
@@ -264,7 +264,7 @@ where
 /// ```
 pub async fn server_with_config<F, R, U>(factory: F, cfg: U) -> TestServer
 where
-    F: Fn() -> R + Send + Clone + 'static,
+    F: AsyncFn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedCfg> + 'static,
     U: Into<SharedCfg>,
 {
@@ -281,7 +281,7 @@ where
         sys.run(move || {
             println!("\n\n\n ==== {:?}", cfg);
             let srv = crate::server::build()
-                .listen("test", tcp, move |_| factory())?
+                .listen("test", tcp, async move |_| factory().await)?
                 .config("test", cfg)
                 .workers(1)
                 .disable_signals()
@@ -420,7 +420,7 @@ impl TestServer {
         WsClient::build(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))
-            .finish(Default::default())
+            .finish(SharedCfg::default())
             .await
             .unwrap()
             .connect()
@@ -460,7 +460,7 @@ impl TestServer {
             .timeout(Seconds(30))
             .openssl(builder.build())
             .take()
-            .finish(Default::default())
+            .finish(SharedCfg::default())
             .await
             .unwrap()
             .connect()

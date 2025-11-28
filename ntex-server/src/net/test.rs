@@ -67,7 +67,7 @@ where
 
             sys.run(move || {
                 let server = ServerBuilder::new()
-                    .listen("test", tcp, move |_| factory())?
+                    .listen("test", tcp, async move |_| factory())?
                     .config("test", config)
                     .workers(1)
                     .disable_signals()

@@ -10,7 +10,7 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     ntex::server::build()
-        .bind("hello-world", "127.0.0.1:8080", |_| {
+        .bind("hello-world", "127.0.0.1:8080", async |_| {
             HttpService::new(|_req| {
                 info!("{:?}", _req);
                 let mut res = Response::Ok();

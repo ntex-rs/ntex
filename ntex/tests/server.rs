@@ -23,7 +23,7 @@ fn test_bind() {
             let srv = build()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, move |_| {
+                .bind("test", addr, async move |_| {
                     fn_service(|_| Ready::Ok::<_, ()>(()))
                 })
                 .unwrap()
@@ -52,7 +52,9 @@ async fn test_listen() {
             let srv = build()
                 .disable_signals()
                 .workers(1)
-                .listen("test", lst, move |_| fn_service(|_| Ready::Ok::<_, ()>(())))
+                .listen("test", lst, async move |_| {
+                    fn_service(|_| Ready::Ok::<_, ()>(()))
+                })
                 .unwrap()
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
@@ -83,7 +85,7 @@ async fn test_run() {
                 .backlog(100)
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, move |_| {
+                .bind("test", addr, async move |_| {
                     fn_service(|io: Io| async move {
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())
@@ -345,7 +347,7 @@ fn test_on_accept() {
         sys.run(move || {
             let srv = build()
                 .disable_signals()
-                .bind("test", addr, move |_| {
+                .bind("test", addr, async move |_| {
                     fn_service(|io: Io| async move {
                         let _ = io.send(Bytes::from_static(b"test"), &BytesCodec).await;
                         Ok::<_, ()>(())

@@ -281,7 +281,7 @@ where
 /// ```
 pub fn server<F, I, S, B>(factory: F) -> HttpServer<F, I, S, B>
 where
-    F: Fn() -> I + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
     S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,

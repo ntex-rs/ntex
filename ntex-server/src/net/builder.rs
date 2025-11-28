@@ -149,10 +149,9 @@ impl ServerBuilder {
     ///
     /// This function is useful for moving parts of configuration to a
     /// different module or even library.
-    pub async fn configure<F, R>(mut self, f: F) -> io::Result<ServerBuilder>
+    pub async fn configure<F>(mut self, f: F) -> io::Result<ServerBuilder>
     where
-        F: Fn(ServiceConfig) -> R,
-        R: Future<Output = io::Result<()>>,
+        F: AsyncFn(ServiceConfig) -> io::Result<()>,
     {
         let cfg = ServiceConfig::new(self.token, self.backlog);
 
@@ -170,10 +169,9 @@ impl ServerBuilder {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
-    pub fn on_worker_start<F, R, E>(mut self, f: F) -> Self
+    pub fn on_worker_start<F, E>(mut self, f: F) -> Self
     where
-        F: Fn() -> R + Send + Clone + 'static,
-        R: Future<Output = Result<(), E>> + 'static,
+        F: AsyncFn() -> Result<(), E> + Send + Clone + 'static,
         E: fmt::Display + 'static,
     {
         self.on_worker_start.push(OnWorkerStartWrapper::create(f));
@@ -198,7 +196,7 @@ impl ServerBuilder {
     where
         U: net::ToSocketAddrs,
         N: AsRef<str>,
-        F: Fn(Config) -> R + Send + Clone + 'static,
+        F: AsyncFn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
@@ -226,7 +224,7 @@ impl ServerBuilder {
     where
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
-        F: Fn(Config) -> R + Send + Clone + 'static,
+        F: AsyncFn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         use std::os::unix::net::UnixListener;
@@ -255,7 +253,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: Fn(Config) -> R + Send + Clone + 'static,
+        F: AsyncFn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let token = self.token.next();
@@ -277,7 +275,7 @@ impl ServerBuilder {
         factory: F,
     ) -> io::Result<Self>
     where
-        F: Fn(Config) -> R + Send + Clone + 'static,
+        F: AsyncFn(Config) -> R + Send + Clone + 'static,
         R: ServiceFactory<Io, SharedCfg> + 'static,
     {
         let token = self.token.next();

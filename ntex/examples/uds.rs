@@ -21,7 +21,7 @@ async fn no_params() -> &'static str {
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    HttpServer::new(|| {
+    HttpServer::new(async || {
         App::new()
             .wrap(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
             .wrap(middleware::Logger::default())

@@ -29,7 +29,7 @@ async fn ws_service(
 
 #[ntex::test]
 async fn test_simple() {
-    let mut srv = test_server(|| {
+    let mut srv = test_server(async || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
             |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
@@ -88,7 +88,7 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_transport() {
-    let mut srv = test_server(|| {
+    let mut srv = test_server(async || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
             |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
@@ -131,7 +131,7 @@ async fn test_transport() {
 
 #[ntex::test]
 async fn test_keepalive_timeout() {
-    let srv = test_server(|| {
+    let srv = test_server(async || {
         HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).control(
             |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
@@ -171,7 +171,7 @@ async fn test_keepalive_timeout() {
     let con = ws::WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
-        .finish(Default::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap()
         .connect()
@@ -197,7 +197,7 @@ async fn test_upgrade_handler_with_await() {
         Ok(None)
     }
 
-    let srv = test_server(|| {
+    let srv = test_server(async || {
         HttpService::new(App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // some async context switch
@@ -218,7 +218,7 @@ async fn test_upgrade_handler_with_await() {
     let _ = ws::WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(1))
-        .finish(Default::default())
+        .finish(SharedCfg::default())
         .await
         .unwrap()
         .connect()
