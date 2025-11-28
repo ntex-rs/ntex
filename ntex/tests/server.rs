@@ -157,33 +157,30 @@ fn test_on_worker_start() {
                 let num = num.clone();
                 let srv = build()
                     .disable_signals()
-                    .configure(move |cfg| {
+                    .configure(async move |cfg| {
                         let num = num.clone();
-                        async move {
-                            let num = num.clone();
-                            let lst = net::TcpListener::bind(addr3).unwrap();
-                            cfg.bind("addr1", addr1)
-                                .unwrap()
-                                .bind("addr2", addr2)
-                                .unwrap()
-                                .listen("addr3", lst)
-                                .on_worker_start(move |rt| {
-                                    let num = num.clone();
-                                    async move {
-                                        rt.service(
-                                            "addr1",
-                                            fn_service(|_| Ready::Ok::<_, ()>(())),
-                                        );
-                                        rt.service(
-                                            "addr3",
-                                            fn_service(|_| Ready::Ok::<_, ()>(())),
-                                        );
-                                        let _ = num.fetch_add(1, Relaxed);
-                                        Ok::<_, io::Error>(())
-                                    }
-                                });
-                            Ok::<_, io::Error>(())
-                        }
+                        let lst = net::TcpListener::bind(addr3).unwrap();
+                        cfg.bind("addr1", addr1)
+                            .unwrap()
+                            .bind("addr2", addr2)
+                            .unwrap()
+                            .listen("addr3", lst)
+                            .on_worker_start(move |rt| {
+                                let num = num.clone();
+                                async move {
+                                    rt.service(
+                                        "addr1",
+                                        fn_service(|_| Ready::Ok::<_, ()>(())),
+                                    );
+                                    rt.service(
+                                        "addr3",
+                                        fn_service(|_| Ready::Ok::<_, ()>(())),
+                                    );
+                                    let _ = num.fetch_add(1, Relaxed);
+                                    Ok::<_, io::Error>(())
+                                }
+                            });
+                        Ok::<_, io::Error>(())
                     })
                     .await
                     .unwrap()
@@ -227,7 +224,7 @@ fn test_configure_async() {
             ntex_rt::spawn(async move {
                 let srv = build()
                     .disable_signals()
-                    .configure(move |cfg| {
+                    .configure(async move |cfg| {
                         let num = num.clone();
                         let lst = net::TcpListener::bind(addr3).unwrap();
                         cfg.bind("addr1", addr1)
@@ -252,7 +249,7 @@ fn test_configure_async() {
                                     Ok::<_, io::Error>(())
                                 }
                             });
-                        Ready::Ok::<_, io::Error>(())
+                        Ok::<_, io::Error>(())
                     })
                     .await
                     .unwrap()
@@ -298,7 +295,7 @@ fn test_panic_in_worker() {
             let srv = build()
                 .workers(1)
                 .disable_signals()
-                .bind("test", addr, move |_| {
+                .bind("test", addr, async move |_| {
                     let counter = counter.clone();
                     fn_service(move |_| {
                         counter.fetch_add(1, Relaxed);
