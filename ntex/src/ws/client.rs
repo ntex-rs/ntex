@@ -541,9 +541,9 @@ where
     }
 
     /// Complete building process and construct websockets client.
-    pub async fn finish(
+    pub async fn finish<U: Into<SharedCfg>>(
         &mut self,
-        cfg: SharedCfg,
+        cfg: U,
     ) -> Result<WsClient<F, T::Service>, WsClientBuilderError<T::InitError>> {
         if let Some(e) = self.err.take() {
             return Err(WsClientBuilderError::Http(e));
@@ -621,7 +621,7 @@ where
 
         let connector = inner
             .connector
-            .create(cfg)
+            .create(cfg.into())
             .await
             .map_err(WsClientBuilderError::Connector)?;
 

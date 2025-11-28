@@ -158,7 +158,7 @@ mod tests {
         let data = TestData::new(num.clone());
         assert_eq!(num.load(Ordering::SeqCst), 1);
 
-        let srv = web::test::server(move || {
+        let srv = web::test::server(async move || {
             let data = data.clone();
 
             App::new().state(data).service(

@@ -272,7 +272,7 @@ where
 /// #[ntex::main]
 /// async fn main() -> std::io::Result<()> {
 ///     web::server(
-///         || web::App::new()
+///         async || web::App::new()
 ///             .service(web::resource("/").to(|| async { web::HttpResponse::Ok() })))
 ///         .bind("127.0.0.1:59090")?
 ///         .run()
@@ -281,7 +281,7 @@ where
 /// ```
 pub fn server<F, I, S, B>(factory: F) -> HttpServer<F, I, S, B>
 where
-    F: Fn() -> I + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
     S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,

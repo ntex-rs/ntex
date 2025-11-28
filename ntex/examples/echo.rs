@@ -11,7 +11,7 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     ntex::server::build()
-        .bind("echo", "127.0.0.1:8080", |_| {
+        .bind("echo", "127.0.0.1:8080", async |_| {
             HttpService::new(|mut req: Request| async move {
                 let mut body = BytesMut::new();
                 while let Some(item) = req.payload().next().await {

@@ -74,7 +74,7 @@ async fn get_param_test(_: Path<String>) -> HttpResponse {
 
 #[ntex::test]
 async fn test_params() {
-    let srv = test::server(|| {
+    let srv = test::server(async || {
         App::new()
             .service(get_param_test)
             .service(put_param_test)
@@ -97,7 +97,7 @@ async fn test_params() {
 
 #[ntex::test]
 async fn test_body() {
-    let srv = test::server(|| {
+    let srv = test::server(async || {
         App::new()
             .service(post_test)
             .service(put_test)
@@ -146,7 +146,7 @@ async fn test_body() {
 
 #[ntex::test]
 async fn test_auto_async() {
-    let srv = test::server(|| App::new().service(auto_async)).await;
+    let srv = test::server(async || App::new().service(auto_async)).await;
 
     let request = srv.request(Method::GET, srv.url("/test"));
     let response = request.send().await.unwrap();

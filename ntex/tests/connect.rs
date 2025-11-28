@@ -38,7 +38,7 @@ async fn test_openssl_string() {
 
     let mut tcp = Some(tcp);
     let srv = build_test_server(move |srv| {
-        srv.listen("test", tcp.take().unwrap(), |_| {
+        srv.listen("test", tcp.take().unwrap(), async |_| {
             chain_factory(
                 fn_service(|io: Io<_>| async move {
                     let res = io.read_ready().await;

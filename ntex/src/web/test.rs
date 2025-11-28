@@ -546,7 +546,7 @@ impl TestRequest {
 /// ```
 pub async fn server<F, I, S, B>(factory: F) -> TestServer
 where
-    F: Fn() -> I + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
     S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
@@ -584,7 +584,7 @@ where
 /// ```
 pub async fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
-    F: Fn() -> I + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
     S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
@@ -624,38 +624,38 @@ where
 
             let srv = match cfg.stream {
                 StreamType::Tcp => match cfg.tp {
-                    HttpVer::Http1 => {
-                        builder.listen("test", tcp, move |_| HttpService::h1(factory()))
-                    }
-                    HttpVer::Http2 => {
-                        builder.listen("test", tcp, move |_| HttpService::h2(factory()))
-                    }
-                    HttpVer::Both => {
-                        builder.listen("test", tcp, move |_| HttpService::new(factory()))
-                    }
+                    HttpVer::Http1 => builder.listen("test", tcp, async move |_| {
+                        HttpService::h1(factory().await)
+                    }),
+                    HttpVer::Http2 => builder.listen("test", tcp, async move |_| {
+                        HttpService::h2(factory().await)
+                    }),
+                    HttpVer::Both => builder.listen("test", tcp, async move |_| {
+                        HttpService::new(factory().await)
+                    }),
                 },
                 #[cfg(feature = "openssl")]
                 StreamType::Openssl(acceptor) => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, move |_| {
-                        HttpService::h1(factory()).openssl(acceptor.clone())
+                    HttpVer::Http1 => builder.listen("test", tcp, async move |_| {
+                        HttpService::h1(factory().await).openssl(acceptor.clone())
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, move |_| {
-                        HttpService::h2(factory()).openssl(acceptor.clone())
+                    HttpVer::Http2 => builder.listen("test", tcp, async move |_| {
+                        HttpService::h2(factory().await).openssl(acceptor.clone())
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, move |_| {
-                        HttpService::new(factory()).openssl(acceptor.clone())
+                    HttpVer::Both => builder.listen("test", tcp, async move |_| {
+                        HttpService::new(factory().await).openssl(acceptor.clone())
                     }),
                 },
                 #[cfg(feature = "rustls")]
                 StreamType::Rustls(config) => match cfg.tp {
-                    HttpVer::Http1 => builder.listen("test", tcp, move |_| {
-                        HttpService::h1(factory()).rustls(config.clone())
+                    HttpVer::Http1 => builder.listen("test", tcp, async move |_| {
+                        HttpService::h1(factory().await).rustls(config.clone())
                     }),
-                    HttpVer::Http2 => builder.listen("test", tcp, move |_| {
-                        HttpService::h2(factory()).rustls(config.clone())
+                    HttpVer::Http2 => builder.listen("test", tcp, async move |_| {
+                        HttpService::h2(factory().await).rustls(config.clone())
                     }),
-                    HttpVer::Both => builder.listen("test", tcp, move |_| {
-                        HttpService::new(factory()).rustls(config.clone())
+                    HttpVer::Both => builder.listen("test", tcp, async move |_| {
+                        HttpService::new(factory().await).rustls(config.clone())
                     }),
                 },
             }
@@ -918,7 +918,7 @@ impl TestServer {
                     .timeout(Seconds(60))
                     .openssl(builder.build())
                     .take()
-                    .finish(Default::default())
+                    .finish(SharedCfg::default())
                     .await
                     .unwrap()
                     .connect()
@@ -933,7 +933,7 @@ impl TestServer {
             WsClient::build(self.url(path))
                 .address(self.addr)
                 .timeout(Seconds(60))
-                .finish(Default::default())
+                .finish(SharedCfg::default())
                 .await
                 .unwrap()
                 .connect()
@@ -1172,7 +1172,7 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_test_methods() {
-        let srv = server(|| {
+        let srv = server(|| async {
             App::new().service(
                 web::resource("/").route((
                     web::route()

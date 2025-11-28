@@ -25,7 +25,7 @@ struct Config {
 /// #[ntex::main]
 /// async fn main() -> std::io::Result<()> {
 ///     HttpServer::new(
-///         || App::new()
+///         async || App::new()
 ///             .service(web::resource("/").to(|| async { HttpResponse::Ok() })))
 ///         .bind("127.0.0.1:59090")?
 ///         .run()
@@ -34,7 +34,7 @@ struct Config {
 /// ```
 pub struct HttpServer<F, I, S, B>
 where
-    F: Fn() -> I + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
     S: ServiceFactory<Request, SharedCfg>,
     S::Error: ResponseError,
@@ -51,7 +51,7 @@ where
 
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
-    F: Fn() -> I + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
     S: ServiceFactory<Request, SharedCfg> + 'static,
     S::Error: ResponseError,
@@ -183,12 +183,14 @@ where
         let factory = self.factory.clone();
         let addr = lst.local_addr().unwrap();
 
-        self.builder =
-            self.builder
-                .listen(format!("ntex-web-service-{addr}"), lst, move |r| {
-                    r.config(cfg.lock().unwrap().cfg);
-                    HttpService::new(factory())
-                })?;
+        self.builder = self.builder.listen(
+            format!("ntex-web-service-{addr}"),
+            lst,
+            async move |r| {
+                r.config(cfg.lock().unwrap().cfg);
+                HttpService::new(factory().await)
+            },
+        )?;
         Ok(self)
     }
 
@@ -214,12 +216,14 @@ where
         let cfg = self.config.clone();
         let addr = lst.local_addr().unwrap();
 
-        self.builder =
-            self.builder
-                .listen(format!("ntex-web-service-{addr}"), lst, move |r| {
-                    r.config(cfg.lock().unwrap().cfg);
-                    HttpService::new(factory()).openssl(acceptor.clone())
-                })?;
+        self.builder = self.builder.listen(
+            format!("ntex-web-service-{addr}"),
+            lst,
+            async move |r| {
+                r.config(cfg.lock().unwrap().cfg);
+                HttpService::new(factory().await).openssl(acceptor.clone())
+            },
+        )?;
         Ok(self)
     }
 
@@ -248,9 +252,9 @@ where
         self.builder = self.builder.listen(
             format!("ntex-web-rustls-service-{addr}"),
             lst,
-            move |r| {
+            async move |r| {
                 r.config(cfg.lock().unwrap().cfg);
-                HttpService::new(factory()).rustls(config.clone())
+                HttpService::new(factory().await).rustls(config.clone())
             },
         )?;
         Ok(self)
@@ -344,9 +348,9 @@ where
         let factory = self.factory.clone();
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
-        self.builder = self.builder.listen_uds(addr, lst, move |r| {
+        self.builder = self.builder.listen_uds(addr, lst, async move |r| {
             r.config(cfg.lock().unwrap().cfg);
-            HttpService::new(factory())
+            HttpService::new(factory().await)
         })?;
         Ok(self)
     }
@@ -365,9 +369,9 @@ where
         self.builder = self.builder.bind_uds(
             format!("ntex-web-service-{:?}", addr.as_ref()),
             addr,
-            move |r| {
+            async move |r| {
                 r.config(cfg.lock().unwrap().cfg);
-                HttpService::new(factory())
+                HttpService::new(factory().await)
             },
         )?;
         Ok(self)
@@ -376,7 +380,7 @@ where
 
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
-    F: Fn() -> I + Send + Clone + 'static,
+    F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
     S: ServiceFactory<Request, SharedCfg>,
     S::Error: ResponseError,
@@ -400,7 +404,7 @@ where
     /// #[ntex::main]
     /// async fn main() -> std::io::Result<()> {
     ///     HttpServer::new(
-    ///         || App::new().service(web::resource("/").to(|| async { HttpResponse::Ok() }))
+    ///         async || App::new().service(web::resource("/").to(|| async { HttpResponse::Ok() }))
     ///     )
     ///         .bind("127.0.0.1:0")?
     ///         .run()

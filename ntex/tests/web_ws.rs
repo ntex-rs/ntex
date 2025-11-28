@@ -23,7 +23,7 @@ async fn service(msg: ws::Frame) -> Result<Option<ws::Message>, io::Error> {
 async fn web_ws() {
     let _ = env_logger::try_init();
 
-    let srv = test::server(|| {
+    let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 ws::start::<_, _, web::Error>(
@@ -71,7 +71,7 @@ async fn web_ws() {
 
 #[ntex::test]
 async fn web_no_ws() {
-    let srv = test::server(|| {
+    let srv = test::server(async || {
         App::new()
             .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
             .service(web::resource("/ws_error").route(web::to(|| async {
@@ -92,7 +92,7 @@ async fn web_no_ws() {
 
 #[ntex::test]
 async fn web_no_ws_2() {
-    let srv = test::server(|| {
+    let srv = test::server(async || {
         App::new().service(
             web::resource("/")
                 .route(web::to(|| async { HttpResponse::Ok().body("Hello world") })),
@@ -116,7 +116,7 @@ async fn web_no_ws_2() {
 
 #[ntex::test]
 async fn web_ws_client() {
-    let srv = test::server(|| {
+    let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 ws::start::<_, _, web::Error>(

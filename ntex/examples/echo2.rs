@@ -22,7 +22,7 @@ async fn main() -> io::Result<()> {
     env_logger::init();
 
     ntex::server::build()
-        .bind("echo", "127.0.0.1:8080", |_| {
+        .bind("echo", "127.0.0.1:8080", async |_| {
             HttpService::h2(handle_request)
         })?
         .run()

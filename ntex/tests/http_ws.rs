@@ -84,7 +84,7 @@ async fn test_simple() {
     let mut srv = test::server_with_config(
         {
             let ws_service = ws_service.clone();
-            move || {
+            async move || {
                 let ws_service = Pipeline::new(ws_service.clone());
                 HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
                     .control(move |req: h1::Control<_, _>| {
@@ -266,7 +266,7 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_transport() {
-    let mut srv = test_server(|| {
+    let mut srv = test_server(async || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
             move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {

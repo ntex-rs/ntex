@@ -447,7 +447,7 @@ where
     ///
     /// #[ntex::main]
     /// async fn main() -> std::io::Result<()> {
-    ///     server::build().bind("http", "127.0.0.1:0", |_|
+    ///     server::build().bind("http", "127.0.0.1:0", async |_|
     ///         http::HttpService::new(
     ///             web::App::new()
     ///                 .route("/index.html", web::get().to(|| async { "hello_world" }))

@@ -27,7 +27,7 @@ async fn main() -> io::Result<()> {
 
     // start server
     server::ServerBuilder::new()
-        .bind("basic", "127.0.0.1:8443", move |_| {
+        .bind("basic", "127.0.0.1:8443", async move |_| {
             chain_factory(TlsAcceptor::new(tls_config.clone())).and_then(fn_service(
                 |io: Io<_>| async move {
                     println!("New client is connected");

@@ -2,12 +2,12 @@ use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
 use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
-use ntex_util::future::{BoxFuture, Ready};
+use ntex_util::future::BoxFuture;
 
 use super::{Config, Token, socket::Stream};
 
 pub(super) type BoxServerService = boxed::BoxServiceFactory<SharedCfg, Io, (), (), ()>;
-pub(crate) type FactoryServiceType = Box<dyn FactoryService>;
+pub(super) type FactoryServiceType = Box<dyn FactoryService>;
 
 #[derive(Debug)]
 pub(crate) struct NetService {
@@ -22,11 +22,17 @@ pub(crate) trait FactoryService: Send {
         ""
     }
 
+    fn clone_factory(&self) -> FactoryServiceType;
+
     fn set_config(&mut self, _: Token, _: SharedCfg) {}
 
-    fn clone_factory(&self) -> Box<dyn FactoryService>;
-
     fn create(&self) -> BoxFuture<'static, Result<Vec<NetService>, ()>>;
+}
+
+struct Factory {
+    name: Arc<str>,
+    tokens: Vec<(Token, SharedCfg)>,
+    factory: Box<dyn FactoryWrapper + Send>,
 }
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
@@ -43,44 +49,56 @@ pub(crate) fn create_factory_service<F, R>(
     name: String,
     tokens: Vec<(Token, SharedCfg)>,
     factory: F,
-) -> Box<dyn FactoryService>
+) -> FactoryServiceType
 where
-    F: Fn(Config) -> R + Send + Clone + 'static,
+    F: AsyncFn(Config) -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedCfg> + 'static,
 {
-    Box::new(Factory {
+    let name: Arc<str> = Arc::from(name.clone());
+
+    Box::from(Factory {
         tokens,
         name: name.clone(),
-        factory: move |cfg| {
-            Ready::Ok::<_, &'static str>(create_boxed_factory(name.clone(), (factory)(cfg)))
-        },
-        _t: PhantomData,
+        factory: Box::new(FactoryWrapperImpl(async move |cfg| {
+            boxed::factory(ServerServiceFactory {
+                name: name.clone(),
+                factory: (factory)(cfg).await,
+            })
+        })),
     })
 }
 
-struct Factory<F, R, E> {
-    name: String,
-    tokens: Vec<(Token, SharedCfg)>,
-    factory: F,
-    _t: PhantomData<(R, E)>,
+struct FactoryWrapperImpl<F>(F);
+
+trait FactoryWrapper: Send {
+    fn clone(&self) -> Box<dyn FactoryWrapper>;
+    fn run(&self, cfg: Config) -> BoxFuture<'static, BoxServerService>;
 }
 
-impl<F, R, E> FactoryService for Factory<F, R, E>
+impl<F> FactoryWrapper for FactoryWrapperImpl<F>
 where
-    F: Fn(Config) -> R + Send + Clone + 'static,
-    R: Future<Output = Result<BoxServerService, E>> + 'static,
-    E: fmt::Display + 'static,
+    F: AsyncFn(Config) -> BoxServerService + Send + Clone + 'static,
 {
+    fn clone(&self) -> Box<dyn FactoryWrapper> {
+        Box::new(Self(self.0.clone()))
+    }
+
+    fn run(&self, cfg: Config) -> BoxFuture<'static, BoxServerService> {
+        let f = self.0.clone();
+        Box::pin(async move { f(cfg).await })
+    }
+}
+
+impl FactoryService for Factory {
     fn name(&self, _: Token) -> &str {
         &self.name
     }
 
-    fn clone_factory(&self) -> Box<dyn FactoryService> {
-        Box::new(Self {
+    fn clone_factory(&self) -> FactoryServiceType {
+        Box::new(Factory {
             name: self.name.clone(),
             tokens: self.tokens.clone(),
             factory: self.factory.clone(),
-            _t: PhantomData,
         })
     }
 
@@ -96,12 +114,13 @@ where
         let cfg = Config::default();
         let name = self.name.clone();
         let mut tokens = self.tokens.clone();
-        let factory_fut = (self.factory)(cfg.clone());
+        let factory_fut = self.factory.run(cfg.clone());
 
         Box::pin(async move {
-            let factory = factory_fut.await.map_err(|_| {
-                log::error!("Cannot create {name:?} service");
-            })?;
+            //let factory = factory_fut.await.map_err(|_| {
+            //log::error!("Cannot create {name:?} service");
+            //})?;
+            let factory = factory_fut.await;
             if let Some(config) = cfg.get_config() {
                 for item in &mut tokens {
                     item.1 = config;
@@ -109,9 +128,9 @@ where
             }
 
             Ok(vec![NetService {
+                name,
                 tokens,
                 factory,
-                name: Arc::from(name),
                 config: cfg.get_config().unwrap_or_default(),
             }])
         })
@@ -165,7 +184,7 @@ where
 
 // SAFETY: Send cannot be provided authomatically because of E and R params
 // but R always get executed in one thread and never leave it
-unsafe impl<F, R, E> Send for Factory<F, R, E> where F: Send {}
+unsafe impl Send for Factory {}
 
 pub(crate) trait OnWorkerStart {
     fn clone_fn(&self) -> Box<dyn OnWorkerStart + Send>;
@@ -173,17 +192,16 @@ pub(crate) trait OnWorkerStart {
     fn run(&self) -> BoxFuture<'static, Result<(), ()>>;
 }
 
-pub(super) struct OnWorkerStartWrapper<F, R, E> {
+pub(super) struct OnWorkerStartWrapper<F, E> {
     pub(super) f: F,
-    pub(super) _t: PhantomData<(R, E)>,
+    pub(super) _t: PhantomData<E>,
 }
 
-unsafe impl<F, R, E> Send for OnWorkerStartWrapper<F, R, E> where F: Send {}
+unsafe impl<F, E> Send for OnWorkerStartWrapper<F, E> where F: Send {}
 
-impl<F, R, E> OnWorkerStartWrapper<F, R, E>
+impl<F, E> OnWorkerStartWrapper<F, E>
 where
-    F: Fn() -> R + Send + Clone + 'static,
-    R: Future<Output = Result<(), E>> + 'static,
+    F: AsyncFn() -> Result<(), E> + Send + Clone + 'static,
     E: fmt::Display + 'static,
 {
     pub(super) fn create(f: F) -> Box<dyn OnWorkerStart + Send> {
@@ -191,10 +209,9 @@ where
     }
 }
 
-impl<F, R, E> OnWorkerStart for OnWorkerStartWrapper<F, R, E>
+impl<F, E> OnWorkerStart for OnWorkerStartWrapper<F, E>
 where
-    F: Fn() -> R + Send + Clone + 'static,
-    R: Future<Output = Result<(), E>> + 'static,
+    F: AsyncFn() -> Result<(), E> + Send + Clone + 'static,
     E: fmt::Display + 'static,
 {
     fn clone_fn(&self) -> Box<dyn OnWorkerStart + Send> {
