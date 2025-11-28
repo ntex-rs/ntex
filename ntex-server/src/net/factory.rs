@@ -128,9 +128,9 @@ impl FactoryService for Factory {
             }
 
             Ok(vec![NetService {
+                name,
                 tokens,
                 factory,
-                name: Arc::from(name),
                 config: cfg.get_config().unwrap_or_default(),
             }])
         })
