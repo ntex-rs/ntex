@@ -25,7 +25,7 @@ struct Config {
 /// #[ntex::main]
 /// async fn main() -> std::io::Result<()> {
 ///     HttpServer::new(
-///         || App::new()
+///         async || App::new()
 ///             .service(web::resource("/").to(|| async { HttpResponse::Ok() })))
 ///         .bind("127.0.0.1:59090")?
 ///         .run()
@@ -404,7 +404,7 @@ where
     /// #[ntex::main]
     /// async fn main() -> std::io::Result<()> {
     ///     HttpServer::new(
-    ///         || App::new().service(web::resource("/").to(|| async { HttpResponse::Ok() }))
+    ///         async || App::new().service(web::resource("/").to(|| async { HttpResponse::Ok() }))
     ///     )
     ///         .bind("127.0.0.1:0")?
     ///         .run()

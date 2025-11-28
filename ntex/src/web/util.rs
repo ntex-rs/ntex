@@ -272,7 +272,7 @@ where
 /// #[ntex::main]
 /// async fn main() -> std::io::Result<()> {
 ///     web::server(
-///         || web::App::new()
+///         async || web::App::new()
 ///             .service(web::resource("/").to(|| async { web::HttpResponse::Ok() })))
 ///         .bind("127.0.0.1:59090")?
 ///         .run()

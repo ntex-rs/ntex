@@ -9,7 +9,7 @@
 //!
 //! #[ntex::main]
 //! async fn main() -> std::io::Result<()> {
-//!     web::server(|| web::App::new().service(
+//!     web::server(async || web::App::new().service(
 //!         web::resource("/{name}/{id}/index.html").to(index))
 //!     )
 //!         .bind("127.0.0.1:8080")?
