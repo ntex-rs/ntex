@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.2] - 2025-11-30
+
+* Do not swallow error from rt-polling/rt-uring drivers
+
 ## [3.0.0-pre.0] - 2025-11-27
 
 * New io configuration subsystem

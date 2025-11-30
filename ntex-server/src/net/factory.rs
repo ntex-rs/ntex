@@ -114,12 +114,12 @@ impl FactoryService for Factory {
         let cfg = Config::default();
         let name = self.name.clone();
         let mut tokens = self.tokens.clone();
+        for item in &tokens {
+            cfg.config(item.1);
+        }
         let factory_fut = self.factory.run(cfg.clone());
 
         Box::pin(async move {
-            //let factory = factory_fut.await.map_err(|_| {
-            //log::error!("Cannot create {name:?} service");
-            //})?;
             let factory = factory_fut.await;
             if let Some(config) = cfg.get_config() {
                 for item in &mut tokens {

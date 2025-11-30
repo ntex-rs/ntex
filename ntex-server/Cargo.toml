@@ -1,6 +1,6 @@
 [package]
 name = "ntex-server"
-version = "3.0.0-pre.1"
+version = "3.0.0-pre.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Server for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -17,8 +17,8 @@ name = "ntex_server"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-io = "3.0.0-pre.1"
-ntex-net = "3.0.0-pre.0"
+ntex-io = "3.0.0-pre.2"
+ntex-net = "3.0.0-pre.2"
 ntex-service = "3.6.2"
 ntex-rt = "3"
 ntex-util = "3"
