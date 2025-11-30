@@ -135,7 +135,7 @@ impl IoContext {
 
                     if status.nbytes > 0 {
                         // dest buffer has new data, wake up dispatcher
-                        if hw < buffer_size {
+                        if buffer_size >= hw {
                             log::trace!(
                                 "{}: Io read buffer is too large {}, enable read back-pressure",
                                 self.tag(),
