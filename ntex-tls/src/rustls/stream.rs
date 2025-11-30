@@ -90,7 +90,7 @@ where
                             let v = self.session.reader().read(chunk)?;
                             unsafe { dst.advance_mut(v) };
                             new_bytes += v;
-                        } else {
+                        } else iF src.is_empty() {
                             break;
                         }
                     }

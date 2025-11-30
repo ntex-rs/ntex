@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.2] - 2025-11-30
+
+* Fix rustls stream reading
+
 ## [2.6.0] - 2025-07-29
 
 * Fix the rustls handshake negotiation #620
