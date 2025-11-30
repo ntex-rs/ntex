@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.3] - 2025-11-30
+
+* Fix missing config log
+
 ## [3.6.2] - 2025-11-27
 
 * Fix default config context

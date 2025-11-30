@@ -112,7 +112,6 @@ impl IoContext {
         result: Poll<Result<(), Option<io::Error>>>,
     ) -> IoTaskStatus {
         let inner = &self.0.0;
-        let orig_size = inner.buffer.read_destination_size();
         let hw = self.0.cfg().read_buf().high;
 
         if let Some(mut first_buf) = inner.buffer.get_read_source() {
@@ -133,7 +132,8 @@ impl IoContext {
             {
                 Ok(status) => {
                     let buffer_size = inner.buffer.read_destination_size();
-                    if buffer_size.saturating_sub(orig_size) > 0 {
+
+                    if status.nbytes > 0 {
                         // dest buffer has new data, wake up dispatcher
                         if buffer_size >= hw {
                             log::trace!(
@@ -159,7 +159,7 @@ impl IoContext {
                             // so we need to wake up read task to read more data
                             // otherwise read task would sleep forever
                             full = true;
-                            inner.read_task.wake();
+                            inner.remove_flags(Flags::BUF_R_FULL);
                         }
                         if inner.flags.get().is_waiting_for_read() {
                             // in case of "notify" we must wake up dispatch task
