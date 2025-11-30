@@ -112,7 +112,7 @@ where
 /// #[ntex::test]
 /// async fn test_example() {
 ///     let mut srv = server::test_server(
-///         || http::HttpService::new(
+///         async || http::HttpService::new(
 ///             App::new().service(
 ///                 web::resource("/").to(my_handler))
 ///         )
