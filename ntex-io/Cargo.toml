@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "3.0.0-pre.1"
+version = "3.0.0-pre.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
@@ -20,7 +20,7 @@ path = "src/lib.rs"
 ntex-codec = "1"
 ntex-bytes = "1"
 ntex-util = "3"
-ntex-service = "3.6.2"
+ntex-service = "3.6.3"
 
 bitflags = { workspace = true }
 log = { workspace = true }

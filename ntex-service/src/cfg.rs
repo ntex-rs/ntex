@@ -167,16 +167,16 @@ impl SharedCfg {
             .and_then(|boxed| boxed.downcast_ref())
             .map(Cfg)
             .unwrap_or_else(|| {
-                log::info!(
-                    "{}: Configuration {:?} does not exist, using default",
-                    self.tag(),
-                    T::NAME
-                );
                 MAPPING.with(|store| {
                     let key = (self.0.id, tp);
                     if let Some(boxed) = store.borrow().get(&key) {
                         Cfg(boxed.downcast_ref().unwrap())
                     } else {
+                        log::info!(
+                            "{}: Configuration {:?} does not exist, using default",
+                            self.tag(),
+                            T::NAME
+                        );
                         let mut val = T::default();
                         val.set_ctx(CfgContext(self.0));
                         store.borrow_mut().insert(key, Box::leak(Box::new(val)));
