@@ -95,7 +95,7 @@ async fn test_openssl_read_before_error() {
     use ntex::server::openssl;
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-    let srv = test_server(|| {
+    let srv = test_server(async || {
         chain_factory(
             fn_service(|io: Io<_>| async move {
                 let res = io.read_ready().await;
@@ -146,7 +146,7 @@ async fn test_rustls_string() {
     use ntex::{io::types::HttpProtocol, server::rustls};
     use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain};
 
-    let srv = test_server(|| {
+    let srv = test_server(async || {
         chain_factory(
             fn_service(|io: Io<_>| async move {
                 let res = io.read_ready().await;
@@ -208,7 +208,7 @@ async fn test_rustls_string() {
 
 #[ntex::test]
 async fn test_static_str() {
-    let srv = test_server(|| {
+    let srv = test_server(async || {
         fn_service(|io: Io| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
@@ -231,7 +231,7 @@ async fn test_static_str() {
 
 #[ntex::test]
 async fn test_create() {
-    let srv = test_server(|| {
+    let srv = test_server(async || {
         fn_service(|io: Io| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
@@ -249,7 +249,7 @@ async fn test_create() {
 #[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_uri() {
-    let srv = test_server(|| {
+    let srv = test_server(async || {
         fn_service(|io: Io| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
@@ -269,7 +269,7 @@ async fn test_uri() {
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_uri() {
-    let srv = test_server(|| {
+    let srv = test_server(async || {
         fn_service(|io: Io| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await

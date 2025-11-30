@@ -28,7 +28,7 @@ impl<F, R> fmt::Debug for TestServerBuilder<F, R> {
 
 impl<F, R> TestServerBuilder<F, R>
 where
-    F: Fn() -> R + Send + Clone + 'static,
+    F: AsyncFn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedCfg> + 'static,
 {
     pub fn new(factory: F) -> Self {
@@ -67,7 +67,7 @@ where
 
             sys.run(move || {
                 let server = ServerBuilder::new()
-                    .listen("test", tcp, async move |_| factory())?
+                    .listen("test", tcp, async move |_| factory().await)?
                     .config("test", config)
                     .workers(1)
                     .disable_signals()
@@ -125,7 +125,7 @@ where
 /// ```
 pub fn test_server<F, R>(factory: F) -> TestServer
 where
-    F: Fn() -> R + Send + Clone + 'static,
+    F: AsyncFn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedCfg> + 'static,
 {
     TestServerBuilder::new(factory).start()

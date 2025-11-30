@@ -136,7 +136,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_rustls_connect() {
-        let server = ntex::server::test_server(|| {
+        let server = ntex::server::test_server(async || {
             ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
