@@ -1,7 +1,7 @@
 use std::{cell::Cell, fmt, io, task::Context, task::Poll};
 
 use ntex_bytes::{Buf, BytesVec};
-use ntex_util::time::{Sleep, sleep};
+use ntex_util::time::{sleep, Sleep};
 
 use crate::{FilterCtx, Flags, IoRef, IoTaskStatus, Readiness};
 
@@ -22,7 +22,7 @@ impl IoContext {
     #[doc(hidden)]
     #[inline]
     pub fn id(&self) -> usize {
-        self.0.0.as_ref() as *const _ as usize
+        self.0 .0.as_ref() as *const _ as usize
     }
 
     #[inline]
@@ -54,7 +54,7 @@ impl IoContext {
     #[inline]
     /// Stop io
     pub fn stop(&self, e: Option<io::Error>) {
-        self.0.0.io_stopped(e);
+        self.0 .0.io_stopped(e);
     }
 
     #[inline]
@@ -65,7 +65,7 @@ impl IoContext {
 
     /// Wait when io get closed or preparing for close
     pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
-        let st = &self.0.0;
+        let st = &self.0 .0;
         let flags = self.0.flags();
 
         if flush && !flags.contains(Flags::IO_STOPPED) {
@@ -85,7 +85,7 @@ impl IoContext {
 
     /// Get read buffer
     pub fn get_read_buf(&self) -> BytesVec {
-        let inner = &self.0.0;
+        let inner = &self.0 .0;
 
         if inner.flags.get().is_read_buf_ready() {
             // read buffer is still not read by dispatcher
@@ -101,7 +101,7 @@ impl IoContext {
 
     /// Resize read buffer
     pub fn resize_read_buf(&self, buf: &mut BytesVec) {
-        self.0.0.read_buf().resize(buf);
+        self.0 .0.read_buf().resize(buf);
     }
 
     /// Set read buffer
@@ -111,7 +111,7 @@ impl IoContext {
         buf: BytesVec,
         result: Poll<Result<(), Option<io::Error>>>,
     ) -> IoTaskStatus {
-        let inner = &self.0.0;
+        let inner = &self.0 .0;
         let hw = self.0.cfg().read_buf().high;
 
         if let Some(mut first_buf) = inner.buffer.get_read_source() {
@@ -159,6 +159,7 @@ impl IoContext {
                             // so we need to wake up read task to read more data
                             // otherwise read task would sleep forever
                             full = true;
+                            inner.remove_flags(Flags::BUF_R_FULL);
                         }
                         if inner.flags.get().is_waiting_for_read() {
                             // in case of "notify" we must wake up dispatch task
@@ -218,11 +219,13 @@ impl IoContext {
     #[inline]
     /// Get write buffer
     pub fn get_write_buf(&self) -> Option<BytesVec> {
-        self.0
-            .0
-            .buffer
-            .get_write_destination()
-            .and_then(|buf| if buf.is_empty() { None } else { Some(buf) })
+        self.0 .0.buffer.get_write_destination().and_then(|buf| {
+            if buf.is_empty() {
+                None
+            } else {
+                Some(buf)
+            }
+        })
     }
 
     /// Set write buffer
@@ -252,7 +255,7 @@ impl IoContext {
             Poll::Pending => Ok(buf.len()),
         };
 
-        let inner = &self.0.0;
+        let inner = &self.0 .0;
 
         // set buffer back
         let result = match result {
@@ -314,7 +317,7 @@ impl IoContext {
 
     fn shutdown_filters(&self, cx: &mut Context<'_>) {
         let io = &self.0;
-        let st = &self.0.0;
+        let st = &self.0 .0;
         let flags = st.flags.get();
         if flags.contains(Flags::IO_STOPPING_FILTERS)
             && !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
