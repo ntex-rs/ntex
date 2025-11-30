@@ -1,11 +1,14 @@
-use std::{io, net::SocketAddr, os::fd::FromRawFd, path::Path};
+use std::{error, io, net::SocketAddr, os::fd::FromRawFd, path::Path};
 
 use ntex_neon::syscall;
 use ntex_util::channel::oneshot::channel;
 use socket2::{Protocol, SockAddr, Socket, Type};
 
-pub(crate) fn pool_io_err<T, E>(result: std::result::Result<T, E>) -> io::Result<T> {
-    result.map_err(|_| io::Error::other("Thread pool panic"))
+pub(crate) fn pool_io_err<T, E>(result: std::result::Result<T, E>) -> io::Result<T>
+where
+    E: error::Error + Send + Sync + 'static,
+{
+    result.map_err(|e| io::Error::other(e))
 }
 
 pub(crate) async fn connect(addr: SocketAddr) -> io::Result<Socket> {
