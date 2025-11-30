@@ -166,7 +166,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_connect() {
-        let server = ntex::server::test_server(|| {
+        let server = ntex::server::test_server(async || {
             ntex_service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 

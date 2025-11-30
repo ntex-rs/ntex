@@ -93,7 +93,7 @@ mod tests {
         let (tx, rx) = ::oneshot::channel();
         let tx = Arc::new(Mutex::new(Some(tx)));
 
-        let server = ntex::server::test_server(move || {
+        let server = ntex::server::test_server(async move || {
             let tx = tx.clone();
             ntex_service::fn_service(move |io: Io<_>| {
                 tx.lock().unwrap().take().unwrap().send(()).unwrap();

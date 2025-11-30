@@ -337,12 +337,12 @@ where
     where
         C: Into<Cookie<'static>>,
     {
-        if self.cookies.is_none() {
+        if let Some(cookies) = &mut self.cookies {
+            cookies.add(cookie.into());
+        } else {
             let mut jar = CookieJar::new();
             jar.add(cookie.into());
             self.cookies = Some(jar)
-        } else {
-            self.cookies.as_mut().unwrap().add(cookie.into());
         }
         self
     }
