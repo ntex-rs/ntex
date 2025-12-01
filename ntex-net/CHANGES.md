@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.3] - 2025-12-01
+
+* Export missing types
+
 ## [3.0.0-pre.2] - 2025-11-30
 
 * Do not swallow error from rt-polling/rt-uring drivers

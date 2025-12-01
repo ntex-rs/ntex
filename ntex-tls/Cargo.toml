@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "3.0.0-pre.2"
+version = "3.0.0-pre.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]
@@ -31,7 +31,7 @@ ntex-bytes = "1"
 ntex-io = "3.0.0-pre.2"
 ntex-util = "3"
 ntex-service = "3.6.3"
-ntex-net = "3.0.0-pre.0"
+ntex-net = "3.0.0-pre.3"
 
 log = { workspace = true }
 
