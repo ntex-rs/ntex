@@ -426,7 +426,12 @@ mod tests {
         };
 
         unsafe {
-            let set = crate::spawn_cbs_try(before, enter, exit, after);
+            let set = crate::spawn_cbs_try(
+                before.clone(),
+                enter.clone(),
+                exit.clone(),
+                after.clone(),
+            );
             assert!(set);
             let set = crate::spawn_cbs_try(before, enter, exit, after);
             assert!(!set);

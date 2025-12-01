@@ -77,7 +77,7 @@ pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
     FAfter: Fn(*const ()) + 'static,
 {
     CB.with(|cb| {
-        if cb.get().is_null() {
+        if !cb.get().is_null() {
             panic!("Spawn callbacks already set");
         }
 
@@ -112,10 +112,12 @@ where
     FAfter: Fn(*const ()) + 'static,
 {
     CB.with(|cb| {
-        if cb.get().is_null() {
+        if !cb.get().is_null() {
             false
         } else {
-            spawn_cbs(before, enter, exit, after);
+            unsafe {
+                spawn_cbs(before, enter, exit, after);
+            }
             true
         }
     })
