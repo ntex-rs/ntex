@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.3] - 2025-12-xx
+
+* Export missing types
+
 ## [3.0.0-pre.0] - 2025-11-27
 
 * Update ntex-net and ntex-io versions
