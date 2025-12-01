@@ -148,9 +148,10 @@ where
                 .workers(1)
                 .disable_signals()
                 .run();
-            tx.send((system, server))
+            tx.send((system, server.clone()))
                 .expect("Failed to send Server to TestServer");
-        })
+            let _ = server.await;
+        });
     });
     let (system, server) = rx.recv().unwrap();
 

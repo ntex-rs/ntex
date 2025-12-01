@@ -66,12 +66,10 @@ async fn test_openssl_string() {
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
 
-    let conn = Pipeline::new(
-        ntex::connect::openssl::SslConnector::new(builder.build())
-            .create(SharedCfg::default())
-            .await
-            .unwrap(),
-    );
+    let conn = ntex::connect::openssl::SslConnector::new(builder.build())
+        .pipeline(SharedCfg::default())
+        .await
+        .unwrap();
     let addr = format!("127.0.0.1:{}", srv.addr().port());
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
