@@ -110,7 +110,7 @@ where
             spawn_cbs(before, enter, exit, after);
             true
         }
-    });
+    })
 }
 
 #[allow(dead_code)]
