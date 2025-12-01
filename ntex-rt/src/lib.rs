@@ -77,17 +77,50 @@ pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
     FAfter: Fn(*const ()) + 'static,
 {
     CB.with(|cb| {
+        if !cb.get().is_null() {
+            panic!("Spawn callbacks already set");
+        }
+
         let new: *mut Callbacks = Box::leak(Box::new(Callbacks {
             before: Box::new(before),
             enter: Box::new(enter),
             exit: Box::new(exit),
             after: Box::new(after),
         }));
-
-        if !cb.replace(new).is_null() {
-            panic!("Spawn callbacks already set");
-        }
+        cb.replace(new);
     });
+}
+
+/// # Safety
+///
+/// The user must ensure that the pointer returned by `before` has a `'static` lifetime.
+/// This pointer will be owned by the spawned task for the duration of that task, and
+/// ownership will be returned to the user at the end of the task via `after`.
+/// The pointer remains opaque to the runtime.
+///
+/// Returns false if spawn callbacks have already been set.
+pub unsafe fn spawn_cbs_try<FBefore, FEnter, FExit, FAfter>(
+    before: FBefore,
+    enter: FEnter,
+    exit: FExit,
+    after: FAfter,
+) -> bool
+where
+    FBefore: Fn() -> Option<*const ()> + 'static,
+    FEnter: Fn(*const ()) -> *const () + 'static,
+    FExit: Fn(*const ()) + 'static,
+    FAfter: Fn(*const ()) + 'static,
+{
+    CB.with(|cb| {
+        if !cb.get().is_null() {
+            false
+        } else {
+            unsafe {
+                spawn_cbs(before, enter, exit, after);
+            }
+            true
+        }
+    })
 }
 
 #[allow(dead_code)]

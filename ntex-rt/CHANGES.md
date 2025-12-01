@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.1] - 2025-12-01
+
+* Add spawn_cbs_try helper method, returns bool and does not panics
+
 ## [3.0.0] - 2025-11-27
 
 * Update MSRV
