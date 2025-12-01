@@ -207,7 +207,7 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
 }
 
 /// Manages http client network connectivity.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ConnectorService {
     tcp_pool: ConnectionPool,
     ssl_pool: Option<ConnectionPool>,

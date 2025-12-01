@@ -46,6 +46,12 @@ impl Clone for ConnectError {
     }
 }
 
+impl From<ConnectServiceError> for io::Error {
+    fn from(err: ConnectServiceError) -> io::Error {
+        io::Error::other(err)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

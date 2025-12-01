@@ -11,7 +11,7 @@ use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::util::{Either, clone_io_error};
 
 /// A set of errors that can occur during parsing json payloads
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum JsonPayloadError {
     /// Content type error
     #[error("Content type error")]
@@ -25,7 +25,7 @@ pub enum JsonPayloadError {
 }
 
 /// A set of errors that can occur while building HTTP client
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Copy, Clone, Debug)]
 pub enum ClientBuilderError {
     /// Connector failed
     #[error("Cannot construct connector")]
@@ -33,7 +33,7 @@ pub enum ClientBuilderError {
 }
 
 /// A set of errors that can occur while connecting to an HTTP host
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ConnectError {
     /// SSL feature is not enabled
     #[error("SSL is not supported")]
@@ -121,7 +121,7 @@ impl<T: std::fmt::Debug> From<HandshakeError<T>> for ConnectError {
     }
 }
 
-#[derive(Clone, Error, Debug)]
+#[derive(Clone, thiserror::Error, Debug)]
 pub enum InvalidUrl {
     #[error("Missing url scheme")]
     MissingScheme,
@@ -134,7 +134,7 @@ pub enum InvalidUrl {
 }
 
 /// A set of errors that can occur during request sending and response reading
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum SendRequestError {
     /// Invalid URL
     #[error("Invalid URL: {0}")]
@@ -222,5 +222,11 @@ impl From<FreezeRequestError> for SendRequestError {
             FreezeRequestError::Url(e) => e.into(),
             FreezeRequestError::Http(e) => e.into(),
         }
+    }
+}
+
+impl From<ClientBuilderError> for io::Error {
+    fn from(err: ClientBuilderError) -> io::Error {
+        io::Error::other(err)
     }
 }
