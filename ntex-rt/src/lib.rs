@@ -91,6 +91,14 @@ pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
     });
 }
 
+/// # Safety
+///
+/// The user must ensure that the pointer returned by `before` has a `'static` lifetime.
+/// This pointer will be owned by the spawned task for the duration of that task, and
+/// ownership will be returned to the user at the end of the task via `after`.
+/// The pointer remains opaque to the runtime.
+///
+/// Returns false if spawn callbacks have already been set.
 pub unsafe fn spawn_cbs_try<FBefore, FEnter, FExit, FAfter>(
     before: FBefore,
     enter: FEnter,
