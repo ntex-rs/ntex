@@ -134,7 +134,7 @@ where
 /// Start new server with server builder
 pub fn build_test_server<F>(factory: F) -> TestServer
 where
-    F: FnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
+    F: AsyncFnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
 {
     let (tx, rx) = oneshot::channel();
     // run server in separate thread
@@ -142,11 +142,14 @@ where
         let sys = System::new("ntex-test-server");
         let system = sys.system();
 
-        sys.run(|| {
-            let server = factory(super::build()).workers(1).disable_signals().run();
+        sys.block_on(async move {
+            let server = factory(super::build())
+                .await
+                .workers(1)
+                .disable_signals()
+                .run();
             tx.send((system, server))
                 .expect("Failed to send Server to TestServer");
-            Ok(())
         })
     });
     let (system, server) = rx.recv().unwrap();

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, fmt, io, net::SocketAddr};
+use std::{collections::VecDeque, io, marker::PhantomData, net::SocketAddr};
 
 use ntex_io::{Io, IoConfig, types};
 use ntex_service::cfg::{Cfg, SharedCfg};
@@ -8,19 +8,35 @@ use ntex_util::{future::Either, time::timeout_checked};
 use super::{Address, Connect, ConnectError, ConnectServiceError, Resolver};
 use crate::tcp_connect;
 
+#[derive(Copy, Clone, Debug)]
 /// Basic tcp stream connector
-pub struct Connector<T> {
+pub struct Connector<T>(PhantomData<T>);
+
+#[derive(Copy, Clone, Debug)]
+/// Basic tcp stream connector
+pub struct ConnectorService<T> {
     cfg: Cfg<IoConfig>,
     shared: SharedCfg,
     resolver: Resolver<T>,
 }
 
-impl<T> Copy for Connector<T> {}
-
 impl<T> Connector<T> {
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
-        Connector {
+        Connector(PhantomData)
+    }
+}
+
+impl<T> Default for Connector<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> ConnectorService<T> {
+    /// Construct new connect service with default configuration
+    pub fn new() -> Self {
+        ConnectorService {
             cfg: Default::default(),
             shared: Default::default(),
             resolver: Resolver::new(),
@@ -29,7 +45,7 @@ impl<T> Connector<T> {
 
     /// Construct new connect service with custom configuration
     pub fn with(cfg: SharedCfg) -> Self {
-        Connector {
+        ConnectorService {
             cfg: cfg.get(),
             shared: cfg,
             resolver: Resolver::new(),
@@ -37,7 +53,13 @@ impl<T> Connector<T> {
     }
 }
 
-impl<T: Address> Connector<T> {
+impl<T> Default for ConnectorService<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Address> ConnectorService<T> {
     /// Resolve and connect to remote host
     pub async fn connect<U>(&self, message: U) -> Result<Io, ConnectError>
     where
@@ -70,39 +92,18 @@ impl<T: Address> Connector<T> {
     }
 }
 
-impl<T> Default for Connector<T> {
-    fn default() -> Self {
-        Connector::new()
-    }
-}
-
-impl<T> Clone for Connector<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> fmt::Debug for Connector<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Connector")
-            .field("cfg", &self.cfg)
-            .field("resolver", &self.resolver)
-            .finish()
-    }
-}
-
 impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
     type Response = Io;
     type Error = ConnectError;
-    type Service = Connector<T>;
+    type Service = ConnectorService<T>;
     type InitError = ConnectServiceError;
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        Ok(Connector::with(cfg))
+        Ok(ConnectorService::with(cfg))
     }
 }
 
-impl<T: Address> Service<Connect<T>> for Connector<T> {
+impl<T: Address> Service<Connect<T>> for ConnectorService<T> {
     type Response = Io;
     type Error = ConnectError;
 
@@ -184,7 +185,7 @@ mod tests {
         assert!(result.is_err());
         assert!(format!("{srv:?}").contains("Connector"));
 
-        let srv = Connector::default();
+        let srv = ConnectorService::default();
         let result = srv.connect(format!("{}", server.addr())).await;
         assert!(result.is_ok());
 
