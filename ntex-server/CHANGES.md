@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.3] - 2025-12-01
+
+* Use async fn for test server
+
 ## [3.0.0-pre.2] - 2025-11-30
 
 * Fix config usage for registered service
