@@ -426,7 +426,10 @@ mod tests {
         };
 
         unsafe {
-            crate::spawn_cbs(before, enter, exit, after);
+            let set = crate::spawn_cbs_try(before, enter, exit, after);
+            assert!(set);
+            let set = crate::spawn_cbs_try(before, enter, exit, after);
+            assert!(!set);
         }
 
         System::new("test").block_on(async {

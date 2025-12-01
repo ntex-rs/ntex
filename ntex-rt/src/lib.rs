@@ -77,15 +77,38 @@ pub unsafe fn spawn_cbs<FBefore, FEnter, FExit, FAfter>(
     FAfter: Fn(*const ()) + 'static,
 {
     CB.with(|cb| {
+        if cb.get().is_null() {
+            panic!("Spawn callbacks already set");
+        }
+
         let new: *mut Callbacks = Box::leak(Box::new(Callbacks {
             before: Box::new(before),
             enter: Box::new(enter),
             exit: Box::new(exit),
             after: Box::new(after),
         }));
+        cb.replace(new);
+    });
+}
 
-        if !cb.replace(new).is_null() {
-            panic!("Spawn callbacks already set");
+pub unsafe fn spawn_cbs_try<FBefore, FEnter, FExit, FAfter>(
+    before: FBefore,
+    enter: FEnter,
+    exit: FExit,
+    after: FAfter,
+) -> bool
+where
+    FBefore: Fn() -> Option<*const ()> + 'static,
+    FEnter: Fn(*const ()) -> *const () + 'static,
+    FExit: Fn(*const ()) + 'static,
+    FAfter: Fn(*const ()) + 'static,
+{
+    CB.with(|cb| {
+        if cb.get().is_null() {
+            false
+        } else {
+            spawn_cbs(before, enter, exit, after);
+            true
         }
     });
 }
