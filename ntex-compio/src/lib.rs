@@ -2,20 +2,18 @@
 mod io;
 
 #[cfg(feature = "compio")]
-mod compat {
+pub(crate) mod compat {
     use std::{io::Result, net, net::SocketAddr};
 
     use ntex_io::Io;
     use ntex_service::cfg::SharedCfg;
 
-    use super::io;
-
     /// Tcp stream wrapper for compio TcpStream
-    struct TcpStream(compio_net::TcpStream);
+    pub(crate) struct TcpStream(pub(crate) compio_net::TcpStream);
 
     #[cfg(unix)]
     /// Tcp stream wrapper for compio UnixStream
-    struct UnixStream(compio_net::UnixStream);
+    pub(crate) struct UnixStream(pub(crate) compio_net::UnixStream);
 
     /// Opens a TCP connection to a remote host.
     pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> Result<Io> {
