@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.0] - 2025-12-02
+
+* Upgrade compio to 0.17
+
 ## [3.1.0] - 2025-12-01
 
 * Add spawn_cbs_try helper method, returns bool and does not panics
