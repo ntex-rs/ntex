@@ -7,7 +7,7 @@ use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use ntex_util::future::{Either, select};
 
-impl IoStream for crate::TcpStream {
+impl IoStream for crate::compat::TcpStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         compio_runtime::spawn(run(self.0.clone(), ctx)).detach();
         Some(Box::new(HandleWrapper(self.0)))
@@ -15,7 +15,7 @@ impl IoStream for crate::TcpStream {
 }
 
 #[cfg(unix)]
-impl IoStream for crate::UnixStream {
+impl IoStream for crate::compat::UnixStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         compio_runtime::spawn(run(self.0.clone(), ctx)).detach();
         None

@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0] - 2025-12-02
+
+* Upgrade compio to 0.17
+
 ## [3.0.0-pre.0] - 2025-11-27
 
 * Update ntex-net version

@@ -23,7 +23,7 @@ default = []
 tokio = ["ntex-rt/tokio", "ntex-tokio"]
 
 # compio runtime
-compio = ["ntex-rt/compio", "ntex-compio"]
+compio = ["ntex-rt/compio", "ntex-compio/compio"]
 
 # neon runtime
 neon = ["ntex-rt/neon", "ntex-neon", "slab", "socket2"]
