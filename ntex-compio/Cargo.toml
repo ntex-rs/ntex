@@ -16,6 +16,12 @@ rust-version = "1.85"
 name = "ntex_compio"
 path = "src/lib.rs"
 
+[features]
+default = ["compio"]
+
+# compio runtime
+compio = ["ntex-rt/compio", "compio-io", "compio-net", "compio-runtime", "compio-driver"]
+
 [dependencies]
 ntex-bytes = "1"
 ntex-io = "3.0.0-pre.2"
@@ -25,7 +31,7 @@ ntex-service = "3.6"
 log = { workspace = true }
 
 compio-buf = "0.7"
-compio-io = "0.8"
-compio-net = "0.10"
-compio-runtime = "0.10"
-compio-driver = { version = "0.10", features = ["io-uring", "polling"] }
+compio-io = { version = "0.8", optional = true }
+compio-net = { version = "0.10", optional = true }
+compio-runtime = { version = "0.10", optional = true }
+compio-driver = { version = "0.10", features = ["io-uring", "polling"], optional = true }
