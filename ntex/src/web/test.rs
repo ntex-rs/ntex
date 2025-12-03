@@ -663,7 +663,7 @@ where
             .config(
                 "test",
                 SharedCfg::new("WEB-SRV")
-                    .add(HttpServiceConfig::new().headers_read_rate(
+                    .add(HttpServiceConfig::new().set_headers_read_rate(
                         ctimeout,
                         Seconds::ZERO,
                         256,

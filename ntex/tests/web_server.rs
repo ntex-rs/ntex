@@ -892,8 +892,8 @@ async fn test_web_server() {
                     .add(IoConfig::new().set_disconnect_timeout(Seconds(1)))
                     .add(
                         HttpServiceConfig::new()
-                            .headers_read_rate(Seconds(1), Seconds(5), 128)
-                            .payload_read_rate(Seconds(1), Seconds(5), 128),
+                            .set_headers_read_rate(Seconds(1), Seconds(5), 128)
+                            .set_payload_read_rate(Seconds(1), Seconds(5), 128),
                     ),
             )
             .listen(tcp)

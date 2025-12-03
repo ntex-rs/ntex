@@ -6,7 +6,7 @@ use regex::Regex;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
-use crate::service::{Middleware, Service, ServiceCtx};
+use crate::service::{Middleware2, Service, ServiceCtx, cfg::SharedCfg};
 use crate::util::{Bytes, HashSet};
 use crate::web::{HttpResponse, WebRequest, WebResponse};
 
@@ -111,10 +111,10 @@ impl Default for Logger {
     }
 }
 
-impl<S> Middleware<S> for Logger {
+impl<S> Middleware2<S, SharedCfg> for Logger {
     type Service = LoggerMiddleware<S>;
 
-    fn create(&self, service: S) -> Self::Service {
+    fn create(&self, service: S, _: SharedCfg) -> Self::Service {
         LoggerMiddleware {
             service,
             inner: self.inner.clone(),
@@ -427,7 +427,12 @@ mod tests {
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
             .exclude("/test");
 
-        let srv = Pipeline::new(Middleware::create(&logger, srv.into_service())).bind();
+        let srv = Pipeline::new(Middleware2::create(
+            &logger,
+            srv.into_service(),
+            SharedCfg::default(),
+        ))
+        .bind();
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);
 

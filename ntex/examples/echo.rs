@@ -28,7 +28,7 @@ async fn main() -> io::Result<()> {
         })?
         .config(
             "echo",
-            SharedCfg::new("ECHO").add(HttpServiceConfig::new().headers_read_rate(
+            SharedCfg::new("ECHO").add(HttpServiceConfig::new().set_headers_read_rate(
                 Seconds(1),
                 Seconds(5),
                 128,

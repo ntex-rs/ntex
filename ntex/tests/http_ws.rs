@@ -102,9 +102,9 @@ async fn test_simple() {
         },
         SharedCfg::new("SRV").add(
             HttpServiceConfig::new()
-                .keepalive(1)
-                .headers_read_rate(Seconds(1), Seconds::ZERO, 16)
-                .payload_read_rate(Seconds(1), Seconds::ZERO, 16),
+                .set_keepalive(1)
+                .set_headers_read_rate(Seconds(1), Seconds::ZERO, 16)
+                .set_payload_read_rate(Seconds(1), Seconds::ZERO, 16),
         ),
     )
     .await;
