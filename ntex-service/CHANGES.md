@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.0] - 2025-12-03
+
+* Add Middleware2 trait with config parameter
+
 ## [3.6.3] - 2025-11-30
 
 * Fix missing config log
