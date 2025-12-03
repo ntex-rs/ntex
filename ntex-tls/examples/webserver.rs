@@ -47,7 +47,7 @@ async fn main() -> io::Result<()> {
         .config(
             "basic",
             SharedCfg::new("EXAMPLE")
-                .add(HttpServiceConfig::new().client_timeout(Seconds(1))),
+                .add(HttpServiceConfig::new().set_client_timeout(Seconds(1))),
         )
         .workers(1)
         .run()

@@ -26,8 +26,8 @@ async fn test_h1() {
         },
         SharedCfg::new("SRV").add(
             HttpServiceConfig::new()
-                .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
-                .keepalive(KeepAlive::Disabled),
+                .set_headers_read_rate(Seconds(1), Seconds::ZERO, 256)
+                .set_keepalive(KeepAlive::Disabled),
         ),
     )
     .await;
@@ -48,8 +48,8 @@ async fn test_h1_2() {
         },
         SharedCfg::new("SRV").add(
             HttpServiceConfig::new()
-                .headers_read_rate(Seconds(1), Seconds::ZERO, 256)
-                .keepalive(KeepAlive::Disabled),
+                .set_headers_read_rate(Seconds(1), Seconds::ZERO, 256)
+                .set_keepalive(KeepAlive::Disabled),
         ),
     )
     .await;
@@ -87,7 +87,8 @@ async fn test_expect_continue() {
                 Ok::<_, std::convert::Infallible>(ack)
             }))
         },
-        SharedCfg::new("SRV").add(HttpServiceConfig::new().keepalive(KeepAlive::Disabled)),
+        SharedCfg::new("SRV")
+            .add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
     )
     .await;
 
@@ -169,7 +170,7 @@ async fn test_slow_request() {
 
     let srv = test::server_with_config(
         async || HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())),
-        SharedCfg::new("SRV").add(HttpServiceConfig::new().headers_read_rate(
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_headers_read_rate(
             Seconds(1),
             Seconds(2),
             4,
@@ -199,7 +200,7 @@ async fn test_slow_request2() {
 
     let srv = test::server_with_config(
         async || HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())),
-        SharedCfg::new("SRV").add(HttpServiceConfig::new().headers_read_rate(
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_headers_read_rate(
             Seconds(1),
             Seconds(2),
             4,
@@ -256,7 +257,7 @@ async fn test_http1_keepalive() {
 async fn test_http1_keepalive_timeout() {
     let srv = test::server_with_config(
         async || HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())),
-        SharedCfg::new("SRV").add(HttpServiceConfig::new().keepalive(1)),
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(1)),
     )
     .await;
 
@@ -282,7 +283,7 @@ async fn test_http1_no_keepalive_during_response() {
                 Ok::<_, io::Error>(Response::Ok().finish())
             })
         },
-        SharedCfg::new("SRV").add(HttpServiceConfig::new().keepalive(1)),
+        SharedCfg::new("SRV").add(HttpServiceConfig::new().set_keepalive(1)),
     )
     .await;
 
@@ -368,7 +369,8 @@ async fn test_http10_keepalive() {
 async fn test_http1_keepalive_disabled() {
     let srv = test::server_with_config(
         async || HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())),
-        SharedCfg::new("SRV").add(HttpServiceConfig::new().keepalive(KeepAlive::Disabled)),
+        SharedCfg::new("SRV")
+            .add(HttpServiceConfig::new().set_keepalive(KeepAlive::Disabled)),
     )
     .await;
 
@@ -399,9 +401,9 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
         },
         SharedCfg::new("SRV").add(
             HttpServiceConfig::new()
-                .headers_read_rate(Seconds(1), Seconds(1), 128)
-                .payload_read_rate(Seconds(1), Seconds(1), 512)
-                .keepalive(1),
+                .set_headers_read_rate(Seconds(1), Seconds(1), 128)
+                .set_payload_read_rate(Seconds(1), Seconds(1), 512)
+                .set_keepalive(1),
         ),
     )
     .await;

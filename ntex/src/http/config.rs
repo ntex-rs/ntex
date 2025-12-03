@@ -100,7 +100,7 @@ impl HttpServiceConfig {
     /// Set server keep-alive setting
     ///
     /// By default keep alive is set to a 5 seconds.
-    pub fn keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
+    pub fn set_keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
         let (keep_alive, ka_enabled) = match val.into() {
             KeepAlive::Timeout(val) => (val, true),
             KeepAlive::Os => (Seconds::ZERO, true),
@@ -122,7 +122,7 @@ impl HttpServiceConfig {
     /// To disable timeout set value to 0.
     ///
     /// By default keep-alive timeout is set to 30 seconds.
-    pub fn keepalive_timeout(mut self, timeout: Seconds) -> Self {
+    pub fn set_keepalive_timeout(mut self, timeout: Seconds) -> Self {
         self.keep_alive = timeout;
         self.ka_enabled = !timeout.is_zero();
         self
@@ -137,7 +137,7 @@ impl HttpServiceConfig {
     /// To disable timeout set value to 0.
     ///
     /// By default client timeout is set to 3 seconds.
-    pub fn client_timeout(mut self, timeout: Seconds) -> Self {
+    pub fn set_client_timeout(mut self, timeout: Seconds) -> Self {
         if timeout.is_zero() {
             self.headers_read_rate = None;
         } else {
@@ -159,7 +159,7 @@ impl HttpServiceConfig {
     /// But no more than `max_timeout` timeout.
     ///
     /// By default headers read rate is set to 1sec with max timeout 5sec.
-    pub fn headers_read_rate(
+    pub fn set_headers_read_rate(
         mut self,
         timeout: Seconds,
         max_timeout: Seconds,
@@ -184,7 +184,7 @@ impl HttpServiceConfig {
     /// But no more than `max_timeout` timeout.
     ///
     /// By default payload read rate is disabled.
-    pub fn payload_read_rate(
+    pub fn set_payload_read_rate(
         mut self,
         timeout: Seconds,
         max_timeout: Seconds,

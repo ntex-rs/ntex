@@ -20,11 +20,9 @@ async fn main() -> io::Result<()> {
         })?
         .config(
             "hello-world",
-            SharedCfg::new("HELLO-WORLD").add(HttpServiceConfig::new().headers_read_rate(
-                Seconds(1),
-                Seconds(5),
-                128,
-            )),
+            SharedCfg::new("HELLO-WORLD").add(
+                HttpServiceConfig::new().set_headers_read_rate(Seconds(1), Seconds(5), 128),
+            ),
         )
         .run()
         .await

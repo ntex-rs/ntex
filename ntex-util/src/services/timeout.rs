@@ -4,7 +4,7 @@
 //! will be aborted.
 use std::{fmt, marker};
 
-use ntex_service::{Middleware, Service, ServiceCtx};
+use ntex_service::{Middleware, Middleware2, Service, ServiceCtx};
 
 use crate::future::{Either, select};
 use crate::time::{Millis, sleep};
@@ -96,6 +96,17 @@ impl<S> Middleware<S> for Timeout {
     }
 }
 
+impl<S, C> Middleware2<S, C> for Timeout {
+    type Service = TimeoutService<S>;
+
+    fn create(&self, service: S, _: C) -> Self::Service {
+        TimeoutService {
+            service,
+            timeout: self.timeout,
+        }
+    }
+}
+
 /// Applies a timeout to requests.
 #[derive(Debug, Clone)]
 pub struct TimeoutService<S> {
@@ -149,7 +160,7 @@ where
 mod tests {
     use std::time::Duration;
 
-    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
+    use ntex_service::{Pipeline, ServiceFactory, apply, apply2, fn_factory};
 
     use super::*;
 
@@ -175,7 +186,7 @@ mod tests {
         }
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_success() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(50);
@@ -187,7 +198,7 @@ mod tests {
         timeout.shutdown().await;
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_zero() {
         let wait_time = Duration::from_millis(50);
         let resolution = Duration::from_millis(0);
@@ -198,7 +209,7 @@ mod tests {
         assert_eq!(timeout.ready().await, Ok(()));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_timeout() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
@@ -208,13 +219,29 @@ mod tests {
         assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     #[allow(clippy::redundant_clone)]
     async fn test_timeout_middleware() {
         let resolution = Duration::from_millis(100);
         let wait_time = Duration::from_millis(500);
 
         let timeout = apply(
+            Timeout::new(resolution).clone(),
+            fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
+        );
+        let srv = timeout.pipeline(&()).await.unwrap();
+
+        let res = srv.call(()).await.unwrap_err();
+        assert_eq!(res, TimeoutError::Timeout);
+    }
+
+    #[ntex::test]
+    #[allow(clippy::redundant_clone)]
+    async fn test_timeout_middleware2() {
+        let resolution = Duration::from_millis(100);
+        let wait_time = Duration::from_millis(500);
+
+        let timeout = apply2(
             Timeout::new(resolution).clone(),
             fn_factory(|| async { Ok::<_, ()>(SleepService(wait_time)) }),
         );

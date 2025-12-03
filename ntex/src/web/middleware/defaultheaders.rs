@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::http::error::HttpError;
 use crate::http::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
-use crate::service::{Middleware, Service, ServiceCtx};
+use crate::service::{Middleware2, Service, ServiceCtx, cfg::SharedCfg};
 use crate::web::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -86,10 +86,10 @@ impl DefaultHeaders {
     }
 }
 
-impl<S> Middleware<S> for DefaultHeaders {
+impl<S> Middleware2<S, SharedCfg> for DefaultHeaders {
     type Service = DefaultHeadersMiddleware<S>;
 
-    fn create(&self, service: S) -> Self::Service {
+    fn create(&self, service: S, _: SharedCfg) -> Self::Service {
         DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
@@ -151,7 +151,7 @@ mod tests {
         let mw = Pipeline::new(
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
-                .create(ok_service()),
+                .create(ok_service(), SharedCfg::default()),
         )
         .bind();
 
@@ -171,7 +171,7 @@ mod tests {
         let mw = Pipeline::new(
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
-                .create(srv.into_service()),
+                .create(srv.into_service(), Default::default()),
         );
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");
@@ -197,7 +197,7 @@ mod tests {
         let mw = Pipeline::new(
             DefaultHeaders::new()
                 .content_type()
-                .create(srv.into_service()),
+                .create(srv.into_service(), SharedCfg::default()),
         );
 
         let req = TestRequest::default().to_srv_request();

@@ -40,7 +40,7 @@ async fn main() -> std::io::Result<()> {
     .workers(4)
     .config(
         ntex::SharedCfg::new("MY-SERVER")
-            .add(http::HttpServiceConfig::new().keepalive(http::KeepAlive::Disabled)),
+            .add(http::HttpServiceConfig::new().set_keepalive(http::KeepAlive::Disabled)),
     )
     .run()
     .await

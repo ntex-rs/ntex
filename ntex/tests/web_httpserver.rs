@@ -39,8 +39,8 @@ async fn test_run() {
                 ntex::SharedCfg::new("WEB")
                     .add(
                         HttpServiceConfig::new()
-                            .keepalive(10)
-                            .client_timeout(Seconds(5)),
+                            .set_keepalive(10)
+                            .set_client_timeout(Seconds(5)),
                     )
                     .add(IoConfig::new().set_disconnect_timeout(Seconds(1)))
                     .add(TlsConfig::new().set_handshake_timeout(Seconds(1))),

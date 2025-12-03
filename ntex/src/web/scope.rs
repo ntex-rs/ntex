@@ -4,7 +4,7 @@ use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
-use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
+use crate::service::{Identity, Middleware2, Service, ServiceCtx, ServiceFactory};
 use crate::service::{IntoServiceFactory, chain_factory, dev::ServiceChainFactory};
 use crate::util::{Extensions, join};
 
@@ -375,7 +375,7 @@ where
             Error = Err::Container,
             InitError = (),
         > + 'static,
-    M: Middleware<ScopeService<T::Service, Err>> + 'static,
+    M: Middleware2<ScopeService<T::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
@@ -460,7 +460,7 @@ struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
 impl<M, F, Err> ServiceFactory<WebRequest<Err>, SharedCfg>
     for ScopeServiceFactory<M, F, Err>
 where
-    M: Middleware<ScopeService<F::Service, Err>> + 'static,
+    M: Middleware2<ScopeService<F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
@@ -477,10 +477,13 @@ where
     type InitError = ();
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        Ok(self.middleware.create(ScopeService {
-            filter: self.filter.create(cfg).await?,
-            routing: self.routing.create(cfg).await?,
-        }))
+        Ok(self.middleware.create(
+            ScopeService {
+                filter: self.filter.create(cfg).await?,
+                routing: self.routing.create(cfg).await?,
+            },
+            cfg,
+        ))
     }
 }
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.3] 2025-12-04
+
+* Use Middleware2 trait
+
 ## [3.0.0-pre.2] 2025-11-28
 
 * Use async factories for server configuration

@@ -779,8 +779,8 @@ mod tests {
         let config: SharedCfg = SharedCfg::new("DBG")
             .add(
                 HttpServiceConfig::new()
-                    .keepalive(Seconds(5))
-                    .client_timeout(Seconds(1)),
+                    .set_keepalive(Seconds(5))
+                    .set_client_timeout(Seconds(1)),
             )
             .into();
         Dispatcher::new(
@@ -826,8 +826,8 @@ mod tests {
         let config: SharedCfg = SharedCfg::new("DBG")
             .add(
                 HttpServiceConfig::new()
-                    .keepalive(Seconds(5))
-                    .client_timeout(Seconds(1)),
+                    .set_keepalive(Seconds(5))
+                    .set_client_timeout(Seconds(1)),
             )
             .into();
         let mut h1 = Dispatcher::<_, _, _, _>::new(
@@ -1233,9 +1233,9 @@ mod tests {
         let config: SharedCfg = SharedCfg::new("SVC")
             .add(
                 HttpServiceConfig::new()
-                    .keepalive(Seconds(5))
-                    .client_timeout(Seconds(1))
-                    .payload_read_rate(Seconds(1), Seconds(2), 512),
+                    .set_keepalive(Seconds(5))
+                    .set_client_timeout(Seconds(1))
+                    .set_payload_read_rate(Seconds(1), Seconds(2), 512),
             )
             .into();
 
