@@ -904,9 +904,9 @@ async fn test_web_server() {
     });
     let (system, addr) = rx.recv().unwrap();
 
-    let client = client::Client::build()
+    let client = client::Client::builder()
         .response_timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 
@@ -936,9 +936,9 @@ async fn web_no_ws_with_response_payload() {
     })
     .await;
 
-    let client = client::Client::build()
+    let client = client::Client::builder()
         .response_timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
     let mut response = client

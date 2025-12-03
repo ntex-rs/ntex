@@ -59,9 +59,9 @@ async fn test_connection_reuse_h2() {
         .set_alpn_protos(b"\x02h2\x08http/1.1")
         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-    let client = Client::build()
+    let client = Client::builder()
         .connector::<&str>(Connector::default().openssl(builder.build()))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 

@@ -96,11 +96,14 @@ impl Default for ClientConfig {
 impl Client {
     /// Create new client instance with default settings.
     pub async fn new() -> Client {
-        Client::build().finish(SharedCfg::default()).await.unwrap()
+        ClientBuilder::new()
+            .build(SharedCfg::default())
+            .await
+            .unwrap()
     }
 
     /// Build client instance.
-    pub fn build() -> ClientBuilder {
+    pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
 
