@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.5] 2025-12-04
+
+* Naming for ClientBuilder
+
 ## [3.0.0-pre.3] 2025-12-04
 
 * Use Middleware2 trait

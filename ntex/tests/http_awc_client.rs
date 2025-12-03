@@ -170,10 +170,10 @@ async fn test_timeout() {
 
     let connector = Connector::default().connector(ntex::connect::Connector::new());
 
-    let client = Client::build()
+    let client = Client::builder()
         .connector::<&str>(connector)
         .response_timeout(Seconds(1))
-        .finish(SharedCfg::new("SVC").add(IoConfig::new().set_connect_timeout(15)))
+        .build(SharedCfg::new("SVC").add(IoConfig::new().set_connect_timeout(15)))
         .await
         .unwrap();
 
@@ -194,9 +194,9 @@ async fn test_timeout_override() {
     })
     .await;
 
-    let client = Client::build()
+    let client = Client::builder()
         .response_timeout(Seconds(50))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
     let request = client.get(srv.url("/")).timeout(Seconds(1)).send();
@@ -223,9 +223,9 @@ async fn test_connection_reuse() {
     })
     .await;
 
-    let client = Client::build()
+    let client = Client::builder()
         .response_timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 
@@ -260,9 +260,9 @@ async fn test_connection_force_close() {
     })
     .await;
 
-    let client = Client::build()
+    let client = Client::builder()
         .response_timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 
@@ -272,9 +272,9 @@ async fn test_connection_force_close() {
     assert!(response.status().is_success());
 
     // req 2
-    let client = Client::build()
+    let client = Client::builder()
         .response_timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
     let req = client.post(srv.url("/")).force_close();
@@ -304,9 +304,9 @@ async fn test_connection_server_close() {
     })
     .await;
 
-    let client = Client::build()
+    let client = Client::builder()
         .response_timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 
@@ -341,10 +341,10 @@ async fn test_connection_wait_queue() {
     })
     .await;
 
-    let client = Client::build()
+    let client = Client::builder()
         .response_timeout(Seconds(30))
         .connector::<&str>(Connector::default().limit(1))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 
@@ -388,10 +388,10 @@ async fn test_connection_wait_queue_force_close() {
     })
     .await;
 
-    let client = Client::build()
+    let client = Client::builder()
         .response_timeout(Seconds(30))
         .connector::<&str>(Connector::default().limit(1))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 
@@ -446,9 +446,9 @@ async fn test_no_decompress() {
     })
     .await;
 
-    let client = Client::build()
+    let client = Client::builder()
         .response_timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 
@@ -728,9 +728,9 @@ async fn client_read_until_eof() {
     sleep(Millis(500)).await;
 
     // client request
-    let req = Client::build()
+    let req = Client::builder()
         .response_timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap()
         .get(format!("http://{addr}/").as_str());

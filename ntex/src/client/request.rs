@@ -588,9 +588,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_client_header() {
-        let req = Client::build()
+        let req = Client::builder()
             .header(header::CONTENT_TYPE, "111")
-            .finish(SharedCfg::default())
+            .build(SharedCfg::default())
             .await
             .unwrap()
             .get("/");
@@ -608,9 +608,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_client_header_override() {
-        let req = Client::build()
+        let req = Client::builder()
             .header(header::CONTENT_TYPE, "111")
-            .finish(SharedCfg::default())
+            .build(SharedCfg::default())
             .await
             .unwrap()
             .get("/")

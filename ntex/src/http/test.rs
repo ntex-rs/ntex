@@ -7,7 +7,7 @@ use coo_kie::{Cookie, CookieJar};
 use ntex_tls::TlsConfig;
 
 use crate::channel::bstream;
-use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::client::{Client, ClientBuilder, ClientRequest, ClientResponse, Connector};
 #[cfg(feature = "ws")]
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
@@ -299,7 +299,10 @@ where
         addr,
         system,
         server,
-        client: Client::build().finish(SharedCfg::default()).await.unwrap(),
+        client: ClientBuilder::new()
+            .build(SharedCfg::default())
+            .await
+            .unwrap(),
     }
     .set_client_timeout(Seconds(90), Millis(90_000))
     .await
@@ -326,8 +329,8 @@ impl TestServer {
             .add(TlsConfig::new().set_handshake_timeout(timeout))
             .add(
                 ntex_h2::ServiceConfig::new()
-                    .max_header_list_size(256 * 1024)
-                    .max_header_continuation_frames(96),
+                    .set_max_header_list_size(256 * 1024)
+                    .set_max_header_continuation_frames(96),
             )
             .into();
 
@@ -350,9 +353,9 @@ impl TestServer {
                 }
             };
 
-            Client::build()
+            Client::builder()
                 .connector::<&str>(connector)
-                .finish(cfg)
+                .build(cfg)
                 .await
                 .unwrap()
         };

@@ -56,9 +56,9 @@ async fn test_run() {
 
     use ntex::client;
 
-    let client = client::Client::build()
+    let client = client::Client::builder()
         .connector::<&str>(client::Connector::default())
-        .finish(ntex::SharedCfg::new("DBG").add(IoConfig::new().set_connect_timeout(30)))
+        .build(ntex::SharedCfg::new("DBG").add(IoConfig::new().set_connect_timeout(30)))
         .await
         .unwrap();
 
@@ -97,10 +97,10 @@ async fn client() -> ntex::client::Client {
         .set_alpn_protos(b"\x02h2\x08http/1.1")
         .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-    ntex::client::Client::build()
+    ntex::client::Client::builder()
         .response_timeout(Seconds(30))
         .connector::<&str>(ntex::client::Connector::default().openssl(builder.build()))
-        .finish(ntex::SharedCfg::new("TEST").add(IoConfig::new().set_connect_timeout(30)))
+        .build(ntex::SharedCfg::new("TEST").add(IoConfig::new().set_connect_timeout(30)))
         .await
         .unwrap()
 }
@@ -230,7 +230,7 @@ async fn test_bind_uds() {
 
     use ntex::{ServiceFactory, client};
 
-    let client = client::Client::build()
+    let client = client::Client::builder()
         .connector::<&str>(
             client::Connector::default().connector(
                 ntex::service::fn_service(|_| async {
@@ -242,7 +242,7 @@ async fn test_bind_uds() {
                 .map_init_err(|_| unreachable!()),
             ),
         )
-        .finish(ntex::SharedCfg::default())
+        .build(ntex::SharedCfg::default())
         .await
         .unwrap();
     let response = client.get("http://localhost").send().await.unwrap();
@@ -288,7 +288,7 @@ async fn test_listen_uds() {
 
     use ntex::{ServiceFactory, client};
 
-    let client = client::Client::build()
+    let client = client::Client::builder()
         .connector::<&str>(
             client::Connector::default().connector(
                 ntex::service::fn_service(|_| async {
@@ -300,7 +300,7 @@ async fn test_listen_uds() {
                 .map_init_err(|_| unreachable!()),
             ),
         )
-        .finish(ntex::SharedCfg::default())
+        .build(ntex::SharedCfg::default())
         .await
         .unwrap();
     let response = client.get("http://localhost").send().await.unwrap();

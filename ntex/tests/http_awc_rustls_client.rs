@@ -60,9 +60,9 @@ async fn test_connection_reuse_h2() {
     let protos = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     config.alpn_protocols = protos;
 
-    let client = Client::build()
+    let client = Client::builder()
         .connector::<&str>(Connector::default().rustls(config))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 

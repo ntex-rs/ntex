@@ -144,10 +144,10 @@ impl ClientBuilder {
     }
 
     /// Finish build process and create `Client` instance.
-    pub async fn finish<T: Into<SharedCfg>>(
-        self,
-        cfg: T,
-    ) -> Result<Client, ClientBuilderError> {
+    pub async fn build<T>(self, cfg: T) -> Result<Client, ClientBuilderError>
+    where
+        T: Into<SharedCfg>,
+    {
         self.connector
             .create(cfg.into())
             .await

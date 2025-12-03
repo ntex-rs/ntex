@@ -23,9 +23,9 @@ async fn main() -> Result<(), SendRequestError> {
     builder.set_alpn_protos(b"\x02h2").unwrap();
 
     // create client
-    let client = Client::build()
+    let client = Client::builder()
         .connector::<&str>(Connector::default().openssl(builder.build()))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap();
 
