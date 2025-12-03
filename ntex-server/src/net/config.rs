@@ -291,7 +291,7 @@ impl ServiceRuntime {
     ///
     /// Name of the service must be registered during configuration stage with
     /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
-    pub fn service<T, F>(&self, name: &str, service: F)
+    pub fn service<T, F>(&self, name: &str, service: F) -> &Self
     where
         F: IntoServiceFactory<T, Io, SharedCfg>,
         T: ServiceFactory<Io, SharedCfg> + 'static,
@@ -308,14 +308,16 @@ impl ServiceRuntime {
         } else {
             panic!("Unknown service: {name:?}");
         }
+        self
     }
 
     /// Set io config for configured service.
-    pub fn config(&self, name: &str, cfg: SharedCfg) {
+    pub fn config<T: Into<SharedCfg>>(&self, name: &str, cfg: T) -> &Self {
         let mut inner = self.0.borrow_mut();
         if let Some(entry) = inner.names.get_mut(name) {
-            entry.config = cfg;
+            entry.config = cfg.into();
         }
+        self
     }
 }
 

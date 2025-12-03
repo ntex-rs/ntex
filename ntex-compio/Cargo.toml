@@ -17,7 +17,7 @@ name = "ntex_compio"
 path = "src/lib.rs"
 
 [features]
-default = ["compio"]
+default = []
 
 # compio runtime
 compio = ["ntex-rt/compio", "compio-io", "compio-net", "compio-runtime", "compio-driver"]
