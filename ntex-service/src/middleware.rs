@@ -353,7 +353,8 @@ where
     type Service = Outer::Service;
 
     fn create(&self, service: S, cfg: C) -> Self::Service {
-        self.outer.create(self.inner.create(service, cfg.clone()), cfg)
+        self.outer
+            .create(self.inner.create(service, cfg.clone()), cfg)
     }
 }
 
