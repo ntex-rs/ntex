@@ -1,5 +1,9 @@
 # Changes
 
+## [3.1.0] - 2025-12-03
+
+* ServiceRuntime::service() and ServiceRuntime::config() returns self
+
 ## [3.0.0-pre.3] - 2025-12-01
 
 * Use async fn for test server
