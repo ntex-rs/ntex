@@ -143,6 +143,7 @@ struct Accept {
 }
 
 impl Accept {
+    #[allow(clippy::too_many_arguments)]
     fn start(
         tx: oneshot::Sender<()>,
         rx: mpsc::Receiver<AcceptorCommand>,
@@ -165,6 +166,7 @@ impl Accept {
             });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new(
         tx: oneshot::Sender<()>,
         rx: mpsc::Receiver<AcceptorCommand>,
