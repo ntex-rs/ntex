@@ -1,16 +1,18 @@
 //! Test server
-use std::{fmt, io, marker::PhantomData, net, thread};
+use std::{fmt, io, marker::PhantomData, net, thread, time};
 
 use ntex_io::Io;
 use ntex_net::tcp_connect;
 use ntex_rt::System;
 use ntex_service::{ServiceFactory, cfg::SharedCfg};
 use socket2::{Domain, SockAddr, Socket, Type};
+use uuid::Uuid;
 
 use super::{Server, ServerBuilder};
 
 /// Test server builder
 pub struct TestServerBuilder<F, R> {
+    id: Uuid,
     factory: F,
     config: SharedCfg,
     client_config: SharedCfg,
@@ -20,6 +22,7 @@ pub struct TestServerBuilder<F, R> {
 impl<F, R> fmt::Debug for TestServerBuilder<F, R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TestServerBuilder")
+            .field("id", &self.id)
             .field("config", &self.config)
             .field("client_config", &self.client_config)
             .finish()
@@ -34,6 +37,7 @@ where
     pub fn new(factory: F) -> Self {
         Self {
             factory,
+            id: Uuid::new_v4(),
             config: SharedCfg::new("TEST-SERVER").into(),
             client_config: SharedCfg::new("TEST-CLIENT").into(),
             _t: PhantomData,
@@ -54,6 +58,7 @@ where
 
     /// Start test server
     pub fn start(self) -> TestServer {
+        log::debug!("Starting test server {:?}", self.id);
         let factory = self.factory;
         let config = self.config;
 
@@ -89,6 +94,7 @@ where
             addr,
             server,
             system,
+            id: self.id,
             cfg: self.client_config,
         }
     }
@@ -136,6 +142,9 @@ pub fn build_test_server<F>(factory: F) -> TestServer
 where
     F: AsyncFnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
 {
+    let id = Uuid::new_v4();
+    log::debug!("Starting test server {:?}", id);
+
     let (tx, rx) = oneshot::channel();
     // run server in separate thread
     thread::spawn(move || {
@@ -146,6 +155,7 @@ where
             let server = factory(super::build())
                 .await
                 .workers(1)
+                .testing()
                 .disable_signals()
                 .run();
             tx.send((system, server.clone()))
@@ -156,6 +166,7 @@ where
     let (system, server) = rx.recv().unwrap();
 
     TestServer {
+        id,
         system,
         server,
         addr: "127.0.0.1:0".parse().unwrap(),
@@ -166,6 +177,7 @@ where
 #[derive(Debug)]
 /// Test server controller
 pub struct TestServer {
+    id: Uuid,
     addr: net::SocketAddr,
     system: System,
     server: Server,
@@ -190,6 +202,8 @@ impl TestServer {
 
     /// Stop http server by stopping the runtime.
     pub fn stop(&self) {
+        let _ = self.server.stop(true);
+        thread::sleep(time::Duration::from_millis(25));
         self.system.stop();
     }
 
@@ -211,6 +225,7 @@ impl TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
+        log::debug!("Stopping test server {:?}", self.id);
         self.stop()
     }
 }

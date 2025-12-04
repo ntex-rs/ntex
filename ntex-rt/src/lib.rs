@@ -159,8 +159,7 @@ mod tokio {
     where
         F: Future + 'static,
     {
-        let data = crate::Data::load();
-        if let Some(mut data) = data {
+        if let Some(mut data) = crate::Data::load() {
             tok_io::task::spawn_local(async move {
                 tok_io::pin!(f);
                 poll_fn(|cx| data.run(|| f.as_mut().poll(cx))).await

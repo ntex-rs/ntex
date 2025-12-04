@@ -47,6 +47,7 @@ impl AcceptNotify {
 
 /// Streamin io accept loop
 pub struct AcceptLoop {
+    testing: bool,
     notify: AcceptNotify,
     inner: Option<(mpsc::Receiver<AcceptorCommand>, Arc<Poller>)>,
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
@@ -74,6 +75,7 @@ impl AcceptLoop {
         AcceptLoop {
             notify,
             inner: Some((rx, poll)),
+            testing: false,
             status_handler: None,
         }
     }
@@ -88,6 +90,10 @@ impl AcceptLoop {
         F: FnMut(ServerStatus) + Send + 'static,
     {
         self.status_handler = Some(Box::new(f));
+    }
+
+    pub fn testing(&mut self) {
+        self.testing = true;
     }
 
     /// Start accept loop
@@ -105,6 +111,7 @@ impl AcceptLoop {
             socks,
             srv,
             self.notify.clone(),
+            self.testing,
             self.status_handler.take(),
         );
 
@@ -129,6 +136,7 @@ struct Accept {
     sockets: Vec<ServerSocketInfo>,
     srv: Server,
     notify: AcceptNotify,
+    testing: bool,
     backpressure: bool,
     backlog: VecDeque<Connection>,
     status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
@@ -142,6 +150,7 @@ impl Accept {
         socks: Vec<(Token, Listener)>,
         srv: Server,
         notify: AcceptNotify,
+        testing: bool,
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) {
         let sys = System::current();
@@ -151,7 +160,8 @@ impl Accept {
             .name("accept loop".to_owned())
             .spawn(move || {
                 System::set_current(sys);
-                Accept::new(tx, rx, poller, socks, srv, notify, status_handler).poll()
+                Accept::new(tx, rx, poller, socks, srv, notify, testing, status_handler)
+                    .poll()
             });
     }
 
@@ -162,6 +172,7 @@ impl Accept {
         socks: Vec<(Token, Listener)>,
         srv: Server,
         notify: AcceptNotify,
+        testing: bool,
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) -> Accept {
         let mut sockets = Vec::new();
@@ -181,6 +192,7 @@ impl Accept {
             sockets,
             notify,
             srv,
+            testing,
             status_handler,
             tx: Some(tx),
             backpressure: true,
@@ -194,7 +206,7 @@ impl Accept {
         }
     }
 
-    fn poll(&mut self) {
+    fn poll(mut self) {
         log::trace!("Starting server accept loop");
 
         // Create storage for events
@@ -232,7 +244,9 @@ impl Accept {
                     log::info!("Accept loop has been stopped");
 
                     if let Some(rx) = rx {
-                        thread::sleep(EXIT_TIMEOUT);
+                        if !self.testing {
+                            thread::sleep(EXIT_TIMEOUT);
+                        }
                         let _ = rx.send(());
                     }
 
