@@ -1,5 +1,9 @@
 # Changes
 
+## [3.1.0] - 2025-12-04
+
+* Stop testing server faster
+
 ## [3.1.0] - 2025-12-03
 
 * ServiceRuntime::service() and ServiceRuntime::config() returns self

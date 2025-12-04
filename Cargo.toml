@@ -99,3 +99,4 @@ thiserror = "2"
 webpki-roots = "1.0"
 url = "2.5.2"
 url-pkg = { version = "2.5.2", package = "url" }
+uuid = { version = "1.19", features = ["v7"] }

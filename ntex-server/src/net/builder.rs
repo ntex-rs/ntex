@@ -317,6 +317,13 @@ impl ServerBuilder {
         self
     }
 
+    #[doc(hidden)]
+    /// Mark server as testing
+    pub fn testing(mut self) -> Self {
+        self.accept.testing();
+        self
+    }
+
     /// Starts processing incoming connections and return server controller.
     pub fn run(self) -> Server<Connection> {
         if self.sockets.is_empty() {
