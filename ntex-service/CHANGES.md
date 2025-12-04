@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.1] - 2025-12-04
+
+* Add ServiceChainFactory::apply2() builder method
+
 ## [3.7.0] - 2025-12-03
 
 * Add Middleware2 trait with config parameter

@@ -7,7 +7,7 @@ use crate::ctx::ServiceCtx;
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
-use crate::middleware::{ApplyMiddleware, Middleware};
+use crate::middleware::{ApplyMiddleware, ApplyMiddleware2, Middleware, Middleware2};
 use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
@@ -217,6 +217,19 @@ impl<T: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<T, Req, C> {
     {
         ServiceChainFactory {
             factory: ApplyMiddleware::new(tr, self.factory),
+            _t: PhantomData,
+        }
+    }
+
+    /// Apply Middleware2 to current service factory.
+    ///
+    /// Short version of `apply2(middleware, chain_factory(...))`
+    pub fn apply2<U>(self, tr: U) -> ServiceChainFactory<ApplyMiddleware2<U, T, C>, Req, C>
+    where
+        U: Middleware2<T::Service, C>,
+    {
+        ServiceChainFactory {
+            factory: ApplyMiddleware2::new(tr, self.factory),
             _t: PhantomData,
         }
     }
