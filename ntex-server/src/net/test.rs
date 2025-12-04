@@ -37,7 +37,7 @@ where
     pub fn new(factory: F) -> Self {
         Self {
             factory,
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             config: SharedCfg::new("TEST-SERVER").into(),
             client_config: SharedCfg::new("TEST-CLIENT").into(),
             _t: PhantomData,
@@ -142,7 +142,7 @@ pub fn build_test_server<F>(factory: F) -> TestServer
 where
     F: AsyncFnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
 {
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     log::debug!("Starting test server {:?}", id);
 
     let (tx, rx) = oneshot::channel();
