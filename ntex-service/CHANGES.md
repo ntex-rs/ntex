@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.2] - 2025-12-05
+
+* Use asyncfn for fn_shutdown service
+
 ## [3.7.1] - 2025-12-04
 
 * Add ServiceChainFactory::apply2() builder method
