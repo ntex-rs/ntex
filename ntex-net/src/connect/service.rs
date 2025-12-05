@@ -5,8 +5,7 @@ use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::{future::Either, time::timeout_checked};
 
-use super::{Address, Connect, ConnectError, ConnectServiceError, Resolver};
-use crate::tcp_connect;
+use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
 
 #[derive(Copy, Clone, Debug)]
 /// Basic tcp stream connector
@@ -17,7 +16,7 @@ pub struct Connector<T>(PhantomData<T>);
 pub struct ConnectorService<T> {
     cfg: Cfg<IoConfig>,
     shared: SharedCfg,
-    resolver: Resolver<T>,
+    _t: PhantomData<T>,
 }
 
 impl<T> Connector<T> {
@@ -34,28 +33,26 @@ impl<T> Default for Connector<T> {
 }
 
 impl<T> ConnectorService<T> {
+    #[inline]
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
-        ConnectorService {
-            cfg: Default::default(),
-            shared: Default::default(),
-            resolver: Resolver::new(),
-        }
+        ConnectorService::with(Default::default())
     }
 
+    #[inline]
     /// Construct new connect service with custom configuration
     pub fn with(cfg: SharedCfg) -> Self {
         ConnectorService {
             cfg: cfg.get(),
             shared: cfg,
-            resolver: Resolver::new(),
+            _t: PhantomData,
         }
     }
 }
 
 impl<T> Default for ConnectorService<T> {
     fn default() -> Self {
-        Self::new()
+        ConnectorService::new()
     }
 }
 
@@ -67,13 +64,10 @@ impl<T: Address> ConnectorService<T> {
     {
         timeout_checked(self.cfg.connect_timeout(), async {
             // resolve first
-            let address = self
-                .resolver
-                .lookup_with_tag(message.into(), self.shared.tag())
-                .await?;
+            let msg = resolve::lookup(message.into(), self.shared.tag()).await?;
 
-            let port = address.port();
-            let Connect { req, addr, .. } = address;
+            let port = msg.port();
+            let Connect { req, addr, .. } = msg;
 
             if let Some(addr) = addr {
                 connect(req, port, addr, self.shared).await
@@ -130,11 +124,11 @@ async fn connect<T: Address>(
     );
 
     let io = match addr {
-        Either::Left(addr) => tcp_connect(addr, cfg).await?,
+        Either::Left(addr) => crate::tcp_connect(addr, cfg).await?,
         Either::Right(mut addrs) => loop {
             let addr = addrs.pop_front().unwrap();
 
-            match tcp_connect(addr, cfg).await {
+            match crate::tcp_connect(addr, cfg).await {
                 Ok(io) => break io,
                 Err(err) => {
                     log::trace!(
