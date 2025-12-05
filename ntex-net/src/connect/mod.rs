@@ -7,7 +7,6 @@ mod uri;
 
 pub use self::error::{ConnectError, ConnectServiceError};
 pub use self::message::{Address, Connect};
-pub use self::resolve::Resolver;
 pub use self::service::{Connector, ConnectorService};
 
 use ntex_io::Io;

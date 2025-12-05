@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "3.0.0"
+version = "3.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -32,10 +32,10 @@ io-uring = ["ntex-neon/io-uring", "socket2"]
 io-uring-compat = []
 
 [dependencies]
-ntex-service = "3.6"
+ntex-service = "3.7"
 ntex-bytes = "1"
 ntex-http = "1"
-ntex-io = "3.0.0"
+ntex-io = "3.0"
 ntex-rt = "3"
 ntex-util = "3"
 
@@ -52,5 +52,5 @@ socket2 = { workspace = true, optional = true, features = ["all"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.2"
+ntex = "3.0.0-pre.5"
 oneshot = "0.1"
