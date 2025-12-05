@@ -1,4 +1,4 @@
-use std::{future::Future, marker::PhantomData};
+use std::marker::PhantomData;
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
@@ -10,12 +10,13 @@ use super::error::{
 };
 use super::httprequest::HttpRequest;
 
+#[allow(async_fn_in_trait)]
 /// Trait implemented by types that can be converted to a http response.
 ///
 /// Types that implement this trait can be used as the return type of a handler.
 pub trait Responder<Err = DefaultError> {
     /// Convert itself to http response.
-    fn respond_to(self, req: &HttpRequest) -> impl Future<Output = Response>;
+    async fn respond_to(self, req: &HttpRequest) -> Response;
 
     /// Override a status code for a Responder.
     ///

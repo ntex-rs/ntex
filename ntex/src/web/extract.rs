@@ -1,10 +1,9 @@
 //! Request extractors
-use std::future::Future;
-
 use super::error::ErrorRenderer;
 use super::httprequest::HttpRequest;
 use crate::http::Payload;
 
+#[allow(async_fn_in_trait)]
 /// Trait implemented by types that can be extracted from request.
 ///
 /// Types that implement this trait can be used with `Route` handlers.
@@ -13,10 +12,10 @@ pub trait FromRequest<Err>: Sized {
     type Error;
 
     /// Convert request to a Self
-    fn from_request(
+    async fn from_request(
         req: &HttpRequest,
         payload: &mut Payload,
-    ) -> impl Future<Output = Result<Self, Self::Error>>;
+    ) -> Result<Self, Self::Error>;
 }
 
 /// Optionally extract a field from the request
