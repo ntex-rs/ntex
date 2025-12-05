@@ -1,6 +1,12 @@
 # Changes
 
-## [3.1.0] - 2025-12-04
+## [3.3.0] - 2025-12-05
+
+* Use AsyncFn for on-accept callback
+
+* Use AsyncFn for on-worker-start callback
+
+## [3.2.0] - 2025-12-04
 
 * Stop testing server faster
 

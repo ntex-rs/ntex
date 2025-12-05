@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
+use std::{fmt, marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
 use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
@@ -238,17 +238,16 @@ pub(crate) trait OnAccept {
     -> BoxFuture<'static, Result<Stream, ()>>;
 }
 
-pub(super) struct OnAcceptWrapper<F, R, E> {
+pub(super) struct OnAcceptWrapper<F, E> {
     pub(super) f: F,
-    pub(super) _t: PhantomData<(R, E)>,
+    pub(super) _t: PhantomData<E>,
 }
 
-unsafe impl<F, R, E> Send for OnAcceptWrapper<F, R, E> where F: Send {}
+unsafe impl<F, E> Send for OnAcceptWrapper<F, E> where F: Send {}
 
-impl<F, R, E> OnAcceptWrapper<F, R, E>
+impl<F, E> OnAcceptWrapper<F, E>
 where
-    F: Fn(Arc<str>, Stream) -> R + Send + Clone + 'static,
-    R: Future<Output = Result<Stream, E>> + 'static,
+    F: AsyncFn(Arc<str>, Stream) -> Result<Stream, E> + Send + Clone + 'static,
     E: fmt::Display + 'static,
 {
     pub(super) fn create(f: F) -> Box<dyn OnAccept + Send> {
@@ -256,10 +255,9 @@ where
     }
 }
 
-impl<F, R, E> OnAccept for OnAcceptWrapper<F, R, E>
+impl<F, E> OnAccept for OnAcceptWrapper<F, E>
 where
-    F: Fn(Arc<str>, Stream) -> R + Send + Clone + 'static,
-    R: Future<Output = Result<Stream, E>> + 'static,
+    F: AsyncFn(Arc<str>, Stream) -> Result<Stream, E> + Send + Clone + 'static,
     E: fmt::Display + 'static,
 {
     fn clone_fn(&self) -> Box<dyn OnAccept + Send> {

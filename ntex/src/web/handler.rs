@@ -20,14 +20,13 @@ where
 
 impl<F, R, Err> Handler<(), Err> for F
 where
-    F: Fn() -> R,
-    R: Future,
-    R::Output: Responder<Err>,
+    F: AsyncFn() -> R,
+    R: Responder<Err>,
     Err: ErrorRenderer,
 {
-    type Output = R::Output;
+    type Output = R;
 
-    async fn call(&self, _: ()) -> R::Output {
+    async fn call(&self, _: ()) -> R {
         (self)().await
     }
 }
@@ -89,12 +88,11 @@ macro_rules! factory_tuple (
     {$(#[$meta:meta])* $(($T:ident, $t:ident)),+} => {
         $(#[$meta])*
         impl<Func, $($T,)+ Res, Err> Handler<($($T,)+), Err> for Func
-        where Func: Fn($($T,)+) -> Res + 'static,
-            Res: Future + 'static,
-            Res::Output: Responder<Err>,
+        where Func: AsyncFn($($T,)+) -> Res,
+            Res: Responder<Err>,
             Err: ErrorRenderer,
         {
-            type Output = Res::Output;
+            type Output = Res;
 
             async fn call(&self, ($($t,)+): ($($T,)+)) -> Self::Output {
                 (self)($($t,)+).await
