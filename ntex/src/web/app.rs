@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, future::Future, marker::PhantomData, rc::Rc};
+use std::{cell::Cell, cell::RefCell, fmt, marker::PhantomData, rc::Rc};
 
 use crate::http::Request;
 use crate::router::ResourceDef;
@@ -121,25 +121,32 @@ where
     /// Set application state factory. This function is
     /// similar to `.state()` but it accepts state factory. State object get
     /// constructed asynchronously during application initialization.
-    pub fn state_factory<F, Out, D, E>(mut self, state: F) -> Self
+    pub fn state_factory<F, D, E>(mut self, state: F) -> Self
     where
-        F: Fn() -> Out + 'static,
-        Out: Future<Output = Result<D, E>> + 'static,
+        F: AsyncFnOnce() -> Result<D, E> + 'static,
         D: 'static,
         E: fmt::Debug,
     {
+        let state = Cell::new(Some(state));
+
         self.state_factories.push(Box::new(move |mut ext| {
-            let fut = state();
+            let mut state = state.take();
+
             Box::pin(async move {
-                match fut.await {
-                    Err(e) => {
-                        log::error!("Cannot construct state instance: {e:?}");
-                        Err(())
+                if let Some(state) = state.take() {
+                    match state().await {
+                        Err(e) => {
+                            log::error!("Cannot construct state instance: {e:?}");
+                            Err(())
+                        }
+                        Ok(st) => {
+                            ext.insert(st);
+                            Ok(ext)
+                        }
                     }
-                    Ok(st) => {
-                        ext.insert(st);
-                        Ok(ext)
-                    }
+                } else {
+                    log::error!("Cannot construct state instance");
+                    Err(())
                 }
             })
         }));

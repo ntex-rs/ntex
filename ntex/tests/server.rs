@@ -165,20 +165,12 @@ fn test_on_worker_start() {
                             .bind("addr2", addr2)
                             .unwrap()
                             .listen("addr3", lst)
-                            .on_worker_start(move |rt| {
+                            .on_worker_start(async move |rt| {
                                 let num = num.clone();
-                                async move {
-                                    rt.service(
-                                        "addr1",
-                                        fn_service(|_| Ready::Ok::<_, ()>(())),
-                                    );
-                                    rt.service(
-                                        "addr3",
-                                        fn_service(|_| Ready::Ok::<_, ()>(())),
-                                    );
-                                    let _ = num.fetch_add(1, Relaxed);
-                                    Ok::<_, io::Error>(())
-                                }
+                                rt.service("addr1", fn_service(async |_| Ok::<_, ()>(())));
+                                rt.service("addr3", fn_service(async |_| Ok::<_, ()>(())));
+                                let _ = num.fetch_add(1, Relaxed);
+                                Ok::<_, io::Error>(())
                             });
                         Ok::<_, io::Error>(())
                     })
@@ -233,21 +225,13 @@ fn test_configure_async() {
                             .unwrap()
                             .listen("addr3", lst)
                             .config("addr1", SharedCfg::new("srv-addr1"))
-                            .on_worker_start(move |rt| {
+                            .on_worker_start(async move |rt| {
                                 assert!(format!("{:?}", rt).contains("ServiceRuntime"));
                                 let num = num.clone();
-                                async move {
-                                    rt.service(
-                                        "addr1",
-                                        fn_service(|_| Ready::Ok::<_, ()>(())),
-                                    );
-                                    rt.service(
-                                        "addr3",
-                                        fn_service(|_| Ready::Ok::<_, ()>(())),
-                                    );
-                                    let _ = num.fetch_add(1, Relaxed);
-                                    Ok::<_, io::Error>(())
-                                }
+                                rt.service("addr1", fn_service(async |_| Ok::<_, ()>(())));
+                                rt.service("addr3", fn_service(async |_| Ok::<_, ()>(())));
+                                let _ = num.fetch_add(1, Relaxed);
+                                Ok::<_, io::Error>(())
                             });
                         Ok::<_, io::Error>(())
                     })
@@ -351,11 +335,11 @@ fn test_on_accept() {
                     })
                 })
                 .unwrap()
-                .on_accept(move |name, io| {
+                .on_accept(async move |name, io| {
                     if name.as_ref() == "test" {
                         let _ = num.fetch_add(1, Relaxed);
                     }
-                    Ready::Ok::<_, io::Error>(io)
+                    Ok::<_, io::Error>(io)
                 })
                 .workers(1)
                 .run();

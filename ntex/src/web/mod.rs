@@ -158,14 +158,11 @@ pub mod dev {
 
     #[doc(hidden)]
     #[inline(always)]
-    pub fn __assert_handler<Err, Fun, Fut>(
-        f: Fun,
-    ) -> impl Handler<(), Err, Output = Fut::Output>
+    pub fn __assert_handler<Err, Fun, Res>(f: Fun) -> impl Handler<(), Err, Output = Res>
     where
         Err: super::ErrorRenderer,
-        Fun: Fn() -> Fut + 'static,
-        Fut: std::future::Future,
-        Fut::Output: super::Responder<Err>,
+        Fun: AsyncFn() -> Res + 'static,
+        Res: super::Responder<Err>,
     {
         f
     }
@@ -173,14 +170,13 @@ pub mod dev {
     macro_rules! assert_handler ({ $name:ident, $($T:ident),+} => {
         #[doc(hidden)]
         #[inline(always)]
-        pub fn $name<Err, Fun, Fut, $($T,)+>(
+        pub fn $name<Err, Fun, Res, $($T,)+>(
             f: Fun,
-        ) -> impl Handler<($($T,)+), Err, Output = Fut::Output>
+        ) -> impl Handler<($($T,)+), Err, Output = Res>
         where
             Err: $crate::web::ErrorRenderer,
-            Fun: Fn($($T,)+) -> Fut + 'static,
-            Fut: std::future::Future + 'static,
-            Fut::Output: super::Responder<Err>,
+            Fun: AsyncFn($($T,)+) -> Res + 'static,
+            Res: super::Responder<Err> + 'static,
         $($T: $crate::web::FromRequest<Err>),+,
         {
             f

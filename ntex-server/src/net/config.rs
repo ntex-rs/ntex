@@ -1,4 +1,4 @@
-use std::{cell::Cell, cell::RefCell, fmt, future::Future, io, marker, mem, net, rc::Rc};
+use std::{cell::Cell, cell::RefCell, fmt, io, marker, mem, net, rc::Rc};
 
 use ntex_io::Io;
 use ntex_service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
@@ -144,10 +144,9 @@ impl ServiceConfig {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
-    pub fn on_worker_start<F, R, E>(&self, f: F) -> &Self
+    pub fn on_worker_start<F, E>(&self, f: F) -> &Self
     where
-        F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
-        R: Future<Output = Result<(), E>> + 'static,
+        F: AsyncFn(ServiceRuntime) -> Result<(), E> + Send + Clone + 'static,
         E: fmt::Display + 'static,
     {
         self.0.borrow_mut().apply = Some(OnWorkerStartWrapper::create(f));
@@ -327,15 +326,14 @@ trait OnWorkerStart: Send {
     fn run(&self, rt: ServiceRuntime) -> BoxFuture<'static, Result<(), ()>>;
 }
 
-struct OnWorkerStartWrapper<F, R, E> {
+struct OnWorkerStartWrapper<F, E> {
     pub(super) f: F,
-    pub(super) _t: marker::PhantomData<(R, E)>,
+    pub(super) _t: marker::PhantomData<E>,
 }
 
-impl<F, R, E> OnWorkerStartWrapper<F, R, E>
+impl<F, E> OnWorkerStartWrapper<F, E>
 where
-    F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
-    R: Future<Output = Result<(), E>> + 'static,
+    F: AsyncFn(ServiceRuntime) -> Result<(), E> + Send + Clone + 'static,
     E: fmt::Display + 'static,
 {
     pub(super) fn create(f: F) -> Box<dyn OnWorkerStart + Send> {
@@ -348,12 +346,11 @@ where
 
 // SAFETY: Send cannot be provided authomatically because of R param
 // but R always get executed in one thread and never leave it
-unsafe impl<F, R, E> Send for OnWorkerStartWrapper<F, R, E> where F: Send {}
+unsafe impl<F, E> Send for OnWorkerStartWrapper<F, E> where F: Send {}
 
-impl<F, R, E> OnWorkerStart for OnWorkerStartWrapper<F, R, E>
+impl<F, E> OnWorkerStart for OnWorkerStartWrapper<F, E>
 where
-    F: Fn(ServiceRuntime) -> R + Send + Clone + 'static,
-    R: Future<Output = Result<(), E>> + 'static,
+    F: AsyncFn(ServiceRuntime) -> Result<(), E> + Send + Clone + 'static,
     E: fmt::Display + 'static,
 {
     fn clone(&self) -> Box<dyn OnWorkerStart> {

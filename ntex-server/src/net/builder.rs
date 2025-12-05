@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, io, net, sync::Arc};
+use std::{fmt, io, net, sync::Arc};
 
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -181,10 +181,9 @@ impl ServerBuilder {
     /// Register on-accept callback function.
     ///
     /// This function get called with accepted stream.
-    pub fn on_accept<F, R, E>(mut self, f: F) -> Self
+    pub fn on_accept<F, E>(mut self, f: F) -> Self
     where
-        F: Fn(Arc<str>, Stream) -> R + Send + Clone + 'static,
-        R: Future<Output = Result<Stream, E>> + 'static,
+        F: AsyncFn(Arc<str>, Stream) -> Result<Stream, E> + Send + Clone + 'static,
         E: fmt::Display + 'static,
     {
         self.on_accept = Some(OnAcceptWrapper::create(f));
