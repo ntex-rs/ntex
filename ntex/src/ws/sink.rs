@@ -1,7 +1,6 @@
-use std::{future::Future, rc::Rc};
+use std::rc::Rc;
 
-use crate::io::{IoRef, OnDisconnect};
-use crate::ws;
+use crate::{io::IoRef, io::OnDisconnect, ws};
 
 #[derive(Clone, Debug)]
 pub struct WsSink(Rc<WsSinkInner>);
@@ -23,24 +22,17 @@ impl WsSink {
     }
 
     /// Endcode and send message to the peer.
-    pub fn send(
-        &self,
-        item: ws::Message,
-    ) -> impl Future<Output = Result<(), ws::error::ProtocolError>> {
-        let inner = self.0.clone();
+    pub async fn send(&self, item: ws::Message) -> Result<(), ws::error::ProtocolError> {
+        let close = match item {
+            ws::Message::Close(_) => self.0.codec.is_closed(),
+            _ => false,
+        };
 
-        async move {
-            let close = match item {
-                ws::Message::Close(_) => inner.codec.is_closed(),
-                _ => false,
-            };
-
-            inner.io.encode(item, &inner.codec)?;
-            if close {
-                inner.io.close();
-            }
-            Ok(())
+        self.0.io.encode(item, &self.0.codec)?;
+        if close {
+            self.0.io.close();
         }
+        Ok(())
     }
 
     /// Notify when connection get disconnected

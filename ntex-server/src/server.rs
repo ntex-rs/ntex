@@ -55,7 +55,7 @@ impl<T> Server<T> {
     ///
     /// If socket contains some pending connection, they might be dropped.
     /// All opened connection remains active.
-    pub fn pause(&self) -> impl Future<Output = ()> {
+    pub fn pause(&self) -> impl Future<Output = ()> + use<T> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd.try_send(ServerCommand::Pause(tx));
         async move {
@@ -64,7 +64,7 @@ impl<T> Server<T> {
     }
 
     /// Resume accepting incoming connections
-    pub fn resume(&self) -> impl Future<Output = ()> {
+    pub fn resume(&self) -> impl Future<Output = ()> + use<T> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd.try_send(ServerCommand::Resume(tx));
         async move {
@@ -75,7 +75,7 @@ impl<T> Server<T> {
     /// Stop incoming connection processing, stop all workers and exit.
     ///
     /// If server starts with `spawn()` method, then spawned thread get terminated.
-    pub fn stop(&self, graceful: bool) -> impl Future<Output = ()> {
+    pub fn stop(&self, graceful: bool) -> impl Future<Output = ()> + use<T> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd.try_send(ServerCommand::Stop {
             graceful,
