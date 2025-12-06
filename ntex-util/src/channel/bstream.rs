@@ -138,7 +138,9 @@ impl<E> Drop for Sender<E> {
 
 impl<E> Clone for Sender<E> {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone() }
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 }
 
@@ -208,11 +210,7 @@ struct Inner<E> {
 
 impl<E> Inner<E> {
     fn new(eof: bool) -> Self {
-        let flags = if eof {
-            Flags::EOF
-        } else {
-            Flags::NEED_READ
-        };
+        let flags = if eof { Flags::EOF } else { Flags::NEED_READ };
         Inner {
             flags: Cell::new(flags),
             len: Cell::new(0),

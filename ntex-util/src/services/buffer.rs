@@ -3,7 +3,9 @@ use std::cell::{Cell, RefCell};
 use std::task::{Poll, Waker, ready};
 use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
 
-use ntex_service::{Middleware, Middleware2, Pipeline, PipelineBinding, Service, ServiceCtx};
+use ntex_service::{
+    Middleware, Middleware2, Pipeline, PipelineBinding, Service, ServiceCtx,
+};
 
 use crate::channel::oneshot;
 
@@ -122,7 +124,6 @@ pub struct BufferService<R, S: Service<R>> {
     readiness: Cell<Option<Waker>>,
     _t: PhantomData<R>,
 }
-
 
 impl<R, S> BufferService<R, S>
 where

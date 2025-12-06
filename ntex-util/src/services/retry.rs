@@ -191,5 +191,5 @@ mod tests {
         );
         let srv = factory.pipeline(&()).await.unwrap();
         assert_eq!(srv.call(()).await, Ok(()));
-}
+    }
 }
