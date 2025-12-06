@@ -3,7 +3,9 @@ use std::cell::{Cell, RefCell};
 use std::task::{Poll, Waker, ready};
 use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
 
-use ntex_service::{Middleware, Pipeline, PipelineBinding, Service, ServiceCtx};
+use ntex_service::{
+    Middleware, Middleware2, Pipeline, PipelineBinding, Service, ServiceCtx,
+};
 
 use crate::channel::oneshot;
 
@@ -68,16 +70,19 @@ where
     type Service = BufferService<R, S>;
 
     fn create(&self, service: S) -> Self::Service {
-        BufferService {
-            service: Pipeline::new(service).bind(),
-            size: self.buf_size,
-            ready: Cell::new(false),
-            buf: RefCell::new(VecDeque::with_capacity(self.buf_size)),
-            next_call: RefCell::default(),
-            cancel_on_shutdown: self.cancel_on_shutdown,
-            readiness: Cell::new(None),
-            _t: PhantomData,
-        }
+        BufferService::new(self.buf_size, service)
+    }
+}
+
+impl<R, S, C> Middleware2<S, C> for Buffer<R>
+where
+    S: Service<R> + 'static,
+    R: 'static,
+{
+    type Service = BufferService<R, S>;
+
+    fn create(&self, service: S, _: C) -> Self::Service {
+        BufferService::new(self.buf_size, service)
     }
 }
 
@@ -302,12 +307,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
+    use ntex_service::{Pipeline, ServiceFactory, apply, apply2, fn_factory};
     use std::{rc::Rc, time::Duration};
 
     use super::*;
-    use crate::future::lazy;
-    use crate::task::LocalWaker;
+    use crate::{future::lazy, task::LocalWaker};
 
     #[derive(Debug, Clone)]
     struct TestService(Rc<Inner>);
@@ -342,7 +346,7 @@ mod tests {
         }
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_service() {
         let inner = Rc::new(Inner {
             ready: Cell::new(false),
@@ -404,7 +408,7 @@ mod tests {
         assert!(format!("{:?}", Buffer::<TestService>::default()).contains("Buffer"));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     #[allow(clippy::redundant_clone)]
     async fn test_middleware() {
         let inner = Rc::new(Inner {
@@ -414,6 +418,54 @@ mod tests {
         });
 
         let srv = apply(
+            Buffer::default().buf_size(2).clone(),
+            fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
+        );
+
+        let srv = srv.pipeline(&()).await.unwrap().bind();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let srv1 = srv.clone();
+        ntex::rt::spawn(async move {
+            let _ = srv1.call(()).await;
+        });
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(inner.count.get(), 0);
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let srv1 = srv.clone();
+        ntex::rt::spawn(async move {
+            let _ = srv1.call(()).await;
+        });
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(inner.count.get(), 0);
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        inner.ready.set(true);
+        inner.waker.wake();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(inner.count.get(), 1);
+
+        inner.ready.set(true);
+        inner.waker.wake();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(inner.count.get(), 2);
+    }
+
+    #[ntex::test]
+    #[allow(clippy::redundant_clone)]
+    async fn test_middleware2() {
+        let inner = Rc::new(Inner {
+            ready: Cell::new(false),
+            waker: LocalWaker::default(),
+            count: Cell::new(0),
+        });
+
+        let srv = apply2(
             Buffer::default().buf_size(2).clone(),
             fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
         );

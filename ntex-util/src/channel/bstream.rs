@@ -69,18 +69,24 @@ pub struct Receiver<E> {
 }
 
 impl<E> Receiver<E> {
-    /// Set max stream size
+    /// Set size of stream buffer
     ///
-    /// By default max buffer size is set to 32Kb
+    /// By default buffer size is set to 32Kb
     #[inline]
-    pub fn max_size(&self, size: usize) {
-        self.inner.max_size.set(size);
+    pub fn max_buffer_size(&self, size: usize) {
+        self.inner.max_buffer_size.set(size);
     }
 
     /// Put unused data back to stream
     #[inline]
     pub fn put(&self, data: Bytes) {
         self.inner.unread_data(data);
+    }
+
+    #[inline]
+    /// Check if stream is eof
+    pub fn is_eof(&self) -> bool {
+        self.inner.flags.get().contains(Flags::EOF)
     }
 
     #[inline]
@@ -91,46 +97,39 @@ impl<E> Receiver<E> {
 
     #[inline]
     pub fn poll_read(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, E>>> {
-        if let Some(data) = self.inner.items.borrow_mut().pop_front() {
-            let len = self.inner.len.get() - data.len();
-            self.inner.len.set(len);
-            let need_read = if len < self.inner.max_size.get() {
-                self.inner.insert_flag(Flags::NEED_READ);
-                true
-            } else {
-                self.inner.remove_flag(Flags::NEED_READ);
-                false
-            };
-            if need_read {
-                self.inner.rx_task.register(cx.waker());
-                self.inner.tx_task.wake();
-            }
+        if let Some(data) = self.inner.get_data() {
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.inner.err.take() {
+            self.inner.insert_flag(Flags::EOF);
             Poll::Ready(Some(Err(err)))
         } else if self.inner.flags.get().intersects(Flags::EOF | Flags::ERROR) {
             Poll::Ready(None)
         } else {
-            self.inner.insert_flag(Flags::NEED_READ);
-            self.inner.rx_task.register(cx.waker());
-            self.inner.tx_task.wake();
+            self.inner.recv_task.register(cx.waker());
             Poll::Pending
         }
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    #[inline]
+    pub fn max_size(&self, size: usize) {
+        self.max_buffer_size(size);
     }
 }
 
 impl<E> Stream for Receiver<E> {
     type Item = Result<Bytes, E>;
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, E>>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.poll_read(cx)
     }
 }
 
 /// Sender part of the payload stream
+///
+/// It is possible to feed data from a cloned sender, but the readiness
+/// check applies only to the most recently called one.
 #[derive(Debug)]
 pub struct Sender<E> {
     inner: Weak<Inner<E>>,
@@ -139,7 +138,17 @@ pub struct Sender<E> {
 impl<E> Drop for Sender<E> {
     fn drop(&mut self) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.insert_flag(Flags::EOF);
+            if self.inner.weak_count() == 1 {
+                shared.insert_flag(Flags::EOF);
+            }
+        }
+    }
+}
+
+impl<E> Clone for Sender<E> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
         }
     }
 }
@@ -173,13 +182,13 @@ impl<E> Sender<E> {
 
     /// Check stream readiness
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Status> {
-        // we check only if Payload (other side) is alive,
+        // we check if Payload (other side) is alive,
         // otherwise always return true (consume payload)
         if let Some(shared) = self.inner.upgrade() {
             if shared.flags.get().contains(Flags::NEED_READ) {
                 Poll::Ready(Status::Ready)
             } else {
-                shared.tx_task.register(cx.waker());
+                shared.send_task.register(cx.waker());
                 Poll::Pending
             }
         } else {
@@ -203,26 +212,22 @@ struct Inner<E> {
     flags: Cell<Flags>,
     err: Cell<Option<E>>,
     items: RefCell<VecDeque<Bytes>>,
-    max_size: Cell<usize>,
-    rx_task: LocalWaker,
-    tx_task: LocalWaker,
+    max_buffer_size: Cell<usize>,
+    recv_task: LocalWaker,
+    send_task: LocalWaker,
 }
 
 impl<E> Inner<E> {
     fn new(eof: bool) -> Self {
-        let flags = if eof {
-            Flags::EOF | Flags::NEED_READ
-        } else {
-            Flags::NEED_READ
-        };
+        let flags = if eof { Flags::EOF } else { Flags::NEED_READ };
         Inner {
             flags: Cell::new(flags),
             len: Cell::new(0),
             err: Cell::new(None),
             items: RefCell::new(VecDeque::new()),
-            rx_task: LocalWaker::new(),
-            tx_task: LocalWaker::new(),
-            max_size: Cell::new(MAX_BUFFER_SIZE),
+            recv_task: LocalWaker::new(),
+            send_task: LocalWaker::new(),
+            max_buffer_size: Cell::new(MAX_BUFFER_SIZE),
         }
     }
 
@@ -241,24 +246,42 @@ impl<E> Inner<E> {
     fn set_error(&self, err: E) {
         self.err.set(Some(err));
         self.insert_flag(Flags::ERROR);
-        self.rx_task.wake()
+        self.recv_task.wake()
     }
 
     fn feed_eof(&self) {
         self.insert_flag(Flags::EOF);
-        self.rx_task.wake()
+        self.recv_task.wake()
     }
 
     fn feed_data(&self, data: Bytes) {
         let len = self.len.get() + data.len();
         self.len.set(len);
         self.items.borrow_mut().push_back(data);
-        if len < self.max_size.get() {
-            self.insert_flag(Flags::NEED_READ);
-        } else {
+        self.recv_task.wake();
+
+        if len >= self.max_buffer_size.get() {
             self.remove_flag(Flags::NEED_READ);
         }
-        self.rx_task.wake();
+    }
+
+    fn get_data(&self) -> Option<Bytes> {
+        if let Some(data) = self.items.borrow_mut().pop_front() {
+            let len = self.len.get() - data.len();
+
+            // check size of stream buffer,
+            // if stream has more space wake up sender
+            self.len.set(len);
+            if len < self.max_buffer_size.get() {
+                self.insert_flag(Flags::NEED_READ);
+                self.send_task.wake();
+            }
+            Some(data)
+        } else {
+            self.insert_flag(Flags::NEED_READ);
+            self.send_task.wake();
+            None
+        }
     }
 
     fn unread_data(&self, data: Bytes) {
@@ -275,9 +298,9 @@ impl<E> fmt::Debug for Inner<E> {
             .field("len", &self.len)
             .field("flags", &self.flags)
             .field("items", &self.items.borrow())
-            .field("max_size", &self.max_size)
-            .field("rx_task", &self.rx_task)
-            .field("tx_task", &self.tx_task)
+            .field("max_buffer_size", &self.max_buffer_size)
+            .field("recv_task", &self.recv_task)
+            .field("send_task", &self.send_task)
             .finish()
     }
 }
@@ -286,13 +309,13 @@ impl<E> fmt::Debug for Inner<E> {
 mod tests {
     use super::*;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_eof() {
         let (_, rx) = eof::<()>();
         assert!(rx.read().await.is_none());
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_unread_data() {
         let (_, payload) = channel::<()>();
 
@@ -302,5 +325,17 @@ mod tests {
             Bytes::from("data"),
             poll_fn(|cx| payload.poll_read(cx)).await.unwrap().unwrap()
         );
+    }
+
+    #[ntex::test]
+    async fn test_sender_clone() {
+        let (sender, payload) = channel::<()>();
+        assert!(!payload.is_eof());
+        let sender2 = sender.clone();
+        assert!(!payload.is_eof());
+        drop(sender2);
+        assert!(!payload.is_eof());
+        drop(sender);
+        assert!(payload.is_eof());
     }
 }

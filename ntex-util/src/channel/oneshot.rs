@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_oneshot() {
         let (tx, rx) = channel();
         assert!(format!("{tx:?}").contains("Sender"));

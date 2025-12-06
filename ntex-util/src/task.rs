@@ -121,7 +121,7 @@ pub async fn yield_to() {
 mod test {
     use super::*;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn yield_test() {
         yield_to().await;
     }

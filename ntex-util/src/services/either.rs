@@ -208,7 +208,7 @@ mod tests {
     type Either = EitherService<Svc1, Svc2>;
     type EitherFactory<F> = EitherServiceFactory<F, Svc1Factory, Svc2Factory>;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_success() {
         let svc = Pipeline::new(Either::left(Svc1).clone());
         assert_eq!(svc.call(()).await, Ok("svc1"));
@@ -223,7 +223,7 @@ mod tests {
         assert!(format!("{svc:?}").contains("EitherService"));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_factory() {
         let factory =
             EitherFactory::new(|s: &&'static str| *s == "svc1", Svc1Factory, Svc2Factory)

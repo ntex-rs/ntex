@@ -1,5 +1,5 @@
 #![allow(async_fn_in_trait)]
-use ntex_service::{Middleware, Service, ServiceCtx};
+use ntex_service::{Middleware, Middleware2, Service, ServiceCtx};
 
 /// Trait defines retry policy
 pub trait Policy<Req, S: Service<Req>>: Sized + Clone {
@@ -36,6 +36,17 @@ impl<P: Clone, S> Middleware<S> for Retry<P> {
     type Service = RetryService<P, S>;
 
     fn create(&self, service: S) -> Self::Service {
+        RetryService {
+            service,
+            policy: self.policy.clone(),
+        }
+    }
+}
+
+impl<P: Clone, S, C> Middleware2<S, C> for Retry<P> {
+    type Service = RetryService<P, S>;
+
+    fn create(&self, service: S, _: C) -> Self::Service {
         RetryService {
             service,
             policy: self.policy.clone(),
@@ -133,7 +144,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
+    use ntex_service::{Pipeline, ServiceFactory, apply, apply2, fn_factory};
 
     use super::*;
 
@@ -155,7 +166,7 @@ mod tests {
         }
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_retry() {
         let cnt = Rc::new(Cell::new(5));
         let svc = Pipeline::new(
@@ -168,6 +179,13 @@ mod tests {
         assert_eq!(cnt.get(), 1);
 
         let factory = apply(
+            Retry::new(DefaultRetryPolicy::new(3)).clone(),
+            fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
+        );
+        let srv = factory.pipeline(&()).await.unwrap();
+        assert_eq!(srv.call(()).await, Ok(()));
+
+        let factory = apply2(
             Retry::new(DefaultRetryPolicy::new(3)).clone(),
             fn_factory(|| async { Ok::<_, ()>(TestService(Rc::new(Cell::new(2)))) }),
         );

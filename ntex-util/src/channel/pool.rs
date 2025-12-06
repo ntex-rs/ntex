@@ -203,7 +203,7 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_pool() {
         let p = new();
         p.shrink_to_fit();

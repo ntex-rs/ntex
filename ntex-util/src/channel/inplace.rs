@@ -66,7 +66,7 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_inplace() {
         let ch = channel();
         assert_eq!(lazy(|cx| ch.poll_recv(cx)).await, Poll::Pending);

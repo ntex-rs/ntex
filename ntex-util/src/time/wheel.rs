@@ -734,7 +734,7 @@ mod tests {
     use super::*;
     use crate::time::{Millis, interval, sleep};
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_timer() {
         crate::spawn(async {
             let s = interval(Millis(25));

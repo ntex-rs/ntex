@@ -49,7 +49,7 @@ mod tests {
     use super::*;
     use crate::{future::Ready, time};
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn select_tests() {
         let res = select(Ready::<_, ()>::Ok("test"), pending::<()>()).await;
         assert_eq!(res, Either::Left(Ok("test")));
