@@ -84,6 +84,12 @@ impl<E> Receiver<E> {
     }
 
     #[inline]
+    /// Check if stream is eof
+    pub fn is_eof(&self) -> bool {
+        self.inner.flags.get().contains(Flags::EOF)
+    }
+
+    #[inline]
     /// Read next available bytes chunk
     pub async fn read(&self) -> Option<Result<Bytes, E>> {
         poll_fn(|cx| self.poll_read(cx)).await
@@ -94,6 +100,7 @@ impl<E> Receiver<E> {
         if let Some(data) = self.inner.get_data() {
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.inner.err.take() {
+            self.inner.insert_flag(Flags::EOF);
             Poll::Ready(Some(Err(err)))
         } else if self.inner.flags.get().intersects(Flags::EOF | Flags::ERROR) {
             Poll::Ready(None)
@@ -131,7 +138,9 @@ pub struct Sender<E> {
 impl<E> Drop for Sender<E> {
     fn drop(&mut self) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.insert_flag(Flags::EOF);
+            if self.inner.weak_count() == 1 {
+                shared.insert_flag(Flags::EOF);
+            }
         }
     }
 }
@@ -316,5 +325,17 @@ mod tests {
             Bytes::from("data"),
             poll_fn(|cx| payload.poll_read(cx)).await.unwrap().unwrap()
         );
+    }
+
+    #[ntex::test]
+    async fn test_sender_clone() {
+        let (sender, payload) = channel::<()>();
+        assert!(!payload.is_eof());
+        let sender2 = sender.clone();
+        assert!(!payload.is_eof());
+        drop(sender2);
+        assert!(!payload.is_eof());
+        drop(sender);
+        assert!(payload.is_eof());
     }
 }
