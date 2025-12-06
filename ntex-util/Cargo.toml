@@ -31,6 +31,5 @@ pin-project-lite = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.0"
-ntex-macros = "0.2.0"
+ntex = "3.0.0-pre.5"
 futures-util = {workspace = true }

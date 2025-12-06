@@ -82,7 +82,7 @@ mod test {
 
     use super::*;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn on_drop() {
         let f = OnDropFn::new(|| ());
         assert!(format!("{f:?}").contains("OnDropFn"));

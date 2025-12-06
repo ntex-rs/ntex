@@ -203,7 +203,7 @@ mod tests {
     use super::*;
     use crate::{future::lazy, future::stream_recv};
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_mpsc() {
         let (tx, mut rx) = channel();
         assert!(format!("{tx:?}").contains("Sender"));
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(err.into_inner(), "test");
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_close() {
         let (tx, rx) = channel::<()>();
         assert!(!tx.is_closed());

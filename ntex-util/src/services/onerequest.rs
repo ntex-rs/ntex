@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests to 1.
 use std::{cell::Cell, future::poll_fn, task::Poll};
 
-use ntex_service::{Middleware, Service, ServiceCtx};
+use ntex_service::{Middleware, Middleware2, Service, ServiceCtx};
 
 use crate::task::LocalWaker;
 
@@ -14,6 +14,18 @@ impl<S> Middleware<S> for OneRequest {
     type Service = OneRequestService<S>;
 
     fn create(&self, service: S) -> Self::Service {
+        OneRequestService {
+            service,
+            ready: Cell::new(true),
+            waker: LocalWaker::new(),
+        }
+    }
+}
+
+impl<S, C> Middleware2<S, C> for OneRequest {
+    type Service = OneRequestService<S>;
+
+    fn create(&self, service: S, _: C) -> Self::Service {
         OneRequestService {
             service,
             ready: Cell::new(true),
@@ -85,7 +97,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
+    use ntex_service::{Pipeline, ServiceFactory, apply, apply2, fn_factory};
     use std::{cell::RefCell, time::Duration};
 
     use super::*;
@@ -103,7 +115,7 @@ mod tests {
         }
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_oneshot() {
         let (tx, rx) = oneshot::channel();
 
@@ -123,13 +135,42 @@ mod tests {
         srv.shutdown().await;
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_middleware() {
         assert_eq!(format!("{OneRequest:?}"), "OneRequest");
 
         let (tx, rx) = oneshot::channel();
         let rx = RefCell::new(Some(rx));
         let srv = apply(
+            OneRequest,
+            fn_factory(move || {
+                let rx = rx.borrow_mut().take().unwrap();
+                async move { Ok::<_, ()>(SleepService(rx)) }
+            }),
+        );
+
+        let srv = srv.pipeline(&()).await.unwrap().bind();
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let srv2 = srv.clone();
+        ntex::rt::spawn(async move {
+            let _ = srv2.call(()).await;
+        });
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let _ = tx.send(());
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+    }
+
+    #[ntex::test]
+    async fn test_middleware2() {
+        assert_eq!(format!("{OneRequest:?}"), "OneRequest");
+
+        let (tx, rx) = oneshot::channel();
+        let rx = RefCell::new(Some(rx));
+        let srv = apply2(
             OneRequest,
             fn_factory(move || {
                 let rx = rx.borrow_mut().take().unwrap();

@@ -203,7 +203,7 @@ mod tests {
     use super::*;
     use crate::future::lazy;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     #[allow(clippy::unit_cmp)]
     async fn test_condition() {
         let cond = Condition::new();
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(waiter2.await, ());
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_condition_poll() {
         let cond = Condition::default().clone();
         let waiter = cond.wait();
@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Ready(()));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_condition_with() {
         let cond = Condition::<String>::default();
         let waiter = cond.wait();
@@ -287,7 +287,7 @@ mod tests {
         );
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn notify_ready() {
         let cond = Condition::default().clone();
         let waiter = cond.wait();
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(lazy(|cx| waiter2.poll_ready(cx)).await, Poll::Ready(()));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn notify_with_and_lock_ready() {
         // with
         let cond = Condition::<String>::default();

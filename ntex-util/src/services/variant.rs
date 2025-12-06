@@ -287,7 +287,7 @@ mod tests {
         }
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_variant() {
         let factory = variant(fn_factory(|| async { Ok::<_, ()>(Srv1) }));
         assert!(format!("{factory:?}").contains("Variant"));
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(service.call(Variant3::V3(())).await, Ok(2));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_variant_readiness() {
         #[derive(Debug, Clone)]
         struct Srv5;

@@ -1,5 +1,11 @@
 # Changes
 
+## [3.1.0] - 2025-11-27
+
+* Implement Middleware2 for services
+
+* channel::bstream improvements
+
 ## [3.0.0] - 2025-11-27
 
 * Update ntex-bytes

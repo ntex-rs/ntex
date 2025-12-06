@@ -368,7 +368,7 @@ mod tests {
     /// State Under Test: Two calls of `now()` return the same value if they are done within resolution interval.
     ///
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn lowres_time_does_not_immediately_change() {
         let _ = sleep(Seconds(1));
 
@@ -379,7 +379,7 @@ mod tests {
     ///
     /// Expected Behavior: Two calls of `now()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a 1ms interval.
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn lowres_time_updates_after_resolution_interval() {
         let _ = sleep(Seconds(1));
 
@@ -394,7 +394,7 @@ mod tests {
     /// State Under Test: Two calls of `system_time()` return the same value if they are done within 1ms interval.
     ///
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn system_time_service_time_does_not_immediately_change() {
         let _ = sleep(Seconds(1));
 
@@ -406,7 +406,7 @@ mod tests {
     ///
     /// Expected Behavior: Two calls of `system_time()` made in subsequent resolution interval return different values
     /// and second value is greater than the first one at least by a resolution interval.
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn system_time_service_time_updates_after_resolution_interval() {
         let _ = sleep(Seconds(1));
 
@@ -425,7 +425,7 @@ mod tests {
         assert!(second_time - first_time >= time::Duration::from_millis(wait_time as u64));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_sleep_0() {
         let _ = sleep(Seconds(1));
 
@@ -468,7 +468,7 @@ mod tests {
         assert!(second_time - first_time < time::Duration::from_millis(1));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_deadline() {
         let _ = sleep(Seconds(1));
 
@@ -498,7 +498,7 @@ mod tests {
         assert!(format!("{dl:?}").contains("Deadline"));
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_interval() {
         let mut int = interval(Millis(250));
 
@@ -521,7 +521,7 @@ mod tests {
         );
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_interval_one_sec() {
         let int = interval(Millis::ONE_SEC);
 
@@ -537,7 +537,7 @@ mod tests {
         }
     }
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_timeout_checked() {
         let result = timeout_checked(Millis(200), sleep(Millis(100))).await;
         assert!(result.is_ok());

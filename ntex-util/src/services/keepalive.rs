@@ -155,7 +155,7 @@ mod tests {
     #[derive(Debug, PartialEq)]
     struct TestErr;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn test_ka() {
         let factory = KeepAlive::new(Millis(100), || TestErr);
         assert!(format!("{factory:?}").contains("KeepAlive"));

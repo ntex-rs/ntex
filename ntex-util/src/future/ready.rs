@@ -46,7 +46,7 @@ mod test {
 
     use super::*;
 
-    #[ntex_macros::rt_test2]
+    #[ntex::test]
     async fn ready() {
         let ok = Ok::<_, ()>("ok");
         let mut f = Ready::from(ok);
