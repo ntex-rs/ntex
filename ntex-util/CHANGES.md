@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.0] - 2025-12-07
+
+* More channel::bstream improvements
+
 ## [3.1.0] - 2025-11-27
 
 * Implement Middleware2 for services

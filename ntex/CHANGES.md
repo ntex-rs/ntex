@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.6] 2025-12-07
+
+* Update bstream
+
 ## [3.0.0-pre.5] 2025-12-04
 
 * Naming for ClientBuilder

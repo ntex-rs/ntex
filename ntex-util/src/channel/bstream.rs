@@ -12,6 +12,8 @@ const MAX_BUFFER_SIZE: usize = 32_768;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Status {
+    /// Stream is eof
+    Eof,
     /// Stream is ready
     Ready,
     /// Receiver side is dropped
@@ -126,6 +128,12 @@ impl<E> Stream for Receiver<E> {
     }
 }
 
+impl<E> Drop for Receiver<E> {
+    fn drop(&mut self) {
+        self.inner.send_task.wake();
+    }
+}
+
 /// Sender part of the payload stream
 ///
 /// It is possible to feed data from a cloned sender, but the readiness
@@ -135,20 +143,20 @@ pub struct Sender<E> {
     inner: Weak<Inner<E>>,
 }
 
-impl<E> Drop for Sender<E> {
-    fn drop(&mut self) {
-        if let Some(shared) = self.inner.upgrade() {
-            if self.inner.weak_count() == 1 {
-                shared.insert_flag(Flags::EOF);
-            }
-        }
-    }
-}
-
 impl<E> Clone for Sender<E> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<E> Drop for Sender<E> {
+    fn drop(&mut self) {
+        if self.inner.weak_count() == 1 {
+            if let Some(shared) = self.inner.upgrade() {
+                shared.insert_flag(Flags::EOF | Flags::SENDER_GONE);
+            }
         }
     }
 }
@@ -182,16 +190,20 @@ impl<E> Sender<E> {
 
     /// Check stream readiness
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Status> {
-        // we check if Payload (other side) is alive,
-        // otherwise always return true (consume payload)
         if let Some(shared) = self.inner.upgrade() {
-            if shared.flags.get().contains(Flags::NEED_READ) {
+            let flags = shared.flags.get();
+            if flags.contains(Flags::NEED_READ) {
                 Poll::Ready(Status::Ready)
+            } else if flags.contains(Flags::SENDER_GONE | Flags::ERROR) {
+                Poll::Ready(Status::Dropped)
+            } else if flags.intersects(Flags::EOF) {
+                Poll::Ready(Status::Eof)
             } else {
                 shared.send_task.register(cx.waker());
                 Poll::Pending
             }
         } else {
+            // receiver is gone
             Poll::Ready(Status::Dropped)
         }
     }
@@ -246,12 +258,14 @@ impl<E> Inner<E> {
     fn set_error(&self, err: E) {
         self.err.set(Some(err));
         self.insert_flag(Flags::ERROR);
-        self.recv_task.wake()
+        self.recv_task.wake();
+        self.send_task.wake();
     }
 
     fn feed_eof(&self) {
         self.insert_flag(Flags::EOF);
-        self.recv_task.wake()
+        self.recv_task.wake();
+        self.send_task.wake();
     }
 
     fn feed_data(&self, data: Bytes) {
@@ -266,7 +280,7 @@ impl<E> Inner<E> {
     }
 
     fn get_data(&self) -> Option<Bytes> {
-        if let Some(data) = self.items.borrow_mut().pop_front() {
+        self.items.borrow_mut().pop_front().inspect(|data| {
             let len = self.len.get() - data.len();
 
             // check size of stream buffer,
@@ -276,12 +290,7 @@ impl<E> Inner<E> {
                 self.insert_flag(Flags::NEED_READ);
                 self.send_task.wake();
             }
-            Some(data)
-        } else {
-            self.insert_flag(Flags::NEED_READ);
-            self.send_task.wake();
-            None
-        }
+        })
     }
 
     fn unread_data(&self, data: Bytes) {
