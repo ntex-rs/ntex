@@ -155,7 +155,7 @@ impl<E> Drop for Sender<E> {
     fn drop(&mut self) {
         if self.inner.weak_count() == 1 {
             if let Some(shared) = self.inner.upgrade() {
-                shared.insert_flag(Flags::SENDER_GONE);
+                shared.insert_flag(Flags::EOF | Flags::SENDER_GONE);
             }
         }
     }
@@ -194,10 +194,10 @@ impl<E> Sender<E> {
             let flags = shared.flags.get();
             if flags.contains(Flags::NEED_READ) {
                 Poll::Ready(Status::Ready)
-            } else if flags.intersects(Flags::EOF) {
-                Poll::Ready(Status::Eof)
             } else if flags.contains(Flags::SENDER_GONE | Flags::ERROR) {
                 Poll::Ready(Status::Dropped)
+            } else if flags.intersects(Flags::EOF) {
+                Poll::Ready(Status::Eof)
             } else {
                 shared.send_task.register(cx.waker());
                 Poll::Pending
