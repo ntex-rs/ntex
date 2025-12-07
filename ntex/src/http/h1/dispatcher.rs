@@ -573,7 +573,7 @@ where
                 }
                 Poll::Pending
             }
-            Poll::Ready(bstream::Status::Dropped) => {
+            Poll::Ready(bstream::Status::Dropped | bstream::Status::Eof) => {
                 // service call is not interested in payload
                 // wait until future completes and then close
                 // connection
