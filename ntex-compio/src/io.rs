@@ -14,7 +14,6 @@ impl IoStream for crate::compat::TcpStream {
     }
 }
 
-#[cfg(unix)]
 impl IoStream for crate::compat::UnixStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         compio_runtime::spawn(run(self.0.clone(), ctx)).detach();

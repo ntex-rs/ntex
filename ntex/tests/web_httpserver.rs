@@ -12,7 +12,6 @@ use ntex::web::{self, App, HttpResponse, HttpServer, WebAppConfig};
 use ntex::{SharedCfg, io::IoConfig, rt, server::TestServer, time::Seconds, time::sleep};
 use ntex_tls::TlsConfig;
 
-#[cfg(unix)]
 #[ntex::test]
 async fn test_run() {
     let addr = TestServer::unused_addr();
@@ -201,7 +200,11 @@ async fn test_rustls() {
 }
 
 #[ntex::test]
-#[cfg(unix)]
+#[cfg(any(
+    all(unix, feature = "tokio"),
+    all(unix, feature = "neon"),
+    feature = "compio"
+))]
 async fn test_bind_uds() {
     let (tx, rx) = mpsc::channel();
 

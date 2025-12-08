@@ -1,5 +1,9 @@
 # Changes
 
+## [3.1.0] - 2025-12-08
+
+* Enable uds support for windows
+
 ## [3.0.0] - 2025-12-02
 
 * Upgrade compio to 0.17
