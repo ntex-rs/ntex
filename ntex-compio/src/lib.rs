@@ -38,6 +38,7 @@ pub(crate) mod compat {
         ))
     }
 
+    #[cfg(unix)]
     /// Convert std UnixStream to tokio's UnixStream
     pub fn from_unix_stream(
         stream: std::os::unix::net::UnixStream,
