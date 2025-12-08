@@ -439,7 +439,7 @@ async fn test_http1_handle_not_consumed_payload() {
     sleep(Millis(250)).await;
     let _ = stream.write_all(b"1234");
     let mut data = vec![0; 1024];
-    let _ = stream.read_to_end(&mut data);
+    let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
