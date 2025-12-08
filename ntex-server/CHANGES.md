@@ -1,9 +1,5 @@
 # Changes
 
-## [3.4.0] - 2025-12-08
-
-* Enable unix_connect for compio on windows
-
 ## [3.3.0] - 2025-12-05
 
 * Use AsyncFn for on-accept callback
