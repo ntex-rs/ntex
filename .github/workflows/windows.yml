@@ -52,6 +52,12 @@ jobs:
       - name: Install nasm
         uses: ilammy/setup-nasm@v1
 
+      - name: Cache openssl
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed\x64-windows\
+          key: x86_64-openssl
+
       - name: Install OpenSSL
         run: |
           vcpkg integrate install
@@ -63,8 +69,8 @@ jobs:
 
       - name: Run tests (tokio)
         run: |
-          cargo test --all --lib --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+          cargo test --all --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
 
       - name: Run tests (compio)
         run: |
-          cargo test --all --lib --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+          cargo test --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer

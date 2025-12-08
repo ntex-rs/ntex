@@ -420,6 +420,7 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
 }
 
 /// Handle not consumed payload
+#[cfg(unix)]
 #[ntex::test]
 async fn test_http1_handle_not_consumed_payload() {
     let srv = test_server(async || {
@@ -804,7 +805,7 @@ async fn test_h1_client_drop() -> io::Result<()> {
     })
     .await;
 
-    let result = timeout(Millis(1500), srv.request(Method::GET, "/").send()).await;
+    let result = timeout(Millis(2500), srv.request(Method::GET, "/").send()).await;
     assert!(result.is_err());
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 1);

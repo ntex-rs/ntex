@@ -15,7 +15,10 @@ pub use ntex_compio::{from_tcp_stream, tcp_connect};
     not(feature = "tokio"),
     not(feature = "neon")
 ))]
-pub use ntex_compio::{from_unix_stream, unix_connect};
+pub use ntex_compio::from_unix_stream;
+
+#[cfg(all(feature = "compio", not(feature = "tokio"), not(feature = "neon")))]
+pub use ntex_compio::unix_connect;
 
 #[cfg(all(not(feature = "tokio"), not(feature = "compio"), not(feature = "neon")))]
 mod no_rt {

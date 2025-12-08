@@ -78,7 +78,7 @@ ntex-server = "3.3"
 ntex-h2 = "3.1"
 ntex-rt = "3.1"
 ntex-io = "3.0"
-ntex-net = "3.1"
+ntex-net = "3.2"
 ntex-tls = "3.0"
 
 base64 = { workspace = true }

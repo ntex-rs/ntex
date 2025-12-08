@@ -11,7 +11,6 @@ pub(crate) mod compat {
     /// Tcp stream wrapper for compio TcpStream
     pub(crate) struct TcpStream(pub(crate) compio_net::TcpStream);
 
-    #[cfg(unix)]
     /// Tcp stream wrapper for compio UnixStream
     pub(crate) struct UnixStream(pub(crate) compio_net::UnixStream);
 
@@ -21,7 +20,6 @@ pub(crate) mod compat {
         Ok(Io::new(TcpStream(sock), cfg))
     }
 
-    #[cfg(unix)]
     /// Opens a unix stream connection.
     pub async fn unix_connect<'a, P>(addr: P, cfg: SharedCfg) -> Result<Io>
     where

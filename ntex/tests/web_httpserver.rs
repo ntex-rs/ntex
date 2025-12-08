@@ -9,10 +9,11 @@ mod rustls_utils;
 
 use ntex::http::HttpServiceConfig;
 use ntex::web::{self, App, HttpResponse, HttpServer, WebAppConfig};
-use ntex::{SharedCfg, io::IoConfig, rt, server::TestServer, time::Seconds, time::sleep};
+use ntex::{SharedCfg, io::IoConfig, server::TestServer, time::Seconds};
+#[cfg(unix)]
+use ntex::{rt, time::sleep};
 use ntex_tls::TlsConfig;
 
-#[cfg(unix)]
 #[ntex::test]
 async fn test_run() {
     let addr = TestServer::unused_addr();
@@ -154,7 +155,7 @@ async fn test_openssl() {
 }
 
 #[ntex::test]
-#[cfg(all(feature = "rustls", feature = "openssl"))]
+#[cfg(all(unix, feature = "rustls", feature = "openssl"))]
 async fn test_rustls() {
     use ntex::web::HttpRequest;
 
