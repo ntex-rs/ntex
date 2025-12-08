@@ -1,6 +1,6 @@
 [package]
 name = "ntex-server"
-version = "3.3.0"
+version = "3.4.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Server for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-io = "3"
-ntex-net = "3"
+ntex-net = "3.2"
 ntex-service = "3.7"
 ntex-rt = "3"
 ntex-util = "3"
@@ -33,7 +33,7 @@ socket2 = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.5"
+ntex = "3.0.0-pre.6"
 
 [target.'cfg(target_family = "unix")'.dependencies]
 signal-hook = { version = "0.3", features=["iterator"] }

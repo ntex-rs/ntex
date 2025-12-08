@@ -217,7 +217,7 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(feature = "compio", unix))]
     /// Add new unix domain service to the server.
     pub fn bind_uds<F, U, N, R>(self, name: N, addr: U, factory: F) -> io::Result<Self>
     where
