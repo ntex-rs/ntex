@@ -200,11 +200,7 @@ async fn test_rustls() {
 }
 
 #[ntex::test]
-#[cfg(any(
-    all(unix, feature = "tokio"),
-    all(unix, feature = "neon"),
-    feature = "compio"
-))]
+#[cfg(unix)]
 async fn test_bind_uds() {
     let (tx, rx) = mpsc::channel();
 
