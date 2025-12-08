@@ -355,7 +355,7 @@ where
         Ok(self)
     }
 
-    #[cfg(any(feature = "compio", unix))]
+    #[cfg(unix)]
     /// Start listening for incoming unix domain connections.
     ///
     /// This method is available with `uds` feature.
