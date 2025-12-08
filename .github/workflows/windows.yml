@@ -58,7 +58,6 @@ jobs:
           path: C:\vcpkg\installed\x64-windows\
           key: x86_64-openssl
 
-
       - name: Install OpenSSL
         run: |
           vcpkg integrate install
