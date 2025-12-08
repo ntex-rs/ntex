@@ -40,7 +40,7 @@ ntex-rt = "3"
 ntex-util = "3"
 
 ntex-tokio = { version = "3.0.0", optional = true }
-ntex-compio = { version = "3.1.0", optional = true }
+ntex-compio = { version = "3.2.1", optional = true }
 ntex-neon = { version = "0.1.35", optional = true }
 
 bitflags = { workspace = true }
