@@ -52,6 +52,12 @@ jobs:
       - name: Install nasm
         uses: ilammy/setup-nasm@v1
 
+      - name: Cache openssl
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed\x64-windows\
+          key: x86_64-openssl
+
       - name: Install OpenSSL
         run: |
           vcpkg integrate install
