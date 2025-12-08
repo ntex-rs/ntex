@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.0] - 2025-12-08
+
+* Fix panic in read
+
 ## [3.1.0] - 2025-12-08
 
 * Enable uds support for windows
