@@ -90,14 +90,14 @@ where
     let mut buf = ctx.get_read_buf();
     let mut total = buf.len();
     ctx.resize_read_buf(&mut buf);
-    let mut read_fut = Some(read_buf(&io, buf));
+    let mut read_fut = Some(Box::pin(read_buf(&io, buf)));
 
     loop {
         if read_ready(ctx).await {
             break;
         }
 
-        match select(read_fut.take().unwrap(), not_read_ready(ctx)).await {
+        match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
                 let nbytes = cbuf.0.len() - total;
                 let result = ctx.release_read_buf(
@@ -111,10 +111,11 @@ where
                     let mut buf = ctx.get_read_buf();
                     total = buf.len();
                     ctx.resize_read_buf(&mut buf);
-                    read_fut = Some(read_buf(&io, buf));
+                    read_fut = Some(Box::pin(read_buf(&io, buf)));
                 };
             }
-            Either::Right(()) => break,
+            Either::Right(true) => break,
+            Either::Right(false) => (),
         }
     }
 }
@@ -135,10 +136,11 @@ async fn read_ready(ctx: &IoContext) -> bool {
     .await
 }
 
-async fn not_read_ready(ctx: &IoContext) {
+async fn not_read_ready(ctx: &IoContext) -> bool {
     poll_fn(|cx| match ctx.poll_read_ready(cx) {
-        Poll::Pending | Poll::Ready(Readiness::Ready) => Poll::Pending,
-        Poll::Ready(_) => Poll::Ready(()),
+        Poll::Pending => Poll::Ready(false),
+        Poll::Ready(Readiness::Ready) => Poll::Pending,
+        Poll::Ready(_) => Poll::Ready(true),
     })
     .await
 }
