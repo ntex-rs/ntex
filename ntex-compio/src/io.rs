@@ -85,7 +85,7 @@ async fn run<T: AsyncRead + AsyncWrite + Clone + Unpin + 'static>(io: T, ctx: Io
 
 async fn read<T>(io: T, ctx: &IoContext)
 where
-    T: AsyncRead + AsyncWrite + Clone,
+    T: AsyncRead + AsyncWrite + Clone + Unpin,
 {
     let mut buf = ctx.get_read_buf();
     let mut total = buf.len();
@@ -114,8 +114,7 @@ where
                     read_fut = Some(read_buf(&io, buf));
                 };
             }
-            Either::Right(true) => break,
-            Either::Right(false) => (),
+            Either::Right(()) => break,
         }
     }
 }
@@ -136,11 +135,10 @@ async fn read_ready(ctx: &IoContext) -> bool {
     .await
 }
 
-async fn not_read_ready(ctx: &IoContext) -> bool {
+async fn not_read_ready(ctx: &IoContext) {
     poll_fn(|cx| match ctx.poll_read_ready(cx) {
-        Poll::Pending => Poll::Ready(false),
-        Poll::Ready(Readiness::Ready) => Poll::Pending,
-        Poll::Ready(_) => Poll::Ready(true),
+        Poll::Pending | Poll::Ready(Readiness::Ready) => Poll::Pending,
+        Poll::Ready(_) => Poll::Ready(()),
     })
     .await
 }
