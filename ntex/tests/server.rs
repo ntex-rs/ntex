@@ -12,7 +12,7 @@ use ntex::server::{TestServer, build};
 use ntex::service::fn_service;
 use ntex::util::Ready;
 #[cfg(unix)]
-use ntex::{SharedCfg, codec::BytesCodec, io::Io, util::Bytes};
+use ntex::{codec::BytesCodec, io::Io, util::Bytes};
 
 #[test]
 fn test_bind() {
@@ -94,7 +94,7 @@ async fn test_run() {
                     })
                 })
                 .unwrap()
-                .config("test", SharedCfg::new("SRV"))
+                .config("test", ntex::SharedCfg::new("SRV"))
                 .run();
             let _ = tx.send((srv, ntex::rt::System::current()));
             Ok(())
@@ -226,7 +226,7 @@ fn test_configure_async() {
                             .bind("addr2", addr2)
                             .unwrap()
                             .listen("addr3", lst)
-                            .config("addr1", SharedCfg::new("srv-addr1"))
+                            .config("addr1", ntex::SharedCfg::new("srv-addr1"))
                             .on_worker_start(async move |rt| {
                                 assert!(format!("{:?}", rt).contains("ServiceRuntime"));
                                 let num = num.clone();
