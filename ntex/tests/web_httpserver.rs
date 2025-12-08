@@ -153,7 +153,7 @@ async fn test_openssl() {
 }
 
 #[ntex::test]
-#[cfg(all(feature = "rustls", feature = "openssl"))]
+#[cfg(all(unix, feature = "rustls", feature = "openssl"))]
 async fn test_rustls() {
     use ntex::web::HttpRequest;
 

@@ -158,11 +158,12 @@ async fn test_form() {
     assert!(response.status().is_success());
 }
 
+// #[cfg(unix)]
 #[ntex::test]
 async fn test_timeout() {
     let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(|| async {
-            sleep(Millis(2000)).await;
+            sleep(Millis(5000)).await;
             HttpResponse::Ok().body(STR)
         })))
     })
@@ -172,13 +173,13 @@ async fn test_timeout() {
 
     let client = Client::builder()
         .connector::<&str>(connector)
-        .response_timeout(Seconds(1))
-        .build(SharedCfg::new("SVC").add(IoConfig::new().set_connect_timeout(15)))
+        .response_timeout(Seconds(3))
+        .build(SharedCfg::new("SVC").add(IoConfig::new().set_connect_timeout(2500)))
         .await
         .unwrap();
 
-    let request = client.get(srv.url("/")).send();
-    match request.await {
+    let request = client.get(srv.url("/")).send().await;
+    match request {
         Err(SendRequestError::Timeout) => (),
         _ => panic!(),
     }

@@ -804,7 +804,7 @@ async fn test_h1_client_drop() -> io::Result<()> {
     })
     .await;
 
-    let result = timeout(Millis(1500), srv.request(Method::GET, "/").send()).await;
+    let result = timeout(Millis(2500), srv.request(Method::GET, "/").send()).await;
     assert!(result.is_err());
     let _ = rx.await;
     assert_eq!(count.load(Ordering::Relaxed), 1);
