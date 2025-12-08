@@ -9,7 +9,9 @@ mod rustls_utils;
 
 use ntex::http::HttpServiceConfig;
 use ntex::web::{self, App, HttpResponse, HttpServer, WebAppConfig};
-use ntex::{SharedCfg, io::IoConfig, rt, server::TestServer, time::Seconds, time::sleep};
+use ntex::{SharedCfg, io::IoConfig, server::TestServer, time::Seconds};
+#[cfg(unix)]
+use ntex::{rt, time::sleep};
 use ntex_tls::TlsConfig;
 
 #[ntex::test]

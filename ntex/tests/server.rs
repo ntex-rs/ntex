@@ -1,16 +1,18 @@
 #![allow(clippy::let_underscore_future)]
 
+#[cfg(unix)]
+use std::io::{Read, Write};
 #[cfg(any(feature = "tokio", feature = "neon"))]
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 #[cfg(any(feature = "tokio", feature = "neon"))]
 use std::{io, sync::Arc};
-use std::{io::Read, io::Write, net, sync::mpsc, thread, time};
+use std::{net, sync::mpsc, thread, time};
 
-use ntex::codec::BytesCodec;
-use ntex::io::Io;
 use ntex::server::{TestServer, build};
-use ntex::service::{cfg::SharedCfg, fn_service};
-use ntex::util::{Bytes, Ready};
+use ntex::service::fn_service;
+use ntex::util::Ready;
+#[cfg(unix)]
+use ntex::{SharedCfg, codec::BytesCodec, io::Io, util::Bytes};
 
 #[test]
 fn test_bind() {
