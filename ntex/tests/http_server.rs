@@ -420,6 +420,7 @@ async fn test_http1_disable_payload_timer_after_whole_pl_has_been_read() {
 }
 
 /// Handle not consumed payload
+#[cfg(unix)]
 #[ntex::test]
 async fn test_http1_handle_not_consumed_payload() {
     let srv = test_server(async || {
@@ -438,7 +439,7 @@ async fn test_http1_handle_not_consumed_payload() {
     sleep(Millis(250)).await;
     let _ = stream.write_all(b"1234");
     let mut data = vec![0; 1024];
-    let _ = stream.read(&mut data);
+    let _ = stream.read_to_end(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 }
 
