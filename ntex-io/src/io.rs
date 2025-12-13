@@ -238,10 +238,7 @@ impl<F> Io<F> {
             cfg: Cell::new(SharedCfg::default().get::<IoConfig>().into_static()),
             filter: FilterPtr::null(),
             flags: Cell::new(
-                Flags::DSP_STOP
-                    | Flags::IO_STOPPED
-                    | Flags::IO_STOPPING
-                    | Flags::IO_STOPPING_FILTERS,
+                Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
             ),
             error: Cell::new(None),
             dispatch_task: LocalWaker::new(),
@@ -360,10 +357,6 @@ impl<F> Io<F> {
                 Err(RecvError::KeepAlive) => Err(Either::Right(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "Timeout",
-                ))),
-                Err(RecvError::Stop) => Err(Either::Right(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "Dispatcher stopped",
                 ))),
                 Err(RecvError::WriteBackpressure) => {
                     poll_fn(|cx| self.poll_flush(cx, false))
@@ -541,9 +534,6 @@ impl<F> Io<F> {
             let flags = st.flags.get();
             if flags.is_stopped() {
                 Err(RecvError::PeerGone(st.error()))
-            } else if flags.contains(Flags::DSP_STOP) {
-                st.remove_flags(Flags::DSP_STOP);
-                Err(RecvError::Stop)
             } else if flags.contains(Flags::DSP_TIMEOUT) {
                 st.remove_flags(Flags::DSP_TIMEOUT);
                 Err(RecvError::KeepAlive)
@@ -649,9 +639,6 @@ impl<F> Io<F> {
         let flags = st.flags.get();
         if flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
             Poll::Ready(IoStatusUpdate::PeerGone(st.error()))
-        } else if flags.contains(Flags::DSP_STOP) {
-            st.remove_flags(Flags::DSP_STOP);
-            Poll::Ready(IoStatusUpdate::Stop)
         } else if flags.contains(Flags::DSP_TIMEOUT) {
             st.remove_flags(Flags::DSP_TIMEOUT);
             Poll::Ready(IoStatusUpdate::KeepAlive)
@@ -1025,10 +1012,6 @@ mod tests {
         server.st().notify_timeout();
         let err = server.recv(&BytesCodec).await.err().unwrap();
         assert!(format!("{err:?}").contains("Timeout"));
-
-        server.st().insert_flags(Flags::DSP_STOP);
-        let err = server.recv(&BytesCodec).await.err().unwrap();
-        assert!(format!("{err:?}").contains("Dispatcher stopped"));
 
         client.write(TEXT);
         server.st().insert_flags(Flags::BUF_W_BACKPRESSURE);

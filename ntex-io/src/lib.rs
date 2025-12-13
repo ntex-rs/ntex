@@ -129,8 +129,6 @@ pub enum IoStatusUpdate {
     KeepAlive,
     /// Write backpressure is enabled
     WriteBackpressure,
-    /// Stop io stream handling
-    Stop,
     /// Peer is disconnected
     PeerGone(Option<IoError>),
 }
@@ -142,8 +140,6 @@ pub enum RecvError<U: Decoder> {
     KeepAlive,
     /// Write backpressure is enabled
     WriteBackpressure,
-    /// Stop io stream handling
-    Stop,
     /// Unrecoverable frame decoding errors
     Decoder(U::Error),
     /// Peer is disconnected
