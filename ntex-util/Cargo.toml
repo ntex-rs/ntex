@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "3.2.0"
+version = "3.3.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -31,5 +31,5 @@ pin-project-lite = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.5"
+ntex = "3.0.0-pre.6"
 futures-util = {workspace = true }

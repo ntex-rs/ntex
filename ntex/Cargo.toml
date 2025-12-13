@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.0.0-pre.6"
+version = "3.0.0-pre.7"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -72,12 +72,12 @@ ntex-http = "1"
 ntex-router = "1"
 ntex-service = "3.7.1"
 ntex-macros = "0.2"
-ntex-util = "3.2"
+ntex-util = "3.3"
 ntex-bytes = "1"
 ntex-server = "3.3"
 ntex-h2 = "3.1"
 ntex-rt = "3.1"
-ntex-io = "3.0"
+ntex-io = "3.1"
 ntex-net = "3.2"
 ntex-tls = "3.0"
 

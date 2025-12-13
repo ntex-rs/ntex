@@ -223,14 +223,6 @@ where
                                         continue;
                                     }
                                 }
-                                Err(RecvError::Stop) => {
-                                    log::trace!(
-                                        "{}: Dispatcher is instructed to stop",
-                                        slf.shared.io.tag()
-                                    );
-                                    slf.st = DispatcherState::Stop;
-                                    continue;
-                                }
                                 Err(RecvError::WriteBackpressure) => {
                                     // instruct write task to notify dispatcher when data is flushed
                                     slf.st = DispatcherState::Backpressure;
@@ -300,9 +292,7 @@ where
                         }
                     } else if !slf.shared.contains(Flags::IO_ERR) {
                         match ready!(slf.shared.io.poll_status_update(cx)) {
-                            IoStatusUpdate::PeerGone(_)
-                            | IoStatusUpdate::Stop
-                            | IoStatusUpdate::KeepAlive => {
+                            IoStatusUpdate::PeerGone(_) | IoStatusUpdate::KeepAlive => {
                                 slf.shared.insert_flags(Flags::IO_ERR);
                                 continue;
                             }
@@ -416,14 +406,6 @@ where
                         );
                         self.st = DispatcherState::Stop;
                         Poll::Ready(PollService::Item(DispatchItem::KeepAliveTimeout))
-                    }
-                    IoStatusUpdate::Stop => {
-                        log::trace!(
-                            "{}: Dispatcher is instructed to stop during pause",
-                            self.shared.io.tag()
-                        );
-                        self.st = DispatcherState::Stop;
-                        Poll::Ready(PollService::Continue)
                     }
                     IoStatusUpdate::PeerGone(err) => {
                         log::trace!(
@@ -563,8 +545,7 @@ mod tests {
         }
 
         fn close(&self) {
-            self.0.0.insert_flags(Flags::DSP_STOP);
-            self.0.0.dispatch_task.wake();
+            self.0.close();
         }
     }
 
@@ -684,6 +665,8 @@ mod tests {
             ntex_service::fn_service(|msg: DispatchItem<BytesCodec>| async move {
                 if let DispatchItem::Item(msg) = msg {
                     Ok::<_, ()>(Some(msg.freeze()))
+                } else if let DispatchItem::Disconnect(_) = msg {
+                    Ok(None)
                 } else {
                     panic!()
                 }

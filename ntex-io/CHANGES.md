@@ -1,5 +1,9 @@
 # Changes
 
+## [3.1.0] - 2025-12-13
+
+* Remove RecvError::Stop and IoStatusUpdate::Stop
+
 ## [3.0.0-pre.0] - 2025-11-27
 
 * New configuration subsystem

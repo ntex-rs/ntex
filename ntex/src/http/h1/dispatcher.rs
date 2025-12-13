@@ -320,10 +320,6 @@ where
                     self.stop()
                 }
             }
-            Err(RecvError::Stop) => {
-                log::trace!("{}: Dispatcher is instructed to stop", self.io.tag());
-                self.stop()
-            }
         };
 
         Poll::Ready(st)
@@ -440,9 +436,7 @@ where
             // check for io changes, could close while waiting for service call
             match ready!(self.io.poll_status_update(cx)) {
                 IoStatusUpdate::KeepAlive => Poll::Pending,
-                IoStatusUpdate::Stop | IoStatusUpdate::PeerGone(_) => {
-                    Poll::Ready(self.stop())
-                }
+                IoStatusUpdate::PeerGone(_) => Poll::Ready(self.stop()),
                 IoStatusUpdate::WriteBackpressure => Poll::Pending,
             }
         }
@@ -539,12 +533,6 @@ where
                                     } else {
                                         continue;
                                     }
-                                }
-                                RecvError::Stop => {
-                                    self.set_payload_error(PayloadError::EncodingCorrupted);
-                                    Either::Right(Some(io::Error::other(
-                                        "Dispatcher stopped",
-                                    )))
                                 }
                                 RecvError::PeerGone(err) => {
                                     self.set_payload_error(PayloadError::EncodingCorrupted);

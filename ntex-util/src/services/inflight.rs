@@ -88,6 +88,9 @@ where
         req: R,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
+        if !self.count.is_available() {
+            self.count.available().await;
+        }
         let _guard = self.count.get();
         ctx.call(&self.service, req).await
     }

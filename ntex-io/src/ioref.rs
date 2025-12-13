@@ -66,9 +66,8 @@ impl IoRef {
     #[inline]
     /// Gracefully close connection
     ///
-    /// Notify dispatcher and initiate io stream shutdown process.
+    /// Initiate io stream shutdown process.
     pub fn close(&self) {
-        self.0.insert_flags(Flags::DSP_STOP);
         self.0.init_shutdown();
     }
 
@@ -80,10 +79,7 @@ impl IoRef {
     pub fn force_close(&self) {
         log::trace!("{}: Force close io stream object", self.tag());
         self.0.insert_flags(
-            Flags::DSP_STOP
-                | Flags::IO_STOPPED
-                | Flags::IO_STOPPING
-                | Flags::IO_STOPPING_FILTERS,
+            Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
         );
         self.0.read_task.wake();
         self.0.write_task.wake();
@@ -380,7 +376,6 @@ mod tests {
         if let Poll::Ready(msg) = res {
             assert!(msg.is_err());
             assert!(state.flags().contains(Flags::IO_STOPPED));
-            assert!(state.flags().contains(Flags::DSP_STOP));
         }
 
         let (client, server) = IoTest::create();
@@ -404,7 +399,7 @@ mod tests {
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
         state.force_close();
-        assert!(state.flags().contains(Flags::DSP_STOP));
+        assert!(state.flags().contains(Flags::IO_STOPPED));
         assert!(state.flags().contains(Flags::IO_STOPPING));
     }
 

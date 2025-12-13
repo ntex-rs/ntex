@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.0] - 2025-12-13
+
+* Fix nowait handling for Inflight service call
+
 ## [3.2.0] - 2025-12-07
 
 * More channel::bstream improvements

@@ -28,8 +28,6 @@ bitflags::bitflags! {
         /// wait for write completion task
         const WR_TASK_WAIT        = 0b0000_1000_0000_0000;
 
-        /// dispatcher is marked stopped
-        const DSP_STOP            = 0b0001_0000_0000_0000;
         /// timeout occured
         const DSP_TIMEOUT         = 0b0010_0000_0000_0000;
     }
