@@ -1,5 +1,9 @@
 # Changes
 
+## [2.16.0] - 2025-12-14
+
+* Fix nowait handling for Inflight service call, fixes deadlock
+
 ## [2.15.0] - 2025-10-10
 
 * Fix readiness check for Variant service
