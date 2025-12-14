@@ -134,7 +134,6 @@ pub enum IoStatusUpdate {
 }
 
 /// Recv error
-#[derive(Debug)]
 pub enum RecvError<U: Decoder> {
     /// Keep-alive timeout occured
     KeepAlive,
@@ -144,6 +143,29 @@ pub enum RecvError<U: Decoder> {
     Decoder(U::Error),
     /// Peer is disconnected
     PeerGone(Option<IoError>),
+}
+
+impl<U> fmt::Debug for RecvError<U>
+where
+    U: Decoder,
+    <U as Decoder>::Error: fmt::Debug,
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            RecvError::KeepAlive => {
+                write!(fmt, "RecvError::KeepAlive")
+            }
+            RecvError::WriteBackpressure => {
+                write!(fmt, "RecvError::WriteBackpressure")
+            }
+            RecvError::Decoder(ref e) => {
+                write!(fmt, "RecvError::Decoder({e:?})")
+            }
+            RecvError::PeerGone(ref e) => {
+                write!(fmt, "RecvError::PeerGone({e:?})")
+            }
+        }
+    }
 }
 
 /// Dispatcher item
@@ -232,5 +254,23 @@ mod tests {
 
         assert!(format!("{:?}", IoStatusUpdate::KeepAlive).contains("KeepAlive"));
         assert!(format!("{:?}", RecvError::<BytesCodec>::KeepAlive).contains("KeepAlive"));
+        assert!(
+            format!("{:?}", RecvError::<BytesCodec>::WriteBackpressure)
+                .contains("WriteBackpressure")
+        );
+        assert!(
+            format!(
+                "{:?}",
+                RecvError::<BytesCodec>::Decoder(io::Error::other("err"))
+            )
+            .contains("RecvError::Decoder")
+        );
+        assert!(
+            format!(
+                "{:?}",
+                RecvError::<BytesCodec>::PeerGone(Some(io::Error::other("err")))
+            )
+            .contains("RecvError::PeerGone")
+        );
     }
 }
