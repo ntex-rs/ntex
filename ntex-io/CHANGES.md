@@ -1,5 +1,9 @@
 # Changes
 
+## [3.1.1] - 2025-12-14
+
+* Add fmt::Debug impl for RecvError
+
 ## [3.1.0] - 2025-12-14
 
 * Remove RecvError::Stop and IoStatusUpdate::Stop
