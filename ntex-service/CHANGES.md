@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.3] - 2025-12-14
+
+* Fix handling nested readiness checks
+
 ## [3.7.2] - 2025-12-05
 
 * Use asyncfn for fn_shutdown service

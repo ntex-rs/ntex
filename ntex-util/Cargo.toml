@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-bytes = "1"
-ntex-service = "3.7"
+ntex-service = "3.7.3"
 ntex-rt = "3"
 
 foldhash = { workspace = true }
@@ -32,4 +32,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 ntex = "3.0.0-pre.6"
-futures-util = {workspace = true }
+futures-util = { workspace = true }
+async-channel = { workspace = true }

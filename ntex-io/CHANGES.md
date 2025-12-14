@@ -1,6 +1,6 @@
 # Changes
 
-## [3.1.0] - 2025-12-13
+## [3.1.0] - 2025-12-14
 
 * Remove RecvError::Stop and IoStatusUpdate::Stop
 

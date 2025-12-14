@@ -1,5 +1,7 @@
 //! Utilities for futures
-use std::{future::Future, future::poll_fn, mem, pin::Pin, task::Context, task::Poll};
+use std::future::{Future, poll_fn};
+use std::task::{Context, Poll, ready};
+use std::{mem, pin::Pin};
 
 pub use futures_core::{Stream, TryFuture};
 
@@ -60,7 +62,7 @@ impl<F: Future> Future for MaybeDone<F> {
         unsafe {
             match self.as_mut().get_unchecked_mut() {
                 MaybeDone::Pending(f) => {
-                    let res = futures_core::ready!(Pin::new_unchecked(f).poll(cx));
+                    let res = ready!(Pin::new_unchecked(f).poll(cx));
                     self.set(Self::Done(res));
                 }
                 MaybeDone::Done(_) => {}

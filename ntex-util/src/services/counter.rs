@@ -75,9 +75,13 @@ impl Counter {
     /// Check if counter is not at capacity. If counter at capacity
     /// it registers notification for current task.
     fn poll_available(&self, cx: &mut Context<'_>) -> bool {
-        let tasks = self.1.tasks.borrow();
-        tasks[self.0].register(cx.waker());
-        self.1.count.get() < self.1.capacity.get()
+        if self.1.count.get() < self.1.capacity.get() {
+            true
+        } else {
+            let tasks = self.1.tasks.borrow();
+            tasks[self.0].register(cx.waker());
+            false
+        }
     }
 
     /// Get total number of acquired counts
@@ -119,11 +123,7 @@ impl Drop for CounterGuard {
 
 impl CounterInner {
     fn inc(&self) {
-        let num = self.count.get() + 1;
-        self.count.set(num);
-        if num == self.capacity.get() {
-            self.notify();
-        }
+        self.count.set(self.count.get() + 1);
     }
 
     fn dec(&self) {

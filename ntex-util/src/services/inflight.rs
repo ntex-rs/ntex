@@ -74,9 +74,9 @@ where
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         if !self.count.is_available() {
-            let (_, res) =
-                crate::future::join(self.count.available(), ctx.ready(&self.service)).await;
-            res
+            crate::future::join(self.count.available(), ctx.ready(&self.service))
+                .await
+                .1
         } else {
             ctx.ready(&self.service).await
         }
@@ -88,9 +88,7 @@ where
         req: R,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        if !self.count.is_available() {
-            self.count.available().await;
-        }
+        ctx.ready(&self.service).await?;
         let _guard = self.count.get();
         ctx.call(&self.service, req).await
     }
@@ -101,14 +99,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, task::Poll, time::Duration};
+    use std::{cell::Cell, cell::RefCell, rc::Rc, task::Poll, time::Duration};
 
+    use async_channel as mpmc;
     use ntex_service::{Pipeline, ServiceFactory, apply, apply2, fn_factory};
 
     use super::*;
     use crate::{channel::oneshot, future::lazy};
 
-    struct SleepService(oneshot::Receiver<()>);
+    struct SleepService(mpmc::Receiver<()>);
 
     impl Service<()> for SleepService {
         type Response = ();
@@ -122,21 +121,52 @@ mod tests {
 
     #[ntex::test]
     async fn test_service() {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpmc::unbounded();
+        let counter = Rc::new(Cell::new(0));
 
         let srv = Pipeline::new(InFlightService::new(1, SleepService(rx))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
-        let srv2 = srv.clone();
+        let counter2 = counter.clone();
+        let fut = srv.call_nowait(());
         ntex::rt::spawn(async move {
-            let _ = srv2.call(()).await;
+            let _ = fut.await;
+            counter2.set(counter2.get() + 1);
         });
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
-        let _ = tx.send(());
+        let counter2 = counter.clone();
+        let fut = srv.call_nowait(());
+        ntex::rt::spawn(async move {
+            let _ = fut.await;
+            counter2.set(counter2.get() + 1);
+        });
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let counter2 = counter.clone();
+        let fut = srv.call(());
+        let (stx, srx) = oneshot::channel::<()>();
+        ntex::rt::spawn(async move {
+            let _ = fut.await;
+            counter2.set(counter2.get() + 1);
+            let _ = stx.send(());
+        });
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let _ = tx.send(()).await;
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
+
+        let _ = tx.send(()).await;
+        crate::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
+
+        let _ = tx.send(()).await;
+        let _ = srx.recv().await;
+        assert_eq!(counter.get(), 3);
         srv.shutdown().await;
     }
 
@@ -148,7 +178,7 @@ mod tests {
             "InFlight { max_inflight: 1 }"
         );
 
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpmc::unbounded();
         let rx = RefCell::new(Some(rx));
         let srv = apply(
             InFlight::new(1),
@@ -168,7 +198,7 @@ mod tests {
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
-        let _ = tx.send(());
+        let _ = tx.send(()).await;
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
@@ -181,7 +211,7 @@ mod tests {
             "InFlight { max_inflight: 1 }"
         );
 
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = mpmc::unbounded();
         let rx = RefCell::new(Some(rx));
         let srv = apply2(
             InFlight::new(1),
@@ -201,7 +231,7 @@ mod tests {
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Pending);
 
-        let _ = tx.send(());
+        let _ = tx.send(()).await;
         crate::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
     }
