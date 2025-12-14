@@ -1,6 +1,6 @@
 [package]
 name = "ntex-service"
-version = "3.7.2"
+version = "3.7.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex service"
 keywords = ["network", "framework", "async", "futures"]
@@ -24,6 +24,8 @@ log = { workspace = true }
 slab = { workspace = true }
 foldhash = { workspace = true }
 
+backtrace = "*"
+
 [dev-dependencies]
-ntex = "3.0.0-pre.5"
+ntex = "3.0.0-pre.6"
 ntex-util = "3"

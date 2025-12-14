@@ -19,7 +19,7 @@ path = "src/lib.rs"
 [dependencies]
 ntex-codec = "1"
 ntex-bytes = "1"
-ntex-util = "3"
+ntex-util = "3.1"
 ntex-service = "3.6.3"
 
 bitflags = { workspace = true }
@@ -27,5 +27,5 @@ log = { workspace = true }
 pin-project-lite = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.2"
+ntex = "3.0.0-pre.6"
 rand = { workspace = true }

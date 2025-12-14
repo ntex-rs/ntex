@@ -388,7 +388,7 @@ impl<S: Service<R>, R, F, Fut> Unpin for CheckReadiness<S, R, F, Fut> {}
 
 impl<S: Service<R>, R, F, Fut> Drop for CheckReadiness<S, R, F, Fut> {
     fn drop(&mut self) {
-        // future fot dropped during polling, we must notify other waiters
+        // future got dropped during polling, we must notify other waiters
         if self.fut.is_some() {
             self.pl.state.waiters.notify();
         }
@@ -408,24 +408,16 @@ where
 
         slf.pl.poll(cx)?;
 
-        if slf.pl.state.waiters.can_check(slf.pl.index, cx) {
+        slf.pl.state.waiters.run(slf.pl.index, cx, |cx| {
             if slf.fut.is_none() {
                 slf.fut = Some((slf.f)(slf.pl));
             }
             let fut = slf.fut.as_mut().unwrap();
-            match unsafe { Pin::new_unchecked(fut) }.poll(cx) {
-                Poll::Pending => {
-                    slf.pl.state.waiters.register(slf.pl.index, cx);
-                    Poll::Pending
-                }
-                Poll::Ready(res) => {
-                    let _ = slf.fut.take();
-                    slf.pl.state.waiters.notify();
-                    Poll::Ready(res)
-                }
+            let result = unsafe { Pin::new_unchecked(fut) }.poll(cx);
+            if result.is_ready() {
+                let _ = slf.fut.take();
             }
-        } else {
-            Poll::Pending
-        }
+            result
+        })
     }
 }

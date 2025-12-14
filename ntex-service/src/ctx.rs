@@ -11,6 +11,7 @@ pub struct ServiceCtx<'a, S: ?Sized> {
 
 #[derive(Debug)]
 pub(crate) struct WaitersRef {
+    running: cell::Cell<bool>,
     cur: cell::Cell<u32>,
     shutdown: cell::Cell<bool>,
     wakers: cell::UnsafeCell<Vec<u32>>,
@@ -24,6 +25,7 @@ impl WaitersRef {
         (
             waiters.insert(Default::default()) as u32,
             WaitersRef {
+                running: cell::Cell::new(false),
                 cur: cell::Cell::new(u32::MAX),
                 shutdown: cell::Cell::new(false),
                 indexes: cell::UnsafeCell::new(waiters),
@@ -54,17 +56,6 @@ impl WaitersRef {
         }
     }
 
-    pub(crate) fn register(&self, idx: u32, cx: &mut Context<'_>) {
-        let wakers = self.get_wakers();
-        if let Some(last) = wakers.last() {
-            if idx == *last {
-                return;
-            }
-        }
-        wakers.push(idx);
-        self.get()[idx as usize] = Some(cx.waker().clone());
-    }
-
     pub(crate) fn notify(&self) {
         let wakers = self.get_wakers();
         if !wakers.is_empty() {
@@ -81,16 +72,45 @@ impl WaitersRef {
         self.cur.set(u32::MAX);
     }
 
-    pub(crate) fn can_check(&self, idx: u32, cx: &mut Context<'_>) -> bool {
+    pub(crate) fn run<F, R>(&self, idx: u32, cx: &mut Context<'_>, f: F) -> Poll<R>
+    where
+        F: FnOnce(&mut Context<'_>) -> Poll<R>,
+    {
+        // calculate owner for readiness check
         let cur = self.cur.get();
-        if cur == idx {
+        let can_check = if cur == idx {
             true
         } else if cur == u32::MAX {
             self.cur.set(idx);
             true
         } else {
-            self.register(idx, cx);
             false
+        };
+
+        if can_check {
+            // only one readiness check can manage waiters
+            let initial_run = !self.running.get();
+            if initial_run {
+                self.running.set(true);
+            }
+
+            let result = f(cx);
+
+            if initial_run {
+                if result.is_pending() {
+                    self.get_wakers().push(idx);
+                    self.get()[idx as usize] = Some(cx.waker().clone());
+                } else {
+                    self.notify();
+                }
+                self.running.set(false);
+            }
+            result
+        } else {
+            // other pipeline ownes readiness check process
+            self.get_wakers().push(idx);
+            self.get()[idx as usize] = Some(cx.waker().clone());
+            Poll::Pending
         }
     }
 
@@ -114,6 +134,12 @@ impl<'a, S> ServiceCtx<'a, S> {
 
     pub(crate) fn inner(self) -> (u32, &'a WaitersRef) {
         (self.idx, self.waiters)
+    }
+
+    #[inline]
+    /// Unique id for this pipeline
+    pub fn id(&self) -> u32 {
+        self.idx
     }
 
     /// Returns when the service is able to process requests.
@@ -215,23 +241,14 @@ impl<S: ?Sized, F: Future> Future for ReadyCall<'_, S, F> {
     type Output = F::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.ctx.waiters.can_check(self.ctx.idx, cx) {
+        self.ctx.waiters.run(self.ctx.idx, cx, |cx| {
             // SAFETY: `fut` never moves
             let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
-            match result {
-                Poll::Pending => {
-                    self.ctx.waiters.register(self.ctx.idx, cx);
-                    Poll::Pending
-                }
-                Poll::Ready(res) => {
-                    self.completed = true;
-                    self.ctx.waiters.notify();
-                    Poll::Ready(res)
-                }
+            if result.is_ready() {
+                self.completed = true;
             }
-        } else {
-            Poll::Pending
-        }
+            result
+        })
     }
 }
 

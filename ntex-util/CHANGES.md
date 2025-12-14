@@ -1,8 +1,8 @@
 # Changes
 
-## [3.3.0] - 2025-12-13
+## [3.3.0] - 2025-12-14
 
-* Fix nowait handling for Inflight service call
+* Fix nowait handling for Inflight service call, fixes deadlock
 
 ## [3.2.0] - 2025-12-07
 
