@@ -677,14 +677,13 @@ where
             .run();
 
             crate::rt::spawn(async move {
-                sleep(Millis(125)).await;
                 tx.send((System::current(), srv, local_addr)).unwrap();
             });
             Ok(())
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
-    sleep(Millis(50)).await;
+    sleep(Millis(25)).await;
 
     let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
         .add(ntex_io::IoConfig::new().set_connect_timeout(Millis(90_000)))
@@ -956,7 +955,7 @@ impl TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        thread::sleep(time::Duration::from_millis(125));
+        thread::sleep(time::Duration::from_millis(100));
         let _ = self.server.stop(true);
         thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
