@@ -1,10 +1,10 @@
-use std::{cell::RefCell, io, os::fd::RawFd, rc::Rc};
+use std::{cell::RefCell, io, os::fd::AsRawFd, rc::Rc};
 
 use ntex_neon::driver::io_uring::{opcode, types::Fd};
 use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
 use ntex_util::channel::oneshot::Sender;
 use slab::Slab;
-use socket2::SockAddr;
+use socket2::{SockAddr, Socket};
 
 #[derive(Clone)]
 pub(crate) struct ConnectOps(Rc<ConnectOpsInner>);
@@ -20,7 +20,7 @@ struct ConnectOpsHandler {
     inner: Rc<ConnectOpsInner>,
 }
 
-type Operations = RefCell<Slab<(Box<SockAddr>, Sender<io::Result<()>>)>>;
+type Operations = RefCell<Slab<(Box<SockAddr>, Socket, Sender<io::Result<Socket>>)>>;
 
 struct ConnectOpsInner {
     api: DriverApi,
@@ -49,9 +49,9 @@ impl ConnectOps {
 
     pub(crate) fn connect(
         &self,
-        fd: RawFd,
+        sock: Socket,
         addr: SockAddr,
-        sender: Sender<io::Result<()>>,
+        sender: Sender<io::Result<Socket>>,
     ) -> io::Result<()> {
         let addr2 = addr.clone();
         let mut ops = self.0.ops.borrow_mut();
@@ -60,7 +60,8 @@ impl ConnectOps {
         let addr = Box::new(addr);
         let (addr_ptr, addr_len) = (addr.as_ref().as_ptr(), addr.len());
 
-        let id = ops.insert((addr, sender));
+        let fd = sock.as_raw_fd();
+        let id = ops.insert((addr, sock, sender));
         self.0.api.submit(
             id as u32,
             opcode::Connect::new(Fd(fd), addr_ptr, addr_len).build(),
@@ -73,12 +74,11 @@ impl ConnectOps {
 impl Handler for ConnectOpsHandler {
     fn canceled(&mut self, user_data: usize) {
         log::trace!("connect-op is canceled {:?}", user_data);
-
         self.inner.ops.borrow_mut().remove(user_data);
     }
 
     fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<usize>) {
-        let (addr, tx) = self.inner.ops.borrow_mut().remove(user_data);
+        let (addr, sock, tx) = self.inner.ops.borrow_mut().remove(user_data);
         log::trace!(
             "connect-op is completed {:?} result: {:?}, addr: {:?}",
             user_data,
@@ -86,6 +86,20 @@ impl Handler for ConnectOpsHandler {
             addr.as_socket()
         );
 
-        let _ = tx.send(result.map(|_| ()));
+        match result {
+            Ok(_) => {
+                if let Err(Ok(sock)) = tx.send(Ok(sock)) {
+                    crate::helpers::close_socket(sock);
+                }
+            }
+            Err(err) => {
+                let _ = tx.send(Err(err));
+                crate::helpers::close_socket(sock);
+            }
+        }
+    }
+
+    fn cleanup(&mut self) {
+        self.inner.ops.borrow_mut().clear();
     }
 }

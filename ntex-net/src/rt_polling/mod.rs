@@ -17,21 +17,24 @@ struct TcpStream(socket2::Socket);
 /// Tcp stream wrapper for neon UnixStream
 struct UnixStream(socket2::Socket);
 
+#[inline]
 /// Opens a TCP connection to a remote host.
 pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> Result<Io> {
     let sock = crate::helpers::connect(addr).await?;
-    Ok(Io::new(TcpStream(crate::helpers::prep_socket(sock)?), cfg))
+    Ok(Io::new(TcpStream(sock), cfg))
 }
 
+#[inline]
 /// Opens a unix stream connection.
 pub async fn unix_connect<'a, P>(addr: P, cfg: SharedCfg) -> Result<Io>
 where
     P: AsRef<std::path::Path> + 'a,
 {
     let sock = crate::helpers::connect_unix(addr).await?;
-    Ok(Io::new(UnixStream(crate::helpers::prep_socket(sock)?), cfg))
+    Ok(Io::new(UnixStream(sock), cfg))
 }
 
+#[inline]
 /// Convert std TcpStream to TcpStream
 pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> Result<Io> {
     stream.set_nodelay(true)?;
@@ -41,6 +44,7 @@ pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> Result<Io> {
     ))
 }
 
+#[inline]
 /// Convert std UnixStream to UnixStream
 pub fn from_unix_stream(
     stream: std::os::unix::net::UnixStream,

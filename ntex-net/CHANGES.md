@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.0] - 2025-12-15
+
+* Drop all sockets on driver drop for neon driver
+
 ## [3.2.0] - 2025-12-08
 
 * Enable unix_connect for compio on windows

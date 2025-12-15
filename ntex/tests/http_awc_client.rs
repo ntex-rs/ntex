@@ -158,7 +158,6 @@ async fn test_form() {
     assert!(response.status().is_success());
 }
 
-// #[cfg(unix)]
 #[ntex::test]
 async fn test_timeout() {
     let srv = test::server(async || {

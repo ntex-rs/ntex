@@ -1,5 +1,5 @@
 //! Test helpers to use during testing.
-use std::{net, str::FromStr, sync::mpsc, thread};
+use std::{net, str::FromStr, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
@@ -287,13 +287,13 @@ where
                 .run();
 
             crate::rt::spawn(async move {
-                sleep(Millis(125)).await;
                 tx.send((system, srv, local_addr)).unwrap();
             });
             Ok(())
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
+    sleep(Millis(25)).await;
 
     TestServer {
         addr,
@@ -470,14 +470,17 @@ impl TestServer {
     }
 
     /// Stop http server
-    pub async fn stop(&self) {
+    pub async fn stop(self) {
         self.server.stop(true).await;
-        self.system.stop();
     }
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
+        thread::sleep(time::Duration::from_millis(100));
+        let _ = self.server.stop(true);
+        thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
+        thread::sleep(time::Duration::from_millis(25));
     }
 }

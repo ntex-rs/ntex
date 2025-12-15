@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "3.2.0"
+version = "3.3.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -42,4 +42,4 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
     "net",
 ], optional = true }
 
-ntex-neon = { version = "0.1.35", optional = true }
+ntex-neon = { version = "0.2.1", optional = true }
