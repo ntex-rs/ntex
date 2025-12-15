@@ -79,7 +79,6 @@ where
                     .run();
 
                 ntex_rt::spawn(async move {
-                    ntex_util::time::sleep(ntex_util::time::Millis(75)).await;
                     tx.send((system, local_addr, server))
                         .expect("Failed to send Server to TestServer");
                 });
@@ -87,8 +86,8 @@ where
                 Ok(())
             })
         });
-
         let (system, addr, server) = rx.recv().unwrap();
+        thread::sleep(time::Duration::from_millis(75));
 
         TestServer {
             addr,
@@ -164,6 +163,7 @@ where
         });
     });
     let (system, server) = rx.recv().unwrap();
+    thread::sleep(time::Duration::from_millis(75));
 
     TestServer {
         id,
@@ -203,8 +203,6 @@ impl TestServer {
     /// Stop http server by stopping the runtime.
     pub fn stop(&self) {
         let _ = self.server.stop(true);
-        thread::sleep(time::Duration::from_millis(25));
-        self.system.stop();
     }
 
     /// Get first available unused address
@@ -226,6 +224,10 @@ impl TestServer {
 impl Drop for TestServer {
     fn drop(&mut self) {
         log::debug!("Stopping test server {:?}", self.id);
-        self.stop()
+        thread::sleep(time::Duration::from_millis(150));
+        let _ = self.server.stop(true);
+        thread::sleep(time::Duration::from_millis(75));
+        self.system.stop();
+        thread::sleep(time::Duration::from_millis(25));
     }
 }

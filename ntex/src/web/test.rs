@@ -1,5 +1,5 @@
 //! Various helpers for ntex applications to use during testing.
-use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread};
+use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
@@ -683,8 +683,8 @@ where
             Ok(())
         })
     });
-
     let (system, server, addr) = rx.recv().unwrap();
+    sleep(Millis(75)).await;
 
     let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
         .add(ntex_io::IoConfig::new().set_connect_timeout(Millis(90_000)))
@@ -949,16 +949,18 @@ impl TestServer {
     }
 
     /// Gracefully stop http server
-    pub async fn stop(self) {
+    pub async fn stop(&self) {
         self.server.stop(true).await;
-        self.system.stop();
-        sleep(Millis(100)).await;
     }
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.system.stop()
+        thread::sleep(time::Duration::from_millis(150));
+        let _ = self.server.stop(true);
+        thread::sleep(time::Duration::from_millis(75));
+        self.system.stop();
+        thread::sleep(time::Duration::from_millis(25));
     }
 }
 

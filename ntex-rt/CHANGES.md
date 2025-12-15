@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.0] - 2025-12-15
+
+* Upgrade neon to 0.2
+
 ## [3.2.0] - 2025-12-02
 
 * Upgrade compio to 0.17

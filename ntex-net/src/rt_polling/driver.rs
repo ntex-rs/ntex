@@ -1,4 +1,4 @@
-use std::{cell::Cell, cell::RefCell, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
+use std::{cell::Cell, io, net, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::{IoContext, IoTaskStatus};
@@ -35,8 +35,8 @@ struct StreamOpsHandler {
 
 struct StreamOpsInner {
     api: DriverApi,
-    delayd_drop: Cell<bool>,
-    feed: RefCell<Vec<u32>>,
+    delayed_drop: Cell<bool>,
+    feed: Cell<Option<Vec<StreamCtl>>>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
     lw: usize,
     hw: usize,
@@ -50,8 +50,8 @@ impl StreamOps {
             rt.register_handler(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
-                    feed: RefCell::new(Vec::new()),
-                    delayd_drop: Cell::new(false),
+                    feed: Cell::new(Some(Vec::new())),
+                    delayed_drop: Cell::new(false),
                     streams: Cell::new(Some(Box::new(Slab::new()))),
                     lw: 1024,
                     hw: 1024 * 16,
@@ -147,19 +147,16 @@ impl Handler for StreamOpsHandler {
                 );
                 self.inner.api.modify(io.fd(), id as u32, renew);
             }
-
-            // delayed drops
-            if self.inner.delayd_drop.get() {
-                self.inner.delayd_drop.set(false);
-                for id in self.inner.feed.borrow_mut().drain(..) {
-                    let io = &mut streams[id as usize];
-                    io.ref_count -= 1;
-                    if io.ref_count == 0 {
-                        close(streams, id, &self.inner.api);
-                    }
-                }
-            }
         });
+
+        // delayed drops
+        if self.inner.delayed_drop.get() {
+            self.inner.delayed_drop.set(false);
+            if let Some(mut feed) = self.inner.feed.take() {
+                feed.clear();
+                self.inner.feed.set(Some(feed));
+            }
+        }
     }
 
     fn error(&mut self, id: usize, err: io::Error) {
@@ -171,9 +168,13 @@ impl Handler for StreamOpsHandler {
                         ctx.stop(Some(err));
                     }
                 }
-                close(streams, id as u32, &self.inner.api);
             }
         })
+    }
+
+    fn cleanup(&mut self) {
+        self.inner.feed.take();
+        self.inner.streams.take();
     }
 }
 
@@ -297,17 +298,44 @@ impl Clone for StreamCtl {
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        // It is possible that drop happens while `StreamOps` handling event
+        // Dropping while `StreamOps` handling event
         if let Some(mut streams) = self.inner.streams.take() {
             let id = self.id as usize;
             streams[id].ref_count -= 1;
             if streams[id].ref_count == 0 {
-                close(&mut streams, self.id, &self.inner.api);
+                let mut item = streams.remove(id);
+                let fd = item.fd();
+                log::trace!("{}: Close ({fd:?}), flags: {:?}", item.tag(), item.flags);
+
+                let shutdown = item
+                    .context
+                    .take()
+                    .map(|ctx| {
+                        if !ctx.is_stopped() {
+                            ctx.stop(None);
+                        }
+                        true
+                    })
+                    .unwrap_or_default();
+                self.inner.api.detach(fd, self.id);
+                let io = item.io;
+                ntex_rt::spawn_blocking(move || {
+                    if shutdown {
+                        let _ = io.shutdown(net::Shutdown::Both);
+                    }
+                    drop(io);
+                });
             }
             self.inner.streams.set(Some(streams));
         } else {
-            self.inner.delayd_drop.set(true);
-            self.inner.feed.borrow_mut().push(self.id);
+            self.inner.delayed_drop.set(true);
+            if let Some(mut feed) = self.inner.feed.take() {
+                feed.push(StreamCtl {
+                    id: self.id,
+                    inner: self.inner.clone(),
+                });
+                self.inner.feed.set(Some(feed));
+            }
         }
     }
 }
@@ -368,32 +396,4 @@ impl StreamItem {
             IoTaskStatus::Pause
         }
     }
-}
-
-fn close(st: &mut Slab<StreamItem>, id: u32, api: &DriverApi) {
-    let mut item = st.remove(id as usize);
-    let fd = item.fd();
-    let shutdown = item
-        .context
-        .take()
-        .map(|ctx| {
-            if !ctx.is_stopped() {
-                ctx.stop(None);
-            }
-            true
-        })
-        .unwrap_or_default();
-
-    log::trace!("{}: Close ({fd:?}), flags: {:?}", item.tag(), item.flags);
-
-    api.detach(fd, id);
-    mem::forget(item.io);
-    ntex_rt::spawn_blocking(move || {
-        if shutdown {
-            let _ = syscall!(libc::shutdown(fd, libc::SHUT_RDWR));
-        }
-        if let Err(err) = syscall!(libc::close(fd)) {
-            log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
-        }
-    });
 }

@@ -17,7 +17,7 @@ struct UnixStream(Socket);
 /// Opens a TCP connection to a remote host.
 pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> Result<Io> {
     let sock = crate::helpers::connect(addr).await?;
-    Ok(Io::new(TcpStream(crate::helpers::prep_socket(sock)?), cfg))
+    Ok(Io::new(TcpStream(sock), cfg))
 }
 
 /// Opens a unix stream connection.
@@ -26,7 +26,7 @@ where
     P: AsRef<std::path::Path> + 'a,
 {
     let sock = crate::helpers::connect_unix(addr).await?;
-    Ok(Io::new(UnixStream(crate::helpers::prep_socket(sock)?), cfg))
+    Ok(Io::new(UnixStream(sock), cfg))
 }
 
 /// Convert std TcpStream to tokio's TcpStream

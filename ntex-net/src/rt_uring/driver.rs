@@ -2,7 +2,7 @@ use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::P
 
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{IoContext, IoTaskStatus};
-use ntex_neon::driver::io_uring::{cqueue, opcode, opcode2, squeue::Entry, types::Fd};
+use ntex_neon::driver::io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
 use ntex_util::channel::pool;
 use slab::Slab;
@@ -72,8 +72,8 @@ struct StreamOpsHandler {
 #[allow(clippy::box_collection)]
 struct StreamOpsInner {
     api: DriverApi,
-    feed: Cell<Option<Box<Vec<usize>>>>,
-    delayd_drop: Cell<bool>,
+    delayed: Cell<bool>,
+    feed: Cell<Option<Box<Vec<StreamCtl>>>>,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
     pool: pool::Pool<io::Result<()>>,
     default_flags: Flags,
@@ -109,8 +109,8 @@ impl StreamOps {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     default_flags,
+                    delayed: Cell::new(false),
                     feed: Cell::new(Some(Box::new(Vec::new()))),
-                    delayd_drop: Cell::new(false),
                     pool: pool::new(),
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
@@ -224,7 +224,7 @@ impl Handler for StreamOpsHandler {
                             let res = Poll::Ready(res.map(|size| {
                                 unsafe { buf.advance_mut(size) };
                                 total = size;
-                            }).map_err(|e| Some(e)));
+                            }).map_err(Some));
 
                             // handle IORING_CQE_F_SOCK_NONEMPTY flag
                             if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
@@ -288,33 +288,25 @@ impl Handler for StreamOpsHandler {
                 Operation::Nop => {}
             }
             let _ = st.ops.remove(user_data);
+        });
 
-            // extra
-            if self.inner.delayd_drop.get() {
-                self.inner.delayd_drop.set(false);
-                let mut feed = self.inner.feed.take().unwrap();
-                for id in feed.drain(..) {
-                    st.streams[id].ref_count -= 1;
-                    if st.streams[id].ref_count == 0 {
-                        let (op_id, entry) = st.close(id);
-                        self.inner.api.submit(op_id, entry);
-                    }
-                }
+        // delayed drops
+        if self.inner.delayed.get() {
+            self.inner.delayed.set(false);
+            if let Some(mut feed) = self.inner.feed.take() {
+                feed.clear();
                 self.inner.feed.set(Some(feed));
             }
-        })
+        }
+    }
+
+    fn cleanup(&mut self) {
+        self.inner.feed.take();
+        self.inner.storage.take();
     }
 }
 
 impl StreamOpsStorage {
-    fn close(&mut self, id: usize) -> (u32, Entry) {
-        let item = &self.streams[id];
-        let entry = opcode::Close::new(item.fd()).build();
-        log::trace!("{}: Close ({:?})", item.tag(), item.fd());
-
-        (self.add_operation(Operation::Close { id }), entry)
-    }
-
     fn recv(&mut self, id: usize, ctx: IoContext, poll_first: bool, api: &DriverApi) {
         if let Some(item) = self.streams.get_mut(id) {
             if item.rd_op.is_none() {
@@ -478,17 +470,24 @@ impl Clone for StreamCtl {
 impl Drop for StreamCtl {
     fn drop(&mut self) {
         if let Some(mut storage) = self.inner.storage.take() {
-            storage.streams[self.id].ref_count -= 1;
-            if storage.streams[self.id].ref_count == 0 {
-                let (op_id, entry) = storage.close(self.id);
+            let item = &mut storage.streams[self.id];
+            item.ref_count -= 1;
+            if item.ref_count == 0 {
+                log::trace!("{}: Close ({:?})", item.tag(), item.fd());
+                let entry = opcode::Close::new(item.fd()).build();
+                let op_id = storage.add_operation(Operation::Close { id: self.id });
                 self.inner.api.submit(op_id, entry);
             }
             self.inner.storage.set(Some(storage));
         } else {
-            self.inner.delayd_drop.set(true);
-            let mut feed = self.inner.feed.take().unwrap();
-            feed.push(self.id);
-            self.inner.feed.set(Some(feed));
+            self.inner.delayed.set(true);
+            if let Some(mut feed) = self.inner.feed.take() {
+                feed.push(StreamCtl {
+                    id: self.id,
+                    inner: self.inner.clone(),
+                });
+                self.inner.feed.set(Some(feed));
+            }
         }
     }
 }

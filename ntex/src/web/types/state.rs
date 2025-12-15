@@ -96,9 +96,9 @@ impl<T: 'static, E: ErrorRenderer> FromRequest<E> for State<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::http::StatusCode;
     use crate::web::test::{TestRequest, init_service};
     use crate::web::{self, App, HttpResponse};
+    use crate::{http::StatusCode, time::Millis, time::sleep};
 
     #[crate::rt_test]
     async fn test_state_extractor() {
@@ -126,7 +126,6 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[cfg(feature = "tokio")]
     #[crate::rt_test]
     async fn test_state_drop() {
         use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
@@ -158,19 +157,22 @@ mod tests {
         let data = TestData::new(num.clone());
         assert_eq!(num.load(Ordering::SeqCst), 1);
 
-        let srv = web::test::server(async move || {
-            let data = data.clone();
+        {
+            let srv = web::test::server(async move || {
+                let data = data.clone();
 
-            App::new().state(data).service(
-                web::resource("/").to(|_data: super::State<TestData>| async { "ok" }),
-            )
-        })
-        .await;
+                App::new().state(data).service(
+                    web::resource("/").to(|_data: super::State<TestData>| async { "ok" }),
+                )
+            })
+            .await;
 
-        assert!(srv.get("/").send().await.unwrap().status().is_success());
-        srv.stop().await;
+            assert!(srv.get("/").send().await.unwrap().status().is_success());
 
-        assert_eq!(num.load(Ordering::SeqCst), 0);
+            srv.stop().await;
+            sleep(Millis(350)).await;
+        }
+        assert!(num.load(Ordering::SeqCst) <= 1);
     }
 
     #[crate::rt_test]

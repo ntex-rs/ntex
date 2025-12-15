@@ -1,10 +1,10 @@
-use std::{cell::RefCell, io, os::fd::RawFd, rc::Rc, task::Poll};
+use std::{cell::RefCell, io, os::fd::AsRawFd, os::fd::RawFd, rc::Rc};
 
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{Runtime, syscall};
 use ntex_util::channel::oneshot::Sender;
 use slab::Slab;
-use socket2::SockAddr;
+use socket2::{SockAddr, Socket};
 
 #[derive(Clone)]
 pub(crate) struct ConnectOps(Rc<ConnectOpsInner>);
@@ -20,13 +20,19 @@ struct ConnectOpsBatcher {
 }
 
 struct Item {
-    fd: RawFd,
-    sender: Sender<io::Result<()>>,
+    sock: Socket,
+    sender: Sender<io::Result<Socket>>,
 }
 
 struct ConnectOpsInner {
     api: DriverApi,
     connects: RefCell<Slab<Item>>,
+}
+
+impl Item {
+    fn fd(&self) -> RawFd {
+        self.sock.as_raw_fd()
+    }
 }
 
 impl ConnectOps {
@@ -48,20 +54,17 @@ impl ConnectOps {
 
     pub(crate) fn connect(
         &self,
-        fd: RawFd,
+        sock: Socket,
         addr: SockAddr,
-        sender: Sender<io::Result<()>>,
+        sender: Sender<io::Result<Socket>>,
     ) -> io::Result<usize> {
-        let result = syscall!(break libc::connect(fd, addr.as_ptr(), addr.len()));
-
-        if let Poll::Ready(res) = result {
-            res?;
-        }
-
-        let item = Item { fd, sender };
+        let result =
+            syscall!(break libc::connect(sock.as_raw_fd(), addr.as_ptr(), addr.len()))?;
+        let fd = sock.as_raw_fd();
+        let item = Item { sock, sender };
         let id = self.0.connects.borrow_mut().insert(item);
-
         self.0.api.attach(fd, id as u32, Event::writable(0));
+
         Ok(id)
     }
 }
@@ -78,7 +81,7 @@ impl Handler for ConnectOpsBatcher {
                 let mut err_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
 
                 let res = syscall!(libc::getsockopt(
-                    item.fd,
+                    item.fd(),
                     libc::SOL_SOCKET,
                     libc::SO_ERROR,
                     &mut err as *mut _ as *mut _,
@@ -86,28 +89,27 @@ impl Handler for ConnectOpsBatcher {
                 ));
 
                 let res = if err == 0 {
-                    res.map(|_| ())
+                    res
                 } else {
                     Err(io::Error::from_raw_os_error(err))
                 };
 
-                self.inner.api.detach(item.fd, id as u32);
-
-                if let Err(Ok(res)) = item.sender.send(res) {
-                    ntex_rt::spawn_blocking(move || {
-                        let _ = syscall!(libc::shutdown(item.fd, libc::SHUT_RDWR));
-                        if let Err(err) = syscall!(libc::close(item.fd)) {
-                            log::error!(
-                                "Cannot close file descriptor ({:?}), {err:?}",
-                                item.fd
-                            );
+                self.inner.api.detach(item.fd(), id as u32);
+                match res {
+                    Ok(_) => {
+                        if let Err(Ok(sock)) = item.sender.send(Ok(item.sock)) {
+                            crate::helpers::close_socket(sock);
                         }
-                    });
+                    }
+                    Err(err) => {
+                        let _ = item.sender.send(Err(err));
+                        crate::helpers::close_socket(item.sock);
+                    }
                 }
             } else if !item.sender.is_canceled() {
                 self.inner
                     .api
-                    .attach(item.fd, id as u32, Event::writable(0));
+                    .attach(item.fd(), id as u32, Event::writable(0));
             }
         }
     }
@@ -120,9 +122,14 @@ impl Handler for ConnectOpsBatcher {
         );
 
         if connects.contains(id) {
-            let item = connects.remove(id);
-            let _ = item.sender.send(Err(err));
-            self.inner.api.detach(item.fd, id as u32);
+            let Item { sock, sender } = connects.remove(id);
+            let _ = sender.send(Err(err));
+            self.inner.api.detach(sock.as_raw_fd(), id as u32);
+            crate::helpers::close_socket(sock);
         }
+    }
+
+    fn cleanup(&mut self) {
+        self.inner.connects.borrow_mut().clear();
     }
 }
