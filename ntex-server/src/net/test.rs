@@ -163,7 +163,7 @@ where
         });
     });
     let (system, server) = rx.recv().unwrap();
-    thread::sleep(time::Duration::from_millis(75));
+    thread::sleep(time::Duration::from_millis(50));
 
     TestServer {
         id,
@@ -224,7 +224,7 @@ impl TestServer {
 impl Drop for TestServer {
     fn drop(&mut self) {
         log::debug!("Stopping test server {:?}", self.id);
-        thread::sleep(time::Duration::from_millis(150));
+        thread::sleep(time::Duration::from_millis(125));
         let _ = self.server.stop(true);
         thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
