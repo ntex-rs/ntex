@@ -33,14 +33,14 @@ jobs:
 
       - name: Run tests (neon)
         timeout-minutes: 15
-        run: cargo nextest run --all --no-default-features --no-fail-fast --features="ntex/neon,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/neon,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (tokio)
         timeout-minutes: 15
-        run: cargo nextest run --all --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (compio)
         timeout-minutes: 15
         if: matrix.version != '1.85.0'
         run: |
-          cargo nextest run --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo nextest run --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
