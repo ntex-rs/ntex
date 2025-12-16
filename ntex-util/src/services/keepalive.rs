@@ -112,11 +112,7 @@ where
 
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         let expire = self.expire.get() + time::Duration::from(self.dur);
-        if expire <= now() {
-            Err((self.f)())
-        } else {
-            Ok(())
-        }
+        if expire <= now() { Err((self.f)()) } else { Ok(()) }
     }
 
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {

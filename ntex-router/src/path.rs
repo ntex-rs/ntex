@@ -68,11 +68,7 @@ impl<T: ResourcePath> Path<T> {
     pub fn path(&self) -> &str {
         let skip = self.skip as usize;
         let path = self.path.path();
-        if skip <= path.len() {
-            &path[skip..]
-        } else {
-            ""
-        }
+        if skip <= path.len() { &path[skip..] } else { "" }
     }
 
     #[inline]

@@ -134,11 +134,7 @@ impl StreamOps {
             rd_op: None,
             wr_op: None,
             ref_count: 1,
-            flags: if zc {
-                self.0.default_flags
-            } else {
-                Flags::NO_ZC
-            },
+            flags: if zc { self.0.default_flags } else { Flags::NO_ZC },
             context: Some(context),
         };
 

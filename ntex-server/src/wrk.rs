@@ -325,11 +325,7 @@ where
             Either::Right(Some(Shutdown { timeout, result })) => {
                 wrk.availability.set(false);
 
-                let timeout = if timeout.is_zero() {
-                    STOP_TIMEOUT
-                } else {
-                    timeout
-                };
+                let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
 
                 stop_svc(wrk.id, svc, timeout, Some(result)).await;
                 return;
