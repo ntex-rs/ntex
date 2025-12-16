@@ -481,7 +481,7 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let factory =
             crate::chain_factory(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-            .apply2(Mw(PhantomData, cnt_sht.clone()).clone());
+                .apply2(Mw(PhantomData, cnt_sht.clone()).clone());
 
         let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
