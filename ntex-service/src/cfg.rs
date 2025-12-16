@@ -145,6 +145,12 @@ impl SharedCfg {
     }
 
     #[inline]
+    /// Get unique shared cfg id
+    pub fn id(&self) -> usize {
+        self.0.id
+    }
+
+    #[inline]
     /// Get tag
     pub fn tag(&self) -> &'static str {
         self.0.tag.as_ref()
@@ -297,9 +303,12 @@ mod tests {
         assert_eq!(t.shared(), cfg);
         let t: Cfg<TestCfg> = Default::default();
         assert_eq!(t.tag(), "--");
+        assert_eq!(t.ctx().id(), t.id());
+        assert_eq!(t.ctx().id(), t.ctx().clone().id());
 
         let cfg: SharedCfg = SharedCfg::new("TEST2").into();
         let t = cfg.get::<TestCfg>();
         assert_eq!(t.tag(), "TEST2");
+        assert_eq!(t.id(), cfg.id());
     }
 }
