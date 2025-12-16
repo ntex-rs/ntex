@@ -3,30 +3,29 @@ use std::{any, future::poll_fn, task::Poll};
 use ntex_io::{Handle, IoContext, Readiness, types};
 use ntex_rt::spawn;
 
-use super::driver::{StreamCtl, StreamOps};
+use super::driver::{StreamCtl, StreamOps, WeakStreamCtl};
 
 impl ntex_io::IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
-        let ctl = StreamOps::current().register(io, ctx.clone());
-        let ctl2 = ctl.clone();
+        let (ctl, weak) = StreamOps::current().register(io, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
-        Some(Box::new(HandleWrapper(ctl2)))
+        Some(Box::new(HandleWrapper(weak)))
     }
 }
 
 impl ntex_io::IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = self.0;
-        let ctl = StreamOps::current().register(io, ctx.clone());
+        let (ctl, _) = StreamOps::current().register(io, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
         None
     }
 }
 
-struct HandleWrapper(StreamCtl);
+struct HandleWrapper(WeakStreamCtl);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {

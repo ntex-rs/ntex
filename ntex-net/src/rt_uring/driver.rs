@@ -21,6 +21,11 @@ pub(crate) struct WeakStreamCtl {
     inner: Rc<StreamOpsInner>,
 }
 
+enum IdType {
+    Stream(u32),
+    Weak(u32),
+}
+
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
@@ -78,7 +83,7 @@ struct StreamOpsHandler {
 struct StreamOpsInner {
     api: DriverApi,
     delayed: Cell<bool>,
-    delayed_feed: Cell<Option<Box<Vec<usize>>>>,
+    delayed_feed: Cell<Option<Box<Vec<IdType>>>>,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
     pool: pool::Pool<io::Result<()>>,
     default_flags: Flags,
@@ -310,13 +315,14 @@ impl Handler for StreamOpsHandler {
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.storage.take() {
             for (_, val) in v.streams.into_iter() {
-                log::trace!(
-                    "{}: Unclosed sockets {:?}",
-                    val.ctx.tag(),
-                    val.io.peer_addr()
-                );
                 if val.flags.contains(Flags::DROPPED_PRI) {
                     mem::forget(val.io);
+                } else {
+                    log::trace!(
+                        "{}: Unclosed sockets {:?}",
+                        val.ctx.tag(),
+                        val.io.peer_addr()
+                    );
                 }
             }
         }
@@ -432,11 +438,27 @@ impl StreamOpsInner {
             self.api.submit(op_id, entry);
             self.storage.set(Some(storage));
         } else {
-            self.add_delayed_drop(id);
+            self.add_delayed_drop(IdType::Stream(id as u32));
         }
     }
 
-    fn add_delayed_drop(&self, id: usize) {
+    fn drop_weak_stream(&self, id: usize) {
+        // Dropping while `StreamOps` handling event
+        if let Some(mut storage) = self.storage.take() {
+            let item = &mut storage.streams[id];
+            if item.flags.contains(Flags::DROPPED_PRI) {
+                let item = storage.streams.remove(id);
+                mem::forget(item.io);
+            } else {
+                item.flags.insert(Flags::DROPPED_SEC);
+            }
+            self.storage.set(Some(storage));
+        } else {
+            self.add_delayed_drop(IdType::Weak(id as u32));
+        }
+    }
+
+    fn add_delayed_drop(&self, id: IdType) {
         self.delayed.set(true);
         if let Some(mut feed) = self.delayed_feed.take() {
             feed.push(id);
@@ -449,7 +471,10 @@ impl StreamOpsInner {
             self.delayed.set(false);
             if let Some(mut feed) = self.delayed_feed.take() {
                 for id in feed.drain(..) {
-                    self.drop_stream(id);
+                    match id {
+                        IdType::Stream(id) => self.drop_stream(id as usize),
+                        IdType::Weak(id) => self.drop_weak_stream(id as usize),
+                    }
                 }
                 self.delayed_feed.set(Some(feed));
             }
@@ -519,15 +544,6 @@ impl WeakStreamCtl {
 
 impl Drop for WeakStreamCtl {
     fn drop(&mut self) {
-        if let Some(mut storage) = self.inner.storage.take() {
-            let item = &mut storage.streams[self.id];
-            if item.flags.contains(Flags::DROPPED_PRI) {
-                let item = storage.streams.remove(self.id);
-                mem::forget(item.io);
-            } else {
-                item.flags.insert(Flags::DROPPED_SEC);
-            }
-            self.inner.storage.set(Some(storage));
-        }
+        self.inner.drop_weak_stream(self.id);
     }
 }

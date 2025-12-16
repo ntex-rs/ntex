@@ -1,4 +1,4 @@
-use std::{cell::Cell, io, os, os::fd::AsRawFd, rc::Rc, task::Poll};
+use std::{cell::Cell, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::{IoContext, IoTaskStatus};
@@ -12,19 +12,30 @@ pub(crate) struct StreamCtl {
     inner: Rc<StreamOpsInner>,
 }
 
+pub(crate) struct WeakStreamCtl {
+    id: u32,
+    inner: Rc<StreamOpsInner>,
+}
+
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug)]
     struct Flags: u8 {
-        const RD     = 0b0000_0001;
-        const WR     = 0b0000_0010;
+        const RD          = 0b0000_0001;
+        const WR          = 0b0000_0010;
+        const DROPPED_PRI = 0b0001_0000;
+        const DROPPED_SEC = 0b0010_0000;
     }
+}
+
+enum IdType {
+    Stream(u32),
+    Weak(u32),
 }
 
 #[derive(Debug)]
 struct StreamItem {
     io: Socket,
     flags: Flags,
-    ref_count: u8,
     ctx: IoContext,
 }
 
@@ -37,7 +48,7 @@ struct StreamOpsHandler {
 struct StreamOpsInner {
     api: DriverApi,
     delayed_drop: Cell<bool>,
-    delayed_feed: Cell<Option<Vec<u32>>>,
+    delayed_feed: Cell<Option<Vec<IdType>>>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
     lw: usize,
     hw: usize,
@@ -71,13 +82,16 @@ impl StreamOps {
     }
 
     /// Register new stream
-    pub(crate) fn register(&self, io: Socket, ctx: IoContext) -> StreamCtl {
+    pub(crate) fn register(
+        &self,
+        io: Socket,
+        ctx: IoContext,
+    ) -> (StreamCtl, WeakStreamCtl) {
         let fd = io.as_raw_fd();
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
                 io,
                 ctx,
-                ref_count: 1,
                 flags: Flags::empty(),
             };
             StreamCtl {
@@ -89,7 +103,13 @@ impl StreamOps {
         self.0
             .api
             .attach(fd, stream.id, Event::new(0, false, false));
-        stream
+
+        let weak = WeakStreamCtl {
+            id: stream.id,
+            inner: self.0.clone(),
+        };
+
+        (stream, weak)
     }
 }
 
@@ -166,12 +186,16 @@ impl Handler for StreamOpsHandler {
 
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.streams.take() {
-            for (_, val) in v.iter() {
-                log::trace!(
-                    "{}: Unclosed sockets {:?}",
-                    val.ctx.tag(),
-                    val.io.peer_addr()
-                );
+            for (_, val) in v.into_iter() {
+                if val.flags.contains(Flags::DROPPED_PRI) {
+                    mem::forget(val.io);
+                } else {
+                    log::trace!(
+                        "{}: Unclosed sockets {:?}",
+                        val.ctx.tag(),
+                        val.io.peer_addr()
+                    );
+                }
             }
         }
         self.inner.delayed_feed.take();
@@ -193,27 +217,52 @@ impl StreamOpsInner {
         // Dropping while `StreamOps` handling event
         if let Some(mut streams) = self.streams.take() {
             let idx = id as usize;
-            streams[idx].ref_count -= 1;
-            if streams[idx].ref_count == 0 {
-                let item = streams.remove(idx);
-                let fd = item.fd();
-                log::trace!("{}: Close ({fd:?}), flags: {:?}", item.tag(), item.flags);
+            let item = &mut streams[idx];
+            let fd = item.fd();
+            log::trace!("{}: Close ({fd:?}), flags: {:?}", item.tag(), item.flags);
 
-                if !item.ctx.is_stopped() {
-                    item.ctx.stop(None);
+            if !item.ctx.is_stopped() {
+                item.ctx.stop(None);
+            }
+            self.api.detach(fd, id);
+            ntex_rt::spawn_blocking(move || {
+                if let Err(err) = syscall!(libc::close(fd)) {
+                    log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
                 }
-                self.api.detach(fd, id);
-                ntex_rt::spawn_blocking(move || {
-                    drop(item.io);
-                });
+            });
+
+            if item.flags.contains(Flags::DROPPED_SEC) {
+                let item = streams.remove(idx);
+                mem::forget(item.io);
+            } else {
+                item.flags.insert(Flags::DROPPED_PRI);
             }
             self.streams.set(Some(streams));
         } else {
-            self.add_delayed_drop(id);
+            self.add_delayed_drop(IdType::Stream(id));
         }
     }
 
-    fn add_delayed_drop(&self, id: u32) {
+    fn drop_weak_stream(&self, id: u32) {
+        // Dropping while `StreamOps` handling event
+        if let Some(mut streams) = self.streams.take() {
+            let idx = id as usize;
+            let item = &mut streams[idx];
+            let fd = item.fd();
+
+            if item.flags.contains(Flags::DROPPED_PRI) {
+                let item = streams.remove(idx);
+                mem::forget(item.io);
+            } else {
+                item.flags.insert(Flags::DROPPED_SEC);
+            }
+            self.streams.set(Some(streams));
+        } else {
+            self.add_delayed_drop(IdType::Weak(id));
+        }
+    }
+
+    fn add_delayed_drop(&self, id: IdType) {
         self.delayed_drop.set(true);
         if let Some(mut feed) = self.delayed_feed.take() {
             feed.push(id);
@@ -226,7 +275,10 @@ impl StreamOpsInner {
             self.delayed_drop.set(false);
             if let Some(mut feed) = self.delayed_feed.take() {
                 for id in feed.drain(..) {
-                    self.drop_stream(id);
+                    match id {
+                        IdType::Stream(id) => self.drop_stream(id),
+                        IdType::Weak(id) => self.drop_weak_stream(id),
+                    }
                 }
                 self.delayed_feed.set(Some(feed));
             }
@@ -235,13 +287,6 @@ impl StreamOpsInner {
 }
 
 impl StreamCtl {
-    pub(crate) fn with<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&Socket) -> R,
-    {
-        self.inner.with(|streams| f(&streams[self.id as usize].io))
-    }
-
     pub(crate) async fn shutdown(self) -> io::Result<()> {
         self.inner
             .with(|streams| {
@@ -318,21 +363,24 @@ impl StreamCtl {
     }
 }
 
-impl Clone for StreamCtl {
-    fn clone(&self) -> Self {
-        self.inner.with(|streams| {
-            streams[self.id as usize].ref_count += 1;
-            Self {
-                id: self.id,
-                inner: self.inner.clone(),
-            }
-        })
-    }
-}
-
 impl Drop for StreamCtl {
     fn drop(&mut self) {
         self.inner.drop_stream(self.id);
+    }
+}
+
+impl WeakStreamCtl {
+    pub(crate) fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Socket) -> R,
+    {
+        self.inner.with(|streams| f(&streams[self.id as usize].io))
+    }
+}
+
+impl Drop for WeakStreamCtl {
+    fn drop(&mut self) {
+        self.inner.drop_weak_stream(self.id);
     }
 }
 
