@@ -1,6 +1,6 @@
 [package]
 name = "ntex-compio"
-version = "3.2.1"
+version = "3.3.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "compio runtime intergration for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -26,8 +26,8 @@ compio = ["ntex-rt/compio", "compio-io", "compio-net", "compio-runtime", "compio
 ntex-bytes = "1"
 ntex-io = "3"
 ntex-util = "3"
-ntex-rt = "3.2"
-ntex-service = "3.7"
+ntex-rt = "3.3"
+ntex-service = "3.8"
 log = { workspace = true }
 
 compio-buf = "0.7"
