@@ -689,7 +689,7 @@ where
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
-    sleep(Millis(50)).await;
+    sleep(Millis(25)).await;
 
     let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
         .add(ntex_io::IoConfig::new().set_connect_timeout(Millis(90_000)))
@@ -965,7 +965,7 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         log::debug!("Stopping test web server {:?}", self.id);
         let _ = self.server.stop(false);
-        thread::sleep(time::Duration::from_millis(100));
+        thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
         thread::sleep(time::Duration::from_millis(25));
     }

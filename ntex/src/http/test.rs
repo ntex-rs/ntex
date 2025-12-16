@@ -297,7 +297,7 @@ where
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
-    sleep(Millis(50)).await;
+    sleep(Millis(25)).await;
 
     TestServer {
         id,
@@ -485,7 +485,7 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         log::debug!("Stopping test http server {:?}", self.id);
         let _ = self.server.stop(false);
-        thread::sleep(time::Duration::from_millis(100));
+        thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
         thread::sleep(time::Duration::from_millis(25));
     }
