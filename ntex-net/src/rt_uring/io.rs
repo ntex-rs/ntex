@@ -51,7 +51,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     let st = poll_fn(|cx| {
         let read = match ctx.poll_read_ready(cx) {
             Poll::Ready(Readiness::Ready) => {
-                ctl.resume_read(&ctx);
+                ctl.resume_read();
                 Poll::Pending
             }
             Poll::Ready(Readiness::Shutdown) | Poll::Ready(Readiness::Terminate) => {
@@ -65,7 +65,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
 
         let write = match ctx.poll_write_ready(cx) {
             Poll::Ready(Readiness::Ready) => {
-                ctl.resume_write(&ctx);
+                ctl.resume_write();
                 Poll::Pending
             }
             Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
@@ -86,8 +86,8 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
-            ctl.resume_read(&ctx);
-            ctl.resume_write(&ctx);
+            ctl.resume_read();
+            ctl.resume_write();
             ctx.shutdown(flush, cx)
         })
         .await;

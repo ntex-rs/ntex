@@ -99,6 +99,8 @@ impl Handler for ConnectOpsHandler {
         }
     }
 
+    fn tick(&mut self) {}
+
     fn cleanup(&mut self) {
         self.inner.ops.borrow_mut().clear();
     }

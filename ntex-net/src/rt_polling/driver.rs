@@ -73,7 +73,6 @@ impl StreamOps {
     /// Register new stream
     pub(crate) fn register(&self, io: Socket, ctx: IoContext) -> StreamCtl {
         let fd = io.as_raw_fd();
-        println!("{}: == register {:?}", ctx.tag(), fd);
         let stream = self.0.with(move |streams| {
             let item = StreamItem {
                 io,
@@ -166,13 +165,16 @@ impl Handler for StreamOpsHandler {
     }
 
     fn cleanup(&mut self) {
-        println!("\n\n\nCLEANUP");
         if let Some(v) = self.inner.streams.take() {
             for (_, val) in v.iter() {
-                println!("{}: === {:?}", val.ctx.tag(), val.io);
+                log::trace!(
+                    "{}: Unclosed sockets {:?}",
+                    val.ctx.tag(),
+                    val.io.peer_addr()
+                );
             }
         }
-        println!("{:?}", self.inner.delayed_feed.take().map(|v| v.len()));
+        self.inner.delayed_feed.take();
     }
 }
 
