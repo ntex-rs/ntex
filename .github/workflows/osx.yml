@@ -23,7 +23,12 @@ jobs:
           toolchain: ${{ matrix.version }}-aarch64-apple-darwin
 
       - name: Generate Cargo.lock
-        run: cargo generate-lockfile
+        uses: actions-rs/cargo@v1
+        with:
+          command: generate-lockfile
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v1.0.1
 
       - name: Run tests (neon)
         timeout-minutes: 40

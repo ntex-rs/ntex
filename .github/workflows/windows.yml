@@ -25,6 +25,14 @@ jobs:
         with:
           toolchain: ${{ matrix.version }}-x86_64-pc-windows-msvc
 
+      - name: Generate Cargo.lock
+        uses: actions-rs/cargo@v1
+        with:
+          command: generate-lockfile
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v1.0.1
+
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
