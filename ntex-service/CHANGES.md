@@ -1,5 +1,9 @@
 # Changes
 
+## [3.8.0] - 2025-12-16
+
+* Add Service impl for Pipeline, PipelineSvc
+
 ## [3.7.3] - 2025-12-14
 
 * Fix handling nested readiness checks
