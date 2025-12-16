@@ -88,7 +88,6 @@ where
         req: R,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        ctx.ready(self).await?;
         let _guard = self.count.get();
         ctx.call(&self.service, req).await
     }
