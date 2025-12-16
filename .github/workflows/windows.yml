@@ -60,8 +60,9 @@ jobs:
 
       - name: Install OpenSSL
         run: |
+          $env:VCPKG_MANIFEST_MODE = 'OFF'
           vcpkg integrate install
-          vcpkg install openssl:x64-windows
+          vcpkg install --clean-after-build openssl:x64-windows
           Copy-Item C:\vcpkg\installed\x64-windows\bin\libcrypto-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libcrypto.dll
           Copy-Item C:\vcpkg\installed\x64-windows\bin\libssl-3-x64.dll C:\vcpkg\installed\x64-windows\bin\libssl.dll
           Get-ChildItem C:\vcpkg\installed\x64-windows\bin
