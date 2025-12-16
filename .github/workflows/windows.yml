@@ -25,13 +25,10 @@ jobs:
         with:
           toolchain: ${{ matrix.version }}-x86_64-pc-windows-msvc
 
-      - name: Generate Cargo.lock
-        run: cargo generate-lockfile
-
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
-          path: C:\vcpkg\installed\x64-windows\
+          path: C:\vcpkg\installed\
           key: x86_64-pc-windows-msvc-openssl
 
       - name: Cache cargo registry
