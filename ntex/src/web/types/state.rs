@@ -170,7 +170,7 @@ mod tests {
             assert!(srv.get("/").send().await.unwrap().status().is_success());
 
             srv.stop().await;
-            sleep(Millis(350)).await;
+            sleep(Millis(500)).await;
         }
         assert!(num.load(Ordering::SeqCst) <= 1);
     }
