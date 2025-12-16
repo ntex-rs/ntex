@@ -58,8 +58,9 @@ impl ConnectOps {
         addr: SockAddr,
         sender: Sender<io::Result<Socket>>,
     ) -> io::Result<usize> {
-        let result =
-            syscall!(break libc::connect(sock.as_raw_fd(), addr.as_ptr(), addr.len()))?;
+        let result = syscall!(
+            break libc::connect(sock.as_raw_fd(), addr.as_ptr().cast(), addr.len())
+        )?;
         let fd = sock.as_raw_fd();
         let item = Item { sock, sender };
         let id = self.0.connects.borrow_mut().insert(item);
@@ -128,6 +129,8 @@ impl Handler for ConnectOpsBatcher {
             crate::helpers::close_socket(sock);
         }
     }
+
+    fn tick(&mut self) {}
 
     fn cleanup(&mut self) {
         self.inner.connects.borrow_mut().clear();

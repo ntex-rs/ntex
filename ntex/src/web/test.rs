@@ -4,6 +4,7 @@ use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
 use serde::{Serialize, de::DeserializeOwned};
+use uuid::Uuid;
 
 use crate::client::{Client, ClientRequest, ClientResponse, Connector};
 use crate::http::body::MessageBody;
@@ -592,7 +593,9 @@ where
     S::Response: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
+    let id = Uuid::now_v7();
     let (tx, rx) = mpsc::channel();
+    log::debug!("Starting test web server {:?}", id);
 
     let ssl = match cfg.stream {
         StreamType::Tcp => false,
@@ -613,7 +616,10 @@ where
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
-            let builder = crate::server::build().workers(1).disable_signals();
+            let builder = crate::server::build()
+                .testing()
+                .workers(1)
+                .disable_signals();
             let secure = match cfg.stream {
                 StreamType::Tcp => false,
                 #[cfg(feature = "openssl")]
@@ -724,6 +730,7 @@ where
     };
 
     TestServer {
+        id,
         addr,
         client,
         system,
@@ -826,6 +833,7 @@ impl TestServerConfig {
 #[derive(Debug)]
 /// Test server controller
 pub struct TestServer {
+    id: Uuid,
     addr: net::SocketAddr,
     client: Client,
     system: crate::rt::System,
@@ -955,9 +963,9 @@ impl TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
+        log::debug!("Stopping test web server {:?}", self.id);
+        let _ = self.server.stop(false);
         thread::sleep(time::Duration::from_millis(100));
-        let _ = self.server.stop(true);
-        thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
         thread::sleep(time::Duration::from_millis(25));
     }

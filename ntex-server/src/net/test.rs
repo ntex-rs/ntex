@@ -76,6 +76,7 @@ where
                     .config("test", config)
                     .workers(1)
                     .disable_signals()
+                    .testing()
                     .run();
 
                 ntex_rt::spawn(async move {
@@ -224,9 +225,8 @@ impl TestServer {
 impl Drop for TestServer {
     fn drop(&mut self) {
         log::debug!("Stopping test server {:?}", self.id);
+        let _ = self.server.stop(false);
         thread::sleep(time::Duration::from_millis(100));
-        let _ = self.server.stop(true);
-        thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
         thread::sleep(time::Duration::from_millis(25));
     }

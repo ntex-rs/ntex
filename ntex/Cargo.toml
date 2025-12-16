@@ -92,6 +92,7 @@ env_logger = { workspace = true }
 thiserror = { workspace = true }
 nanorand = { workspace = true }
 variadics_please = { workspace = true }
+uuid = { workspace = true }
 
 # http/web framework
 httparse = { workspace = true }

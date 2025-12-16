@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.1] - 2025-12-16
+
+* Refactor neon and neon-uring drivers
+
 ## [3.3.0] - 2025-12-15
 
 * Drop all sockets on driver drop for neon driver

@@ -5,6 +5,7 @@ use std::{net, str::FromStr, sync::mpsc, thread, time};
 use coo_kie::{Cookie, CookieJar};
 
 use ntex_tls::TlsConfig;
+use uuid::Uuid;
 
 use crate::channel::bstream;
 use crate::client::{Client, ClientBuilder, ClientRequest, ClientResponse, Connector};
@@ -268,8 +269,10 @@ where
     R: ServiceFactory<Io, SharedCfg> + 'static,
     U: Into<SharedCfg>,
 {
+    let id = Uuid::now_v7();
     let cfg = cfg.into();
     let (tx, rx) = mpsc::channel();
+    log::debug!("Starting test http server {:?}", id);
 
     // run server in separate thread
     thread::spawn(move || {
@@ -283,6 +286,7 @@ where
                 .listen("test", tcp, async move |_| factory().await)?
                 .config("test", cfg)
                 .workers(1)
+                .testing()
                 .disable_signals()
                 .run();
 
@@ -296,6 +300,7 @@ where
     sleep(Millis(50)).await;
 
     TestServer {
+        id,
         addr,
         system,
         server,
@@ -311,6 +316,7 @@ where
 #[derive(Debug)]
 /// Test server controller
 pub struct TestServer {
+    id: Uuid,
     addr: net::SocketAddr,
     client: Client,
     system: System,
@@ -477,9 +483,9 @@ impl TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
+        log::debug!("Stopping test http server {:?}", self.id);
+        let _ = self.server.stop(false);
         thread::sleep(time::Duration::from_millis(100));
-        let _ = self.server.stop(true);
-        thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
         thread::sleep(time::Duration::from_millis(25));
     }
