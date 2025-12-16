@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.0] - 2025-12-16
+
+* Stop io context after disconnect
+
 ## [3.2.0] - 2025-12-08
 
 * Fix panic in read

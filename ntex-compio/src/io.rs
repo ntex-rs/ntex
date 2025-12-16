@@ -166,6 +166,12 @@ where
             Readiness::Terminate => return,
         }
     }
+
+    log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
+    if !ctx.is_stopped() {
+        ctx.stop(None);
+        poll_fn(|cx| ctx.shutdown(false, cx)).await;
+    }
 }
 
 async fn write_buf<T>(io: &mut T, ctx: &IoContext, buf: Option<BytesVec>) -> IoTaskStatus
