@@ -4,7 +4,7 @@ use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_neon::driver::io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
-use ntex_util::{channel::pool, future::Either, future::Ready};
+use ntex_util::channel::pool;
 use slab::Slab;
 use socket2::Socket;
 
@@ -16,15 +16,22 @@ pub(crate) struct StreamCtl {
     inner: Rc<StreamOpsInner>,
 }
 
+pub(crate) struct WeakStreamCtl {
+    id: usize,
+    inner: Rc<StreamOpsInner>,
+}
+
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
         const RD_CANCELING = 0b0000_0001;
         const RD_REISSUE   = 0b0000_0010;
         const RD_MORE      = 0b0000_0100;
-        const WR_CANCELING = 0b0001_0000;
-        const WR_REISSUE   = 0b0010_0000;
-        const NO_ZC        = 0b1000_0000;
+        const WR_CANCELING = 0b0000_1000;
+        const WR_REISSUE   = 0b0001_0000;
+        const NO_ZC        = 0b0010_0000;
+        const DROPPED_PRI  = 0b0100_0000;
+        const DROPPED_SEC  = 0b1000_0000;
     }
 }
 
@@ -37,10 +44,10 @@ struct StreamItem {
     flags: Flags,
     rd_op: Option<NonZeroU32>,
     wr_op: Option<NonZeroU32>,
-    ref_count: u8,
     ctx: IoContext,
 }
 
+#[derive(Debug)]
 enum Operation {
     Recv {
         id: usize,
@@ -125,12 +132,16 @@ impl StreamOps {
         })
     }
 
-    pub(crate) fn register(&self, io: Socket, ctx: IoContext, zc: bool) -> StreamCtl {
+    pub(crate) fn register(
+        &self,
+        io: Socket,
+        ctx: IoContext,
+        zc: bool,
+    ) -> (StreamCtl, WeakStreamCtl) {
         let item = StreamItem {
             io,
             rd_op: None,
             wr_op: None,
-            ref_count: 1,
             flags: if zc { self.0.default_flags } else { Flags::NO_ZC },
             ctx: ctx.clone(),
         };
@@ -143,10 +154,16 @@ impl StreamOps {
             self.0.api.submit(op_id, op);
             id
         });
-        StreamCtl {
-            id,
-            inner: self.0.clone(),
-        }
+        (
+            StreamCtl {
+                id,
+                inner: self.0.clone(),
+            },
+            WeakStreamCtl {
+                id,
+                inner: self.0.clone(),
+            },
+        )
     }
 
     pub(crate) fn active_ops() -> usize {
@@ -273,8 +290,12 @@ impl Handler for StreamOpsHandler {
                     }
                 }
                 Operation::Close { id } => {
-                    let item = st.streams.remove(id);
-                    mem::forget(item.io);
+                    if st.streams[id].flags.contains(Flags::DROPPED_SEC) {
+                        let item = st.streams.remove(id);
+                        mem::forget(item.io);
+                    } else {
+                        st.streams[id].flags.insert(Flags::DROPPED_PRI);
+                    }
                 }
                 Operation::Nop => {}
             }
@@ -288,12 +309,15 @@ impl Handler for StreamOpsHandler {
 
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.storage.take() {
-            for (_, val) in v.streams.iter() {
+            for (_, val) in v.streams.into_iter() {
                 log::trace!(
                     "{}: Unclosed sockets {:?}",
                     val.ctx.tag(),
                     val.io.peer_addr()
                 );
+                if val.flags.contains(Flags::DROPPED_PRI) {
+                    mem::forget(val.io);
+                }
             }
         }
         self.inner.delayed_feed.take();
@@ -372,6 +396,17 @@ impl StreamOpsStorage {
     fn add_operation(&mut self, op: Operation) -> u32 {
         self.ops.insert(Some(op)) as u32
     }
+
+    fn pause_read(&mut self, id: usize, api: &DriverApi) {
+        let item = &mut self.streams[id];
+        if let Some(rd_op) = item.rd_op {
+            if !item.flags.contains(Flags::RD_CANCELING) {
+                item.flags.insert(Flags::RD_CANCELING);
+                api.cancel(rd_op.get());
+                log::trace!("{}: Recv to pause ({:?})", item.tag(), item.fd());
+            }
+        }
+    }
 }
 
 impl StreamOpsInner {
@@ -389,15 +424,12 @@ impl StreamOpsInner {
         // Dropping while `StreamOps` handling event
         if let Some(mut storage) = self.storage.take() {
             let item = &mut storage.streams[id];
-            item.ref_count -= 1;
-            if item.ref_count == 0 {
-                let fd = item.fd();
-                let tag = item.tag();
-                let entry = opcode::Close::new(fd).build();
-                let op_id = storage.add_operation(Operation::Close { id });
-                log::trace!("{}: Close ({:?} - {op_id})", tag, fd);
-                self.api.submit(op_id, entry);
-            }
+            let fd = item.fd();
+            let tag = item.tag();
+            let entry = opcode::Close::new(fd).build();
+            let op_id = storage.add_operation(Operation::Close { id });
+            log::trace!("{}: Close ({:?} - {op_id})", tag, fd);
+            self.api.submit(op_id, entry);
             self.storage.set(Some(storage));
         } else {
             self.add_delayed_drop(id);
@@ -439,29 +471,19 @@ impl StreamCtl {
     pub(crate) async fn shutdown(&self) -> io::Result<()> {
         self.inner
             .with(|storage| {
+                storage.pause_read(self.id, &self.inner.api);
                 let item = &storage.streams[self.id];
-                if !item.ctx.is_stopped() {
-                    let (tx, rx) = self.inner.pool.channel();
-                    let fd = item.fd();
-                    let op_id = storage.add_operation(Operation::shutdown(tx));
-                    self.inner
-                        .api
-                        .submit(op_id, opcode::Shutdown::new(fd, libc::SHUT_RDWR).build());
-                    Either::Left(rx)
-                } else {
-                    Either::Right(Ready::Ok(Ok(())))
-                }
+                let (tx, rx) = self.inner.pool.channel();
+                let fd = item.fd();
+                let op_id = storage.add_operation(Operation::shutdown(tx));
+                self.inner
+                    .api
+                    .submit(op_id, opcode::Shutdown::new(fd, libc::SHUT_RDWR).build());
+                rx
             })
             .await
             .map_err(|_| io::Error::other("gone"))
             .and_then(|item| item)
-    }
-
-    pub(crate) fn with_io<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&Socket) -> R,
-    {
-        self.inner.with(|storage| f(&storage.streams[self.id].io))
     }
 
     pub(crate) fn resume_read(&self) {
@@ -474,34 +496,38 @@ impl StreamCtl {
     }
 
     pub(crate) fn pause_read(&self) {
-        self.inner.with(|storage| {
-            let item = &mut storage.streams[self.id];
-
-            if let Some(rd_op) = item.rd_op {
-                if !item.flags.contains(Flags::RD_CANCELING) {
-                    item.flags.insert(Flags::RD_CANCELING);
-                    self.inner.api.cancel(rd_op.get());
-                    log::trace!("{}: Recv to pause ({:?})", item.tag(), item.fd());
-                }
-            }
-        })
-    }
-}
-
-impl Clone for StreamCtl {
-    fn clone(&self) -> Self {
-        self.inner.with(|storage| {
-            storage.streams[self.id].ref_count += 1;
-            Self {
-                id: self.id,
-                inner: self.inner.clone(),
-            }
-        })
+        self.inner
+            .with(|storage| storage.pause_read(self.id, &self.inner.api))
     }
 }
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
+        println!("DROP CTL {:?}", self.id);
         self.inner.drop_stream(self.id);
+    }
+}
+
+impl WeakStreamCtl {
+    pub(crate) fn with_io<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Socket) -> R,
+    {
+        self.inner.with(|storage| f(&storage.streams[self.id].io))
+    }
+}
+
+impl Drop for WeakStreamCtl {
+    fn drop(&mut self) {
+        if let Some(mut storage) = self.inner.storage.take() {
+            let item = &mut storage.streams[self.id];
+            if item.flags.contains(Flags::DROPPED_PRI) {
+                let item = storage.streams.remove(self.id);
+                mem::forget(item.io);
+            } else {
+                item.flags.insert(Flags::DROPPED_SEC);
+            }
+            self.inner.storage.set(Some(storage));
+        }
     }
 }
