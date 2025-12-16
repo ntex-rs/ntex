@@ -33,7 +33,7 @@ pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Middleware2, Stack, apply, apply2};
-pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall};
+pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
 
 #[allow(unused_variables)]
 /// An asynchronous function of `Request` to a `Response`.

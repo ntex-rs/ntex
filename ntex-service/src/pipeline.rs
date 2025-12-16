@@ -1,6 +1,6 @@
 use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
 
-use crate::{Service, ServiceCtx, ctx::WaitersRef};
+use crate::{IntoService, Service, ServiceCtx, ctx::WaitersRef};
 
 #[derive(Debug)]
 /// Container for a service.
@@ -164,6 +164,79 @@ impl<S: fmt::Debug> fmt::Debug for PipelineState<S> {
             .field("svc", &self.svc)
             .field("waiters", &self.waiters.get().len())
             .finish()
+    }
+}
+
+#[derive(Debug)]
+/// Service wrapper for Pipeline
+pub struct PipelineSvc<S> {
+    inner: Pipeline<S>,
+}
+
+impl<S> PipelineSvc<S> {
+    #[inline]
+    /// Construct new PipelineSvc
+    pub fn new(inner: Pipeline<S>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<S, Req> Service<Req> for PipelineSvc<S>
+where
+    S: Service<Req>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+
+    #[inline]
+    async fn call(
+        &self,
+        req: Req,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        self.inner.call(req).await
+    }
+
+    #[inline]
+    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        self.inner.ready().await
+    }
+
+    #[inline]
+    async fn shutdown(&self) {
+        self.inner.shutdown().await
+    }
+
+    #[inline]
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.inner.poll(cx)
+    }
+}
+
+impl<S> From<S> for PipelineSvc<S> {
+    #[inline]
+    fn from(svc: S) -> Self {
+        PipelineSvc {
+            inner: Pipeline::new(svc),
+        }
+    }
+}
+
+impl<S> Clone for PipelineSvc<S> {
+    fn clone(&self) -> Self {
+        PipelineSvc {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<S, R> IntoService<PipelineSvc<S>, R> for Pipeline<S>
+where
+    S: Service<R>,
+{
+    #[inline]
+    fn into_service(self) -> PipelineSvc<S> {
+        PipelineSvc::new(self)
     }
 }
 
@@ -419,5 +492,66 @@ where
             }
             result
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, rc::Rc};
+
+    use super::*;
+
+    #[derive(Debug, Default, Clone)]
+    struct Srv(Rc<Cell<usize>>);
+
+    impl Service<()> for Srv {
+        type Response = ();
+        type Error = ();
+
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+            Ok(())
+        }
+
+        async fn shutdown(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[ntex::test]
+    async fn pipeline_service() {
+        let cnt_sht = Rc::new(Cell::new(0));
+        let srv = Pipeline::new(
+            Pipeline::new(Srv(cnt_sht.clone()).map(|_| "ok"))
+                .into_service()
+                .clone(),
+        );
+        let res = srv.call(()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "ok");
+
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
+
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 1);
+        let _ = format!("{srv:?}");
+
+        let cnt_sht = Rc::new(Cell::new(0));
+        let svc = Srv(cnt_sht.clone()).map(|_| "ok");
+        let srv = Pipeline::new(PipelineSvc::from(&svc));
+        let res = srv.call(()).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "ok");
+
+        let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
+
+        srv.shutdown().await;
+        assert_eq!(cnt_sht.get(), 1);
+        let _ = format!("{srv:?}");
     }
 }
