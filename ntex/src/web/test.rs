@@ -683,7 +683,7 @@ where
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
-    sleep(Millis(25)).await;
+    sleep(Millis(50)).await;
 
     let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
         .add(ntex_io::IoConfig::new().set_connect_timeout(Millis(90_000)))
