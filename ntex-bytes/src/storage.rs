@@ -451,11 +451,7 @@ impl Storage {
 
     #[inline]
     pub(crate) fn capacity(&self) -> usize {
-        if self.is_inline() {
-            INLINE_CAP
-        } else {
-            self.cap
-        }
+        if self.is_inline() { INLINE_CAP } else { self.cap }
     }
 
     pub(crate) fn split_off(&mut self, at: usize, create_inline: bool) -> Storage {

@@ -1,2 +1,4 @@
 max_width = 92
 reorder_imports = true
+use_field_init_shorthand = true
+single_line_if_else_max_width = 56

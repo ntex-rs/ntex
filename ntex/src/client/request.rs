@@ -337,11 +337,7 @@ impl ClientRequest {
     where
         F: FnOnce(T, ClientRequest) -> ClientRequest,
     {
-        if let Some(val) = value {
-            f(val, self)
-        } else {
-            self
-        }
+        if let Some(val) = value { f(val, self) } else { self }
     }
 
     /// Sets the query part of the request

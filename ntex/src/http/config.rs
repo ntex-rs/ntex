@@ -78,11 +78,7 @@ impl HttpServiceConfig {
             KeepAlive::Os => (Seconds::ZERO, true),
             KeepAlive::Disabled => (Seconds::ZERO, false),
         };
-        let keep_alive = if ka_enabled {
-            keep_alive
-        } else {
-            Seconds::ZERO
-        };
+        let keep_alive = if ka_enabled { keep_alive } else { Seconds::ZERO };
 
         HttpServiceConfig {
             keep_alive,
@@ -106,11 +102,7 @@ impl HttpServiceConfig {
             KeepAlive::Os => (Seconds::ZERO, true),
             KeepAlive::Disabled => (Seconds::ZERO, false),
         };
-        let keep_alive = if ka_enabled {
-            keep_alive
-        } else {
-            Seconds::ZERO
-        };
+        let keep_alive = if ka_enabled { keep_alive } else { Seconds::ZERO };
 
         self.keep_alive = keep_alive;
         self.ka_enabled = ka_enabled;

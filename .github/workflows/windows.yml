@@ -26,12 +26,17 @@ jobs:
           toolchain: ${{ matrix.version }}-x86_64-pc-windows-msvc
 
       - name: Generate Cargo.lock
-        run: cargo generate-lockfile
+        uses: actions-rs/cargo@v1
+        with:
+          command: generate-lockfile
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v1.0.1
 
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
-          path: C:\vcpkg\installed\x64-windows\
+          path: C:\vcpkg\installed\
           key: x86_64-pc-windows-msvc-openssl
 
       - name: Cache cargo registry

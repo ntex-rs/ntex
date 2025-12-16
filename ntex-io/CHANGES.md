@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.0] - 2025-12-16
+
+* Shutdown service if readiness fails
+
 ## [3.1.1] - 2025-12-14
 
 * Add fmt::Debug impl for RecvError

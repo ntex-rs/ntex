@@ -163,7 +163,7 @@ where
         });
     });
     let (system, server) = rx.recv().unwrap();
-    thread::sleep(time::Duration::from_millis(25));
+    thread::sleep(time::Duration::from_millis(50));
 
     TestServer {
         id,

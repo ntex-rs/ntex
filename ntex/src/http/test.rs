@@ -293,7 +293,7 @@ where
         })
     });
     let (system, server, addr) = rx.recv().unwrap();
-    sleep(Millis(25)).await;
+    sleep(Millis(50)).await;
 
     TestServer {
         addr,

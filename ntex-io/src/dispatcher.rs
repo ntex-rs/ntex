@@ -80,6 +80,7 @@ enum DispatcherError<S, U> {
 
 enum PollService<U: Encoder + Decoder> {
     Item(DispatchItem<U>),
+    ItemWait(DispatchItem<U>),
     Continue,
     Ready,
 }
@@ -203,14 +204,14 @@ where
         loop {
             match slf.st {
                 DispatcherState::Processing => {
-                    let item = match ready!(slf.poll_service(cx)) {
+                    let (item, nowait) = match ready!(slf.poll_service(cx)) {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
                             match slf.shared.io.poll_recv_decode(&slf.shared.codec, cx) {
                                 Ok(decoded) => {
                                     slf.update_timer(&decoded);
                                     if let Some(el) = decoded.item {
-                                        DispatchItem::Item(el)
+                                        (DispatchItem::Item(el), true)
                                     } else {
                                         return Poll::Pending;
                                     }
@@ -218,7 +219,7 @@ where
                                 Err(RecvError::KeepAlive) => {
                                     if let Err(err) = slf.handle_timeout() {
                                         slf.st = DispatcherState::Stop;
-                                        err
+                                        (err, true)
                                     } else {
                                         continue;
                                     }
@@ -226,7 +227,7 @@ where
                                 Err(RecvError::WriteBackpressure) => {
                                     // instruct write task to notify dispatcher when data is flushed
                                     slf.st = DispatcherState::Backpressure;
-                                    DispatchItem::WBackPressureEnabled
+                                    (DispatchItem::WBackPressureEnabled, true)
                                 }
                                 Err(RecvError::Decoder(err)) => {
                                     log::trace!(
@@ -235,7 +236,7 @@ where
                                         err
                                     );
                                     slf.st = DispatcherState::Stop;
-                                    DispatchItem::DecoderError(err)
+                                    (DispatchItem::DecoderError(err), true)
                                 }
                                 Err(RecvError::PeerGone(err)) => {
                                     log::trace!(
@@ -244,21 +245,23 @@ where
                                         err
                                     );
                                     slf.st = DispatcherState::Stop;
-                                    DispatchItem::Disconnect(err)
+                                    (DispatchItem::Disconnect(err), true)
                                 }
                             }
                         }
-                        PollService::Item(item) => item,
+                        PollService::Item(item) => (item, true),
+                        PollService::ItemWait(item) => (item, false),
                         PollService::Continue => continue,
                     };
 
-                    slf.call_service(cx, item);
+                    slf.call_service(cx, item, nowait);
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
                     match ready!(slf.poll_service(cx)) {
                         PollService::Ready => (),
-                        PollService::Item(item) => slf.call_service(cx, item),
+                        PollService::Item(item) => slf.call_service(cx, item, true),
+                        PollService::ItemWait(item) => slf.call_service(cx, item, false),
                         PollService::Continue => continue,
                     };
 
@@ -270,7 +273,7 @@ where
                         slf.st = DispatcherState::Processing;
                         DispatchItem::WBackPressureDisabled
                     };
-                    slf.call_service(cx, item);
+                    slf.call_service(cx, item, false);
                 }
                 // drain service responses and shutdown io
                 DispatcherState::Stop => {
@@ -335,8 +338,12 @@ where
     S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
-    fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>) {
-        let mut fut = self.shared.service.call_nowait(item);
+    fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {
+        let mut fut = if nowait {
+            self.shared.service.call_nowait(item)
+        } else {
+            self.shared.service.call(item)
+        };
         let inflight = self.shared.inflight.get() + 1;
         self.shared.inflight.set(inflight);
         if inflight == 1 {
@@ -405,7 +412,7 @@ where
                             self.shared.io.tag()
                         );
                         self.st = DispatcherState::Stop;
-                        Poll::Ready(PollService::Item(DispatchItem::KeepAliveTimeout))
+                        Poll::Ready(PollService::ItemWait(DispatchItem::KeepAliveTimeout))
                     }
                     IoStatusUpdate::PeerGone(err) => {
                         log::trace!(
@@ -414,11 +421,13 @@ where
                             err
                         );
                         self.st = DispatcherState::Stop;
-                        Poll::Ready(PollService::Item(DispatchItem::Disconnect(err)))
+                        Poll::Ready(PollService::ItemWait(DispatchItem::Disconnect(err)))
                     }
                     IoStatusUpdate::WriteBackpressure => {
                         self.st = DispatcherState::Backpressure;
-                        Poll::Ready(PollService::Item(DispatchItem::WBackPressureEnabled))
+                        Poll::Ready(PollService::ItemWait(
+                            DispatchItem::WBackPressureEnabled,
+                        ))
                     }
                 }
             }
@@ -431,7 +440,7 @@ where
                 self.st = DispatcherState::Stop;
                 self.error = Some(err);
                 self.shared.insert_flags(Flags::READY_ERR);
-                Poll::Ready(PollService::Item(DispatchItem::Disconnect(None)))
+                Poll::Ready(PollService::Continue)
             }
         }
     }
@@ -618,7 +627,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_basic() {
+    async fn basics() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -654,7 +663,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_sink() {
+    async fn sink() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -693,7 +702,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_err_in_service() {
+    async fn err_in_service() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -730,7 +739,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_err_in_service_ready() {
+    async fn err_in_service_ready() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -787,7 +796,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_write_backpressure() {
+    async fn write_backpressure() {
         let (client, server) = IoTest::create();
         // do not allow to write to socket
         client.remote_buffer_cap(0);
@@ -862,7 +871,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_disconnect_during_read_backpressure() {
+    async fn disconnect_during_read_backpressure() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
 
@@ -911,7 +920,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_keepalive() {
+    async fn keepalive() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         client.write("GET /test HTTP/1\r\n\r\n");
@@ -961,7 +970,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_keepalive2() {
+    async fn keepalive2() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
@@ -1012,7 +1021,7 @@ mod tests {
 
     /// Update keep-alive timer after receiving frame
     #[ntex::test]
-    async fn test_keepalive3() {
+    async fn keepalive3() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
@@ -1069,7 +1078,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_read_timeout() {
+    async fn read_timeout() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
@@ -1129,7 +1138,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_idle_timeout() {
+    async fn idle_timeout() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
@@ -1181,7 +1190,7 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn test_unhandled_data() {
+    async fn unhandled_data() {
         let handled = Arc::new(AtomicBool::new(false));
         let handled2 = handled.clone();
 
