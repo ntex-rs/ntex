@@ -19,6 +19,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@nextest
 
       - name: Install ${{ matrix.version }}
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -75,8 +76,8 @@ jobs:
 
       - name: Run tests (tokio)
         run: |
-          cargo test --all --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
 
       - name: Run tests (compio)
         run: |
-          cargo test --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer

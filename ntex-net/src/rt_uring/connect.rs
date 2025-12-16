@@ -58,7 +58,7 @@ impl ConnectOps {
 
         // addr must be stable, neon submits ops at the end of rt turn
         let addr = Box::new(addr);
-        let (addr_ptr, addr_len) = (addr.as_ref().as_ptr(), addr.len());
+        let (addr_ptr, addr_len) = (addr.as_ref().as_ptr().cast(), addr.len());
 
         let fd = sock.as_raw_fd();
         let id = ops.insert((addr, sock, sender));
@@ -98,6 +98,8 @@ impl Handler for ConnectOpsHandler {
             }
         }
     }
+
+    fn tick(&mut self) {}
 
     fn cleanup(&mut self) {
         self.inner.ops.borrow_mut().clear();

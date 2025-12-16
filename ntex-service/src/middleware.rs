@@ -493,4 +493,34 @@ mod tests {
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
     }
+
+    #[ntex::test]
+    async fn stack() {
+        let cnt_sht = Rc::new(Cell::new(0));
+        let mw = Stack::new(Identity, Mw(PhantomData, cnt_sht.clone()));
+        let _ = format!("{mw:?}");
+
+        let pl = Pipeline::new(Middleware2::create(
+            &mw,
+            fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
+            (),
+        ));
+        let res = pl.call(10).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 20);
+        assert_eq!(pl.ready().await, Ok(()));
+        pl.shutdown().await;
+        assert_eq!(cnt_sht.get(), 2);
+
+        let pl = Pipeline::new(Middleware::create(
+            &mw,
+            fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
+        ));
+        let res = pl.call(10).await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 20);
+        assert_eq!(pl.ready().await, Ok(()));
+        pl.shutdown().await;
+        assert_eq!(cnt_sht.get(), 3);
+    }
 }
