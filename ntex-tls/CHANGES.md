@@ -1,5 +1,9 @@
 # Changes
 
+## [3.1.0] - 2025-12-17
+
+* Upgrade to ntex-service v4
+
 ## [3.0.0-pre.3] - 2025-12-01
 
 * Export missing types

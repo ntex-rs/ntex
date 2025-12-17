@@ -111,13 +111,6 @@ impl<E> Receiver<E> {
             Poll::Pending
         }
     }
-
-    #[doc(hidden)]
-    #[deprecated]
-    #[inline]
-    pub fn max_size(&self, size: usize) {
-        self.max_buffer_size(size);
-    }
 }
 
 impl<E> Stream for Receiver<E> {

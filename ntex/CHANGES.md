@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.9] 2025-12-17
+
+* Upgrade to ntex-service v4
+
 ## [3.0.0-pre.8] 2025-12-17
 
 * Better test servers drop handling
