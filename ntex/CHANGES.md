@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.8] 2025-12-17
+
+* Better test servers drop handling
+
 ## [3.0.0-pre.6] 2025-12-07
 
 * Update bstream
