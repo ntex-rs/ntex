@@ -32,7 +32,7 @@ pub use self::ctx::ServiceCtx;
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
-pub use self::middleware::{Identity, Middleware, Middleware2, Stack, apply, apply2};
+pub use self::middleware::{Identity, Middleware, Stack, apply};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
 
 #[allow(unused_variables)]
@@ -372,6 +372,6 @@ pub mod dev {
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrFactory};
     pub use crate::map_init_err::MapInitErr;
-    pub use crate::middleware::{ApplyMiddleware, ApplyMiddleware2};
+    pub use crate::middleware::ApplyMiddleware;
     pub use crate::then::{Then, ThenFactory};
 }

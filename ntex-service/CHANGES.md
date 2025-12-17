@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0] - 2025-12-17
+
+* Replace Middleware with Middleware2
+
 ## [3.8.0] - 2025-12-16
 
 * Add Service impl for Pipeline, PipelineSvc

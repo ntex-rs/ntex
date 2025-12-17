@@ -92,8 +92,6 @@ struct StreamOpsInner {
 struct StreamOpsStorage {
     ops: Slab<Option<Operation>>,
     streams: Slab<StreamItem>,
-    lw: usize,
-    hw: usize,
 }
 
 impl StreamOps {
@@ -125,8 +123,6 @@ impl StreamOps {
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
                         streams: Slab::new(),
-                        lw: 1024,
-                        hw: 1024 * 16,
                     }))),
                 });
                 inner = Some(ops.clone());
@@ -145,10 +141,10 @@ impl StreamOps {
     ) -> (StreamCtl, WeakStreamCtl) {
         let item = StreamItem {
             io,
+            ctx,
             rd_op: None,
             wr_op: None,
             flags: if zc { self.0.default_flags } else { Flags::NO_ZC },
-            ctx: ctx.clone(),
         };
 
         let id = self.0.with(move |st| {
@@ -232,6 +228,7 @@ impl Handler for StreamOpsHandler {
                         } else {
                             let mut total = 0;
                             let res = Poll::Ready(res.map(|size| {
+                                // SAFETY: kernel tells us how many bytes it read
                                 unsafe { buf.advance_mut(size) };
                                 total = size;
                             }).map_err(Some));
@@ -355,9 +352,8 @@ impl StreamOpsStorage {
 
     fn recv_more(&mut self, id: usize, mut buf: BytesVec, api: &DriverApi) {
         if let Some(item) = self.streams.get_mut(id) {
-            if buf.remaining_mut() < self.lw {
-                buf.reserve(self.hw);
-            }
+            item.ctx.resize_read_buf(&mut buf);
+
             let slice = buf.chunk_mut();
             let buf_ptr = slice.as_mut_ptr();
             let buf_len = slice.len() as u32;
@@ -528,7 +524,6 @@ impl StreamCtl {
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        println!("DROP CTL {:?}", self.id);
         self.inner.drop_stream(self.id);
     }
 }

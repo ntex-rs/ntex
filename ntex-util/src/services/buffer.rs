@@ -3,9 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::task::{Poll, Waker, ready};
 use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
 
-use ntex_service::{
-    Middleware, Middleware2, Pipeline, PipelineBinding, Service, ServiceCtx,
-};
+use ntex_service::{Middleware, Pipeline, PipelineBinding, Service, ServiceCtx};
 
 use crate::channel::oneshot;
 
@@ -62,19 +60,7 @@ impl<R> Clone for Buffer<R> {
     }
 }
 
-impl<R, S> Middleware<S> for Buffer<R>
-where
-    S: Service<R> + 'static,
-    R: 'static,
-{
-    type Service = BufferService<R, S>;
-
-    fn create(&self, service: S) -> Self::Service {
-        BufferService::new(self.buf_size, service)
-    }
-}
-
-impl<R, S, C> Middleware2<S, C> for Buffer<R>
+impl<R, S, C> Middleware<S, C> for Buffer<R>
 where
     S: Service<R> + 'static,
     R: 'static,
@@ -307,7 +293,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{Pipeline, ServiceFactory, apply, apply2, fn_factory};
+    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
     use std::{rc::Rc, time::Duration};
 
     use super::*;
@@ -465,7 +451,7 @@ mod tests {
             count: Cell::new(0),
         });
 
-        let srv = apply2(
+        let srv = apply(
             Buffer::default().buf_size(2).clone(),
             fn_factory(|| async { Ok::<_, ()>(TestService(inner.clone())) }),
         );

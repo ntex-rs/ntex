@@ -1,5 +1,9 @@
 # Changes
 
+## [3.4.0] - 2025-12-17
+
+* Upgrade to ntex-service v4
+
 ## [3.3.0] - 2025-12-16
 
 * Stop io context after disconnect

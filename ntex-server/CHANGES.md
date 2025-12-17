@@ -1,5 +1,11 @@
 # Changes
 
+## [3.4.0] - 2025-12-17
+
+* Upgrade to ntex-service v4
+
+* Improve test servers shutdown process
+
 ## [3.3.0] - 2025-12-05
 
 * Use AsyncFn for on-accept callback

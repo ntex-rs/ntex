@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "3.3.0"
+version = "3.4.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ntex-bytes = "1"
-ntex-service = "3.7.3"
+ntex-service = "4"
 ntex-rt = "3"
 
 foldhash = { workspace = true }
