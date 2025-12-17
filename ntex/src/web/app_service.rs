@@ -5,7 +5,7 @@ use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
 use crate::service::dev::ServiceChainFactory;
-use crate::service::{Middleware2, Service, ServiceCtx, ServiceFactory, fn_service};
+use crate::service::{Middleware, Service, ServiceCtx, ServiceFactory, fn_service};
 use crate::util::{BoxFuture, Extensions, join};
 
 use super::error::ErrorRenderer;
@@ -48,7 +48,7 @@ where
 
 impl<T, F, Err> ServiceFactory<Request, SharedCfg> for AppFactory<T, F, Err>
 where
-    T: Middleware2<AppService<F::Service, Err>, SharedCfg> + 'static,
+    T: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
     T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,

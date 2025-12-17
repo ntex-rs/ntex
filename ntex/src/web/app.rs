@@ -4,7 +4,7 @@ use crate::http::Request;
 use crate::router::ResourceDef;
 use crate::service::boxed::{self, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
-use crate::service::{Identity, Middleware2, Service, ServiceCtx, ServiceFactory};
+use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
 use crate::service::{IntoServiceFactory, chain_factory, dev::ServiceChainFactory};
 use crate::util::{BoxFuture, Extensions};
 
@@ -436,7 +436,7 @@ where
 
 impl<M, F, Err> App<M, F, Err>
 where
-    M: Middleware2<AppService<F::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
@@ -481,7 +481,7 @@ where
 impl<M, F, Err> IntoServiceFactory<AppFactory<M, F, Err>, Request, SharedCfg>
     for App<M, F, Err>
 where
-    M: Middleware2<AppService<F::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,

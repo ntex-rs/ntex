@@ -5,7 +5,7 @@ use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
-use crate::service::{Identity, IntoServiceFactory, Middleware2, Service, ServiceFactory};
+use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
 use crate::service::{ServiceCtx, chain, chain_factory};
 use crate::util::Extensions;
 
@@ -324,7 +324,7 @@ where
             Error = Err::Container,
             InitError = (),
         > + 'static,
-    M: Middleware2<ResourcePipeline<T::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<T::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
@@ -384,7 +384,7 @@ where
             Error = Err::Container,
             InitError = (),
         > + 'static,
-    M: Middleware2<ResourcePipeline<F::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
@@ -416,7 +416,7 @@ pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
 impl<Err, M, F> ServiceFactory<WebRequest<Err>, SharedCfg>
     for ResourceServiceFactory<Err, M, F>
 where
-    M: Middleware2<ResourcePipeline<F::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<F::Service, Err>, SharedCfg> + 'static,
     M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,

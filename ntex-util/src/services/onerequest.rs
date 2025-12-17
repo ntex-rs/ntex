@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests to 1.
 use std::{cell::Cell, future::poll_fn, task::Poll};
 
-use ntex_service::{Middleware, Middleware2, Service, ServiceCtx};
+use ntex_service::{Middleware, Service, ServiceCtx};
 
 use crate::task::LocalWaker;
 
@@ -10,19 +10,7 @@ use crate::task::LocalWaker;
 #[derive(Copy, Clone, Default, Debug)]
 pub struct OneRequest;
 
-impl<S> Middleware<S> for OneRequest {
-    type Service = OneRequestService<S>;
-
-    fn create(&self, service: S) -> Self::Service {
-        OneRequestService {
-            service,
-            ready: Cell::new(true),
-            waker: LocalWaker::new(),
-        }
-    }
-}
-
-impl<S, C> Middleware2<S, C> for OneRequest {
+impl<S, C> Middleware<S, C> for OneRequest {
     type Service = OneRequestService<S>;
 
     fn create(&self, service: S, _: C) -> Self::Service {
@@ -97,7 +85,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{Pipeline, ServiceFactory, apply, apply2, fn_factory};
+    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
     use std::{cell::RefCell, time::Duration};
 
     use super::*;
@@ -170,7 +158,7 @@ mod tests {
 
         let (tx, rx) = oneshot::channel();
         let rx = RefCell::new(Some(rx));
-        let srv = apply2(
+        let srv = apply(
             OneRequest,
             fn_factory(move || {
                 let rx = rx.borrow_mut().take().unwrap();

@@ -1,5 +1,5 @@
 //! Service that limits number of in-flight async requests.
-use ntex_service::{Middleware, Middleware2, Service, ServiceCtx};
+use ntex_service::{Middleware, Service, ServiceCtx};
 
 use super::counter::Counter;
 
@@ -24,18 +24,7 @@ impl Default for InFlight {
     }
 }
 
-impl<S> Middleware<S> for InFlight {
-    type Service = InFlightService<S>;
-
-    fn create(&self, service: S) -> Self::Service {
-        InFlightService {
-            service,
-            count: Counter::new(self.max_inflight),
-        }
-    }
-}
-
-impl<S, C> Middleware2<S, C> for InFlight {
+impl<S, C> Middleware<S, C> for InFlight {
     type Service = InFlightService<S>;
 
     fn create(&self, service: S, _: C) -> Self::Service {
@@ -102,7 +91,7 @@ mod tests {
     use std::{cell::Cell, cell::RefCell, rc::Rc, task::Poll, time::Duration};
 
     use async_channel as mpmc;
-    use ntex_service::{Pipeline, ServiceFactory, apply, apply2, fn_factory};
+    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
 
     use super::*;
     use crate::{channel::oneshot, future::lazy};
@@ -213,7 +202,7 @@ mod tests {
 
         let (tx, rx) = mpmc::unbounded();
         let rx = RefCell::new(Some(rx));
-        let srv = apply2(
+        let srv = apply(
             InFlight::new(1),
             fn_factory(move || {
                 let rx = rx.borrow_mut().take().unwrap();

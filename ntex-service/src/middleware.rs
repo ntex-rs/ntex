@@ -6,22 +6,12 @@ use crate::{IntoServiceFactory, Service, ServiceFactory};
 pub fn apply<T, S, R, C, U>(t: T, factory: U) -> ApplyMiddleware<T, S, C>
 where
     S: ServiceFactory<R, C>,
-    T: Middleware<S::Service>,
+    T: Middleware<S::Service, C>,
     U: IntoServiceFactory<S, R, C>,
 {
     ApplyMiddleware::new(t, factory.into_factory())
 }
 
-/// Apply middleware to a service.
-pub fn apply2<T, S, R, C, U>(t: T, factory: U) -> ApplyMiddleware2<T, S, C>
-where
-    S: ServiceFactory<R, C>,
-    T: Middleware2<S::Service, C>,
-    U: IntoServiceFactory<S, R, C>,
-{
-    ApplyMiddleware2::new(t, factory.into_factory())
-}
-
 /// The `Middleware` trait defines the interface of a service factory that wraps inner service
 /// during construction.
 ///
@@ -92,85 +82,7 @@ where
 ///     }
 /// }
 /// ```
-pub trait Middleware<S> {
-    /// The middleware `Service` value created by this factory
-    type Service;
-
-    /// Creates and returns a new middleware Service
-    fn create(&self, service: S) -> Self::Service;
-}
-
-/// The `Middleware` trait defines the interface of a service factory that wraps inner service
-/// during construction.
-///
-/// Middleware wraps inner service and runs during
-/// inbound and/or outbound processing in the request/response lifecycle.
-/// It may modify request and/or response.
-///
-/// For example, timeout middleware:
-///
-/// ```rust
-/// use ntex_service::{Service, ServiceCtx};
-/// use ntex_util::{time::sleep, future::Either, future::select};
-///
-/// pub struct Timeout<S> {
-///     service: S,
-///     timeout: std::time::Duration,
-/// }
-///
-/// pub enum TimeoutError<E> {
-///    Service(E),
-///    Timeout,
-/// }
-///
-/// impl<S, R> Service<R> for Timeout<S>
-/// where
-///     S: Service<R>,
-/// {
-///     type Response = S::Response;
-///     type Error = TimeoutError<S::Error>;
-///
-///     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
-///     }
-///
-///     async fn call(&self, req: R, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
-///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
-///             Either::Left(_) => Err(TimeoutError::Timeout),
-///             Either::Right(res) => res.map_err(TimeoutError::Service),
-///         }
-///     }
-/// }
-/// ```
-///
-/// Timeout service in above example is decoupled from underlying service implementation
-/// and could be applied to any service.
-///
-/// The `Middleware` trait defines the interface of a middleware factory, defining how to
-/// construct a middleware Service. A Service that is constructed by the factory takes
-/// the Service that follows it during execution as a parameter, assuming
-/// ownership of the next Service.
-///
-/// Factory for `Timeout` middleware from the above example could look like this:
-///
-/// ```rust,ignore
-/// pub struct TimeoutMiddleware {
-///     timeout: std::time::Duration,
-/// }
-///
-/// impl<S> Middleware<S> for TimeoutMiddleware
-/// {
-///     type Service = Timeout<S>;
-///
-///     fn create(&self, service: S) -> Self::Service {
-///         Timeout {
-///             service,
-///             timeout: self.timeout,
-///         }
-///     }
-/// }
-/// ```
-pub trait Middleware2<S, Cfg = ()> {
+pub trait Middleware<S, Cfg = ()> {
     /// The middleware `Service` value created by this factory
     type Service;
 
@@ -178,20 +90,9 @@ pub trait Middleware2<S, Cfg = ()> {
     fn create(&self, service: S, cfg: Cfg) -> Self::Service;
 }
 
-impl<T, S> Middleware<S> for Rc<T>
+impl<T, S, C> Middleware<S, C> for Rc<T>
 where
-    T: Middleware<S>,
-{
-    type Service = T::Service;
-
-    fn create(&self, service: S) -> T::Service {
-        self.as_ref().create(service)
-    }
-}
-
-impl<T, S, C> Middleware2<S, C> for Rc<T>
-where
-    T: Middleware2<S, C>,
+    T: Middleware<S, C>,
 {
     type Service = T::Service;
 
@@ -232,54 +133,7 @@ where
 impl<T, S, R, C> ServiceFactory<R, C> for ApplyMiddleware<T, S, C>
 where
     S: ServiceFactory<R, C>,
-    T: Middleware<S::Service>,
-    T::Service: Service<R>,
-{
-    type Response = <T::Service as Service<R>>::Response;
-    type Error = <T::Service as Service<R>>::Error;
-
-    type Service = T::Service;
-    type InitError = S::InitError;
-
-    #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        Ok(self.0.0.create(self.0.1.create(cfg).await?))
-    }
-}
-
-/// `Apply` middleware to a service factory.
-pub struct ApplyMiddleware2<T, S, C>(Rc<(T, S)>, PhantomData<C>);
-
-impl<T, S, C> ApplyMiddleware2<T, S, C> {
-    /// Create new `ApplyMiddleware` service factory instance
-    pub(crate) fn new(mw: T, svc: S) -> Self {
-        Self(Rc::new((mw, svc)), PhantomData)
-    }
-}
-
-impl<T, S, C> Clone for ApplyMiddleware2<T, S, C> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), PhantomData)
-    }
-}
-
-impl<T, S, C> fmt::Debug for ApplyMiddleware2<T, S, C>
-where
-    T: fmt::Debug,
-    S: fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ApplyMiddleware")
-            .field("service", &self.0.1)
-            .field("middleware", &self.0.0)
-            .finish()
-    }
-}
-
-impl<T, S, R, C> ServiceFactory<R, C> for ApplyMiddleware2<T, S, C>
-where
-    S: ServiceFactory<R, C>,
-    T: Middleware2<S::Service, C>,
+    T: Middleware<S::Service, C>,
     T::Service: Service<R>,
     C: Clone,
 {
@@ -301,16 +155,7 @@ where
 #[derive(Debug, Clone, Copy)]
 pub struct Identity;
 
-impl<S> Middleware<S> for Identity {
-    type Service = S;
-
-    #[inline]
-    fn create(&self, service: S) -> Self::Service {
-        service
-    }
-}
-
-impl<S, Cfg> Middleware2<S, Cfg> for Identity {
+impl<S, Cfg> Middleware<S, Cfg> for Identity {
     type Service = S;
 
     #[inline]
@@ -332,22 +177,10 @@ impl<Inner, Outer> Stack<Inner, Outer> {
     }
 }
 
-impl<S, Inner, Outer> Middleware<S> for Stack<Inner, Outer>
+impl<S, Inner, Outer, C> Middleware<S, C> for Stack<Inner, Outer>
 where
-    Inner: Middleware<S>,
-    Outer: Middleware<Inner::Service>,
-{
-    type Service = Outer::Service;
-
-    fn create(&self, service: S) -> Self::Service {
-        self.outer.create(self.inner.create(service))
-    }
-}
-
-impl<S, Inner, Outer, C> Middleware2<S, C> for Stack<Inner, Outer>
-where
-    Inner: Middleware2<S, C>,
-    Outer: Middleware2<Inner::Service, C>,
+    Inner: Middleware<S, C>,
+    Outer: Middleware<Inner::Service, C>,
     C: Clone,
 {
     type Service = Outer::Service;
@@ -369,15 +202,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Mw<R>(PhantomData<R>, Rc<Cell<usize>>);
 
-    impl<S, R> Middleware<S> for Mw<R> {
-        type Service = Srv<S, R>;
-
-        fn create(&self, service: S) -> Self::Service {
-            Srv(service, PhantomData, self.1.clone())
-        }
-    }
-
-    impl<S, R, C> Middleware2<S, C> for Mw<R> {
+    impl<S, R, C> Middleware<S, C> for Mw<R> {
         type Service = Srv<S, R>;
 
         fn create(&self, service: S, _: C) -> Self::Service {
@@ -427,39 +252,6 @@ mod tests {
 
         assert_eq!(srv.ready().await, Ok(()));
         srv.shutdown().await;
-        assert_eq!(cnt_sht.get(), 1);
-
-        let factory =
-            crate::chain_factory(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-                .apply(Rc::new(Mw(PhantomData, Rc::new(Cell::new(0))).clone()))
-                .clone();
-
-        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
-        let res = srv.call(10).await;
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 20);
-        let _ = format!("{factory:?} {srv:?}");
-
-        assert_eq!(srv.ready().await, Ok(()));
-    }
-
-    #[ntex::test]
-    async fn middleware2() {
-        let cnt_sht = Rc::new(Cell::new(0));
-        let factory = apply2(
-            Rc::new(Mw(PhantomData, cnt_sht.clone()).clone()),
-            fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
-        )
-        .clone();
-
-        let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
-        let res = srv.call(10).await;
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 20);
-        let _ = format!("{factory:?} {srv:?}");
-
-        assert_eq!(srv.ready().await, Ok(()));
-        srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
 
         let factory =
@@ -477,11 +269,11 @@ mod tests {
     }
 
     #[ntex::test]
-    async fn middleware2_chain() {
+    async fn middleware_chain() {
         let cnt_sht = Rc::new(Cell::new(0));
         let factory =
             crate::chain_factory(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-                .apply2(Mw(PhantomData, cnt_sht.clone()).clone());
+                .apply(Mw(PhantomData, cnt_sht.clone()).clone());
 
         let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
         let res = srv.call(10).await;
@@ -500,7 +292,7 @@ mod tests {
         let mw = Stack::new(Identity, Mw(PhantomData, cnt_sht.clone()));
         let _ = format!("{mw:?}");
 
-        let pl = Pipeline::new(Middleware2::create(
+        let pl = Pipeline::new(Middleware::create(
             &mw,
             fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
             (),
@@ -511,16 +303,5 @@ mod tests {
         assert_eq!(pl.ready().await, Ok(()));
         pl.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
-
-        let pl = Pipeline::new(Middleware::create(
-            &mw,
-            fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
-        ));
-        let res = pl.call(10).await;
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 20);
-        assert_eq!(pl.ready().await, Ok(()));
-        pl.shutdown().await;
-        assert_eq!(cnt_sht.get(), 3);
     }
 }

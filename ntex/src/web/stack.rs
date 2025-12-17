@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::service::{Middleware2, Service, ServiceCtx, cfg::SharedCfg};
+use crate::service::{Middleware, Service, ServiceCtx, cfg::SharedCfg};
 use crate::web::{ErrorRenderer, WebRequest, WebResponse};
 
 /// Stack of middlewares.
@@ -21,10 +21,10 @@ impl<Inner, Outer, Err> WebStack<Inner, Outer, Err> {
     }
 }
 
-impl<S, Inner, Outer, Err> Middleware2<S, SharedCfg> for WebStack<Inner, Outer, Err>
+impl<S, Inner, Outer, Err> Middleware<S, SharedCfg> for WebStack<Inner, Outer, Err>
 where
-    Inner: Middleware2<S, SharedCfg>,
-    Outer: Middleware2<Inner::Service, SharedCfg>,
+    Inner: Middleware<S, SharedCfg>,
+    Outer: Middleware<Inner::Service, SharedCfg>,
     Outer::Service: Service<WebRequest<Err>, Response = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, Err>;

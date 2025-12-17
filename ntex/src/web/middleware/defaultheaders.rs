@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::http::error::HttpError;
 use crate::http::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
-use crate::service::{Middleware2, Service, ServiceCtx, cfg::SharedCfg};
+use crate::service::{Middleware, Service, ServiceCtx, cfg::SharedCfg};
 use crate::web::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -86,7 +86,7 @@ impl DefaultHeaders {
     }
 }
 
-impl<S> Middleware2<S, SharedCfg> for DefaultHeaders {
+impl<S> Middleware<S, SharedCfg> for DefaultHeaders {
     type Service = DefaultHeadersMiddleware<S>;
 
     fn create(&self, service: S, _: SharedCfg) -> Self::Service {

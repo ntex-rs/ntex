@@ -32,7 +32,7 @@ io-uring = ["ntex-neon/io-uring", "socket2"]
 io-uring-compat = []
 
 [dependencies]
-ntex-service = "3.8"
+ntex-service = "4"
 ntex-bytes = "1"
 ntex-http = "1"
 ntex-io = "3"
