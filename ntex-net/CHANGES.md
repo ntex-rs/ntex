@@ -1,6 +1,6 @@
 # Changes
 
-## [3.4.1] - 2025-12-xx
+## [3.4.1] - 2025-12-18
 
 * Cleanup and improvements for polling driver
 

@@ -1,6 +1,6 @@
 # Changes
 
-## [3.3.1] - 2025-12-xx
+## [3.3.1] - 2025-12-18
 
 * Add IoTaskStatus::ready() helper method
 
