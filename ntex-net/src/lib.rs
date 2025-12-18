@@ -1,6 +1,5 @@
 //! Utility for async runtime abstraction
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
-#![allow(unused_variables, dead_code)]
 
 mod compat;
 pub mod connect;

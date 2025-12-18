@@ -2,18 +2,12 @@ use std::{cell::RefCell, io, os::fd::AsRawFd, os::fd::RawFd, rc::Rc};
 
 use ntex_neon::driver::{DriverApi, Event, Handler};
 use ntex_neon::{Runtime, syscall};
-use ntex_util::channel::oneshot::Sender;
+use ntex_util::channel::oneshot::{Sender, channel};
 use slab::Slab;
 use socket2::{SockAddr, Socket};
 
 #[derive(Clone)]
 pub(crate) struct ConnectOps(Rc<ConnectOpsInner>);
-
-#[derive(Debug)]
-enum Change {
-    Event(Event),
-    Error(io::Error),
-}
 
 struct ConnectOpsBatcher {
     inner: Rc<ConnectOpsInner>,
@@ -52,21 +46,25 @@ impl ConnectOps {
         })
     }
 
-    pub(crate) fn connect(
-        &self,
-        sock: Socket,
-        addr: SockAddr,
-        sender: Sender<io::Result<Socket>>,
-    ) -> io::Result<usize> {
+    pub(crate) async fn connect(&self, sock: Socket, addr: SockAddr) -> io::Result<Socket> {
         let result = syscall!(
             break libc::connect(sock.as_raw_fd(), addr.as_ptr().cast(), addr.len())
         )?;
-        let fd = sock.as_raw_fd();
-        let item = Item { sock, sender };
-        let id = self.0.connects.borrow_mut().insert(item);
-        self.0.api.attach(fd, id as u32, Event::writable(0));
+        if result.is_ready() {
+            // socket is connected
+            Ok(sock)
+        } else {
+            // connect is async
+            let (sender, rx) = channel();
+            let fd = sock.as_raw_fd();
+            let item = Item { sock, sender };
+            let id = self.0.connects.borrow_mut().insert(item);
+            self.0.api.attach(fd, id as u32, Event::writable(0));
 
-        Ok(id)
+            rx.await
+                .map_err(|_| io::Error::other("IO Driver is gone"))
+                .and_then(|item| item)
+        }
     }
 }
 

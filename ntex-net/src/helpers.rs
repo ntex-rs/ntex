@@ -1,14 +1,6 @@
-use std::{error, io, net, net::SocketAddr, path::Path};
+use std::{io, net, net::SocketAddr, path::Path};
 
-use ntex_util::channel::oneshot::channel;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-
-pub(crate) fn pool_io_err<T, E>(result: std::result::Result<T, E>) -> io::Result<T>
-where
-    E: error::Error + Send + Sync + 'static,
-{
-    result.map_err(|e| io::Error::other(e))
-}
 
 pub(crate) async fn connect(addr: SocketAddr) -> io::Result<Socket> {
     let addr = SockAddr::from(addr);
@@ -28,17 +20,9 @@ async fn connect_inner(
     protocol: Option<Protocol>,
 ) -> io::Result<Socket> {
     let sock = prep_socket(Socket::new(domain, ty, protocol)?)?;
-
-    let (sender, rx) = channel();
-
-    crate::rt_impl::connect::ConnectOps::current().connect(sock, addr, sender)?;
-
-    let sock = rx
+    crate::rt_impl::connect::ConnectOps::current()
+        .connect(sock, addr)
         .await
-        .map_err(|_| io::Error::other("IO Driver is gone"))
-        .and_then(|item| item)?;
-
-    Ok(sock)
 }
 
 pub(crate) fn prep_socket(sock: Socket) -> io::Result<Socket> {

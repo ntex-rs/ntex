@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.1] - 2025-12-18
+
+* Add IoTaskStatus::ready() helper method
+
 ## [3.3.0] - 2025-12-17
 
 * Upgrade to ntex-service v4

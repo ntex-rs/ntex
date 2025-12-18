@@ -2,19 +2,12 @@ use std::{cell::RefCell, io, os::fd::AsRawFd, rc::Rc};
 
 use ntex_neon::driver::io_uring::{opcode, types::Fd};
 use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
-use ntex_util::channel::oneshot::Sender;
+use ntex_util::channel::oneshot::{Sender, channel};
 use slab::Slab;
 use socket2::{SockAddr, Socket};
 
 #[derive(Clone)]
 pub(crate) struct ConnectOps(Rc<ConnectOpsInner>);
-
-#[derive(Debug)]
-enum Change {
-    Readable,
-    Writable,
-    Error(io::Error),
-}
 
 struct ConnectOpsHandler {
     inner: Rc<ConnectOpsInner>,
@@ -47,27 +40,26 @@ impl ConnectOps {
         })
     }
 
-    pub(crate) fn connect(
-        &self,
-        sock: Socket,
-        addr: SockAddr,
-        sender: Sender<io::Result<Socket>>,
-    ) -> io::Result<()> {
-        let addr2 = addr.clone();
-        let mut ops = self.0.ops.borrow_mut();
+    pub(crate) async fn connect(&self, sock: Socket, addr: SockAddr) -> io::Result<Socket> {
+        {
+            let mut ops = self.0.ops.borrow_mut();
 
-        // addr must be stable, neon submits ops at the end of rt turn
-        let addr = Box::new(addr);
-        let (addr_ptr, addr_len) = (addr.as_ref().as_ptr().cast(), addr.len());
+            // addr must be stable, neon submits ops at the end of rt turn
+            let addr = Box::new(addr);
+            let (addr_ptr, addr_len) = (addr.as_ref().as_ptr().cast(), addr.len());
 
-        let fd = sock.as_raw_fd();
-        let id = ops.insert((addr, sock, sender));
-        self.0.api.submit(
-            id as u32,
-            opcode::Connect::new(Fd(fd), addr_ptr, addr_len).build(),
-        );
-
-        Ok(())
+            let (sender, rx) = channel();
+            let fd = sock.as_raw_fd();
+            let id = ops.insert((addr, sock, sender));
+            self.0.api.submit(
+                id as u32,
+                opcode::Connect::new(Fd(fd), addr_ptr, addr_len).build(),
+            );
+            rx
+        }
+        .await
+        .map_err(|_| io::Error::other("IO Driver is gone"))
+        .and_then(|item| item)
     }
 }
 
@@ -77,7 +69,7 @@ impl Handler for ConnectOpsHandler {
         self.inner.ops.borrow_mut().remove(user_data);
     }
 
-    fn completed(&mut self, user_data: usize, flags: u32, result: io::Result<usize>) {
+    fn completed(&mut self, user_data: usize, _: u32, result: io::Result<usize>) {
         let (addr, sock, tx) = self.inner.ops.borrow_mut().remove(user_data);
         log::trace!(
             "connect-op is completed {:?} result: {:?}, addr: {:?}",

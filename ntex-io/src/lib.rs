@@ -122,6 +122,14 @@ pub enum IoTaskStatus {
     Stop,
 }
 
+impl IoTaskStatus {
+    #[inline]
+    /// Ready for more io ops
+    pub fn ready(self) -> bool {
+        self == IoTaskStatus::Io
+    }
+}
+
 /// Io status
 #[derive(Debug)]
 pub enum IoStatusUpdate {

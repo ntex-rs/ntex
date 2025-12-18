@@ -1,5 +1,9 @@
 # Changes
 
+## [3.4.1] - 2025-12-18
+
+* Cleanup and improvements for polling driver
+
 ## [3.4.0] - 2025-12-17
 
 * Upgrade to ntex-service v4
