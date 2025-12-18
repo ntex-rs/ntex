@@ -1,13 +1,6 @@
-use std::{error, io, net, net::SocketAddr, path::Path};
+use std::{io, net, net::SocketAddr, path::Path};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-
-pub(crate) fn pool_io_err<T, E>(result: std::result::Result<T, E>) -> io::Result<T>
-where
-    E: error::Error + Send + Sync + 'static,
-{
-    result.map_err(|e| io::Error::other(e))
-}
 
 pub(crate) async fn connect(addr: SocketAddr) -> io::Result<Socket> {
     let addr = SockAddr::from(addr);

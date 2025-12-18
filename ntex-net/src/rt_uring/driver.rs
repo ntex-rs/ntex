@@ -1,7 +1,7 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::{Buf, BufMut, BytesVec};
-use ntex_io::{IoContext, IoTaskStatus};
+use ntex_io::IoContext;
 use ntex_neon::driver::io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
 use ntex_util::channel::pool;
@@ -194,7 +194,7 @@ impl Handler for StreamOpsHandler {
                         }
                     }
                 }
-                Operation::Send { id, buf, result } => {
+                Operation::Send { id, buf, .. } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
                         item.wr_op.take();
@@ -426,7 +426,7 @@ impl StreamOpsInner {
         // Dropping while `StreamOps` handling event
         if let Some(mut storage) = self.storage.take() {
             let item = &mut storage.streams[id];
-            log::trace!("{}: Close ({:?} - {op_id})", item.tag(), item.fd());
+            log::trace!("{}: Close ({:?})", item.tag(), item.fd());
 
             let entry = opcode::Close::new(item.fd()).build();
             let op_id = storage.add_operation(Operation::Close { id });
@@ -493,12 +493,12 @@ impl StreamCtl {
         self.inner
             .with(|storage| {
                 storage.pause_read(self.id, &self.inner.api);
-                let item = &storage.streams[self.id];
+                let fd = storage.streams[self.id].fd();
                 let (tx, rx) = self.inner.pool.channel();
-                self.inner.api.submit(
-                    storage.add_operation(Operation::shutdown(tx)),
-                    opcode::Shutdown::new(item.fd(), libc::SHUT_RDWR).build(),
-                );
+                let op_id = storage.add_operation(Operation::shutdown(tx));
+                self.inner
+                    .api
+                    .submit(op_id, opcode::Shutdown::new(fd, libc::SHUT_RDWR).build());
                 rx
             })
             .await

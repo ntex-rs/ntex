@@ -290,7 +290,7 @@ impl StreamCtl {
             })
             .await
             .map_err(io::Error::other)
-            .and_then(crate::helpers::pool_io_err)
+            .and_then(|res| res.map_err(io::Error::other))
     }
 
     /// Modify poll interest for the stream
