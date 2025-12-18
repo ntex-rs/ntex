@@ -50,8 +50,6 @@ struct StreamOpsInner {
     delayed_drop: Cell<bool>,
     delayed_feed: Cell<Option<Vec<IdType>>>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
-    lw: usize,
-    hw: usize,
 }
 
 impl StreamOps {
@@ -65,8 +63,6 @@ impl StreamOps {
                     delayed_drop: Cell::new(false),
                     delayed_feed: Cell::new(Some(Vec::new())),
                     streams: Cell::new(Some(Box::new(Slab::new()))),
-                    lw: 1024,
-                    hw: 1024 * 16,
                 });
                 inner = Some(ops.clone());
                 Box::new(StreamOpsHandler { inner: ops })
@@ -131,21 +127,18 @@ impl Handler for StreamOpsHandler {
             log::trace!("{}: Event ({:?}): {ev:?} {:?}", io.tag(), io.fd(), io.flags);
 
             if ev.readable {
-                match io.read(id as u32, &self.inner.api, self.inner.lw, self.inner.hw) {
-                    IoTaskStatus::Io => {
-                        renew.readable = true;
-                        io.flags.insert(Flags::RD);
-                    }
-                    IoTaskStatus::Pause | IoTaskStatus::Stop => {
-                        io.flags.remove(Flags::RD);
-                    }
+                if io.read().ready() {
+                    renew.readable = true;
+                    io.flags.insert(Flags::RD);
+                } else {
+                    io.flags.remove(Flags::RD);
                 }
             } else if io.flags.contains(Flags::RD) {
                 renew.readable = true;
             }
 
             if ev.writable {
-                if io.write(id as u32, &self.inner.api) == IoTaskStatus::Io {
+                if io.write().ready() {
                     renew.writable = true;
                     io.flags.insert(Flags::WR);
                 } else {
@@ -248,7 +241,6 @@ impl StreamOpsInner {
         if let Some(mut streams) = self.streams.take() {
             let idx = id as usize;
             let item = &mut streams[idx];
-            let fd = item.fd();
 
             if item.flags.contains(Flags::DROPPED_PRI) {
                 let item = streams.remove(idx);
@@ -318,9 +310,7 @@ impl StreamCtl {
                 if io.flags.contains(Flags::RD) {
                     event.readable = true;
                     want_update_read = false;
-                } else if io.read(self.id, &self.inner.api, self.inner.lw, self.inner.hw)
-                    == IoTaskStatus::Io
-                {
+                } else if io.read().ready() {
                     event.readable = true;
                     io.flags.insert(Flags::RD);
                 } else {
@@ -337,7 +327,7 @@ impl StreamCtl {
                 if io.flags.contains(Flags::WR) {
                     event.writable = true;
                     want_update_write = false;
-                } else if io.write(self.id, &self.inner.api) == IoTaskStatus::Io {
+                } else if io.write().ready() {
                     event.writable = true;
                     io.flags.insert(Flags::WR);
                 } else {
@@ -393,7 +383,7 @@ impl StreamItem {
         self.ctx.tag()
     }
 
-    fn write(&mut self, id: u32, api: &DriverApi) -> IoTaskStatus {
+    fn write(&mut self) -> IoTaskStatus {
         if let Some(buf) = self.ctx.get_write_buf() {
             let fd = self.fd();
             log::trace!("{}: Write ({fd:?}), buf: {:?}", self.ctx.tag(), buf.len());
@@ -403,7 +393,7 @@ impl StreamItem {
         IoTaskStatus::Pause
     }
 
-    fn read(&mut self, id: u32, api: &DriverApi, lw: usize, hw: usize) -> IoTaskStatus {
+    fn read(&mut self) -> IoTaskStatus {
         let mut buf = self.ctx.get_read_buf();
 
         let fd = self.fd();

@@ -185,9 +185,9 @@ impl Handler for StreamOpsHandler {
                 Operation::Recv { id, buf } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         log::trace!("{}: Recv canceled {:?}", item.tag(), item.fd());
-                        item.ctx.release_read_buf(0, buf, Poll::Pending);
                         item.rd_op.take();
                         item.flags.remove(Flags::RD_CANCELING);
+                        item.ctx.release_read_buf(0, buf, Poll::Pending);
                         if item.flags.contains(Flags::RD_REISSUE) {
                             item.flags.remove(Flags::RD_REISSUE);
                             st.recv(id, false, &self.inner.api);
@@ -196,10 +196,10 @@ impl Handler for StreamOpsHandler {
                 }
                 Operation::Send { id, buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
-                        item.ctx.release_write_buf(buf, Poll::Pending);
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
+                        item.ctx.release_write_buf(buf, Poll::Pending);
                         if item.flags.contains(Flags::WR_REISSUE) {
                             item.flags.remove(Flags::WR_REISSUE);
                             st.send(id, &self.inner.api);
@@ -244,7 +244,7 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.release_read_buf(total, buf, res) == IoTaskStatus::Io {
+                                if item.ctx.release_read_buf(total, buf, res).ready() {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
                                 }
                             }
@@ -254,7 +254,7 @@ impl Handler for StreamOpsHandler {
                 Operation::Send { id, buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         if cqueue::notif(flags) {
-                            if item.ctx.release_write_buf(buf, Poll::Ready(result.unwrap())) == IoTaskStatus::Io {
+                            if item.ctx.release_write_buf(buf, Poll::Ready(result.unwrap())).ready() {
                                 st.send(id, &self.inner.api);
                             }
                         } else if cqueue::more(flags) {
@@ -273,7 +273,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            if item.ctx.release_write_buf(buf, Poll::Ready(res)) == IoTaskStatus::Io {
+                            if item.ctx.release_write_buf(buf, Poll::Ready(res)).ready() {
                                 st.send(id, &self.inner.api);
                             }
                         }
@@ -426,11 +426,10 @@ impl StreamOpsInner {
         // Dropping while `StreamOps` handling event
         if let Some(mut storage) = self.storage.take() {
             let item = &mut storage.streams[id];
-            let fd = item.fd();
-            let tag = item.tag();
-            let entry = opcode::Close::new(fd).build();
+            log::trace!("{}: Close ({:?} - {op_id})", item.tag(), item.fd());
+
+            let entry = opcode::Close::new(item.fd()).build();
             let op_id = storage.add_operation(Operation::Close { id });
-            log::trace!("{}: Close ({:?} - {op_id})", tag, fd);
             self.api.submit(op_id, entry);
             self.storage.set(Some(storage));
         } else {
@@ -443,6 +442,7 @@ impl StreamOpsInner {
         if let Some(mut storage) = self.storage.take() {
             let item = &mut storage.streams[id];
             if item.flags.contains(Flags::DROPPED_PRI) {
+                // io is closed already, remove from storage
                 let item = storage.streams.remove(id);
                 mem::forget(item.io);
             } else {
@@ -495,11 +495,10 @@ impl StreamCtl {
                 storage.pause_read(self.id, &self.inner.api);
                 let item = &storage.streams[self.id];
                 let (tx, rx) = self.inner.pool.channel();
-                let fd = item.fd();
-                let op_id = storage.add_operation(Operation::shutdown(tx));
-                self.inner
-                    .api
-                    .submit(op_id, opcode::Shutdown::new(fd, libc::SHUT_RDWR).build());
+                self.inner.api.submit(
+                    storage.add_operation(Operation::shutdown(tx)),
+                    opcode::Shutdown::new(item.fd(), libc::SHUT_RDWR).build(),
+                );
                 rx
             })
             .await

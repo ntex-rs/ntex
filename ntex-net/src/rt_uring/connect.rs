@@ -2,7 +2,7 @@ use std::{cell::RefCell, io, os::fd::AsRawFd, rc::Rc};
 
 use ntex_neon::driver::io_uring::{opcode, types::Fd};
 use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
-use ntex_util::channel::oneshot::Sender;
+use ntex_util::channel::oneshot::{Sender, channel};
 use slab::Slab;
 use socket2::{SockAddr, Socket};
 
@@ -47,12 +47,7 @@ impl ConnectOps {
         })
     }
 
-    pub(crate) fn connect(
-        &self,
-        sock: Socket,
-        addr: SockAddr,
-        sender: Sender<io::Result<Socket>>,
-    ) -> io::Result<()> {
+    pub(crate) async fn connect(&self, sock: Socket, addr: SockAddr) -> io::Result<Socket> {
         let addr2 = addr.clone();
         let mut ops = self.0.ops.borrow_mut();
 
@@ -60,6 +55,7 @@ impl ConnectOps {
         let addr = Box::new(addr);
         let (addr_ptr, addr_len) = (addr.as_ref().as_ptr().cast(), addr.len());
 
+        let (sender, rx) = channel();
         let fd = sock.as_raw_fd();
         let id = ops.insert((addr, sock, sender));
         self.0.api.submit(
@@ -67,7 +63,9 @@ impl ConnectOps {
             opcode::Connect::new(Fd(fd), addr_ptr, addr_len).build(),
         );
 
-        Ok(())
+        rx.await
+            .map_err(|_| io::Error::other("IO Driver is gone"))
+            .and_then(|item| item)
     }
 }
 
