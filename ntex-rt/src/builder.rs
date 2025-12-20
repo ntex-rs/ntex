@@ -88,7 +88,7 @@ impl Builder {
 
         let (arb, controller) = Arbiter::new_system(self.name.clone());
         let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
-        let system = System::construct(sys_sender, arb.clone(), config);
+        let system = System::construct(sys_sender, arb, config);
 
         // system arbiter
         let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);
