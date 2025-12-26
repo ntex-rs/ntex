@@ -39,7 +39,7 @@
 //! let b = buf.split();
 //! assert_eq!(b, b"goodbye world"[..]);
 //!
-//! assert_eq!(buf.capacity(), 1006);
+//! assert_eq!(buf.capacity(), 998);
 //! ```
 //!
 //! In the above example, only a single buffer of 1024 is allocated. The handles
@@ -53,6 +53,8 @@
 #![deny(warnings, missing_debug_implementations, rust_2018_idioms)]
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
 #![allow(unsafe_op_in_unsafe_fn)]
+
+extern crate alloc;
 
 pub mod buf;
 pub use crate::buf::{Buf, BufMut};

@@ -163,7 +163,7 @@ impl BytesVec {
     /// use ntex_bytes::BytesVec;
     ///
     /// let b = BytesVec::with_capacity(64);
-    /// assert_eq!(b.capacity(), 72);
+    /// assert_eq!(b.capacity(), 64);
     /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
@@ -222,7 +222,7 @@ impl BytesVec {
     /// let other = buf.split();
     ///
     /// assert!(buf.is_empty());
-    /// assert_eq!(1021, buf.capacity());
+    /// assert_eq!(1013, buf.capacity());
     ///
     /// assert_eq!(other, b"hello world"[..]);
     /// ```
@@ -422,12 +422,12 @@ impl BytesVec {
     /// let other = buf.split();
     ///
     /// assert!(buf.is_empty());
-    /// assert_eq!(buf.capacity(), 80);
+    /// assert_eq!(buf.capacity(), 64);
     ///
     /// drop(other);
     /// buf.reserve(128);
     ///
-    /// assert_eq!(buf.capacity(), 144);
+    /// assert_eq!(buf.capacity(), 128);
     /// assert_eq!(buf.as_ptr(), ptr);
     /// ```
     ///

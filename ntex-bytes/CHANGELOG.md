@@ -1,5 +1,9 @@
 # Changes
 
+## [1.1.0] (2025-12-27)
+
+* Use alloc create for BytesVec
+
 ## [1.0.0] (2025-11-24)
 
 * Drop memory pool support

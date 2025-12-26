@@ -272,7 +272,7 @@ fn split_off_uninitialized() {
     assert_eq!(bytes.capacity(), 128);
 
     assert_eq!(other.len(), 0);
-    assert_eq!(other.capacity(), 904);
+    assert_eq!(other.capacity(), 896);
 }
 
 const B: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -513,15 +513,15 @@ fn fns_defined_for_bytes() {
     let bytes = Bytes::copy_from_slice(&B[..]);
     assert!(bytes.info().kind == Kind::Vec);
     assert!(bytes.info().refs == 1);
-    assert!(bytes.info().capacity == 96);
+    assert_eq!(bytes.info().capacity, 76);
     let b2 = bytes.clone();
     assert!(b2.info().kind == Kind::Vec);
     assert!(b2.info().refs == 2);
-    assert!(b2.info().capacity == 96);
+    assert!(b2.info().capacity == 76);
     drop(b2);
     assert!(bytes.info().kind == Kind::Vec);
     assert!(bytes.info().refs == 1);
-    assert!(bytes.info().capacity == 96);
+    assert!(bytes.info().capacity == 76);
 
     let mut bytes = BytesMut::with_capacity(64);
     bytes.put(LONG);
@@ -645,15 +645,15 @@ fn fns_defined_for_bytes_mut() {
     let mut bytes = BytesMut::copy_from_slice(&B[..]);
     assert!(bytes.info().kind == Kind::Vec);
     assert!(bytes.info().refs == 1);
-    assert!(bytes.info().capacity == 96);
+    assert_eq!(bytes.info().capacity, 76);
     let b2 = bytes.split_to(36);
     assert!(b2.info().kind == Kind::Vec);
     assert!(b2.info().refs == 2);
-    assert!(b2.info().capacity == 96);
+    assert!(b2.info().capacity == 76);
     drop(b2);
     assert!(bytes.info().kind == Kind::Vec);
     assert!(bytes.info().refs == 1);
-    assert!(bytes.info().capacity == 96);
+    assert!(bytes.info().capacity == 76);
 }
 
 #[test]
@@ -745,7 +745,7 @@ fn reserve_convert() {
     // Vec -> Vec
     let mut bytes = BytesMut::from(LONG);
     bytes.reserve(64);
-    assert_eq!(bytes.capacity(), LONG.len() + 72);
+    assert_eq!(bytes.capacity(), LONG.len() + 64);
 
     // Arc -> Vec
     let mut bytes = BytesMut::from(Vec::from(LONG));
@@ -759,7 +759,7 @@ fn reserve_convert() {
     // Vec -> Vec
     let mut bytes = BytesVec::copy_from_slice(LONG);
     bytes.reserve(64);
-    assert_eq!(bytes.capacity(), LONG.len() + 72);
+    assert_eq!(bytes.capacity(), LONG.len() + 64);
 }
 
 // Without either looking at the internals of the BytesMut or doing weird stuff
@@ -780,10 +780,10 @@ fn reserve_vec_recycling() {
 #[test]
 fn reserve_recycling() {
     let mut bytes = BytesVec::with_capacity(16);
-    assert_eq!(bytes.capacity(), 48);
+    assert_eq!(bytes.capacity(), 16);
     bytes.put("0123456789012345".as_bytes());
     bytes.advance(10);
-    assert_eq!(bytes.capacity(), 38);
+    assert_eq!(bytes.capacity(), 6);
     bytes.reserve(32);
     assert_eq!(bytes.capacity(), 38);
 }
@@ -795,9 +795,9 @@ fn reserve_in_arc_unique_does_not_overallocate() {
 
     // now bytes is Arc and refcount == 1
 
-    assert_eq!(1008, bytes.capacity());
+    assert_eq!(1000, bytes.capacity());
     bytes.reserve(2001);
-    assert_eq!(2016, bytes.capacity());
+    assert_eq!(2001, bytes.capacity());
 }
 
 #[test]
@@ -807,9 +807,9 @@ fn reserve_in_arc_unique_doubles() {
 
     // now bytes is Arc and refcount == 1
 
-    assert_eq!(1008, bytes.capacity());
+    assert_eq!(1000, bytes.capacity());
     bytes.reserve(1025);
-    assert_eq!(1032, bytes.capacity());
+    assert_eq!(1025, bytes.capacity());
 }
 
 #[test]
@@ -819,9 +819,9 @@ fn reserve_in_arc_nonunique_does_not_overallocate() {
 
     // now bytes is Arc and refcount == 2
 
-    assert_eq!(1008, bytes.capacity());
+    assert_eq!(1000, bytes.capacity());
     bytes.reserve(2001);
-    assert_eq!(2016, bytes.capacity());
+    assert_eq!(2001, bytes.capacity());
 }
 
 #[test]
