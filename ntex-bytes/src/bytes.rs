@@ -953,7 +953,7 @@ mod tests {
         let mut b = BytesMut::try_from(LONG).unwrap();
         assert_eq!(b, LONG);
         assert_eq!(<BytesMut as Buf>::remaining(&b), LONG.len());
-        assert_eq!(<BytesMut as BufMut>::remaining_mut(&b), 1);
+        assert_eq!(<BytesMut as BufMut>::remaining_mut(&b), 0);
         assert_eq!(<BytesMut as Buf>::chunk(&b), LONG);
         <BytesMut as Buf>::advance(&mut b, 10);
         assert_eq!(<BytesMut as Buf>::chunk(&b), &LONG[10..]);

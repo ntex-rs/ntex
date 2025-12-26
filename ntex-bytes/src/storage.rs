@@ -1,3 +1,5 @@
+use crate::alloc::alloc::{self, Layout, LayoutError};
+
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, mem, ptr, ptr::NonNull, slice};
@@ -187,6 +189,7 @@ struct SharedVec {
     len: u32,
     offset: u32,
     ref_count: AtomicUsize,
+    data: [u8; 0],
 }
 
 pub(crate) struct StorageVec(NonNull<SharedVec>);
@@ -1242,36 +1245,33 @@ impl Shared {
 
 impl SharedVec {
     fn create(cap: usize, src: &[u8]) -> *mut SharedVec {
-        // vec must be aligned to SharedVec instead of u8
-        let vec_cap = if cap % SHARED_VEC_SIZE != 0 {
-            (cap / SHARED_VEC_SIZE) + 2
-        } else {
-            (cap / SHARED_VEC_SIZE) + 1
-        };
-        let mut vec: Vec<SharedVec> = Vec::with_capacity(cmp::max(vec_cap, 3));
-        let cap = vec.capacity() * SHARED_VEC_SIZE;
-        let shared_ptr = vec.as_mut_ptr();
-        mem::forget(vec);
+        let layout = shared_vec_layout(cap).unwrap();
 
-        // Store data in vec
+        // Alloc memory and store data
         unsafe {
+            let shared_ptr = alloc::alloc(layout) as *mut SharedVec;
+            if shared_ptr.is_null() {
+                alloc::handle_alloc_error(layout);
+            }
+
             ptr::write(
                 shared_ptr,
                 SharedVec {
-                    cap,
+                    cap: layout.size(),
                     len: src.len() as u32,
                     offset: SHARED_VEC_SIZE as u32,
                     ref_count: AtomicUsize::new(1),
+                    data: [],
                 },
             );
 
             if !src.is_empty() {
-                let ptr = shared_ptr.add(1) as *mut u8;
-                ptr::copy_nonoverlapping(src.as_ptr(), ptr, src.len());
+                let data = &((&*shared_ptr).data) as *const u8 as *mut _;
+                ptr::copy_nonoverlapping(src.as_ptr(), data, src.len());
             }
-        }
 
-        shared_ptr
+            shared_ptr
+        }
     }
 
     fn is_unique(&self) -> bool {
@@ -1309,7 +1309,20 @@ fn release_shared_vec(ptr: *mut SharedVec) {
         // Drop the data
         let cap = (*ptr).cap;
         ptr::drop_in_place(ptr);
-        Vec::<u8>::from_raw_parts(ptr as *mut u8, 0, cap);
+        alloc::dealloc(ptr as *mut _, shared_vec_layout(cap).unwrap());
+    }
+}
+
+const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
+    let s_layout = Layout::new::<u8>();
+    let size = s_layout.size() * cap;
+    let s_layout = match Layout::from_size_align(size, s_layout.align()) {
+        Ok(l) => l,
+        Err(e) => return Err(e),
+    };
+    match Layout::new::<SharedVec>().extend(s_layout) {
+        Ok((l, _)) => Ok(l),
+        Err(err) => Err(err),
     }
 }
 
@@ -1344,7 +1357,6 @@ fn abort() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::*;
 
     const LONG: &[u8] =
@@ -1362,7 +1374,7 @@ mod tests {
         assert_eq!(b.storage.capacity(), 263);
         b.trimdown();
         assert_eq!(&b[..], &LONG[..68]);
-        assert_eq!(b.storage.capacity(), 72);
+        assert_eq!(b.storage.capacity(), 68);
 
         unsafe { b.storage.set_len(16) };
         assert_eq!(&b[..], &LONG[..16]);
@@ -1374,19 +1386,25 @@ mod tests {
     #[allow(clippy::unnecessary_fallible_conversions)]
     fn bytes_vec() {
         let bv = BytesVec::copy_from_slice(LONG);
-        assert_eq!(bv.capacity(), 264);
+        assert_eq!(bv.capacity(), 263);
         assert_eq!(bv.len(), 263);
         assert_eq!(bv.as_ref().len(), 263);
         assert_eq!(bv.as_ref(), LONG);
         assert_eq!(&bv[..], LONG);
 
         let mut bv = BytesVec::copy_from_slice(&b"hello"[..]);
-        assert_eq!(bv.capacity(), mem::size_of::<SharedVec>() * 2);
+        assert_eq!(bv.capacity(), 5);
         assert_eq!(bv.len(), 5);
         assert_eq!(bv.as_ref().len(), 5);
         assert_eq!(bv.as_ref()[0], b"h"[0]);
+        assert_eq!(bv.remaining_mut(), 0);
+        bv.reserve(1);
+        assert_eq!(bv.remaining_mut(), 1);
         bv.put_u8(b" "[0]);
         assert_eq!(bv.as_ref(), &b"hello "[..]);
+        assert_eq!(bv.remaining_mut(), 0);
+        bv.reserve(5);
+        assert_eq!(bv.remaining_mut(), 5);
         bv.put("world");
         assert_eq!(bv, "hello world");
 
@@ -1407,7 +1425,7 @@ mod tests {
 
         bv.advance(48);
         assert!(bv.is_empty());
-        assert!(bv.capacity() == 0);
+        assert_eq!(bv.capacity(), 0);
         bv.reserve(48);
         assert!(bv.is_empty());
         assert!(bv.capacity() == 48);
