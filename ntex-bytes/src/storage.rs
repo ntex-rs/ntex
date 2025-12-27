@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, mem, ptr, ptr::NonNull, slice};
 
-use crate::{info::Info, info::Kind, BytesMut};
+use crate::{BytesMut, info::Info, info::Kind};
 
 // Both `Bytes` and `BytesMut` are backed by `Storage` and functions are delegated
 // to `Storage` functions. The `Bytes` and `BytesMut` shims ensure that functions
@@ -463,11 +463,7 @@ impl Storage {
 
     #[inline]
     pub(crate) fn capacity(&self) -> usize {
-        if self.is_inline() {
-            INLINE_CAP
-        } else {
-            self.cap
-        }
+        if self.is_inline() { INLINE_CAP } else { self.cap }
     }
 
     pub(crate) fn split_off(&mut self, at: usize, create_inline: bool) -> Storage {
