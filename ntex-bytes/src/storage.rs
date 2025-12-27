@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, mem, ptr, ptr::NonNull, slice};
 
-use crate::{BytesMut, info::Info, info::Kind};
+use crate::{info::Info, info::Kind, BytesMut};
 
 // Both `Bytes` and `BytesMut` are backed by `Storage` and functions are delegated
 // to `Storage` functions. The `Bytes` and `BytesMut` shims ensure that functions
@@ -224,6 +224,13 @@ pub(crate) const INLINE_CAP: usize = 4 * 8 - 2;
 #[cfg(target_pointer_width = "32")]
 pub(crate) const INLINE_CAP: usize = 4 * 4 - 2;
 
+// Inline storage
+const PTR_INLINE: NonNull<Shared> =
+    unsafe { NonNull::new_unchecked(KIND_INLINE as *mut Shared) };
+// Inline storage
+const PTR_STATIC: NonNull<Shared> =
+    unsafe { NonNull::new_unchecked(KIND_STATIC as *mut Shared) };
+
 /*
  *
  * ===== Storage =====
@@ -234,7 +241,7 @@ impl Storage {
     #[inline]
     pub(crate) const fn empty() -> Storage {
         Storage {
-            arc: unsafe { NonNull::new_unchecked(KIND_INLINE as *mut Shared) },
+            arc: PTR_INLINE,
             ptr: ptr::null_mut::<u8>(),
             len: 0,
             cap: 0,
@@ -259,7 +266,7 @@ impl Storage {
             // `arc` won't ever store a pointer. Instead, use it to
             // track the fact that the `Bytes` handle is backed by a
             // static buffer.
-            arc: unsafe { NonNull::new_unchecked(KIND_STATIC as *mut Shared) },
+            arc: PTR_STATIC,
             ptr,
             len: bytes.len(),
             cap: bytes.len(),
@@ -309,14 +316,15 @@ impl Storage {
     fn from_slice_with_capacity(cap: usize, src: &[u8]) -> Storage {
         let ptr = SharedVec::create(cap, src);
         unsafe {
-            let cap = (*ptr).cap - SHARED_VEC_SIZE;
-            let arc = NonNull::new_unchecked((ptr as usize ^ KIND_VEC) as *mut Shared);
+            let arc = NonNull::new_unchecked(
+                ptr.as_ptr().map_addr(|addr| addr ^ KIND_VEC) as *mut Shared
+            );
 
             // Create new arc, so atomic operations can be avoided.
             Storage {
                 cap,
                 arc,
-                ptr: ptr.add(1) as *mut u8,
+                ptr: ptr.as_ptr().add(1) as *mut u8,
                 len: src.len(),
             }
         }
@@ -325,7 +333,7 @@ impl Storage {
     #[inline]
     unsafe fn from_ptr_inline(src: *const u8, len: usize) -> Storage {
         let mut st = Storage {
-            arc: NonNull::new_unchecked(KIND_INLINE as *mut Shared),
+            arc: PTR_INLINE,
             ptr: ptr::null_mut(),
             len: 0,
             cap: 0,
@@ -441,8 +449,9 @@ impl Storage {
         debug_assert!(len <= INLINE_CAP);
         self.arc = unsafe {
             NonNull::new_unchecked(
-                ((self.arc.as_ptr() as usize & !INLINE_LEN_MASK)
-                    | (len << INLINE_LEN_OFFSET)) as _,
+                self.arc
+                    .as_ptr()
+                    .map_addr(|addr| addr & !INLINE_LEN_MASK | (len << INLINE_LEN_OFFSET)),
             )
         };
     }
@@ -454,7 +463,11 @@ impl Storage {
 
     #[inline]
     pub(crate) fn capacity(&self) -> usize {
-        if self.is_inline() { INLINE_CAP } else { self.cap }
+        if self.is_inline() {
+            INLINE_CAP
+        } else {
+            self.cap
+        }
     }
 
     pub(crate) fn split_off(&mut self, at: usize, create_inline: bool) -> Storage {
@@ -709,7 +722,7 @@ impl Storage {
         } else {
             assert!(kind == KIND_VEC);
 
-            let vec_arc = (arc as usize & KIND_UNMASK) as *mut SharedVec;
+            let vec_arc = arc.map_addr(|addr| addr & KIND_UNMASK) as *mut SharedVec;
             let old_size = (*vec_arc).ref_count.fetch_add(1, Relaxed);
             if old_size == usize::MAX {
                 abort();
@@ -815,7 +828,7 @@ impl Storage {
 
     #[inline]
     fn shared_vec(&self) -> *mut SharedVec {
-        ((self.arc.as_ptr() as usize) & KIND_UNMASK) as *mut SharedVec
+        self.arc.as_ptr().map_addr(|addr| addr & KIND_UNMASK) as *mut SharedVec
     }
 
     #[inline]
@@ -943,16 +956,14 @@ fn release_shared(ptr: *mut Shared) {
 impl StorageVec {
     /// Create new empty storage with specified capacity
     pub(crate) fn with_capacity(capacity: usize) -> StorageVec {
-        let shared_ptr = SharedVec::create(capacity, &[]);
-        StorageVec(unsafe { NonNull::new_unchecked(shared_ptr) })
+        StorageVec(SharedVec::create(capacity, &[]))
     }
 
     /// Create new storage with capacity and copy slice
     ///
     /// Caller must garantee cap is larger or eaqual to src length
     pub(crate) fn from_slice(src: &[u8]) -> StorageVec {
-        let shared_ptr = SharedVec::create(src.len(), src);
-        StorageVec(unsafe { NonNull::new_unchecked(shared_ptr) })
+        StorageVec(SharedVec::create(src.len(), src))
     }
 
     /// Return a slice for the handle's view into the shared buffer
@@ -972,7 +983,7 @@ impl StorageVec {
     }
 
     /// Return a raw pointer to data
-    unsafe fn as_ptr(&self) -> *mut u8 {
+    pub(crate) unsafe fn as_ptr(&self) -> *mut u8 {
         (self.0.as_ptr() as *mut u8).add((*self.0.as_ptr()).offset as usize)
     }
 
@@ -1009,7 +1020,7 @@ impl StorageVec {
                     len: self.len(),
                     cap: self.capacity(),
                     arc: NonNull::new_unchecked(
-                        (self.0.as_ptr() as usize ^ KIND_VEC) as *mut Shared,
+                        self.0.as_ptr().map_addr(|addr| addr ^ KIND_VEC) as *mut Shared,
                     ),
                 };
                 mem::forget(self);
@@ -1042,7 +1053,7 @@ impl StorageVec {
                     len: self.len(),
                     cap: self.capacity(),
                     arc: NonNull::new_unchecked(
-                        (self.0.as_ptr() as usize ^ KIND_VEC) as *mut Shared,
+                        self.0.as_ptr().map_addr(|addr| addr ^ KIND_VEC) as *mut Shared,
                     ),
                 },
             };
@@ -1098,7 +1109,7 @@ impl StorageVec {
                     len: at,
                     cap: at,
                     arc: NonNull::new_unchecked(
-                        (self.0.as_ptr() as usize ^ KIND_VEC) as *mut Shared,
+                        self.0.as_ptr().map_addr(|addr| addr ^ KIND_VEC) as *mut Shared,
                     ),
                 }
             };
@@ -1178,10 +1189,7 @@ impl StorageVec {
                 }
             } else {
                 // Create a new vector storage
-                *self = StorageVec(NonNull::new_unchecked(SharedVec::create(
-                    new_cap,
-                    self.as_ref(),
-                )));
+                *self = StorageVec(SharedVec::create(new_cap, self.as_ref()));
             }
         }
     }
@@ -1244,15 +1252,16 @@ impl Shared {
 }
 
 impl SharedVec {
-    fn create(cap: usize, src: &[u8]) -> *mut SharedVec {
+    fn create(cap: usize, src: &[u8]) -> NonNull<SharedVec> {
         let layout = shared_vec_layout(cap).unwrap();
 
         // Alloc memory and store data
         unsafe {
-            let shared_ptr = alloc::alloc(layout) as *mut SharedVec;
-            if shared_ptr.is_null() {
+            let ptr = alloc::alloc(layout);
+            if ptr.is_null() {
                 alloc::handle_alloc_error(layout);
             }
+            let shared_ptr = ptr as *mut SharedVec;
 
             ptr::write(
                 shared_ptr,
@@ -1266,11 +1275,11 @@ impl SharedVec {
             );
 
             if !src.is_empty() {
-                let data = &((&*shared_ptr).data) as *const u8 as *mut _;
-                ptr::copy_nonoverlapping(src.as_ptr(), data, src.len());
+                let ptr = ptr.add(SHARED_VEC_SIZE);
+                let sl = slice::from_raw_parts_mut(ptr, src.len());
+                sl.copy_from_slice(src);
             }
-
-            shared_ptr
+            NonNull::new_unchecked(shared_ptr)
         }
     }
 
@@ -1309,7 +1318,8 @@ fn release_shared_vec(ptr: *mut SharedVec) {
         // Drop the data
         let cap = (*ptr).cap;
         ptr::drop_in_place(ptr);
-        alloc::dealloc(ptr as *mut _, shared_vec_layout(cap).unwrap());
+        let layout = shared_vec_layout(cap - SHARED_VEC_SIZE).unwrap();
+        alloc::dealloc(ptr as *mut _, layout);
     }
 }
 
@@ -1320,7 +1330,7 @@ const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
         Ok(l) => l,
         Err(e) => return Err(e),
     };
-    match Layout::new::<SharedVec>().extend(s_layout) {
+    match Layout::new::<SharedVec>().pad_to_align().extend(s_layout) {
         Ok((l, _)) => Ok(l),
         Err(err) => Err(err),
     }

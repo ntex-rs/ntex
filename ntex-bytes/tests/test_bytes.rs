@@ -439,19 +439,15 @@ fn split_off_to_at_gt_len() {
     make_bytes().split_to(4);
     make_bytes().split_off(4);
 
-    assert!(
-        panic::catch_unwind(move || {
-            make_bytes().split_to(5);
-        })
-        .is_err()
-    );
+    assert!(panic::catch_unwind(move || {
+        make_bytes().split_to(5);
+    })
+    .is_err());
 
-    assert!(
-        panic::catch_unwind(move || {
-            make_bytes().split_off(5);
-        })
-        .is_err()
-    );
+    assert!(panic::catch_unwind(move || {
+        make_bytes().split_off(5);
+    })
+    .is_err());
 }
 
 #[test]
@@ -499,14 +495,10 @@ fn fns_defined_for_bytes() {
     assert_eq!(&"hello world"[..], bytes);
     assert_eq!(
         bytes,
-        [
-            b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'
-        ]
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd']
     );
     assert_eq!(
-        [
-            b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'
-        ],
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'],
         bytes,
     );
 
@@ -585,9 +577,7 @@ fn fns_defined_for_bytes_mut() {
     assert_eq!(bytes, BytesVec::copy_from_slice(b"hello world"));
     assert_eq!(
         bytes,
-        [
-            b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'
-        ]
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd']
     );
     assert_eq!("hello world", bytes);
     assert_eq!("hello world".as_bytes().to_vec(), bytes);
@@ -595,9 +585,7 @@ fn fns_defined_for_bytes_mut() {
     assert_eq!(b"hello world", bytes);
     assert_eq!(&"hello world"[..], bytes);
     assert_eq!(
-        [
-            b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'
-        ],
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'],
         bytes
     );
 
@@ -680,18 +668,14 @@ fn fns_defined_for_bytes_vec() {
     assert_eq!(&bytes[..], b"hello world");
     assert_eq!(
         bytes,
-        [
-            b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'
-        ]
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd']
     );
     assert_eq!("hello world", bytes);
     assert_eq!("hello world".as_bytes().to_vec(), bytes);
     assert_eq!("hello world".to_string(), bytes);
     assert_eq!(b"hello world", bytes);
     assert_eq!(
-        [
-            b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'
-        ],
+        [b'h', b'e', b'l', b'l', b'o', b' ', b'w', b'o', b'r', b'l', b'd'],
         bytes
     );
 
