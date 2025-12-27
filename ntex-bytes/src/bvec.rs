@@ -595,11 +595,8 @@ unsafe impl bytes::buf::BufMut for BytesVec {
         let len = self.len();
         unsafe {
             // This will never panic as `len` can never become invalid
-            let ptr = &mut self.storage.as_raw()[len..];
-            bytes::buf::UninitSlice::from_raw_parts_mut(
-                ptr.as_mut_ptr(),
-                self.capacity() - len,
-            )
+            let ptr = self.storage.as_ptr();
+            bytes::buf::UninitSlice::from_raw_parts_mut(ptr.add(len), self.capacity() - len)
         }
     }
 
