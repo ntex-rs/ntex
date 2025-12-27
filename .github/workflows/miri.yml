@@ -1,0 +1,20 @@
+name: Miri
+
+on: [push, pull_request]
+
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        # Miri requires nightly Rust
+        toolchain: nightly
+        override: true
+        components: miri
+    - name: Run Miri
+      # Run all of your tests inside of Miri interpreter
+      run: cargo miri test -p ntex-bytes
