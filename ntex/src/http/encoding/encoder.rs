@@ -8,7 +8,7 @@ use flate2::write::{GzEncoder, ZlibEncoder};
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderValue};
 use crate::http::{ResponseHead, StatusCode};
-use crate::rt::{JoinHandle, spawn_blocking};
+use crate::rt::{BlockingResult, spawn_blocking};
 use crate::util::{Bytes, dyn_rc_error};
 
 use super::Writer;
@@ -19,7 +19,7 @@ pub struct Encoder<B> {
     eof: bool,
     body: EncoderBody<B>,
     encoder: Option<ContentEncoder>,
-    fut: Option<JoinHandle<Result<ContentEncoder, io::Error>>>,
+    fut: Option<BlockingResult<Result<ContentEncoder, io::Error>>>,
 }
 
 impl<B: MessageBody> Encoder<B> {

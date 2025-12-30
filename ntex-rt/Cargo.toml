@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "3.3.0"
+version = "3.4.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -31,6 +31,7 @@ neon = ["ntex-neon"]
 
 [dependencies]
 async-channel = { workspace = true }
+crossbeam-channel = { workspace = true }
 futures-timer = { workspace = true }
 oneshot = { workspace = true }
 log = { workspace = true }

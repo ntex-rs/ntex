@@ -259,6 +259,15 @@ impl From<crate::rt::JoinError> for PayloadError {
     }
 }
 
+impl From<crate::rt::BlockingError> for PayloadError {
+    fn from(_: crate::rt::BlockingError) -> Self {
+        PayloadError::Io(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Operation is canceled",
+        ))
+    }
+}
+
 impl From<BlockingError<io::Error>> for PayloadError {
     fn from(err: BlockingError<io::Error>) -> Self {
         match err {

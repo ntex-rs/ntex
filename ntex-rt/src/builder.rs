@@ -1,8 +1,9 @@
-use std::{future::Future, io, marker::PhantomData, pin::Pin, rc::Rc, sync::Arc};
+use std::{future::Future, io, marker::PhantomData, pin::Pin, rc::Rc, sync::Arc, time};
 
 use async_channel::unbounded;
 
 use crate::arbiter::{Arbiter, ArbiterController};
+use crate::pool::ThreadPool;
 use crate::system::{System, SystemCommand, SystemConfig, SystemSupport};
 
 /// Builder struct for a ntex runtime.
@@ -21,6 +22,9 @@ pub struct Builder {
     ping_interval: usize,
     /// Block on fn
     block_on: Option<Arc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>) + Sync + Send>>,
+    /// Thread pool config
+    pool_limit: usize,
+    pool_recv_timeout: time::Duration,
 }
 
 impl Builder {
@@ -31,6 +35,8 @@ impl Builder {
             stack_size: 0,
             block_on: None,
             ping_interval: 1000,
+            pool_limit: 256,
+            pool_recv_timeout: time::Duration::from_secs(60),
         }
     }
 
@@ -64,6 +70,23 @@ impl Builder {
         self
     }
 
+    /// Set the thread number limit of the inner thread pool, if exists. The
+    /// default value is 256.
+    pub fn thread_pool_limit(mut self, value: usize) -> Self {
+        self.pool_limit = value;
+        self
+    }
+
+    /// Set the waiting timeout of the inner thread, if exists. The default is
+    /// 60 seconds.
+    pub fn thread_pool_recv_timeout<T>(mut self, timeout: T) -> Self
+    where
+        time::Duration: From<T>,
+    {
+        self.pool_recv_timeout = timeout.into();
+        self
+    }
+
     /// Use custom block_on function
     pub fn block_on<F>(mut self, block_on: F) -> Self
     where
@@ -86,9 +109,12 @@ impl Builder {
             stop_on_panic: self.stop_on_panic,
         };
 
+        // thread pool
+        let pool = ThreadPool::new(self.pool_limit, self.pool_recv_timeout);
+
         let (arb, controller) = Arbiter::new_system(self.name.clone());
         let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
-        let system = System::construct(sys_sender, arb, config);
+        let system = System::construct(sys_sender, arb, config, pool);
 
         // system arbiter
         let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);

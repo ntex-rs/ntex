@@ -1,13 +1,15 @@
 #![allow(clippy::type_complexity, clippy::let_underscore_future)]
 //! A runtime implementation that runs everything on the current thread.
-use std::{cell::Cell, ptr};
+use std::{cell::Cell, panic, ptr};
 
 mod arbiter;
 mod builder;
+mod pool;
 mod system;
 
 pub use self::arbiter::Arbiter;
 pub use self::builder::{Builder, SystemRunner};
+pub use self::pool::{BlockingError, BlockingResult};
 pub use self::system::{Id, PingRecord, System};
 
 thread_local! {
@@ -123,11 +125,22 @@ where
     })
 }
 
+/// Spawns a blocking task in a new thread, and wait for it.
+///
+/// The task will not be cancelled even if the future is dropped.
+pub fn spawn_blocking<F, R>(f: F) -> BlockingResult<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    System::current().spawn_blocking(f)
+}
+
 #[allow(dead_code)]
 #[cfg(feature = "tokio")]
 mod tokio {
     use std::future::{Future, poll_fn};
-    pub use tok_io::task::{JoinError, JoinHandle, spawn_blocking};
+    pub use tok_io::task::{JoinError, JoinHandle};
 
     /// Runs the provided future, blocking the current thread until the future
     /// completes.
@@ -217,21 +230,6 @@ mod compio {
         );
         let rt = Runtime::new().unwrap();
         rt.block_on(fut);
-    }
-
-    /// Spawns a blocking task.
-    ///
-    /// The task will be spawned onto a thread pool specifically dedicated
-    /// to blocking tasks. This is useful to prevent long-running synchronous
-    /// operations from blocking the main futures executor.
-    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
-    where
-        F: FnOnce() -> T + Send + Sync + 'static,
-        T: Send + 'static,
-    {
-        JoinHandle {
-            fut: Some(Either::Compio(compio_runtime::spawn_blocking(f))),
-        }
     }
 
     /// Spawn a future on the current thread. This does not create a new Arbiter
@@ -387,21 +385,6 @@ mod neon {
         }
     }
 
-    /// Spawns a blocking task.
-    ///
-    /// The task will be spawned onto a thread pool specifically dedicated
-    /// to blocking tasks. This is useful to prevent long-running synchronous
-    /// operations from blocking the main futures executor.
-    pub fn spawn_blocking<F, T>(f: F) -> JoinHandle<T>
-    where
-        F: FnOnce() -> T + Send + Sync + 'static,
-        T: Send + 'static,
-    {
-        JoinHandle {
-            task: Some(Either::Blocking(ntex_neon::spawn_blocking(f))),
-        }
-    }
-
     #[derive(Clone, Debug)]
     pub struct Handle(ntex_neon::Handle);
 
@@ -503,14 +486,6 @@ mod no_rt {
     pub fn spawn<F>(_: F) -> JoinHandle<F::Output>
     where
         F: Future + 'static,
-    {
-        unimplemented!()
-    }
-
-    pub fn spawn_blocking<F, T>(_: F) -> JoinHandle<T>
-    where
-        F: FnOnce() -> T + Send + Sync + 'static,
-        T: Send + 'static,
     {
         unimplemented!()
     }

@@ -5,7 +5,7 @@ use flate2::write::{GzDecoder, ZlibDecoder};
 use super::Writer;
 use crate::http::error::PayloadError;
 use crate::http::header::{CONTENT_ENCODING, ContentEncoding, HeaderMap};
-use crate::rt::{JoinHandle, spawn_blocking};
+use crate::rt::{BlockingResult, spawn_blocking};
 use crate::util::{Bytes, Stream};
 
 const INPLACE: usize = 2049;
@@ -14,7 +14,7 @@ pub struct Decoder<S> {
     decoder: Option<ContentDecoder>,
     stream: S,
     eof: bool,
-    fut: Option<JoinHandle<Result<(Option<Bytes>, ContentDecoder), io::Error>>>,
+    fut: Option<BlockingResult<Result<(Option<Bytes>, ContentDecoder), io::Error>>>,
 }
 
 impl<S> Decoder<S>
