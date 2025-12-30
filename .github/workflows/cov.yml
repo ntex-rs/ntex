@@ -9,6 +9,7 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+      - uses: jlumbroso/free-disk-space@main
       - uses: taiki-e/install-action@nextest
 
       - name: Install Rust
