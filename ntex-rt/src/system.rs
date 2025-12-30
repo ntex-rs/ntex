@@ -1,13 +1,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
-use std::{cell::RefCell, fmt, future::Future, pin::Pin, rc::Rc};
+use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, rc::Rc};
 
 use async_channel::{Receiver, Sender};
 use futures_timer::Delay;
 
-use super::arbiter::Arbiter;
-use super::builder::{Builder, SystemRunner};
+use crate::arbiter::Arbiter;
+use crate::builder::{Builder, SystemRunner};
+use crate::pool::{BlockingResult, ThreadPool};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -33,6 +34,7 @@ pub struct System {
     sys: Sender<SystemCommand>,
     arbiter: Arbiter,
     config: SystemConfig,
+    pool: ThreadPool,
 }
 
 #[derive(Clone)]
@@ -53,6 +55,7 @@ impl System {
         sys: Sender<SystemCommand>,
         mut arbiter: Arbiter,
         config: SystemConfig,
+        pool: ThreadPool,
     ) -> Self {
         let id = SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst);
         arbiter.sys_id = id;
@@ -62,6 +65,7 @@ impl System {
             sys,
             config,
             arbiter,
+            pool,
         };
         System::set_current(sys.clone());
         sys
@@ -160,6 +164,17 @@ impl System {
     /// System config
     pub(super) fn config(&self) -> SystemConfig {
         self.config.clone()
+    }
+
+    /// Spawns a blocking task in a new thread, and wait for it.
+    ///
+    /// The task will not be cancelled even if the future is dropped.
+    pub fn spawn_blocking<F, R>(&self, f: F) -> BlockingResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.pool.dispatch(f)
     }
 }
 

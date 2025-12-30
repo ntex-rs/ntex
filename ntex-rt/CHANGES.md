@@ -1,5 +1,9 @@
 # Changes
 
+## [3.4.0] - 2025-12-xx
+
+* Add thread pool for blocking operations
+
 ## [3.3.0] - 2025-12-15
 
 * Upgrade neon to 0.2
