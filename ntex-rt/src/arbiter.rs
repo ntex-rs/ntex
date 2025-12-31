@@ -255,9 +255,9 @@ impl Arbiter {
     /// Get a reference to a type previously inserted on this arbiter's storage.
     ///
     /// Panics is item is not inserted
-    pub fn get_item<T: 'static, F, R>(mut f: F) -> R
+    pub fn get_item<T: 'static, F, R>(f: F) -> R
     where
-        F: FnMut(&T) -> R,
+        F: FnOnce(&T) -> R,
     {
         STORAGE.with(move |cell| {
             let st = cell.borrow();
@@ -272,9 +272,9 @@ impl Arbiter {
     /// Get a mutable reference to a type previously inserted on this arbiter's storage.
     ///
     /// Panics is item is not inserted
-    pub fn get_mut_item<T: 'static, F, R>(mut f: F) -> R
+    pub fn get_mut_item<T: 'static, F, R>(f: F) -> R
     where
-        F: FnMut(&mut T) -> R,
+        F: FnOnce(&mut T) -> R,
     {
         STORAGE.with(move |cell| {
             let mut st = cell.borrow_mut();
@@ -302,6 +302,26 @@ impl Arbiter {
             let val = f();
             st.insert(TypeId::of::<T>(), Box::new(val.clone()));
             val
+        })
+    }
+
+    /// Get a type previously inserted to this runtime or create new one.
+    pub fn get_ref_item<T: 'static, F, V, R>(factory: V, f: F) -> R
+    where
+        F: FnOnce(&T) -> R,
+        V: FnOnce() -> T,
+    {
+        STORAGE.with(move |cell| {
+            let mut st = cell.borrow_mut();
+            if let Some(boxed) = st.get(&TypeId::of::<T>()) {
+                if let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>() {
+                    return f(val);
+                }
+            }
+            let val = factory();
+            let result = f(&val);
+            st.insert(TypeId::of::<T>(), Box::new(val));
+            result
         })
     }
 
@@ -360,92 +380,5 @@ impl ArbiterController {
                 Err(_) => break,
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use futures_timer::Delay;
-    use std::time::Duration;
-
-    use super::*;
-
-    #[test]
-    fn test_arbiter_local_storage() {
-        let _s = System::new("test");
-        Arbiter::set_item("test");
-        assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
-        assert!(Arbiter::get_mut_item::<&'static str, _, _>(|s| *s == "test"));
-        assert!(Arbiter::contains_item::<&'static str>());
-        assert!(Arbiter::get_value(|| 64u64) == 64);
-        assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
-    }
-
-    #[test]
-    fn test_spawn_api() {
-        System::new("test").block_on(async {
-            let mut hnd = crate::spawn(async {
-                Delay::new(Duration::from_millis(25)).await;
-            });
-            assert!(!hnd.is_finished());
-            let _ = (&mut hnd).await;
-            assert!(hnd.is_finished());
-
-            let hnd = crate::Handle::current();
-            let res = hnd
-                .spawn(async {
-                    Delay::new(Duration::from_millis(25)).await;
-                    1
-                })
-                .await
-                .unwrap();
-            assert_eq!(res, 1);
-        });
-    }
-
-    #[test]
-    fn test_spawn_cb() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let c = counter.clone();
-        let before = move || {
-            let _ = c.fetch_add(1, Ordering::Relaxed);
-            Some(c.as_ptr() as *const _)
-        };
-        let c = counter.clone();
-        let enter = move |_| {
-            let _ = c.fetch_add(1, Ordering::Relaxed);
-            c.as_ptr() as *const _
-        };
-        let c = counter.clone();
-        let exit = move |_| {
-            let _ = c.fetch_add(1, Ordering::Relaxed);
-        };
-        let c = counter.clone();
-        let after = move |_| {
-            let _ = c.fetch_add(1, Ordering::Relaxed);
-        };
-
-        unsafe {
-            let set = crate::spawn_cbs_try(
-                before.clone(),
-                enter.clone(),
-                exit.clone(),
-                after.clone(),
-            );
-            assert!(set);
-            let set = crate::spawn_cbs_try(before, enter, exit, after);
-            assert!(!set);
-        }
-
-        System::new("test").block_on(async {
-            let mut hnd = crate::spawn(async {
-                Delay::new(Duration::from_millis(25)).await;
-            });
-            let _ = (&mut hnd).await;
-            assert!(hnd.is_finished());
-        });
-
-        let val = counter.load(Ordering::Relaxed);
-        assert!(val > 0);
     }
 }

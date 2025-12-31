@@ -1,10 +1,13 @@
-use std::{cell::RefCell, io, os::fd::AsRawFd, os::fd::RawFd, rc::Rc};
+use std::{cell::RefCell, io, os::fd::AsRawFd, os::fd::RawFd, rc::Rc, task::Poll};
 
-use ntex_neon::driver::{DriverApi, Event, Handler};
-use ntex_neon::{Runtime, syscall};
-use ntex_util::channel::oneshot::{Sender, channel};
+use ntex_io::Io;
+use ntex_rt::{Arbiter, syscall};
+use ntex_service::cfg::SharedCfg;
 use slab::Slab;
 use socket2::{SockAddr, Socket};
+
+use super::{Driver, DriverApi, Event, Handler, TcpStream, UnixStream, stream::StreamOps};
+use crate::channel::{self, Receiver, Sender};
 
 #[derive(Clone)]
 pub(crate) struct ConnectOps(Rc<ConnectOpsInner>);
@@ -15,11 +18,14 @@ struct ConnectOpsBatcher {
 
 struct Item {
     sock: Socket,
-    sender: Sender<io::Result<Socket>>,
+    cfg: SharedCfg,
+    sender: Sender<Io>,
+    uds: bool,
 }
 
 struct ConnectOpsInner {
     api: DriverApi,
+    streams: StreamOps,
     connects: RefCell<Slab<Item>>,
 }
 
@@ -30,51 +36,85 @@ impl Item {
 }
 
 impl ConnectOps {
-    pub(crate) fn current() -> Self {
-        Runtime::value(|rt| {
+    pub(crate) fn get(driver: &Driver) -> Self {
+        let streams = StreamOps::get(driver);
+
+        Arbiter::get_value(move || {
             let mut inner = None;
-            rt.register_handler(|api| {
+            driver.register(|api| {
                 let ops = Rc::new(ConnectOpsInner {
                     api,
+                    streams,
                     connects: RefCell::new(Slab::new()),
                 });
                 inner = Some(ops.clone());
                 Box::new(ConnectOpsBatcher { inner: ops })
             });
-
             ConnectOps(inner.unwrap())
         })
     }
 
-    pub(crate) async fn connect(&self, sock: Socket, addr: SockAddr) -> io::Result<Socket> {
+    pub(crate) fn connect(
+        &self,
+        sock: Socket,
+        addr: SockAddr,
+        cfg: SharedCfg,
+        uds: bool,
+    ) -> Receiver<Io> {
         let result = syscall!(
             break libc::connect(sock.as_raw_fd(), addr.as_ptr().cast(), addr.len())
-        )?;
-        if result.is_ready() {
-            // socket is connected
-            Ok(sock)
+        );
+        if let Poll::Ready(res) = result {
+            match res {
+                Err(err) => {
+                    crate::helpers::close_socket(sock);
+                    Receiver::new(Err(err))
+                }
+                Ok(_) => {
+                    if uds {
+                        Receiver::new(Ok(Io::new(
+                            UnixStream(sock, self.0.streams.clone()),
+                            cfg,
+                        )))
+                    } else {
+                        Receiver::new(Ok(Io::new(
+                            TcpStream(sock, self.0.streams.clone()),
+                            cfg,
+                        )))
+                    }
+                }
+            }
         } else {
             // connect is async
-            let (sender, rx) = channel();
+            let (sender, rx) = channel::create();
             let fd = sock.as_raw_fd();
-            let item = Item { sock, sender };
+            let item = Item {
+                sock,
+                cfg,
+                sender,
+                uds,
+            };
             let id = self.0.connects.borrow_mut().insert(item);
             self.0.api.attach(fd, id as u32, Event::writable(0));
-
-            rx.await
-                .map_err(|_| io::Error::other("IO Driver is gone"))
-                .and_then(|item| item)
+            rx
         }
     }
 }
 
 impl Handler for ConnectOpsBatcher {
-    fn event(&mut self, id: usize, event: Event) {
-        log::trace!("connect-fd {id:?} is {event:?}");
-
+    fn event(&mut self, id: usize, ev: Event) {
         let mut connects = self.inner.connects.borrow_mut();
         if let Some(item) = connects.get(id) {
-            if event.writable {
+            log::trace!(
+                "{}: {:?}-Connect rd({:?}) wr({:?}) {:?}",
+                item.cfg.tag(),
+                item.sock.as_raw_fd(),
+                ev.readable,
+                ev.writable,
+                item.sock.local_addr().map(|s| s.as_socket())
+            );
+
+            if ev.writable {
                 let item = connects.remove(id);
                 let mut err: libc::c_int = 0;
                 let mut err_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
@@ -96,8 +136,16 @@ impl Handler for ConnectOpsBatcher {
                 self.inner.api.detach(item.fd(), id as u32);
                 match res {
                     Ok(_) => {
-                        if let Err(Ok(sock)) = item.sender.send(Ok(item.sock)) {
-                            crate::helpers::close_socket(sock);
+                        if item.uds {
+                            let _ = item.sender.send(Ok(Io::new(
+                                UnixStream(item.sock, self.inner.streams.clone()),
+                                item.cfg,
+                            )));
+                        } else {
+                            let _ = item.sender.send(Ok(Io::new(
+                                TcpStream(item.sock, self.inner.streams.clone()),
+                                item.cfg,
+                            )));
                         }
                     }
                     Err(err) => {
@@ -105,7 +153,7 @@ impl Handler for ConnectOpsBatcher {
                         crate::helpers::close_socket(item.sock);
                     }
                 }
-            } else if !item.sender.is_canceled() {
+            } else {
                 self.inner
                     .api
                     .attach(item.fd(), id as u32, Event::writable(0));
@@ -116,12 +164,12 @@ impl Handler for ConnectOpsBatcher {
     fn error(&mut self, id: usize, err: io::Error) {
         let mut connects = self.inner.connects.borrow_mut();
         log::trace!(
-            "connect-fd {id:?} is failed {err:?}, has-con: {}",
+            "Connect {id:?} is failed {err:?}, has-con: {}",
             connects.contains(id)
         );
 
         if connects.contains(id) {
-            let Item { sock, sender } = connects.remove(id);
+            let Item { sock, sender, .. } = connects.remove(id);
             let _ = sender.send(Err(err));
             self.inner.api.detach(sock.as_raw_fd(), id as u32);
             crate::helpers::close_socket(sock);

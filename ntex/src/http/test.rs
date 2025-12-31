@@ -276,7 +276,7 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("test-server");
+        let sys = System::new("test-server", crate::rt::DefaultRuntime);
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 

@@ -1,6 +1,8 @@
 # Changes
 
-## [3.4.0] - 2025-12-xx
+## [3.4.0] - 2026-01-xx
+
+* Refactor io driver management
 
 * Add thread pool for blocking operations
 

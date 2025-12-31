@@ -7,10 +7,27 @@ mod io;
 
 pub use self::io::{SocketOptions, TokioIoBoxed};
 
-struct TcpStream(tokio::net::TcpStream);
+pub struct TcpStream(tokio::net::TcpStream);
 
 #[cfg(unix)]
-struct UnixStream(tokio::net::UnixStream);
+pub struct UnixStream(tokio::net::UnixStream);
+
+/// Runs the provided future, blocking the current thread until the future
+/// completes.
+pub fn block_on<F: Future<Output = ()>>(fut: F) {
+    if let Ok(hnd) = tokio::runtime::Handle::try_current() {
+        log::debug!("Use existing tokio runtime and block on future");
+        hnd.block_on(tokio::task::LocalSet::new().run_until(fut));
+    } else {
+        log::debug!("Create tokio runtime and block on future");
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        tokio::task::LocalSet::new().block_on(&rt, fut);
+    }
+}
 
 /// Opens a TCP connection to a remote host.
 pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> Result<Io> {
@@ -50,4 +67,17 @@ pub fn from_unix_stream(
         UnixStream(tokio::net::UnixStream::from_std(stream)?),
         cfg,
     ))
+}
+
+impl From<tokio::net::TcpStream> for TcpStream {
+    fn from(stream: tokio::net::TcpStream) -> Self {
+        Self(stream)
+    }
+}
+
+#[cfg(unix)]
+impl From<tokio::net::UnixStream> for UnixStream {
+    fn from(stream: tokio::net::UnixStream) -> Self {
+        Self(stream)
+    }
 }

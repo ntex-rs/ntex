@@ -2,10 +2,11 @@ use std::{cell::Cell, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::{IoContext, IoTaskStatus};
-use ntex_neon::driver::{DriverApi, Event, Handler};
-use ntex_neon::{Runtime, syscall};
+use ntex_rt::{Arbiter, syscall};
 use slab::Slab;
 use socket2::Socket;
+
+use super::{Driver, DriverApi, Event, Handler};
 
 pub(crate) struct StreamCtl {
     id: u32,
@@ -54,10 +55,10 @@ struct StreamOpsInner {
 
 impl StreamOps {
     /// Get `StreamOps` instance from the current runtime, or create new one
-    pub(crate) fn current() -> Self {
-        Runtime::value(|rt| {
+    pub(crate) fn get(driver: &Driver) -> Self {
+        Arbiter::get_value(|| {
             let mut inner = None;
-            rt.register_handler(|api| {
+            driver.register(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     delayed_drop: Cell::new(false),
@@ -70,11 +71,6 @@ impl StreamOps {
 
             StreamOps(inner.unwrap())
         })
-    }
-
-    /// Number of active streams
-    pub(crate) fn active_ops() -> usize {
-        Self::current().0.with(|streams| streams.len())
     }
 
     /// Register new stream
@@ -123,8 +119,14 @@ impl Handler for StreamOpsHandler {
             }
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false).with_interrupt();
-
-            log::trace!("{}: Event ({:?}): {ev:?} {:?}", io.tag(), io.fd(), io.flags);
+            log::trace!(
+                "{}: {:?}-Evt rd({:?}) wr({:?}) {:?}",
+                io.tag(),
+                io.fd(),
+                ev.readable,
+                ev.writable,
+                io.flags
+            );
 
             if ev.readable {
                 if io.read().ready() {
@@ -152,8 +154,9 @@ impl Handler for StreamOpsHandler {
                 io.ctx.stop(None);
             } else {
                 log::trace!(
-                    "{}: Renew rd:{:?}, wr:{:?} ",
+                    "{}: {:?}-Renew rd({:?}) wr({:?})",
                     io.tag(),
+                    io.fd(),
                     renew.readable,
                     renew.writable
                 );
@@ -165,7 +168,7 @@ impl Handler for StreamOpsHandler {
     fn error(&mut self, id: usize, err: io::Error) {
         self.inner.with(|streams| {
             if let Some(io) = streams.get_mut(id) {
-                log::trace!("{}: Failed ({:?}) err: {err:?}", io.tag(), io.fd());
+                log::trace!("{}: {:?}-Failed err({err:?})", io.tag(), io.fd());
                 if !io.ctx.is_stopped() {
                     io.ctx.stop(Some(err));
                 }
@@ -212,7 +215,7 @@ impl StreamOpsInner {
             let idx = id as usize;
             let item = &mut streams[idx];
             let fd = item.fd();
-            log::trace!("{}: Close ({fd:?}), flags: {:?}", item.tag(), item.flags);
+            log::trace!("{}: {fd:?}-Close flags: {:?}", item.tag(), item.flags);
 
             if !item.ctx.is_stopped() {
                 item.ctx.stop(None);
@@ -299,7 +302,7 @@ impl StreamCtl {
             let io = &mut streams[self.id as usize];
             let mut event = Event::new(0, false, false).with_interrupt();
             log::trace!(
-                "{}: Mod ({:?}) rd: {rd:?}, wr: {wr:?} {:?}",
+                "{}: {:?}-Mod rd({rd:?}) wr({wr:?}) {:?}",
                 io.tag(),
                 io.fd(),
                 io.flags
@@ -341,7 +344,7 @@ impl StreamCtl {
 
             if want_update_read || want_update_write {
                 log::trace!(
-                    "{}: Update ({:?}) rd: {:?}, wr:{:?}",
+                    "{}: {:?}-Upd rd({:?}) wr({:?})",
                     io.tag(),
                     io.fd(),
                     event.readable,
@@ -386,7 +389,7 @@ impl StreamItem {
     fn write(&mut self) -> IoTaskStatus {
         if let Some(buf) = self.ctx.get_write_buf() {
             let fd = self.fd();
-            log::trace!("{}: Write ({fd:?}), buf: {:?}", self.ctx.tag(), buf.len());
+            log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), buf.len());
             let res = syscall!(break libc::write(fd, buf[..].as_ptr() as _, buf.len()));
             return self.ctx.release_write_buf(buf, res);
         }
@@ -407,9 +410,9 @@ impl StreamItem {
 
             let res = match syscall!(break libc::read(fd, chunk_ptr as _, chunk_len)) {
                 Poll::Ready(Ok(size)) => {
-                    unsafe { buf.advance_mut(size) };
                     total += size;
                     if size > 0 {
+                        unsafe { buf.advance_mut(size) };
                         continue;
                     }
                     Poll::Ready(Err(None))
@@ -417,7 +420,7 @@ impl StreamItem {
                 Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
                 Poll::Pending => Poll::Pending,
             };
-            log::trace!("{}: Read ({fd:?}), s: {total:?}, res: {res:?}", self.tag());
+            log::trace!("{}: {fd:?}-Rdt sz({total:?}) = {res:?}", self.tag());
             return self.ctx.release_read_buf(total, buf, res);
         }
     }

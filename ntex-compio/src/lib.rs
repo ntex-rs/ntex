@@ -5,14 +5,28 @@ mod io;
 pub(crate) mod compat {
     use std::{io::Result, net, net::SocketAddr};
 
+    use compio_driver::DriverType;
+    use compio_runtime::Runtime;
     use ntex_io::Io;
     use ntex_service::cfg::SharedCfg;
 
     /// Tcp stream wrapper for compio TcpStream
-    pub(crate) struct TcpStream(pub(crate) compio_net::TcpStream);
+    pub struct TcpStream(pub(crate) compio_net::TcpStream);
 
     /// Tcp stream wrapper for compio UnixStream
-    pub(crate) struct UnixStream(pub(crate) compio_net::UnixStream);
+    pub struct UnixStream(pub(crate) compio_net::UnixStream);
+
+    /// Runs the provided future, blocking the current thread until the future
+    /// completes.
+    pub fn block_on<F: Future<Output = ()>>(fut: F) {
+        log::info!(
+            "Starting compio runtime, driver {:?}",
+            compio_runtime::Runtime::try_with_current(|rt| rt.driver_type())
+                .unwrap_or(DriverType::Poll)
+        );
+        let rt = Runtime::new().unwrap();
+        rt.block_on(fut);
+    }
 
     /// Opens a TCP connection to a remote host.
     pub async fn tcp_connect(addr: SocketAddr, cfg: SharedCfg) -> Result<Io> {
@@ -48,6 +62,18 @@ pub(crate) mod compat {
             UnixStream(compio_net::UnixStream::from_std(stream)?),
             cfg,
         ))
+    }
+
+    impl From<compio_net::TcpStream> for TcpStream {
+        fn from(s: compio_net::TcpStream) -> Self {
+            Self(s)
+        }
+    }
+
+    impl From<compio_net::UnixStream> for UnixStream {
+        fn from(s: compio_net::UnixStream) -> Self {
+            Self(s)
+        }
     }
 }
 

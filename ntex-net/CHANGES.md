@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.0] - 2026-01-xx
+
+* Refactor io driver
+
 ## [3.4.1] - 2025-12-18
 
 * Cleanup and improvements for polling driver

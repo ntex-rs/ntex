@@ -875,7 +875,7 @@ async fn test_web_server() {
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
-        let sys = ntex::rt::System::new("test-server");
+        let sys = ntex::rt::System::new("test-server", ntex::rt::DefaultRuntime);
         let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
         tx.send((sys.system(), local_addr)).unwrap();

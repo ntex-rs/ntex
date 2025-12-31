@@ -81,3 +81,7 @@ jobs:
       - name: Run tests (compio)
         run: |
           cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+
+      #- name: Run tests (neon)
+      #  run: |
+      #    cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer

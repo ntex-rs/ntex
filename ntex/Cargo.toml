@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.0.0-pre.9"
+version = "3.0.0-pre.10"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -15,7 +15,7 @@ categories = [
 ]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [package.metadata.docs.rs]
 toolchain = "nightly"
@@ -55,10 +55,13 @@ tokio = ["ntex-net/tokio"]
 compio = ["ntex-net/compio"]
 
 # neon runtime
-neon = ["ntex-net/neon"]
+neon = []
 
-# neon runtime
-neon-uring = ["ntex-net/neon", "ntex-net/io-uring"]
+# neon polling runtime
+neon-polling = ["ntex-net/neon-polling"]
+
+# neon io-uring runtime
+neon-uring = ["ntex-net/neon-uring"]
 
 # websocket support
 ws = ["dep:sha1"]
@@ -72,13 +75,13 @@ ntex-codec = "1"
 ntex-http = "1"
 ntex-router = "1"
 ntex-service = "4"
-ntex-macros = "0.2"
+ntex-macros = "3"
 ntex-util = "3.4"
 ntex-server = "3.4"
 ntex-h2 = "3.1"
 ntex-rt = "3.4"
 ntex-io = "3.3"
-ntex-net = "3.4"
+ntex-net = "3.5"
 ntex-tls = "3.1"
 
 base64 = { workspace = true }

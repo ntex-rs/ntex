@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "3.4.1"
+version = "3.5.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ntex-connect/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [lib]
 name = "ntex_net"
@@ -20,37 +20,55 @@ path = "src/lib.rs"
 default = []
 
 # tokio runtime
-tokio = ["ntex-rt/tokio", "ntex-tokio"]
+tokio = ["ntex-rt/tokio", "ntex-tokio", "tok-io"]
 
 # compio runtime
-compio = ["ntex-rt/compio", "ntex-compio/compio"]
+compio = ["ntex-rt/compio", "ntex-compio/compio", "compio-net", "compio-driver", "compio-runtime"]
 
-# neon runtime
-neon = ["ntex-rt/neon", "ntex-neon", "slab", "socket2"]
+# neon runtime (deprecated)
+neon = []
 
-io-uring = ["ntex-neon/io-uring", "socket2"]
-io-uring-compat = []
+# io-uring only
+neon-uring = []
+
+# polling only
+neon-polling = []
 
 [dependencies]
 ntex-service = "4"
 ntex-bytes = "1"
 ntex-http = "1"
 ntex-io = "3.3.1"
-ntex-rt = "3.3"
+ntex-rt = "3.4"
 ntex-util = "3"
-
-ntex-tokio = { version = "3.1.0", optional = true }
-ntex-compio = { version = "3.4.0", optional = true }
-ntex-neon = { version = "0.2.2", optional = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
 log = { workspace = true }
 libc = { workspace = true }
-slab = { workspace = true, optional = true }
-socket2 = { workspace = true, optional = true, features = ["all"] }
+slab = { workspace = true }
+socket2 = { workspace = true, features = ["all"] }
 thiserror = { workspace = true }
+scoped-tls = { workspace = true }
+polling = { version = "3.10.0", package = "ntex-polling" }
+
+ntex-tokio = { version = "3.2.0", optional = true }
+ntex-compio = { version = "3.5.0", optional = true }
+
+compio-net = { version = "0.10", optional = true }
+compio-driver = { version = "0.10", optional = true }
+compio-runtime = { version = "0.10", optional = true }
+tok-io = { version = "1", package = "tokio", default-features = false, features = [
+    "rt",
+    "net",
+], optional = true }
+
+# Linux specific dependencies
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { version = "0.7.120", package = "ntex-io-uring", features = ["direct-syscall"] }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.8"
+ntex = "3.0.0-pre.10"
+ntex-rt = "3.4"
+ntex-server = "3.4"
 oneshot = "0.1"

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-macros"
-version = "0.2.0"
+version = "3.0.0"
 description = "ntex proc macros"
 readme = "README.md"
 authors = ["ntex contributors <team@ntex.rs>"]
@@ -17,5 +17,5 @@ syn = { version = "^1", features = ["full", "parsing"] }
 proc-macro2 = "^1"
 
 [dev-dependencies]
-ntex = "3.0.0-pre.0"
+ntex = "3.0.0-pre.9"
 futures = "0.3"
