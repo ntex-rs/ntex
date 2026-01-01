@@ -26,15 +26,22 @@ tokio = ["tok-io"]
 # compio support
 compio = ["compio-driver", "compio-runtime"]
 
-# neon runtime
-neon = ["ntex-neon"]
+# neon runtime (deprecated)
+neon = []
 
 [dependencies]
+ntex-service = "4"
+
 async-channel = { workspace = true }
+async-task = { workspace = true }
+crossbeam-queue = { workspace = true }
 crossbeam-channel = { workspace = true }
+foldhash = { workspace = true }
 futures-timer = { workspace = true }
 oneshot = { workspace = true }
 log = { workspace = true }
+scoped-tls = { workspace = true }
+swap-buffer-queue = { workspace = true }
 
 compio-driver = { version = "0.10", optional = true }
 compio-runtime = { version = "0.10", optional = true }
@@ -43,4 +50,5 @@ tok-io = { version = "1", package = "tokio", default-features = false, features 
     "net",
 ], optional = true }
 
-ntex-neon = { version = "0.2.1", optional = true }
+[dev-dependencies]
+ntex = "3.0.0-pre.9"

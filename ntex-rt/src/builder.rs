@@ -1,8 +1,9 @@
-use std::{future::Future, io, marker::PhantomData, pin::Pin, rc::Rc, sync::Arc, time};
+use std::{future::Future, io, marker::PhantomData, rc::Rc, sync::Arc, time};
 
 use async_channel::unbounded;
 
 use crate::arbiter::{Arbiter, ArbiterController};
+use crate::driver::Runner;
 use crate::pool::ThreadPool;
 use crate::system::{System, SystemCommand, SystemConfig, SystemSupport};
 
@@ -20,8 +21,6 @@ pub struct Builder {
     stack_size: usize,
     /// Arbiters ping interval
     ping_interval: usize,
-    /// Block on fn
-    block_on: Option<Arc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>) + Sync + Send>>,
     /// Thread pool config
     pool_limit: usize,
     pool_recv_timeout: time::Duration,
@@ -33,7 +32,6 @@ impl Builder {
             name: "ntex".into(),
             stop_on_panic: false,
             stack_size: 0,
-            block_on: None,
             ping_interval: 1000,
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_secs(60),
@@ -87,24 +85,15 @@ impl Builder {
         self
     }
 
-    /// Use custom block_on function
-    pub fn block_on<F>(mut self, block_on: F) -> Self
-    where
-        F: Fn(Pin<Box<dyn Future<Output = ()>>>) + Sync + Send + 'static,
-    {
-        self.block_on = Some(Arc::new(block_on));
-        self
-    }
-
     /// Create new System.
     ///
     /// This method panics if it can not create tokio runtime
-    pub fn finish(self) -> SystemRunner {
+    pub fn build<R: Runner>(self, runner: R) -> SystemRunner {
         let (stop_tx, stop) = oneshot::channel();
         let (sys_sender, sys_receiver) = unbounded();
 
         let config = SystemConfig {
-            block_on: self.block_on,
+            runner: Arc::new(runner),
             stack_size: self.stack_size,
             stop_on_panic: self.stop_on_panic,
         };
@@ -114,7 +103,7 @@ impl Builder {
 
         let (arb, controller) = Arbiter::new_system(self.name.clone());
         let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
-        let system = System::construct(sys_sender, arb, config, pool);
+        let system = System::construct(sys_sender, arb, config.clone(), pool);
 
         // system arbiter
         let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);
@@ -125,6 +114,35 @@ impl Builder {
             support,
             controller,
             system,
+            config,
+            _t: PhantomData,
+        }
+    }
+
+    /// Create new System.
+    ///
+    /// This method panics if it can not create tokio runtime
+    pub fn build_with(self, config: SystemConfig) -> SystemRunner {
+        let (stop_tx, stop) = oneshot::channel();
+        let (sys_sender, sys_receiver) = unbounded();
+
+        // thread pool
+        let pool = ThreadPool::new(self.pool_limit, self.pool_recv_timeout);
+
+        let (arb, controller) = Arbiter::new_system(self.name.clone());
+        let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
+        let system = System::construct(sys_sender, arb, config.clone(), pool);
+
+        // system arbiter
+        let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);
+
+        // init system arbiter and run configuration method
+        SystemRunner {
+            stop,
+            support,
+            controller,
+            system,
+            config,
             _t: PhantomData,
         }
     }
@@ -137,6 +155,7 @@ pub struct SystemRunner {
     support: SystemSupport,
     controller: ArbiterController,
     system: System,
+    config: SystemConfig,
     _t: PhantomData<Rc<()>>,
 }
 
@@ -162,12 +181,12 @@ impl SystemRunner {
             controller,
             stop,
             support,
-            system,
+            config,
             ..
         } = self;
 
         // run loop
-        system.config().block_on(async move {
+        config.block_on(async move {
             f()?;
 
             let _ = crate::spawn(support.run());
@@ -194,11 +213,11 @@ impl SystemRunner {
         let SystemRunner {
             controller,
             support,
-            system,
+            config,
             ..
         } = self;
 
-        system.config().block_on(async move {
+        config.block_on(async move {
             let _ = crate::spawn(support.run());
             let _ = crate::spawn(controller.run());
             fut.await
@@ -226,99 +245,5 @@ impl SystemRunner {
                 fut.await
             })
             .await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::mpsc;
-    use std::thread;
-
-    use super::*;
-
-    #[test]
-    fn test_async() {
-        let (tx, rx) = mpsc::channel();
-
-        thread::spawn(move || {
-            let runner = crate::System::build().stop_on_panic(true).finish();
-
-            tx.send(runner.system()).unwrap();
-            let _ = runner.run_until_stop();
-        });
-        let s = System::new("test");
-
-        let sys = rx.recv().unwrap();
-        let id = sys.id();
-        let (tx, rx) = mpsc::channel();
-        sys.arbiter().exec_fn(move || {
-            let _ = tx.send(System::current().id());
-        });
-        let id2 = rx.recv().unwrap();
-        assert_eq!(id, id2);
-
-        let id2 = s
-            .block_on(sys.arbiter().exec(|| System::current().id()))
-            .unwrap();
-        assert_eq!(id, id2);
-
-        let (tx, rx) = mpsc::channel();
-        sys.arbiter().spawn(Box::pin(async move {
-            let _ = tx.send(System::current().id());
-        }));
-        let id2 = rx.recv().unwrap();
-        assert_eq!(id, id2);
-    }
-
-    #[cfg(feature = "tokio")]
-    #[test]
-    fn test_block_on() {
-        let (tx, rx) = mpsc::channel();
-
-        thread::spawn(move || {
-            let runner = crate::System::build()
-                .stop_on_panic(true)
-                .ping_interval(25)
-                .block_on(|fut| {
-                    let rt = tok_io::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .unwrap();
-                    tok_io::task::LocalSet::new().block_on(&rt, fut);
-                })
-                .finish();
-
-            tx.send(runner.system()).unwrap();
-            let _ = runner.run_until_stop();
-        });
-        let s = System::new("test");
-
-        let sys = rx.recv().unwrap();
-        let id = sys.id();
-        let (tx, rx) = mpsc::channel();
-        sys.arbiter().exec_fn(move || {
-            let _ = tx.send(System::current().id());
-        });
-        let id2 = rx.recv().unwrap();
-        assert_eq!(id, id2);
-
-        let id2 = s
-            .block_on(sys.arbiter().exec(|| System::current().id()))
-            .unwrap();
-        assert_eq!(id, id2);
-
-        let (tx, rx) = mpsc::channel();
-        sys.arbiter().spawn(async move {
-            futures_timer::Delay::new(std::time::Duration::from_millis(100)).await;
-
-            let recs = System::list_arbiter_pings(Arbiter::current().id(), |recs| {
-                recs.unwrap().clone()
-            });
-            let _ = tx.send(recs);
-        });
-        let recs = rx.recv().unwrap();
-
-        assert!(!recs.is_empty());
-        sys.stop();
     }
 }

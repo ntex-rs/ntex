@@ -6,9 +6,8 @@ use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, rc::Rc};
 use async_channel::{Receiver, Sender};
 use futures_timer::Delay;
 
-use crate::arbiter::Arbiter;
-use crate::builder::{Builder, SystemRunner};
-use crate::pool::{BlockingResult, ThreadPool};
+use crate::pool::ThreadPool;
+use crate::{Arbiter, BlockingResult, Builder, Runner, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -38,11 +37,10 @@ pub struct System {
 }
 
 #[derive(Clone)]
-pub(super) struct SystemConfig {
+pub struct SystemConfig {
+    pub(super) runner: Arc<dyn Runner>,
     pub(super) stack_size: usize,
     pub(super) stop_on_panic: bool,
-    pub(super) block_on:
-        Option<Arc<dyn Fn(Pin<Box<dyn Future<Output = ()>>>) + Sync + Send>>,
 }
 
 thread_local!(
@@ -63,8 +61,8 @@ impl System {
         let sys = System {
             id,
             sys,
-            config,
             arbiter,
+            config,
             pool,
         };
         System::set_current(sys.clone());
@@ -83,8 +81,16 @@ impl System {
     /// Create new system.
     ///
     /// This method panics if it can not create tokio runtime
-    pub fn new(name: &str) -> SystemRunner {
-        Self::build().name(name).finish()
+    pub fn new<R: Runner>(name: &str, runner: R) -> SystemRunner {
+        Self::build().name(name).build(runner)
+    }
+
+    #[allow(clippy::new_ret_no_self)]
+    /// Create new system.
+    ///
+    /// This method panics if it can not create tokio runtime
+    pub fn with_config(name: &str, config: SystemConfig) -> SystemRunner {
+        Self::build().name(name).build_with(config)
     }
 
     /// Get current running system.
@@ -162,7 +168,7 @@ impl System {
     }
 
     /// System config
-    pub(super) fn config(&self) -> SystemConfig {
+    pub fn config(&self) -> SystemConfig {
         self.config.clone()
     }
 
@@ -190,17 +196,10 @@ impl SystemConfig {
         let result = Rc::new(RefCell::new(None));
         let result_inner = result.clone();
 
-        if let Some(block_on) = &self.block_on {
-            (*block_on)(Box::pin(async move {
-                let r = fut.await;
-                *result_inner.borrow_mut() = Some(r);
-            }));
-        } else {
-            crate::block_on(Box::pin(async move {
-                let r = fut.await;
-                *result_inner.borrow_mut() = Some(r);
-            }));
-        }
+        self.runner.block_on(Box::pin(async move {
+            let r = fut.await;
+            *result_inner.borrow_mut() = Some(r);
+        }));
         result.borrow_mut().take().unwrap()
     }
 }

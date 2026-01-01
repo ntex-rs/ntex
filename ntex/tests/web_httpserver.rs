@@ -20,7 +20,7 @@ async fn test_run() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
 
         sys.run(move || {
             let srv = HttpServer::new(async || {
@@ -115,7 +115,7 @@ async fn test_openssl() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let builder = ssl_acceptor().unwrap();
 
         sys.run(move || {
@@ -163,7 +163,7 @@ async fn test_rustls() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let config = rustls_utils::tls_acceptor();
 
         sys.run(move || {
@@ -207,7 +207,7 @@ async fn test_bind_uds() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
 
         sys.run(move || {
             let srv = HttpServer::new(async || {
@@ -262,7 +262,7 @@ async fn test_listen_uds() {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
 
         sys.run(move || {
             let _ = std::fs::remove_file("/tmp/uds-test2");

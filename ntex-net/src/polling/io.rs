@@ -3,22 +3,22 @@ use std::{any, future::poll_fn, task::Poll};
 use ntex_io::{Handle, IoContext, Readiness, types};
 use ntex_rt::spawn;
 
-use super::driver::{StreamCtl, StreamOps, WeakStreamCtl};
+use super::stream::{StreamCtl, WeakStreamCtl};
 
 impl ntex_io::IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
-        let io = self.0;
-        let (ctl, ctl2) = StreamOps::current().register(io, ctx.clone(), true);
+        let super::TcpStream(io, ops) = self;
+        let (ctl, weak) = ops.register(io, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
-        Some(Box::new(HandleWrapper(ctl2)))
+        Some(Box::new(HandleWrapper(weak)))
     }
 }
 
 impl ntex_io::IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
-        let io = self.0;
-        let (ctl, _) = StreamOps::current().register(io, ctx.clone(), false);
+        let super::UnixStream(io, ops) = self;
+        let (ctl, _) = ops.register(io, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
         None
@@ -30,7 +30,7 @@ struct HandleWrapper(WeakStreamCtl);
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            let addr = self.0.with_io(|io| io.peer_addr().ok());
+            let addr = self.0.with(|io| io.peer_addr().ok());
             if let Some(addr) = addr.and_then(|addr| addr.as_socket()) {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
@@ -45,32 +45,45 @@ enum Status {
     Terminate,
 }
 
-async fn run(ctl: StreamCtl, ctx: IoContext) {
-    // Handle io readiness
+async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
+    // Handle io read readiness
     let st = poll_fn(|cx| {
-        let read = match ctx.poll_read_ready(cx) {
+        let mut modify = false;
+        let mut readable = false;
+        let mut writable = false;
+
+        let read = match context.poll_read_ready(cx) {
             Poll::Ready(Readiness::Ready) => {
-                ctl.resume_read();
+                modify = true;
+                readable = true;
                 Poll::Pending
             }
             Poll::Ready(Readiness::Shutdown) | Poll::Ready(Readiness::Terminate) => {
                 Poll::Ready(())
             }
             Poll::Pending => {
-                ctl.pause_read();
+                modify = true;
                 Poll::Pending
             }
         };
 
-        let write = match ctx.poll_write_ready(cx) {
+        let write = match context.poll_write_ready(cx) {
             Poll::Ready(Readiness::Ready) => {
-                ctl.resume_write();
+                modify = true;
+                writable = true;
                 Poll::Pending
             }
             Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
             Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                modify = true;
+                Poll::Pending
+            }
         };
+
+        if modify {
+            ctl.interest(readable, writable);
+        }
 
         if read.is_pending() && write.is_pending() {
             Poll::Pending
@@ -82,17 +95,19 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
     })
     .await;
 
-    if !ctx.is_stopped() {
+    log::trace!("{}: Shuting down io", context.tag());
+    if !context.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
-            ctl.resume_read();
-            ctl.resume_write();
-            ctx.shutdown(flush, cx)
+            ctl.interest(true, true);
+            context.shutdown(flush, cx)
         })
         .await;
     }
+
     let result = ctl.shutdown().await;
-    if !ctx.is_stopped() {
-        ctx.stop(result.err());
+    log::trace!("{}: Shutdown complete {result:?}", context.tag());
+    if !context.is_stopped() {
+        context.stop(result.err());
     }
 }

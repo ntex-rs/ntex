@@ -1,12 +1,14 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
+use io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::IoContext;
-use ntex_neon::driver::io_uring::{cqueue, opcode, opcode2, types::Fd};
-use ntex_neon::{Runtime, driver::DriverApi, driver::Handler};
+use ntex_rt::Arbiter;
 use ntex_util::channel::pool;
 use slab::Slab;
 use socket2::Socket;
+
+use super::driver::{Driver, DriverApi, Handler};
 
 #[derive(Clone)]
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
@@ -95,10 +97,11 @@ struct StreamOpsStorage {
 }
 
 impl StreamOps {
-    pub(crate) fn current() -> Self {
-        Runtime::value(|rt| {
+    /// Get `StreamOps` instance from the current runtime, or create new one
+    pub(crate) fn get(driver: &Driver) -> Self {
+        Arbiter::get_value(|| {
             let mut inner = None;
-            rt.register_handler(|api| {
+            driver.register(|api| {
                 let default_flags = if api.is_supported(opcode::SendZc::CODE) {
                     Flags::empty()
                 } else {
@@ -165,10 +168,6 @@ impl StreamOps {
                 inner: self.0.clone(),
             },
         )
-    }
-
-    pub(crate) fn active_ops() -> usize {
-        Self::current().0.with(|st| st.streams.len())
     }
 }
 

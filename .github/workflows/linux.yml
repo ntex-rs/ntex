@@ -8,7 +8,7 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - 1.85.0 # MSRV
+          - 1.86.0 # MSRV
           - stable
           - nightly
 
@@ -32,10 +32,10 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v1.0.1
 
-      - name: Run tests (neon)
+      - name: Run tests (neon-polling)
         timeout-minutes: 15
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --features="ntex/neon,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+          cargo nextest run --retries=3 --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (neon-uring)
         timeout-minutes: 15
@@ -49,6 +49,6 @@ jobs:
 
       - name: Run tests (compio)
         timeout-minutes: 15
-        if: matrix.version != '1.85.0'
+        if: matrix.version != '1.86.0'
         run: |
           cargo nextest run --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"

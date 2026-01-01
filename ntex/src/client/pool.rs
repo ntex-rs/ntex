@@ -448,7 +448,7 @@ impl OpenConnection {
     ) {
         let fut = pipeline.call_static(msg);
 
-        #[allow(clippy::redundant_async_block)]
+        // #[allow(clippy::redundant_async_block)]
         let _ = spawn(async move {
             OpenConnection {
                 tx: Some(tx),

@@ -61,11 +61,12 @@ where
         log::debug!("Starting test server {:?}", self.id);
         let factory = self.factory;
         let config = self.config;
+        let sys_config = System::current().config();
 
         let (tx, rx) = oneshot::channel();
         // run server in separate thread
         thread::spawn(move || {
-            let sys = System::new("ntex-test-server");
+            let sys = System::with_config("ntex-test-server", sys_config);
             let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
             let local_addr = tcp.local_addr().unwrap();
             let system = sys.system();
@@ -148,7 +149,7 @@ where
     let (tx, rx) = oneshot::channel();
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("ntex-test-server");
+        let sys = System::new("ntex-test-server", ntex_net::DefaultRuntime);
         let system = sys.system();
 
         sys.block_on(async move {
@@ -194,6 +195,11 @@ impl TestServer {
     pub fn set_addr(mut self, addr: net::SocketAddr) -> Self {
         self.addr = addr;
         self
+    }
+
+    /// Test client shared config
+    pub fn config(&self) -> SharedCfg {
+        self.cfg
     }
 
     /// Connect to server, return Io

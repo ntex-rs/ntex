@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.0] - 2026-01-03
+
+* Use new rt configuration subsystem
+
 ## [3.4.0] - 2025-12-17
 
 * Upgrade to ntex-service v4

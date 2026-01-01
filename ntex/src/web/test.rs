@@ -607,7 +607,7 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("ntex-test-server");
+        let sys = System::new("ntex-test-server", crate::rt::DefaultRuntime);
 
         let cfg = cfg.clone();
         let factory = factory.clone();

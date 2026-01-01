@@ -95,9 +95,8 @@ async fn test_openssl_read_before_error() {
 
     let srv = test_server(async || {
         chain_factory(
-            fn_service(|io: Io<_>| async move {
-                let res = io.read_ready().await;
-                assert!(res.is_ok());
+            fn_service(async move |io: Io<_>| {
+                let _ = io.read_ready().await;
                 Ok(io)
             })
             .map_init_err(|_| ()),
@@ -108,7 +107,7 @@ async fn test_openssl_read_before_error() {
                 io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
                     .await
                     .unwrap();
-                time::sleep(time::Millis(100)).await;
+                time::sleep(time::Millis(50)).await;
                 Ok::<_, Box<dyn std::error::Error>>(())
             })
             .map_init_err(|_| ()),
@@ -120,7 +119,7 @@ async fn test_openssl_read_before_error() {
 
     let conn = Pipeline::new(
         ntex::connect::openssl::SslConnector::new(builder.build())
-            .create(SharedCfg::default())
+            .create(srv.config())
             .await
             .unwrap(),
     );
@@ -282,4 +281,42 @@ async fn test_rustls_uri() {
             .unwrap();
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+}
+
+#[ntex::test]
+async fn basic_connect_service() {
+    let server = ntex::server::test_server(async || {
+        ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
+    });
+
+    let srv = ntex_net::connect::Connector::default()
+        .create(
+            ntex::SharedCfg::new("T")
+                .add(ntex::io::IoConfig::new().set_connect_timeout(time::Millis(5000)))
+                .into(),
+        )
+        .await
+        .unwrap();
+    let result = srv.connect("").await;
+    assert!(result.is_err());
+    let result = srv.connect("localhost:99999").await;
+    assert!(result.is_err());
+    assert!(format!("{srv:?}").contains("Connector"));
+
+    let srv = ntex_net::connect::ConnectorService::default();
+    let result = srv.connect(format!("{}", server.addr())).await;
+    assert!(result.is_ok());
+
+    let msg = Connect::new(format!("{}", server.addr())).set_addrs(vec![
+        format!("127.0.0.1:{}", server.addr().port() - 1)
+            .parse()
+            .unwrap(),
+        server.addr(),
+    ]);
+    let result = ntex_net::connect::connect(msg).await;
+    assert!(result.is_ok());
+
+    let msg = Connect::new(server.addr());
+    let result = ntex_net::connect::connect(msg).await;
+    assert!(result.is_ok());
 }

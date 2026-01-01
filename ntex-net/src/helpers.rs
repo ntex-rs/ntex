@@ -1,29 +1,6 @@
-use std::{io, net, net::SocketAddr, path::Path};
+use std::{io, net};
 
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-
-pub(crate) async fn connect(addr: SocketAddr) -> io::Result<Socket> {
-    let addr = SockAddr::from(addr);
-    let domain = addr.domain();
-    connect_inner(addr, domain, Type::STREAM, Some(Protocol::TCP)).await
-}
-
-pub(crate) async fn connect_unix(path: impl AsRef<Path>) -> io::Result<Socket> {
-    let addr = SockAddr::unix(path)?;
-    connect_inner(addr, Domain::UNIX, Type::STREAM, None).await
-}
-
-async fn connect_inner(
-    addr: SockAddr,
-    domain: Domain,
-    ty: Type,
-    protocol: Option<Protocol>,
-) -> io::Result<Socket> {
-    let sock = prep_socket(Socket::new(domain, ty, protocol)?)?;
-    crate::rt_impl::connect::ConnectOps::current()
-        .connect(sock, addr)
-        .await
-}
+use socket2::Socket;
 
 pub(crate) fn prep_socket(sock: Socket) -> io::Result<Socket> {
     #[cfg(not(any(

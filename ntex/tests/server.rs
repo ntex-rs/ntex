@@ -20,7 +20,7 @@ fn test_bind() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         sys.run(move || {
             let srv = build()
                 .workers(1)
@@ -48,7 +48,7 @@ async fn test_listen() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let lst = net::TcpListener::bind(addr).unwrap();
         let _ = sys.run(move || {
             let srv = build()
@@ -81,7 +81,7 @@ async fn test_run() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         sys.run(move || {
             let srv = build()
                 .backlog(100)
@@ -152,7 +152,7 @@ fn test_on_worker_start() {
     let h = thread::spawn(move || {
         let num = num2.clone();
         let num2 = num2.clone();
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let _ = sys.run(move || {
             let num = num.clone();
             ntex::rt::spawn(async move {
@@ -213,7 +213,7 @@ fn test_configure_async() {
     let h = thread::spawn(move || {
         let num = num2.clone();
         let num2 = num2.clone();
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let _ = sys.run(move || {
             ntex_rt::spawn(async move {
                 let srv = build()
@@ -274,7 +274,7 @@ fn test_panic_in_worker() {
     let (tx, rx) = mpsc::channel();
 
     let h = thread::spawn(move || {
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         let counter = counter2.clone();
         sys.run(move || {
             let counter = counter.clone();
@@ -326,7 +326,7 @@ fn test_on_accept() {
 
     let h = thread::spawn(move || {
         let num = num2.clone();
-        let sys = ntex::rt::System::new("test");
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
         sys.run(move || {
             let srv = build()
                 .disable_signals()
