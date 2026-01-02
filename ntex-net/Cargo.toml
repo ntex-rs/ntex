@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "3.5.0"
+version = "3.5.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -39,7 +39,7 @@ ntex-service = "4"
 ntex-bytes = "1"
 ntex-http = "1"
 ntex-io = "3.3.1"
-ntex-rt = "3.4"
+ntex-rt = "3.4.1"
 ntex-util = "3"
 
 bitflags = { workspace = true }

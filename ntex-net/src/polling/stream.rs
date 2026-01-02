@@ -2,11 +2,12 @@ use std::{cell::Cell, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::BufMut;
 use ntex_io::{IoContext, IoTaskStatus};
-use ntex_rt::{Arbiter, syscall};
+use ntex_rt::Arbiter;
 use slab::Slab;
 use socket2::Socket;
 
 use super::{Driver, DriverApi, Event, Handler};
+use crate::syscall;
 
 pub(crate) struct StreamCtl {
     id: u32,

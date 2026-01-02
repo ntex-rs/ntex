@@ -37,8 +37,6 @@ impl ntex_rt::Driver for CompioDriver {
     fn handle(&self) -> Box<dyn ntex_rt::Notify> {
         panic!("Not supported")
     }
-
-    fn clear(&self) {}
 }
 
 impl crate::Reactor for CompioDriver {

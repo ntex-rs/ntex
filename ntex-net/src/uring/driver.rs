@@ -309,6 +309,12 @@ impl Driver {
             self.handlers.set(Some(handlers));
         }
     }
+
+    pub(crate) fn clear(&self) {
+        for mut h in self.handlers.take().unwrap().into_iter() {
+            h.hnd.cleanup()
+        }
+    }
 }
 
 impl AsRawFd for Driver {
@@ -372,6 +378,11 @@ impl crate::Reactor for Driver {
 }
 
 impl ntex_rt::Driver for Driver {
+    /// Get notification handle
+    fn handle(&self) -> Box<dyn Notify> {
+        Box::new(self.notifier.handle())
+    }
+
     /// Poll the driver and handle completed operations.
     fn run(&self, rt: &Runtime) -> io::Result<()> {
         let ring = &self.inner.ring;
@@ -407,17 +418,6 @@ impl ntex_rt::Driver for Driver {
                     _ => return Err(e),
                 }
             }
-        }
-    }
-
-    /// Get notification handle
-    fn handle(&self) -> Box<dyn Notify> {
-        Box::new(self.notifier.handle())
-    }
-
-    fn clear(&self) {
-        for mut h in self.handlers.take().unwrap().into_iter() {
-            h.hnd.cleanup()
         }
     }
 }

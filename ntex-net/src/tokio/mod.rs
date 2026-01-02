@@ -44,8 +44,6 @@ impl ntex_rt::Driver for TokioDriver {
     fn handle(&self) -> Box<dyn ntex_rt::Notify> {
         panic!("Not supported")
     }
-
-    fn clear(&self) {}
 }
 
 impl crate::Reactor for TokioDriver {

@@ -1,7 +1,7 @@
 use std::{cell::RefCell, io, os::fd::AsRawFd, os::fd::RawFd, rc::Rc, task::Poll};
 
 use ntex_io::Io;
-use ntex_rt::{Arbiter, syscall};
+use ntex_rt::Arbiter;
 use ntex_service::cfg::SharedCfg;
 use slab::Slab;
 use socket2::{SockAddr, Socket};
@@ -61,7 +61,7 @@ impl ConnectOps {
         cfg: SharedCfg,
         uds: bool,
     ) -> Receiver<Io> {
-        let result = syscall!(
+        let result = crate::syscall!(
             break libc::connect(sock.as_raw_fd(), addr.as_ptr().cast(), addr.len())
         );
         if let Poll::Ready(res) = result {
@@ -119,7 +119,7 @@ impl Handler for ConnectOpsBatcher {
                 let mut err: libc::c_int = 0;
                 let mut err_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
 
-                let res = syscall!(libc::getsockopt(
+                let res = crate::syscall!(libc::getsockopt(
                     item.fd(),
                     libc::SOL_SOCKET,
                     libc::SO_ERROR,

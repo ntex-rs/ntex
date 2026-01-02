@@ -191,6 +191,14 @@ impl Driver {
             }
         }
     }
+
+    #[allow(dead_code)]
+    /// Clear handlers
+    pub(crate) fn clear(&self) {
+        for mut h in self.handlers.take().unwrap().into_iter() {
+            h.hnd.cleanup()
+        }
+    }
 }
 
 impl AsRawFd for Driver {
@@ -264,6 +272,11 @@ impl crate::Reactor for Driver {
 }
 
 impl ntex_rt::Driver for Driver {
+    /// Get notification handle
+    fn handle(&self) -> Box<dyn Notify> {
+        Box::new(NotifyHandle::new(self.poll.clone()))
+    }
+
     /// Poll the driver and handle completed entries.
     fn run(&self, rt: &Runtime) -> io::Result<()> {
         let mut events = if self.capacity == 0 {
@@ -303,18 +316,6 @@ impl ntex_rt::Driver for Driver {
                 h.tick();
             }
             self.handlers.set(Some(handlers));
-        }
-    }
-
-    /// Get notification handle
-    fn handle(&self) -> Box<dyn Notify> {
-        Box::new(NotifyHandle::new(self.poll.clone()))
-    }
-
-    /// Clear handlers
-    fn clear(&self) {
-        for mut h in self.handlers.take().unwrap().into_iter() {
-            h.hnd.cleanup()
         }
     }
 }
