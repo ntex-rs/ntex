@@ -1,6 +1,6 @@
 # Changes
 
-## [3.0.0-pre.10] 2026-01-xx
+## [3.0.0-pre.10] 2026-01-03
 
 * Refactor io driver management
 
