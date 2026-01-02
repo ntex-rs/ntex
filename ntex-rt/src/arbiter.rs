@@ -260,23 +260,6 @@ impl Arbiter {
         F: FnOnce(&T) -> R,
     {
         STORAGE.with(move |cell| {
-            let st = cell.borrow();
-            let item = st
-                .get(&TypeId::of::<T>())
-                .and_then(|boxed| (&**boxed as &(dyn Any + 'static)).downcast_ref())
-                .unwrap();
-            f(item)
-        })
-    }
-
-    /// Get a mutable reference to a type previously inserted on this arbiter's storage.
-    ///
-    /// Panics is item is not inserted
-    pub fn get_mut_item<T: 'static, F, R>(f: F) -> R
-    where
-        F: FnOnce(&mut T) -> R,
-    {
-        STORAGE.with(move |cell| {
             let mut st = cell.borrow_mut();
             let item = st
                 .get_mut(&TypeId::of::<T>())
@@ -302,26 +285,6 @@ impl Arbiter {
             let val = f();
             st.insert(TypeId::of::<T>(), Box::new(val.clone()));
             val
-        })
-    }
-
-    /// Get a type previously inserted to this runtime or create new one.
-    pub fn get_ref_item<T: 'static, F, V, R>(factory: V, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-        V: FnOnce() -> T,
-    {
-        STORAGE.with(move |cell| {
-            let mut st = cell.borrow_mut();
-            if let Some(boxed) = st.get(&TypeId::of::<T>()) {
-                if let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>() {
-                    return f(val);
-                }
-            }
-            let val = factory();
-            let result = f(&val);
-            st.insert(TypeId::of::<T>(), Box::new(val));
-            result
         })
     }
 

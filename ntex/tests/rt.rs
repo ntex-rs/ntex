@@ -102,7 +102,6 @@ fn test_arbiter_local_storage() {
     let _s = System::new("test", ntex::rt::DefaultRuntime);
     Arbiter::set_item("test");
     assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
-    assert!(Arbiter::get_mut_item::<&'static str, _, _>(|s| *s == "test"));
     assert!(Arbiter::contains_item::<&'static str>());
     assert!(Arbiter::get_value(|| 64u64) == 64);
     assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
