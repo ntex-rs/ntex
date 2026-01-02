@@ -4,12 +4,13 @@ use std::os::unix::net::UnixStream as OsUnixStream;
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
-// pub use tok_io::*;
-
 mod io_impl;
 
 pub use self::io_impl::{SocketOptions, TokioIoBoxed};
 use crate::channel::{self, Receiver};
+
+#[doc(hidden)]
+pub use tok_io::*;
 
 pub(crate) struct TcpStream(tok_io::net::TcpStream);
 
