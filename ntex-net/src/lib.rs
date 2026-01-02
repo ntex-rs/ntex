@@ -102,7 +102,7 @@ impl Runner for DefaultRuntime {
             let driver: Box<dyn Reactor> = Box::new(self::tokio::TokioDriver);
 
             CURRENT_DRIVER.set(&driver, || {
-                ntex_tokio::block_on(_fut);
+                crate::tokio::block_on(_fut);
             });
         }
 
@@ -111,7 +111,7 @@ impl Runner for DefaultRuntime {
             let driver: Box<dyn Reactor> = Box::new(self::compio::CompioDriver);
 
             CURRENT_DRIVER.set(&driver, || {
-                ntex_compio::block_on(_fut);
+                crate::compio::block_on(_fut);
             });
         }
 

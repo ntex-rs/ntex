@@ -36,7 +36,7 @@ ntex = { version = "2", features = ["tokio"] }
 
 * [Documentation](https://ntex.rs)
 * [Docs.rs](https://docs.rs/ntex)
-* Minimum supported Rust version: 1.85 or later
+* Minimum supported Rust version: 1.86 or later
 
 ## License
 

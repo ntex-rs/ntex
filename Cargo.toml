@@ -14,9 +14,6 @@ members = [
   "ntex-tls",
   "ntex-macros",
   "ntex-util",
-
-  "ntex-compio",
-  "ntex-tokio",
 ]
 
 [workspace.package]
@@ -41,9 +38,6 @@ ntex-service = { path = "ntex-service" }
 ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
-
-ntex-compio = { path = "ntex-compio" }
-ntex-tokio = { path = "ntex-tokio" }
 
 [workspace.dependencies]
 async-channel = "2"

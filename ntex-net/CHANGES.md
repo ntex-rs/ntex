@@ -4,6 +4,10 @@
 
 * Refactor io driver
 
+* Move tokio impl from ntex-tokio
+
+* Move compio impl from ntex-compio
+
 ## [3.4.1] - 2025-12-18
 
 * Cleanup and improvements for polling driver

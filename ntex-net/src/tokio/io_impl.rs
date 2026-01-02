@@ -6,22 +6,22 @@ use ntex_io::{
     Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types,
 };
 use ntex_util::time::Millis;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
+use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tok_io::net::TcpStream;
 
-impl IoStream for crate::TcpStream {
+impl IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(RefCell::new(self.0));
-        tokio::task::spawn_local(run(io.clone(), ctx));
+        tok_io::task::spawn_local(run(io.clone(), ctx));
         Some(Box::new(HandleWrapper(io)))
     }
 }
 
 #[cfg(unix)]
-impl IoStream for crate::UnixStream {
+impl IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(RefCell::new(self.0));
-        tokio::task::spawn_local(run(io.clone(), ctx));
+        tok_io::task::spawn_local(run(io.clone(), ctx));
         None
     }
 }
@@ -220,6 +220,7 @@ fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
+#[derive(Debug)]
 pub struct TokioIoBoxed(IoBoxed);
 
 impl std::ops::Deref for TokioIoBoxed {
@@ -285,6 +286,7 @@ impl AsyncWrite for TokioIoBoxed {
     }
 }
 
+#[derive(Debug)]
 /// Query TCP Io connections for a handle to set socket options
 pub struct SocketOptions(Weak<RefCell<TcpStream>>);
 
