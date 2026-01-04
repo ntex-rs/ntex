@@ -2,7 +2,13 @@
 
 ## [1.2.0] (2026-01-04)
 
+* Rename .split() to .take()
+
 * Add .advance_to() method, same as Buf::advance()
+
+* Add .take_bytes() method, same as .take().freeze()
+
+* Add .split_to_bytes() method, same as .split_to(at).freeze()
 
 ## [1.1.0] (2025-12-27)
 

@@ -260,7 +260,7 @@ impl MessageType for Request {
         let mut msg = Request::new();
 
         // convert headers
-        let mut length = msg.set_headers(&src.split_to(len).freeze(), ver, headers)?;
+        let mut length = msg.set_headers(&src.split_to_bytes(len), ver, headers)?;
 
         // disallow HTTP/1.0 POST requests that do not contain a Content-Length headers
         // see https://datatracker.ietf.org/doc/html/rfc1945#section-7.2.2
@@ -360,7 +360,7 @@ impl MessageType for ResponseHead {
         msg.version = ver;
 
         // convert headers
-        let mut length = msg.set_headers(&src.split_to(len).freeze(), ver, headers)?;
+        let mut length = msg.set_headers(&src.split_to_bytes(len), ver, headers)?;
 
         // Remove CL value if 0 now that all headers and HTTP/1.0 special cases are processed.
         // Protects against some request smuggling attacks.
@@ -574,7 +574,7 @@ impl Decoder for PayloadDecoder {
                     let len = src.len() as u64;
                     let buf;
                     if *remaining > len {
-                        buf = src.split();
+                        buf = src.take();
                         *remaining -= len;
                     } else {
                         buf = src.split_to(*remaining as usize);
@@ -614,7 +614,7 @@ impl Decoder for PayloadDecoder {
                 if src.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(PayloadItem::Chunk(src.split().freeze())))
+                    Ok(Some(PayloadItem::Chunk(src.take_bytes())))
                 }
             }
         }
@@ -735,7 +735,7 @@ impl ChunkedState {
         } else {
             let slice;
             if *rem > len {
-                slice = rdr.split();
+                slice = rdr.take();
                 *rem -= len;
             } else {
                 slice = rdr.split_to(*rem as usize);

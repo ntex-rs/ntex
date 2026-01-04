@@ -791,19 +791,23 @@ fn reserve_recycling() {
 #[test]
 fn reserve_in_arc_unique_does_not_overallocate() {
     let mut bytes = BytesMut::with_capacity(1000);
-    bytes.split();
+    bytes.take();
 
     // now bytes is Arc and refcount == 1
-
     assert_eq!(1000, bytes.capacity());
     bytes.reserve(2001);
     assert_eq!(2001, bytes.capacity());
+
+    let mut bytes = BytesMut::with_capacity(1000);
+    #[allow(deprecated)]
+    bytes.split();
+    assert_eq!(1000, bytes.capacity());
 }
 
 #[test]
 fn reserve_in_arc_unique_doubles() {
     let mut bytes = BytesMut::with_capacity(1000);
-    bytes.split();
+    bytes.take();
 
     // now bytes is Arc and refcount == 1
 
@@ -815,7 +819,7 @@ fn reserve_in_arc_unique_doubles() {
 #[test]
 fn reserve_in_arc_nonunique_does_not_overallocate() {
     let mut bytes = BytesMut::with_capacity(1000);
-    let _copy = bytes.split();
+    let _copy = bytes.take();
 
     // now bytes is Arc and refcount == 2
 

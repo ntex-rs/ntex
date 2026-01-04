@@ -595,9 +595,9 @@ impl Storage {
             }
         } else {
             assert!(
-                start <= self.len,
-                "cannot advance past `remaining` len:{} delta:{}",
-                self.len,
+                start <= self.cap,
+                "cannot advance past `remaining` cap:{} delta:{}",
+                self.cap,
                 start
             );
 

@@ -36,7 +36,7 @@ where
                 Some(port) => write!(wrt, "{host}:{port}"),
             };
 
-            match HeaderValue::from_shared(wrt.get_mut().split()) {
+            match HeaderValue::from_shared(wrt.get_mut().take()) {
                 Ok(value) => match head {
                     RequestHeadType::Owned(ref mut head) => {
                         head.headers.insert(HOST, value)

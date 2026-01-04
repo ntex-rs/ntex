@@ -1186,7 +1186,7 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(h1.inner.io.is_closed());
-        let buf = client.local_buffer(|buf| buf.split());
+        let buf = client.local_buffer(|buf| buf.take());
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
         assert_eq!(&buf[buf.len() - 5..], b"error");
     }
@@ -1273,7 +1273,7 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(h1.inner.io.is_closed());
-        let buf = client.local_buffer(|buf| buf.split());
+        let buf = client.local_buffer(|buf| buf.take());
         assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
     }
 }

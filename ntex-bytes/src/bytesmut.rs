@@ -207,6 +207,66 @@ impl BytesMut {
         }
     }
 
+    /// Removes the bytes from the current view, returning them in a new
+    /// `BytesMut` handle.
+    ///
+    /// Afterwards, `self` will be empty, but will retain any additional
+    /// capacity that it had before the operation. This is identical to
+    /// `self.split_to(self.len())`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and
+    /// sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::{BytesMut, BufMut};
+    ///
+    /// let mut buf = BytesMut::with_capacity(1024);
+    /// buf.put(&b"hello world"[..]);
+    ///
+    /// let other = buf.take();
+    ///
+    /// assert!(buf.is_empty());
+    /// assert_eq!(1013, buf.capacity());
+    ///
+    /// assert_eq!(other, b"hello world"[..]);
+    /// ```
+    pub fn take(&mut self) -> BytesMut {
+        BytesMut {
+            storage: self.storage.split_to(self.len()),
+        }
+    }
+
+    /// Removes the bytes from the current view, returning them in a new
+    /// `Bytes` handle.
+    ///
+    /// This is identical to `self.take().freeze()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::{BytesMut, BufMut};
+    ///
+    /// let mut buf = BytesMut::with_capacity(1024);
+    /// buf.put(&b"hello world"[..]);
+    ///
+    /// let other = buf.take_bytes();
+    ///
+    /// assert_eq!(other, b"hello world"[..]);
+    /// ```
+    pub fn take_bytes(&mut self) -> Bytes {
+        Bytes {
+            storage: self.storage.split_to(self.len()),
+        }
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    pub fn split(&mut self) -> BytesMut {
+        self.take()
+    }
+
     /// Splits the bytes into two at the given index.
     ///
     /// Afterwards `self` contains elements `[0, at)`, and the returned
@@ -239,35 +299,6 @@ impl BytesMut {
         }
     }
 
-    /// Removes the bytes from the current view, returning them in a new
-    /// `BytesMut` handle.
-    ///
-    /// Afterwards, `self` will be empty, but will retain any additional
-    /// capacity that it had before the operation. This is identical to
-    /// `self.split_to(self.len())`.
-    ///
-    /// This is an `O(1)` operation that just increases the reference count and
-    /// sets a few indices.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::{BytesMut, BufMut};
-    ///
-    /// let mut buf = BytesMut::with_capacity(1024);
-    /// buf.put(&b"hello world"[..]);
-    ///
-    /// let other = buf.split();
-    ///
-    /// assert!(buf.is_empty());
-    /// assert_eq!(1013, buf.capacity());
-    ///
-    /// assert_eq!(other, b"hello world"[..]);
-    /// ```
-    pub fn split(&mut self) -> BytesMut {
-        self.split_to(self.len())
-    }
-
     /// Splits the buffer into two at the given index.
     ///
     /// Afterwards `self` contains elements `[at, len)`, and the returned `BytesMut`
@@ -297,6 +328,34 @@ impl BytesMut {
     pub fn split_to(&mut self, at: usize) -> BytesMut {
         self.split_to_checked(at)
             .expect("at value must be <= self.len()`")
+    }
+
+    /// Splits the buffer into two at the given index.
+    ///
+    /// Same as .split_to() but returns `Bytes` instance
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesMut;
+    ///
+    /// let mut a = BytesMut::from(&b"hello world"[..]);
+    /// let mut b = a.split_to_bytes(5);
+    ///
+    /// a[0] = b'!';
+    /// b[0] = b'j';
+    ///
+    /// assert_eq!(&a[..], b"!world");
+    /// assert_eq!(&b[..], b"jello");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > len`.
+    pub fn split_to_bytes(&mut self, at: usize) -> Bytes {
+        Bytes {
+            storage: self.split_to(at).storage,
+        }
     }
 
     /// Splits the bytes into two at the given index.
@@ -485,7 +544,7 @@ impl BytesMut {
     /// buf.put(&[0; 64][..]);
     ///
     /// let ptr = buf.as_ptr();
-    /// let other = buf.split();
+    /// let other = buf.take();
     ///
     /// assert!(buf.is_empty());
     /// assert_eq!(buf.capacity(), 64);

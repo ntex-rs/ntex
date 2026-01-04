@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(io.read_ready().await.unwrap(), Some(()));
         assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
 
-        let item = io.with_read_buf(|buffer| buffer.split());
+        let item = io.with_read_buf(|buffer| buffer.take());
         assert_eq!(item, Bytes::from_static(BIN));
 
         client.write(TEXT);
