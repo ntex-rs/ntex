@@ -1,6 +1,6 @@
 use std::{borrow, fmt, ops, ptr};
 
-use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, debug, storage::Storage};
+use crate::{buf::IntoIter, buf::UninitSlice, debug, storage::Storage, Buf, BufMut, Bytes};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -380,7 +380,7 @@ impl BytesMut {
     /// ```
     /// use ntex_bytes::BytesMut;
     ///
-    /// let mut a = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// let mut a = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// a.advance_to(5);
     ///
     /// a[0] = b'!';
