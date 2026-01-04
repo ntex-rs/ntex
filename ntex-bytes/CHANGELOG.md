@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.0] (2026-01-04)
+
+* Cleanups
+
 ## [1.1.0] (2025-12-27)
 
 * Use alloc create for BytesVec

@@ -94,15 +94,15 @@ impl BytesVec {
 
     /// Creates a new `BytesVec` from slice, by copying it.
     pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
+        let slice = src.as_ref();
         BytesVec {
-            storage: StorageVec::from_slice(src.as_ref()),
+            storage: StorageVec::from_slice(slice.len(), slice),
         }
     }
 
     /// Creates a new `BytesVec` with default capacity.
     ///
     /// Resulting object has length 0 and unspecified capacity.
-    /// This function does not allocate.
     ///
     /// # Examples
     ///
@@ -121,7 +121,7 @@ impl BytesVec {
     #[inline]
     pub fn new() -> BytesVec {
         BytesVec {
-            storage: StorageVec::with_capacity(0),
+            storage: StorageVec::with_capacity(104),
         }
     }
 
@@ -266,7 +266,7 @@ impl BytesVec {
     pub fn split_to_checked(&mut self, at: usize) -> Option<BytesMut> {
         if at <= self.len() {
             Some(BytesMut {
-                storage: self.storage.split_to(at, false),
+                storage: self.storage.split_to(at),
             })
         } else {
             None
@@ -760,7 +760,10 @@ impl Extend<u8> for BytesVec {
         let (lower, _) = iter.size_hint();
         self.reserve(lower);
 
-        for b in iter {
+        for (idx, b) in iter.enumerate() {
+            if idx >= lower {
+                self.reserve(1);
+            }
             self.put_u8(b);
         }
     }
@@ -913,7 +916,7 @@ impl From<BytesVec> for BytesMut {
     #[inline]
     fn from(src: BytesVec) -> BytesMut {
         BytesMut {
-            storage: src.storage.into_storage(),
+            storage: src.storage.freeze(),
         }
     }
 }

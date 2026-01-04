@@ -5,6 +5,10 @@ use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
 
 const DEFAULT_CACHE_SIZE: usize = 128;
+const DEFAULT_HIGH: usize = 16 * 1024 - 24;
+const DEFAULT_LOW: usize = 512 + 24;
+const DEFAULT_HALF: usize = (16 * 1024 - 24) / 2;
+
 thread_local! {
     static CACHE: LocalCache = LocalCache::new();
 }
@@ -77,17 +81,17 @@ impl IoConfig {
             frame_read_rate: None,
 
             read_buf: BufConfig {
-                high: 16 * 1024,
-                low: 1024,
-                half: 8 * 1024,
+                high: DEFAULT_HIGH,
+                low: DEFAULT_LOW,
+                half: DEFAULT_HALF,
                 idx: config.id(),
                 first: true,
                 cache_size: DEFAULT_CACHE_SIZE,
             },
             write_buf: BufConfig {
-                high: 16 * 1024,
-                low: 1024,
-                half: 8 * 1024,
+                high: DEFAULT_HIGH,
+                low: DEFAULT_LOW,
+                half: DEFAULT_HALF,
                 idx: config.id(),
                 first: false,
                 cache_size: DEFAULT_CACHE_SIZE,

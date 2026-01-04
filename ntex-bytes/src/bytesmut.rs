@@ -305,7 +305,7 @@ impl BytesMut {
     pub fn split_to_checked(&mut self, at: usize) -> Option<BytesMut> {
         if at <= self.len() {
             Some(BytesMut {
-                storage: self.storage.split_to(at, false),
+                storage: self.storage.split_to(at),
             })
         } else {
             None
@@ -862,7 +862,10 @@ impl Extend<u8> for BytesMut {
         let (lower, _) = iter.size_hint();
         self.reserve(lower);
 
-        for b in iter {
+        for (idx, b) in iter.enumerate() {
+            if idx >= lower {
+                self.reserve(1);
+            }
             self.put_u8(b);
         }
     }

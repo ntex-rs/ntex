@@ -395,7 +395,7 @@ impl Bytes {
                 Some(Bytes::new())
             } else {
                 Some(Bytes {
-                    storage: self.storage.split_to(at, true),
+                    storage: self.storage.split_to(at),
                 })
             }
         } else {
