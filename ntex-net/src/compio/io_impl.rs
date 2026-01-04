@@ -193,7 +193,7 @@ where
                     "failed to write frame to transport",
                 )),
                 Ok(size) => {
-                    buf.0.advance(size);
+                    buf.0.advance_to(size);
                     if buf.0.is_empty() {
                         Ok(len)
                     } else {

@@ -260,6 +260,33 @@ impl BytesVec {
             .expect("at value must be <= self.len()`")
     }
 
+    /// Advance the internal cursor.
+    ///
+    /// Afterwards `self` contains elements `[cnt, len)`.
+    /// This is an `O(1)` operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesVec;
+    ///
+    /// let mut a = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// a.advance_to(5);
+    ///
+    /// a[0] = b'!';
+    ///
+    /// assert_eq!(&a[..], b"!world");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cnt > len`.
+    pub fn advance_to(&mut self, cnt: usize) {
+        unsafe {
+            self.storage.set_start(cnt as u32);
+        }
+    }
+
     /// Splits the bytes into two at the given index.
     ///
     /// Does nothing if `at > len`.
@@ -503,15 +530,7 @@ impl Buf for BytesVec {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(
-            cnt <= self.storage.len(),
-            "cannot advance past `remaining` len:{} delta:{}",
-            self.storage.len(),
-            cnt
-        );
-        unsafe {
-            self.storage.set_start(cnt as u32);
-        }
+        self.advance_to(cnt);
     }
 }
 
@@ -575,7 +594,7 @@ impl bytes::buf::Buf for BytesVec {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        Buf::advance(self, cnt)
+        self.advance_to(cnt);
     }
 }
 

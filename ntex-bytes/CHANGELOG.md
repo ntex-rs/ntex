@@ -2,7 +2,7 @@
 
 ## [1.2.0] (2026-01-04)
 
-* Cleanups
+* Add .advance_to() method, same as Buf::advance()
 
 ## [1.1.0] (2025-12-27)
 

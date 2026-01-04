@@ -8,7 +8,7 @@ use crate::http::error::DecodeError;
 use crate::http::header::HeaderMap;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::request::Request;
-use crate::util::{Buf, Bytes, BytesMut};
+use crate::util::{Bytes, BytesMut};
 
 const MAX_HEADERS: usize = 96;
 const MAX_BUFFER_SIZE: usize = 32_768;
@@ -625,7 +625,7 @@ macro_rules! byte (
     ($rdr:ident) => ({
         if $rdr.len() > 0 {
             let b = $rdr[0];
-            $rdr.advance(1);
+            $rdr.advance_to(1);
             b
         } else {
             return Poll::Pending

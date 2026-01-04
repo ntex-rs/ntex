@@ -594,7 +594,12 @@ impl Storage {
                 self.set_inline_len(new_len);
             }
         } else {
-            assert!(start <= self.cap);
+            assert!(
+                start <= self.len,
+                "cannot advance past `remaining` len:{} delta:{}",
+                self.len,
+                start
+            );
 
             // Updating the start of the view is setting `ptr` to point to the
             // new start and updating the `len` field to reflect the new length

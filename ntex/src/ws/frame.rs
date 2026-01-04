@@ -2,7 +2,7 @@ use nanorand::{Rng, WyRand};
 
 use super::proto::{CloseCode, CloseReason, OpCode};
 use super::{error::ProtocolError, mask::apply_mask};
-use crate::util::{Buf, BufMut, Bytes, BytesMut};
+use crate::util::{BufMut, Bytes, BytesMut};
 
 /// WebSocket frame parser.
 #[derive(Debug)]
@@ -103,7 +103,7 @@ impl Parser {
         }
 
         // remove prefix
-        src.advance(idx);
+        src.advance_to(idx);
 
         // no need for body
         if length == 0 {

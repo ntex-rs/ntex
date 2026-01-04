@@ -76,7 +76,7 @@ where
                             }
                             Err(err) => return Err(err),
                         };
-                        src.advance(n);
+                        src.advance_to(n);
                         let state = self
                             .session
                             .process_new_packets()
@@ -108,7 +108,7 @@ where
 
                 'outer: loop {
                     if !src.is_empty() {
-                        src.advance(self.session.writer().write(src)?);
+                        src.advance_to(self.session.writer().write(src)?);
 
                         loop {
                             match self.session.write_tls(&mut io) {
@@ -197,7 +197,7 @@ impl io::Read for Wrapper<'_, '_> {
                     let len = cmp::min(buf.len(), dst.len());
                     if len > 0 {
                         dst[..len].copy_from_slice(&buf[..len]);
-                        buf.advance(len);
+                        buf.advance_to(len);
                         return Ok(len);
                     }
                 }
