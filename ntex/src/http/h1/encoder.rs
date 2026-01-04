@@ -600,7 +600,7 @@ mod tests {
             assert!(!enc.encode(b"test", &mut bytes).ok().unwrap());
             assert!(enc.encode(b"", &mut bytes).ok().unwrap());
         }
-        assert_eq!(bytes.split(), Bytes::from_static(b"4\r\ntest\r\n0\r\n\r\n"));
+        assert_eq!(bytes.take(), Bytes::from_static(b"4\r\ntest\r\n0\r\n\r\n"));
     }
 
     #[test]
@@ -628,7 +628,7 @@ mod tests {
             BodySize::Empty,
             ConnectionType::Close,
         );
-        let data = String::from_utf8(Vec::from(bytes.split().as_ref())).unwrap();
+        let data = String::from_utf8(Vec::from(bytes.take().as_ref())).unwrap();
         assert!(data.contains("content-length: 0\r\n"));
         assert!(data.contains("connection: close\r\n"));
         assert!(data.contains("authorization: another authorization\r\n"));
@@ -640,35 +640,35 @@ mod tests {
         let mut bytes = BytesMut::new();
         bytes.reserve(50);
         write_content_length(0, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 0\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 0\r\n"[..]);
         bytes.reserve(50);
         write_content_length(9, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 9\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 9\r\n"[..]);
         bytes.reserve(50);
         write_content_length(10, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 10\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 10\r\n"[..]);
         bytes.reserve(50);
         write_content_length(99, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 99\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 99\r\n"[..]);
         bytes.reserve(50);
         write_content_length(100, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 100\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 100\r\n"[..]);
         bytes.reserve(50);
         write_content_length(101, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 101\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 101\r\n"[..]);
         bytes.reserve(50);
         write_content_length(998, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 998\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 998\r\n"[..]);
         bytes.reserve(50);
         write_content_length(1000, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 1000\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 1000\r\n"[..]);
         bytes.reserve(50);
         write_content_length(1001, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 1001\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 1001\r\n"[..]);
         bytes.reserve(50);
         write_content_length(5909, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 5909\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 5909\r\n"[..]);
         write_content_length(25999, &mut bytes);
-        assert_eq!(bytes.split(), b"\r\ncontent-length: 25999\r\n"[..]);
+        assert_eq!(bytes.take(), b"\r\ncontent-length: 25999\r\n"[..]);
     }
 }

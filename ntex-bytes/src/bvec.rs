@@ -94,15 +94,15 @@ impl BytesVec {
 
     /// Creates a new `BytesVec` from slice, by copying it.
     pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
+        let slice = src.as_ref();
         BytesVec {
-            storage: StorageVec::from_slice(src.as_ref()),
+            storage: StorageVec::from_slice(slice.len(), slice),
         }
     }
 
     /// Creates a new `BytesVec` with default capacity.
     ///
     /// Resulting object has length 0 and unspecified capacity.
-    /// This function does not allocate.
     ///
     /// # Examples
     ///
@@ -121,7 +121,7 @@ impl BytesVec {
     #[inline]
     pub fn new() -> BytesVec {
         BytesVec {
-            storage: StorageVec::with_capacity(0),
+            storage: StorageVec::with_capacity(104),
         }
     }
 
@@ -202,7 +202,7 @@ impl BytesVec {
     }
 
     /// Removes the bytes from the current view, returning them in a new
-    /// `Bytes` instance.
+    /// `BytesMut` instance.
     ///
     /// Afterwards, `self` will be empty, but will retain any additional
     /// capacity that it had before the operation. This is identical to
@@ -219,15 +219,47 @@ impl BytesVec {
     /// let mut buf = BytesVec::with_capacity(1024);
     /// buf.put(&b"hello world"[..]);
     ///
-    /// let other = buf.split();
+    /// let other = buf.take();
     ///
     /// assert!(buf.is_empty());
     /// assert_eq!(1013, buf.capacity());
     ///
     /// assert_eq!(other, b"hello world"[..]);
     /// ```
+    #[inline]
+    pub fn take(&mut self) -> BytesMut {
+        BytesMut {
+            storage: self.storage.split_to(self.len()),
+        }
+    }
+
+    /// Removes the bytes from the current view, returning them in a new
+    /// `Bytes` handle.
+    ///
+    /// This is identical to `self.take().freeze()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::{BytesMut, BufMut};
+    ///
+    /// let mut buf = BytesMut::with_capacity(1024);
+    /// buf.put(&b"hello world"[..]);
+    ///
+    /// let other = buf.take_bytes();
+    ///
+    /// assert_eq!(other, b"hello world"[..]);
+    /// ```
+    pub fn take_bytes(&mut self) -> Bytes {
+        Bytes {
+            storage: self.storage.split_to(self.len()),
+        }
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
     pub fn split(&mut self) -> BytesMut {
-        self.split_to(self.len())
+        self.take()
     }
 
     /// Splits the buffer into two at the given index.
@@ -255,18 +287,76 @@ impl BytesVec {
     /// # Panics
     ///
     /// Panics if `at > len`.
+    #[inline]
     pub fn split_to(&mut self, at: usize) -> BytesMut {
         self.split_to_checked(at)
             .expect("at value must be <= self.len()`")
     }
 
+    /// Splits the buffer into two at the given index.
+    ///
+    /// Same as .split_to() but returns `Bytes` instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesVec;
+    ///
+    /// let mut a = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// let mut b = a.split_to_bytes(5);
+    ///
+    /// a[0] = b'!';
+    ///
+    /// assert_eq!(&a[..], b"!world");
+    /// assert_eq!(&b[..], b"hello");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > len`.
+    #[inline]
+    pub fn split_to_bytes(&mut self, at: usize) -> Bytes {
+        Bytes {
+            storage: self.split_to(at).storage,
+        }
+    }
+
+    /// Advance the internal cursor.
+    ///
+    /// Afterwards `self` contains elements `[cnt, len)`.
+    /// This is an `O(1)` operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::BytesVec;
+    ///
+    /// let mut a = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// a.advance_to(5);
+    ///
+    /// a[0] = b'!';
+    ///
+    /// assert_eq!(&a[..], b"!world");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cnt > len`.
+    #[inline]
+    pub fn advance_to(&mut self, cnt: usize) {
+        unsafe {
+            self.storage.set_start(cnt as u32);
+        }
+    }
+
     /// Splits the bytes into two at the given index.
     ///
     /// Does nothing if `at > len`.
+    #[inline]
     pub fn split_to_checked(&mut self, at: usize) -> Option<BytesMut> {
         if at <= self.len() {
             Some(BytesMut {
-                storage: self.storage.split_to(at, false),
+                storage: self.storage.split_to(at),
             })
         } else {
             None
@@ -293,6 +383,7 @@ impl BytesVec {
     /// ```
     ///
     /// [`split_off`]: #method.split_off
+    #[inline]
     pub fn truncate(&mut self, len: usize) {
         self.storage.truncate(len);
     }
@@ -308,6 +399,7 @@ impl BytesVec {
     /// buf.clear();
     /// assert!(buf.is_empty());
     /// ```
+    #[inline]
     pub fn clear(&mut self) {
         self.truncate(0);
     }
@@ -419,7 +511,7 @@ impl BytesVec {
     /// buf.put(&[0; 64][..]);
     ///
     /// let ptr = buf.as_ptr();
-    /// let other = buf.split();
+    /// let other = buf.take();
     ///
     /// assert!(buf.is_empty());
     /// assert_eq!(buf.capacity(), 64);
@@ -503,15 +595,7 @@ impl Buf for BytesVec {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(
-            cnt <= self.storage.len(),
-            "cannot advance past `remaining` len:{} delta:{}",
-            self.storage.len(),
-            cnt
-        );
-        unsafe {
-            self.storage.set_start(cnt as u32);
-        }
+        self.advance_to(cnt);
     }
 }
 
@@ -575,7 +659,7 @@ impl bytes::buf::Buf for BytesVec {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        Buf::advance(self, cnt)
+        self.advance_to(cnt);
     }
 }
 
@@ -760,7 +844,10 @@ impl Extend<u8> for BytesVec {
         let (lower, _) = iter.size_hint();
         self.reserve(lower);
 
-        for b in iter {
+        for (idx, b) in iter.enumerate() {
+            if idx >= lower {
+                self.reserve(1);
+            }
             self.put_u8(b);
         }
     }
@@ -913,7 +1000,7 @@ impl From<BytesVec> for BytesMut {
     #[inline]
     fn from(src: BytesVec) -> BytesMut {
         BytesMut {
-            storage: src.storage.into_storage(),
+            storage: src.storage.freeze(),
         }
     }
 }

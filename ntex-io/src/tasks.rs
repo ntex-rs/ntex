@@ -1,6 +1,6 @@
 use std::{cell::Cell, fmt, io, task::Context, task::Poll};
 
-use ntex_bytes::{Buf, BytesVec};
+use ntex_bytes::BytesVec;
 use ntex_util::time::{Sleep, sleep};
 
 use crate::{FilterCtx, Flags, IoRef, IoTaskStatus, Readiness};
@@ -245,7 +245,7 @@ impl IoContext {
                     buf.clear();
                     Ok(0)
                 } else {
-                    buf.advance(n);
+                    buf.advance_to(n);
                     Ok(buf.len())
                 }
             }

@@ -41,7 +41,8 @@ impl io::Read for IoInner {
                 Err(io::Error::from(io::ErrorKind::WouldBlock))
             } else {
                 let len = cmp::min(buf.len(), dst.len());
-                dst[..len].copy_from_slice(&buf.split_to(len));
+                dst[..len].copy_from_slice(&buf[..len]);
+                buf.advance_to(len);
                 Ok(len)
             }
         } else {
@@ -192,7 +193,7 @@ impl FilterLayer for SslFilter {
                         let ssl_result = self.inner.borrow_mut().ssl_write(src);
                         match ssl_result {
                             Ok(v) => {
-                                src.split_to(v);
+                                src.advance_to(v);
                                 continue;
                             }
                             Err(e) => {

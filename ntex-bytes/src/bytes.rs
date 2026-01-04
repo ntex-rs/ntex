@@ -395,11 +395,36 @@ impl Bytes {
                 Some(Bytes::new())
             } else {
                 Some(Bytes {
-                    storage: self.storage.split_to(at, true),
+                    storage: self.storage.split_to(at),
                 })
             }
         } else {
             None
+        }
+    }
+
+    /// Advance the internal cursor.
+    ///
+    /// Afterwards `self` contains elements `[cnt, len)`.
+    /// This is an `O(1)` operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ntex_bytes::Bytes;
+    ///
+    /// let mut a = Bytes::copy_from_slice(&b"hello world"[..]);
+    /// a.advance_to(5);
+    ///
+    /// assert_eq!(&a[..], b" world");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cnt > len`.
+    pub fn advance_to(&mut self, cnt: usize) {
+        unsafe {
+            self.storage.set_start(cnt);
         }
     }
 
@@ -539,10 +564,7 @@ impl Buf for Bytes {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(cnt <= self.storage.len(), "cannot advance past `remaining`");
-        unsafe {
-            self.storage.set_start(cnt);
-        }
+        self.advance_to(cnt)
     }
 }
 
@@ -559,10 +581,7 @@ impl bytes::buf::Buf for Bytes {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(cnt <= self.storage.len(), "cannot advance past `remaining`");
-        unsafe {
-            self.storage.set_start(cnt);
-        }
+        self.advance_to(cnt)
     }
 }
 

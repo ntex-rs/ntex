@@ -31,12 +31,12 @@
 //! buf.put(&b"hello world"[..]);
 //! buf.put_u16(1234);
 //!
-//! let a = buf.split();
+//! let a = buf.take();
 //! assert_eq!(a, b"hello world\x04\xD2"[..]);
 //!
 //! buf.put(&b"goodbye world"[..]);
 //!
-//! let b = buf.split();
+//! let b = buf.take();
 //! assert_eq!(b, b"goodbye world"[..]);
 //!
 //! assert_eq!(buf.capacity(), 998);

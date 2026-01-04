@@ -70,7 +70,7 @@ ws = ["dep:sha1"]
 no-test-logging = []
 
 [dependencies]
-ntex-bytes = "1"
+ntex-bytes = "1.2"
 ntex-codec = "1"
 ntex-http = "1"
 ntex-router = "1"

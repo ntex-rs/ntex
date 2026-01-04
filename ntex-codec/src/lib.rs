@@ -92,8 +92,7 @@ impl Decoder for BytesCodec {
         if src.is_empty() {
             Ok(None)
         } else {
-            let len = src.len();
-            Ok(Some(src.split_to(len)))
+            Ok(Some(src.split_to(src.len())))
         }
     }
 }
