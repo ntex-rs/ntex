@@ -291,7 +291,9 @@ impl AsyncWrite for TokioIoBoxed {
 pub struct SocketOptions(Weak<RefCell<TcpStream>>);
 
 impl SocketOptions {
+    #[deprecated = "`SO_LINGER` causes the socket to block the thread on drop"]
     pub fn set_linger(&self, dur: Option<Millis>) -> io::Result<()> {
+        #[allow(deprecated)]
         self.try_self()
             .and_then(|s| s.borrow().set_linger(dur.map(|d| d.into())))
     }
