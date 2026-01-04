@@ -1,6 +1,6 @@
 use std::{borrow, cmp, fmt, hash, mem, ops};
 
-use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
+use crate::{buf::IntoIter, debug, storage::Storage, storage::INLINE_CAP, Buf, BytesMut};
 
 /// A reference counted contiguous slice of memory.
 ///
@@ -416,9 +416,7 @@ impl Bytes {
     /// let mut a = Bytes::copy_from_slice(&b"hello world"[..]);
     /// a.advance_to(5);
     ///
-    /// a[0] = b'!';
-    ///
-    /// assert_eq!(&a[..], b"!world");
+    /// assert_eq!(&a[..], b" world");
     /// ```
     ///
     /// # Panics
