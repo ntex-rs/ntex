@@ -33,7 +33,7 @@ jobs:
         run: cargo llvm-cov nextest --retries=3 --no-report --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (doc neon-poling)
-        run: cargo llvm-cov test --doc --no-report --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        run: cargo +nightly llvm-cov test --doc --no-report --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (neon-uring)
         run: cargo llvm-cov nextest --retries=3 --no-report --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
