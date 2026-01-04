@@ -32,14 +32,17 @@ jobs:
       - name: Code coverage (neon-poling)
         run: cargo llvm-cov nextest --retries=3 --no-report --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
+      - name: Code coverage (doc neon-poling)
+        run: cargo llvm-cov test --doc --no-report --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+
       - name: Code coverage (neon-uring)
         run: cargo llvm-cov nextest --retries=3 --no-report --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (tokio)
         run: cargo llvm-cov nextest --retries=3 --no-report --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
-      #- name: Code coverage (compio)
-      #  run: cargo llvm-cov nextest --retries=3 --no-report --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+      - name: Code coverage (compio)
+        run: cargo llvm-cov nextest --retries=3 --no-report --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Generate coverage report
         run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex="ntex-compio|ntex-tokio"
