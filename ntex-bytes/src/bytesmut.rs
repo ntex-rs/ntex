@@ -343,10 +343,9 @@ impl BytesMut {
     /// let mut b = a.split_to_bytes(5);
     ///
     /// a[0] = b'!';
-    /// b[0] = b'j';
     ///
     /// assert_eq!(&a[..], b"!world");
-    /// assert_eq!(&b[..], b"jello");
+    /// assert_eq!(&b[..], b"hello");
     /// ```
     ///
     /// # Panics
