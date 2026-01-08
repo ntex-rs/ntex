@@ -1,8 +1,6 @@
+use std::cell::{Cell, UnsafeCell};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::{
-    cell::Cell, cell::RefCell, cmp, collections::VecDeque, fmt, io, mem, net, rc::Rc,
-    sync::Arc,
-};
+use std::{cmp, collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc};
 
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
@@ -49,14 +47,15 @@ impl DriverApi {
     where
         F: FnOnce(&mut SEntry),
     {
-        let mut changes = self.inner.changes.borrow_mut();
-        let sq = self.inner.ring.submission();
-        if !changes.is_empty() || sq.is_full() {
-            let mut entry = Default::default();
-            f(&mut entry);
-            changes.push_back(entry);
-        } else {
-            unsafe {
+        unsafe {
+            let changes = &mut *self.inner.changes.get();
+            let sq = self.inner.ring.submission();
+            if !changes.is_empty() || sq.is_full() {
+                changes.push_back(mem::MaybeUninit::uninit());
+                let entry = changes.back_mut().unwrap();
+                ptr::write_bytes(entry.as_mut_ptr(), 0, 1);
+                f(entry.assume_init_mut());
+            } else {
                 sq.push_inline(f).expect("Queue size is checked");
             }
         }
@@ -135,7 +134,7 @@ struct DriverInner {
     probe: Probe,
     flags: Cell<Flags>,
     ring: IoUring<SEntry, CEntry>,
-    changes: RefCell<VecDeque<SEntry>>,
+    changes: UnsafeCell<VecDeque<mem::MaybeUninit<SEntry>>>,
 }
 
 impl Driver {
@@ -189,7 +188,7 @@ impl Driver {
             ring,
             probe,
             flags: Cell::new(if new { Flags::NEW } else { Flags::empty() }),
-            changes: RefCell::new(VecDeque::with_capacity(32)),
+            changes: UnsafeCell::new(VecDeque::with_capacity(32)),
         });
 
         Ok(Self {
@@ -225,24 +224,26 @@ impl Driver {
     }
 
     fn apply_changes(&self, sq: SubmissionQueue<'_, SEntry>) -> bool {
-        let mut changes = self.inner.changes.borrow_mut();
-        if changes.is_empty() {
-            false
-        } else {
-            let num = cmp::min(changes.len(), sq.capacity() - sq.len());
-            let (s1, s2) = changes.as_slices();
-            let s1_num = cmp::min(s1.len(), num);
-            if s1_num > 0 {
-                unsafe { sq.push_multiple(&s1[0..s1_num]) }.unwrap();
-            } else if !s2.is_empty() {
-                let s2_num = cmp::min(s2.len(), num - s1_num);
-                if s2_num > 0 {
-                    unsafe { sq.push_multiple(&s2[0..s2_num]) }.unwrap();
+        unsafe {
+            let changes = &mut *self.inner.changes.get();
+            if changes.is_empty() {
+                false
+            } else {
+                let num = cmp::min(changes.len(), sq.capacity() - sq.len());
+                let (s1, s2) = changes.as_slices();
+                let s1_num = cmp::min(s1.len(), num);
+                if s1_num > 0 {
+                    sq.push_multiple(mem::transmute(&s1[0..s1_num])).unwrap();
+                } else if !s2.is_empty() {
+                    let s2_num = cmp::min(s2.len(), num - s1_num);
+                    if s2_num > 0 {
+                        sq.push_multiple(mem::transmute(&s2[0..s2_num])).unwrap();
+                    }
                 }
-            }
-            changes.drain(0..num);
+                changes.drain(0..num);
 
-            !changes.is_empty()
+                !changes.is_empty()
+            }
         }
     }
 
