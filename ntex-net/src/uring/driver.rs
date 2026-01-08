@@ -233,11 +233,20 @@ impl Driver {
                 let (s1, s2) = changes.as_slices();
                 let s1_num = cmp::min(s1.len(), num);
                 if s1_num > 0 {
-                    sq.push_multiple(mem::transmute(&s1[0..s1_num])).unwrap();
+                    // safety: "changes" contains only initialized entries
+                    sq.push_multiple(mem::transmute::<
+                        &[mem::MaybeUninit<SEntry>],
+                        &[SEntry],
+                    >(&s1[0..s1_num]))
+                        .unwrap();
                 } else if !s2.is_empty() {
                     let s2_num = cmp::min(s2.len(), num - s1_num);
                     if s2_num > 0 {
-                        sq.push_multiple(mem::transmute(&s2[0..s2_num])).unwrap();
+                        sq.push_multiple(mem::transmute::<
+                            &[mem::MaybeUninit<SEntry>],
+                            &[SEntry],
+                        >(&s2[0..s2_num]))
+                            .unwrap();
                     }
                 }
                 changes.drain(0..num);
