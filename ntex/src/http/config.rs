@@ -2,7 +2,7 @@ use std::{cell::Cell, ptr::copy_nonoverlapping, time};
 
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
+use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut, util::BytesVec};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -344,6 +344,25 @@ impl DateService {
             }
         })
     }
+
+    #[doc(hidden)]
+    pub fn bset_date_header(&self, dst: &mut BytesVec) {
+        self.check_date();
+
+        DATE.with(|date| {
+            // SAFETY: reserves exact size
+            let len = dst.len();
+            dst.reserve(DATE_VALUE_LENGTH_HDR);
+            unsafe {
+                copy_nonoverlapping(
+                    date.current_date.as_ptr().cast(),
+                    dst.as_mut_ptr().add(len),
+                    DATE_VALUE_LENGTH_HDR,
+                );
+                dst.set_len(len + DATE_VALUE_LENGTH_HDR)
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -356,6 +375,12 @@ mod tests {
         DateService.set_date_header(&mut buf1);
         let mut buf2 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
         DateService.set_date_header(&mut buf2);
+        assert_eq!(buf1, buf2);
+
+        let mut buf1 = BytesVec::with_capacity(DATE_VALUE_LENGTH_HDR);
+        DateService.bset_date_header(&mut buf1);
+        let mut buf2 = BytesVec::with_capacity(DATE_VALUE_LENGTH_HDR);
+        DateService.bset_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
     }
 

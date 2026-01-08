@@ -1,5 +1,11 @@
 # Changes
 
+## [3.0.0-pre.11] 2026-01-08
+
+* Update ntex-bytes
+
+* Add DateService.bset_date_header()
+
 ## [3.0.0-pre.10] 2026-01-03
 
 * Refactor io driver management
