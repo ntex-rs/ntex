@@ -212,8 +212,6 @@ impl RunnableQueue {
     }
 
     fn run(&self) -> bool {
-        self.idle.set(false);
-
         for _ in 0..self.event_interval {
             let task = unsafe { (*self.local_queue.get()).pop_front() };
             if let Some(task) = task {
@@ -238,11 +236,15 @@ impl RunnableQueue {
             }
             break;
         }
-        self.idle.set(true);
 
-        !unsafe { (*self.local_queue.get()).is_empty() }
+        let more_tasks = !unsafe { (*self.local_queue.get()).is_empty() }
             || !self.sync_fixed_queue.is_empty()
-            || !self.sync_queue.is_empty()
+            || !self.sync_queue.is_empty();
+
+        if !more_tasks {
+            self.idle.set(true);
+        }
+        more_tasks
     }
 
     fn clear(&self) {
