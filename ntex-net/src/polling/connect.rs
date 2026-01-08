@@ -163,16 +163,18 @@ impl Handler for ConnectOpsBatcher {
 
     fn error(&mut self, id: usize, err: io::Error) {
         let mut connects = self.inner.connects.borrow_mut();
-        log::trace!(
-            "Connect {id:?} is failed {err:?}, has-con: {}",
-            connects.contains(id)
-        );
 
         if connects.contains(id) {
-            let Item { sock, sender, .. } = connects.remove(id);
+            let Item {
+                sock, sender, cfg, ..
+            } = connects.remove(id);
+            log::trace!("{}: Connect {id:?} is failed {err:?}", cfg.tag());
+
             let _ = sender.send(Err(err));
             self.inner.api.detach(sock.as_raw_fd(), id as u32);
             crate::helpers::close_socket(sock);
+        } else {
+            log::error!("Connect {id:?} is failed {err:?}");
         }
     }
 

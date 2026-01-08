@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.1] - 2026-01-08
+
+* Remove changes queue checks for io-uring driver
+
 ## [3.5.0] - 2026-01-03
 
 * Refactor io driver

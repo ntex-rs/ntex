@@ -247,11 +247,19 @@ impl<'a> FilterCtx<'a> {
     }
 
     #[inline]
+    /// Get io
+    pub fn io(&self) -> &IoRef {
+        self.io
+    }
+
+    #[inline]
+    /// Get io tag
     pub fn tag(&self) -> &'static str {
         self.io.tag()
     }
 
     #[inline]
+    /// Get filter ctx for next filter in chain
     pub fn next(&self) -> Self {
         Self {
             io: self.io,
@@ -261,6 +269,7 @@ impl<'a> FilterCtx<'a> {
     }
 
     #[inline]
+    /// Get current read buffer
     pub fn read_buf<F, R>(&self, nbytes: usize, f: F) -> R
     where
         F: FnOnce(&ReadBuf<'_>) -> R,
@@ -278,6 +287,7 @@ impl<'a> FilterCtx<'a> {
     }
 
     #[inline]
+    /// Get current write buffer
     pub fn write_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&WriteBuf<'_>) -> R,
