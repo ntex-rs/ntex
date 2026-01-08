@@ -137,7 +137,7 @@ impl StreamOps {
     }
 
     pub(crate) fn register(
-        &self,
+        self,
         io: Socket,
         ctx: IoContext,
         zc: bool,
@@ -150,7 +150,7 @@ impl StreamOps {
             flags: if zc { self.0.default_flags } else { Flags::NO_ZC },
         };
 
-        let id = self.0.with(move |st| {
+        let id = self.0.with(|st| {
             // handle RDHUP event
             let op = opcode::PollAdd::new(item.fd(), libc::POLLRDHUP as u32).build();
             let id = st.streams.insert(item);
