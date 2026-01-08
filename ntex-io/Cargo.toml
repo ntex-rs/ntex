@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "3.3.1"
+version = "3.3.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
@@ -27,5 +27,5 @@ log = { workspace = true }
 pin-project-lite = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.8"
+ntex = "3.0.0-pre.10"
 rand = { workspace = true }

@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.2] - 2026-01-08
+
+* Add FilterCtx::io()
+
 ## [3.3.1] - 2025-12-18
 
 * Add IoTaskStatus::ready() helper method
