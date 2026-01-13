@@ -132,16 +132,20 @@ mod tests {
         )
         .clone();
 
-        let _ = factory.create(&10).await;
+        let svc = factory.pipeline(&10).await.unwrap();
         assert_eq!(item.get(), 11);
         let _ = format!("{factory:?}");
+
+        assert_eq!(svc.call(1).await.unwrap(), 1);
     }
 
     #[ntex::test]
     async fn test_unit_config() {
-        let _ = unit_config(fn_service(|item: usize| async move { Ok::<_, ()>(item) }))
+        let svc = unit_config(fn_service(|item: usize| async move { Ok::<_, ()>(item) }))
             .clone()
-            .create(&10)
-            .await;
+            .pipeline(&10)
+            .await
+            .unwrap();
+        assert_eq!(svc.call(1).await.unwrap(), 1);
     }
 }

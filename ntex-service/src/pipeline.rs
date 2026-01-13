@@ -497,7 +497,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{cell::Cell, future::poll_fn, rc::Rc};
 
     use super::*;
 
@@ -548,6 +548,9 @@ mod tests {
         assert_eq!(res.unwrap(), "ok");
 
         let res = srv.ready().await;
+        assert_eq!(res, Ok(()));
+
+        let res = poll_fn(|cx| Poll::Ready(srv.poll(cx))).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;

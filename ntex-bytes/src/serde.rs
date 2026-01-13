@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::{cmp, fmt};
 
@@ -17,6 +18,7 @@ macro_rules! serde_impl {
 
         struct $visitor_ty;
 
+        #[cfg_attr(coverage_nightly, coverage(off))]
         impl<'de> de::Visitor<'de> for $visitor_ty {
             type Value = $ty;
 
