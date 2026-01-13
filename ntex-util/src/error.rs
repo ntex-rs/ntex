@@ -138,6 +138,8 @@ impl<M: Into<ErrorMessage>> From<M> for ErrorMessageChained {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::*;
 
     #[test]
@@ -151,6 +153,7 @@ mod tests {
 
         let msg = ErrorMessage::from("test");
         assert!(!msg.is_empty());
+        assert_eq!(format!("{msg}"), "test");
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
@@ -187,5 +190,9 @@ mod tests {
         let chained = ErrorMessageChained::from_bstr(ByteString::from("test"));
         assert_eq!(chained.msg(), "test");
         assert!(chained.source().is_none());
+
+        let err = ErrorMessageChained::new("test", io::Error::other("io-test"));
+        let msg = fmt_err_string(&err);
+        assert_eq!(msg, "test\nio-test\n");
     }
 }

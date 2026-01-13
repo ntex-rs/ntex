@@ -26,10 +26,7 @@ pub struct LocalWaker {
 impl LocalWaker {
     /// Create an `LocalWaker`.
     pub fn new() -> Self {
-        LocalWaker {
-            waker: Cell::new(None),
-            _t: PhantomData,
-        }
+        LocalWaker::with(None)
     }
 
     /// Create an `LocalWaker`.

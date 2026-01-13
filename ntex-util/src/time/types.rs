@@ -243,6 +243,12 @@ mod tests {
         let m = Millis::default();
         assert_eq!(m.0, 0);
 
+        let m = Millis::from(10u32);
+        assert_eq!(m.0, 10);
+
+        let m = Millis::from(10usize);
+        assert_eq!(m.0, 10);
+
         let m = Millis(10) + Millis(20);
         assert_eq!(m.0, 30);
 
@@ -281,6 +287,18 @@ mod tests {
 
         let s = Seconds::new(10);
         assert_eq!(s.0, 10);
+
+        let s = Seconds::from(10u16);
+        assert_eq!(s.0, 10);
+
+        let s = Seconds::from(10usize);
+        assert_eq!(s.0, 10);
+
+        let s = Seconds::from(10i32);
+        assert_eq!(s.0, 10);
+
+        let s = Seconds::from(-10i32);
+        assert_eq!(s.0, 0);
 
         let s = Seconds::checked_new(10);
         assert_eq!(s.0, 10);
