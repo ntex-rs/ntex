@@ -334,7 +334,13 @@ mod tests {
         let factory = variant(fn_service(|()| async { Ok::<_, ()>(0) }))
             .v2(fn_factory(|| async { Ok::<_, ()>(Srv5) }))
             .v3(fn_service(|()| crate::future::Ready::Ok::<_, ()>(2)));
+        assert!(format!("{factory:?}").contains("Variant"));
+
+        let service = factory.clone().create(&()).await.unwrap().clone();
+        assert!(format!("{service:?}").contains("Variant"));
+
         let service = factory.pipeline(&()).await.unwrap().clone();
         assert!(service.ready().await.is_ok());
+        assert!(format!("{service:?}").contains("Variant"));
     }
 }

@@ -276,6 +276,7 @@ mod tests {
                 let _ = ctx.shared().get::<TestCfg>();
             }
         }
+        let _ = TestCfg::new().ctx();
         SharedCfg::new("TEST").add(TestCfg::new());
     }
 

@@ -601,6 +601,13 @@ fn fns_defined_for_bytes_mut() {
         bytes
     );
 
+    let bytes = BytesMut::from("hello world".to_string());
+    assert_eq!("hello world", bytes);
+    assert_eq!(bytes, "hello world");
+    let bytes2 = BytesMut::from(&bytes);
+    assert_eq!("hello world", bytes);
+    assert_eq!("hello world", bytes2);
+
     // Iterator
     let v: Vec<u8> = (&bytes).iter().cloned().collect();
     assert_eq!(&v[..], bytes);
@@ -1064,4 +1071,19 @@ fn bytes_vec() {
         *buf = BytesMut::from(b"12345".to_vec());
     });
     assert_eq!(bytes, "12345");
+
+    let mut bytes = BytesVec::from("12345");
+    assert_eq!(bytes, "12345");
+    assert_eq!("12345", bytes);
+    let b: Bytes = bytes.split_to_bytes(3);
+    assert_eq!(b, "123");
+    assert_eq!("123", b);
+    assert_eq!(bytes, "45");
+
+    let bytes = BytesMut::from(BytesVec::from("12345"));
+    assert_eq!(bytes, "12345");
+
+    let data: [u8; 3] = [1, 2, 3];
+    let bytes = BytesVec::from(data);
+    assert_eq!(bytes, b"\x01\x02\x03");
 }

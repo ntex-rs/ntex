@@ -256,12 +256,6 @@ impl BytesVec {
         }
     }
 
-    #[doc(hidden)]
-    #[deprecated]
-    pub fn split(&mut self) -> BytesMut {
-        self.take()
-    }
-
     /// Splits the buffer into two at the given index.
     ///
     /// Afterwards `self` contains elements `[at, len)`, and the returned `Bytes`

@@ -124,8 +124,8 @@ mod tests {
     #[ntex::test]
     async fn test_oneshot() {
         let (tx, rx) = create();
-        //assert!(format!("{tx:?}").contains("Sender"));
-        //assert!(format!("{rx:?}").contains("Receiver"));
+        assert!(format!("{tx:?}").contains("Sender"));
+        assert!(format!("{rx:?}").contains("Receiver"));
 
         tx.send(Ok("test")).unwrap();
         assert_eq!(rx.await.unwrap(), "test");

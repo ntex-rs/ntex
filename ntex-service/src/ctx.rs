@@ -280,6 +280,7 @@ mod tests {
             ctx: ServiceCtx<'_, Self>,
         ) -> Result<Self::Response, Self::Error> {
             let _ = format!("{ctx:?}");
+            let _ = format!("{:?}", ctx.id());
             #[allow(clippy::clone_on_copy)]
             let _ = ctx.clone();
             Ok(req)
@@ -334,7 +335,6 @@ mod tests {
         spawn(async move {
             select(rx, srv1.ready()).await;
             time::sleep(time::Millis(25000)).await;
-            drop(srv1);
         });
         time::sleep(time::Millis(250)).await;
 
@@ -366,7 +366,6 @@ mod tests {
             select(rx, poll_fn(|cx| srv1.poll_ready(cx))).await;
             poll_fn(|cx| srv1.poll_shutdown(cx)).await;
             time::sleep(time::Millis(25000)).await;
-            drop(srv1);
         });
         time::sleep(time::Millis(250)).await;
 
