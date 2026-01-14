@@ -881,6 +881,7 @@ impl PartialOrd<Bytes> for String {
 
 impl PartialEq<Bytes> for &[u8] {
     fn eq(&self, other: &Bytes) -> bool {
+        println!("4 --------------------");
         *other == *self
     }
 }
@@ -940,6 +941,7 @@ mod tests {
 
     #[test]
     #[allow(
+        clippy::op_ref,
         clippy::len_zero,
         clippy::nonminimal_bool,
         clippy::unnecessary_fallible_conversions
@@ -950,6 +952,11 @@ mod tests {
         assert!(b.is_inline());
         assert!(b.is_empty());
         assert!(b.len() == 0);
+
+        let b = Bytes::from(b"123");
+        assert!(&b"12"[..] > &b);
+        assert!("123" == &b);
+        assert!("12" > &b);
 
         let b = Bytes::from(&Bytes::from(LONG));
         assert_eq!(b, LONG);

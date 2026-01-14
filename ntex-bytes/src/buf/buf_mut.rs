@@ -985,6 +985,7 @@ mod tests {
         let mut buf = [b'1'; 10];
         let mut b = buf.as_mut();
         assert_eq!(b.remaining_mut(), 10);
+        assert!(b.has_remaining_mut());
         b.put_slice(b"123");
         assert_eq!(&buf[..], b"1231111111");
 
@@ -1003,9 +1004,10 @@ mod tests {
 
         let b = buf.as_mut();
         let mut bb = Box::new(b);
+        unsafe { bb.advance_mut(1) };
         let chunk = bb.chunk_mut();
-        chunk.copy_from_slice(b"1111111111");
-        assert_eq!(&buf[..], b"1111111111");
+        chunk.copy_from_slice(b"111111111");
+        assert_eq!(&buf[..], b"0111111111");
 
         let mut buf = BytesMut::new();
         buf.put_u8(0x01);

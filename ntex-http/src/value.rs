@@ -767,12 +767,16 @@ mod tests {
         assert!(hdr == &hdr);
         assert!(hdr == "upgrade");
         assert!(hdr == "upgrade".to_string());
+        assert!(hdr == b"upgrade".as_ref());
         assert!("upgrade" == hdr);
         assert!("upgrade" == &hdr);
         assert!("upgrade".to_string() == hdr);
+        assert!(b"upgrade".as_ref() == &hdr);
         assert!(hdr < hdr2);
         assert!(hdr < &hdr2);
         assert!(&hdr < &hdr2);
+        assert!(hdr2 > hdr);
+        assert!(&hdr2 > hdr);
         assert!(&hdr < "upgrade2");
         assert!(hdr < "upgrade2");
         assert!(hdr < "upgrade2".to_string());
@@ -781,6 +785,7 @@ mod tests {
         assert!(hdr != &b"upgrade2"[..]);
         assert!(hdr != b"upgrade2"[..]);
         assert!("upgrade2" > hdr);
+        assert!("upgrade2" > &hdr);
         assert!("upgrade2".to_string() > hdr);
         assert!(b"upgrade2"[..] > hdr);
         assert!("upgrade2"[..] != hdr);
