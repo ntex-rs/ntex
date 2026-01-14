@@ -608,6 +608,9 @@ fn fns_defined_for_bytes_mut() {
     assert_eq!("hello world", bytes);
     assert_eq!("hello world", bytes2);
 
+    let bytes = BytesMut::from(Bytes::copy_from_slice(b"hello world"));
+    assert_eq!("hello world", &bytes);
+
     // Iterator
     let v: Vec<u8> = (&bytes).iter().cloned().collect();
     assert_eq!(&v[..], bytes);

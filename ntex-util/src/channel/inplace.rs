@@ -77,5 +77,6 @@ mod tests {
 
         assert!(ch.send(1).is_ok());
         assert_eq!(ch.recv().await, 1);
+        assert!(format!("{ch:?}").contains("Inplace"));
     }
 }

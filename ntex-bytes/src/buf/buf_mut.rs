@@ -1004,9 +1004,10 @@ mod tests {
 
         let b = buf.as_mut();
         let mut bb = Box::new(b);
+        unsafe { bb.advance_mut(1) };
         let chunk = bb.chunk_mut();
-        chunk.copy_from_slice(b"1111111111");
-        assert_eq!(&buf[..], b"1111111111");
+        chunk.copy_from_slice(b"111111111");
+        assert_eq!(&buf[..], b"0111111111");
 
         let mut buf = BytesMut::new();
         buf.put_u8(0x01);

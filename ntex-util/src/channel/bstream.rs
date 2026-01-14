@@ -313,8 +313,10 @@ mod tests {
 
     #[ntex::test]
     async fn test_eof() {
-        let (_, rx) = eof::<()>();
+        let (tx, rx) = eof::<()>();
+        rx.max_buffer_size(100);
         assert!(rx.read().await.is_none());
+        assert_eq!(tx.ready().await, Status::Eof);
     }
 
     #[ntex::test]
