@@ -23,7 +23,7 @@ where
 ///
 /// ```rust
 /// use ntex_service::{Service, ServiceCtx};
-/// use ntex_util::{time::sleep, future::Either, future::select};
+/// use ntex::{time::sleep, util::Either, util::select};
 ///
 /// pub struct Timeout<S> {
 ///     service: S,
