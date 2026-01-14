@@ -985,6 +985,7 @@ mod tests {
         let mut buf = [b'1'; 10];
         let mut b = buf.as_mut();
         assert_eq!(b.remaining_mut(), 10);
+        assert!(b.has_remaining_mut());
         b.put_slice(b"123");
         assert_eq!(&buf[..], b"1231111111");
 

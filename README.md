@@ -8,7 +8,7 @@
 [![Documentation](https://img.shields.io/docsrs/ntex/latest)](https://docs.rs/ntex) 
 [![Version](https://img.shields.io/badge/rustc-1.86+-lightgray.svg)](https://releases.rs/docs/1.86.0/) 
 ![License](https://img.shields.io/crates/l/ntex.svg) 
-[![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/master/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex) 
+[![codecov](https://codecov.io/gh/ntex-rs/ntex/branch/main/graph/badge.svg)](https://codecov.io/gh/ntex-rs/ntex/tree/main) 
 [![Chat on Discord](https://img.shields.io/discord/919288597826387979?label=chat&logo=discord)](https://discord.gg/4GtaeP5Uqu) 
  
   </p>

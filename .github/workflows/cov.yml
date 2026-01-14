@@ -27,7 +27,7 @@ jobs:
         uses: Swatinem/rust-cache@v1.0.1
 
       - name: Clean coverage results
-        run: cargo llvm-cov clean --workspace
+        run: cargo +nightly llvm-cov clean --workspace
 
       - name: Code coverage (neon-poling)
         run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
@@ -42,7 +42,7 @@ jobs:
         run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Generate coverage report
-        run: cargo +nightly llvm-cov report --lcov --output-path lcov.info
+        run: cargo +nightly llvm-cov report --doctests --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
