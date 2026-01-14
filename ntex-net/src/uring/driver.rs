@@ -5,11 +5,11 @@ use std::{cmp, collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc}
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
 
-use io_uring::cqueue::{self, Entry as CEntry, more};
-use io_uring::opcode::{AsyncCancel, PollAdd};
-use io_uring::squeue::{Entry as SEntry, SubmissionQueue};
-use io_uring::{IoUring, Probe, types::Fd};
 use ntex_io::Io;
+use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
+use ntex_io_uring::opcode::{AsyncCancel, PollAdd};
+use ntex_io_uring::squeue::{Entry as SEntry, SubmissionQueue};
+use ntex_io_uring::{IoUring, Probe, types::Fd};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};

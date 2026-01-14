@@ -29,7 +29,7 @@ impl<T> Server<T> {
     }
 
     /// Start streaming server building process
-    pub fn build() -> crate::net::ServerBuilder {
+    pub fn builder() -> crate::net::ServerBuilder {
         crate::net::ServerBuilder::default()
     }
 

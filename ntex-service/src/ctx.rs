@@ -256,8 +256,8 @@ impl<S: ?Sized, F: Future> Future for ReadyCall<'_, S, F> {
 mod tests {
     use std::{cell::Cell, cell::RefCell, future::poll_fn};
 
-    use ntex_util::channel::{condition, oneshot};
-    use ntex_util::{future::lazy, future::select, spawn, time};
+    use ntex::channel::{condition, oneshot};
+    use ntex::{rt::spawn, time, util::lazy, util::select};
 
     use super::*;
     use crate::Pipeline;

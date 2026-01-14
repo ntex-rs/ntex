@@ -1,8 +1,8 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_bytes::{Buf, BufMut, BytesVec};
 use ntex_io::IoContext;
+use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_rt::Arbiter;
 use ntex_util::channel::pool;
 use slab::Slab;

@@ -58,7 +58,7 @@ impl ServerBuilder {
             on_worker_start: Vec::new(),
             accept: AcceptLoop::default(),
             backlog: 2048,
-            pool: WorkerPool::new(),
+            pool: WorkerPool::default(),
         }
     }
 

@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 license = "MIT OR Apache-2.0"
 
 [features]
@@ -19,10 +19,10 @@ default = []
 simd = ["simdutf8"]
 
 [dependencies]
-bytes = "1"
+bytes = { workspace = true }
 serde = { workspace = true }
-simdutf8 = { version = "0.1.5", optional = true }
+simdutf8 = { workspace = true, optional = true }
 
 [dev-dependencies]
-serde_test = "1"
-serde_json = "1"
+serde_test = { workspace = true }
+serde_json = { workspace = true }

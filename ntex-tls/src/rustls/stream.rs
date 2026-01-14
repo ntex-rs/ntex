@@ -4,7 +4,7 @@ use std::{any, cmp, future::poll_fn, ops::Deref, ops::DerefMut, task::Poll, task
 
 use ntex_bytes::BufMut;
 use ntex_io::{Io, ReadBuf, WriteBuf, types};
-use tls_rust::{ConnectionCommon, SideData};
+use tls_rustls::{ConnectionCommon, SideData};
 
 use super::{PeerCert, PeerCertChain};
 

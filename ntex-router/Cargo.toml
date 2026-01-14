@@ -8,7 +8,7 @@ repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-router/"
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [lib]
 name = "ntex_router"
@@ -18,12 +18,12 @@ path = "src/lib.rs"
 default = ["http"]
 
 [dependencies]
-ntex-bytes = "1"
+ntex-bytes = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
-http = { version = "1", optional = true }
+http = { workspace = true, optional = true }
 regex = { workspace = true }
 
 [dev-dependencies]
-http = "1"
-serde_derive = "1.0"
+http = { workspace = true }
+serde_derive = { workspace = true }

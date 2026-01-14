@@ -3,7 +3,7 @@ use std::{any, cell::RefCell, io, sync::Arc};
 
 use ntex_io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use ntex_util::{time, time::Millis};
-use tls_rust::{ServerConfig, ServerConnection};
+use tls_rustls::{ServerConfig, ServerConnection};
 
 use crate::{Servername, rustls::Stream};
 

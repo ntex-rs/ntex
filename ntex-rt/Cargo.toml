@@ -30,7 +30,7 @@ compio = ["compio-driver", "compio-runtime"]
 neon = []
 
 [dependencies]
-ntex-service = "4"
+ntex-service = { workspace = true }
 
 async-channel = { workspace = true }
 async-task = { workspace = true }
@@ -43,12 +43,9 @@ log = { workspace = true }
 scoped-tls = { workspace = true }
 swap-buffer-queue = { workspace = true }
 
-compio-driver = { version = "0.10", optional = true }
-compio-runtime = { version = "0.10", optional = true }
-tok-io = { version = "1", package = "tokio", default-features = false, features = [
-    "rt",
-    "net",
-], optional = true }
+compio-driver = { workspace = true, optional = true }
+compio-runtime = { workspace = true, optional = true }
+tok-io = { workspace = true, features = ["rt", "net"], optional = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.9"
+ntex = { workspace = true }

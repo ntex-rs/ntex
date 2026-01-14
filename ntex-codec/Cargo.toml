@@ -10,11 +10,11 @@ documentation = "https://docs.rs/ntex-codec/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [lib]
 name = "ntex_codec"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "1.0"
+ntex-bytes = { workspace = true }

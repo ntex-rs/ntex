@@ -72,12 +72,13 @@ where
             let system = sys.system();
 
             sys.run(move || {
-                let server = ServerBuilder::new()
+                let server = Server::builder()
                     .listen("test", tcp, async move |_| factory().await)?
                     .config("test", config)
                     .workers(1)
                     .disable_signals()
                     .testing()
+                    .enable_affinity()
                     .run();
 
                 ntex_rt::spawn(async move {
@@ -89,7 +90,7 @@ where
             })
         });
         let (system, addr, server) = rx.recv().unwrap();
-        thread::sleep(time::Duration::from_millis(75));
+        thread::sleep(time::Duration::from_millis(25));
 
         TestServer {
             addr,

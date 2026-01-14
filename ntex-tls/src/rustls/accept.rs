@@ -1,6 +1,6 @@
 use std::{io, sync::Arc};
 
-use tls_rust::ServerConfig;
+use tls_rustls::ServerConfig;
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::{Cfg, SharedCfg};

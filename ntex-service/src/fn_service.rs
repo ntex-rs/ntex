@@ -348,7 +348,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_util::future::lazy;
+    use ntex::util::lazy;
     use std::task::Poll;
 
     use super::*;
