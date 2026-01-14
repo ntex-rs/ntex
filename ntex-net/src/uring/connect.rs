@@ -1,7 +1,7 @@
 use std::{cell::RefCell, io, os::fd::AsRawFd, rc::Rc};
 
-use io_uring::{opcode, types::Fd};
 use ntex_io::Io;
+use ntex_io_uring::{opcode, types::Fd};
 use ntex_rt::Arbiter;
 use ntex_service::cfg::SharedCfg;
 use slab::Slab;

@@ -37,7 +37,6 @@ pub mod header {
     pub use crate::map::{AsName, Either, GetAll, Iter, Value};
     pub use crate::value::{HeaderValue, InvalidHeaderValue, ToStrError};
 
-    pub use http::header::{HeaderName, InvalidHeaderName};
     pub use http::header::{
         ACCEPT, ACCEPT_CHARSET, ACCEPT_ENCODING, ACCEPT_LANGUAGE, ACCEPT_RANGES,
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
@@ -58,6 +57,7 @@ pub mod header {
         WARNING, WWW_AUTHENTICATE, X_CONTENT_TYPE_OPTIONS, X_DNS_PREFETCH_CONTROL,
         X_FRAME_OPTIONS, X_XSS_PROTECTION,
     };
+    pub use http::header::{HeaderName, InvalidHeaderName};
 }
 
 #[doc(hidden)]

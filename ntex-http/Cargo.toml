@@ -9,14 +9,15 @@ repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-http/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.86"
 
 [lib]
 name = "ntex_http"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "1"
+ntex-bytes = { workspace = true }
 
 foldhash = { workspace = true }
 futures-core = { workspace = true }
@@ -27,8 +28,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-bincode = "1"
-serde_json = "1"
-ntex = "3.0.0-pre.0"
-ntex-util = "3"
+bincode = { workspace = true }
+serde_json = { workspace = true }
+ntex = { workspace = true }
 futures-util = { workspace = true }

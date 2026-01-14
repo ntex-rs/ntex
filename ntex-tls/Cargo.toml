@@ -23,27 +23,27 @@ default = []
 openssl = ["tls_openssl"]
 
 # rustls support
-rustls = ["tls_rust", "tls_rust/std"]
-rustls-ring = ["tls_rust", "tls_rust/ring", "tls_rust/std"]
+rustls = ["tls_rustls", "tls_rustls/std"]
+rustls-ring = ["tls_rustls", "tls_rustls/ring", "tls_rustls/std"]
 
 [dependencies]
-ntex-bytes = "1.2"
-ntex-io = "3"
-ntex-util = "3"
-ntex-service = "4"
-ntex-net = "3"
+ntex-bytes = { workspace = true }
+ntex-io = { workspace = true }
+ntex-util = { workspace = true }
+ntex-service = { workspace = true }
+ntex-net = { workspace = true }
 
 log = { workspace = true }
 
 # openssl
-tls_openssl = { version = "0.10", package = "openssl", optional = true }
+tls_openssl = { workspace = true, optional = true }
 
 # rustls
-tls_rust = { version = "0.23", package = "rustls", default-features = false, optional = true }
+tls_rustls = { workspace = true, optional = true }
 
 [dev-dependencies]
-ntex = { version = "3.0.0-pre.0", features = ["openssl", "rustls"] }
+ntex = { workspace = true, features = ["openssl", "rustls"] }
 env_logger = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
-tls_rust = { version = "0.23", package = "rustls", features = ["ring", "std"], default-features = false }
+tls_rustls = { workspace = true, features = ["ring", "std"] }

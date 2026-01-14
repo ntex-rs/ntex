@@ -2,7 +2,7 @@
 use std::{any, cell::RefCell, io, sync::Arc};
 
 use ntex_io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
-use tls_rust::{ClientConfig, ClientConnection, pki_types::ServerName};
+use tls_rustls::{ClientConfig, ClientConnection, pki_types::ServerName};
 
 use super::Stream;
 

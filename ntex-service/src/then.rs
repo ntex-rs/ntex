@@ -92,7 +92,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_util::future::lazy;
+    use ntex::util::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
 
     use crate::{Service, ServiceCtx, chain, chain_factory, fn_factory};

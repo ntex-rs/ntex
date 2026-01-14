@@ -1,5 +1,5 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use tls_rust::pki_types::CertificateDer;
+use tls_rustls::pki_types::CertificateDer;
 
 mod accept;
 mod client;

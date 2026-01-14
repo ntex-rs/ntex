@@ -3,7 +3,7 @@ use std::{fs::File, io, io::BufReader, sync::Arc};
 use ntex::service::{chain_factory, fn_service};
 use ntex::{codec, io::Io, server, util::Either};
 use ntex_tls::rustls::TlsAcceptor;
-use tls_rust::ServerConfig;
+use tls_rustls::ServerConfig;
 
 #[ntex::main]
 async fn main() -> io::Result<()> {

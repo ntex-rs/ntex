@@ -10,16 +10,16 @@ documentation = "https://docs.rs/ntex-util/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [lib]
 name = "ntex_util"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-bytes = "1"
-ntex-service = "4"
-ntex-rt = "3"
+ntex-bytes = { workspace = true }
+ntex-service = { workspace = true }
+ntex-rt = { workspace = true }
 
 foldhash = { workspace = true }
 bitflags = { workspace = true }
@@ -31,6 +31,6 @@ pin-project-lite = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.6"
+ntex = { workspace = true }
 futures-util = { workspace = true }
 async-channel = { workspace = true }

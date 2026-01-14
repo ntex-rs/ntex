@@ -35,12 +35,13 @@ neon-uring = []
 neon-polling = []
 
 [dependencies]
-ntex-service = "4"
-ntex-bytes = "1"
-ntex-http = "1"
-ntex-io = "3.3.1"
-ntex-rt = "3.4"
-ntex-util = "3"
+ntex-service = { workspace = true }
+ntex-bytes = { workspace = true }
+ntex-http = { workspace = true }
+ntex-io = { workspace = true }
+ntex-rt = { workspace = true }
+ntex-util = { workspace = true }
+ntex-polling = { workspace = true }
 
 bitflags = { workspace = true }
 cfg-if = { workspace = true }
@@ -50,24 +51,18 @@ slab = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
 thiserror = { workspace = true }
 scoped-tls = { workspace = true }
-polling = { version = "3.10.0", package = "ntex-polling" }
 
-compio-buf = { version = "0.7", optional = true }
-compio-io = { version = "0.8", optional = true }
-compio-net = { version = "0.10", optional = true }
-compio-driver = { version = "0.10", optional = true }
-compio-runtime = { version = "0.10", optional = true }
-tok-io = { version = "1", package = "tokio", default-features = false, features = [
-    "rt",
-    "net",
-], optional = true }
+compio-buf = { workspace = true, optional = true }
+compio-io = { workspace = true, optional = true }
+compio-net = { workspace = true, optional = true }
+compio-driver = { workspace = true, optional = true }
+compio-runtime = { workspace = true, optional = true }
+tok-io = { workspace = true, features = ["rt", "net"], optional = true }
 
 # Linux specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
-io-uring = { version = "0.7.120", package = "ntex-io-uring", features = ["direct-syscall"] }
+ntex-io-uring = { workspace = true, features = ["direct-syscall"] }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.10"
-ntex-rt = "3.4"
-ntex-server = "3.4"
-oneshot = "0.1"
+ntex = { workspace = true }
+oneshot = { workspace = true }

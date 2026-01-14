@@ -10,22 +10,22 @@ documentation = "https://docs.rs/ntex-io/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [lib]
 name = "ntex_io"
 path = "src/lib.rs"
 
 [dependencies]
-ntex-codec = "1"
-ntex-bytes = "1.2"
-ntex-util = "3"
-ntex-service = "4"
+ntex-codec = { workspace = true }
+ntex-bytes = { workspace = true }
+ntex-util = { workspace = true }
+ntex-service = { workspace = true }
 
 bitflags = { workspace = true }
 log = { workspace = true }
 pin-project-lite = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.10"
+ntex = { workspace = true }
 rand = { workspace = true }

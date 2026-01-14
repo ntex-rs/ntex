@@ -34,10 +34,10 @@ path = "src/lib.rs"
 default = ["ws"]
 
 # openssl
-openssl = ["tls-openssl", "ntex-tls/openssl"]
+openssl = ["tls_openssl", "ntex-tls/openssl"]
 
 # rustls support
-rustls = ["tls-rustls", "webpki-roots", "ntex-tls/rustls"]
+rustls = ["tls_rustls", "webpki-roots", "ntex-tls/rustls"]
 
 # enable compressison support
 compress = ["flate2"]
@@ -70,19 +70,19 @@ ws = ["dep:sha1"]
 no-test-logging = []
 
 [dependencies]
-ntex-bytes = "1.2"
-ntex-codec = "1"
-ntex-http = "1"
-ntex-router = "1"
-ntex-service = "4"
-ntex-macros = "3"
-ntex-util = "3.4"
-ntex-server = "3.5"
-ntex-h2 = "3.3"
-ntex-rt = "3.4"
-ntex-io = "3.3"
-ntex-net = "3.5"
-ntex-tls = "3.1"
+ntex-bytes = { workspace = true }
+ntex-codec = { workspace = true }
+ntex-http = { workspace = true }
+ntex-router = { workspace = true }
+ntex-service = { workspace = true }
+ntex-macros = { workspace = true }
+ntex-util = { workspace = true }
+ntex-server = { workspace = true }
+ntex-h2 = { workspace = true }
+ntex-rt = { workspace = true }
+ntex-io = { workspace = true }
+ntex-net = { workspace = true }
+ntex-tls = { workspace = true }
 
 base64 = { workspace = true }
 bitflags = { workspace = true }
@@ -109,10 +109,10 @@ url-pkg = { workspace = true, optional = true }
 coo-kie = { workspace = true, optional = true }
 
 # openssl
-tls-openssl = { version = "0.10", package = "openssl", optional = true }
+tls_openssl = { workspace = true, optional = true }
 
 # rustls
-tls-rustls = { version = "0.23", package = "rustls", optional = true, default-features = false }
+tls_rustls = { workspace = true, optional = true }
 webpki-roots = { workspace = true, optional = true }
 
 # compression
@@ -123,7 +123,7 @@ rand = { workspace = true }
 time = { workspace = true }
 oneshot = { workspace = true }
 futures-util = { workspace = true }
-tls-openssl = { version = "0.10", package = "openssl" }
-tls-rustls = { version = "0.23", package = "rustls", features = ["ring", "std"], default-features = false }
+tls_openssl = { workspace = true }
+tls_rustls = { workspace = true, features = ["ring", "std"] }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }

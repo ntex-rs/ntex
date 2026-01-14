@@ -2,9 +2,9 @@ use std::time::{Duration, Instant};
 use std::{cell::Cell, fmt, io, sync::Arc, sync::mpsc, thread};
 use std::{collections::VecDeque, num::NonZeroUsize};
 
+use ntex_polling::{Event, Events, Poller};
 use ntex_rt::System;
 use ntex_util::{future::Either, time::Millis, time::sleep};
-use polling::{Event, Events, Poller};
 
 use super::socket::{Connection, Listener, SocketAddr};
 use super::{Server, ServerStatus, Token};

@@ -25,5 +25,4 @@ slab = { workspace = true }
 foldhash = { workspace = true }
 
 [dev-dependencies]
-ntex = "3.0.0-pre.8"
-ntex-util = "3"
+ntex = { workspace = true }

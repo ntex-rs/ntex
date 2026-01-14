@@ -108,7 +108,7 @@ impl<B> ResponseBody<B> {
 
 impl<B: MessageBody> ResponseBody<B> {
     pub fn as_ref(&self) -> Option<&B> {
-        if let ResponseBody::Body(ref b) = self {
+        if let ResponseBody::Body(b) = self {
             Some(b)
         } else {
             None
@@ -120,8 +120,8 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
     #[inline]
     fn size(&self) -> BodySize {
         match self {
-            ResponseBody::Body(ref body) => body.size(),
-            ResponseBody::Other(ref body) => body.size(),
+            ResponseBody::Body(body) => body.size(),
+            ResponseBody::Other(body) => body.size(),
         }
     }
 
@@ -131,8 +131,8 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         match self {
-            ResponseBody::Body(ref mut body) => body.poll_next_chunk(cx),
-            ResponseBody::Other(ref mut body) => body.poll_next_chunk(cx),
+            ResponseBody::Body(body) => body.poll_next_chunk(cx),
+            ResponseBody::Other(body) => body.poll_next_chunk(cx),
         }
     }
 }
@@ -142,8 +142,8 @@ impl<B: MessageBody + Unpin> Stream for ResponseBody<B> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.get_mut() {
-            ResponseBody::Body(ref mut body) => body.poll_next_chunk(cx),
-            ResponseBody::Other(ref mut body) => body.poll_next_chunk(cx),
+            ResponseBody::Body(body) => body.poll_next_chunk(cx),
+            ResponseBody::Other(body) => body.poll_next_chunk(cx),
         }
     }
 }
@@ -178,8 +178,8 @@ impl MessageBody for Body {
         match self {
             Body::None => BodySize::None,
             Body::Empty => BodySize::Empty,
-            Body::Bytes(ref bin) => BodySize::Sized(bin.len() as u64),
-            Body::Message(ref body) => body.size(),
+            Body::Bytes(bin) => BodySize::Sized(bin.len() as u64),
+            Body::Message(body) => body.size(),
         }
     }
 
@@ -190,7 +190,7 @@ impl MessageBody for Body {
         match self {
             Body::None => Poll::Ready(None),
             Body::Empty => Poll::Ready(None),
-            Body::Bytes(ref mut bin) => {
+            Body::Bytes(bin) => {
                 let len = bin.len();
                 if len == 0 {
                     Poll::Ready(None)
@@ -198,7 +198,7 @@ impl MessageBody for Body {
                     Poll::Ready(Some(Ok(mem::take(bin))))
                 }
             }
-            Body::Message(ref mut body) => body.poll_next_chunk(cx),
+            Body::Message(body) => body.poll_next_chunk(cx),
         }
     }
 }
@@ -208,7 +208,7 @@ impl PartialEq for Body {
         match (self, other) {
             (Body::None, Body::None) => true,
             (Body::Empty, Body::Empty) => true,
-            (Body::Bytes(ref b), Body::Bytes(ref b2)) => b == b2,
+            (Body::Bytes(b), Body::Bytes(b2)) => b == b2,
             _ => false,
         }
     }
@@ -567,7 +567,7 @@ mod tests {
     use std::{future::poll_fn, io};
 
     use futures_util::stream;
-    use ntex_util::future::Ready;
+    use ntex::util::Ready;
 
     use super::*;
 
@@ -640,9 +640,11 @@ mod tests {
                 .ok(),
             Some(Bytes::from("test"))
         );
-        assert!(poll_fn(|cx| Vec::<u8>::new().poll_next_chunk(cx))
-            .await
-            .is_none());
+        assert!(
+            poll_fn(|cx| Vec::<u8>::new().poll_next_chunk(cx))
+                .await
+                .is_none()
+        );
     }
 
     #[ntex::test]

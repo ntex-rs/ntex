@@ -1,4 +1,4 @@
-use std::collections::{self, hash_map, hash_map::Entry, VecDeque};
+use std::collections::{self, VecDeque, hash_map, hash_map::Entry};
 use std::fmt;
 
 use crate::{HeaderName, HeaderValue};
@@ -34,15 +34,15 @@ pub enum Value {
 impl Value {
     fn get(&self) -> &HeaderValue {
         match self {
-            Value::One(ref val) => val,
-            Value::Multi(ref val) => &val[0],
+            Value::One(val) => val,
+            Value::Multi(val) => &val[0],
         }
     }
 
     fn get_mut(&mut self) -> &mut HeaderValue {
         match self {
-            Value::One(ref mut val) => val,
-            Value::Multi(ref mut val) => &mut val[0],
+            Value::One(val) => val,
+            Value::Multi(val) => &mut val[0],
         }
     }
 
@@ -58,7 +58,7 @@ impl Value {
                     Value::Multi(_) => unreachable!(),
                 }
             }
-            Value::Multi(ref mut vec) => vec.push_back(val),
+            Value::Multi(vec) => vec.push_back(val),
         }
     }
 }
@@ -459,11 +459,11 @@ impl<'a> Iterator for GetAll<'a> {
     fn next(&mut self) -> Option<&'a HeaderValue> {
         if let Some(ref val) = self.item {
             match val {
-                Value::One(ref val) => {
+                Value::One(val) => {
                     self.item.take();
                     Some(val)
                 }
-                Value::Multi(ref vec) => {
+                Value::Multi(vec) => {
                     if self.idx < vec.len() {
                         let item = Some(&vec[self.idx]);
                         self.idx += 1;
@@ -535,8 +535,8 @@ impl<'a> Iterator for Iter<'a> {
         }
         if let Some(item) = self.iter.next() {
             match item.1 {
-                Value::One(ref value) => Some((item.0, value)),
-                Value::Multi(ref vec) => {
+                Value::One(value) => Some((item.0, value)),
+                Value::Multi(vec) => {
                     self.current = Some((item.0, vec));
                     self.next()
                 }

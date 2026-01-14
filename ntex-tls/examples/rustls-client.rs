@@ -5,7 +5,7 @@ use ntex::{
     Pipeline, ServiceFactory, SharedCfg, codec, connect, util::Bytes, util::Either,
 };
 use ntex_tls::TlsConfig;
-use tls_rust::{ClientConfig, RootCertStore};
+use tls_rustls::{ClientConfig, RootCertStore};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {

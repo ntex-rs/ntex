@@ -6,16 +6,16 @@ readme = "README.md"
 authors = ["ntex contributors <team@ntex.rs>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [lib]
 proc-macro = true
 
 [dependencies]
-quote = "^1"
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
 syn = { version = "^1", features = ["full", "parsing"] }
-proc-macro2 = "^1"
 
 [dev-dependencies]
-ntex = "3.0.0-pre.9"
-futures = "0.3"
+ntex = { workspace = true }
+futures = { workspace = true }

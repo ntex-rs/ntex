@@ -231,10 +231,12 @@ mod tests {
         // Try decode empty header value
         let map_empty = serde_json::from_str::<HeaderMap>(r#"{"user-agent":[]}"#);
         assert!(map_empty.is_err());
-        assert!(map_empty
-            .unwrap_err()
-            .to_string()
-            .contains("invalid length 0, expected non-empty value"));
+        assert!(
+            map_empty
+                .unwrap_err()
+                .to_string()
+                .contains("invalid length 0, expected non-empty value")
+        );
     }
 
     #[test]

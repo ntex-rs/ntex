@@ -5,7 +5,7 @@ use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::time::timeout_checked;
-use tls_rust::{ClientConfig, pki_types::ServerName};
+use tls_rustls::{ClientConfig, pki_types::ServerName};
 
 use crate::{TlsConfig, rustls::TlsClientFilter};
 
@@ -132,7 +132,7 @@ mod tests {
     use super::*;
 
     use ntex_util::future::lazy;
-    use tls_rust::RootCertStore;
+    use tls_rustls::RootCertStore;
 
     #[ntex::test]
     async fn test_rustls_connect() {
