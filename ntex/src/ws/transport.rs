@@ -67,7 +67,7 @@ impl FilterLayer for WsTransport {
                 CloseCode::Normal
             };
             let _ = buf.with_dst(|buf| {
-                self.codec.encode_vec(
+                self.codec.encode(
                     Message::Close(Some(CloseReason {
                         code,
                         description: None,
@@ -89,7 +89,7 @@ impl FilterLayer for WsTransport {
                 buf.cfg().resize(&mut dst);
 
                 let frame = if let Some(frame) =
-                    self.codec.decode_vec(&mut src).map_err(|e| {
+                    self.codec.decode(&mut src).map_err(|e| {
                         log::trace!("Failed to decode ws codec frames: {e:?}");
                         self.insert_flags(Flags::PROTO_ERR);
                         io::Error::new(io::ErrorKind::InvalidData, e)
@@ -132,7 +132,7 @@ impl FilterLayer for WsTransport {
                     }
                     Frame::Ping(msg) => {
                         let _ = buf.with_write_buf(|b| {
-                            b.with_dst(|b| self.codec.encode_vec(Message::Pong(msg), b))
+                            b.with_dst(|b| self.codec.encode(Message::Pong(msg), b))
                         });
                     }
                     Frame::Pong(_) => (),
@@ -163,7 +163,7 @@ impl FilterLayer for WsTransport {
                 }
 
                 // Encoder ws::Codec do not fail
-                let _ = self.codec.encode_vec(Message::Binary(src.freeze()), dst);
+                let _ = self.codec.encode(Message::Binary(src.freeze()), dst);
             });
         }
         Ok(())

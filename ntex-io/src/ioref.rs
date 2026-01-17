@@ -127,7 +127,7 @@ impl IoRef {
                 self.cfg().write_buf().resize(buf);
 
                 // encode item and wake write task
-                codec.encode_vec(item, buf)
+                codec.encode(item, buf)
             })
             // .with_write_buf() could return io::Error<Result<(), U::Error>>,
             // in that case mark io as failed
@@ -157,7 +157,7 @@ impl IoRef {
     {
         self.0
             .buffer
-            .with_read_destination(self, |buf| codec.decode_vec(buf))
+            .with_read_destination(self, |buf| codec.decode(buf))
     }
 
     #[inline]
@@ -171,7 +171,7 @@ impl IoRef {
     {
         self.0.buffer.with_read_destination(self, |buf| {
             let len = buf.len();
-            codec.decode_vec(buf).map(|item| Decoded {
+            codec.decode(buf).map(|item| Decoded {
                 item,
                 remains: buf.len(),
                 consumed: len - buf.len(),

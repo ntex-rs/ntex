@@ -70,8 +70,10 @@ mod string;
 
 pub use crate::bvec::BytesVec;
 pub use crate::bytes::Bytes;
-pub use crate::bytesmut::BytesMut;
+pub use crate::bytesmut::BytesMut as BytesMut2;
 pub use crate::string::ByteString;
+
+pub type BytesMut = BytesVec;
 
 #[doc(hidden)]
 pub mod info {

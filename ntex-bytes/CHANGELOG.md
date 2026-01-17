@@ -1,5 +1,11 @@
 # Changes
 
+## [1.3.0] (2026-01-17)
+
+* Replace BytesMut with BytesVec
+
+* Simplify Bytes impl
+
 ## [1.2.0] (2026-01-04)
 
 * Rename .split() to .take()

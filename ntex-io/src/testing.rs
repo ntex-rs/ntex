@@ -204,7 +204,7 @@ impl IoTest {
 
     /// Read any available data
     pub fn read_any(&self) -> Bytes {
-        self.local.lock().unwrap().borrow_mut().buf.take_bytes()
+        self.local.lock().unwrap().borrow_mut().buf.take()
     }
 
     /// Read data, if data is not available wait for it
@@ -235,7 +235,7 @@ impl IoTest {
             })
             .await;
         }
-        Ok(self.local.lock().unwrap().borrow_mut().buf.take_bytes())
+        Ok(self.local.lock().unwrap().borrow_mut().buf.take())
     }
 
     pub fn poll_read_buf(

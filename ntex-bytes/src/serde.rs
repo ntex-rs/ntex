@@ -1,7 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::{cmp, fmt};
 
-use super::{Bytes, BytesMut};
+use super::{Bytes, bytesmut::BytesMut};
 
 macro_rules! serde_impl {
     ($ty:ident, $visitor_ty:ident, $from_slice:ident) => {

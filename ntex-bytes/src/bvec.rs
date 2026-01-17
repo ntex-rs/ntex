@@ -3,7 +3,9 @@ use std::ops::{Deref, DerefMut};
 use std::{fmt, ptr};
 
 use crate::storage::StorageVec;
-use crate::{Buf, BufMut, Bytes, BytesMut, buf::IntoIter, buf::UninitSlice, debug};
+use crate::{
+    Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, bytesmut::BytesMut, debug,
+};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -202,7 +204,7 @@ impl BytesVec {
     }
 
     /// Removes the bytes from the current view, returning them in a new
-    /// `BytesMut` instance.
+    /// `Bytes` instance.
     ///
     /// Afterwards, `self` will be empty, but will retain any additional
     /// capacity that it had before the operation. This is identical to
@@ -227,30 +229,7 @@ impl BytesVec {
     /// assert_eq!(other, b"hello world"[..]);
     /// ```
     #[inline]
-    pub fn take(&mut self) -> BytesMut {
-        BytesMut {
-            storage: self.storage.split_to(self.len()),
-        }
-    }
-
-    /// Removes the bytes from the current view, returning them in a new
-    /// `Bytes` handle.
-    ///
-    /// This is identical to `self.take().freeze()`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::{BytesMut, BufMut};
-    ///
-    /// let mut buf = BytesMut::with_capacity(1024);
-    /// buf.put(&b"hello world"[..]);
-    ///
-    /// let other = buf.take_bytes();
-    ///
-    /// assert_eq!(other, b"hello world"[..]);
-    /// ```
-    pub fn take_bytes(&mut self) -> Bytes {
+    pub fn take(&mut self) -> Bytes {
         Bytes {
             storage: self.storage.split_to(self.len()),
         }
@@ -282,37 +261,9 @@ impl BytesVec {
     ///
     /// Panics if `at > len`.
     #[inline]
-    pub fn split_to(&mut self, at: usize) -> BytesMut {
+    pub fn split_to(&mut self, at: usize) -> Bytes {
         self.split_to_checked(at)
             .expect("at value must be <= self.len()`")
-    }
-
-    /// Splits the buffer into two at the given index.
-    ///
-    /// Same as .split_to() but returns `Bytes` instance.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::BytesVec;
-    ///
-    /// let mut a = BytesVec::copy_from_slice(&b"hello world"[..]);
-    /// let mut b = a.split_to_bytes(5);
-    ///
-    /// a[0] = b'!';
-    ///
-    /// assert_eq!(&a[..], b"!world");
-    /// assert_eq!(&b[..], b"hello");
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if `at > len`.
-    #[inline]
-    pub fn split_to_bytes(&mut self, at: usize) -> Bytes {
-        Bytes {
-            storage: self.split_to(at).storage,
-        }
     }
 
     /// Advance the internal cursor.
@@ -347,9 +298,9 @@ impl BytesVec {
     ///
     /// Does nothing if `at > len`.
     #[inline]
-    pub fn split_to_checked(&mut self, at: usize) -> Option<BytesMut> {
+    pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
-            Some(BytesMut {
+            Some(Bytes {
                 storage: self.storage.split_to(at),
             })
         } else {
@@ -786,6 +737,13 @@ impl fmt::Write for BytesVec {
     #[inline]
     fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
         fmt::write(self, args)
+    }
+}
+
+impl Clone for BytesVec {
+    #[inline]
+    fn clone(&self) -> BytesVec {
+        BytesVec::from(&self[..])
     }
 }
 

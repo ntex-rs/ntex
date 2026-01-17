@@ -1,6 +1,8 @@
 use std::{borrow, cmp, fmt, hash, mem, ops};
 
-use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
+use crate::{
+    Buf, buf::IntoIter, bytesmut::BytesMut, debug, storage::INLINE_CAP, storage::Storage,
+};
 
 /// A reference counted contiguous slice of memory.
 ///

@@ -246,9 +246,9 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesMut, BufMut};
+    /// use ntex_bytes::{BytesMut2, BufMut};
     ///
-    /// let mut buf = BytesMut::with_capacity(1024);
+    /// let mut buf = BytesMut2::with_capacity(1024);
     /// buf.put(&b"hello world"[..]);
     ///
     /// let other = buf.take_bytes();
@@ -278,9 +278,9 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use ntex_bytes::BytesMut2;
     ///
-    /// let mut a = BytesMut::from(&b"hello world"[..]);
+    /// let mut a = BytesMut2::from(&b"hello world"[..]);
     /// let mut b = a.split_off(5);
     ///
     /// a[0] = b'j';
@@ -310,9 +310,9 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use ntex_bytes::BytesMut2;
     ///
-    /// let mut a = BytesMut::from(&b"hello world"[..]);
+    /// let mut a = BytesMut2::from(&b"hello world"[..]);
     /// let mut b = a.split_to(5);
     ///
     /// a[0] = b'!';
@@ -337,9 +337,9 @@ impl BytesMut {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesMut;
+    /// use ntex_bytes::BytesMut2;
     ///
-    /// let mut a = BytesMut::from(&b"hello world"[..]);
+    /// let mut a = BytesMut2::from(&b"hello world"[..]);
     /// let mut b = a.split_to_bytes(5);
     ///
     /// a[0] = b'!';

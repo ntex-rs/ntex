@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
 use std::{cmp, mem, ptr, ptr::NonNull, slice};
 
-use crate::{BytesMut, info::Info, info::Kind};
+use crate::{bytesmut::BytesMut, info::Info, info::Kind};
 
 // Both `Bytes` and `BytesMut` are backed by `Storage` and functions are delegated
 // to `Storage` functions. The `Bytes` and `BytesMut` shims ensure that functions
@@ -1203,6 +1203,9 @@ impl StorageVec {
     }
 }
 
+unsafe impl Send for StorageVec {}
+unsafe impl Sync for StorageVec {}
+
 impl Drop for StorageVec {
     fn drop(&mut self) {
         release_shared_vec(self.0.as_ptr());
@@ -1352,6 +1355,8 @@ fn abort() {
 #[cfg(test)]
 mod tests {
     use crate::*;
+
+    use crate::bytesmut::BytesMut;
 
     const LONG: &[u8] =
         b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
