@@ -39,8 +39,6 @@ ntex-tls = { path = "ntex-tls" }
 ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
-ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "bytes" }
-
 [workspace.dependencies]
 ntex = "3.0.0-pre.11"
 ntex-bytes = "1.3.0"
@@ -55,7 +53,7 @@ ntex-service = "4.0.0"
 ntex-tls = "3.2.0"
 ntex-macros = "3.0.0"
 ntex-util = "3.4.0"
-ntex-h2 = "3.3.0"
+ntex-h2 = "3.4.0"
 
 ntex-polling = "3.10.0"
 ntex-io-uring = "0.7.120"
