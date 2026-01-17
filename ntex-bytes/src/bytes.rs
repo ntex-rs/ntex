@@ -872,9 +872,9 @@ mod tests {
     use super::*;
     use crate::BufMut;
 
-    const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
+    const LONG: &[u8] = b"mary had a1 little la2mb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
-        mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb";
+        mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \0";
 
     #[test]
     #[allow(
@@ -885,6 +885,11 @@ mod tests {
     )]
     fn bytes() {
         let mut b = Bytes::from(LONG.to_vec());
+        b.advance_to(10);
+        assert_eq!(&b, &LONG[10..]);
+        b.advance_to(10);
+        assert_eq!(&b[..], &LONG[20..]);
+        assert_eq!(&b, &LONG[20..]);
         b.clear();
         assert!(b.is_inline());
         assert!(b.is_empty());
@@ -908,6 +913,8 @@ mod tests {
         assert_eq!(<Bytes as Buf>::chunk(&b), LONG);
         <Bytes as Buf>::advance(&mut b, 10);
         assert_eq!(Buf::chunk(&b), &LONG[10..]);
+        <Bytes as Buf>::advance(&mut b, 10);
+        assert_eq!(Buf::chunk(&b), &LONG[20..]);
 
         let mut h: HashMap<Bytes, usize> = HashMap::default();
         h.insert(b.clone(), 1);
@@ -931,5 +938,11 @@ mod tests {
         <BytesMut as BufMut>::chunk_mut(&mut b).write_byte(0, b'1');
         unsafe { <BytesMut as BufMut>::advance_mut(&mut b, 1) };
         assert_eq!(b, b"\x01\x02123451".as_ref());
+
+        let mut iter = Bytes::from(LONG.to_vec()).into_iter();
+        assert_eq!(iter.next(), Some(LONG[0]));
+        assert_eq!(iter.next(), Some(LONG[1]));
+        assert_eq!(iter.next(), Some(LONG[2]));
+        assert_eq!(iter.next(), Some(LONG[3]));
     }
 }

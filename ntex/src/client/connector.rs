@@ -55,7 +55,7 @@ impl Connector {
             secure_connector: None,
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
-            limit: 100,
+            limit: 8,
         };
 
         #[cfg(feature = "openssl")]
@@ -111,7 +111,7 @@ impl Connector {
     /// Set total number of simultaneous connections per type of scheme.
     ///
     /// If limit is 0, the connector has no limit.
-    /// The default limit size is 100.
+    /// The default limit size is 8.
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self

@@ -351,17 +351,9 @@ impl Storage {
         };
         unsafe {
             if create_inline && at <= INLINE_CAP {
-                println!("SELF CREATE INLINE {}", self.kind());
                 *self = Storage::from_ptr_inline(self.as_ptr(), at);
             } else {
-                println!(
-                    "SELF CREATE SET-END {} 1 {} {}",
-                    self.len(),
-                    at,
-                    self.kind()
-                );
                 self.set_end(at);
-                println!("SELF CREATE SET-END {} 2 {}", self.len(), at);
             }
         }
 
@@ -446,50 +438,52 @@ impl Storage {
             return;
         }
 
-        let kind = self.kind();
+        match self.kind() {
+            KIND_VEC => {
+                let shared = self.shared_vec();
 
-        if kind == KIND_VEC {
-            let shared = self.shared_vec();
+                // Updating the start of the view is setting `ptr` to point to the
+                // new start and updating the `len` field to reflect the new length
+                // of the view.
+                let offset = (self.offset.get() >> KIND_OFFSET_BITS) + start;
 
-            // Updating the start of the view is setting `ptr` to point to the
-            // new start and updating the `len` field to reflect the new length
-            // of the view.
-            let offset = SHARED_VEC_SIZE + start;
+                self.ptr = (shared as *mut u8).add(offset);
+                if self.len >= start {
+                    self.len -= start;
+                } else {
+                    self.len = 0;
+                }
 
-            self.ptr = (shared as *mut u8).add(offset);
-            if self.len >= start {
+                self.offset =
+                    NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
+            }
+            KIND_INLINE => {
+                assert!(start <= INLINE_CAP);
+
+                let len = self.inline_len();
+                if len <= start {
+                    self.set_inline_len(0);
+                } else {
+                    // `set_start` is essentially shifting data off the front of the
+                    // view. Inlined buffers only track the length of the slice.
+                    // So, to update the start, the data at the new starting point
+                    // is copied to the beginning of the buffer.
+                    let new_len = len - start;
+
+                    let dst = self.inline_ptr();
+                    let src = (dst as *const u8).add(start);
+
+                    ptr::copy(src, dst, new_len);
+
+                    self.set_inline_len(new_len);
+                }
+            }
+            _ => {
+                // set len for static storage
+                assert!(start <= self.len);
                 self.len -= start;
-            } else {
-                self.len = 0;
+                self.ptr = self.ptr.add(start);
             }
-
-            self.offset =
-                NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
-        } else if kind == KIND_INLINE {
-            assert!(start <= INLINE_CAP);
-
-            let len = self.inline_len();
-            if len <= start {
-                self.set_inline_len(0);
-            } else {
-                // `set_start` is essentially shifting data off the front of the
-                // view. Inlined buffers only track the length of the slice.
-                // So, to update the start, the data at the new starting point
-                // is copied to the beginning of the buffer.
-                let new_len = len - start;
-
-                let dst = self.inline_ptr();
-                let src = (dst as *const u8).add(start);
-
-                ptr::copy(src, dst, new_len);
-
-                self.set_inline_len(new_len);
-            }
-        } else {
-            // set len for static storage
-            assert!(start <= self.len);
-            self.len -= start;
-            self.ptr = self.ptr.add(start);
         }
     }
 
