@@ -969,7 +969,7 @@ fn _assert_trait_object(_b: &dyn BufMut) {}
 #[allow(unused_allocation, warnings)]
 mod tests {
     use super::*;
-    use crate::{BytesMut, BytesVec};
+    use crate::BytesMut;
 
     #[test]
     #[allow(clippy::needless_borrow)]
@@ -1013,7 +1013,7 @@ mod tests {
         buf.put_u8(0x01);
         assert_eq!(buf, b"\x01"[..]);
 
-        let mut buf = BytesVec::new();
+        let mut buf = BytesMut::new();
         buf.put_u8(0x01);
         assert_eq!(buf, b"\x01"[..]);
 
@@ -1025,7 +1025,7 @@ mod tests {
         buf.put_i8(0x01);
         assert_eq!(buf, b"\x01"[..]);
 
-        let mut buf = BytesVec::new();
+        let mut buf = BytesMut::new();
         buf.put_i8(0x01);
         assert_eq!(buf, b"\x01"[..]);
 

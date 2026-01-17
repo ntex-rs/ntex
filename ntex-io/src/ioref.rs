@@ -1,6 +1,6 @@
 use std::{any, fmt, hash, io};
 
-use ntex_bytes::BytesVec;
+use ntex_bytes::BytesMut;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
@@ -127,7 +127,7 @@ impl IoRef {
                 self.cfg().write_buf().resize(buf);
 
                 // encode item and wake write task
-                codec.encode_vec(item, buf)
+                codec.encode(item, buf)
             })
             // .with_write_buf() could return io::Error<Result<(), U::Error>>,
             // in that case mark io as failed
@@ -157,7 +157,7 @@ impl IoRef {
     {
         self.0
             .buffer
-            .with_read_destination(self, |buf| codec.decode_vec(buf))
+            .with_read_destination(self, |buf| codec.decode(buf))
     }
 
     #[inline]
@@ -171,7 +171,7 @@ impl IoRef {
     {
         self.0.buffer.with_read_destination(self, |buf| {
             let len = buf.len();
-            codec.decode_vec(buf).map(|item| Decoded {
+            codec.decode(buf).map(|item| Decoded {
                 item,
                 remains: buf.len(),
                 consumed: len - buf.len(),
@@ -201,7 +201,7 @@ impl IoRef {
     /// Get mut access to source write buffer
     pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut BytesMut) -> R,
     {
         if self.0.flags.get().contains(Flags::IO_STOPPED) {
             Err(self.0.error_or_disconnected())
@@ -219,7 +219,7 @@ impl IoRef {
     /// Get mut access to destination write buffer
     pub fn with_write_dest_buf<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(Option<&mut BytesVec>) -> R,
+        F: FnOnce(Option<&mut BytesMut>) -> R,
     {
         self.0.buffer.with_write_destination(self, f)
     }
@@ -228,7 +228,7 @@ impl IoRef {
     /// Get mut access to source read buffer
     pub fn with_read_buf<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut BytesMut) -> R,
     {
         self.0.buffer.with_read_destination(self, f)
     }

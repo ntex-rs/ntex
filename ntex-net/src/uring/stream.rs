@@ -1,6 +1,6 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use ntex_bytes::{Buf, BufMut, BytesVec};
+use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_io::IoContext;
 use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_rt::Arbiter;
@@ -58,11 +58,11 @@ struct StreamItem {
 enum Operation {
     Recv {
         id: usize,
-        buf: BytesVec,
+        buf: BytesMut,
     },
     Send {
         id: usize,
-        buf: BytesVec,
+        buf: BytesMut,
         result: Option<io::Result<usize>>,
     },
     Poll {
@@ -349,7 +349,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn recv_more(&mut self, id: usize, mut buf: BytesVec, api: &DriverApi) {
+    fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &DriverApi) {
         if let Some(item) = self.streams.get_mut(id) {
             item.ctx.resize_read_buf(&mut buf);
 

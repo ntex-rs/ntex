@@ -487,44 +487,6 @@ impl Bytes {
         self.storage = Storage::empty();
     }
 
-    /// Attempts to convert into a `BytesMut` handle.
-    ///
-    /// This will only succeed if there are no other outstanding references to
-    /// the underlying chunk of memory. `Bytes` handles that contain inlined
-    /// bytes will always be convertible to `BytesMut`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::Bytes;
-    ///
-    /// let a = Bytes::copy_from_slice(&b"Mary had a little lamb, little lamb, little lamb..."[..]);
-    ///
-    /// // Create a shallow clone
-    /// let b = a.clone();
-    ///
-    /// // This will fail because `b` shares a reference with `a`
-    /// let a = a.try_mut().unwrap_err();
-    ///
-    /// drop(b);
-    ///
-    /// // This will succeed
-    /// let mut a = a.try_mut().unwrap();
-    ///
-    /// a[0] = b'b';
-    ///
-    /// assert_eq!(&a[..4], b"bary");
-    /// ```
-    pub fn try_mut(self) -> Result<BytesMut, Bytes> {
-        if self.storage.is_mut_safe() {
-            Ok(BytesMut {
-                storage: self.storage,
-            })
-        } else {
-            Err(self)
-        }
-    }
-
     /// Returns an iterator over the bytes contained by the buffer.
     ///
     /// # Examples
@@ -615,37 +577,19 @@ impl From<&Bytes> for Bytes {
     }
 }
 
-impl From<BytesMut> for Bytes {
-    fn from(src: BytesMut) -> Bytes {
-        src.freeze()
-    }
-}
-
 impl From<Vec<u8>> for Bytes {
     /// Convert a `Vec` into a `Bytes`
     fn from(src: Vec<u8>) -> Bytes {
-        if src.len() <= INLINE_CAP {
-            Bytes {
-                storage: Storage::from_slice(&src),
-            }
-        } else {
-            Bytes {
-                storage: Storage::from_vec(src),
-            }
+        Bytes {
+            storage: Storage::from_slice(&src),
         }
     }
 }
 
 impl From<String> for Bytes {
     fn from(src: String) -> Bytes {
-        if src.len() <= INLINE_CAP {
-            Bytes {
-                storage: Storage::from_slice(src.as_bytes()),
-            }
-        } else {
-            Bytes {
-                storage: Storage::from_vec(src.into_bytes()),
-            }
+        Bytes {
+            storage: Storage::from_slice(src.as_bytes()),
         }
     }
 }
@@ -881,7 +825,6 @@ impl PartialOrd<Bytes> for String {
 
 impl PartialEq<Bytes> for &[u8] {
     fn eq(&self, other: &Bytes) -> bool {
-        println!("4 --------------------");
         *other == *self
     }
 }
@@ -922,12 +865,6 @@ where
     }
 }
 
-impl PartialEq<BytesMut> for Bytes {
-    fn eq(&self, other: &BytesMut) -> bool {
-        other[..] == self[..]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -935,9 +872,9 @@ mod tests {
     use super::*;
     use crate::BufMut;
 
-    const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
+    const LONG: &[u8] = b"mary had a1 little la2mb, little lamb, little lamb, little lamb, little lamb, little lamb \
         mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
-        mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb";
+        mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \0";
 
     #[test]
     #[allow(
@@ -948,10 +885,38 @@ mod tests {
     )]
     fn bytes() {
         let mut b = Bytes::from(LONG.to_vec());
+        b.advance_to(10);
+        assert_eq!(&b, &LONG[10..]);
+        b.advance_to(10);
+        assert_eq!(&b[..], &LONG[20..]);
+        assert_eq!(&b, &LONG[20..]);
         b.clear();
         assert!(b.is_inline());
         assert!(b.is_empty());
         assert!(b.len() == 0);
+
+        let mut b = Bytes::from(LONG);
+        b.advance_to(10);
+        assert_eq!(&b, &LONG[10..]);
+        b.advance_to(10);
+        assert_eq!(&b[..], &LONG[20..]);
+        assert_eq!(&b, &LONG[20..]);
+        b.clear();
+        assert!(b.is_empty());
+        assert!(b.len() == 0);
+
+        let mut b = Bytes::from(LONG);
+        b.split_off(10);
+        assert_eq!(&b, &LONG[..10]);
+        b.advance_to(5);
+        assert_eq!(&b, &LONG[5..10]);
+
+        let mut b = Bytes::copy_from_slice(&LONG[..15]);
+        assert!(b.is_inline());
+        b.split_off(10);
+        assert_eq!(&b, &LONG[..10]);
+        b.advance_to(1);
+        assert_eq!(&b, &LONG[1..10]);
 
         let b = Bytes::from(b"123");
         assert!(&b"12"[..] > &b);
@@ -971,6 +936,8 @@ mod tests {
         assert_eq!(<Bytes as Buf>::chunk(&b), LONG);
         <Bytes as Buf>::advance(&mut b, 10);
         assert_eq!(Buf::chunk(&b), &LONG[10..]);
+        <Bytes as Buf>::advance(&mut b, 10);
+        assert_eq!(Buf::chunk(&b), &LONG[20..]);
 
         let mut h: HashMap<Bytes, usize> = HashMap::default();
         h.insert(b.clone(), 1);
@@ -994,5 +961,11 @@ mod tests {
         <BytesMut as BufMut>::chunk_mut(&mut b).write_byte(0, b'1');
         unsafe { <BytesMut as BufMut>::advance_mut(&mut b, 1) };
         assert_eq!(b, b"\x01\x02123451".as_ref());
+
+        let mut iter = Bytes::from(LONG.to_vec()).into_iter();
+        assert_eq!(iter.next(), Some(LONG[0]));
+        assert_eq!(iter.next(), Some(LONG[1]));
+        assert_eq!(iter.next(), Some(LONG[2]));
+        assert_eq!(iter.next(), Some(LONG[3]));
     }
 }

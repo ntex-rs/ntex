@@ -2,9 +2,9 @@ use crate::alloc::alloc::{self, Layout, LayoutError};
 
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicUsize};
-use std::{cmp, mem, ptr, ptr::NonNull, slice};
+use std::{cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
-use crate::{BytesMut, info::Info, info::Kind};
+use crate::{info::Info, info::Kind};
 
 // Both `Bytes` and `BytesMut` are backed by `Storage` and functions are delegated
 // to `Storage` functions. The `Bytes` and `BytesMut` shims ensure that functions
@@ -150,40 +150,21 @@ use crate::{BytesMut, info::Info, info::Kind};
 #[cfg(target_endian = "little")]
 #[repr(C)]
 pub(crate) struct Storage {
-    // WARNING: Do not access the fields directly unless you know what you are
-    // doing. Instead, use the fns. See implementation comment above.
-    arc: NonNull<Shared>,
+    offset: NonZeroUsize,
     ptr: *mut u8,
     len: usize,
-    cap: usize,
 }
 
 #[cfg(target_endian = "big")]
 #[repr(C)]
 pub(crate) struct Storage {
-    // WARNING: Do not access the fields directly unless you know what you are
-    // doing. Instead, use the fns. See implementation comment above.
-    ptr: *mut u8,
     len: usize,
-    cap: usize,
-    arc: NonNull<Shared>,
-}
-
-// Thread-safe reference-counted container for the shared storage. This mostly
-// the same as `std::sync::Arc` but without the weak counter. The ref counting
-// fns are based on the ones found in `std`.
-//
-// The main reason to use `Shared` instead of `std::sync::Arc` is that it ends
-// up making the overall code simpler and easier to reason about. This is due to
-// some of the logic around setting `Storage::arc` and other ways the `arc` field
-// is used. Using `Arc` ended up requiring a number of funky transmutes and
-// other shenanigans to make it work.
-struct Shared {
-    vec: Vec<u8>,
-    ref_count: AtomicUsize,
+    ptr: *mut u8,
+    offset: NonZeroUsize,
 }
 
 #[repr(C)]
+/// Thread-safe reference-counted container for the shared storage.
 struct SharedVec {
     cap: usize,
     len: u32,
@@ -195,41 +176,41 @@ struct SharedVec {
 pub(crate) struct StorageVec(NonNull<SharedVec>);
 
 // Buffer storage strategy flags.
-const KIND_ARC: usize = 0b00;
-const KIND_INLINE: usize = 0b01;
-const KIND_STATIC: usize = 0b10;
-const KIND_VEC: usize = 0b11;
+const KIND_VEC: usize = 0b01;
+const KIND_INLINE: usize = 0b10;
+const KIND_STATIC: usize = 0b11;
 const KIND_MASK: usize = 0b11;
-const KIND_UNMASK: usize = !KIND_MASK;
+// const KIND_UNMASK: usize = !KIND_MASK;
+const KIND_OFFSET_BITS: usize = 2;
 
 const SHARED_VEC_SIZE: usize = mem::size_of::<SharedVec>();
 
-// Bit op constants for extracting the inline length value from the `arc` field.
+// Bit op constants for extracting the inline length value from the `ptr` field.
 const INLINE_LEN_MASK: usize = 0b1111_1100;
-const INLINE_LEN_OFFSET: usize = 2;
 
 // Byte offset from the start of `Storage` to where the inline buffer data
 // starts. On little endian platforms, the first byte of the struct is the
 // storage flag, so the data is shifted by a byte. On big endian systems, the
 // data starts at the beginning of the struct.
 #[cfg(target_endian = "little")]
-const INLINE_DATA_OFFSET: isize = 2;
+const INLINE_DATA_OFFSET: isize = 1;
 #[cfg(target_endian = "big")]
 const INLINE_DATA_OFFSET: isize = 0;
 
 // Inline buffer capacity. This is the size of `Storage` minus 1 byte for the
 // metadata.
 #[cfg(target_pointer_width = "64")]
-pub(crate) const INLINE_CAP: usize = 4 * 8 - 2;
+pub(crate) const INLINE_CAP: usize = 3 * 8 - 1;
 #[cfg(target_pointer_width = "32")]
-pub(crate) const INLINE_CAP: usize = 4 * 4 - 2;
+pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 
 // Inline storage
-const PTR_INLINE: NonNull<Shared> =
-    unsafe { NonNull::new_unchecked(KIND_INLINE as *mut Shared) };
-// Inline storage
-const PTR_STATIC: NonNull<Shared> =
-    unsafe { NonNull::new_unchecked(KIND_STATIC as *mut Shared) };
+const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
+// Static storage
+const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
+// Default offset
+const DEFAUILT_OFFSET: NonZeroUsize =
+    NonZeroUsize::new((SHARED_VEC_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
 
 /*
  *
@@ -241,59 +222,20 @@ impl Storage {
     #[inline]
     pub(crate) const fn empty() -> Storage {
         Storage {
-            arc: PTR_INLINE,
-            ptr: ptr::null_mut::<u8>(),
+            ptr: ptr::null_mut(),
             len: 0,
-            cap: 0,
+            offset: PTR_INLINE,
         }
-    }
-
-    #[inline]
-    pub(crate) fn empty_inline() -> Storage {
-        Storage::from_slice_with_capacity(INLINE_CAP, &[])
-    }
-
-    #[inline]
-    pub(crate) fn with_capacity(capacity: usize) -> Storage {
-        Self::from_shared_vec(SharedVec::create_with_capacity(capacity), capacity, 0)
     }
 
     #[inline]
     pub(crate) const fn from_static(bytes: &'static [u8]) -> Storage {
-        let ptr = bytes.as_ptr() as *mut u8;
+        let ptr = bytes.as_ptr() as *mut _;
 
         Storage {
-            // `arc` won't ever store a pointer. Instead, use it to
-            // track the fact that the `Bytes` handle is backed by a
-            // static buffer.
-            arc: PTR_STATIC,
             ptr,
             len: bytes.len(),
-            cap: bytes.len(),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn from_vec(mut vec: Vec<u8>) -> Storage {
-        let len = vec.len();
-        let cap = vec.capacity();
-        let ptr = vec.as_mut_ptr();
-
-        // Store data in arc
-        let shared = Box::into_raw(Box::new(Shared {
-            vec,
-            ref_count: AtomicUsize::new(1),
-        }));
-
-        // The pointer should be aligned, so this assert should always succeed.
-        debug_assert!(0 == (shared as usize & KIND_MASK));
-
-        // Create new arc, so atomic operations can be avoided.
-        Storage {
-            ptr,
-            len,
-            cap,
-            arc: unsafe { NonNull::new_unchecked(shared) },
+            offset: PTR_STATIC,
         }
     }
 
@@ -308,21 +250,12 @@ impl Storage {
 
     #[inline]
     fn from_slice_with_capacity(cap: usize, src: &[u8]) -> Storage {
-        Self::from_shared_vec(SharedVec::create(cap, src), cap, src.len())
-    }
-
-    #[inline]
-    fn from_shared_vec(ptr: NonNull<SharedVec>, cap: usize, len: usize) -> Storage {
         unsafe {
-            let arc = NonNull::new_unchecked(
-                ptr.as_ptr().map_addr(|addr| addr ^ KIND_VEC) as *mut Shared
-            );
-
+            let shared = SharedVec::create(cap, src);
             Storage {
-                cap,
-                len,
-                arc,
-                ptr: ptr.as_ptr().add(1) as *mut u8,
+                len: src.len(),
+                ptr: shared.as_ptr().add(1) as *mut u8,
+                offset: DEFAUILT_OFFSET,
             }
         }
     }
@@ -330,10 +263,9 @@ impl Storage {
     #[inline]
     unsafe fn from_ptr_inline(src: *const u8, len: usize) -> Storage {
         let mut st = Storage {
-            arc: PTR_INLINE,
             ptr: ptr::null_mut(),
             len: 0,
-            cap: 0,
+            offset: PTR_INLINE,
         };
 
         let dst = st.inline_ptr();
@@ -346,7 +278,7 @@ impl Storage {
     #[inline]
     pub(crate) fn as_ref(&self) -> &[u8] {
         unsafe {
-            if self.is_inline() {
+            if self.kind() == KIND_INLINE {
                 slice::from_raw_parts(self.inline_ptr_ro(), self.inline_len())
             } else {
                 slice::from_raw_parts(self.ptr, self.len)
@@ -354,63 +286,21 @@ impl Storage {
         }
     }
 
-    /// Return a mutable slice for the handle's view into the shared buffer
-    #[inline]
-    pub(crate) fn as_mut(&mut self) -> &mut [u8] {
-        debug_assert!(self.kind() != KIND_STATIC);
-
-        unsafe {
-            if self.is_inline() {
-                slice::from_raw_parts_mut(self.inline_ptr(), self.inline_len())
-            } else {
-                slice::from_raw_parts_mut(self.ptr, self.len)
-            }
-        }
-    }
-
-    /// Return a mutable slice for the handle's view into the shared buffer
-    /// including potentially uninitialized bytes.
-    #[inline]
-    pub(crate) unsafe fn as_raw(&mut self) -> &mut [u8] {
-        debug_assert!(self.kind() != KIND_STATIC);
-
-        if self.is_inline() {
-            slice::from_raw_parts_mut(self.inline_ptr(), INLINE_CAP)
-        } else {
-            slice::from_raw_parts_mut(self.ptr, self.cap)
-        }
-    }
-
     /// Return a raw pointer to data
     #[inline]
     unsafe fn as_ptr(&mut self) -> *mut u8 {
-        if self.is_inline() {
-            self.inline_ptr()
-        } else {
-            self.ptr
-        }
-    }
-
-    /// Insert a byte into the next slot and advance the len by 1.
-    #[inline]
-    pub(crate) fn put_u8(&mut self, n: u8) {
-        if self.is_inline() {
-            let len = self.inline_len();
-            unsafe {
-                *self.inline_ptr().add(len) = n;
+        unsafe {
+            if self.kind() == KIND_INLINE {
+                self.inline_ptr()
+            } else {
+                self.ptr
             }
-            self.set_inline_len(len + 1);
-        } else {
-            unsafe {
-                *self.ptr.add(self.len) = n;
-            }
-            self.len += 1;
         }
     }
 
     #[inline]
     pub(crate) fn len(&self) -> usize {
-        if self.is_inline() {
+        if self.kind() == KIND_INLINE {
             self.inline_len()
         } else {
             self.len
@@ -431,24 +321,7 @@ impl Storage {
 
     #[inline]
     fn inline_len(&self) -> usize {
-        // This is undefind behavior due to a data race, but experimental
-        // evidence shows that it works in practice (discussion:
-        // https://internals.rust-lang.org/t/bit-wise-reasoning-for-atomic-accesses/8853).
-        (self.arc.as_ptr() as usize & INLINE_LEN_MASK) >> INLINE_LEN_OFFSET
-    }
-
-    /// Set the length of the inline buffer. This is done by writing to the
-    /// least significant byte of the `arc` field.
-    #[inline]
-    fn set_inline_len(&mut self, len: usize) {
-        debug_assert!(len <= INLINE_CAP);
-        self.arc = unsafe {
-            NonNull::new_unchecked(
-                self.arc
-                    .as_ptr()
-                    .map_addr(|addr| addr & !INLINE_LEN_MASK | (len << INLINE_LEN_OFFSET)),
-            )
-        };
+        (self.offset.get() & INLINE_LEN_MASK) >> KIND_OFFSET_BITS
     }
 
     #[inline]
@@ -458,7 +331,12 @@ impl Storage {
 
     #[inline]
     pub(crate) fn capacity(&self) -> usize {
-        if self.is_inline() { INLINE_CAP } else { self.cap }
+        let kind = self.kind();
+        match kind {
+            KIND_VEC => unsafe { (*self.shared_vec()).capacity() },
+            KIND_INLINE => INLINE_CAP,
+            _ => self.len,
+        }
     }
 
     pub(crate) fn split_off(&mut self, at: usize, create_inline: bool) -> Storage {
@@ -525,41 +403,32 @@ impl Storage {
         }
     }
 
-    pub(crate) fn resize(&mut self, new_len: usize, value: u8) {
-        let len = self.len();
-        if new_len > len {
-            let additional = new_len - len;
-            self.reserve(additional);
-            unsafe {
-                let dst = self.as_raw()[len..].as_mut_ptr();
-                ptr::write_bytes(dst, value, additional);
-                self.set_len(new_len);
-            }
-        } else {
-            self.truncate(new_len, false);
-        }
-    }
-
-    #[inline]
-    pub(crate) fn freeze(self) -> Storage {
-        if self.len() > INLINE_CAP || self.is_inline() {
-            self
-        } else {
-            let slice = self.as_ref();
-            unsafe { Storage::from_ptr_inline(slice.as_ptr(), slice.len()) }
-        }
-    }
-
-    /// slice.
     #[inline]
     pub(crate) unsafe fn set_len(&mut self, len: usize) {
-        if self.is_inline() {
-            assert!(len <= INLINE_CAP);
-            self.set_inline_len(len);
-        } else {
-            assert!(len <= self.cap);
-            self.len = len;
+        let kind = self.kind();
+        match kind {
+            KIND_VEC => {
+                assert!(len <= self.capacity());
+                self.len = len;
+            }
+            KIND_INLINE => self.set_inline_len(len),
+            _ => {
+                assert!(len <= self.len);
+                self.len = len;
+            }
         }
+    }
+
+    /// Set the length of the inline buffer. This is done by writing to the
+    /// least significant byte of the `arc` field.
+    #[inline]
+    fn set_inline_len(&mut self, len: usize) {
+        debug_assert!(len <= INLINE_CAP);
+        self.offset = unsafe {
+            NonZeroUsize::new_unchecked(
+                self.offset.get() & !INLINE_LEN_MASK | (len << KIND_OFFSET_BITS),
+            )
+        };
     }
 
     pub(crate) unsafe fn set_start(&mut self, start: usize) {
@@ -569,88 +438,70 @@ impl Storage {
             return;
         }
 
-        let kind = self.kind();
+        match self.kind() {
+            KIND_VEC => {
+                let shared = self.shared_vec();
 
-        // Always check `inline` first, because if the handle is using inline
-        // data storage, all of the `Storage` struct fields will be gibberish.
-        if kind == KIND_INLINE {
-            assert!(start <= INLINE_CAP);
+                // Updating the start of the view is setting `ptr` to point to the
+                // new start and updating the `len` field to reflect the new length
+                // of the view.
+                let offset = (self.offset.get() >> KIND_OFFSET_BITS) + start;
 
-            let len = self.inline_len();
-            if len <= start {
-                self.set_inline_len(0);
-            } else {
-                // `set_start` is essentially shifting data off the front of the
-                // view. Inlined buffers only track the length of the slice.
-                // So, to update the start, the data at the new starting point
-                // is copied to the beginning of the buffer.
-                let new_len = len - start;
+                self.ptr = (shared as *mut u8).add(offset);
+                if self.len >= start {
+                    self.len -= start;
+                } else {
+                    self.len = 0;
+                }
 
-                let dst = self.inline_ptr();
-                let src = (dst as *const u8).add(start);
-
-                ptr::copy(src, dst, new_len);
-
-                self.set_inline_len(new_len);
+                self.offset =
+                    NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
             }
-        } else {
-            assert!(
-                start <= self.cap,
-                "cannot advance past `remaining` cap:{} delta:{}",
-                self.cap,
-                start
-            );
+            KIND_INLINE => {
+                assert!(start <= INLINE_CAP);
 
-            // Updating the start of the view is setting `ptr` to point to the
-            // new start and updating the `len` field to reflect the new length
-            // of the view.
-            self.ptr = self.ptr.add(start);
+                let len = self.inline_len();
+                if len <= start {
+                    self.set_inline_len(0);
+                } else {
+                    // `set_start` is essentially shifting data off the front of the
+                    // view. Inlined buffers only track the length of the slice.
+                    // So, to update the start, the data at the new starting point
+                    // is copied to the beginning of the buffer.
+                    let new_len = len - start;
 
-            if self.len >= start {
+                    let dst = self.inline_ptr();
+                    let src = (dst as *const u8).add(start);
+
+                    ptr::copy(src, dst, new_len);
+
+                    self.set_inline_len(new_len);
+                }
+            }
+            _ => {
+                // set len for static storage
+                assert!(start <= self.len);
                 self.len -= start;
-            } else {
-                self.len = 0;
+                self.ptr = self.ptr.add(start);
             }
-
-            self.cap -= start;
         }
     }
 
     pub(crate) unsafe fn set_end(&mut self, end: usize) {
-        // Always check `inline` first, because if the handle is using inline
-        // data storage, all of the `Storage` struct fields will be gibberish.
-        if self.is_inline() {
-            assert!(end <= INLINE_CAP);
-            let new_len = cmp::min(self.inline_len(), end);
-            self.set_inline_len(new_len);
-        } else {
-            assert!(end <= self.cap);
-
-            self.cap = end;
-            self.len = cmp::min(self.len, end);
-        }
-    }
-
-    /// Checks if it is safe to mutate the memory
-    pub(crate) fn is_mut_safe(&self) -> bool {
-        let kind = self.kind();
-
-        // Always check `inline` first, because if the handle is using inline
-        // data storage, all of the `Storage` struct fields will be gibberish.
-        if kind == KIND_INLINE {
-            // Inlined buffers can always be mutated as the data is never shared
-            // across handles.
-            true
-        } else if kind == KIND_STATIC {
-            false
-        } else if kind == KIND_VEC {
-            // Otherwise, the underlying buffer is potentially shared with other
-            // handles, so the ref_count needs to be checked.
-            unsafe { (*self.shared_vec()).is_unique() }
-        } else {
-            // Otherwise, the underlying buffer is potentially shared with other
-            // handles, so the ref_count needs to be checked.
-            unsafe { (*self.arc.as_ptr()).is_unique() }
+        match self.kind() {
+            KIND_VEC => {
+                self.len = cmp::min(self.len, end);
+            }
+            KIND_INLINE => {
+                assert!(end <= INLINE_CAP);
+                let new_len = cmp::min(self.inline_len(), end);
+                self.set_inline_len(new_len);
+            }
+            _ => {
+                // set len for static storage
+                assert!(end <= self.len);
+                self.len = end;
+            }
         }
     }
 
@@ -669,7 +520,7 @@ impl Storage {
         // Always check `inline` first, because if the handle is using inline
         // data storage, all of the `Storage` struct fields will be gibberish.
         //
-        // Additionally, if kind is STATIC, then Arc is *never* changed, making
+        // Additionally, if kind is STATIC, then ptr is *never* changed, making
         // it safe and faster to check for it now before an atomic acquire.
 
         // The value returned by `kind` isn't itself safe, but the value could
@@ -686,128 +537,14 @@ impl Storage {
             ptr::copy_nonoverlapping(self, inner.as_mut_ptr(), 1);
             inner.assume_init()
         } else {
-            self.shallow_clone_sync()
-        }
-    }
-
-    unsafe fn shallow_clone_sync(&self) -> Storage {
-        // The function requires `&self`, this means that `shallow_clone`
-        // could be called concurrently.
-        //
-        // The first step is to load the value of `arc`. This will determine
-        // how to proceed. The `Acquire` ordering synchronizes with the
-        // `compare_and_swap` that comes later in this function. The goal is
-        // to ensure that if `arc` is currently set to point to a `Shared`,
-        // that the current thread acquires the associated memory.
-        let arc: *mut Shared = self.arc.as_ptr();
-        let kind = self.kind();
-
-        if kind == KIND_ARC {
-            let old_size = (*arc).ref_count.fetch_add(1, Relaxed);
-            if old_size == usize::MAX {
+            // ptr points to SharedVec
+            let shared = self.shared_vec();
+            let ref_cnt = (*shared).ref_count.fetch_add(1, Relaxed);
+            if ref_cnt == usize::MAX {
                 abort();
             }
 
-            Storage {
-                arc: NonNull::new_unchecked(arc),
-                ..*self
-            }
-        } else {
-            assert!(kind == KIND_VEC);
-
-            let vec_arc = arc.map_addr(|addr| addr & KIND_UNMASK) as *mut SharedVec;
-            let old_size = (*vec_arc).ref_count.fetch_add(1, Relaxed);
-            if old_size == usize::MAX {
-                abort();
-            }
-
-            Storage {
-                arc: NonNull::new_unchecked(arc),
-                ..*self
-            }
-        }
-    }
-
-    #[inline]
-    pub(crate) fn reserve(&mut self, additional: usize) {
-        let len = self.len();
-        let rem = self.capacity() - len;
-
-        if additional <= rem {
-            // The handle can already store at least `additional` more bytes, so
-            // there is no further work needed to be done.
-            return;
-        }
-
-        self.reserve_inner(additional)
-    }
-
-    fn reserve_inner(&mut self, additional: usize) {
-        let len = self.len();
-        let kind = self.kind();
-
-        // Always check `inline` first, because if the handle is using inline
-        // data storage, all of the `Storage` struct fields will be gibberish.
-        if kind == KIND_INLINE {
-            let new_cap = len + additional;
-
-            // Promote to a vector
-            *self = Storage::from_slice_with_capacity(new_cap, self.as_ref());
-            return;
-        }
-
-        // Reserving involves abandoning the currently shared buffer and
-        // allocating a new vector with the requested capacity.
-        let new_cap = len + additional;
-
-        if kind == KIND_VEC {
-            let vec = self.shared_vec();
-
-            unsafe {
-                let vec_cap = (*vec).cap - SHARED_VEC_SIZE;
-
-                // First, try to reclaim the buffer. This is possible if the current
-                // handle is the only outstanding handle pointing to the buffer.
-                if vec_cap >= new_cap && (*vec).is_unique() {
-                    // The capacity is sufficient, reclaim the buffer
-                    let ptr = (vec as *mut u8).add(SHARED_VEC_SIZE);
-                    ptr::copy(self.ptr, ptr, len);
-
-                    self.ptr = ptr;
-                    self.cap = vec_cap;
-                } else {
-                    // Create a new vector storage
-                    *self = Storage::from_slice_with_capacity(new_cap, self.as_ref());
-                }
-            }
-        } else {
-            debug_assert!(kind == KIND_ARC);
-
-            let arc = self.arc.as_ptr();
-            unsafe {
-                // First, try to reclaim the buffer. This is possible if the current
-                // handle is the only outstanding handle pointing to the buffer.
-                if (*arc).is_unique() {
-                    // This is the only handle to the buffer. It can be reclaimed.
-                    // However, before doing the work of copying data, check to make
-                    // sure that the vector has enough capacity.
-                    let v = &mut (*arc).vec;
-
-                    if v.capacity() >= new_cap {
-                        // The capacity is sufficient, reclaim the buffer
-                        let ptr = v.as_mut_ptr();
-
-                        ptr::copy(self.ptr, ptr, len);
-
-                        self.ptr = ptr;
-                        self.cap = v.capacity();
-                        return;
-                    }
-                }
-
-                // Create a new vector storage
-                *self = Storage::from_slice_with_capacity(new_cap, self.as_ref());
-            }
+            Storage { ..*self }
         }
     }
 
@@ -819,16 +556,17 @@ impl Storage {
 
     #[inline]
     fn shared_vec(&self) -> *mut SharedVec {
-        self.arc.as_ptr().map_addr(|addr| addr & KIND_UNMASK) as *mut SharedVec
+        let offset = self.offset.get() >> KIND_OFFSET_BITS;
+        unsafe { self.ptr.sub(offset) as *mut SharedVec }
     }
 
     #[inline]
     fn kind(&self) -> usize {
         // This function is going to probably raise some eyebrows. The function
         // returns true if the buffer is stored inline. This is done by checking
-        // the least significant bit in the `arc` field.
+        // the least significant bit in the `ptr` field.
         //
-        // Now, you may notice that `arc` is an `AtomicPtr` and this is
+        // Now, you may notice that `ptr` is an `AtomicPtr` and this is
         // accessing it as a normal field without performing an atomic load...
         //
         // Again, the function only cares about the least significant bit, and
@@ -837,10 +575,6 @@ impl Storage {
         // bits, so even without any explicit atomic operations, reading the
         // flag will be correct.
         //
-        // This is undefined behavior due to a data race, but experimental
-        // evidence shows that it works in practice (discussion:
-        // https://internals.rust-lang.org/t/bit-wise-reasoning-for-atomic-accesses/8853).
-        //
         // This function is very critical performance wise as it is called for
         // every operation. Performing an atomic load would mess with the
         // compiler's ability to optimize. Simple benchmarks show up to a 10%
@@ -848,20 +582,20 @@ impl Storage {
 
         #[cfg(target_endian = "little")]
         #[inline]
-        fn imp(arc: *mut Shared) -> usize {
-            (arc as usize) & KIND_MASK
+        fn imp(ptr: usize) -> usize {
+            ptr & KIND_MASK
         }
 
         #[cfg(target_endian = "big")]
         #[inline]
-        fn imp(arc: *mut Shared) -> usize {
+        fn imp(arc: usize) -> usize {
             unsafe {
-                let p: *const usize = arc as *const usize;
+                let p: *const u8 = arc as *const u8;
                 *p & KIND_MASK
             }
         }
 
-        imp(self.arc.as_ptr())
+        imp(self.offset.get())
     }
 
     pub(crate) fn info(&self) -> Info {
@@ -871,13 +605,6 @@ impl Storage {
             if kind == KIND_VEC {
                 let ptr = self.shared_vec();
                 (ptr as usize, (*ptr).ref_count.load(Relaxed), (*ptr).cap)
-            } else if kind == KIND_ARC {
-                let ptr = self.arc.as_ptr();
-                (
-                    ptr as usize,
-                    (*ptr).ref_count.load(Relaxed),
-                    (*ptr).vec.capacity(),
-                )
             } else {
                 (0, 0, 0)
             }
@@ -903,44 +630,9 @@ impl Clone for Storage {
 
 impl Drop for Storage {
     fn drop(&mut self) {
-        let kind = self.kind();
-
-        if kind == KIND_VEC {
+        if self.kind() == KIND_VEC {
             release_shared_vec(self.shared_vec());
-        } else if kind == KIND_ARC {
-            release_shared(self.arc.as_ptr());
         }
-    }
-}
-
-fn release_shared(ptr: *mut Shared) {
-    // `Shared` storage... follow the drop steps from Arc.
-    unsafe {
-        if (*ptr).ref_count.fetch_sub(1, Release) != 1 {
-            return;
-        }
-
-        // This fence is needed to prevent reordering of use of the data and
-        // deletion of the data.  Because it is marked `Release`, the decreasing
-        // of the reference count synchronizes with this `Acquire` fence. This
-        // means that use of the data happens before decreasing the reference
-        // count, which happens before this fence, which happens before the
-        // deletion of the data.
-        //
-        // As explained in the [Boost documentation][1],
-        //
-        // > It is important to enforce any possible access to the object in one
-        // > thread (through an existing reference) to *happen before* deleting
-        // > the object in a different thread. This is achieved by a "release"
-        // > operation after dropping a reference (any access to the object
-        // > through this reference must obviously happened before), and an
-        // > "acquire" operation before deleting the object.
-        //
-        // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
-        atomic::fence(Acquire);
-
-        // Drop the data
-        let _ = Box::from_raw(ptr);
     }
 }
 
@@ -997,7 +689,7 @@ impl StorageVec {
     }
 
     pub(crate) fn capacity(&self) -> usize {
-        unsafe { (*self.0.as_ptr()).cap - (*self.0.as_ptr()).offset as usize }
+        unsafe { (*self.0.as_ptr()).capacity() }
     }
 
     pub(crate) fn freeze(self) -> Storage {
@@ -1005,69 +697,19 @@ impl StorageVec {
             if self.len() <= INLINE_CAP {
                 Storage::from_ptr_inline(self.as_ptr(), self.len())
             } else {
+                let inner = self.0.as_ref();
+                let offset = inner.offset as usize;
+
                 let inner = Storage {
-                    ptr: self.as_ptr(),
+                    ptr: (self.0.as_ptr() as *mut u8).add(offset),
                     len: self.len(),
-                    cap: self.capacity(),
-                    arc: NonNull::new_unchecked(
-                        self.0.as_ptr().map_addr(|addr| addr ^ KIND_VEC) as *mut Shared,
+                    offset: NonZeroUsize::new_unchecked(
+                        (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
                     ),
                 };
                 mem::forget(self);
                 inner
             }
-        }
-    }
-
-    pub(crate) fn with_bytes_mut<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut BytesMut) -> R,
-    {
-        unsafe {
-            let len = self.len();
-            let cap = self.capacity();
-
-            let mut buf = BytesMut {
-                storage: Storage {
-                    len,
-                    cap,
-                    ptr: self.as_ptr(),
-                    arc: NonNull::new_unchecked(
-                        self.0.as_ptr().map_addr(|addr| addr ^ KIND_VEC) as *mut Shared,
-                    ),
-                },
-            };
-
-            let result = f(&mut buf);
-
-            // convert BytesMut back to StorageVec
-            // only KIND_VEC could be converted to self, otherwise we have to copy data
-            let storage = match buf.storage.kind() {
-                KIND_VEC => {
-                    let ptr = buf.storage.shared_vec();
-                    let offset = buf.storage.ptr as usize - ptr as usize;
-
-                    // we cannot use shared vec if BytesMut points to inside of vec
-                    if buf.storage.cap < (*ptr).cap - offset {
-                        StorageVec::from_slice(buf.capacity(), buf.storage.as_ref())
-                    } else {
-                        // BytesMut owns rest of the vec, so it can be re-used
-                        (*ptr).len = buf.len() as u32;
-                        (*ptr).offset = offset as u32;
-                        mem::forget(buf); // we dont want to run drop for Storage
-                        StorageVec(NonNull::new_unchecked(ptr))
-                    }
-                }
-                KIND_INLINE | KIND_STATIC | KIND_ARC => {
-                    StorageVec::from_slice(buf.capacity(), buf.storage.as_ref())
-                }
-                _ => panic!(),
-            };
-
-            let old = mem::replace(self, storage);
-            mem::forget(old);
-
-            result
         }
     }
 
@@ -1081,12 +723,12 @@ impl StorageVec {
                 let inner = self.as_inner();
                 inner.ref_count.fetch_add(1, Relaxed);
 
+                let offset = inner.offset as usize;
                 Storage {
-                    ptr,
+                    ptr: (self.0.as_ptr() as *mut u8).add(offset),
                     len: at,
-                    cap: at,
-                    arc: NonNull::new_unchecked(
-                        self.0.as_ptr().map_addr(|addr| addr ^ KIND_VEC) as *mut Shared,
+                    offset: NonZeroUsize::new_unchecked(
+                        (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
                     ),
                 }
             };
@@ -1203,25 +845,12 @@ impl StorageVec {
     }
 }
 
+unsafe impl Send for StorageVec {}
+unsafe impl Sync for StorageVec {}
+
 impl Drop for StorageVec {
     fn drop(&mut self) {
         release_shared_vec(self.0.as_ptr());
-    }
-}
-
-impl Shared {
-    fn is_unique(&self) -> bool {
-        // The goal is to check if the current handle is the only handle
-        // that currently has access to the buffer. This is done by
-        // checking if the `ref_count` is currently 1.
-        //
-        // The `Acquire` ordering synchronizes with the `Release` as
-        // part of the `fetch_sub` in `release_shared`. The `fetch_sub`
-        // operation guarantees that any mutations done in other threads
-        // are ordered before the `ref_count` is decremented. As such,
-        // this `Acquire` will guarantee that those mutations are
-        // visible to the current thread.
-        self.ref_count.load(Acquire) == 1
     }
 }
 
@@ -1236,11 +865,6 @@ impl SharedVec {
             sl.copy_from_slice(src);
             NonNull::new_unchecked(ptr as *mut SharedVec)
         }
-    }
-
-    fn create_with_capacity(cap: usize) -> NonNull<SharedVec> {
-        let ptr = Self::alloc_with_capacity(cap, 0);
-        unsafe { NonNull::new_unchecked(ptr as *mut SharedVec) }
     }
 
     fn alloc_with_capacity(cap: usize, len: u32) -> *mut u8 {
@@ -1270,6 +894,10 @@ impl SharedVec {
     fn is_unique(&self) -> bool {
         // This is same as Shared::is_unique() but for KIND_VEC
         self.ref_count.load(Acquire) == 1
+    }
+
+    fn capacity(&self) -> usize {
+        self.cap - self.offset as usize
     }
 }
 
@@ -1334,7 +962,7 @@ impl Drop for Abort {
 impl Kind {
     fn from_raw(n: usize) -> Kind {
         match n {
-            KIND_ARC => Kind::Arc,
+            KIND_VEC => Kind::Vec,
             KIND_INLINE => Kind::Inline,
             KIND_STATIC => Kind::Static,
             _ => Kind::Vec,
@@ -1379,7 +1007,7 @@ mod tests {
     #[test]
     #[allow(clippy::unnecessary_fallible_conversions)]
     fn bytes_vec() {
-        let bv = BytesVec::copy_from_slice(LONG);
+        let bv = BytesMut::copy_from_slice(LONG);
         assert_eq!(bv.capacity(), 263);
         assert_eq!(bv.len(), 263);
         assert_eq!(bv.as_ref().len(), 263);
@@ -1387,14 +1015,14 @@ mod tests {
         assert_eq!(&bv[..], LONG);
 
         let sl: &[u8] = &[];
-        let bv = BytesVec::copy_from_slice(sl);
+        let bv = BytesMut::copy_from_slice(sl);
         assert_eq!(bv.capacity(), 0);
         assert_eq!(bv.len(), 0);
         assert_eq!(bv.as_ref().len(), 0);
         assert_eq!(bv.as_ref(), sl);
         assert_eq!(&bv[..], sl);
 
-        let mut bv = BytesVec::copy_from_slice(&b"hello"[..]);
+        let mut bv = BytesMut::copy_from_slice(&b"hello"[..]);
         assert_eq!(bv.capacity(), 5);
         assert_eq!(bv.len(), 5);
         assert_eq!(bv.as_ref().len(), 5);
@@ -1413,12 +1041,8 @@ mod tests {
         let b = Bytes::from(bv);
         assert_eq!(b, "hello world");
 
-        let mut b = BytesMut::try_from(b).unwrap();
-        b.put(".");
-        assert_eq!(b, "hello world.");
-
         // does not re-alloc
-        let mut bv = BytesVec::with_capacity(0);
+        let mut bv = BytesMut::with_capacity(0);
         bv.extend_from_slice(b"hello world.");
         bv.extend_from_slice(b"hello world.");
         bv.extend_from_slice(b"hello world.");

@@ -1,7 +1,7 @@
 use std::task::{Context, Poll, ready};
 use std::{any, cell::RefCell, cmp, future::poll_fn, io, mem, pin::Pin, rc::Rc, rc::Weak};
 
-use ntex_bytes::{BufMut, BytesVec};
+use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{
     Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types,
 };
@@ -156,7 +156,7 @@ fn read<T: AsyncRead + Unpin>(
 fn read_buf<T: AsyncRead>(
     io: Pin<&mut T>,
     cx: &mut Context<'_>,
-    buf: &mut BytesVec,
+    buf: &mut BytesMut,
 ) -> Poll<io::Result<usize>> {
     let n = {
         let dst =
@@ -184,7 +184,7 @@ fn read_buf<T: AsyncRead>(
 /// Flush write buffer to underlying I/O stream.
 fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
     io: &mut T,
-    buf: &mut BytesVec,
+    buf: &mut BytesMut,
     cx: &mut Context<'_>,
 ) -> Poll<io::Result<usize>> {
     let len = buf.len();

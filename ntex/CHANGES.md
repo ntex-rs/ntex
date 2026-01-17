@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.12] 2026-01-17
+
+* Update codec and bytes
+
 ## [3.0.0-pre.11] 2026-01-08
 
 * Update ntex-bytes

@@ -129,7 +129,7 @@ impl Parser {
             apply_mask(&mut src[..length], mask);
         }
 
-        Ok(Some((finished, opcode, Some(src.split_to_bytes(length)))))
+        Ok(Some((finished, opcode, Some(src.split_to(length)))))
     }
 
     /// Parse the payload of a close frame.

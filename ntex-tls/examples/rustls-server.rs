@@ -43,7 +43,7 @@ async fn main() -> io::Result<()> {
                         match io.recv(&codec::BytesCodec).await {
                             Ok(Some(msg)) => {
                                 println!("Got message: {:?}", msg);
-                                io.send(msg.freeze(), &codec::BytesCodec)
+                                io.send(msg, &codec::BytesCodec)
                                     .await
                                     .map_err(Either::into_inner)?;
                             }

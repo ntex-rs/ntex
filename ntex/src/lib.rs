@@ -120,7 +120,7 @@ pub mod tls {
 pub mod util {
     use std::{error::Error, io, rc::Rc};
 
-    pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut, BytesVec};
+    pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
     pub use ntex_util::{HashMap, HashSet, error::*, future::*, services::*};
 
     #[doc(hidden)]

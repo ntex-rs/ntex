@@ -2,7 +2,7 @@ use std::{any, future::poll_fn, io, task::Poll};
 
 use compio_buf::{BufResult, IoBuf, IoBufMut, SetBufInit};
 use compio_io::{AsyncRead, AsyncWrite};
-use ntex_bytes::{Buf, BufMut, BytesVec};
+use ntex_bytes::{Buf, BufMut, BytesMut};
 use ntex_io::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use ntex_util::future::{Either, select};
 
@@ -35,7 +35,7 @@ impl Handle for HandleWrapper {
     }
 }
 
-struct CompioBuf(BytesVec);
+struct CompioBuf(BytesMut);
 
 unsafe impl IoBuf for CompioBuf {
     #[inline]
@@ -121,7 +121,7 @@ where
     }
 }
 
-async fn read_buf<T>(io: &T, buf: BytesVec) -> BufResult<usize, CompioBuf>
+async fn read_buf<T>(io: &T, buf: BytesMut) -> BufResult<usize, CompioBuf>
 where
     T: AsyncRead + AsyncWrite + Clone,
 {
@@ -175,7 +175,7 @@ where
     }
 }
 
-async fn write_buf<T>(io: &mut T, ctx: &IoContext, buf: Option<BytesVec>) -> IoTaskStatus
+async fn write_buf<T>(io: &mut T, ctx: &IoContext, buf: Option<BytesMut>) -> IoTaskStatus
 where
     T: AsyncRead + AsyncWrite,
 {

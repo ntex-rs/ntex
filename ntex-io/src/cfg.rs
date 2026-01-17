@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use ntex_bytes::{BytesVec, buf::BufMut};
+use ntex_bytes::{BytesMut, buf::BufMut};
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
 
@@ -231,25 +231,25 @@ impl IoConfig {
 impl BufConfig {
     #[inline]
     /// Get buffer
-    pub fn get(&self) -> BytesVec {
+    pub fn get(&self) -> BytesMut {
         if let Some(mut buf) =
             CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop()))
         {
             buf.clear();
             buf
         } else {
-            BytesVec::with_capacity(self.high)
+            BytesMut::with_capacity(self.high)
         }
     }
 
     /// Get buffer with capacity
-    pub fn buf_with_capacity(&self, cap: usize) -> BytesVec {
-        BytesVec::with_capacity(cap)
+    pub fn buf_with_capacity(&self, cap: usize) -> BytesMut {
+        BytesMut::with_capacity(cap)
     }
 
     #[inline]
     /// Resize buffer
-    pub fn resize(&self, buf: &mut BytesVec) {
+    pub fn resize(&self, buf: &mut BytesMut) {
         let remaining = buf.remaining_mut();
         if remaining < self.low {
             buf.reserve(self.high - remaining);
@@ -258,7 +258,7 @@ impl BufConfig {
 
     #[inline]
     /// Release buffer, buf must be allocated from this pool
-    pub fn release(&self, buf: BytesVec) {
+    pub fn release(&self, buf: BytesMut) {
         let cap = buf.capacity();
         if cap > self.low && cap <= self.high {
             CACHE.with(|c| {
@@ -273,7 +273,7 @@ impl BufConfig {
 }
 
 struct LocalCache {
-    cache: UnsafeCell<Vec<(Vec<BytesVec>, Vec<BytesVec>)>>,
+    cache: UnsafeCell<Vec<(Vec<BytesMut>, Vec<BytesMut>)>>,
 }
 
 impl LocalCache {
@@ -285,7 +285,7 @@ impl LocalCache {
 
     fn with<F, R>(&self, idx: usize, first: bool, f: F) -> R
     where
-        F: FnOnce(&mut Vec<BytesVec>) -> R,
+        F: FnOnce(&mut Vec<BytesMut>) -> R,
     {
         let cache = unsafe { &mut *self.cache.get() };
 

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::{cmp, fmt};
 
-use super::{Bytes, BytesMut};
+use super::Bytes;
 
 macro_rules! serde_impl {
     ($ty:ident, $visitor_ty:ident, $from_slice:ident) => {
@@ -85,7 +85,6 @@ macro_rules! serde_impl {
 }
 
 serde_impl!(Bytes, BytesVisitor, copy_from_slice);
-serde_impl!(BytesMut, BytesMutVisitor, from);
 
 #[cfg(test)]
 mod tests {
@@ -95,15 +94,15 @@ mod tests {
     fn test_serialize() {
         let s: Bytes = serde_json::from_str(r#""nice bytes""#).unwrap();
         assert_eq!(s, "nice bytes");
-        let s: BytesMut = serde_json::from_str(r#""nice bytes""#).unwrap();
-        assert_eq!(s, "nice bytes");
+        //let s: BytesMut = serde_json::from_str(r#""nice bytes""#).unwrap();
+        //assert_eq!(s, "nice bytes");
     }
 
     #[test]
     fn test_deserialize() {
         let s = serde_json::to_string(&Bytes::from_static(b"nice bytes")).unwrap();
         assert_eq!(s, "[110,105,99,101,32,98,121,116,101,115]");
-        let s = serde_json::to_string(&BytesMut::copy_from_slice(b"nice bytes")).unwrap();
-        assert_eq!(s, "[110,105,99,101,32,98,121,116,101,115]");
+        //let s = serde_json::to_string(&BytesMut::copy_from_slice(b"nice bytes")).unwrap();
+        //assert_eq!(s, "[110,105,99,101,32,98,121,116,101,115]");
     }
 }

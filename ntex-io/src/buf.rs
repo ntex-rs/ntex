@@ -1,14 +1,14 @@
 use std::{cell::Cell, fmt};
 
-use ntex_bytes::BytesVec;
+use ntex_bytes::BytesMut;
 use ntex_util::future::Either;
 
 use crate::{IoRef, cfg::BufConfig};
 
 #[derive(Default)]
 pub(crate) struct Buffer {
-    read: Cell<Option<BytesVec>>,
-    write: Cell<Option<BytesVec>>,
+    read: Cell<Option<BytesMut>>,
+    write: Cell<Option<BytesMut>>,
 }
 
 impl fmt::Debug for Buffer {
@@ -120,11 +120,11 @@ impl Stack {
         }
     }
 
-    pub(crate) fn get_read_source(&self) -> Option<BytesVec> {
+    pub(crate) fn get_read_source(&self) -> Option<BytesMut> {
         self.get_last_level().read.take()
     }
 
-    pub(crate) fn set_read_source(&self, io: &IoRef, buf: BytesVec) {
+    pub(crate) fn set_read_source(&self, io: &IoRef, buf: BytesMut) {
         if buf.is_empty() {
             io.cfg().read_buf().release(buf);
         } else {
@@ -134,7 +134,7 @@ impl Stack {
 
     pub(crate) fn with_read_destination<F, R>(&self, io: &IoRef, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut BytesMut) -> R,
     {
         let item = self.get_first_level();
         let mut rb = item
@@ -158,11 +158,11 @@ impl Stack {
         result
     }
 
-    pub(crate) fn get_write_destination(&self) -> Option<BytesVec> {
+    pub(crate) fn get_write_destination(&self) -> Option<BytesMut> {
         self.get_last_level().write.take()
     }
 
-    pub(crate) fn set_write_destination(&self, buf: BytesVec) -> Option<BytesVec> {
+    pub(crate) fn set_write_destination(&self, buf: BytesMut) -> Option<BytesMut> {
         let b = self.get_last_level().write.take();
         if b.is_some() {
             self.get_last_level().write.set(b);
@@ -175,7 +175,7 @@ impl Stack {
 
     pub(crate) fn with_write_source<F, R>(&self, io: &IoRef, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut BytesMut) -> R,
     {
         let item = self.get_first_level();
         let mut wb = item
@@ -194,7 +194,7 @@ impl Stack {
 
     pub(crate) fn with_write_destination<F, R>(&self, io: &IoRef, f: F) -> R
     where
-        F: FnOnce(Option<&mut BytesVec>) -> R,
+        F: FnOnce(Option<&mut BytesMut>) -> R,
     {
         let item = self.get_last_level();
         let mut wb = item.write.take();
@@ -340,7 +340,7 @@ impl ReadBuf<'_> {
 
     #[inline]
     /// Make sure buffer has enough free space
-    pub fn resize_buf(&self, buf: &mut BytesVec) {
+    pub fn resize_buf(&self, buf: &mut BytesMut) {
         self.io.cfg().read_buf().resize(buf);
     }
 
@@ -348,7 +348,7 @@ impl ReadBuf<'_> {
     /// Get reference to source read buffer
     pub fn with_src<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut Option<BytesVec>) -> R,
+        F: FnOnce(&mut Option<BytesMut>) -> R,
     {
         let mut buf = self.next.read.take();
         let result = f(&mut buf);
@@ -367,7 +367,7 @@ impl ReadBuf<'_> {
     /// Get reference to destination read buffer
     pub fn with_dst<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut BytesMut) -> R,
     {
         let mut rb = self
             .curr
@@ -386,7 +386,7 @@ impl ReadBuf<'_> {
 
     #[inline]
     /// Take source read buffer
-    pub fn take_src(&self) -> Option<BytesVec> {
+    pub fn take_src(&self) -> Option<BytesMut> {
         self.next.read.take().and_then(|b| {
             if b.is_empty() {
                 self.io.cfg().read_buf().release(b);
@@ -399,7 +399,7 @@ impl ReadBuf<'_> {
 
     #[inline]
     /// Set source read buffer
-    pub fn set_src(&self, src: Option<BytesVec>) {
+    pub fn set_src(&self, src: Option<BytesMut>) {
         if let Some(src) = src {
             if src.is_empty() {
                 self.io.cfg().read_buf().release(src);
@@ -415,7 +415,7 @@ impl ReadBuf<'_> {
 
     #[inline]
     /// Take destination read buffer
-    pub fn take_dst(&self) -> BytesVec {
+    pub fn take_dst(&self) -> BytesMut {
         self.curr
             .read
             .take()
@@ -424,7 +424,7 @@ impl ReadBuf<'_> {
 
     #[inline]
     /// Set destination read buffer
-    pub fn set_dst(&self, dst: Option<BytesVec>) {
+    pub fn set_dst(&self, dst: Option<BytesMut>) {
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.cfg().read_buf().release(dst);
@@ -484,7 +484,7 @@ impl WriteBuf<'_> {
 
     #[inline]
     /// Make sure buffer has enough free space
-    pub fn resize_buf(&self, buf: &mut BytesVec) {
+    pub fn resize_buf(&self, buf: &mut BytesMut) {
         self.io.cfg().write_buf().resize(buf);
     }
 
@@ -492,7 +492,7 @@ impl WriteBuf<'_> {
     /// Get reference to source write buffer
     pub fn with_src<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut Option<BytesVec>) -> R,
+        F: FnOnce(&mut Option<BytesMut>) -> R,
     {
         let mut wb = self.curr.write.take();
         let result = f(&mut wb);
@@ -510,7 +510,7 @@ impl WriteBuf<'_> {
     /// Get reference to destination write buffer
     pub fn with_dst<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut BytesMut) -> R,
     {
         let mut wb = self
             .next
@@ -533,7 +533,7 @@ impl WriteBuf<'_> {
 
     #[inline]
     /// Take source write buffer
-    pub fn take_src(&self) -> Option<BytesVec> {
+    pub fn take_src(&self) -> Option<BytesMut> {
         self.curr.write.take().and_then(|b| {
             if b.is_empty() {
                 self.io.cfg().write_buf().release(b);
@@ -546,7 +546,7 @@ impl WriteBuf<'_> {
 
     #[inline]
     /// Set source write buffer
-    pub fn set_src(&self, src: Option<BytesVec>) {
+    pub fn set_src(&self, src: Option<BytesMut>) {
         if let Some(src) = src {
             if src.is_empty() {
                 self.io.cfg().write_buf().release(src);
@@ -562,7 +562,7 @@ impl WriteBuf<'_> {
 
     #[inline]
     /// Take destination write buffer
-    pub fn take_dst(&self) -> BytesVec {
+    pub fn take_dst(&self) -> BytesMut {
         self.next
             .write
             .take()
@@ -571,7 +571,7 @@ impl WriteBuf<'_> {
 
     #[inline]
     /// Set destination write buffer
-    pub fn set_dst(&self, dst: Option<BytesVec>) {
+    pub fn set_dst(&self, dst: Option<BytesMut>) {
         if let Some(dst) = dst {
             if dst.is_empty() {
                 self.io.cfg().write_buf().release(dst);

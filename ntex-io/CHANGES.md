@@ -1,5 +1,9 @@
 # Changes
 
+## [3.4.0] - 2026-01-17
+
+* Updates ntex-codec and ntex-bytes usage
+
 ## [3.3.2] - 2026-01-08
 
 * Add FilterCtx::io()

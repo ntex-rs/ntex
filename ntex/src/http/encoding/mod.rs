@@ -21,7 +21,7 @@ impl Writer {
     }
 
     fn take(&mut self) -> Bytes {
-        self.buf.take_bytes()
+        self.buf.take()
     }
 }
 

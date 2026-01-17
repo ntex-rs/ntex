@@ -505,7 +505,7 @@ async fn test_ws_transport() {
                         while let Some(item) =
                             io.recv(&BytesCodec).await.map_err(|e| e.into_inner())?
                         {
-                            io.send(item.freeze(), &BytesCodec).await.unwrap()
+                            io.send(item, &BytesCodec).await.unwrap()
                         }
 
                         Ok::<_, io::Error>(())

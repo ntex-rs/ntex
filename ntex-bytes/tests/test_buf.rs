@@ -1,7 +1,7 @@
 #![deny(warnings, rust_2018_idioms)]
 #![allow(clippy::unnecessary_mut_passed)]
 
-use ntex_bytes::{Buf, BufMut, Bytes, BytesMut, BytesVec};
+use ntex_bytes::{Buf, BufMut, Bytes, BytesMut};
 
 #[test]
 fn test_fresh_cursor_vec() {
@@ -41,7 +41,8 @@ fn test_bytes() {
 
 #[test]
 fn test_bytes_mut() {
-    let mut buf = BytesMut::from(b"hello");
+    let mut buf = BytesMut::with_capacity(30);
+    buf.extend_from_slice(b"hello");
     assert_eq!(Buf::remaining(&buf), 5);
     assert_eq!(Buf::chunk(&buf), b"hello");
 
@@ -59,7 +60,8 @@ fn test_bytes_mut() {
 
 #[test]
 fn test_bytes_mut_buf() {
-    let mut buf = BytesMut::from(b"hello");
+    let mut buf = BytesMut::with_capacity(30);
+    buf.extend_from_slice(b"hello");
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 5);
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"hello");
@@ -89,7 +91,7 @@ fn test_bytes_mut_buf() {
 
 #[test]
 fn test_bytes_vec() {
-    let mut buf = BytesVec::from(b"hello");
+    let mut buf = BytesMut::from(b"hello");
     assert_eq!(Buf::remaining(&buf), 5);
     assert_eq!(Buf::chunk(&buf), b"hello");
 
@@ -107,7 +109,7 @@ fn test_bytes_vec() {
 
 #[test]
 fn test_bytes_vec_buf() {
-    let mut buf = BytesVec::from(b"hello");
+    let mut buf = BytesMut::from(b"hello");
 
     assert_eq!(bytes::buf::Buf::remaining(&buf), 5);
     assert_eq!(bytes::buf::Buf::chunk(&buf), b"hello");

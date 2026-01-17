@@ -3,7 +3,7 @@
 
 use std::{io, rc::Rc};
 
-use ntex_bytes::{Bytes, BytesMut, BytesVec};
+use ntex_bytes::{Bytes, BytesMut};
 
 /// Trait of helper objects to write out messages as bytes.
 pub trait Encoder {
@@ -15,11 +15,6 @@ pub trait Encoder {
 
     /// Encodes a frame into the buffer provided.
     fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error>;
-
-    /// Encodes a frame into the buffer provided.
-    fn encode_vec(&self, item: Self::Item, dst: &mut BytesVec) -> Result<(), Self::Error> {
-        dst.with_bytes_mut(|dst| self.encode(item, dst))
-    }
 }
 
 /// Decoding of frames via buffers.
@@ -36,11 +31,6 @@ pub trait Decoder {
 
     /// Attempts to decode a frame from the provided buffer of bytes.
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error>;
-
-    /// Attempts to decode a frame from the provided buffer of bytes.
-    fn decode_vec(&self, src: &mut BytesVec) -> Result<Option<Self::Item>, Self::Error> {
-        src.with_bytes_mut(|src| self.decode(src))
-    }
 }
 
 impl<T> Encoder for Rc<T>
@@ -85,7 +75,7 @@ impl Encoder for BytesCodec {
 }
 
 impl Decoder for BytesCodec {
-    type Item = BytesMut;
+    type Item = Bytes;
     type Error = io::Error;
 
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {

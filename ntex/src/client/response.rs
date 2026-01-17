@@ -396,7 +396,7 @@ impl Future for ReadBody {
                         continue;
                     }
                 }
-                Poll::Ready(None) => Poll::Ready(Ok(this.buf.take_bytes())),
+                Poll::Ready(None) => Poll::Ready(Ok(this.buf.take())),
                 Poll::Ready(Some(Err(err))) => Poll::Ready(Err(err)),
                 Poll::Pending => {
                     if this.timeout.poll_elapsed(cx).is_ready() {
