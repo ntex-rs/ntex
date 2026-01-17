@@ -895,6 +895,29 @@ mod tests {
         assert!(b.is_empty());
         assert!(b.len() == 0);
 
+        let mut b = Bytes::from(LONG);
+        b.advance_to(10);
+        assert_eq!(&b, &LONG[10..]);
+        b.advance_to(10);
+        assert_eq!(&b[..], &LONG[20..]);
+        assert_eq!(&b, &LONG[20..]);
+        b.clear();
+        assert!(b.is_empty());
+        assert!(b.len() == 0);
+
+        let mut b = Bytes::from(LONG);
+        b.split_off(10);
+        assert_eq!(&b, &LONG[..10]);
+        b.advance_to(5);
+        assert_eq!(&b, &LONG[5..10]);
+
+        let mut b = Bytes::copy_from_slice(&LONG[..15]);
+        assert!(b.is_inline());
+        b.split_off(10);
+        assert_eq!(&b, &LONG[..10]);
+        b.advance_to(1);
+        assert_eq!(&b, &LONG[1..10]);
+
         let b = Bytes::from(b"123");
         assert!(&b"12"[..] > &b);
         assert!("123" == &b);
