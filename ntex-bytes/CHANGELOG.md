@@ -4,7 +4,7 @@
 
 * Replace BytesMut with BytesVec
 
-* Simplify Bytes impl
+* Bytes size reduced to 24 bytes
 
 ## [1.2.0] (2026-01-04)
 

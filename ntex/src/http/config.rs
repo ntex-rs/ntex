@@ -2,7 +2,7 @@ use std::{cell::Cell, ptr::copy_nonoverlapping, time};
 
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut, util::BytesVec};
+use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -346,7 +346,7 @@ impl DateService {
     }
 
     #[doc(hidden)]
-    pub fn bset_date_header(&self, dst: &mut BytesVec) {
+    pub fn bset_date_header(&self, dst: &mut BytesMut) {
         self.check_date();
 
         DATE.with(|date| {
@@ -377,9 +377,9 @@ mod tests {
         DateService.set_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
 
-        let mut buf1 = BytesVec::with_capacity(DATE_VALUE_LENGTH_HDR);
+        let mut buf1 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
         DateService.bset_date_header(&mut buf1);
-        let mut buf2 = BytesVec::with_capacity(DATE_VALUE_LENGTH_HDR);
+        let mut buf2 = BytesMut::with_capacity(DATE_VALUE_LENGTH_HDR);
         DateService.bset_date_header(&mut buf2);
         assert_eq!(buf1, buf2);
     }

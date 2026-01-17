@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::{any, cell::RefCell, cmp, fmt, future::poll_fn, io, mem, net, rc::Rc};
 
-use ntex_bytes::{BufMut, Bytes, BytesVec};
+use ntex_bytes::{BufMut, Bytes, BytesMut};
 use ntex_util::time::{Millis, sleep};
 
 use crate::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
@@ -60,7 +60,7 @@ struct State {
 
 #[derive(Default, Debug)]
 struct Channel {
-    buf: BytesVec,
+    buf: BytesMut,
     buf_cap: usize,
     flags: IoTestFlags,
     waker: AtomicWaker,
@@ -157,7 +157,7 @@ impl IoTest {
     /// Access read buffer.
     pub fn local_buffer<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut BytesMut) -> R,
     {
         let guard = self.local.lock().unwrap();
         let mut ch = guard.borrow_mut();
@@ -167,7 +167,7 @@ impl IoTest {
     /// Access remote buffer.
     pub fn remote_buffer<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesVec) -> R,
+        F: FnOnce(&mut BytesMut) -> R,
     {
         let guard = self.remote.lock().unwrap();
         let mut ch = guard.borrow_mut();
@@ -241,7 +241,7 @@ impl IoTest {
     pub fn poll_read_buf(
         &self,
         cx: &mut Context<'_>,
-        buf: &mut BytesVec,
+        buf: &mut BytesMut,
     ) -> Poll<io::Result<usize>> {
         let guard = self.local.lock().unwrap();
         let mut ch = guard.borrow_mut();
@@ -485,7 +485,7 @@ fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
 /// Flush write buffer to underlying I/O stream.
 pub(super) fn write_io(
     io: &IoTest,
-    buf: &mut BytesVec,
+    buf: &mut BytesMut,
     cx: &mut Context<'_>,
     tag: &'static str,
 ) -> Poll<io::Result<usize>> {
@@ -537,7 +537,7 @@ mod tests {
         assert!(format!("{:?}", AtomicWaker::default()).contains("AtomicWaker"));
 
         server.read_pending();
-        let mut buf = BytesVec::new();
+        let mut buf = BytesMut::new();
         let res = lazy(|cx| client.poll_read_buf(cx, &mut buf)).await;
         assert!(res.is_pending());
 

@@ -1,7 +1,7 @@
 //! A UTF-8 encoded read-only string using Bytes as storage.
 use std::{borrow, fmt, hash, ops, slice, str};
 
-use crate::{Bytes, BytesVec};
+use crate::{Bytes, BytesMut};
 
 /// An immutable UTF-8 encoded string with [`Bytes`] as a storage.
 #[derive(Clone, Default, Eq, PartialOrd, Ord)]
@@ -315,11 +315,11 @@ impl TryFrom<&Bytes> for ByteString {
     }
 }
 
-impl TryFrom<BytesVec> for ByteString {
+impl TryFrom<BytesMut> for ByteString {
     type Error = ();
 
     #[inline]
-    fn try_from(value: BytesVec) -> Result<Self, Self::Error> {
+    fn try_from(value: BytesMut) -> Result<Self, Self::Error> {
         if utf8::is_valid(&value) {
             Ok(ByteString(value.freeze()))
         } else {
@@ -486,8 +486,8 @@ mod test {
         assert!(ByteString::try_from(&Bytes::from_static(b"\xc3\x28")).is_err());
 
         let _ =
-            ByteString::try_from(BytesVec::copy_from_slice(&b"nice bytes"[..])).unwrap();
-        assert!(ByteString::try_from(BytesVec::copy_from_slice(b"\xc3\x28")).is_err());
+            ByteString::try_from(BytesMut::copy_from_slice(&b"nice bytes"[..])).unwrap();
+        assert!(ByteString::try_from(BytesMut::copy_from_slice(b"\xc3\x28")).is_err());
     }
 
     #[test]

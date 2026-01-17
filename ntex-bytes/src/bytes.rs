@@ -1,6 +1,6 @@
 use std::{borrow, cmp, fmt, hash, mem, ops};
 
-use crate::{Buf, BytesVec, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
+use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
 
 /// A reference counted contiguous slice of memory.
 ///
@@ -580,28 +580,16 @@ impl From<&Bytes> for Bytes {
 impl From<Vec<u8>> for Bytes {
     /// Convert a `Vec` into a `Bytes`
     fn from(src: Vec<u8>) -> Bytes {
-        if src.len() <= INLINE_CAP {
-            Bytes {
-                storage: Storage::from_slice(&src),
-            }
-        } else {
-            Bytes {
-                storage: Storage::from_vec(src),
-            }
+        Bytes {
+            storage: Storage::from_slice(&src),
         }
     }
 }
 
 impl From<String> for Bytes {
     fn from(src: String) -> Bytes {
-        if src.len() <= INLINE_CAP {
-            Bytes {
-                storage: Storage::from_slice(src.as_bytes()),
-            }
-        } else {
-            Bytes {
-                storage: Storage::from_vec(src.into_bytes()),
-            }
+        Bytes {
+            storage: Storage::from_slice(src.as_bytes()),
         }
     }
 }
@@ -626,13 +614,13 @@ impl<'a, const N: usize> From<&'a [u8; N]> for Bytes {
 
 impl FromIterator<u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
-        BytesVec::from_iter(into_iter).freeze()
+        BytesMut::from_iter(into_iter).freeze()
     }
 }
 
 impl<'a> FromIterator<&'a u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
-        BytesVec::from_iter(into_iter).freeze()
+        BytesMut::from_iter(into_iter).freeze()
     }
 }
 
@@ -837,7 +825,6 @@ impl PartialOrd<Bytes> for String {
 
 impl PartialEq<Bytes> for &[u8] {
     fn eq(&self, other: &Bytes) -> bool {
-        println!("4 --------------------");
         *other == *self
     }
 }
@@ -911,10 +898,10 @@ mod tests {
         let b = Bytes::from(&Bytes::from(LONG));
         assert_eq!(b, LONG);
 
-        let b = Bytes::from(BytesVec::from(LONG));
+        let b = Bytes::from(BytesMut::from(LONG));
         assert_eq!(b, LONG);
 
-        let mut b: Bytes = BytesVec::try_from(b).unwrap().freeze();
+        let mut b: Bytes = BytesMut::try_from(b).unwrap().freeze();
         assert_eq!(b, LONG);
         assert!(!(b > b));
         assert_eq!(<Bytes as Buf>::remaining(&b), LONG.len());
@@ -926,23 +913,23 @@ mod tests {
         h.insert(b.clone(), 1);
         assert_eq!(h.get(&b), Some(&1));
 
-        let mut b = BytesVec::try_from(LONG).unwrap();
+        let mut b = BytesMut::try_from(LONG).unwrap();
         assert_eq!(b, LONG);
-        assert_eq!(<BytesVec as Buf>::remaining(&b), LONG.len());
-        assert_eq!(<BytesVec as BufMut>::remaining_mut(&b), 0);
-        assert_eq!(<BytesVec as Buf>::chunk(&b), LONG);
-        <BytesVec as Buf>::advance(&mut b, 10);
-        assert_eq!(<BytesVec as Buf>::chunk(&b), &LONG[10..]);
+        assert_eq!(<BytesMut as Buf>::remaining(&b), LONG.len());
+        assert_eq!(<BytesMut as BufMut>::remaining_mut(&b), 0);
+        assert_eq!(<BytesMut as Buf>::chunk(&b), LONG);
+        <BytesMut as Buf>::advance(&mut b, 10);
+        assert_eq!(<BytesMut as Buf>::chunk(&b), &LONG[10..]);
 
-        let mut b = BytesVec::with_capacity(12);
-        <BytesVec as BufMut>::put_i8(&mut b, 1);
+        let mut b = BytesMut::with_capacity(12);
+        <BytesMut as BufMut>::put_i8(&mut b, 1);
         assert_eq!(b, b"\x01".as_ref());
-        <BytesVec as BufMut>::put_u8(&mut b, 2);
+        <BytesMut as BufMut>::put_u8(&mut b, 2);
         assert_eq!(b, b"\x01\x02".as_ref());
-        <BytesVec as BufMut>::put_slice(&mut b, b"12345");
+        <BytesMut as BufMut>::put_slice(&mut b, b"12345");
         assert_eq!(b, b"\x01\x0212345".as_ref());
-        <BytesVec as BufMut>::chunk_mut(&mut b).write_byte(0, b'1');
-        unsafe { <BytesVec as BufMut>::advance_mut(&mut b, 1) };
+        <BytesMut as BufMut>::chunk_mut(&mut b).write_byte(0, b'1');
+        unsafe { <BytesMut as BufMut>::advance_mut(&mut b, 1) };
         assert_eq!(b, b"\x01\x02123451".as_ref());
     }
 }

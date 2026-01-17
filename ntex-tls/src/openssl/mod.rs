@@ -1,7 +1,7 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::{any, cell::RefCell, cmp, error::Error, io, task::Poll};
 
-use ntex_bytes::{BufMut, BytesVec};
+use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf, types};
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
@@ -30,8 +30,8 @@ pub struct SslFilter {
 
 #[derive(Debug)]
 struct IoInner {
-    source: Option<BytesVec>,
-    destination: Option<BytesVec>,
+    source: Option<BytesMut>,
+    destination: Option<BytesMut>,
 }
 
 impl io::Read for IoInner {

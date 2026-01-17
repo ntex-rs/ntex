@@ -15,7 +15,7 @@ To use `ntex-bytes`, first add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ntex-bytes = "0.1"
+ntex-bytes = "1"
 ```
 
 Next, add this to your crate:
@@ -30,7 +30,7 @@ Serde support is optional and disabled by default. To enable use the feature `se
 
 ```toml
 [dependencies]
-ntex-bytes = { version = "0.1", features = ["serde"] }
+ntex-bytes = { version = "1", features = ["serde"] }
 ```
 
 ## License

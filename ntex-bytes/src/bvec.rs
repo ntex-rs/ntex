@@ -7,8 +7,8 @@ use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, debug};
 
 /// A unique reference to a contiguous slice of memory.
 ///
-/// `BytesVec` represents a unique view into a potentially shared memory region.
-/// Given the uniqueness guarantee, owners of `BytesVec` handles are able to
+/// `BytesMut` represents a unique view into a potentially shared memory region.
+/// Given the uniqueness guarantee, owners of `BytesMut` handles are able to
 /// mutate the memory. It is similar to a `Vec<u8>` but with less copies and
 /// allocations. It also always allocates.
 ///
@@ -28,9 +28,9 @@ use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, debug};
 /// # Examples
 ///
 /// ```
-/// use ntex_bytes::{BytesVec, BufMut};
+/// use ntex_bytes::{BytesMut, BufMut};
 ///
-/// let mut buf = BytesVec::with_capacity(64);
+/// let mut buf = BytesMut::with_capacity(64);
 ///
 /// buf.put_u8(b'h');
 /// buf.put_u8(b'e');
@@ -47,24 +47,18 @@ use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, debug};
 /// assert_eq!(a, b"hello");
 /// assert_eq!(b, b"hello");
 /// ```
-pub struct BytesVec {
+pub struct BytesMut {
     pub(crate) storage: StorageVec,
 }
 
-/*
- *
- * ===== BytesVec =====
- *
- */
-
-impl BytesVec {
-    /// Creates a new `BytesVec` with the specified capacity.
+impl BytesMut {
+    /// Creates a new `BytesMut` with the specified capacity.
     ///
-    /// The returned `BytesVec` will be able to hold at least `capacity` bytes
+    /// The returned `BytesMut` will be able to hold at least `capacity` bytes
     /// without reallocating.
     ///
     /// It is important to note that this function does not specify the length
-    /// of the returned `BytesVec`, but only the capacity.
+    /// of the returned `BytesMut`, but only the capacity.
     ///
     /// # Panics
     ///
@@ -74,9 +68,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesVec, BufMut};
+    /// use ntex_bytes::{BytesMut, BufMut};
     ///
-    /// let mut bytes = BytesVec::with_capacity(64);
+    /// let mut bytes = BytesMut::with_capacity(64);
     ///
     /// // `bytes` contains no data, even though there is capacity
     /// assert_eq!(bytes.len(), 0);
@@ -86,30 +80,30 @@ impl BytesVec {
     /// assert_eq!(&bytes[..], b"hello world");
     /// ```
     #[inline]
-    pub fn with_capacity(capacity: usize) -> BytesVec {
-        BytesVec {
+    pub fn with_capacity(capacity: usize) -> BytesMut {
+        BytesMut {
             storage: StorageVec::with_capacity(capacity),
         }
     }
 
-    /// Creates a new `BytesVec` from slice, by copying it.
+    /// Creates a new `BytesMut` from slice, by copying it.
     pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
         let slice = src.as_ref();
-        BytesVec {
+        BytesMut {
             storage: StorageVec::from_slice(slice.len(), slice),
         }
     }
 
-    /// Creates a new `BytesVec` with default capacity.
+    /// Creates a new `BytesMut` with default capacity.
     ///
     /// Resulting object has length 0 and unspecified capacity.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesVec, BufMut};
+    /// use ntex_bytes::{BytesMut, BufMut};
     ///
-    /// let mut bytes = BytesVec::new();
+    /// let mut bytes = BytesMut::new();
     ///
     /// assert_eq!(0, bytes.len());
     ///
@@ -119,20 +113,20 @@ impl BytesVec {
     /// assert_eq!(&b"xy"[..], &bytes[..]);
     /// ```
     #[inline]
-    pub fn new() -> BytesVec {
-        BytesVec {
+    pub fn new() -> BytesMut {
+        BytesMut {
             storage: StorageVec::with_capacity(104),
         }
     }
 
-    /// Returns the number of bytes contained in this `BytesVec`.
+    /// Returns the number of bytes contained in this `BytesMut`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let b = BytesVec::copy_from_slice(&b"hello"[..]);
+    /// let b = BytesMut::copy_from_slice(&b"hello"[..]);
     /// assert_eq!(b.len(), 5);
     /// ```
     #[inline]
@@ -140,14 +134,14 @@ impl BytesVec {
         self.storage.len()
     }
 
-    /// Returns true if the `BytesVec` has a length of 0.
+    /// Returns true if the `BytesMut` has a length of 0.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let b = BytesVec::with_capacity(64);
+    /// let b = BytesMut::with_capacity(64);
     /// assert!(b.is_empty());
     /// ```
     #[inline]
@@ -155,14 +149,14 @@ impl BytesVec {
         self.storage.len() == 0
     }
 
-    /// Returns the number of bytes the `BytesVec` can hold without reallocating.
+    /// Returns the number of bytes the `BytesMut` can hold without reallocating.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let b = BytesVec::with_capacity(64);
+    /// let b = BytesMut::with_capacity(64);
     /// assert_eq!(b.capacity(), 64);
     /// ```
     #[inline]
@@ -179,10 +173,10 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesVec, BufMut};
+    /// use ntex_bytes::{BytesMut, BufMut};
     /// use std::thread;
     ///
-    /// let mut b = BytesVec::with_capacity(64);
+    /// let mut b = BytesMut::with_capacity(64);
     /// b.put("hello world");
     /// let b1 = b.freeze();
     /// let b2 = b1.clone();
@@ -214,9 +208,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{BytesVec, BufMut};
+    /// use ntex_bytes::{BytesMut, BufMut};
     ///
-    /// let mut buf = BytesVec::with_capacity(1024);
+    /// let mut buf = BytesMut::with_capacity(1024);
     /// buf.put(&b"hello world"[..]);
     ///
     /// let other = buf.take();
@@ -244,9 +238,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let mut a = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// let mut a = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// let mut b = a.split_to(5);
     ///
     /// a[0] = b'!';
@@ -272,9 +266,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let mut a = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// let mut a = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// a.advance_to(5);
     ///
     /// a[0] = b'!';
@@ -318,9 +312,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let mut buf = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// let mut buf = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// buf.truncate(5);
     /// assert_eq!(buf, b"hello"[..]);
     /// ```
@@ -336,9 +330,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let mut buf = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// let mut buf = BytesMut::copy_from_slice(&b"hello world"[..]);
     /// buf.clear();
     /// assert!(buf.is_empty());
     /// ```
@@ -361,9 +355,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let mut buf = BytesVec::new();
+    /// let mut buf = BytesMut::new();
     ///
     /// buf.resize(3, 0x1);
     /// assert_eq!(&buf[..], &[0x1, 0x1, 0x1]);
@@ -388,9 +382,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let mut b = BytesVec::copy_from_slice(&b"hello world"[..]);
+    /// let mut b = BytesMut::copy_from_slice(&b"hello world"[..]);
     ///
     /// unsafe {
     ///     b.set_len(5);
@@ -416,7 +410,7 @@ impl BytesVec {
     }
 
     /// Reserves capacity for at least `additional` more bytes to be inserted
-    /// into the given `BytesVec`.
+    /// into the given `BytesMut`.
     ///
     /// More than `additional` bytes may be reserved in order to avoid frequent
     /// reallocations. A call to `reserve` may result in an allocation.
@@ -438,9 +432,9 @@ impl BytesVec {
     /// In the following example, a new buffer is allocated.
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let mut buf = BytesVec::copy_from_slice(&b"hello"[..]);
+    /// let mut buf = BytesMut::copy_from_slice(&b"hello"[..]);
     /// buf.reserve(64);
     /// assert!(buf.capacity() >= 69);
     /// ```
@@ -448,9 +442,9 @@ impl BytesVec {
     /// In the following example, the existing buffer is reclaimed.
     ///
     /// ```
-    /// use ntex_bytes::{BytesVec, BufMut};
+    /// use ntex_bytes::{BytesMut, BufMut};
     ///
-    /// let mut buf = BytesVec::with_capacity(128);
+    /// let mut buf = BytesMut::with_capacity(128);
     /// buf.put(&[0; 64][..]);
     ///
     /// let ptr = buf.as_ptr();
@@ -476,15 +470,15 @@ impl BytesVec {
 
     /// Appends given bytes to this object.
     ///
-    /// If this `BytesVec` object has not enough capacity, it is resized first.
+    /// If this `BytesMut` object has not enough capacity, it is resized first.
     /// So unlike `put_slice` operation, `extend_from_slice` does not panic.
     ///
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::BytesVec;
+    /// use ntex_bytes::BytesMut;
     ///
-    /// let mut buf = BytesVec::with_capacity(0);
+    /// let mut buf = BytesMut::with_capacity(0);
     /// buf.extend_from_slice(b"aaabbb");
     /// buf.extend_from_slice(b"cccddd");
     ///
@@ -500,9 +494,9 @@ impl BytesVec {
     /// # Examples
     ///
     /// ```
-    /// use ntex_bytes::{Buf, BytesVec};
+    /// use ntex_bytes::{Buf, BytesMut};
     ///
-    /// let buf = BytesVec::copy_from_slice(&b"abc"[..]);
+    /// let buf = BytesMut::copy_from_slice(&b"abc"[..]);
     /// let mut iter = buf.iter();
     ///
     /// assert_eq!(iter.next().map(|b| *b), Some(b'a'));
@@ -516,7 +510,7 @@ impl BytesVec {
     }
 }
 
-impl Buf for BytesVec {
+impl Buf for BytesMut {
     #[inline]
     fn remaining(&self) -> usize {
         self.len()
@@ -533,7 +527,7 @@ impl Buf for BytesVec {
     }
 }
 
-impl BufMut for BytesVec {
+impl BufMut for BytesMut {
     #[inline]
     fn remaining_mut(&self) -> usize {
         self.capacity() - self.len()
@@ -580,7 +574,7 @@ impl BufMut for BytesVec {
     }
 }
 
-impl bytes::buf::Buf for BytesVec {
+impl bytes::buf::Buf for BytesMut {
     #[inline]
     fn remaining(&self) -> usize {
         self.len()
@@ -597,7 +591,7 @@ impl bytes::buf::Buf for BytesVec {
     }
 }
 
-unsafe impl bytes::buf::BufMut for BytesVec {
+unsafe impl bytes::buf::BufMut for BytesMut {
     #[inline]
     fn remaining_mut(&self) -> usize {
         BufMut::remaining_mut(self)
@@ -634,21 +628,21 @@ unsafe impl bytes::buf::BufMut for BytesVec {
     }
 }
 
-impl AsRef<[u8]> for BytesVec {
+impl AsRef<[u8]> for BytesMut {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         self.storage.as_ref()
     }
 }
 
-impl AsMut<[u8]> for BytesVec {
+impl AsMut<[u8]> for BytesMut {
     #[inline]
     fn as_mut(&mut self) -> &mut [u8] {
         self.storage.as_mut()
     }
 }
 
-impl Deref for BytesVec {
+impl Deref for BytesMut {
     type Target = [u8];
 
     #[inline]
@@ -657,56 +651,56 @@ impl Deref for BytesVec {
     }
 }
 
-impl DerefMut for BytesVec {
+impl DerefMut for BytesMut {
     #[inline]
     fn deref_mut(&mut self) -> &mut [u8] {
         self.storage.as_mut()
     }
 }
 
-impl Eq for BytesVec {}
+impl Eq for BytesMut {}
 
-impl PartialEq for BytesVec {
+impl PartialEq for BytesMut {
     #[inline]
-    fn eq(&self, other: &BytesVec) -> bool {
+    fn eq(&self, other: &BytesMut) -> bool {
         self.storage.as_ref() == other.storage.as_ref()
     }
 }
 
-impl Default for BytesVec {
+impl Default for BytesMut {
     #[inline]
-    fn default() -> BytesVec {
-        BytesVec::new()
+    fn default() -> BytesMut {
+        BytesMut::new()
     }
 }
 
-impl Borrow<[u8]> for BytesVec {
+impl Borrow<[u8]> for BytesMut {
     #[inline]
     fn borrow(&self) -> &[u8] {
         self.as_ref()
     }
 }
 
-impl BorrowMut<[u8]> for BytesVec {
+impl BorrowMut<[u8]> for BytesMut {
     #[inline]
     fn borrow_mut(&mut self) -> &mut [u8] {
         self.as_mut()
     }
 }
 
-impl PartialEq<Bytes> for BytesVec {
+impl PartialEq<Bytes> for BytesMut {
     fn eq(&self, other: &Bytes) -> bool {
         other[..] == self[..]
     }
 }
 
-impl fmt::Debug for BytesVec {
+impl fmt::Debug for BytesMut {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
     }
 }
 
-impl fmt::Write for BytesVec {
+impl fmt::Write for BytesMut {
     #[inline]
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if self.remaining_mut() >= s.len() {
@@ -723,23 +717,23 @@ impl fmt::Write for BytesVec {
     }
 }
 
-impl Clone for BytesVec {
+impl Clone for BytesMut {
     #[inline]
-    fn clone(&self) -> BytesVec {
-        BytesVec::from(&self[..])
+    fn clone(&self) -> BytesMut {
+        BytesMut::from(&self[..])
     }
 }
 
-impl IntoIterator for BytesVec {
+impl IntoIterator for BytesMut {
     type Item = u8;
-    type IntoIter = IntoIter<BytesVec>;
+    type IntoIter = IntoIter<BytesMut>;
 
     fn into_iter(self) -> Self::IntoIter {
         IntoIter::new(self)
     }
 }
 
-impl<'a> IntoIterator for &'a BytesVec {
+impl<'a> IntoIterator for &'a BytesMut {
     type Item = &'a u8;
     type IntoIter = std::slice::Iter<'a, u8>;
 
@@ -748,12 +742,12 @@ impl<'a> IntoIterator for &'a BytesVec {
     }
 }
 
-impl FromIterator<u8> for BytesVec {
+impl FromIterator<u8> for BytesMut {
     fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
         let iter = into_iter.into_iter();
         let (min, maybe_max) = iter.size_hint();
 
-        let mut out = BytesVec::with_capacity(maybe_max.unwrap_or(min));
+        let mut out = BytesMut::with_capacity(maybe_max.unwrap_or(min));
         for i in iter {
             out.reserve(1);
             out.put_u8(i);
@@ -763,13 +757,13 @@ impl FromIterator<u8> for BytesVec {
     }
 }
 
-impl<'a> FromIterator<&'a u8> for BytesVec {
+impl<'a> FromIterator<&'a u8> for BytesMut {
     fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
-        into_iter.into_iter().copied().collect::<BytesVec>()
+        into_iter.into_iter().copied().collect::<BytesMut>()
     }
 }
 
-impl Extend<u8> for BytesVec {
+impl Extend<u8> for BytesMut {
     fn extend<T>(&mut self, iter: T)
     where
         T: IntoIterator<Item = u8>,
@@ -788,7 +782,7 @@ impl Extend<u8> for BytesVec {
     }
 }
 
-impl<'a> Extend<&'a u8> for BytesVec {
+impl<'a> Extend<&'a u8> for BytesMut {
     fn extend<T>(&mut self, iter: T)
     where
         T: IntoIterator<Item = &'a u8>,
@@ -797,146 +791,146 @@ impl<'a> Extend<&'a u8> for BytesVec {
     }
 }
 
-impl PartialEq<[u8]> for BytesVec {
+impl PartialEq<[u8]> for BytesMut {
     fn eq(&self, other: &[u8]) -> bool {
         &**self == other
     }
 }
 
-impl<const N: usize> PartialEq<[u8; N]> for BytesVec {
+impl<const N: usize> PartialEq<[u8; N]> for BytesMut {
     fn eq(&self, other: &[u8; N]) -> bool {
         &**self == other
     }
 }
 
-impl PartialEq<BytesVec> for [u8] {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl PartialEq<BytesMut> for [u8] {
+    fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl<const N: usize> PartialEq<BytesVec> for [u8; N] {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl<const N: usize> PartialEq<BytesMut> for [u8; N] {
+    fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl<const N: usize> PartialEq<BytesVec> for &[u8; N] {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl<const N: usize> PartialEq<BytesMut> for &[u8; N] {
+    fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl PartialEq<str> for BytesVec {
+impl PartialEq<str> for BytesMut {
     fn eq(&self, other: &str) -> bool {
         &**self == other.as_bytes()
     }
 }
 
-impl PartialEq<BytesVec> for str {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl PartialEq<BytesMut> for str {
+    fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl PartialEq<Vec<u8>> for BytesVec {
+impl PartialEq<Vec<u8>> for BytesMut {
     fn eq(&self, other: &Vec<u8>) -> bool {
         *self == other[..]
     }
 }
 
-impl PartialEq<BytesVec> for Vec<u8> {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl PartialEq<BytesMut> for Vec<u8> {
+    fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl PartialEq<String> for BytesVec {
+impl PartialEq<String> for BytesMut {
     fn eq(&self, other: &String) -> bool {
         *self == other[..]
     }
 }
 
-impl PartialEq<BytesVec> for String {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl PartialEq<BytesMut> for String {
+    fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl<'a, T: ?Sized> PartialEq<&'a T> for BytesVec
+impl<'a, T: ?Sized> PartialEq<&'a T> for BytesMut
 where
-    BytesVec: PartialEq<T>,
+    BytesMut: PartialEq<T>,
 {
     fn eq(&self, other: &&'a T) -> bool {
         *self == **other
     }
 }
 
-impl PartialEq<BytesVec> for &[u8] {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl PartialEq<BytesMut> for &[u8] {
+    fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl PartialEq<BytesVec> for &str {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl PartialEq<BytesMut> for &str {
+    fn eq(&self, other: &BytesMut) -> bool {
         *other == *self
     }
 }
 
-impl PartialEq<BytesVec> for Bytes {
-    fn eq(&self, other: &BytesVec) -> bool {
+impl PartialEq<BytesMut> for Bytes {
+    fn eq(&self, other: &BytesMut) -> bool {
         other[..] == self[..]
     }
 }
 
-impl From<BytesVec> for Bytes {
+impl From<BytesMut> for Bytes {
     #[inline]
-    fn from(b: BytesVec) -> Self {
+    fn from(b: BytesMut) -> Self {
         b.freeze()
     }
 }
 
-impl<'a> From<&'a [u8]> for BytesVec {
+impl<'a> From<&'a [u8]> for BytesMut {
     #[inline]
-    fn from(src: &'a [u8]) -> BytesVec {
-        BytesVec::copy_from_slice(src)
+    fn from(src: &'a [u8]) -> BytesMut {
+        BytesMut::copy_from_slice(src)
     }
 }
 
-impl<const N: usize> From<[u8; N]> for BytesVec {
+impl<const N: usize> From<[u8; N]> for BytesMut {
     #[inline]
-    fn from(src: [u8; N]) -> BytesVec {
-        BytesVec::copy_from_slice(src)
+    fn from(src: [u8; N]) -> BytesMut {
+        BytesMut::copy_from_slice(src)
     }
 }
 
-impl<'a, const N: usize> From<&'a [u8; N]> for BytesVec {
+impl<'a, const N: usize> From<&'a [u8; N]> for BytesMut {
     #[inline]
-    fn from(src: &'a [u8; N]) -> BytesVec {
-        BytesVec::copy_from_slice(src)
+    fn from(src: &'a [u8; N]) -> BytesMut {
+        BytesMut::copy_from_slice(src)
     }
 }
 
-impl<'a> From<&'a str> for BytesVec {
+impl<'a> From<&'a str> for BytesMut {
     #[inline]
-    fn from(src: &'a str) -> BytesVec {
-        BytesVec::from(src.as_bytes())
+    fn from(src: &'a str) -> BytesMut {
+        BytesMut::from(src.as_bytes())
     }
 }
 
-impl From<Bytes> for BytesVec {
+impl From<Bytes> for BytesMut {
     #[inline]
-    fn from(src: Bytes) -> BytesVec {
+    fn from(src: Bytes) -> BytesMut {
         //src.try_mut()
-        //.unwrap_or_else(|src| BytesVec::copy_from_slice(&src[..]))
-        BytesVec::copy_from_slice(&src[..])
+        //.unwrap_or_else(|src| BytesMut::copy_from_slice(&src[..]))
+        BytesMut::copy_from_slice(&src[..])
     }
 }
 
-impl From<&Bytes> for BytesVec {
+impl From<&Bytes> for BytesMut {
     #[inline]
-    fn from(src: &Bytes) -> BytesVec {
-        BytesVec::copy_from_slice(&src[..])
+    fn from(src: &Bytes) -> BytesMut {
+        BytesMut::copy_from_slice(&src[..])
     }
 }

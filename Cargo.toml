@@ -43,9 +43,9 @@ ntex-h2 = { git = "https://github.com/ntex-rs/ntex-h2.git", branch = "bytes" }
 
 [workspace.dependencies]
 ntex = "3.0.0-pre.11"
-ntex-bytes = "1.2.0"
-ntex-codec = "1.0.0"
-ntex-io = "3.3.2"
+ntex-bytes = "1.3.0"
+ntex-codec = "1.1.0"
+ntex-io = "3.4.0"
 ntex-net = "3.5.1"
 ntex-http = "1.0.0"
 ntex-router = "1.0.0"

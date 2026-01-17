@@ -1,6 +1,6 @@
 use std::fmt::{Formatter, LowerHex, Result, UpperHex};
 
-use crate::{Bytes, BytesVec};
+use crate::{Bytes, BytesMut};
 
 struct BytesRef<'a>(&'a [u8]);
 
@@ -33,9 +33,9 @@ macro_rules! hex_impl {
 }
 
 hex_impl!(LowerHex, Bytes);
-hex_impl!(LowerHex, BytesVec);
+hex_impl!(LowerHex, BytesMut);
 hex_impl!(UpperHex, Bytes);
-hex_impl!(UpperHex, BytesVec);
+hex_impl!(UpperHex, BytesMut);
 
 #[cfg(test)]
 mod tests {

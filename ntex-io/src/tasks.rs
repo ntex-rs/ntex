@@ -1,6 +1,6 @@
 use std::{cell::Cell, fmt, io, task::Context, task::Poll};
 
-use ntex_bytes::BytesVec;
+use ntex_bytes::BytesMut;
 use ntex_util::time::{Sleep, sleep};
 
 use crate::{FilterCtx, Flags, IoRef, IoTaskStatus, Readiness};
@@ -84,7 +84,7 @@ impl IoContext {
     }
 
     /// Get read buffer
-    pub fn get_read_buf(&self) -> BytesVec {
+    pub fn get_read_buf(&self) -> BytesMut {
         let inner = &self.0.0;
 
         if inner.flags.get().is_read_buf_ready() {
@@ -100,7 +100,7 @@ impl IoContext {
     }
 
     /// Resize read buffer
-    pub fn resize_read_buf(&self, buf: &mut BytesVec) {
+    pub fn resize_read_buf(&self, buf: &mut BytesMut) {
         self.0.0.read_buf().resize(buf);
     }
 
@@ -108,7 +108,7 @@ impl IoContext {
     pub fn release_read_buf(
         &self,
         nbytes: usize,
-        buf: BytesVec,
+        buf: BytesMut,
         result: Poll<Result<(), Option<io::Error>>>,
     ) -> IoTaskStatus {
         let inner = &self.0.0;
@@ -218,7 +218,7 @@ impl IoContext {
 
     #[inline]
     /// Get write buffer
-    pub fn get_write_buf(&self) -> Option<BytesVec> {
+    pub fn get_write_buf(&self) -> Option<BytesMut> {
         self.0
             .0
             .buffer
@@ -229,7 +229,7 @@ impl IoContext {
     /// Set write buffer
     pub fn release_write_buf(
         &self,
-        mut buf: BytesVec,
+        mut buf: BytesMut,
         result: Poll<io::Result<usize>>,
     ) -> IoTaskStatus {
         let result = match result {

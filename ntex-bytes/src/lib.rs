@@ -66,11 +66,13 @@ mod serde;
 mod storage;
 mod string;
 
-pub use crate::bvec::BytesVec;
+pub use crate::bvec::BytesMut;
 pub use crate::bytes::Bytes;
 pub use crate::string::ByteString;
 
-pub type BytesMut = BytesVec;
+#[doc(hidden)]
+#[deprecated]
+pub type BytesVec = BytesMut;
 
 #[doc(hidden)]
 pub mod info {
