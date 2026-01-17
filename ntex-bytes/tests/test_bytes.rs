@@ -172,7 +172,6 @@ fn slice() {
     assert_eq!(b, b"lo world"[..]);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn slice_oob_1() {
@@ -180,7 +179,6 @@ fn slice_oob_1() {
     a.slice(5..(inline_cap() + 1));
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn slice_oob_2() {
@@ -197,7 +195,6 @@ fn split_off() {
     assert_eq!(world, &b"world"[..]);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn split_off_oob() {
@@ -304,7 +301,6 @@ fn split_to_2() {
     drop(b);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn split_to_oob() {
@@ -312,7 +308,6 @@ fn split_to_oob() {
     hello.split_to(inline_cap() + 1);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn split_to_oob_mut() {
@@ -320,7 +315,6 @@ fn split_to_oob_mut() {
     hello.split_to(inline_cap() + 1);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn split_to_uninitialized() {
@@ -328,7 +322,6 @@ fn split_to_uninitialized() {
     let _other = bytes.split_to(128);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 fn split_off_to_at_gt_len() {
     fn make_bytes() -> Bytes {
@@ -660,7 +653,6 @@ fn slice_ref_empty() {
     assert_eq!(&sub[..], b"");
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn slice_ref_catches_not_a_subset() {
@@ -670,7 +662,6 @@ fn slice_ref_catches_not_a_subset() {
     bytes.slice_ref(slice);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn slice_ref_catches_not_an_empty_subset() {
@@ -680,7 +671,6 @@ fn slice_ref_catches_not_an_empty_subset() {
     bytes.slice_ref(slice);
 }
 
-#[cfg(not(target_os = "macos"))]
 #[test]
 #[should_panic]
 fn empty_slice_ref_catches_not_an_empty_subset() {
