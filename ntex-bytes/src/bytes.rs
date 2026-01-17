@@ -1,8 +1,6 @@
 use std::{borrow, cmp, fmt, hash, mem, ops};
 
-use crate::{
-    Buf, buf::IntoIter, bytesmut::BytesMut, debug, storage::INLINE_CAP, storage::Storage,
-};
+use crate::{Buf, BytesVec, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
 
 /// A reference counted contiguous slice of memory.
 ///
@@ -489,44 +487,6 @@ impl Bytes {
         self.storage = Storage::empty();
     }
 
-    /// Attempts to convert into a `BytesMut` handle.
-    ///
-    /// This will only succeed if there are no other outstanding references to
-    /// the underlying chunk of memory. `Bytes` handles that contain inlined
-    /// bytes will always be convertible to `BytesMut`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ntex_bytes::Bytes;
-    ///
-    /// let a = Bytes::copy_from_slice(&b"Mary had a little lamb, little lamb, little lamb..."[..]);
-    ///
-    /// // Create a shallow clone
-    /// let b = a.clone();
-    ///
-    /// // This will fail because `b` shares a reference with `a`
-    /// let a = a.try_mut().unwrap_err();
-    ///
-    /// drop(b);
-    ///
-    /// // This will succeed
-    /// let mut a = a.try_mut().unwrap();
-    ///
-    /// a[0] = b'b';
-    ///
-    /// assert_eq!(&a[..4], b"bary");
-    /// ```
-    pub fn try_mut(self) -> Result<BytesMut, Bytes> {
-        if self.storage.is_mut_safe() {
-            Ok(BytesMut {
-                storage: self.storage,
-            })
-        } else {
-            Err(self)
-        }
-    }
-
     /// Returns an iterator over the bytes contained by the buffer.
     ///
     /// # Examples
@@ -617,12 +577,6 @@ impl From<&Bytes> for Bytes {
     }
 }
 
-impl From<BytesMut> for Bytes {
-    fn from(src: BytesMut) -> Bytes {
-        src.freeze()
-    }
-}
-
 impl From<Vec<u8>> for Bytes {
     /// Convert a `Vec` into a `Bytes`
     fn from(src: Vec<u8>) -> Bytes {
@@ -672,13 +626,13 @@ impl<'a, const N: usize> From<&'a [u8; N]> for Bytes {
 
 impl FromIterator<u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = u8>>(into_iter: T) -> Self {
-        BytesMut::from_iter(into_iter).freeze()
+        BytesVec::from_iter(into_iter).freeze()
     }
 }
 
 impl<'a> FromIterator<&'a u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = &'a u8>>(into_iter: T) -> Self {
-        BytesMut::from_iter(into_iter).freeze()
+        BytesVec::from_iter(into_iter).freeze()
     }
 }
 
@@ -924,12 +878,6 @@ where
     }
 }
 
-impl PartialEq<BytesMut> for Bytes {
-    fn eq(&self, other: &BytesMut) -> bool {
-        other[..] == self[..]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -963,10 +911,10 @@ mod tests {
         let b = Bytes::from(&Bytes::from(LONG));
         assert_eq!(b, LONG);
 
-        let b = Bytes::from(BytesMut::from(LONG));
+        let b = Bytes::from(BytesVec::from(LONG));
         assert_eq!(b, LONG);
 
-        let mut b: Bytes = BytesMut::try_from(b).unwrap().freeze();
+        let mut b: Bytes = BytesVec::try_from(b).unwrap().freeze();
         assert_eq!(b, LONG);
         assert!(!(b > b));
         assert_eq!(<Bytes as Buf>::remaining(&b), LONG.len());
@@ -978,23 +926,23 @@ mod tests {
         h.insert(b.clone(), 1);
         assert_eq!(h.get(&b), Some(&1));
 
-        let mut b = BytesMut::try_from(LONG).unwrap();
+        let mut b = BytesVec::try_from(LONG).unwrap();
         assert_eq!(b, LONG);
-        assert_eq!(<BytesMut as Buf>::remaining(&b), LONG.len());
-        assert_eq!(<BytesMut as BufMut>::remaining_mut(&b), 0);
-        assert_eq!(<BytesMut as Buf>::chunk(&b), LONG);
-        <BytesMut as Buf>::advance(&mut b, 10);
-        assert_eq!(<BytesMut as Buf>::chunk(&b), &LONG[10..]);
+        assert_eq!(<BytesVec as Buf>::remaining(&b), LONG.len());
+        assert_eq!(<BytesVec as BufMut>::remaining_mut(&b), 0);
+        assert_eq!(<BytesVec as Buf>::chunk(&b), LONG);
+        <BytesVec as Buf>::advance(&mut b, 10);
+        assert_eq!(<BytesVec as Buf>::chunk(&b), &LONG[10..]);
 
-        let mut b = BytesMut::with_capacity(12);
-        <BytesMut as BufMut>::put_i8(&mut b, 1);
+        let mut b = BytesVec::with_capacity(12);
+        <BytesVec as BufMut>::put_i8(&mut b, 1);
         assert_eq!(b, b"\x01".as_ref());
-        <BytesMut as BufMut>::put_u8(&mut b, 2);
+        <BytesVec as BufMut>::put_u8(&mut b, 2);
         assert_eq!(b, b"\x01\x02".as_ref());
-        <BytesMut as BufMut>::put_slice(&mut b, b"12345");
+        <BytesVec as BufMut>::put_slice(&mut b, b"12345");
         assert_eq!(b, b"\x01\x0212345".as_ref());
-        <BytesMut as BufMut>::chunk_mut(&mut b).write_byte(0, b'1');
-        unsafe { <BytesMut as BufMut>::advance_mut(&mut b, 1) };
+        <BytesVec as BufMut>::chunk_mut(&mut b).write_byte(0, b'1');
+        unsafe { <BytesVec as BufMut>::advance_mut(&mut b, 1) };
         assert_eq!(b, b"\x01\x02123451".as_ref());
     }
 }

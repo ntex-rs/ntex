@@ -3,9 +3,7 @@ use std::ops::{Deref, DerefMut};
 use std::{fmt, ptr};
 
 use crate::storage::StorageVec;
-use crate::{
-    Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, bytesmut::BytesMut, debug,
-};
+use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, debug};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -497,15 +495,6 @@ impl BytesVec {
         self.put_slice(extend);
     }
 
-    /// Run provided function with `BytesMut` instance that contains current data.
-    #[inline]
-    pub fn with_bytes_mut<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut BytesMut) -> R,
-    {
-        self.storage.with_bytes_mut(f)
-    }
-
     /// Returns an iterator over the bytes contained by the buffer.
     ///
     /// # Examples
@@ -711,12 +700,6 @@ impl PartialEq<Bytes> for BytesVec {
     }
 }
 
-impl PartialEq<BytesMut> for BytesVec {
-    fn eq(&self, other: &BytesMut) -> bool {
-        other[..] == self[..]
-    }
-}
-
 impl fmt::Debug for BytesVec {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
@@ -907,12 +890,6 @@ impl PartialEq<BytesVec> for Bytes {
     }
 }
 
-impl PartialEq<BytesVec> for BytesMut {
-    fn eq(&self, other: &BytesVec) -> bool {
-        other[..] == self[..]
-    }
-}
-
 impl From<BytesVec> for Bytes {
     #[inline]
     fn from(b: BytesVec) -> Self {
@@ -948,11 +925,18 @@ impl<'a> From<&'a str> for BytesVec {
     }
 }
 
-impl From<BytesVec> for BytesMut {
+impl From<Bytes> for BytesVec {
     #[inline]
-    fn from(src: BytesVec) -> BytesMut {
-        BytesMut {
-            storage: src.storage.freeze(),
-        }
+    fn from(src: Bytes) -> BytesVec {
+        //src.try_mut()
+        //.unwrap_or_else(|src| BytesVec::copy_from_slice(&src[..]))
+        BytesVec::copy_from_slice(&src[..])
+    }
+}
+
+impl From<&Bytes> for BytesVec {
+    #[inline]
+    fn from(src: &Bytes) -> BytesVec {
+        BytesVec::copy_from_slice(&src[..])
     }
 }

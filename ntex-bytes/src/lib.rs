@@ -20,9 +20,8 @@
 //! using a reference count to track when the memory is no longer needed and can
 //! be freed.
 //!
-//! A `Bytes` handle can be created directly from an existing byte store (such as `&[u8]`
-//! or `Vec<u8>`), but usually a `BytesMut` is used first and written to. For
-//! example:
+//! A `Bytes` handle can be created directly from an existing `BytesMut` store
+//! is used first and written to. For example:
 //!
 //! ```rust
 //! use ntex_bytes::{BytesMut, BufMut};
@@ -61,7 +60,6 @@ pub use crate::buf::{Buf, BufMut};
 
 mod bvec;
 mod bytes;
-mod bytesmut;
 mod debug;
 mod hex;
 mod serde;
@@ -70,7 +68,6 @@ mod string;
 
 pub use crate::bvec::BytesVec;
 pub use crate::bytes::Bytes;
-pub use crate::bytesmut::BytesMut as BytesMut2;
 pub use crate::string::ByteString;
 
 pub type BytesMut = BytesVec;
