@@ -2,7 +2,7 @@ use std::{cell::Cell, ptr::copy_nonoverlapping, time};
 
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut, util::BytesMut};
+use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting

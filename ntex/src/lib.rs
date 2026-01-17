@@ -42,8 +42,8 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    IntoService, IntoServiceFactory, Middleware, Pipeline, Service, ServiceCtx,
-    ServiceFactory, cfg::Cfg, cfg::SharedCfg, chain, chain_factory, fn_service,
+    cfg::Cfg, cfg::SharedCfg, chain, chain_factory, fn_service, IntoService,
+    IntoServiceFactory, Middleware, Pipeline, Service, ServiceCtx, ServiceFactory,
 };
 
 pub use ntex_util::{channel, task};
@@ -88,7 +88,7 @@ pub mod server {
     //! General purpose tcp server
     pub use ntex_server::net::*;
 
-    pub use ntex_server::{Signal, signal};
+    pub use ntex_server::{signal, Signal};
 
     #[cfg(feature = "openssl")]
     pub use ntex_tls::openssl;
@@ -120,8 +120,8 @@ pub mod tls {
 pub mod util {
     use std::{error::Error, io, rc::Rc};
 
-    pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut, BytesMut};
-    pub use ntex_util::{HashMap, HashSet, error::*, future::*, services::*};
+    pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
+    pub use ntex_util::{error::*, future::*, services::*, HashMap, HashSet};
 
     #[doc(hidden)]
     pub fn enable_test_logging() {
