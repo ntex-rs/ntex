@@ -205,13 +205,12 @@ pub(crate) const INLINE_CAP: usize = 3 * 8 - 1;
 pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 
 // Inline storage
-const PTR_INLINE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(KIND_INLINE) };
+const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
 // Static storage
-const PTR_STATIC: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(KIND_STATIC) };
+const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
 // Default offset
-const DEFAUILT_OFFSET: NonZeroUsize = unsafe {
-    NonZeroUsize::new_unchecked((SHARED_VEC_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC)
-};
+const DEFAUILT_OFFSET: NonZeroUsize =
+    NonZeroUsize::new((SHARED_VEC_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
 
 /*
  *
@@ -489,7 +488,7 @@ impl Storage {
         } else {
             // set len for static storage
             assert!(start <= self.len);
-            self.len = self.len - start;
+            self.len -= start;
             self.ptr = self.ptr.add(start);
         }
     }
@@ -590,7 +589,7 @@ impl Storage {
         #[cfg(target_endian = "little")]
         #[inline]
         fn imp(ptr: usize) -> usize {
-            (ptr as usize) & KIND_MASK
+            ptr & KIND_MASK
         }
 
         #[cfg(target_endian = "big")]
