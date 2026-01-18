@@ -5,7 +5,7 @@ use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::S
 /// A reference counted contiguous slice of memory.
 ///
 /// `Bytes` is an efficient container for storing and operating on contiguous
-/// slices of memory. It is intended for use primarily in networking code, but
+/// slices of memory. It is intended primarily for use in networking code, but
 /// could have applications elsewhere as well.
 ///
 /// `Bytes` values facilitate zero-copy network programming by allowing multiple
@@ -30,7 +30,7 @@ use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::S
 /// # Memory layout
 ///
 /// The `Bytes` struct itself is fairly small, limited to a pointer to the
-/// memory and 4 `usize` fields used to track information about which segment of
+/// memory and two `usize` fields used to track information about which segment of
 /// the underlying memory the `Bytes` handle has access to.
 ///
 /// The memory layout looks like this:
@@ -43,13 +43,13 @@ use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::S
 /// |              \
 /// v               v
 /// +-----+------------------------------------+
-/// | Arc |         |      Data     |          |
+/// | MD  |         |      Data     |          |
 /// +-----+------------------------------------+
 /// ```
 ///
-/// `Bytes` keeps both a pointer to the shared `Arc` containing the full memory
-/// slice and a pointer to the start of the region visible by the handle.
-/// `Bytes` also tracks the length of its view into the memory.
+/// `Bytes` keeps a pointer to the start of the region visible to the handle and
+/// an `offset` that can be used to calculate the beginning of the heap-allocated
+/// buffer. `Bytes` also tracks the length of its view into the memory.
 ///
 /// # Sharing
 ///
@@ -71,29 +71,28 @@ use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::S
 /// |      data |      tail |/              |
 /// v           v           v               v
 /// +-----+---------------------------------+-----+
-/// | Arc |     |           |               |     |
+/// | MD  |     |           |               |     |
 /// +-----+---------------------------------+-----+
 /// ```
 ///
 /// # Mutating
 ///
-/// While `Bytes` handles may potentially represent overlapping views of the
-/// underlying memory slice and may not be mutated, `BytesMut` handles are
+/// While `Bytes` handles may represent overlapping views of the underlying
+/// memory slice and therefore cannot be mutated, `BytesMut` handles are
 /// guaranteed to be the only handle able to view that slice of memory. As such,
-/// `BytesMut` handles are able to mutate the underlying memory. Note that
-/// holding a unique view to a region of memory does not mean that there are no
-/// other `Bytes` and `BytesMut` handles with disjoint views of the underlying
-/// memory.
+/// `BytesMut` handles may mutate the underlying memory. Note that holding a
+/// unique view of a region of memory does not mean there are no other `Bytes`
+/// handles with disjoint views of the same underlying allocation.
 ///
 /// # Inline bytes
 ///
 /// As an optimization, when the slice referenced by a `Bytes` handle is small
-/// enough [^1]. In this case, a clone is no longer "shallow" and the data will
-/// be copied.  Converting from a `Vec` will never use inlining. `BytesMut` does
-/// not support data inlining and always allocates, but during converion to `Bytes`
-/// data from `BytesMut` could be inlined.
+/// enough [^1], the data may be stored inline. In this case, a clone is no longer
+/// “shallow”, and the data will be copied. `BytesMut` does not support data
+/// inlining and always allocates, but during conversion to `Bytes`, data from
+/// `BytesMut` may be inlined.
 ///
-/// [^1]: Small enough: 31 bytes on 64 bit systems, 15 on 32 bit systems.
+/// [^1]: Small enough: 23 bytes on 64 bit systems, 11 on 32 bit systems.
 ///
 pub struct Bytes {
     pub(crate) storage: Storage,
@@ -190,6 +189,8 @@ impl Bytes {
     }
 
     /// Creates `Bytes` instance from slice, by copying it.
+    ///
+    /// Data from the slice could be inlined.
     pub fn copy_from_slice(data: &[u8]) -> Self {
         Bytes {
             storage: Storage::from_slice(data),
@@ -432,7 +433,7 @@ impl Bytes {
     /// rest.
     ///
     /// If `len` is greater than the buffer's current length, this has no
-    /// effect.
+    /// effect. `Data` may be inlined if the slice fits.
     ///
     /// The [`split_off`] method can emulate `truncate`, but this causes the
     /// excess bytes to be returned instead of dropped.
@@ -967,5 +968,9 @@ mod tests {
         assert_eq!(iter.next(), Some(LONG[1]));
         assert_eq!(iter.next(), Some(LONG[2]));
         assert_eq!(iter.next(), Some(LONG[3]));
+        assert_eq!(iter.get_ref(), &LONG[4..]);
+        assert_eq!(iter.get_mut(), &LONG[4..]);
+        let b = iter.into_inner();
+        assert_eq!(b, &LONG[4..]);
     }
 }

@@ -1,3 +1,98 @@
+//! # Data storage modes
+//!
+//! The goal of `bytes` is to be as efficient as possible for server networking
+//! workloads. As such, `bytes` needs to handle buffers that are never shared,
+//! shared on a single thread, and shared across many threads. `bytes` also needs
+//! to handle both tiny buffers as well as very large buffers.
+//!
+//! To achieve high performance in these various situations, `Bytes` and
+//! `BytesMut` use different strategies for storing the buffer depending on the
+//! usage pattern.
+//!
+//! ## Shared vec buffer
+//!
+//! `BytesMut` always allocates and is backed by a `SharedVec`. A `SharedVec` is
+//! similar to `Vec<u8>`, except that it stores the vector parameters on the heap
+//! and includes a reference counter for shared buffer support. `BytesMut` owns
+//! the tail of the buffer; the buffer can be modified only via `BytesMut`. The
+//! head of the buffer may be owned by `Bytes`.
+//!
+//! ## Inlining small buffers
+//!
+//! The `Bytes` struct requires three pointer-sized fields. On 64-bit systems,
+//! this ends up being 24 bytes, which is a significant amount of storage for
+//! cases where `Bytes` is used to represent small byte strings, such as HTTP
+//! header names and values.
+//!
+//! To avoid any allocation in these cases, `Bytes` uses the struct itself to
+//! store the buffer, reserving one byte for metadata. This means that, on 64-bit
+//! systems, buffers of up to 23 bytes require no allocation at all.
+//!
+//! The metadata byte stores a 2-bit flag indicating that the buffer is stored
+//! inline, as well as 6 bits for tracking the buffer length (the return value of
+//! `Bytes::len`).
+//!
+//! ## Static buffers
+//!
+//! `Bytes` can also represent a static buffer, which is created with
+//! `Bytes::from_static`. No copying or allocations are required for static
+//! buffers. A pointer to the `&'static [u8]`, the length, and a flag indicating
+//! that the `Bytes` instance represents a static buffer are stored directly in
+//! the `Bytes` struct.
+//!
+//! # Struct layout
+//!
+//! `Bytes` is a wrapper around `Storage`, which provides the data fields as well
+//! as all function implementations.
+//!
+//! The `Storage` struct contains the following fields:
+//!
+//! * `ptr: *mut u8`
+//! * `len: usize`
+//! * `offset: usize`
+//!
+//! ## `ptr: *mut u8`
+//!
+//! A pointer to the start of the handle’s buffer view. When backed by a
+//! `SharedVec`, this pointer is shifted to point somewhere inside the buffer.
+//!
+//! When in inline mode, `ptr` is used as part of the inlined buffer.
+//!
+//! ## `len: usize`
+//!
+//! The length of the handle’s buffer view. When backed by a `SharedVec`, this is
+//! the length of the buffer slice. The slice represented by `ptr` and `len`
+//! always points to initialized memory.
+//!
+//! When in inline mode, `len` is used as part of the inlined buffer.
+//!
+//! ## `offset: usize`
+//!
+//! The lower two bits of `offset` are used to track the storage mode of
+//! `Storage`. `0b01` indicates shared storage, `0b10` indicates inline storage,
+//! and `0b11` indicates static storage. The remaining upper bits store the
+//! offset value.
+//!
+//! When storage is backed by a `SharedVec`, `offset` represents the offset of
+//! the pointer and is used to calculate the pointer to the `SharedVec`.
+//! `ptr - offset` always points to the beginning of the `SharedVec` structure.
+//!
+//! When in inline mode, `offset` is used as part of the inlined buffer.
+//!
+//! On little-endian platforms, the `offset` field must be the first field in the
+//! struct. On big-endian platforms, the `offset` field must be the last field in
+//! the struct. Since a deterministic struct layout is required, `Storage` is
+//! annotated with `#[repr(C)]`.
+//!
+//! # Thread safety
+//!
+//! `Bytes::clone()` returns a new `Bytes` handle without copying. This is done by
+//! incrementing the buffer’s reference count and returning a new struct pointing
+//! to the same buffer.
+//!
+//! Care is taken to minimize the need for synchronization. Most operations do
+//! not require any synchronization.
+//!
 use crate::alloc::alloc::{self, Layout, LayoutError};
 
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
@@ -6,147 +101,6 @@ use std::{cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
 use crate::{info::Info, info::Kind};
 
-// Both `Bytes` and `BytesMut` are backed by `Storage` and functions are delegated
-// to `Storage` functions. The `Bytes` and `BytesMut` shims ensure that functions
-// that mutate the underlying buffer are only performed when the data range
-// being mutated is only available via a single `BytesMut` handle.
-//
-// # Data storage modes
-//
-// The goal of `bytes` is to be as efficient as possible across a wide range of
-// potential usage patterns. As such, `bytes` needs to be able to handle buffers
-// that are never shared, shared on a single thread, and shared across many
-// threads. `bytes` also needs to handle both tiny buffers as well as very large
-// buffers. For example, [Cassandra](http://cassandra.apache.org) values have
-// been known to be in the hundreds of megabyte, and HTTP header values can be a
-// few characters in size.
-//
-// To achieve high performance in these various situations, `Bytes` and
-// `BytesMut` use different strategies for storing the buffer depending on the
-// usage pattern.
-//
-// ## Delayed `Arc` allocation
-//
-// When a `Bytes` or `BytesMut` is first created, there is only one outstanding
-// handle referencing the buffer. Since sharing is not yet required, an `Arc`* is
-// not used and the buffer is backed by a `Vec<u8>` directly. Using an
-// `Arc<Vec<u8>>` requires two allocations, so if the buffer ends up never being
-// shared, that allocation is avoided.
-//
-// When sharing does become necessary (`clone`, `split_to`, `split_off`), that
-// is when the buffer is promoted to being shareable. The `Vec<u8>` is moved
-// into an `Arc` and both the original handle and the new handle use the same
-// buffer via the `Arc`.
-//
-// * `Arc` is being used to signify an atomically reference counted cell. We
-// don't use the `Arc` implementation provided by `std` and instead use our own.
-// This ends up simplifying a number of the `unsafe` code snippets.
-//
-// ## Inlining small buffers
-//
-// The `Bytes` / `BytesMut` structs require 4 pointer sized fields. On 64 bit
-// systems, this ends up being 32 bytes, which is actually a lot of storage for
-// cases where `Bytes` is being used to represent small byte strings, such as
-// HTTP header names and values.
-//
-// To avoid any allocation at all in these cases, `Bytes` will use the struct
-// itself for storing the buffer, reserving 1 byte for meta data. This means
-// that, on 64 bit systems, 31 byte buffers require no allocation at all.
-//
-// The byte used for metadata stores a 2 bits flag used to indicate that the
-// buffer is stored inline as well as 6 bits for tracking the buffer length (the
-// return value of `Bytes::len`).
-//
-// ## Static buffers
-//
-// `Bytes` can also represent a static buffer, which is created with
-// `Bytes::from_static`. No copying or allocations are required for tracking
-// static buffers. The pointer to the `&'static [u8]`, the length, and a flag
-// tracking that the `Bytes` instance represents a static buffer is stored in
-// the `Bytes` struct.
-//
-// # Struct layout
-//
-// Both `Bytes` and `BytesMut` are wrappers around `Storage`, which provides the
-// data fields as well as all of the function implementations.
-//
-// The `Storage` struct is carefully laid out in order to support the
-// functionality described above as well as being as small as possible. Size is
-// important as growing the size of the `Bytes` struct from 32 bytes to 40 bytes
-// added as much as 15% overhead in benchmarks using `Bytes` in an HTTP header
-// map structure.
-//
-// The `Storage` struct contains the following fields:
-//
-// * `ptr: *mut u8`
-// * `len: usize`
-// * `cap: usize`
-// * `arc: *mut Shared`
-//
-// ## `ptr: *mut u8`
-//
-// A pointer to start of the handle's buffer view. When backed by a `Vec<u8>`,
-// this is always the `Vec`'s pointer. When backed by an `Arc<Vec<u8>>`, `ptr`
-// may have been shifted to point somewhere inside the buffer.
-//
-// When in "inlined" mode, `ptr` is used as part of the inlined buffer.
-//
-// ## `len: usize`
-//
-// The length of the handle's buffer view. When backed by a `Vec<u8>`, this is
-// always the `Vec`'s length. The slice represented by `ptr` and `len` should
-// (ideally) always be initialized memory.
-//
-// When in "inlined" mode, `len` is used as part of the inlined buffer.
-//
-// ## `cap: usize`
-//
-// The capacity of the handle's buffer view. When backed by a `Vec<u8>`, this is
-// always the `Vec`'s capacity. The slice represented by `ptr+len` and `cap-len`
-// may or may not be initialized memory.
-//
-// When in "inlined" mode, `cap` is used as part of the inlined buffer.
-//
-// ## `arc: *mut Shared`
-//
-// When `Storage` is in allocated mode (backed by Vec<u8> or Arc<Vec<u8>>), this
-// will be the pointer to the `Arc` structure tracking the ref count for the
-// underlying buffer. When the pointer is null, then the `Arc` has not been
-// allocated yet and `self` is the only outstanding handle for the underlying
-// buffer.
-//
-// The lower two bits of `arc` are used to track the storage mode of `Storage`.
-// `0b01` indicates inline storage, `0b10` indicates static storage, and `0b11`
-// indicates vector storage, not yet promoted to Arc.  Since pointers to
-// allocated structures are aligned, the lower two bits of a pointer will always
-// be 0. This allows disambiguating between a pointer and the two flags.
-//
-// When in "inlined" mode, the least significant byte of `arc` is also used to
-// store the length of the buffer view (vs. the capacity, which is a constant).
-//
-// The rest of `arc`'s bytes are used as part of the inline buffer, which means
-// that those bytes need to be located next to the `ptr`, `len`, and `cap`
-// fields, which make up the rest of the inline buffer. This requires special
-// casing the layout of `Storage` depending on if the target platform is big or
-// little endian.
-//
-// On little endian platforms, the `arc` field must be the first field in the
-// struct. On big endian platforms, the `arc` field must be the last field in
-// the struct. Since a deterministic struct layout is required, `Storage` is
-// annotated with `#[repr(C)]`.
-//
-// # Thread safety
-//
-// `Bytes::clone()` returns a new `Bytes` handle with no copying. This is done
-// by bumping the buffer ref count and returning a new struct pointing to the
-// same buffer. However, the `Arc` structure is lazily allocated. This means
-// that if `Bytes` is stored itself in an `Arc` (`Arc<Bytes>`), the `clone`
-// function can be called concurrently from multiple threads. This is why an
-// `AtomicPtr` is used for the `arc` field vs. a `*const`.
-//
-// Care is taken to ensure that the need for synchronization is minimized. Most
-// operations do not require any synchronization.
-//
 #[cfg(target_endian = "little")]
 #[repr(C)]
 pub(crate) struct Storage {
