@@ -1,7 +1,5 @@
 //! Provides abstractions for working with bytes.
 //!
-//! This is fork of [bytes crate](https://github.com/tokio-rs/bytes)
-//!
 //! The `ntex-bytes` crate provides an efficient byte buffer structure
 //! ([`Bytes`](struct.Bytes.html)) and traits for working with buffer
 //! implementations ([`Buf`], [`BufMut`]).
@@ -48,7 +46,7 @@
 //! See the [struct docs] for more details.
 //!
 //! [struct docs]: struct.Bytes.html
-
+//!
 #![deny(warnings, missing_debug_implementations, rust_2018_idioms)]
 #![doc(html_root_url = "https://docs.rs/ntex-bytes/")]
 #![allow(unsafe_op_in_unsafe_fn)]

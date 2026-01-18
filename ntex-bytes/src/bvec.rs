@@ -1,9 +1,6 @@
-use std::borrow::{Borrow, BorrowMut};
-use std::ops::{Deref, DerefMut};
-use std::{fmt, ptr};
+use std::{borrow::Borrow, borrow::BorrowMut, fmt, ops::Deref, ops::DerefMut, ptr};
 
-use crate::storage::StorageVec;
-use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, debug};
+use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, storage::StorageVec};
 
 /// A unique reference to a contiguous slice of memory.
 ///
@@ -54,7 +51,7 @@ pub struct BytesMut {
 impl BytesMut {
     /// Creates a new `BytesMut` with the specified capacity.
     ///
-    /// The returned `BytesMut` will be able to hold at least `capacity` bytes
+    /// The returned `BytesMut` will be able to hold `capacity` bytes
     /// without reallocating.
     ///
     /// It is important to note that this function does not specify the length
@@ -195,7 +192,7 @@ impl BytesMut {
         }
     }
 
-    /// Removes the bytes from the current view, returning them in a new
+    /// Removes the bytes from the current view, returning them in a
     /// `Bytes` instance.
     ///
     /// Afterwards, `self` will be empty, but will retain any additional
@@ -399,21 +396,21 @@ impl BytesMut {
     /// assert_eq!(&b[..], b"hello world");
     /// ```
     ///
+    /// # Safety
+    ///
+    /// Caller must ensure that data has been initialized.
+    ///
     /// # Panics
     ///
     /// This method will panic if `len` is out of bounds for the underlying
     /// slice or if it comes after the `end` of the configured window.
     #[inline]
-    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn set_len(&mut self, len: usize) {
         self.storage.set_len(len)
     }
 
     /// Reserves capacity for at least `additional` more bytes to be inserted
     /// into the given `BytesMut`.
-    ///
-    /// More than `additional` bytes may be reserved in order to avoid frequent
-    /// reallocations. A call to `reserve` may result in an allocation.
     ///
     /// Before allocating new buffer space, the function will attempt to reclaim
     /// space in the existing buffer. If the current handle references a small
@@ -696,7 +693,7 @@ impl PartialEq<Bytes> for BytesMut {
 
 impl fmt::Debug for BytesMut {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
+        fmt::Debug::fmt(&crate::debug::BsDebug(self.storage.as_ref()), fmt)
     }
 }
 
