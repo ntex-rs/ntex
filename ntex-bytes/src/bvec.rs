@@ -625,11 +625,13 @@ unsafe impl bytes::buf::BufMut for BytesMut {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut bytes::buf::UninitSlice {
-        let len = self.len();
         unsafe {
             // This will never panic as `len` can never become invalid
             let ptr = self.storage.as_ptr();
-            bytes::buf::UninitSlice::from_raw_parts_mut(ptr.add(len), self.remaining_mut())
+            bytes::buf::UninitSlice::from_raw_parts_mut(
+                ptr.add(self.len()),
+                BufMut::remaining_mut(self),
+            )
         }
     }
 
