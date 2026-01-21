@@ -32,7 +32,7 @@ impl IoRef {
 
     #[inline]
     /// Get configuration
-    pub fn cfg(&self) -> &IoConfig {
+    pub fn cfg(&self) -> &'static IoConfig {
         self.0.cfg.get()
     }
 

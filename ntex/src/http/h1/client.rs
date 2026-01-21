@@ -10,7 +10,7 @@ use crate::http::{Method, Version};
 use crate::util::{Bytes, BytesMut};
 
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{Message, MessageType, decoder, encoder, reserve_readbuf};
+use super::{Message, MessageType, decoder, encoder};
 
 bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -146,7 +146,6 @@ impl Decoder for ClientCodec {
             } else {
                 self.inner.payload.borrow_mut().take();
             }
-            reserve_readbuf(src);
             Ok(Some(req))
         } else {
             Ok(None)
@@ -173,10 +172,7 @@ impl Decoder for ClientPayloadCodec {
             .decode(src)?;
 
         Ok(match item {
-            Some(PayloadItem::Chunk(chunk)) => {
-                reserve_readbuf(src);
-                Some(Some(chunk))
-            }
+            Some(PayloadItem::Chunk(chunk)) => Some(Some(chunk)),
             Some(PayloadItem::Eof) => {
                 self.inner.payload.borrow_mut().take();
                 Some(None)

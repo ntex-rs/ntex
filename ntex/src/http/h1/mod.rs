@@ -1,8 +1,6 @@
 //! HTTP/1 implementation
 use std::rc::Rc;
 
-use crate::util::{Bytes, BytesMut};
-
 mod client;
 mod codec;
 mod decoder;
@@ -21,7 +19,7 @@ pub use self::default::DefaultControlService;
 pub use self::service::{H1Service, H1ServiceHandler};
 
 pub(super) use self::dispatcher::Dispatcher;
-use crate::channel::bstream::Receiver;
+use crate::{channel::bstream::Receiver, util::Bytes};
 
 pub type Payload = Receiver<super::error::PayloadError>;
 
@@ -46,16 +44,6 @@ pub enum MessageType {
     None,
     Payload,
     Stream,
-}
-
-const LW: usize = 2 * 1024;
-const HW: usize = 32 * 1024;
-
-pub(crate) fn reserve_readbuf(src: &mut BytesMut) {
-    let cap = src.capacity();
-    if cap < LW {
-        src.reserve(HW - cap);
-    }
 }
 
 #[derive(thiserror::Error, Clone, Debug)]

@@ -1,10 +1,9 @@
 //! An implementation of WebSockets base bytes streams
-use std::{cell::Cell, cmp, io, task::Poll};
+use std::{cell::Cell, io, task::Poll};
 
 use crate::codec::{Decoder, Encoder};
 use crate::io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
 use crate::service::{Service, ServiceCtx};
-use crate::util::BufMut;
 
 use super::{CloseCode, CloseReason, Codec, Frame, Item, Message};
 
@@ -156,11 +155,7 @@ impl FilterLayer for WsTransport {
         if let Some(src) = buf.take_src() {
             buf.with_dst(|dst| {
                 // make sure we've got room
-                let cfg = buf.cfg();
-                let remaining = dst.remaining_mut();
-                if remaining < cfg.low {
-                    dst.reserve(cmp::max(cfg.high, dst.len() + 12) - remaining);
-                }
+                buf.resize_buf(dst);
 
                 // Encoder ws::Codec do not fail
                 let _ = self.codec.encode(Message::Binary(src.freeze()), dst);
