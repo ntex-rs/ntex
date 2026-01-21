@@ -69,6 +69,9 @@ pub use crate::bytes::Bytes;
 pub use crate::string::ByteString;
 
 #[doc(hidden)]
+pub use crate::storage::METADATA_SIZE;
+
+#[doc(hidden)]
 #[deprecated]
 pub type BytesVec = BytesMut;
 

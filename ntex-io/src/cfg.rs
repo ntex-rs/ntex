@@ -250,9 +250,8 @@ impl BufConfig {
     #[inline]
     /// Resize buffer
     pub fn resize(&self, buf: &mut BytesMut) {
-        let remaining = buf.remaining_mut();
-        if remaining < self.low {
-            buf.reserve(self.high - remaining);
+        if buf.remaining_mut() < self.low {
+            buf.reserve_capacity(self.high);
         }
     }
 

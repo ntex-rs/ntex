@@ -1,6 +1,6 @@
 [package]
 name = "ntex-bytes"
-version = "1.3.0"
+version = "1.4.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"

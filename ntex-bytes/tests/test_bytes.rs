@@ -20,6 +20,7 @@ fn is_send<T: Send>() {}
 fn test_size() {
     assert_eq!(24, std::mem::size_of::<Bytes>());
     assert_eq!(24, std::mem::size_of::<Option<Bytes>>());
+    assert_eq!(24, ntex_bytes::METADATA_SIZE);
 
     let mut t = BytesMut::new();
     t.extend_from_slice(&b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"[..]);

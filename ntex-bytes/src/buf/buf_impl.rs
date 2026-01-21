@@ -911,7 +911,11 @@ mod tests {
         buf.copy_to_slice(&mut dst);
         assert_eq!(&b"hello"[..], &dst);
         assert_eq!(6, buf.remaining());
+        buf.advance(1);
+        assert_eq!(Buf::chunk(&buf), &b"world"[..]);
 
+        let mut buf = &b"hello world"[..];
+        buf.advance(5);
         let mut buf = Box::new(buf);
         assert_eq!(buf.remaining(), 6);
         assert_eq!(buf.chunk(), b" world");

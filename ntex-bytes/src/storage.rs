@@ -117,14 +117,12 @@ pub(crate) struct Storage {
     offset: NonZeroUsize,
 }
 
-#[repr(C)]
 /// Thread-safe reference-counted container for the shared storage.
 struct SharedVec {
-    cap: usize,
     len: u32,
     offset: u32,
+    remaining: u32,
     ref_count: AtomicUsize,
-    data: [u8; 0],
 }
 
 pub(crate) struct StorageVec(NonNull<SharedVec>);
@@ -137,7 +135,8 @@ const KIND_MASK: usize = 0b11;
 // const KIND_UNMASK: usize = !KIND_MASK;
 const KIND_OFFSET_BITS: usize = 2;
 
-const SHARED_VEC_SIZE: usize = mem::size_of::<SharedVec>();
+pub const METADATA_SIZE: usize = mem::size_of::<SharedVec>();
+const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
 
 // Bit op constants for extracting the inline length value from the `ptr` field.
 const INLINE_LEN_MASK: usize = 0b1111_1100;
@@ -164,7 +163,7 @@ const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
 const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
 // Default offset
 const DEFAUILT_OFFSET: NonZeroUsize =
-    NonZeroUsize::new((SHARED_VEC_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
+    NonZeroUsize::new((METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
 
 /*
  *
@@ -476,7 +475,7 @@ impl Storage {
         //
         // Additionally, if kind is STATIC, then ptr is *never* changed, making
         // it safe and faster to check for it now before an atomic acquire.
-
+        //
         // The value returned by `kind` isn't itself safe, but the value could
         // inform what operations to take, and unsafely do something without
         // synchronization.
@@ -558,7 +557,13 @@ impl Storage {
         let (id, refs, capacity) = unsafe {
             if kind == KIND_VEC {
                 let ptr = self.shared_vec();
-                (ptr as usize, (*ptr).ref_count.load(Relaxed), (*ptr).cap)
+                (
+                    ptr as usize,
+                    (*ptr).ref_count.load(Relaxed),
+                    (*ptr).offset as usize
+                        + (*ptr).len as usize
+                        + (*ptr).remaining as usize,
+                )
             } else {
                 (0, 0, 0)
             }
@@ -634,6 +639,7 @@ impl StorageVec {
         unsafe {
             let inner = self.as_inner();
             inner.len += 1;
+            inner.remaining -= 1;
             *self.as_ptr().add(len) = n;
         }
     }
@@ -643,7 +649,12 @@ impl StorageVec {
     }
 
     pub(crate) fn capacity(&self) -> usize {
-        unsafe { (*self.0.as_ptr()).capacity() }
+        let ptr = unsafe { &*self.0.as_ptr() };
+        ptr.len as usize + ptr.remaining as usize
+    }
+
+    pub(crate) fn remaining(&self) -> usize {
+        unsafe { (*self.0.as_ptr()).remaining as usize }
     }
 
     pub(crate) fn freeze(self) -> Storage {
@@ -698,8 +709,14 @@ impl StorageVec {
             // handle is the only outstanding handle pointing to the buffer.
             if len == 0 {
                 let inner = self.as_inner();
-                if inner.is_unique() && inner.offset != SHARED_VEC_SIZE as u32 {
-                    inner.offset = SHARED_VEC_SIZE as u32;
+                if inner.is_unique() && inner.offset != METADATA_SIZE_U32 {
+                    let cap = (inner.offset as usize)
+                        + inner.len as usize
+                        + inner.remaining as usize;
+                    inner.len = 0;
+                    inner.offset = METADATA_SIZE_U32;
+                    inner.remaining = (cap - METADATA_SIZE) as u32;
+                    return;
                 }
             }
 
@@ -724,9 +741,15 @@ impl StorageVec {
         }
     }
 
+    /// Copy data for new storage
+    #[inline]
+    pub(crate) fn reserve_capacity(&mut self, capacity: usize) {
+        *self = StorageVec(SharedVec::create(capacity, self.as_ref()));
+    }
+
     #[inline]
     pub(crate) fn reserve(&mut self, additional: usize) {
-        if additional <= self.capacity() - self.len() {
+        if additional <= self.remaining() {
             // The handle can already store at least `additional` more bytes, so
             // there is no further work needed to be done.
             return;
@@ -738,37 +761,45 @@ impl StorageVec {
     fn reserve_inner(&mut self, additional: usize) {
         unsafe {
             let inner = self.as_inner();
-
             let len = inner.len as usize;
-            let cap = inner.cap - SHARED_VEC_SIZE;
 
             // Reserving involves abandoning the currently shared buffer and
             // allocating a new vector with the requested capacity.
             let new_cap = len + additional;
 
-            // try to reclaim the buffer. This is possible if the current
-            // handle is the only outstanding handle pointing to the buffer.
-            if cap >= new_cap && inner.is_unique() {
-                let offset = inner.offset;
-                inner.offset = SHARED_VEC_SIZE as u32;
+            if inner.is_unique() {
+                let capacity = (inner.offset as usize)
+                    + (inner.len as usize)
+                    + (inner.remaining as usize);
 
-                // The capacity is sufficient, reclaim the buffer
-                if len != 0 {
-                    let ptr = self.0.as_ptr() as *mut u8;
-                    ptr::copy(ptr.add(offset as usize), ptr.add(SHARED_VEC_SIZE), len);
+                // try to reclaim the buffer. This is possible if the current
+                // handle is the only outstanding handle pointing to the buffer.
+                if capacity >= (new_cap + METADATA_SIZE) {
+                    let offset = inner.offset;
+                    inner.offset = METADATA_SIZE_U32;
+                    inner.remaining = (capacity - len - METADATA_SIZE) as u32;
+
+                    // The capacity is sufficient, reclaim the buffer
+                    if len != 0 {
+                        let ptr = self.0.as_ptr() as *mut u8;
+                        ptr::copy(ptr.add(offset as usize), ptr.add(METADATA_SIZE), len);
+                    }
+                    return;
                 }
-            } else {
-                // Create a new storage
-                *self = StorageVec(SharedVec::create(new_cap, self.as_ref()));
             }
+            // Create a new storage
+            *self = StorageVec(SharedVec::create(new_cap, self.as_ref()));
         }
     }
 
-    /// slice.
     #[inline]
     pub(crate) unsafe fn set_len(&mut self, len: usize) {
-        assert!(len <= self.capacity());
-        self.0.as_mut().len = len as u32;
+        let cap = self.capacity();
+        assert!(len <= cap);
+
+        let vec = self.0.as_mut();
+        vec.len = len as u32;
+        vec.remaining = (cap - len) as u32;
     }
 
     pub(crate) unsafe fn set_start(&mut self, start: u32) {
@@ -778,11 +809,10 @@ impl StorageVec {
 
             assert!(
                 start <= cap as u32,
-                "Cannot set start position cap:{} offset:{} len:{} acap:{}",
-                inner.cap,
+                "Cannot set start position offset:{} len:{} remaining:{}, new-len:{start}",
                 inner.offset,
                 inner.len,
-                cap
+                inner.remaining,
             );
 
             // Updating the start of the view is setting `offset` to point to the
@@ -795,6 +825,7 @@ impl StorageVec {
             } else {
                 inner.len = 0;
             }
+            inner.remaining = cap as u32 - inner.len - start;
         }
     }
 }
@@ -814,7 +845,7 @@ impl SharedVec {
 
         // copy slice
         unsafe {
-            let dst = ptr.add(SHARED_VEC_SIZE);
+            let dst = ptr.add(METADATA_SIZE);
             let sl = slice::from_raw_parts_mut(dst, src.len());
             sl.copy_from_slice(src);
             NonNull::new_unchecked(ptr as *mut SharedVec)
@@ -835,10 +866,9 @@ impl SharedVec {
                 ptr as *mut SharedVec,
                 SharedVec {
                     len,
-                    cap: layout.size(),
-                    offset: SHARED_VEC_SIZE as u32,
+                    offset: METADATA_SIZE_U32,
+                    remaining: (layout.size() - METADATA_SIZE - len as usize) as u32,
                     ref_count: AtomicUsize::new(1),
-                    data: [],
                 },
             );
             ptr
@@ -851,7 +881,7 @@ impl SharedVec {
     }
 
     fn capacity(&self) -> usize {
-        self.cap - self.offset as usize
+        self.len as usize + self.remaining as usize
     }
 }
 
@@ -882,17 +912,15 @@ fn release_shared_vec(ptr: *mut SharedVec) {
         atomic::fence(Acquire);
 
         // Drop the data
-        let cap = (*ptr).cap;
+        let cap = (*ptr).offset as usize + (*ptr).remaining as usize + (*ptr).len as usize;
         ptr::drop_in_place(ptr);
-        let layout = shared_vec_layout(cap - SHARED_VEC_SIZE).unwrap();
+        let layout = shared_vec_layout(cap - METADATA_SIZE).unwrap();
         alloc::dealloc(ptr as *mut _, layout);
     }
 }
 
 const fn shared_vec_layout(cap: usize) -> Result<Layout, LayoutError> {
-    let s_layout = Layout::new::<u8>();
-    let size = s_layout.size() * cap;
-    let s_layout = match Layout::from_size_align(size, s_layout.align()) {
+    let s_layout = match Layout::from_size_align(cap, Layout::new::<u8>().align()) {
         Ok(l) => l,
         Err(e) => return Err(e),
     };
@@ -960,7 +988,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::unnecessary_fallible_conversions)]
-    fn bytes_vec() {
+    fn bytes_mut() {
         let bv = BytesMut::copy_from_slice(LONG);
         assert_eq!(bv.capacity(), 263);
         assert_eq!(bv.len(), 263);
@@ -978,6 +1006,13 @@ mod tests {
 
         let mut bv = BytesMut::copy_from_slice(&b"hello"[..]);
         assert_eq!(bv.capacity(), 5);
+        bv.reserve_capacity(128);
+        assert_eq!(bv.capacity(), 128);
+        assert_eq!(bv.len(), 5);
+        assert_eq!(bv.as_ref(), &b"hello"[..]);
+
+        let mut bv = BytesMut::copy_from_slice(&b"hello"[..]);
+        assert_eq!(bv.capacity(), 5);
         assert_eq!(bv.len(), 5);
         assert_eq!(bv.as_ref().len(), 5);
         assert_eq!(bv.as_ref()[0], b"h"[0]);
@@ -991,7 +1026,11 @@ mod tests {
         assert_eq!(bv.remaining_mut(), 5);
         bv.put("world");
         assert_eq!(bv, "hello world");
+        bv.advance_to(6);
+        assert_eq!(bv, "world");
+        assert_eq!(bv.remaining_mut(), 0);
 
+        let bv = BytesMut::copy_from_slice(&b"hello world"[..]);
         let b = Bytes::from(bv);
         assert_eq!(b, "hello world");
 
@@ -1008,7 +1047,7 @@ mod tests {
         assert_eq!(bv.capacity(), 0);
         bv.reserve(48);
         assert!(bv.is_empty());
-        assert!(bv.capacity() == 48);
+        assert_eq!(bv.capacity(), 48);
         let p2 = unsafe { bv.storage.as_ptr() as usize };
         assert!(p1 == p2);
     }
