@@ -11,6 +11,7 @@ impl io::Write for Writer<'_> {
         self.0.extend_from_slice(buf);
         Ok(buf.len())
     }
+
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }

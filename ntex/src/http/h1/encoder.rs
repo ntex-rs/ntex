@@ -111,7 +111,7 @@ pub(super) trait MessageType: Sized {
         // write headers
         let mut pos = 0;
         let mut has_date = false;
-        let mut remaining = dst.capacity() - dst.len();
+        let mut remaining = dst.remaining_mut();
         let mut buf = dst.chunk_mut().as_mut_ptr();
         for (key, value) in headers {
             match *key {
@@ -135,7 +135,7 @@ pub(super) trait MessageType: Sized {
                             dst.advance_mut(pos);
                             pos = 0;
                             dst.reserve(len * 2);
-                            remaining = dst.capacity() - dst.len();
+                            remaining = dst.remaining_mut();
                             buf = dst.chunk_mut().as_mut_ptr();
                         }
                         copy_nonoverlapping(k.as_ptr(), buf, k_len);
@@ -162,7 +162,7 @@ pub(super) trait MessageType: Sized {
                                 dst.advance_mut(pos);
                                 pos = 0;
                                 dst.reserve(len * 2);
-                                remaining = dst.capacity() - dst.len();
+                                remaining = dst.remaining_mut();
                                 buf = dst.chunk_mut().as_mut_ptr();
                             }
                             copy_nonoverlapping(k.as_ptr(), buf, k_len);
@@ -216,7 +216,6 @@ impl MessageType for Response<()> {
     fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
         let head = self.head();
         let reason = head.reason().as_bytes();
-        dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE + reason.len());
 
         // status line
         write_status_line(head.version, head.status.as_u16(), dst);
@@ -244,7 +243,6 @@ impl MessageType for RequestHeadType {
 
     fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
         let head = self.as_ref();
-        dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE);
         write!(
             helpers::Writer(dst),
             "{} {} {}",
