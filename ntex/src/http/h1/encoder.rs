@@ -9,8 +9,6 @@ use crate::http::message::{ConnectionType, RequestHeadType};
 use crate::http::{HeaderMap, Response, StatusCode, Version, helpers};
 use crate::util::{BufMut, BytesMut};
 
-const AVERAGE_HEADER_SIZE: usize = 30;
-
 #[derive(Debug)]
 pub(super) struct MessageEncoder<T: MessageType> {
     pub(super) length: BodySize,
@@ -134,7 +132,7 @@ pub(super) trait MessageType: Sized {
                         if len > remaining {
                             dst.advance_mut(pos);
                             pos = 0;
-                            dst.reserve(len * 2);
+                            dst.reserve(len + len);
                             remaining = dst.remaining_mut();
                             buf = dst.chunk_mut().as_mut_ptr();
                         }
@@ -161,7 +159,7 @@ pub(super) trait MessageType: Sized {
                             if len > remaining {
                                 dst.advance_mut(pos);
                                 pos = 0;
-                                dst.reserve(len * 2);
+                                dst.reserve(len + len);
                                 remaining = dst.remaining_mut();
                                 buf = dst.chunk_mut().as_mut_ptr();
                             }
