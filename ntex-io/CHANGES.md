@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.0] - 2026-01-21
+
+* Set IoConfig ref lifetime
+
 ## [3.4.0] - 2026-01-17
 
 * Updates ntex-codec and ntex-bytes usage

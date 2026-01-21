@@ -1,4 +1,4 @@
-use std::cell::UnsafeCell;
+use std::{cell::UnsafeCell, cmp};
 
 use ntex_bytes::{BytesMut, buf::BufMut};
 use ntex_service::cfg::{CfgContext, Configuration};
@@ -250,9 +250,26 @@ impl BufConfig {
     #[inline]
     /// Resize buffer
     pub fn resize(&self, buf: &mut BytesMut) {
-        let remaining = buf.remaining_mut();
-        if remaining < self.low {
-            buf.reserve(self.high - remaining);
+        if buf.remaining_mut() < self.low {
+            let cap = buf.capacity();
+            let mut size = self.high;
+            while cap >= size {
+                size += self.high;
+            }
+            buf.reserve_capacity(size);
+        }
+    }
+
+    #[inline]
+    /// Resize buffer
+    pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
+        if buf.remaining_mut() < cmp::min(self.low, size) {
+            let cap = buf.capacity();
+            let mut new_size = self.high;
+            while cap >= new_size && size >= new_size {
+                new_size += self.high;
+            }
+            buf.reserve_capacity(new_size);
         }
     }
 

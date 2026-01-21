@@ -489,6 +489,12 @@ impl WriteBuf<'_> {
     }
 
     #[inline]
+    /// Make sure buffer has enough free space
+    pub fn resize_buf_min(&self, buf: &mut BytesMut, size: usize) {
+        self.io.cfg().write_buf().resize_min(buf, size);
+    }
+
+    #[inline]
     /// Get reference to source write buffer
     pub fn with_src<F, R>(&self, f: F) -> R
     where

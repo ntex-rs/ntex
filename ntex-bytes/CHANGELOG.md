@@ -1,5 +1,11 @@
 # Changes
 
+## [1.4.0] (2026-01-21)
+
+* Add BytesMut::reserve_capacity() method
+
+* Optimize metadata repr
+
 ## [1.3.0] (2026-01-17)
 
 * Replace BytesMut with BytesVec

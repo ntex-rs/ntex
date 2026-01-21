@@ -465,6 +465,33 @@ impl BytesMut {
         self.storage.reserve(additional);
     }
 
+    /// Reserves capacity for inserting additional bytes into the given `BytesMut`.
+    ///
+    /// This is equivalent to calling
+    /// `BytesMut::reserve(capacity - BytesMut::remaining_mut())`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if new capacity is greater than 60bit for 64bit systems
+    /// and 28bit for 32bit systems
+    ///
+    /// # Examples
+    ///
+    /// In the following example, a new buffer is allocated.
+    ///
+    /// ```
+    /// use ntex_bytes::BytesMut;
+    ///
+    /// let mut buf = BytesMut::copy_from_slice(&b"hello"[..]);
+    /// buf.reserve_capacity(128);
+    /// assert!(buf.capacity() >= 128);
+    /// assert!(buf.len() >= 5);
+    /// ```
+    #[inline]
+    pub fn reserve_capacity(&mut self, cap: usize) {
+        self.storage.reserve_capacity(cap);
+    }
+
     /// Appends given bytes to this object.
     ///
     /// If this `BytesMut` object has not enough capacity, it is resized first.
@@ -527,7 +554,7 @@ impl Buf for BytesMut {
 impl BufMut for BytesMut {
     #[inline]
     fn remaining_mut(&self) -> usize {
-        self.capacity() - self.len()
+        self.storage.remaining()
     }
 
     #[inline]
@@ -538,12 +565,10 @@ impl BufMut for BytesMut {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
-        let len = self.len();
-
         unsafe {
             // This will never panic as `len` can never become invalid
-            let ptr = &mut self.storage.as_raw()[len..];
-            UninitSlice::from_raw_parts_mut(ptr.as_mut_ptr(), self.capacity() - len)
+            let ptr = &mut self.storage.as_ptr();
+            UninitSlice::from_raw_parts_mut(ptr.add(self.len()), self.remaining_mut())
         }
     }
 
@@ -566,7 +591,6 @@ impl BufMut for BytesMut {
 
     #[inline]
     fn put_i8(&mut self, n: i8) {
-        self.reserve(1);
         self.put_u8(n as u8);
     }
 }
@@ -601,11 +625,13 @@ unsafe impl bytes::buf::BufMut for BytesMut {
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut bytes::buf::UninitSlice {
-        let len = self.len();
         unsafe {
             // This will never panic as `len` can never become invalid
             let ptr = self.storage.as_ptr();
-            bytes::buf::UninitSlice::from_raw_parts_mut(ptr.add(len), self.capacity() - len)
+            bytes::buf::UninitSlice::from_raw_parts_mut(
+                ptr.add(self.len()),
+                BufMut::remaining_mut(self),
+            )
         }
     }
 

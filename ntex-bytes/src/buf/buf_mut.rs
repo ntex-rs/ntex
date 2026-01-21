@@ -180,13 +180,11 @@ pub trait BufMut {
         assert!(self.remaining_mut() >= src.remaining());
 
         while src.has_remaining() {
-            let l;
+            let s = src.chunk();
+            let d = self.chunk_mut();
+            let l = cmp::min(s.len(), d.len());
 
             unsafe {
-                let s = src.chunk();
-                let d = self.chunk_mut();
-                l = cmp::min(s.len(), d.len());
-
                 ptr::copy_nonoverlapping(s.as_ptr(), d.as_mut_ptr(), l);
             }
 

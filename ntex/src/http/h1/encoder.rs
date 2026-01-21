@@ -9,8 +9,6 @@ use crate::http::message::{ConnectionType, RequestHeadType};
 use crate::http::{HeaderMap, Response, StatusCode, Version, helpers};
 use crate::util::{BufMut, BytesMut};
 
-const AVERAGE_HEADER_SIZE: usize = 30;
-
 #[derive(Debug)]
 pub(super) struct MessageEncoder<T: MessageType> {
     pub(super) length: BodySize,
@@ -111,7 +109,7 @@ pub(super) trait MessageType: Sized {
         // write headers
         let mut pos = 0;
         let mut has_date = false;
-        let mut remaining = dst.capacity() - dst.len();
+        let mut remaining = dst.remaining_mut();
         let mut buf = dst.chunk_mut().as_mut_ptr();
         for (key, value) in headers {
             match *key {
@@ -134,8 +132,8 @@ pub(super) trait MessageType: Sized {
                         if len > remaining {
                             dst.advance_mut(pos);
                             pos = 0;
-                            dst.reserve(len * 2);
-                            remaining = dst.capacity() - dst.len();
+                            dst.reserve(len + len);
+                            remaining = dst.remaining_mut();
                             buf = dst.chunk_mut().as_mut_ptr();
                         }
                         copy_nonoverlapping(k.as_ptr(), buf, k_len);
@@ -161,8 +159,8 @@ pub(super) trait MessageType: Sized {
                             if len > remaining {
                                 dst.advance_mut(pos);
                                 pos = 0;
-                                dst.reserve(len * 2);
-                                remaining = dst.capacity() - dst.len();
+                                dst.reserve(len + len);
+                                remaining = dst.remaining_mut();
                                 buf = dst.chunk_mut().as_mut_ptr();
                             }
                             copy_nonoverlapping(k.as_ptr(), buf, k_len);
@@ -216,7 +214,6 @@ impl MessageType for Response<()> {
     fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
         let head = self.head();
         let reason = head.reason().as_bytes();
-        dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE + reason.len());
 
         // status line
         write_status_line(head.version, head.status.as_u16(), dst);
@@ -244,7 +241,6 @@ impl MessageType for RequestHeadType {
 
     fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
         let head = self.as_ref();
-        dst.reserve(256 + head.headers.len() * AVERAGE_HEADER_SIZE);
         write!(
             helpers::Writer(dst),
             "{} {} {}",
