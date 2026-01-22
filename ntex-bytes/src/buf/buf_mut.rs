@@ -1026,11 +1026,11 @@ mod tests {
         let mut buf = BytesMut::new();
         buf.put_i8(0x01);
         assert_eq!(buf, b"\x01"[..]);
-        assert_eq!((&mut buf).remaining_mut(), 103);
+        assert_eq!((&mut buf).remaining_mut(), 107);
         let chunk = (&mut buf).chunk_mut();
         chunk.write_byte(0, b'9');
         unsafe { (&mut buf).advance_mut(1) };
-        assert_eq!((&mut buf).remaining_mut(), 102);
+        assert_eq!((&mut buf).remaining_mut(), 106);
 
         let mut buf = vec![];
         buf.put_i16(0x0809);

@@ -80,7 +80,7 @@ pub mod info {
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub struct Info {
         pub id: usize,
-        pub refs: usize,
+        pub refs: u32,
         pub kind: Kind,
         pub capacity: usize,
     }
