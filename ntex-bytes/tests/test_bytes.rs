@@ -20,7 +20,7 @@ fn is_send<T: Send>() {}
 fn test_size() {
     assert_eq!(24, std::mem::size_of::<Bytes>());
     assert_eq!(24, std::mem::size_of::<Option<Bytes>>());
-    assert_eq!(24, ntex_bytes::METADATA_SIZE);
+    assert_eq!(20, ntex_bytes::METADATA_SIZE);
 
     let mut t = BytesMut::new();
     t.extend_from_slice(&b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"[..]);
@@ -409,15 +409,15 @@ fn fns_defined_for_bytes() {
     let bytes = Bytes::copy_from_slice(&B[..]);
     assert!(bytes.info().kind == Kind::Vec);
     assert!(bytes.info().refs == 1);
-    assert_eq!(bytes.info().capacity, 76);
+    assert_eq!(bytes.info().capacity, 72);
     let b2 = bytes.clone();
     assert!(b2.info().kind == Kind::Vec);
     assert!(b2.info().refs == 2);
-    assert!(b2.info().capacity == 76);
+    assert!(b2.info().capacity == 72);
     drop(b2);
     assert!(bytes.info().kind == Kind::Vec);
     assert!(bytes.info().refs == 1);
-    assert!(bytes.info().capacity == 76);
+    assert!(bytes.info().capacity == 72);
 
     let mut bytes = Bytes::from(&b"hello world"[..]);
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [1.4.1] (2026-01-22)
+
+* Allow only u32 ref counts
+
 ## [1.4.0] (2026-01-21)
 
 * Add BytesMut::reserve_capacity() method

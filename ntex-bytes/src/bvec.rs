@@ -112,7 +112,7 @@ impl BytesMut {
     #[inline]
     pub fn new() -> BytesMut {
         BytesMut {
-            storage: StorageVec::with_capacity(104),
+            storage: StorageVec::with_capacity(crate::storage::MIN_CAPACITY),
         }
     }
 
