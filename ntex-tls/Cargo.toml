@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "2.6.1"
+version = "2.6.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]
@@ -14,6 +14,9 @@ edition = "2021"
 [lib]
 name = "ntex_tls"
 path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+features = ["openssl", "rustls"]
 
 [features]
 default = []

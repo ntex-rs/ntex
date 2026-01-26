@@ -1,5 +1,9 @@
 # Changes
 
+## [2.6.3] - 2026-01-26
+
+* Fix compilation #722
+
 ## [2.6.0] - 2025-07-29
 
 * Fix the rustls handshake negotiation #620
