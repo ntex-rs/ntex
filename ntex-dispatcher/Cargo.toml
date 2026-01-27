@@ -1,0 +1,32 @@
+[package]
+name = "ntex-dispatcher"
+version = "3.0.0"
+authors = ["ntex contributors <team@ntex.rs>"]
+description = "Utilities for abstracting io streams dispatcher"
+keywords = ["network", "framework", "async", "futures"]
+homepage = "https://ntex.rs"
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/ntex-io/"
+categories = ["network-programming", "asynchronous"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+rust-version = "1.86"
+
+[lib]
+name = "ntex_dispatcher"
+path = "src/lib.rs"
+
+[dependencies]
+ntex-io = { workspace = true }
+ntex-codec = { workspace = true }
+ntex-util = { workspace = true }
+ntex-service = { workspace = true }
+
+bitflags = { workspace = true }
+log = { workspace = true }
+pin-project-lite = { workspace = true }
+
+[dev-dependencies]
+ntex = { workspace = true }
+ntex-bytes = { workspace = true }
+rand = { workspace = true }
