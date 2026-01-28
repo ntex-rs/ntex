@@ -361,10 +361,10 @@ impl IoStream for IoTest {
 
 impl Handle for Rc<IoTest> {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        if id == any::TypeId::of::<types::PeerAddr>() {
-            if let Some(addr) = self.peer_addr {
-                return Some(Box::new(types::PeerAddr(addr)));
-            }
+        if id == any::TypeId::of::<types::PeerAddr>()
+            && let Some(addr) = self.peer_addr
+        {
+            return Some(Box::new(types::PeerAddr(addr)));
         }
         None
     }

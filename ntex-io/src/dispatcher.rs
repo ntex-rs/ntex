@@ -194,11 +194,11 @@ where
         let slf = &mut this.inner;
 
         // handle service response future
-        if let Some(fut) = slf.response.as_mut() {
-            if let Poll::Ready(item) = Pin::new(fut).poll(cx) {
-                slf.shared.handle_result(item, &slf.shared.io, false);
-                slf.response = None;
-            }
+        if let Some(fut) = slf.response.as_mut()
+            && let Poll::Ready(item) = Pin::new(fut).poll(cx)
+        {
+            slf.shared.handle_result(item, &slf.shared.io, false);
+            slf.response = None;
         }
 
         loop {
@@ -280,12 +280,11 @@ where
                     slf.shared.io.stop_timer();
 
                     // service may relay on poll_ready for response results
-                    if !slf.shared.contains(Flags::READY_ERR) {
-                        if let Poll::Ready(res) = slf.shared.service.poll_ready(cx) {
-                            if res.is_err() {
-                                slf.shared.insert_flags(Flags::READY_ERR);
-                            }
-                        }
+                    if !slf.shared.contains(Flags::READY_ERR)
+                        && let Poll::Ready(res) = slf.shared.service.poll_ready(cx)
+                        && res.is_err()
+                    {
+                        slf.shared.insert_flags(Flags::READY_ERR);
                     }
 
                     if slf.shared.inflight.get() == 0 {
