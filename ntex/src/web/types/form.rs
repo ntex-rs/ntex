@@ -289,10 +289,10 @@ where
 
         // payload size
         let limit = self.limit;
-        if let Some(len) = self.length.take() {
-            if len > limit {
-                return Poll::Ready(Err(UrlencodedError::Overflow { size: len, limit }));
-            }
+        if let Some(len) = self.length.take()
+            && len > limit
+        {
+            return Poll::Ready(Err(UrlencodedError::Overflow { size: len, limit }));
         }
 
         // future
@@ -345,18 +345,18 @@ mod tests {
     }
 
     fn eq(err: UrlencodedError, other: UrlencodedError) -> bool {
-        if let UrlencodedError::Overflow { .. } = err {
-            if let UrlencodedError::Overflow { .. } = other {
-                return true;
-            }
-        } else if let UrlencodedError::UnknownLength = err {
-            if let UrlencodedError::UnknownLength = other {
-                return true;
-            }
-        } else if let UrlencodedError::ContentType = err {
-            if let UrlencodedError::ContentType = other {
-                return true;
-            }
+        if let UrlencodedError::Overflow { .. } = err
+            && let UrlencodedError::Overflow { .. } = other
+        {
+            return true;
+        } else if let UrlencodedError::UnknownLength = err
+            && let UrlencodedError::UnknownLength = other
+        {
+            return true;
+        } else if let UrlencodedError::ContentType = err
+            && let UrlencodedError::ContentType = other
+        {
+            return true;
         }
         false
     }

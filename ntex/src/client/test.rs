@@ -53,11 +53,11 @@ impl TestResponse {
         HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
     {
-        if let Ok(key) = HeaderName::try_from(key) {
-            if let Ok(value) = HeaderValue::try_from(value) {
-                self.head.headers.append(key, value);
-                return self;
-            }
+        if let Ok(key) = HeaderName::try_from(key)
+            && let Ok(value) = HeaderValue::try_from(value)
+        {
+            self.head.headers.append(key, value);
+            return self;
         }
         panic!("Cannot create header");
     }

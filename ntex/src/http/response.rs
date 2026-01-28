@@ -139,13 +139,12 @@ impl<B> Response<B> {
 
         let mut count: usize = 0;
         for v in vals {
-            if let Ok(s) = v.to_str() {
-                if let Ok(c) = Cookie::parse_encoded(s) {
-                    if c.name() == name {
-                        count += 1;
-                        continue;
-                    }
-                }
+            if let Ok(s) = v.to_str()
+                && let Ok(c) = Cookie::parse_encoded(s)
+                && c.name() == name
+            {
+                count += 1;
+                continue;
             }
             h.append(header::SET_COOKIE, v);
         }

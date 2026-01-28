@@ -293,12 +293,11 @@ where
         }
 
         let mut len = None;
-        if let Some(l) = res.headers().get(&CONTENT_LENGTH) {
-            if let Ok(s) = l.to_str() {
-                if let Ok(l) = s.parse::<usize>() {
-                    len = Some(l)
-                }
-            }
+        if let Some(l) = res.headers().get(&CONTENT_LENGTH)
+            && let Ok(s) = l.to_str()
+            && let Ok(l) = s.parse::<usize>()
+        {
+            len = Some(l)
         }
 
         JsonBody {

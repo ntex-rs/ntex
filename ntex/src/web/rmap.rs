@@ -135,10 +135,10 @@ impl ResourceMap {
             }
         } else {
             for (_, rmap) in &self.patterns {
-                if let Some(rmap) = rmap {
-                    if rmap.pattern_for(name, path, elements)?.is_some() {
-                        return Ok(Some(()));
-                    }
+                if let Some(rmap) = rmap
+                    && rmap.pattern_for(name, path, elements)?.is_some()
+                {
+                    return Ok(Some(()));
                 }
             }
             Ok(None)

@@ -41,26 +41,26 @@ impl ConnectionInfo {
                 for pair in val.split(';') {
                     for el in pair.split(',') {
                         let mut items = el.trim().splitn(2, '=');
-                        if let Some(name) = items.next() {
-                            if let Some(val) = items.next() {
-                                match &name.to_lowercase() as &str {
-                                    "for" => {
-                                        if remote.is_none() {
-                                            remote = Some(val.trim());
-                                        }
+                        if let Some(name) = items.next()
+                            && let Some(val) = items.next()
+                        {
+                            match &name.to_lowercase() as &str {
+                                "for" => {
+                                    if remote.is_none() {
+                                        remote = Some(val.trim());
                                     }
-                                    "proto" => {
-                                        if scheme.is_none() {
-                                            scheme = Some(val.trim());
-                                        }
-                                    }
-                                    "host" => {
-                                        if host.is_none() {
-                                            host = Some(val.trim());
-                                        }
-                                    }
-                                    _ => (),
                                 }
+                                "proto" => {
+                                    if scheme.is_none() {
+                                        scheme = Some(val.trim());
+                                    }
+                                }
+                                "host" => {
+                                    if host.is_none() {
+                                        host = Some(val.trim());
+                                    }
+                                }
+                                _ => (),
                             }
                         }
                     }
@@ -73,10 +73,9 @@ impl ConnectionInfo {
             if let Some(h) = req
                 .headers
                 .get(HeaderName::from_lowercase(X_FORWARDED_PROTO).unwrap())
+                && let Ok(h) = h.to_str()
             {
-                if let Ok(h) = h.to_str() {
-                    scheme = h.split(',').next().map(|v| v.trim());
-                }
+                scheme = h.split(',').next().map(|v| v.trim());
             }
             if scheme.is_none() {
                 scheme = req.uri.scheme().map(|a| a.as_str());
@@ -91,10 +90,9 @@ impl ConnectionInfo {
             if let Some(h) = req
                 .headers
                 .get(HeaderName::from_lowercase(X_FORWARDED_HOST).unwrap())
+                && let Ok(h) = h.to_str()
             {
-                if let Ok(h) = h.to_str() {
-                    host = h.split(',').next().map(|v| v.trim());
-                }
+                host = h.split(',').next().map(|v| v.trim());
             }
             if host.is_none() {
                 if let Some(h) = req.headers.get(&header::HOST) {
@@ -114,10 +112,9 @@ impl ConnectionInfo {
             if let Some(h) = req
                 .headers
                 .get(HeaderName::from_lowercase(X_FORWARDED_FOR).unwrap())
+                && let Ok(h) = h.to_str()
             {
-                if let Ok(h) = h.to_str() {
-                    remote = h.split(',').next().map(|v| v.trim());
-                }
+                remote = h.split(',').next().map(|v| v.trim());
             }
             if remote.is_none() {
                 // get peeraddr from socketaddr

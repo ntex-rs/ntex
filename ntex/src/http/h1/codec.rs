@@ -158,10 +158,10 @@ impl Encoder for Codec {
                 res.head_mut().version = self.version.get();
 
                 // connection status
-                if let Some(ct) = res.head().ctype() {
-                    if ct != ConnectionType::KeepAlive {
-                        self.ctype.set(ct)
-                    }
+                if let Some(ct) = res.head().ctype()
+                    && ct != ConnectionType::KeepAlive
+                {
+                    self.ctype.set(ct)
                 }
 
                 // encode message

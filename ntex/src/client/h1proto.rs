@@ -27,27 +27,24 @@ where
     // set request host header
     if !head.as_ref().headers.contains_key(HOST)
         && !head.extra_headers().iter().any(|h| h.contains_key(HOST))
+        && let Some(host) = head.as_ref().uri.host()
     {
-        if let Some(host) = head.as_ref().uri.host() {
-            let mut wrt = BytesMut::with_capacity(host.len() + 5).writer();
+        let mut wrt = BytesMut::with_capacity(host.len() + 5).writer();
 
-            let _ = match head.as_ref().uri.port_u16() {
-                None | Some(80) | Some(443) => write!(wrt, "{host}"),
-                Some(port) => write!(wrt, "{host}:{port}"),
-            };
+        let _ = match head.as_ref().uri.port_u16() {
+            None | Some(80) | Some(443) => write!(wrt, "{host}"),
+            Some(port) => write!(wrt, "{host}:{port}"),
+        };
 
-            match HeaderValue::from_shared(wrt.get_mut().take()) {
-                Ok(value) => match head {
-                    RequestHeadType::Owned(ref mut head) => {
-                        head.headers.insert(HOST, value)
-                    }
-                    RequestHeadType::Rc(_, ref mut extra_headers) => {
-                        let headers = extra_headers.get_or_insert(HeaderMap::new());
-                        headers.insert(HOST, value)
-                    }
-                },
-                Err(e) => log::error!("Cannot set HOST header {e}"),
-            }
+        match HeaderValue::from_shared(wrt.get_mut().take()) {
+            Ok(value) => match head {
+                RequestHeadType::Owned(ref mut head) => head.headers.insert(HOST, value),
+                RequestHeadType::Rc(_, ref mut extra_headers) => {
+                    let headers = extra_headers.get_or_insert(HeaderMap::new());
+                    headers.insert(HOST, value)
+                }
+            },
+            Err(e) => log::error!("Cannot set HOST header {e}"),
         }
     }
 

@@ -4,6 +4,7 @@ members = [
   "ntex",
   "ntex-bytes",
   "ntex-codec",
+  "ntex-dispatcher",
   "ntex-io",
   "ntex-http",
   "ntex-router",
@@ -29,6 +30,7 @@ ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
 ntex-io = { path = "ntex-io" }
+ntex-dispatcher = { path = "ntex-dispatcher" }
 ntex-net = { path = "ntex-net" }
 ntex-http = { path = "ntex-http" }
 ntex-router = { path = "ntex-router" }
@@ -44,6 +46,7 @@ ntex = "3.0.0-pre.13"
 ntex-bytes = "1.4.1"
 ntex-codec = "1.1.0"
 ntex-io = "3.5.0"
+ntex-dispatcher = "3.0.0"
 ntex-net = "3.5.1"
 ntex-http = "1.0.0"
 ntex-router = "1.0.0"

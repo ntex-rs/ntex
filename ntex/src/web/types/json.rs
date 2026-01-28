@@ -352,10 +352,10 @@ where
         }
 
         let limit = self.limit;
-        if let Some(len) = self.length.take() {
-            if len > limit {
-                return Poll::Ready(Err(JsonPayloadError::Overflow));
-            }
+        if let Some(len) = self.length.take()
+            && len > limit
+        {
+            return Poll::Ready(Err(JsonPayloadError::Overflow));
         }
         let mut stream = self.stream.take().unwrap();
 
@@ -391,14 +391,14 @@ mod tests {
     }
 
     fn json_eq(err: JsonPayloadError, other: JsonPayloadError) -> bool {
-        if let JsonPayloadError::Overflow = err {
-            if let JsonPayloadError::Overflow = other {
-                return true;
-            }
-        } else if let JsonPayloadError::ContentType = err {
-            if let JsonPayloadError::ContentType = other {
-                return true;
-            }
+        if let JsonPayloadError::Overflow = err
+            && let JsonPayloadError::Overflow = other
+        {
+            return true;
+        } else if let JsonPayloadError::ContentType = err
+            && let JsonPayloadError::ContentType = other
+        {
+            return true;
         }
         false
     }
