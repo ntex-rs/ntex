@@ -29,10 +29,10 @@ pub trait HttpMessage: Sized {
     /// Read the request content type. If request does not contain
     /// *Content-Type* header, empty str get returned.
     fn content_type(&self) -> &str {
-        if let Some(content_type) = self.message_headers().get(header::CONTENT_TYPE) {
-            if let Ok(content_type) = content_type.to_str() {
-                return content_type.split(';').next().unwrap().trim();
-            }
+        if let Some(content_type) = self.message_headers().get(header::CONTENT_TYPE)
+            && let Ok(content_type) = content_type.to_str()
+        {
+            return content_type.split(';').next().unwrap().trim();
         }
         ""
     }

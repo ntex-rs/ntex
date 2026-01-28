@@ -376,10 +376,10 @@ impl Future for HttpMessageBody {
             return Poll::Ready(Err(err));
         }
 
-        if let Some(len) = self.length.take() {
-            if len > self.limit {
-                return Poll::Ready(Err(PayloadError::from(error::PayloadError::Overflow)));
-            }
+        if let Some(len) = self.length.take()
+            && len > self.limit
+        {
+            return Poll::Ready(Err(PayloadError::from(error::PayloadError::Overflow)));
         }
 
         // future

@@ -147,12 +147,11 @@ where
                         // spawn current publish future to runtime
                         // so it could complete error handling
                         let st = ready!(inner.poll_request(cx));
-                        if inner.payload.is_some() {
-                            if let State::CallPublish { fut } =
+                        if inner.payload.is_some()
+                            && let State::CallPublish { fut } =
                                 mem::replace(&mut *this.st, State::ReadRequest)
-                            {
-                                crate::rt::spawn(fut);
-                            }
+                        {
+                            crate::rt::spawn(fut);
                         }
                         st
                     }
@@ -381,10 +380,10 @@ where
     ) -> Poll<State<F, C, S, B>> {
         if self.io.is_closed() {
             return Poll::Ready(self.stop());
-        } else if !self.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
-            if let Poll::Ready(Some(_)) = self.poll_request_payload(cx) {
-                self.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
-            }
+        } else if !self.flags.contains(Flags::SENDPAYLOAD_AND_STOP)
+            && let Poll::Ready(Some(_)) = self.poll_request_payload(cx)
+        {
+            self.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
         }
         loop {
             let _ = ready!(self.io.poll_flush(cx, false));
@@ -1233,13 +1232,13 @@ mod tests {
                 config.get(),
                 svc.into_service(),
                 fn_service(move |msg: Control<_, _>| {
-                    if let Control::ProtocolError(ref err) = msg {
-                        if matches!(err.err(), ProtocolError::SlowPayloadTimeout) {
-                            err_mark2.store(
-                                err_mark2.load(Ordering::Relaxed) + 1,
-                                Ordering::Relaxed,
-                            );
-                        }
+                    if let Control::ProtocolError(ref err) = msg
+                        && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
+                    {
+                        err_mark2.store(
+                            err_mark2.load(Ordering::Relaxed) + 1,
+                            Ordering::Relaxed,
+                        );
                     }
                     async move { Ok::<_, io::Error>(msg.ack()) }
                 }),

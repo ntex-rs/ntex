@@ -383,10 +383,10 @@ where
             let mut inflight = self.inflight.borrow_mut();
             inflight.remove(&ioref);
 
-            if inflight.is_empty() {
-                if let Some(tx) = self.tx.take() {
-                    let _ = tx.send(());
-                }
+            if inflight.is_empty()
+                && let Some(tx) = self.tx.take()
+            {
+                let _ = tx.send(());
             }
         }
 

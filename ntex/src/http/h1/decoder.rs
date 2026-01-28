@@ -162,10 +162,10 @@ pub(super) trait MessageType: Sized {
                         has_upgrade = true;
                         // check content-length, some clients (dart)
                         // sends "content-length: 0" with websocket upgrade
-                        if let Ok(val) = value.to_str().map(|val| val.trim()) {
-                            if val.eq_ignore_ascii_case("websocket") {
-                                content_length = None;
-                            }
+                        if let Ok(val) = value.to_str().map(|val| val.trim())
+                            && val.eq_ignore_ascii_case("websocket")
+                        {
+                            content_length = None;
                         }
                     }
                     header::EXPECT => {

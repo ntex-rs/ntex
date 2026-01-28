@@ -1,5 +1,9 @@
 # Changes
 
+## [3.0.0-pre.14] 2026-01-xx
+
+* MSRV 1.88
+
 ## [3.0.0-pre.12] 2026-01-17
 
 * Update codec and bytes

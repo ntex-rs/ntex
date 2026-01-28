@@ -396,10 +396,10 @@ impl Guard for HostGuard {
             return false;
         }
 
-        if let Some(ref scheme) = self.1 {
-            if let Some(ref req_host_uri_scheme) = req_host_uri.scheme_str() {
-                return scheme == req_host_uri_scheme;
-            }
+        if let Some(ref scheme) = self.1
+            && let Some(ref req_host_uri_scheme) = req_host_uri.scheme_str()
+        {
+            return scheme == req_host_uri_scheme;
         }
 
         true

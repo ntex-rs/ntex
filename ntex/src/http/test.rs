@@ -114,11 +114,11 @@ impl TestRequest {
         HeaderValue: TryFrom<V>,
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
     {
-        if let Ok(key) = HeaderName::try_from(key) {
-            if let Ok(value) = HeaderValue::try_from(value) {
-                parts(&mut self.0).headers.append(key, value);
-                return self;
-            }
+        if let Ok(key) = HeaderName::try_from(key)
+            && let Ok(value) = HeaderValue::try_from(value)
+        {
+            parts(&mut self.0).headers.append(key, value);
+            return self;
         }
         panic!("Cannot create header");
     }
@@ -161,12 +161,11 @@ impl TestRequest {
         head.version = inner.version;
         head.headers = inner.headers;
 
-        if let Some(conn) = head.headers.get(header::CONNECTION) {
-            if let Ok(s) = conn.to_str() {
-                if s.to_lowercase().contains("upgrade") {
-                    head.set_upgrade()
-                }
-            }
+        if let Some(conn) = head.headers.get(header::CONNECTION)
+            && let Ok(s) = conn.to_str()
+            && s.to_lowercase().contains("upgrade")
+        {
+            head.set_upgrade()
         }
 
         #[cfg(feature = "cookie")]
