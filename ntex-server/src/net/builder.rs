@@ -432,8 +432,8 @@ mod tests {
         assert!(bind_addr(&addrs[..], 10).is_err());
     }
 
-    #[test]
-    fn test_debug() {
+    #[ntex::test]
+    async fn test_debug() {
         let builder = ServerBuilder::default();
         assert!(format!("{builder:?}").contains("ServerBuilder"));
     }
