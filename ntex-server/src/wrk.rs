@@ -11,7 +11,7 @@ use ntex_service::{Pipeline, PipelineBinding, Service, ServiceFactory};
 use ntex_util::future::{Either, Stream, select, stream_recv};
 use ntex_util::time::{Millis, sleep, timeout_checked};
 
-use crate::{ServerConfiguration, WorkerId};
+use crate::ServerConfiguration;
 
 const STOP_TIMEOUT: Millis = Millis(3000);
 
@@ -36,7 +36,7 @@ pub enum WorkerStatus {
 ///
 /// Worker accepts message via unbounded channel and starts processing.
 pub struct Worker<T> {
-    id: WorkerId,
+    name: String,
     tx1: Sender<T>,
     tx2: Sender<Shutdown>,
     avail: WorkerAvailability,
@@ -45,7 +45,7 @@ pub struct Worker<T> {
 
 impl<T> cmp::Ord for Worker<T> {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.id.cmp(&other.id)
+        self.name.cmp(&other.name)
     }
 }
 
@@ -57,7 +57,7 @@ impl<T> cmp::PartialOrd for Worker<T> {
 
 impl<T> hash::Hash for Worker<T> {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
+        self.name.hash(state);
     }
 }
 
@@ -65,7 +65,7 @@ impl<T> Eq for Worker<T> {}
 
 impl<T> PartialEq for Worker<T> {
     fn eq(&self, other: &Worker<T>) -> bool {
-        self.id == other.id
+        self.name == other.name
     }
 }
 
@@ -78,7 +78,7 @@ pub struct WorkerStop(oneshot::Receiver<bool>);
 
 impl<T> Worker<T> {
     /// Start worker.
-    pub fn start<F>(id: WorkerId, cfg: F, cid: Option<CoreId>) -> Worker<T>
+    pub fn start<F>(name: String, cfg: F, cid: Option<CoreId>) -> Worker<T>
     where
         T: Send + 'static,
         F: ServerConfiguration<Item = T>,
@@ -86,27 +86,28 @@ impl<T> Worker<T> {
         let (tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
         let (avail, avail_tx) = WorkerAvailability::create();
+        let name2 = name.clone();
 
-        Arbiter::default().exec_fn(move || {
-            if let Some(cid) = cid {
-                if core_affinity::set_for_current(cid) {
-                    log::info!("Set affinity to {cid:?} for worker {id:?}");
-                }
+        Arbiter::with_name(name.clone()).exec_fn(move || {
+            if let Some(cid) = cid
+                && core_affinity::set_for_current(cid)
+            {
+                log::info!("Set affinity to {cid:?} for worker {name2:?}");
             }
 
             let _ = spawn(async move {
-                log::info!("Starting worker {id:?}");
+                log::info!("Starting worker {name2:?}");
 
-                log::debug!("Creating server instance in {id:?}");
+                log::debug!("Creating server instance in {name2:?}");
                 let factory = cfg.create().await;
 
-                match create(id, rx1, rx2, factory, avail_tx).await {
+                match create(name2.clone(), rx1, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {
-                        log::debug!("Server instance has been created in {id:?}");
+                        log::debug!("Server instance has been created in {name2:?}");
                         run_worker(svc, wrk).await;
                     }
                     Err(e) => {
-                        log::error!("Cannot start worker: {e:?}");
+                        log::error!("Cannot start worker {name2:?}: {e:?}");
                     }
                 }
                 Arbiter::current().stop();
@@ -114,17 +115,17 @@ impl<T> Worker<T> {
         });
 
         Worker {
-            id,
             tx1,
             tx2,
+            name,
             avail,
             failed: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Worker id.
-    pub fn id(&self) -> WorkerId {
-        self.id
+    /// Worker name
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Send message to the worker.
@@ -172,9 +173,9 @@ impl<T> Worker<T> {
 impl<T> Clone for Worker<T> {
     fn clone(&self) -> Self {
         Worker {
-            id: self.id,
             tx1: self.tx1.clone(),
             tx2: self.tx2.clone(),
+            name: self.name.clone(),
             avail: self.avail.clone(),
             failed: self.failed.clone(),
         }
@@ -271,7 +272,7 @@ impl Drop for WorkerAvailabilityTx {
 ///
 /// Worker accepts message via unbounded channel and starts processing.
 struct WorkerSt<T, F: ServiceFactory<T>> {
-    id: WorkerId,
+    name: String,
     rx: Receiver<T>,
     stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     factory: F,
@@ -327,12 +328,12 @@ where
 
                 let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
 
-                stop_svc(wrk.id, svc, timeout, Some(result)).await;
+                stop_svc(&wrk.name, svc, timeout, Some(result)).await;
                 return;
             }
             Either::Left(Ok(false)) | Either::Right(None) => {
                 wrk.availability.set(false);
-                stop_svc(wrk.id, svc, STOP_TIMEOUT, None).await;
+                stop_svc(&wrk.name, svc, STOP_TIMEOUT, None).await;
                 return;
             }
         }
@@ -352,7 +353,7 @@ where
 }
 
 async fn stop_svc<T, F>(
-    id: WorkerId,
+    name: &str,
     svc: PipelineBinding<F, T>,
     timeout: Millis,
     result: Option<oneshot::Sender<bool>>,
@@ -365,11 +366,11 @@ async fn stop_svc<T, F>(
         let _ = result.send(res.is_ok());
     }
 
-    log::info!("Worker {id:?} has been stopped");
+    log::info!("Worker {name:?} has been stopped");
 }
 
 async fn create<T, F>(
-    id: WorkerId,
+    name: String,
     rx: Receiver<T>,
     stop: Receiver<Shutdown>,
     factory: Result<F, ()>,
@@ -398,7 +399,7 @@ where
     Ok((
         svc,
         WorkerSt {
-            id,
+            name,
             rx,
             factory,
             availability,

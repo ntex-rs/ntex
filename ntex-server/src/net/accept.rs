@@ -47,6 +47,7 @@ impl AcceptNotify {
 
 /// Streamin io accept loop
 pub struct AcceptLoop {
+    name: String,
     testing: bool,
     notify: AcceptNotify,
     inner: Option<(mpsc::Receiver<AcceptorCommand>, Arc<Poller>)>,
@@ -74,10 +75,18 @@ impl AcceptLoop {
 
         AcceptLoop {
             notify,
+            name: "ntex:accept".to_string(),
             inner: Some((rx, poll)),
             testing: false,
             status_handler: None,
         }
+    }
+
+    /// Set server name.
+    ///
+    /// Name is used for worker thread name
+    pub fn name<T: AsRef<str>>(&mut self, name: T) {
+        self.name = format!("{}:accept", name.as_ref());
     }
 
     /// Get notification api for the loop
@@ -110,6 +119,7 @@ impl AcceptLoop {
             poll,
             socks,
             srv,
+            self.name.clone(),
             self.notify.clone(),
             self.testing,
             self.status_handler.take(),
@@ -150,6 +160,7 @@ impl Accept {
         poller: Arc<Poller>,
         socks: Vec<(Token, Listener)>,
         srv: Server,
+        name: String,
         notify: AcceptNotify,
         testing: bool,
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
@@ -157,13 +168,10 @@ impl Accept {
         let sys = System::current();
 
         // start accept thread
-        let _ = thread::Builder::new()
-            .name("accept loop".to_owned())
-            .spawn(move || {
-                System::set_current(sys);
-                Accept::new(tx, rx, poller, socks, srv, notify, testing, status_handler)
-                    .poll()
-            });
+        let _ = thread::Builder::new().name(name).spawn(move || {
+            System::set_current(sys);
+            Accept::new(tx, rx, poller, socks, srv, notify, testing, status_handler).poll()
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -309,12 +317,13 @@ impl Accept {
         let now = Instant::now();
         for key in 0..self.sockets.len() {
             let info = &mut self.sockets[key];
-            if let Some(inst) = info.timeout.get() {
-                if now > inst && !self.backpressure {
-                    log::info!("Resuming socket listener on {} after timeout", info.addr);
-                    info.timeout.take();
-                    self.add_source(key);
-                }
+            if let Some(inst) = info.timeout.get()
+                && now > inst
+                && !self.backpressure
+            {
+                log::info!("Resuming socket listener on {} after timeout", info.addr);
+                info.timeout.take();
+                self.add_source(key);
             }
         }
     }

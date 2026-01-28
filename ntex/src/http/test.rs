@@ -268,14 +268,17 @@ where
     R: ServiceFactory<Io, SharedCfg> + 'static,
     U: Into<SharedCfg>,
 {
+    let sys = System::current().config();
+    let name = System::current().name().to_string();
+
     let id = Uuid::now_v7();
     let cfg = cfg.into();
     let (tx, rx) = mpsc::channel();
-    log::debug!("Starting test http server {:?}", id);
+    log::debug!("Starting {:?} http server {:?}", name, id);
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("test-server", crate::rt::DefaultRuntime);
+        let sys = System::with_config(&name, sys);
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
@@ -285,7 +288,6 @@ where
                 .listen("test", tcp, async move |_| factory().await)?
                 .config("test", cfg)
                 .workers(1)
-                .testing()
                 .disable_signals()
                 .run();
 

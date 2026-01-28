@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.0] - 2026-01-28
+
+* Use system name for workers
+
 ## [3.5.0] - 2026-01-03
 
 * Use updated System api

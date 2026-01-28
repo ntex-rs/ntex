@@ -20,10 +20,10 @@ impl Data {
     pub(crate) fn load() -> Option<Data> {
         let cb = CB.with(|cb| cb.get());
 
-        if let Some(cb) = unsafe { cb.as_ref() } {
-            if let Some(ptr) = (*cb.before)() {
-                return Some(Data { cb, ptr });
-            }
+        if let Some(cb) = unsafe { cb.as_ref() }
+            && let Some(ptr) = (*cb.before)()
+        {
+            return Some(Data { cb, ptr });
         }
         None
     }

@@ -593,9 +593,12 @@ where
     S::Response: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
+    let sys = System::current().config();
+    let name = System::current().name().to_string();
+
     let id = Uuid::now_v7();
     let (tx, rx) = mpsc::channel();
-    log::debug!("Starting test web server {:?}", id);
+    log::debug!("Starting {:?} web server {:?}", name, id);
 
     let ssl = match cfg.stream {
         StreamType::Tcp => false,
@@ -607,7 +610,7 @@ where
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("ntex-test-server", crate::rt::DefaultRuntime);
+        let sys = System::with_config(&name, sys);
 
         let cfg = cfg.clone();
         let factory = factory.clone();
@@ -616,10 +619,7 @@ where
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
-            let builder = crate::server::build()
-                .testing()
-                .workers(1)
-                .disable_signals();
+            let builder = crate::server::build().workers(1).disable_signals();
             let secure = match cfg.stream {
                 StreamType::Tcp => false,
                 #[cfg(feature = "openssl")]

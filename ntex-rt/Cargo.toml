@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "3.4.1"
+version = "3.5.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -11,7 +11,7 @@ categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 build = "build.rs"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.88"
 
 [lib]
 name = "ntex_rt"

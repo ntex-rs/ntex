@@ -216,7 +216,8 @@ pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
     (quote! {
         #(#attrs)*
         #vis #sig {
-            ntex::rt::System::build().name(stringify!(#name))
+            ntex::rt::System::build()
+                .name(stringify!(#name))
                 .build(ntex::rt::DefaultRuntime)
                 .block_on(async move { #body })
         }
@@ -264,7 +265,9 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
             #(#attrs)*
             fn #name() #ret {
                 ntex::util::enable_test_logging();
-                ntex::rt::System::build().name("test")
+                ntex::rt::System::build()
+                    .name(stringify!(#name))
+                    .testing()
                     .build(ntex::rt::DefaultRuntime)
                     .block_on(async { #body })
             }
@@ -275,7 +278,9 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
             #(#attrs)*
             fn #name() #ret {
                 ntex::util::enable_test_logging();
-                ntex::rt::System::build().name("test")
+                ntex::rt::System::build()
+                    .name(stringify!(#name))
+                    .testing()
                     .build(ntex::rt::DefaultRuntime)
                     .block_on(async { #body })
             }
@@ -325,7 +330,9 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             #(#attrs)*
             fn #name() #ret {
-                ntex_rt::System::build().name("test")
+                ntex_rt::System::build()
+                    .name(stringify!(#name))
+                    .testing()
                     .build(ntex::rt::DefaultRuntime)
                     .block_on(async { #body })
             }
@@ -335,7 +342,9 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
             #[test]
             #(#attrs)*
             fn #name() #ret {
-                ntex_rt::System::build().name("test")
+                ntex_rt::System::build()
+                    .name(stringify!(#name))
+                    .testing()
                     .build(ntex::rt::DefaultRuntime)
                     .block_on(async { #body })
             }
@@ -386,7 +395,9 @@ pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
             #(#attrs)*
             fn #name() #ret {
                 crate::util::enable_test_logging();
-                ntex_rt::System::build().name("test")
+                ntex_rt::System::build()
+                    .name(stringify!(#name))
+                    .testing()
                     .build(crate::rt::DefaultRuntime)
                     .block_on(async { #body })
             }
@@ -397,7 +408,9 @@ pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
             #(#attrs)*
             fn #name() #ret {
                 crate::util::enable_test_logging();
-                ntex_rt::System::build().name("test")
+                ntex_rt::System::build()
+                    .name(stringify!(#name))
+                    .testing()
                     .build(crate::rt::DefaultRuntime)
                     .block_on(async { #body })
             }

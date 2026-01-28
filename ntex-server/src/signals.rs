@@ -52,17 +52,17 @@ fn register_system<T: Send + 'static>(srv: Server<T>) -> bool {
 }
 
 fn handle_signal(sig: Signal) {
-    if let Ok(guard) = CUR_SYS.lock() {
-        if let Some((sys, srv)) = &*guard.borrow() {
-            (*srv)(sig);
-            sys.arbiter().exec_fn(move || {
-                HANDLERS.with(|handlers| {
-                    for tx in handlers.borrow_mut().drain(..) {
-                        let _ = tx.send(sig);
-                    }
-                })
-            });
-        }
+    if let Ok(guard) = CUR_SYS.lock()
+        && let Some((sys, srv)) = &*guard.borrow()
+    {
+        (*srv)(sig);
+        sys.arbiter().exec_fn(move || {
+            HANDLERS.with(|handlers| {
+                for tx in handlers.borrow_mut().drain(..) {
+                    let _ = tx.send(sig);
+                }
+            })
+        });
     }
 }
 

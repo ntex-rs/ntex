@@ -4,10 +4,11 @@ use crate::{Server, ServerConfiguration};
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Millis = Millis::from_secs(30);
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 /// Server builder
 pub struct WorkerPool {
     pub(crate) num: usize,
+    pub(crate) name: String,
     pub(crate) no_signals: bool,
     pub(crate) stop_runtime: bool,
     pub(crate) shutdown_timeout: Millis,
@@ -31,11 +32,20 @@ impl WorkerPool {
 
         WorkerPool {
             num,
+            name: "default".to_string(),
             no_signals: false,
             stop_runtime: false,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             affinity: false,
         }
+    }
+
+    /// Set workers name.
+    ///
+    /// Name is used for worker thread name
+    pub fn name<T: AsRef<str>>(mut self, name: T) -> Self {
+        self.name = name.as_ref().to_string();
+        self
     }
 
     /// Set number of workers to start.
