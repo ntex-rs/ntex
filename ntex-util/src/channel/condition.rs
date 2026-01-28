@@ -102,10 +102,10 @@ impl<T: Clone + Default> Condition<T> {
     pub fn notify_with(&self, val: T) {
         let inner = self.inner.get_ref();
         for (_, item) in inner.data.iter() {
-            if let Some(item) = item {
-                if item.waker.wake_checked() {
-                    item.val.set(val.clone());
-                }
+            if let Some(item) = item
+                && item.waker.wake_checked()
+            {
+                item.val.set(val.clone());
             }
         }
     }
