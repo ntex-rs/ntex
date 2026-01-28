@@ -279,11 +279,10 @@ impl Handler for StreamOpsHandler {
                     }
                 }
                 Operation::Poll { id } => {
-                    if let Some(item) = st.streams.get_mut(id) {
-                        if !item.flags.contains(Flags::RD_MORE) && !item.ctx.is_stopped() {
+                    if let Some(item) = st.streams.get_mut(id)
+                        && !item.flags.contains(Flags::RD_MORE) && !item.ctx.is_stopped() {
                             item.ctx.stop(res.err());
                         }
-                    }
                 }
                 Operation::Shutdown { tx } => {
                     if let Some(tx) = tx {
@@ -400,12 +399,12 @@ impl StreamOpsStorage {
 
     fn pause_read(&mut self, id: usize, api: &DriverApi) {
         let item = &mut self.streams[id];
-        if let Some(rd_op) = item.rd_op {
-            if !item.flags.contains(Flags::RD_CANCELING) {
-                item.flags.insert(Flags::RD_CANCELING);
-                api.cancel(rd_op.get());
-                log::trace!("{}: Recv to pause ({:?})", item.tag(), item.fd());
-            }
+        if let Some(rd_op) = item.rd_op
+            && !item.flags.contains(Flags::RD_CANCELING)
+        {
+            item.flags.insert(Flags::RD_CANCELING);
+            api.cancel(rd_op.get());
+            log::trace!("{}: Recv to pause ({:?})", item.tag(), item.fd());
         }
     }
 }
