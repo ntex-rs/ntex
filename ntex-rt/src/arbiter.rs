@@ -80,8 +80,8 @@ impl Arbiter {
     /// Spawn new thread and run runtime in spawned thread.
     /// Returns address of newly created arbiter.
     pub fn new() -> Arbiter {
-        let name = format!("worker:{}", COUNT.load(Ordering::Relaxed) + 1);
-        Arbiter::with_name(name)
+        let id = COUNT.load(Ordering::Relaxed) + 1;
+        Arbiter::with_name(format!("{}:arb:{}", System::current().name(), id))
     }
 
     /// Spawn new thread and run runtime in spawned thread.
@@ -107,6 +107,8 @@ impl Arbiter {
 
         let handle = builder
             .spawn(move || {
+                log::info!("Starting {:?} arbiter", name2);
+
                 let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
 
                 let (stop, stop_rx) = oneshot::channel();
@@ -277,10 +279,10 @@ impl Arbiter {
     {
         STORAGE.with(move |cell| {
             let mut st = cell.borrow_mut();
-            if let Some(boxed) = st.get(&TypeId::of::<T>()) {
-                if let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>() {
-                    return val.clone();
-                }
+            if let Some(boxed) = st.get(&TypeId::of::<T>())
+                && let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>()
+            {
+                return val.clone();
             }
             let val = f();
             st.insert(TypeId::of::<T>(), Box::new(val.clone()));

@@ -3,6 +3,7 @@ use std::{fmt, io, net, sync::Arc};
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use ntex_io::Io;
+use ntex_rt::System;
 use ntex_service::{ServiceFactory, cfg::SharedCfg};
 use ntex_util::time::Millis;
 
@@ -19,6 +20,7 @@ use super::{Connection, ServerStatus, Stream, StreamServer, Token, socket::Liste
 /// This type can be used to construct an instance of `net streaming server` through a
 /// builder-like pattern.
 pub struct ServerBuilder {
+    name: String,
     token: Token,
     backlog: i32,
     services: Vec<FactoryServiceType>,
@@ -38,6 +40,7 @@ impl Default for ServerBuilder {
 impl fmt::Debug for ServerBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServerBuilder")
+            .field("name", &self.name)
             .field("token", &self.token)
             .field("backlog", &self.backlog)
             .field("sockets", &self.sockets)
@@ -50,16 +53,34 @@ impl fmt::Debug for ServerBuilder {
 impl ServerBuilder {
     /// Create new Server builder instance
     pub fn new() -> ServerBuilder {
+        let sys = System::current();
+        let mut accept = AcceptLoop::default();
+        accept.name(sys.name());
+        if sys.testing() {
+            accept.testing()
+        }
+
         ServerBuilder {
+            accept,
+            name: sys.name().to_string(),
             token: Token(0),
             services: Vec::new(),
             sockets: Vec::new(),
             on_accept: None,
             on_worker_start: Vec::new(),
-            accept: AcceptLoop::default(),
             backlog: 2048,
-            pool: WorkerPool::default(),
+            pool: WorkerPool::default().name(sys.name()),
         }
+    }
+
+    /// Set server name.
+    ///
+    /// Name is used for worker thread name
+    pub fn name<T: AsRef<str>>(mut self, name: T) -> Self {
+        self.name = name.as_ref().to_string();
+        self.accept.name(self.name.as_str());
+        self.pool = self.pool.name(self.name.as_str());
+        self
     }
 
     /// Set number of workers to start.
@@ -316,13 +337,6 @@ impl ServerBuilder {
         self
     }
 
-    #[doc(hidden)]
-    /// Mark server as testing
-    pub fn testing(mut self) -> Self {
-        self.accept.testing();
-        self
-    }
-
     /// Starts processing incoming connections and return server controller.
     pub fn run(self) -> Server<Connection> {
         if self.sockets.is_empty() {
@@ -412,8 +426,8 @@ mod tests {
         assert!(bind_addr(&addrs[..], 10).is_err());
     }
 
-    #[test]
-    fn test_debug() {
+    #[ntex::test]
+    async fn test_debug() {
         let builder = ServerBuilder::default();
         assert!(format!("{builder:?}").contains("ServerBuilder"));
     }

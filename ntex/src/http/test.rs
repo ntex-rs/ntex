@@ -8,7 +8,7 @@ use ntex_tls::TlsConfig;
 use uuid::Uuid;
 
 use crate::channel::bstream;
-use crate::client::{Client, ClientBuilder, ClientRequest, ClientResponse, Connector};
+use crate::client::{Client, ClientRequest, ClientResponse, Connector};
 #[cfg(feature = "ws")]
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
@@ -230,7 +230,14 @@ where
     F: AsyncFn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedCfg> + 'static,
 {
-    server_with_config(factory, SharedCfg::new("HTTP-TEST-SRV")).await
+    server_with_config(
+        factory,
+        SharedCfg::new("HTTP-TEST-SRV")
+            .add(IoConfig::new())
+            .add(TlsConfig::new())
+            .add(ntex_h2::ServiceConfig::new()),
+    )
+    .await
 }
 
 /// Start test server
@@ -268,14 +275,17 @@ where
     R: ServiceFactory<Io, SharedCfg> + 'static,
     U: Into<SharedCfg>,
 {
+    let sys = System::current().config();
+    let name = System::current().name().to_string();
+
     let id = Uuid::now_v7();
     let cfg = cfg.into();
     let (tx, rx) = mpsc::channel();
-    log::debug!("Starting test http server {:?}", id);
+    log::debug!("Starting {:?} http server {:?}", name, id);
 
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("test-server", crate::rt::DefaultRuntime);
+        let sys = System::with_config(&name, sys);
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
@@ -285,7 +295,6 @@ where
                 .listen("test", tcp, async move |_| factory().await)?
                 .config("test", cfg)
                 .workers(1)
-                .testing()
                 .disable_signals()
                 .run();
 
@@ -298,18 +307,7 @@ where
     let (system, server, addr) = rx.recv().unwrap();
     sleep(Millis(25)).await;
 
-    TestServer {
-        id,
-        addr,
-        system,
-        server,
-        client: ClientBuilder::new()
-            .build(SharedCfg::default())
-            .await
-            .unwrap(),
-    }
-    .set_client_timeout(Seconds(90), Millis(90_000))
-    .await
+    TestServer::create(id, system, server, addr, Seconds(90), Millis(90_000)).await
 }
 
 #[derive(Debug)]
@@ -323,12 +321,37 @@ pub struct TestServer {
 }
 
 impl TestServer {
+    pub async fn create(
+        id: Uuid,
+        system: System,
+        server: Server,
+        addr: net::SocketAddr,
+        timeout: Seconds,
+        connect_timeout: Millis,
+    ) -> Self {
+        let client = Self::create_client(timeout, connect_timeout).await;
+
+        TestServer {
+            id,
+            addr,
+            system,
+            server,
+            client,
+        }
+    }
+
     /// Set client timeout
     pub async fn set_client_timeout(
         mut self,
         timeout: Seconds,
         connect_timeout: Millis,
     ) -> Self {
+        self.client = Self::create_client(timeout, connect_timeout).await;
+        self
+    }
+
+    /// Set client timeout
+    async fn create_client(timeout: Seconds, connect_timeout: Millis) -> Client {
         let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))
@@ -339,34 +362,29 @@ impl TestServer {
             )
             .into();
 
-        let client = {
-            let connector = {
-                #[cfg(feature = "openssl")]
-                {
-                    use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+        let connector = {
+            #[cfg(feature = "openssl")]
+            {
+                use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
-                    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-                    builder.set_verify(SslVerifyMode::NONE);
-                    let _ = builder
-                        .set_alpn_protos(b"\x02h2\x08http/1.1")
-                        .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
-                    Connector::default().openssl(builder.build())
-                }
-                #[cfg(not(feature = "openssl"))]
-                {
-                    Connector::default()
-                }
-            };
-
-            Client::builder()
-                .connector::<&str>(connector)
-                .build(cfg)
-                .await
-                .unwrap()
+                let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+                builder.set_verify(SslVerifyMode::NONE);
+                let _ = builder
+                    .set_alpn_protos(b"\x02h2\x08http/1.1")
+                    .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
+                Connector::default().openssl(builder.build())
+            }
+            #[cfg(not(feature = "openssl"))]
+            {
+                Connector::default()
+            }
         };
 
-        self.client = client;
-        self
+        Client::builder()
+            .connector::<&str>(connector)
+            .build(cfg)
+            .await
+            .unwrap()
     }
 
     /// Construct test server url

@@ -7,6 +7,7 @@ use crate::driver::Runner;
 use crate::pool::ThreadPool;
 use crate::system::{System, SystemCommand, SystemConfig, SystemSupport};
 
+#[derive(Debug, Clone)]
 /// Builder struct for a ntex runtime.
 ///
 /// Either use `Builder::build` to create a system and start actors.
@@ -24,6 +25,8 @@ pub struct Builder {
     /// Thread pool config
     pool_limit: usize,
     pool_recv_timeout: time::Duration,
+    /// testing flag
+    testing: bool,
 }
 
 impl Builder {
@@ -33,6 +36,7 @@ impl Builder {
             stop_on_panic: false,
             stack_size: 0,
             ping_interval: 1000,
+            testing: false,
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_secs(60),
         }
@@ -75,6 +79,12 @@ impl Builder {
         self
     }
 
+    /// Mark system as testing
+    pub fn testing(mut self) -> Self {
+        self.testing = true;
+        self
+    }
+
     /// Set the waiting timeout of the inner thread, if exists. The default is
     /// 60 seconds.
     pub fn thread_pool_recv_timeout<T>(mut self, timeout: T) -> Self
@@ -89,34 +99,18 @@ impl Builder {
     ///
     /// This method panics if it can not create tokio runtime
     pub fn build<R: Runner>(self, runner: R) -> SystemRunner {
-        let (stop_tx, stop) = oneshot::channel();
-        let (sys_sender, sys_receiver) = unbounded();
+        let name = self.name.clone();
+        let testing = self.testing;
+        let stack_size = self.stack_size;
+        let stop_on_panic = self.stop_on_panic;
 
-        let config = SystemConfig {
+        self.build_with(SystemConfig {
+            name,
+            testing,
+            stack_size,
+            stop_on_panic,
             runner: Arc::new(runner),
-            stack_size: self.stack_size,
-            stop_on_panic: self.stop_on_panic,
-        };
-
-        // thread pool
-        let pool = ThreadPool::new(self.pool_limit, self.pool_recv_timeout);
-
-        let (arb, controller) = Arbiter::new_system(self.name.clone());
-        let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
-        let system = System::construct(sys_sender, arb, config.clone(), pool);
-
-        // system arbiter
-        let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);
-
-        // init system arbiter and run configuration method
-        SystemRunner {
-            stop,
-            support,
-            controller,
-            system,
-            config,
-            _t: PhantomData,
-        }
+        })
     }
 
     /// Create new System.
@@ -127,7 +121,7 @@ impl Builder {
         let (sys_sender, sys_receiver) = unbounded();
 
         // thread pool
-        let pool = ThreadPool::new(self.pool_limit, self.pool_recv_timeout);
+        let pool = ThreadPool::new(&self.name, self.pool_limit, self.pool_recv_timeout);
 
         let (arb, controller) = Arbiter::new_system(self.name.clone());
         let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
@@ -177,6 +171,8 @@ impl SystemRunner {
     where
         F: FnOnce() -> io::Result<()> + 'static,
     {
+        log::info!("Starting {:?} system", self.config.name);
+
         let SystemRunner {
             controller,
             stop,

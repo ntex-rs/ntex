@@ -1,5 +1,11 @@
 # Changes
 
+## [3.5.0] - 2026-01-28
+
+* Use system name for arbiters
+
+* Add testing flag for system
+
 ## [3.4.0] - 2026-01-03
 
 * Refactor io driver management

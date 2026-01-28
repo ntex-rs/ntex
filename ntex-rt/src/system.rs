@@ -38,9 +38,11 @@ pub struct System {
 
 #[derive(Clone)]
 pub struct SystemConfig {
+    pub(super) name: String,
     pub(super) runner: Arc<dyn Runner>,
     pub(super) stack_size: usize,
     pub(super) stop_on_panic: bool,
+    pub(super) testing: bool,
 }
 
 thread_local!(
@@ -114,6 +116,11 @@ impl System {
         Id(self.id)
     }
 
+    /// System name
+    pub fn name(&self) -> &str {
+        &self.config.name
+    }
+
     /// Stop the system
     pub fn stop(&self) {
         self.stop_with_code(0)
@@ -172,6 +179,11 @@ impl System {
         self.config.clone()
     }
 
+    /// Testing flag
+    pub fn testing(&self) -> bool {
+        self.config.testing()
+    }
+
     /// Spawns a blocking task in a new thread, and wait for it.
     ///
     /// The task will not be cancelled even if the future is dropped.
@@ -185,6 +197,12 @@ impl System {
 }
 
 impl SystemConfig {
+    #[inline]
+    /// Is current system is testing
+    pub fn testing(&self) -> bool {
+        self.testing
+    }
+
     /// Execute a future with custom `block_on` method and wait for result.
     #[inline]
     pub(super) fn block_on<F, R>(&self, fut: F) -> R
@@ -207,6 +225,7 @@ impl SystemConfig {
 impl fmt::Debug for SystemConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemConfig")
+            .field("testing", &self.testing)
             .field("stack_size", &self.stack_size)
             .field("stop_on_panic", &self.stop_on_panic)
             .finish()

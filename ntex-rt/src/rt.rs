@@ -228,11 +228,11 @@ impl RunnableQueue {
         }
 
         for _ in 0..self.event_interval {
-            if !self.sync_queue.is_empty() {
-                if let Some(task) = self.sync_queue.pop() {
-                    task.run();
-                    continue;
-                }
+            if !self.sync_queue.is_empty()
+                && let Some(task) = self.sync_queue.pop()
+            {
+                task.run();
+                continue;
             }
             break;
         }

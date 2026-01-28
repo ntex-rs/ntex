@@ -146,10 +146,10 @@ impl<E> Clone for Sender<E> {
 
 impl<E> Drop for Sender<E> {
     fn drop(&mut self) {
-        if self.inner.weak_count() == 1 {
-            if let Some(shared) = self.inner.upgrade() {
-                shared.insert_flag(Flags::EOF | Flags::SENDER_GONE);
-            }
+        if self.inner.weak_count() == 1
+            && let Some(shared) = self.inner.upgrade()
+        {
+            shared.insert_flag(Flags::EOF | Flags::SENDER_GONE);
         }
     }
 }

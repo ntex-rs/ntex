@@ -65,6 +65,7 @@ fn worker(
 /// A thread pool to perform blocking operations in other threads.
 #[derive(Debug, Clone)]
 pub(crate) struct ThreadPool {
+    name: String,
     sender: Sender<BoxedDispatchable>,
     receiver: Receiver<BoxedDispatchable>,
     counter: Arc<AtomicUsize>,
@@ -75,13 +76,14 @@ pub(crate) struct ThreadPool {
 impl ThreadPool {
     /// Create [`ThreadPool`] with thread number limit and channel receive
     /// timeout.
-    pub(crate) fn new(thread_limit: usize, recv_timeout: Duration) -> Self {
+    pub(crate) fn new(name: &str, thread_limit: usize, recv_timeout: Duration) -> Self {
         let (sender, receiver) = bounded(0);
         Self {
             sender,
             receiver,
             thread_limit,
             recv_timeout,
+            name: format!("{}:pool-wrk", name),
             counter: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -110,7 +112,7 @@ impl ThreadPool {
                         BlockingResult { rx: None }
                     } else {
                         thread::Builder::new()
-                            .name(format!("pool-wrk:{}", cnt))
+                            .name(format!("{}:{}", self.name, cnt))
                             .spawn(worker(
                                 self.receiver.clone(),
                                 self.counter.clone(),

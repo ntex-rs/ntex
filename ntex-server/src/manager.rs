@@ -49,10 +49,11 @@ struct Inner<F: ServerConfiguration> {
 
 impl<F: ServerConfiguration> ServerManager<F> {
     pub(crate) fn start(cfg: WorkerPool, factory: F) -> Server<F::Item> {
-        log::info!("Starting {} workers", cfg.num);
+        log::info!("Starting {:?} {} workers", cfg.name, cfg.num);
 
         let (tx, rx) = unbounded();
 
+        let affinity = cfg.affinity;
         let no_signals = cfg.no_signals;
         let shared = Arc::new(ServerShared {
             paused: AtomicBool::new(true),
@@ -71,7 +72,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
         let _ = ntex_rt::spawn(handle_cmd(mgr.clone(), rx));
 
         // Retrieve the IDs of all active CPU cores.
-        let mut cores = if cfg.affinity {
+        let mut cores = if affinity {
             core_affinity::get_core_ids().unwrap_or_default()
         } else {
             Vec::new()
@@ -139,7 +140,8 @@ impl<F: ServerConfiguration> ServerManager<F> {
 fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreId>) {
     let _ = ntex_rt::spawn(async move {
         let id = mgr.next_id();
-        let mut wrk = Worker::start(id, mgr.factory(), cid);
+        let name = format!("{}:worker:{}", mgr.0.cfg.name, id.0);
+        let mut wrk = Worker::start(name.clone(), mgr.factory(), cid);
 
         loop {
             match wrk.status() {
@@ -149,7 +151,7 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                     mgr.unavailable(wrk);
                     sleep(RESTART_DELAY).await;
                     if !mgr.stopping() {
-                        wrk = Worker::start(id, mgr.factory(), cid);
+                        wrk = Worker::start(name.clone(), mgr.factory(), cid);
                     } else {
                         return;
                     }

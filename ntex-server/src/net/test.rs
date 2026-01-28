@@ -1,7 +1,7 @@
 //! Test server
 use std::{fmt, io, marker::PhantomData, net, thread, time};
 
-use ntex_io::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
 use ntex_rt::System;
 use ntex_service::{ServiceFactory, cfg::SharedCfg};
@@ -59,14 +59,15 @@ where
     /// Start test server
     pub fn start(self) -> TestServer {
         log::debug!("Starting test server {:?}", self.id);
-        let factory = self.factory;
         let config = self.config;
-        let sys_config = System::current().config();
+        let factory = self.factory;
+        let cfg = System::current().config();
+        let name = System::current().name().to_string();
 
         let (tx, rx) = oneshot::channel();
         // run server in separate thread
         thread::spawn(move || {
-            let sys = System::with_config("ntex-test-server", sys_config);
+            let sys = System::with_config(&name, cfg);
             let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
             let local_addr = tcp.local_addr().unwrap();
             let system = sys.system();
@@ -77,7 +78,6 @@ where
                     .config("test", config)
                     .workers(1)
                     .disable_signals()
-                    .testing()
                     .enable_affinity()
                     .run();
 
@@ -144,20 +144,23 @@ pub fn build_test_server<F>(factory: F) -> TestServer
 where
     F: AsyncFnOnce(ServerBuilder) -> ServerBuilder + Send + 'static,
 {
+    let cfg = System::current().config();
+    let name = System::current().name().to_string();
+
     let id = Uuid::now_v7();
-    log::debug!("Starting test server {:?}", id);
+    log::debug!("Starting {:?} server {:?}", name, id);
 
     let (tx, rx) = oneshot::channel();
+
     // run server in separate thread
     thread::spawn(move || {
-        let sys = System::new("ntex-test-server", ntex_net::DefaultRuntime);
+        let sys = System::with_config(&name, cfg);
         let system = sys.system();
 
         sys.block_on(async move {
             let server = factory(super::build())
                 .await
                 .workers(1)
-                .testing()
                 .disable_signals()
                 .run();
             tx.send((system, server.clone()))
@@ -173,7 +176,7 @@ where
         system,
         server,
         addr: "127.0.0.1:0".parse().unwrap(),
-        cfg: SharedCfg::new("TEST-CLIENT").into(),
+        cfg: SharedCfg::new("TEST-CLIENT").add(IoConfig::new()).into(),
     }
 }
 

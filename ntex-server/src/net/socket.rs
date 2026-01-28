@@ -120,10 +120,10 @@ impl Listener {
             #[cfg(unix)]
             Listener::Uds(ref lst) => {
                 // cleanup file path
-                if let Ok(addr) = lst.local_addr() {
-                    if let Some(path) = addr.as_pathname() {
-                        let _ = std::fs::remove_file(path);
-                    }
+                if let Ok(addr) = lst.local_addr()
+                    && let Some(path) = addr.as_pathname()
+                {
+                    let _ = std::fs::remove_file(path);
                 }
             }
         }

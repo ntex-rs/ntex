@@ -17,7 +17,7 @@ pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
 
 /// Worker id
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct WorkerId(usize);
+pub struct WorkerId(pub(crate) usize);
 
 impl WorkerId {
     pub(self) fn next(&mut self) -> WorkerId {
