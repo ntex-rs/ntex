@@ -171,6 +171,8 @@ impl SystemRunner {
     where
         F: FnOnce() -> io::Result<()> + 'static,
     {
+        log::info!("Starting {:?} system", self.config.name);
+
         let SystemRunner {
             controller,
             stop,

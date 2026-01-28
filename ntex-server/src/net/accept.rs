@@ -132,6 +132,7 @@ impl AcceptLoop {
 impl fmt::Debug for AcceptLoop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AcceptLoop")
+            .field("name", &self.name)
             .field("notify", &self.notify)
             .field("inner", &self.inner)
             .field("status_handler", &self.status_handler.is_some())
@@ -165,9 +166,10 @@ impl Accept {
         testing: bool,
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) {
-        let sys = System::current();
+        log::info!("Starting {name:?} accept loop");
 
         // start accept thread
+        let sys = System::current();
         let _ = thread::Builder::new().name(name).spawn(move || {
             System::set_current(sys);
             Accept::new(tx, rx, poller, socks, srv, notify, testing, status_handler).poll()
@@ -217,8 +219,6 @@ impl Accept {
     }
 
     fn poll(mut self) {
-        log::trace!("Starting server accept loop");
-
         // Create storage for events
         let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
 

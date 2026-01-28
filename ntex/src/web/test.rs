@@ -22,7 +22,7 @@ use crate::time::{Millis, Seconds, sleep};
 use crate::util::{Bytes, BytesMut, Extensions, Ready, Stream, stream_recv};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
-use crate::{Service, ServiceFactory, SharedCfg, rt::System, server::Server};
+use crate::{Service, ServiceFactory, SharedCfg, io::IoConfig, rt::System, server::Server};
 
 use crate::web::error::{DefaultError, ErrorRenderer};
 use crate::web::httprequest::{HttpRequest, HttpRequestPool};
@@ -79,9 +79,14 @@ where
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory();
-    srv.pipeline(SharedCfg::new("WEB").add(WebAppConfig::new()).into())
-        .await
-        .unwrap()
+    srv.pipeline(
+        SharedCfg::new("WEB")
+            .add(IoConfig::new())
+            .add(WebAppConfig::new())
+            .into(),
+    )
+    .await
+    .unwrap()
 }
 
 /// Calls service and waits for response future completion.
@@ -669,6 +674,7 @@ where
             .config(
                 "test",
                 SharedCfg::new("WEB-SRV")
+                    .add(IoConfig::new())
                     .add(HttpServiceConfig::new().set_headers_read_rate(
                         ctimeout,
                         Seconds::ZERO,
@@ -692,7 +698,7 @@ where
     sleep(Millis(25)).await;
 
     let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
-        .add(ntex_io::IoConfig::new().set_connect_timeout(Millis(90_000)))
+        .add(IoConfig::new().set_connect_timeout(Millis(90_000)))
         .add(ntex_tls::TlsConfig::new().set_handshake_timeout(Seconds(5)))
         .add(
             ntex_h2::ServiceConfig::new()

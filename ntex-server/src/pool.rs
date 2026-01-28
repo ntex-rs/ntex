@@ -32,7 +32,7 @@ impl WorkerPool {
 
         WorkerPool {
             num,
-            name: "default".to_string(),
+            name: "ntex".to_string(),
             no_signals: false,
             stop_runtime: false,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,

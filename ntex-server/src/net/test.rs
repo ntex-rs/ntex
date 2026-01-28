@@ -1,7 +1,7 @@
 //! Test server
 use std::{fmt, io, marker::PhantomData, net, thread, time};
 
-use ntex_io::Io;
+use ntex_io::{Io, IoConfig};
 use ntex_net::tcp_connect;
 use ntex_rt::System;
 use ntex_service::{ServiceFactory, cfg::SharedCfg};
@@ -59,8 +59,8 @@ where
     /// Start test server
     pub fn start(self) -> TestServer {
         log::debug!("Starting test server {:?}", self.id);
-        let factory = self.factory;
         let config = self.config;
+        let factory = self.factory;
         let cfg = System::current().config();
         let name = System::current().name().to_string();
 
@@ -148,7 +148,7 @@ where
     let name = System::current().name().to_string();
 
     let id = Uuid::now_v7();
-    log::debug!("Starting test server {:?} for {:?}", id, name);
+    log::debug!("Starting {:?} server {:?}", name, id);
 
     let (tx, rx) = oneshot::channel();
 
@@ -176,7 +176,7 @@ where
         system,
         server,
         addr: "127.0.0.1:0".parse().unwrap(),
-        cfg: SharedCfg::new("TEST-CLIENT").into(),
+        cfg: SharedCfg::new("TEST-CLIENT").add(IoConfig::new()).into(),
     }
 }
 

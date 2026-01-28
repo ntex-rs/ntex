@@ -55,6 +55,7 @@ impl ServerBuilder {
     pub fn new() -> ServerBuilder {
         let sys = System::current();
         let mut accept = AcceptLoop::default();
+        accept.name(sys.name());
         if sys.testing() {
             accept.testing()
         }
@@ -68,7 +69,7 @@ impl ServerBuilder {
             on_accept: None,
             on_worker_start: Vec::new(),
             backlog: 2048,
-            pool: WorkerPool::default(),
+            pool: WorkerPool::default().name(sys.name()),
         }
     }
 

@@ -107,6 +107,8 @@ impl Arbiter {
 
         let handle = builder
             .spawn(move || {
+                log::info!("Starting {:?} arbiter", name2);
+
                 let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
 
                 let (stop, stop_rx) = oneshot::channel();
