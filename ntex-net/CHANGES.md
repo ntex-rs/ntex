@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.2] - 2026-01-29
+
+* Fix socket close process for polling driver
+
 ## [3.5.1] - 2026-01-08
 
 * Remove changes queue checks for io-uring driver
