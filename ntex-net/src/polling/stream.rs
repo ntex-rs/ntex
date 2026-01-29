@@ -221,14 +221,14 @@ impl StreamOpsInner {
                 item.ctx.stop(None);
             }
             self.api.detach(fd, id);
-            ntex_rt::spawn_blocking(move || {
-                if let Err(err) = syscall!(libc::close(fd)) {
-                    log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
-                }
-            });
 
             if item.flags.contains(Flags::DROPPED_SEC) {
                 let item = streams.remove(idx);
+                ntex_rt::spawn_blocking(move || {
+                    if let Err(err) = syscall!(libc::close(fd)) {
+                        log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
+                    }
+                });
                 mem::forget(item.io);
             } else {
                 item.flags.insert(Flags::DROPPED_PRI);
@@ -247,6 +247,12 @@ impl StreamOpsInner {
 
             if item.flags.contains(Flags::DROPPED_PRI) {
                 let item = streams.remove(idx);
+                let fd = item.fd();
+                ntex_rt::spawn_blocking(move || {
+                    if let Err(err) = syscall!(libc::close(fd)) {
+                        log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
+                    }
+                });
                 mem::forget(item.io);
             } else {
                 item.flags.insert(Flags::DROPPED_SEC);
