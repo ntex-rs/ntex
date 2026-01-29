@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.0] - 2026-01-xx
+
+* Drop Dispatcher
+
 ## [3.6.0] - 2026-01-29
 
 * Deprecated Dispatcher

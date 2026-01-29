@@ -10,7 +10,6 @@ pub mod testing;
 pub mod types;
 
 mod buf;
-mod dispatcher;
 mod filter;
 mod flags;
 mod framed;
@@ -22,11 +21,10 @@ mod tasks;
 mod timer;
 mod utils;
 
-use ntex_codec::{Decoder, Encoder};
+use ntex_codec::Decoder;
 
 pub use self::buf::{FilterCtx, ReadBuf, WriteBuf};
 pub use self::cfg::IoConfig;
-pub use self::dispatcher::Dispatcher;
 pub use self::filter::{Base, Filter, FilterReadStatus, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
@@ -176,61 +174,6 @@ where
     }
 }
 
-#[deprecated]
-/// Dispatcher item
-pub enum DispatchItem<U: Encoder + Decoder> {
-    Item(<U as Decoder>::Item),
-    /// Write back-pressure enabled
-    WBackPressureEnabled,
-    /// Write back-pressure disabled
-    WBackPressureDisabled,
-    /// Keep alive timeout
-    KeepAliveTimeout,
-    /// Frame read timeout
-    ReadTimeout,
-    /// Decoder parse error
-    DecoderError(<U as Decoder>::Error),
-    /// Encoder parse error
-    EncoderError(<U as Encoder>::Error),
-    /// Socket is disconnected
-    Disconnect(Option<IoError>),
-}
-
-impl<U> fmt::Debug for DispatchItem<U>
-where
-    U: Encoder + Decoder,
-    <U as Decoder>::Item: fmt::Debug,
-{
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            DispatchItem::Item(ref item) => {
-                write!(fmt, "DispatchItem::Item({item:?})")
-            }
-            DispatchItem::WBackPressureEnabled => {
-                write!(fmt, "DispatchItem::WBackPressureEnabled")
-            }
-            DispatchItem::WBackPressureDisabled => {
-                write!(fmt, "DispatchItem::WBackPressureDisabled")
-            }
-            DispatchItem::KeepAliveTimeout => {
-                write!(fmt, "DispatchItem::KeepAliveTimeout")
-            }
-            DispatchItem::ReadTimeout => {
-                write!(fmt, "DispatchItem::ReadTimeout")
-            }
-            DispatchItem::EncoderError(ref e) => {
-                write!(fmt, "DispatchItem::EncoderError({e:?})")
-            }
-            DispatchItem::DecoderError(ref e) => {
-                write!(fmt, "DispatchItem::DecoderError({e:?})")
-            }
-            DispatchItem::Disconnect(ref e) => {
-                write!(fmt, "DispatchItem::Disconnect({e:?})")
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,28 +182,6 @@ mod tests {
 
     #[test]
     fn test_fmt() {
-        type T = DispatchItem<BytesCodec>;
-
-        let err = T::EncoderError(io::Error::other("err"));
-        assert!(format!("{err:?}").contains("DispatchItem::Encoder"));
-        let err = T::DecoderError(io::Error::other("err"));
-        assert!(format!("{err:?}").contains("DispatchItem::Decoder"));
-        let err = T::Disconnect(Some(io::Error::other("err")));
-        assert!(format!("{err:?}").contains("DispatchItem::Disconnect"));
-
-        assert!(
-            format!("{:?}", T::WBackPressureEnabled)
-                .contains("DispatchItem::WBackPressureEnabled")
-        );
-        assert!(
-            format!("{:?}", T::WBackPressureDisabled)
-                .contains("DispatchItem::WBackPressureDisabled")
-        );
-        assert!(
-            format!("{:?}", T::KeepAliveTimeout).contains("DispatchItem::KeepAliveTimeout")
-        );
-        assert!(format!("{:?}", T::ReadTimeout).contains("DispatchItem::ReadTimeout"));
-
         assert!(format!("{:?}", IoStatusUpdate::KeepAlive).contains("KeepAlive"));
         assert!(format!("{:?}", RecvError::<BytesCodec>::KeepAlive).contains("KeepAlive"));
         assert!(
