@@ -1,6 +1,10 @@
 # Changes
 
-## [3.0.0-pre.14] 2026-01-xx
+## [3.0.0-pre.15] 2026-01-29
+
+* Use ntex_dispatcher::Dispatcher instead of ntex-io
+
+## [3.0.0-pre.14] 2026-01-28
 
 * MSRV 1.88
 
