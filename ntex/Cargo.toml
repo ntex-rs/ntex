@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.0.0-pre.14"
+version = "3.0.0-pre.15"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -72,6 +72,7 @@ no-test-logging = []
 [dependencies]
 ntex-bytes = { workspace = true }
 ntex-codec = { workspace = true }
+ntex-dispatcher = { workspace = true }
 ntex-http = { workspace = true }
 ntex-router = { workspace = true }
 ntex-service = { workspace = true }

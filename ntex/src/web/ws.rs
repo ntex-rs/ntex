@@ -4,14 +4,13 @@ use std::{fmt, rc::Rc};
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{StatusCode, body::BodySize, h1};
+use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
-    IntoServiceFactory, ServiceFactory, apply_fn, chain_factory, fn_factory_with_config,
+    IntoServiceFactory, ServiceFactory, chain_factory, fn_factory_with_config, fn_service,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
-use crate::{
-    SharedCfg, io::DispatchItem, io::IoConfig, rt, time::Seconds, util::Either, util::Ready,
-};
+use crate::{SharedCfg, rt, time::Seconds};
 
 thread_local! {
     static CFG: SharedCfg = SharedCfg::new("WS")
@@ -29,44 +28,30 @@ where
 {
     let inner_factory = Rc::new(chain_factory(factory).map_err(WsError::Service));
 
-    let factory = fn_factory_with_config(move |sink: WsSink| {
-        let factory = inner_factory.clone();
+    let factory = fn_factory_with_config(async move |sink: WsSink| {
+        let srv = inner_factory.pipeline(sink.clone()).await?;
+        let sink = sink.clone();
 
-        async move {
-            let srv = factory.create(sink.clone()).await?;
-            let sink = sink.clone();
-
-            Ok::<_, T::InitError>(apply_fn(srv, move |req, srv| match req {
-                DispatchItem::<ws::Codec>::Item(item) => {
-                    let s = if matches!(item, Frame::Close(_)) {
-                        Some(sink.clone())
-                    } else {
-                        None
-                    };
-                    Either::Left(async move {
-                        let result = srv.call(item).await;
-                        if let Some(s) = s {
-                            let _ = rt::spawn(async move { s.io().close() });
-                        }
-                        result
-                    })
+        Ok::<_, T::InitError>(fn_service(async move |req| match req {
+            DispatchItem::<ws::Codec>::Item(item) => {
+                let s = if matches!(item, Frame::Close(_)) {
+                    Some(sink.clone())
+                } else {
+                    None
+                };
+                let result = srv.call(item).await;
+                if let Some(s) = s {
+                    let _ = rt::spawn(async move { s.io().close() });
                 }
-                DispatchItem::WBackPressureEnabled
-                | DispatchItem::WBackPressureDisabled => Either::Right(Ready::Ok(None)),
-                DispatchItem::KeepAliveTimeout => {
-                    Either::Right(Ready::Err(WsError::KeepAlive))
-                }
-                DispatchItem::ReadTimeout => {
-                    Either::Right(Ready::Err(WsError::ReadTimeout))
-                }
-                DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
-                    Either::Right(Ready::Err(WsError::Protocol(e)))
-                }
-                DispatchItem::Disconnect(e) => {
-                    Either::Right(Ready::Err(WsError::Disconnected(e)))
-                }
-            }))
-        }
+                result
+            }
+            DispatchItem::Control(_) => Ok(None),
+            DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
+            DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
+            DispatchItem::Stop(Reason::Decoder(e))
+            | DispatchItem::Stop(Reason::Encoder(e)) => Err(WsError::Protocol(e)),
+            DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
+        }))
     });
 
     start_with(req, factory).await

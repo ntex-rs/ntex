@@ -1,6 +1,6 @@
 //! Utilities for abstructing io streams
 #![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
-#![allow(async_fn_in_trait)]
+#![allow(deprecated, async_fn_in_trait)]
 
 use std::io::{Error as IoError, Result as IoResult};
 use std::{any::Any, any::TypeId, fmt, task::Context, task::Poll};
@@ -176,6 +176,7 @@ where
     }
 }
 
+#[deprecated]
 /// Dispatcher item
 pub enum DispatchItem<U: Encoder + Decoder> {
     Item(<U as Decoder>::Item),

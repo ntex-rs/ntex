@@ -1,5 +1,5 @@
 //! Framed transport dispatcher
-#![allow(clippy::let_underscore_future)]
+#![allow(deprecated, clippy::let_underscore_future)]
 use std::task::{Context, Poll, ready};
 use std::{cell::Cell, future::Future, pin::Pin, rc::Rc};
 
@@ -14,6 +14,7 @@ type Response<U> = <U as Encoder>::Item;
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
     /// and pass then to the service.
+    #[deprecated]
     pub struct Dispatcher<S, U>
     where
         S: Service<DispatchItem<U>, Response = Option<Response<U>>>,

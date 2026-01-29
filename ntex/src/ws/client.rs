@@ -16,7 +16,7 @@ use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError, h1};
-use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Sealed};
+use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
 use crate::{Service, ServiceFactory, SharedCfg, channel::mpsc, rt, util::Ready, ws};
@@ -743,14 +743,12 @@ impl WsConnection<Sealed> {
             |req, svc| async move {
                 match req {
                     DispatchItem::<ws::Codec>::Item(item) => svc.call(item).await,
-                    DispatchItem::WBackPressureEnabled
-                    | DispatchItem::WBackPressureDisabled => Ok(None),
-                    DispatchItem::KeepAliveTimeout => Err(WsError::KeepAlive),
-                    DispatchItem::ReadTimeout => Err(WsError::ReadTimeout),
-                    DispatchItem::DecoderError(e) | DispatchItem::EncoderError(e) => {
-                        Err(WsError::Protocol(e))
-                    }
-                    DispatchItem::Disconnect(e) => Err(WsError::Disconnected(e)),
+                    DispatchItem::Control(_) => Ok(None),
+                    DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
+                    DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
+                    DispatchItem::Stop(Reason::Decoder(e))
+                    | DispatchItem::Stop(Reason::Encoder(e)) => Err(WsError::Protocol(e)),
+                    DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
                 }
             },
         );

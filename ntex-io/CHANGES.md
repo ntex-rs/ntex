@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.0] - 2026-01-29
+
+* Deprecated Dispatcher
+
 ## [3.5.0] - 2026-01-21
 
 * Set IoConfig ref lifetime
