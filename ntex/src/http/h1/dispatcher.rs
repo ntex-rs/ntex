@@ -90,7 +90,7 @@ where
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
     pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, C>>) -> Self {
-        let codec = Codec::new(config.keep_alive_enabled());
+        let codec = Codec::new(config.keep_alive_enabled(), io.cfg());
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {

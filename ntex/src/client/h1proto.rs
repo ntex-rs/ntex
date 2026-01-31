@@ -54,7 +54,7 @@ where
     );
 
     // send request
-    let codec = h1::ClientCodec::default();
+    let codec = h1::ClientCodec::new(true, io.cfg());
     io.send((head, body.size()).into(), &codec).await?;
 
     log::trace!("http1 request has been sent");

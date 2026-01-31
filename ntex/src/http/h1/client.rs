@@ -7,7 +7,7 @@ use crate::http::body::BodySize;
 use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::message::{ConnectionType, RequestHeadType, ResponseHead};
 use crate::http::{Method, Version};
-use crate::util::{Bytes, BytesMut};
+use crate::{io::IoConfig, util::Bytes, util::BytesMut};
 
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::{Message, MessageType, decoder, encoder};
@@ -39,23 +39,18 @@ struct ClientCodecInner {
     payload: RefCell<Option<PayloadDecoder>>,
     version: Cell<Version>,
     ctype: Cell<ConnectionType>,
+    cfg: &'static IoConfig,
 
     // encoder part
     flags: Cell<Flags>,
     encoder: encoder::MessageEncoder<RequestHeadType>,
 }
 
-impl Default for ClientCodec {
-    fn default() -> Self {
-        ClientCodec::new(true)
-    }
-}
-
 impl ClientCodec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(keep_alive: bool) -> Self {
+    pub fn new(keep_alive: bool, cfg: &'static IoConfig) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -63,6 +58,7 @@ impl ClientCodec {
         };
         ClientCodec {
             inner: ClientCodecInner {
+                cfg,
                 decoder: decoder::MessageDecoder::default(),
                 payload: RefCell::new(None),
                 version: Cell::new(Version::HTTP_11),
@@ -216,10 +212,13 @@ impl Encoder for ClientCodec {
                     inner.version.get(),
                     length,
                     inner.ctype.get(),
+                    self.inner.cfg,
                 )?;
             }
             Message::Chunk(Some(bytes)) => {
-                self.inner.encoder.encode_chunk(bytes.as_ref(), dst)?;
+                self.inner
+                    .encoder
+                    .encode_chunk(bytes.as_ref(), dst, &self.inner.cfg)?;
             }
             Message::Chunk(None) => {
                 self.inner.encoder.encode_eof(dst)?;

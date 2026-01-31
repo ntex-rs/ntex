@@ -10,7 +10,7 @@ use crate::http::message::ConnectionType;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::{Method, Version};
-use crate::util::BytesMut;
+use crate::{io::IoConfig, util::BytesMut};
 
 use super::{Message, decoder, decoder::PayloadType, encoder};
 
@@ -28,16 +28,11 @@ pub struct Codec {
     decoder: decoder::MessageDecoder<Request>,
     version: Cell<Version>,
     ctype: Cell<ConnectionType>,
+    cfg: &'static IoConfig,
 
     // encoder part
     flags: Cell<Flags>,
     encoder: encoder::MessageEncoder<Response<()>>,
-}
-
-impl Default for Codec {
-    fn default() -> Self {
-        Codec::new(false)
-    }
 }
 
 impl Clone for Codec {
@@ -47,6 +42,7 @@ impl Clone for Codec {
             version: self.version.clone(),
             ctype: self.ctype.clone(),
             flags: self.flags.clone(),
+            cfg: self.cfg,
             encoder: self.encoder.clone(),
         }
     }
@@ -60,6 +56,7 @@ impl fmt::Debug for Codec {
             .field("ctype", &self.ctype)
             .field("encoder", &self.encoder)
             .field("decoder", &self.decoder)
+            .field("cfg", &self.cfg)
             .finish()
     }
 }
@@ -68,7 +65,7 @@ impl Codec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(keep_alive: bool) -> Self {
+    pub fn new(keep_alive: bool, cfg: &'static IoConfig) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -76,6 +73,7 @@ impl Codec {
         };
 
         Codec {
+            cfg,
             flags: Cell::new(flags),
             decoder: decoder::MessageDecoder::default(),
             version: Cell::new(Version::HTTP_11),
@@ -173,11 +171,12 @@ impl Encoder for Codec {
                     self.version.get(),
                     length,
                     self.ctype.get(),
+                    &self.cfg,
                 )?;
                 // self.headers_size = (dst.len() - len) as u32;
             }
             Message::Chunk(Some(bytes)) => {
-                self.encoder.encode_chunk(bytes.as_ref(), dst)?;
+                self.encoder.encode_chunk(bytes.as_ref(), dst, self.cfg)?;
             }
             Message::Chunk(None) => {
                 self.encoder.encode_eof(dst)?;
