@@ -1,6 +1,6 @@
 use std::cell::{Ref, RefMut};
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, marker::PhantomData, mem, pin::Pin, rc::Rc};
+use std::{cell::Cell, fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use serde::de::DeserializeOwned;
 
@@ -18,7 +18,7 @@ use super::{ClientConfig, error::JsonPayloadError};
 /// Client Response
 pub struct ClientResponse {
     pub(crate) head: ResponseHead,
-    pub(crate) payload: Payload,
+    pub(crate) payload: Cell<Option<Payload>>,
     config: Rc<ClientConfig>,
 }
 
@@ -63,8 +63,8 @@ impl ClientResponse {
     pub fn new(head: ResponseHead, payload: Payload, config: Rc<ClientConfig>) -> Self {
         ClientResponse {
             head,
-            payload,
             config,
+            payload: Cell::new(Some(payload)),
         }
     }
 
@@ -114,13 +114,17 @@ impl ClientResponse {
     }
 
     /// Set a body and return previous body value
-    pub fn set_payload(&mut self, payload: Payload) {
-        self.payload = payload;
+    pub fn set_payload(&self, payload: Payload) {
+        self.payload.set(Some(payload));
     }
 
     /// Get response's payload
-    pub fn take_payload(&mut self) -> Payload {
-        mem::take(&mut self.payload)
+    pub fn take_payload(&self) -> Payload {
+        if let Some(pl) = self.payload.take() {
+            pl
+        } else {
+            Payload::None
+        }
     }
 
     /// Request extensions
@@ -138,7 +142,7 @@ impl ClientResponse {
 
 impl ClientResponse {
     /// Loads http response's body.
-    pub fn body(&mut self) -> MessageBody {
+    pub fn body(&self) -> MessageBody {
         MessageBody::new(self)
     }
 
@@ -149,7 +153,7 @@ impl ClientResponse {
     ///
     /// * content type is not `application/json`
     /// * content length is greater than 256k
-    pub fn json<T: DeserializeOwned>(&mut self) -> JsonBody<T> {
+    pub fn json<T: DeserializeOwned>(&self) -> JsonBody<T> {
         JsonBody::new(self)
     }
 }
@@ -158,7 +162,13 @@ impl Stream for ClientResponse {
     type Item = Result<Bytes, PayloadError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.get_mut().payload).poll_next(cx)
+        if let Some(mut pl) = self.payload.take() {
+            let result = Pin::new(&mut pl).poll_next(cx);
+            self.payload.set(Some(pl));
+            result
+        } else {
+            Poll::Ready(None)
+        }
     }
 }
 
@@ -183,7 +193,7 @@ pub struct MessageBody {
 
 impl MessageBody {
     /// Create `MessageBody` for request.
-    pub fn new(res: &mut ClientResponse) -> MessageBody {
+    pub fn new(res: &ClientResponse) -> MessageBody {
         let mut len = None;
         if let Some(l) = res.headers().get(&CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
@@ -276,7 +286,7 @@ where
     U: DeserializeOwned,
 {
     /// Create `JsonBody` for request.
-    pub fn new(res: &mut ClientResponse) -> Self {
+    pub fn new(res: &ClientResponse) -> Self {
         // check content-type
         let json = if let Ok(Some(mime)) = res.mime_type() {
             mime.subtype() == mime::JSON || mime.suffix() == Some(mime::JSON)
@@ -423,24 +433,24 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_body() {
-        let mut req = TestResponse::with_header(header::CONTENT_LENGTH, "xxxx").finish();
+        let req = TestResponse::with_header(header::CONTENT_LENGTH, "xxxx").finish();
         match req.body().await.err().unwrap() {
             PayloadError::UnknownLength => (),
             _ => unreachable!("error"),
         }
 
-        let mut req = TestResponse::with_header(header::CONTENT_LENGTH, "1000000").finish();
+        let req = TestResponse::with_header(header::CONTENT_LENGTH, "1000000").finish();
         match req.body().await.err().unwrap() {
             PayloadError::Overflow => (),
             _ => unreachable!("error"),
         }
 
-        let mut req = TestResponse::default()
+        let req = TestResponse::default()
             .set_payload(Bytes::from_static(b"test"))
             .finish();
         assert_eq!(req.body().await.ok().unwrap(), Bytes::from_static(b"test"));
 
-        let mut req = TestResponse::default()
+        let req = TestResponse::default()
             .set_payload(Bytes::from_static(b"11111111111111"))
             .finish();
         match req.body().limit(5).await.err().unwrap() {
@@ -466,20 +476,20 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_json_body() {
-        let mut req = TestResponse::default().finish();
-        let json = JsonBody::<MyObject>::new(&mut req).await;
+        let req = TestResponse::default().finish();
+        let json = JsonBody::<MyObject>::new(&req).await;
         assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
 
-        let mut req = TestResponse::default()
+        let req = TestResponse::default()
             .header(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static("application/text"),
             )
             .finish();
-        let json = JsonBody::<MyObject>::new(&mut req).await;
+        let json = JsonBody::<MyObject>::new(&req).await;
         assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
 
-        let mut req = TestResponse::default()
+        let req = TestResponse::default()
             .header(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static("application/json"),
@@ -490,13 +500,13 @@ mod tests {
             )
             .finish();
 
-        let json = JsonBody::<MyObject>::new(&mut req).limit(100).await;
+        let json = JsonBody::<MyObject>::new(&req).limit(100).await;
         assert!(json_eq(
             json.err().unwrap(),
             JsonPayloadError::Payload(PayloadError::Overflow)
         ));
 
-        let mut req = TestResponse::default()
+        let req = TestResponse::default()
             .header(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static("application/json"),
@@ -508,7 +518,7 @@ mod tests {
             .set_payload(Bytes::from_static(b"{\"name\": \"test\"}"))
             .finish();
 
-        let json = JsonBody::<MyObject>::new(&mut req).await;
+        let json = JsonBody::<MyObject>::new(&req).await;
         assert_eq!(
             json.ok().unwrap(),
             MyObject {

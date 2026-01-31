@@ -89,7 +89,7 @@ async fn test_body() {
     })
     .await;
 
-    let mut response = srv.get("/").send().await.unwrap();
+    let response = srv.get("/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -109,7 +109,7 @@ async fn test_body_gzip() {
     })
     .await;
 
-    let mut response = srv
+    let response = srv
         .get("/")
         .no_decompress()
         .header(ACCEPT_ENCODING, "gzip")
@@ -139,7 +139,7 @@ async fn test_body_gzip2() {
     })
     .await;
 
-    let mut response = srv
+    let response = srv
         .get("/")
         .no_decompress()
         .header(ACCEPT_ENCODING, "gzip")
@@ -180,7 +180,7 @@ async fn test_body_encoding_override() {
     .await;
 
     // Builder
-    let mut response = srv
+    let response = srv
         .get("/")
         .no_decompress()
         .header(ACCEPT_ENCODING, "deflate")
@@ -199,7 +199,7 @@ async fn test_body_encoding_override() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 
     // Raw Response
-    let mut response = srv
+    let response = srv
         .request(Method::GET, srv.url("/raw"))
         .no_decompress()
         .header(ACCEPT_ENCODING, "deflate")
@@ -233,7 +233,7 @@ async fn test_body_gzip_large() {
     })
     .await;
 
-    let mut response = srv
+    let response = srv
         .get("/")
         .no_decompress()
         .header(ACCEPT_ENCODING, "gzip")
@@ -271,7 +271,7 @@ async fn test_body_gzip_large_random() {
     })
     .await;
 
-    let mut response = srv
+    let response = srv
         .get("/")
         .no_decompress()
         .header(ACCEPT_ENCODING, "gzip")
@@ -303,7 +303,7 @@ async fn test_body_chunked_implicit() {
     })
     .await;
 
-    let mut response = srv
+    let response = srv
         .get("/")
         .no_decompress()
         .header(ACCEPT_ENCODING, "gzip")
@@ -338,7 +338,7 @@ async fn test_head_binary() {
     })
     .await;
 
-    let mut response = srv.head("/").send().await.unwrap();
+    let response = srv.head("/").send().await.unwrap();
     assert!(response.status().is_success());
 
     {
@@ -363,7 +363,7 @@ async fn test_no_chunking() {
     })
     .await;
 
-    let mut response = srv.get("/").send().await.unwrap();
+    let response = srv.get("/").send().await.unwrap();
     assert!(response.status().is_success());
     assert!(!response.headers().contains_key(TRANSFER_ENCODING));
 
@@ -385,7 +385,7 @@ async fn test_body_deflate() {
     .await;
 
     // client request
-    let mut response = srv
+    let response = srv
         .get("/")
         .header(ACCEPT_ENCODING, "deflate")
         .no_decompress()
@@ -423,7 +423,7 @@ async fn test_encoding() {
         .post("/")
         .header(CONTENT_ENCODING, "gzip")
         .send_body(enc.clone());
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -449,7 +449,7 @@ async fn test_gzip_encoding() {
         .post("/")
         .header(CONTENT_ENCODING, "gzip")
         .send_body(enc.clone());
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -476,7 +476,7 @@ async fn test_gzip_encoding_large() {
         .post("/")
         .header(CONTENT_ENCODING, "gzip")
         .send_body(enc.clone());
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -508,7 +508,7 @@ async fn test_reading_gzip_encoding_large_random() {
         .post("/")
         .header(CONTENT_ENCODING, "gzip")
         .send_body(enc.clone());
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -535,7 +535,7 @@ async fn test_reading_deflate_encoding() {
         .post("/")
         .header(CONTENT_ENCODING, "deflate")
         .send_body(enc.clone());
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -562,7 +562,7 @@ async fn test_reading_deflate_encoding_large() {
         .post("/")
         .header(CONTENT_ENCODING, "deflate")
         .send_body(enc.clone());
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -594,7 +594,7 @@ async fn test_reading_deflate_encoding_large_random() {
         .post("/")
         .header(CONTENT_ENCODING, "deflate")
         .send_body(enc.clone());
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -636,7 +636,7 @@ async fn test_reading_deflate_encoding_large_random_rustls() {
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
-    let mut response = req.await.unwrap();
+    let response = req.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -678,7 +678,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h1() {
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
-    let mut response = req.await.unwrap();
+    let response = req.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -720,7 +720,7 @@ async fn test_reading_deflate_encoding_large_random_rustls_h2() {
         .header(CONTENT_ENCODING, "deflate")
         .send_stream(TestBody::new(Bytes::from(enc), 1024));
 
-    let mut response = req.await.unwrap();
+    let response = req.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -852,7 +852,7 @@ async fn test_custom_error() {
     })
     .await;
 
-    let mut response = srv.get("/").send().await.unwrap();
+    let response = srv.get("/").send().await.unwrap();
     assert!(response.status().is_success());
 
     let len = response.headers().get(CONTENT_LENGTH).unwrap();
@@ -941,7 +941,7 @@ async fn web_no_ws_with_response_payload() {
         .build(SharedCfg::default())
         .await
         .unwrap();
-    let mut response = client
+    let response = client
         .request(Method::GET, format!("http://{:?}/f", srv.addr()))
         .header("sec-websocket-version", "13")
         .header("upgrade", "websocket")
@@ -953,7 +953,7 @@ async fn web_no_ws_with_response_payload() {
     let body = response.body().await.unwrap();
     assert_eq!(body, STR);
 
-    let mut response = client
+    let response = client
         .request(Method::GET, format!("http://{:?}/", srv.addr()))
         .header("sec-websocket-version", "13")
         .header("upgrade", "websocket")

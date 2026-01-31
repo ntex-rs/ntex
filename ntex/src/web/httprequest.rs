@@ -1,10 +1,9 @@
-use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
+use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
 
 use crate::http::{
     HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
 };
-use crate::io::{IoRef, types};
-use crate::{Cfg, router::Path, util::Extensions};
+use crate::{Cfg, io::IoRef, io::types, router::Path, util::Extensions};
 
 use super::config::WebAppConfig;
 use super::error::ErrorRenderer;
@@ -23,7 +22,6 @@ pub(crate) struct HttpRequestInner {
     pub(crate) payload: Payload,
     pub(crate) app_state: AppState,
     rmap: Rc<ResourceMap>,
-    pool: &'static HttpRequestPool,
 }
 
 impl HttpRequest {
@@ -34,7 +32,6 @@ impl HttpRequest {
         payload: Payload,
         rmap: Rc<ResourceMap>,
         app_state: AppState,
-        pool: &'static HttpRequestPool,
     ) -> HttpRequest {
         HttpRequest(Rc::new(HttpRequestInner {
             head,
@@ -42,7 +39,6 @@ impl HttpRequest {
             payload,
             app_state,
             rmap,
-            pool,
         }))
     }
 }
@@ -244,14 +240,8 @@ impl HttpMessage for HttpRequest {
 
 impl Drop for HttpRequest {
     fn drop(&mut self) {
-        if let Some(inner) = Rc::get_mut(&mut self.0) {
-            let v = &mut inner.pool.0.borrow_mut();
-            if v.len() < 128 {
-                inner.head.remove_io();
-                self.extensions_mut().clear();
-                v.push(self.0.clone());
-            }
-        }
+        let cfg = *self.0.app_state.config();
+        cfg.put_request(&mut self.0);
     }
 }
 
@@ -306,28 +296,10 @@ impl fmt::Debug for HttpRequest {
     }
 }
 
-/// Request's objects pool
-pub(crate) struct HttpRequestPool(RefCell<Vec<Rc<HttpRequestInner>>>);
-
-impl HttpRequestPool {
-    pub(crate) fn create() -> &'static HttpRequestPool {
-        let pool = HttpRequestPool(RefCell::new(Vec::with_capacity(128)));
-        Box::leak(Box::new(pool))
-    }
-
-    /// Get message from the pool
-    #[inline]
-    pub(crate) fn get_request(&self) -> Option<HttpRequest> {
-        self.0.borrow_mut().pop().map(HttpRequest)
-    }
-
-    pub(crate) fn clear(&self) {
-        self.0.borrow_mut().clear()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
     use crate::http::{StatusCode, header};
     use crate::router::ResourceDef;

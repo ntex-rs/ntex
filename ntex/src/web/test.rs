@@ -25,7 +25,7 @@ use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{Service, ServiceFactory, SharedCfg, io::IoConfig, rt::System, server::Server};
 
 use crate::web::error::{DefaultError, ErrorRenderer};
-use crate::web::httprequest::{HttpRequest, HttpRequestPool};
+use crate::web::httprequest::HttpRequest;
 use crate::web::rmap::ResourceMap;
 use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 use crate::web::{config::WebAppConfig, service::AppState};
@@ -480,7 +480,6 @@ impl TestRequest {
             payload,
             Rc::new(self.rmap),
             app_state,
-            HttpRequestPool::create(),
         ))
     }
 
@@ -495,14 +494,7 @@ impl TestRequest {
         *self.path.get_mut() = head.uri.clone();
         let app_state = AppState::new(self.app_state, None, self.config.get());
 
-        HttpRequest::new(
-            self.path,
-            head,
-            payload,
-            Rc::new(self.rmap),
-            app_state,
-            HttpRequestPool::create(),
-        )
+        HttpRequest::new(self.path, head, payload, Rc::new(self.rmap), app_state)
     }
 
     /// Complete request creation and generate `HttpRequest` and `Payload` instances
@@ -517,7 +509,6 @@ impl TestRequest {
             Payload::None,
             Rc::new(self.rmap),
             app_state,
-            HttpRequestPool::create(),
         );
 
         (req, payload)
@@ -905,10 +896,7 @@ impl TestServer {
     }
 
     /// Load response's body
-    pub async fn load_body(
-        &self,
-        mut response: ClientResponse,
-    ) -> Result<Bytes, PayloadError> {
+    pub async fn load_body(&self, response: ClientResponse) -> Result<Bytes, PayloadError> {
         response.body().limit(10_485_760).await
     }
 

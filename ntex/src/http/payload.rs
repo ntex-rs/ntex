@@ -109,5 +109,10 @@ mod tests {
             )
             .contains("Payload::Stream")
         );
+
+        assert_eq!(
+            std::mem::size_of::<Payload>(),
+            std::mem::size_of::<Option<Payload>>()
+        );
     }
 }

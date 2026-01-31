@@ -1,5 +1,11 @@
 # Changes
 
+## [3.0.0] 2026-02-xx
+
+* Remove the need for mut in h2::Payload
+
+* Remove the need for mut in ClientResponse::json() and ClientResponse::body()
+
 ## [3.0.0-pre.15] 2026-01-29
 
 * Use ntex_dispatcher::Dispatcher instead of ntex-io

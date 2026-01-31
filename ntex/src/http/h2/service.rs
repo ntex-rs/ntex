@@ -401,7 +401,7 @@ where
                     self.io.tag(),
                     stream.id()
                 );
-                if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
+                if let Some(sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     match item {
                         h2::StreamEof::Data(data) => {
                             sender.feed_eof(data);
@@ -416,7 +416,7 @@ where
             }
             h2::MessageKind::Disconnect(err) => {
                 log::debug!("{}: Connection is disconnected {err:?}", self.io.tag(),);
-                if let Some(mut sender) = self.streams.borrow_mut().remove(&stream.id()) {
+                if let Some(sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     sender.set_error(
                         io::Error::new(io::ErrorKind::UnexpectedEof, err).into(),
                     );

@@ -46,14 +46,14 @@ async fn test_simple() {
     .await;
 
     let request = srv.get("/").header("x-test", "111").send();
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
-    let mut response = srv.post("/").timeout(Seconds(30)).send().await.unwrap();
+    let response = srv.post("/").timeout(Seconds(30)).send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -74,7 +74,7 @@ async fn test_freeze() {
     let request = srv.get("/").header("x-test", "111").freeze().unwrap();
 
     // send one request
-    let mut response = request.send().await.unwrap();
+    let response = request.send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -82,7 +82,7 @@ async fn test_freeze() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
     // send one request
-    let mut response = request.send().await.unwrap();
+    let response = request.send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -90,7 +90,7 @@ async fn test_freeze() {
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
     // send one request
-    let mut response = request.extra_header("x-test2", "222").send().await.unwrap();
+    let response = request.extra_header("x-test2", "222").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -350,7 +350,7 @@ async fn test_connection_wait_queue() {
 
     // req 1
     let request = client.get(srv.url("/")).send();
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // req 2
@@ -397,7 +397,7 @@ async fn test_connection_wait_queue_force_close() {
 
     // req 1
     let request = client.get(srv.url("/")).send();
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // req 2
@@ -452,7 +452,7 @@ async fn test_no_decompress() {
         .await
         .unwrap();
 
-    let mut res = client
+    let res = client
         .get(srv.url("/"))
         .no_decompress()
         .send()
@@ -469,7 +469,7 @@ async fn test_no_decompress() {
     assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
 
     // POST
-    let mut res = client
+    let res = client
         .post(srv.url("/"))
         .no_decompress()
         .send()
@@ -500,7 +500,7 @@ async fn test_client_gzip_encoding() {
     .await;
 
     // client request
-    let mut response = srv.post("/").send().await.unwrap();
+    let response = srv.post("/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -524,7 +524,7 @@ async fn test_client_gzip_encoding_large() {
     .await;
 
     // client request
-    let mut response = srv.post("/").send().await.unwrap();
+    let response = srv.post("/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -555,7 +555,7 @@ async fn test_client_gzip_encoding_large_random() {
     .await;
 
     // client request
-    let mut response = srv.post("/").send_body(data.clone()).await.unwrap();
+    let response = srv.post("/").send_body(data.clone()).await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -579,7 +579,7 @@ async fn test_client_deflate_encoding() {
     .await;
 
     // client request
-    let mut response = srv.post("/").send_body(STR).await.unwrap();
+    let response = srv.post("/").send_body(STR).await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -609,7 +609,7 @@ async fn test_client_deflate_encoding_large_random() {
     .await;
 
     // client request
-    let mut response = srv.post("/").send_body(data.clone()).await.unwrap();
+    let response = srv.post("/").send_body(data.clone()).await.unwrap();
     assert!(response.status().is_success());
 
     // read response
@@ -729,7 +729,7 @@ async fn client_read_until_eof() {
         .await
         .unwrap()
         .get(format!("http://{addr}/").as_str());
-    let mut response = req.send().await.unwrap();
+    let response = req.send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response
