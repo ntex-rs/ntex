@@ -61,7 +61,7 @@ where
 /// Start websocket service handling Frame messages with automatic control/stop logic,
 /// including the chosen subprotocol in the response.
 ///
-/// If `protocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
+/// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. If `None`, the header is omitted.
 ///
 /// # Example
@@ -72,7 +72,7 @@ where
 ///
 /// async fn handler(req: HttpRequest) -> Result<HttpResponse, web::Error> {
 ///     // Note: convert to owned String since `req` will be moved
-///     let chosen: Option<String> = ws::protocols(&req)
+///     let chosen: Option<String> = ws::subprotocols(&req)
 ///         .find(|p| *p == "graphql-ws" || *p == "graphql-transport-ws")
 ///         .map(String::from);
 ///
@@ -140,11 +140,11 @@ where
 /// Start websocket service handling raw DispatchItem messages requiring manual control/stop logic,
 /// including the chosen subprotocol in the response.
 ///
-/// If `protocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
+/// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. If `None`, the header is omitted.
 pub async fn start_using_subprotocol_with<T, F, P, Err>(
     req: HttpRequest,
-    protocol: Option<P>,
+    subprotocol: Option<P>,
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
@@ -159,7 +159,7 @@ where
 
     // ws handshake
     let mut res = handshake(req.head())?;
-    if let Some(protocol) = protocol {
+    if let Some(protocol) = subprotocol {
         res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol.as_ref());
     }
     let res = res.finish().into_parts().0;
