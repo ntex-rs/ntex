@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
-use crate::http::{StatusCode, body::BodySize, h1};
+use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
     IntoServiceFactory, ServiceFactory, chain_factory, fn_factory_with_config, fn_service,
