@@ -18,7 +18,7 @@ thread_local! {
         .into();
 }
 
-/// Do websocket handshake and start websockets service.
+/// Start websocket service handling Frame messages with automatic control/stop logic.
 pub async fn start<T, F, Err>(req: HttpRequest, factory: F) -> Result<HttpResponse, Err>
 where
     T: ServiceFactory<Frame, WsSink, Response = Option<Message>> + 'static,
@@ -57,7 +57,7 @@ where
     start_with(req, factory).await
 }
 
-/// Do websocket handshake and start websockets service.
+/// Start websocket service handling raw DispatchItem messages requiring manual control/stop logic.
 pub async fn start_with<T, F, Err>(
     req: HttpRequest,
     factory: F,
