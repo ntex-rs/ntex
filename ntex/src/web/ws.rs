@@ -29,7 +29,7 @@ thread_local! {
 ///
 /// async fn handler(req: HttpRequest) -> Result<HttpResponse, web::Error> {
 ///     // Note: convert to owned String since `req` will be moved
-///     let chosen: Option<String> = ws::protocols(&req)
+///     let chosen: Option<String> = ws::subprotocols(&req)
 ///         .find(|p| *p == "my-subprotocol")
 ///         .map(String::from);
 ///
