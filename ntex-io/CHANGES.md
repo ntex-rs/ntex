@@ -1,6 +1,8 @@
 # Changes
 
-## [3.7.0] - 2026-01-xx
+## [3.7.0] - 2026-01-31
+
+* Fix BufferCfg::resize_min()
 
 * Drop Dispatcher
 
