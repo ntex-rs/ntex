@@ -18,7 +18,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@nextest
 
       - name: Install ${{ matrix.version }}
@@ -32,22 +32,22 @@ jobs:
           command: generate-lockfile
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v1.0.1
+        uses: Swatinem/rust-cache@v2.8.2
 
       - name: Cache vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\vcpkg\installed\
           key: x86_64-pc-windows-msvc-openssl
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/registry
           key: ${{ matrix.version }}-x86_64-pc-windows-msvc-cargo-registry-trimmed-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo index
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/git
           key: ${{ matrix.version }}-x86_64-pc-windows-msvc-cargo-index-trimmed-${{ hashFiles('**/Cargo.lock') }}
@@ -59,7 +59,7 @@ jobs:
         uses: ilammy/setup-nasm@v1
 
       - name: Cache openssl
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\vcpkg\installed\x64-windows\
           key: x86_64-openssl

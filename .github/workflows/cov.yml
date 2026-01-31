@@ -8,7 +8,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: jlumbroso/free-disk-space@main
       - uses: taiki-e/install-action@nextest
 
@@ -24,7 +24,7 @@ jobs:
           command: generate-lockfile
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v1.0.1
+        uses: Swatinem/rust-cache@v2.8.2
 
       - name: Clean coverage results
         run: cargo +nightly llvm-cov clean --workspace
@@ -45,7 +45,7 @@ jobs:
         run: cargo +nightly llvm-cov report --doctests --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
