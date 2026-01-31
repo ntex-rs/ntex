@@ -218,7 +218,7 @@ impl Encoder for ClientCodec {
             Message::Chunk(Some(bytes)) => {
                 self.inner
                     .encoder
-                    .encode_chunk(bytes.as_ref(), dst, &self.inner.cfg)?;
+                    .encode_chunk(bytes.as_ref(), dst, self.inner.cfg)?;
             }
             Message::Chunk(None) => {
                 self.inner.encoder.encode_eof(dst)?;

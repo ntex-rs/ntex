@@ -370,7 +370,7 @@ impl TransferEncoding {
         &mut self,
         msg: &[u8],
         buf: &mut BytesMut,
-        cfg: &'static IoConfig,
+        cfg: &IoConfig,
     ) -> Result<bool, EncodeError> {
         match self.kind {
             TransferEncodingKind::Eof => {
@@ -598,8 +598,16 @@ mod tests {
         let mut bytes = BytesMut::new();
         let mut enc = TransferEncoding::chunked();
         {
-            assert!(!enc.encode(b"test", &mut bytes).ok().unwrap());
-            assert!(enc.encode(b"", &mut bytes).ok().unwrap());
+            assert!(
+                !enc.encode(b"test", &mut bytes, &IoConfig::default())
+                    .ok()
+                    .unwrap()
+            );
+            assert!(
+                enc.encode(b"", &mut bytes, &IoConfig::default())
+                    .ok()
+                    .unwrap()
+            );
         }
         assert_eq!(bytes.take(), Bytes::from_static(b"4\r\ntest\r\n0\r\n\r\n"));
     }
@@ -628,6 +636,7 @@ mod tests {
             Version::HTTP_11,
             BodySize::Empty,
             ConnectionType::Close,
+            &IoConfig::default(),
         );
         let data = String::from_utf8(Vec::from(bytes.take().as_ref())).unwrap();
         assert!(data.contains("content-length: 0\r\n"));

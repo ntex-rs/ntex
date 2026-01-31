@@ -171,7 +171,7 @@ impl Encoder for Codec {
                     self.version.get(),
                     length,
                     self.ctype.get(),
-                    &self.cfg,
+                    self.cfg,
                 )?;
                 // self.headers_size = (dst.len() - len) as u32;
             }
@@ -190,11 +190,11 @@ impl Encoder for Codec {
 mod tests {
     use super::*;
     use crate::http::{HttpMessage, h1::PayloadItem};
-    use crate::util::Bytes;
+    use crate::{SharedCfg, util::Bytes};
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
-        let codec = Codec::default();
+        let codec = Codec::new(true, SharedCfg::default().get::<IoConfig>().into_static());
         assert!(format!("{codec:?}").contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
@@ -231,7 +231,8 @@ mod tests {
         assert_eq!(*req.method(), Method::POST);
         assert!(req.chunked().unwrap());
 
-        let codec = Codec::default();
+        let codec = Codec::new(true, SharedCfg::default().get::<IoConfig>().into_static());
+
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
              connection: upgrade\r\n\r\n",
