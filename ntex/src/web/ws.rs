@@ -36,7 +36,7 @@ thread_local! {
 ///     ws::start_using_subprotocol(req, chosen, factory).await
 /// }
 /// ```
-pub fn protocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
+pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
     req.headers()
         .get_all(header::SEC_WEBSOCKET_PROTOCOL)
         .flat_map(|val| {

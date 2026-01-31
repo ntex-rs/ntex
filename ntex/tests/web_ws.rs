@@ -177,7 +177,7 @@ async fn web_ws_subprotocol() {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // choose first supported protocol, convert to owned String
-                let protocol: Option<String> = ws::protocols(&req)
+                let protocol: Option<String> = ws::subprotocols(&req)
                     .find(|p| *p == "my-subprotocol" || *p == "others-subprotocol")
                     .map(String::from);
 
@@ -226,7 +226,7 @@ async fn web_ws_subprotocol_none() {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // choose first supported protocol (none will match), convert to owned String
-                let protocol: Option<String> = ws::protocols(&req)
+                let protocol: Option<String> = ws::subprotocols(&req)
                     .find(|p| *p == "unsupported")
                     .map(String::from);
 
@@ -276,7 +276,7 @@ async fn web_ws_protocols_parsing() {
             |req: HttpRequest| async move {
                 // collect all requested protocols into owned Strings
                 let protocols: Vec<String> =
-                    ws::protocols(&req).map(String::from).collect();
+                    ws::subprotocols(&req).map(String::from).collect();
 
                 // choose based on priority
                 let protocol = protocols
