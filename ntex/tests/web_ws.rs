@@ -100,7 +100,7 @@ async fn web_no_ws_2() {
     })
     .await;
 
-    let mut response = srv
+    let response = srv
         .get("/")
         .no_decompress()
         .header("test", "h2c")

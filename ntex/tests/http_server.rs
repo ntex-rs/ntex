@@ -519,7 +519,7 @@ async fn test_h1_headers() {
     let data = STR.repeat(10);
     let data2 = data.clone();
 
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         let data = data.clone();
         HttpService::h1(move |_| {
             let mut builder = Response::Ok();
@@ -582,7 +582,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 
 #[ntex::test]
 async fn test_h1_body() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
@@ -597,7 +597,7 @@ async fn test_h1_body() {
 
 #[ntex::test]
 async fn test_h1_head_empty() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
     })
     .await;
@@ -617,7 +617,7 @@ async fn test_h1_head_empty() {
 
 #[ntex::test]
 async fn test_h1_head_binary() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::h1(|_| {
             Ready::Ok::<_, io::Error>(
                 Response::Ok().content_length(STR.len() as u64).body(STR),
@@ -657,7 +657,7 @@ async fn test_h1_head_binary2() {
 
 #[ntex::test]
 async fn test_h1_body_length() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::h1(|_| {
             let body = once(Ready::Ok(Bytes::from_static(STR.as_ref())));
             Ready::Ok::<_, io::Error>(
@@ -677,7 +677,7 @@ async fn test_h1_body_length() {
 
 #[ntex::test]
 async fn test_h1_body_chunked_explicit() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::h1(|_| {
             let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
             Ready::Ok::<_, io::Error>(
@@ -710,7 +710,7 @@ async fn test_h1_body_chunked_explicit() {
 
 #[ntex::test]
 async fn test_h1_body_chunked_implicit() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::h1(|_| {
             let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
             Ready::Ok::<_, io::Error>(Response::Ok().streaming(body))
@@ -737,7 +737,7 @@ async fn test_h1_body_chunked_implicit() {
 
 #[ntex::test]
 async fn test_h1_response_http_error_handling() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::h1(fn_service(|_| {
             let broken_header = Bytes::from_static(b"\0\0\0");
             Ready::Ok::<_, io::Error>(
@@ -759,7 +759,7 @@ async fn test_h1_response_http_error_handling() {
 
 #[ntex::test]
 async fn test_h1_service_error() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::h1(|_| {
             future::err::<Response, _>(error::InternalError::default(
                 "error",

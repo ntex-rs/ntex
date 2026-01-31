@@ -21,7 +21,14 @@ where
     S: Stream<Item = Result<Bytes, PayloadError>>,
 {
     let body = stream
-        .map(|res| if let Ok(chunk) = res { chunk } else { panic!() })
+        .map(|res| {
+            if let Ok(chunk) = res {
+                chunk
+            } else {
+                println!("======== {res:?}");
+                panic!()
+            }
+        })
         .fold(BytesMut::new(), move |mut body, chunk| async move {
             body.extend_from_slice(&chunk);
             body
@@ -115,7 +122,7 @@ async fn test_h2_1() -> io::Result<()> {
 #[ntex::test]
 async fn test_h2_body() -> io::Result<()> {
     let data = "HELLOWORLD".to_owned().repeat(64 * 1024);
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         HttpService::h2(|mut req: Request| async move {
             let body = load_body(req.take_payload())
                 .await
@@ -187,7 +194,7 @@ async fn test_h2_headers() {
     let data = STR.repeat(10);
     let data2 = data.clone();
 
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         let data = data.clone();
         HttpService::h2(move |_| {
             let mut builder = Response::Ok();
@@ -247,7 +254,7 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
 
 #[ntex::test]
 async fn test_h2_body2() {
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         HttpService::h2(|_| async { Ok::<_, io::Error>(Response::Ok().body(STR)) })
             .openssl(ssl_acceptor())
             .map_err(|_| ())
@@ -264,7 +271,7 @@ async fn test_h2_body2() {
 
 #[ntex::test]
 async fn test_h2_head_empty() {
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         HttpService::new(|_| async { Ok::<_, io::Error>(Response::Ok().body(STR)) })
             .openssl(ssl_acceptor())
             .map_err(|_| ())
@@ -287,7 +294,7 @@ async fn test_h2_head_empty() {
 
 #[ntex::test]
 async fn test_h2_head_binary() {
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         HttpService::h2(|_| async {
             Ok::<_, io::Error>(Response::Ok().content_length(STR.len() as u64).body(STR))
         })
@@ -330,7 +337,7 @@ async fn test_h2_head_binary2() {
 
 #[ntex::test]
 async fn test_h2_body_length() {
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         HttpService::h2(|_| async {
             let body = once(Ready::Ok(Bytes::from_static(STR.as_ref())));
             Ok::<_, io::Error>(
@@ -352,7 +359,7 @@ async fn test_h2_body_length() {
 
 #[ntex::test]
 async fn test_h2_body_chunked_explicit() {
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         HttpService::h2(|_| {
             let body = once(Ready::Ok::<_, io::Error>(Bytes::from_static(STR.as_ref())));
             Ready::Ok::<_, io::Error>(
@@ -379,7 +386,7 @@ async fn test_h2_body_chunked_explicit() {
 
 #[ntex::test]
 async fn test_h2_response_http_error_handling() {
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         HttpService::h2(fn_service(|_| {
             let broken_header = Bytes::from_static(b"\0\0\0");
             Ready::Ok::<_, io::Error>(
@@ -403,7 +410,7 @@ async fn test_h2_response_http_error_handling() {
 
 #[ntex::test]
 async fn test_h2_service_error() {
-    let mut srv = test_server(async move || {
+    let srv = test_server(async move || {
         HttpService::h2(|_| {
             Ready::Err::<Response, _>(InternalError::default(
                 "error",
@@ -486,7 +493,7 @@ async fn test_ssl_handshake_timeout() {
 
 #[ntex::test]
 async fn test_ws_transport() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
             .h1_control(|req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {

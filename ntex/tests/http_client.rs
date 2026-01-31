@@ -38,14 +38,14 @@ async fn test_h1_v2() {
     assert!(response.status().is_success());
 
     let request = srv.request(Method::GET, "/").header("x-test", "111").send();
-    let mut response = request.await.unwrap();
+    let response = request.await.unwrap();
     assert!(response.status().is_success());
 
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 
-    let mut response = srv.request(Method::POST, "/").send().await.unwrap();
+    let response = srv.request(Method::POST, "/").send().await.unwrap();
     assert!(response.status().is_success());
 
     // read response

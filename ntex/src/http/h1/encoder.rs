@@ -7,7 +7,7 @@ use crate::http::error::EncodeError;
 use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
 use crate::http::message::{ConnectionType, RequestHeadType};
 use crate::http::{HeaderMap, Response, StatusCode, Version, helpers};
-use crate::util::{BufMut, BytesMut};
+use crate::{io::IoConfig, util::BufMut, util::BytesMut};
 
 #[derive(Debug)]
 pub(super) struct MessageEncoder<T: MessageType> {
@@ -53,6 +53,7 @@ pub(super) trait MessageType: Sized {
         version: Version,
         mut length: BodySize,
         ctype: ConnectionType,
+        cfg: &IoConfig,
     ) -> Result<(), EncodeError> {
         let chunked = self.chunked();
         let mut skip_len = length != BodySize::Stream;
@@ -132,7 +133,7 @@ pub(super) trait MessageType: Sized {
                         if len > remaining {
                             dst.advance_mut(pos);
                             pos = 0;
-                            dst.reserve(len + len);
+                            cfg.write_buf().resize_min(dst, len + len);
                             remaining = dst.remaining_mut();
                             buf = dst.chunk_mut().as_mut_ptr();
                         }
@@ -159,7 +160,7 @@ pub(super) trait MessageType: Sized {
                             if len > remaining {
                                 dst.advance_mut(pos);
                                 pos = 0;
-                                dst.reserve(len + len);
+                                cfg.write_buf().resize_min(dst, len + len);
                                 remaining = dst.remaining_mut();
                                 buf = dst.chunk_mut().as_mut_ptr();
                             }
@@ -264,9 +265,10 @@ impl<T: MessageType> MessageEncoder<T> {
         &self,
         msg: &[u8],
         buf: &mut BytesMut,
+        cfg: &'static IoConfig,
     ) -> Result<bool, EncodeError> {
         let mut te = self.te.get();
-        let result = te.encode(msg, buf);
+        let result = te.encode(msg, buf, cfg);
         self.te.set(te);
         result
     }
@@ -288,6 +290,7 @@ impl<T: MessageType> MessageEncoder<T> {
         version: Version,
         length: BodySize,
         ctype: ConnectionType,
+        cfg: &IoConfig,
     ) -> Result<(), EncodeError> {
         // transfer encoding
         if !head {
@@ -308,7 +311,7 @@ impl<T: MessageType> MessageEncoder<T> {
         }
 
         message.encode_status(dst)?;
-        message.encode_headers(dst, version, length, ctype)
+        message.encode_headers(dst, version, length, ctype, cfg)
     }
 }
 
@@ -367,6 +370,7 @@ impl TransferEncoding {
         &mut self,
         msg: &[u8],
         buf: &mut BytesMut,
+        cfg: &IoConfig,
     ) -> Result<bool, EncodeError> {
         match self.kind {
             TransferEncodingKind::Eof => {
@@ -387,7 +391,7 @@ impl TransferEncoding {
                     writeln!(helpers::Writer(buf), "{:X}\r", msg.len())
                         .map_err(EncodeError::Fmt)?;
 
-                    buf.reserve(msg.len() + 2);
+                    cfg.write_buf().resize_min(buf, msg.len() + 2);
                     buf.extend_from_slice(msg);
                     buf.extend_from_slice(b"\r\n");
                     false
@@ -401,6 +405,7 @@ impl TransferEncoding {
                     }
                     let len = cmp::min(remaining, msg.len() as u64);
 
+                    cfg.write_buf().resize_min(buf, len as usize);
                     buf.extend_from_slice(&msg[..len as usize]);
 
                     remaining -= len;
@@ -593,8 +598,16 @@ mod tests {
         let mut bytes = BytesMut::new();
         let mut enc = TransferEncoding::chunked();
         {
-            assert!(!enc.encode(b"test", &mut bytes).ok().unwrap());
-            assert!(enc.encode(b"", &mut bytes).ok().unwrap());
+            assert!(
+                !enc.encode(b"test", &mut bytes, &IoConfig::default())
+                    .ok()
+                    .unwrap()
+            );
+            assert!(
+                enc.encode(b"", &mut bytes, &IoConfig::default())
+                    .ok()
+                    .unwrap()
+            );
         }
         assert_eq!(bytes.take(), Bytes::from_static(b"4\r\ntest\r\n0\r\n\r\n"));
     }
@@ -623,6 +636,7 @@ mod tests {
             Version::HTTP_11,
             BodySize::Empty,
             ConnectionType::Close,
+            &IoConfig::default(),
         );
         let data = String::from_utf8(Vec::from(bytes.take().as_ref())).unwrap();
         assert!(data.contains("content-length: 0\r\n"));

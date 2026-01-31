@@ -30,7 +30,7 @@ async fn main() -> Result<(), SendRequestError> {
         .unwrap();
 
     // Create request builder, configure request and send
-    let mut response = client
+    let response = client
         .get("https://127.0.0.1:8443/")
         .header("User-Agent", "ntex")
         .send()

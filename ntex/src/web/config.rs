@@ -1,8 +1,9 @@
-use std::net::SocketAddr;
+use std::{cell::UnsafeCell, net::SocketAddr, rc::Rc};
 
 use crate::service::cfg::{CfgContext, Configuration};
 use crate::{router::ResourceDef, util::Extensions};
 
+use super::httprequest::{HttpRequest, HttpRequestInner};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
 use super::{DefaultError, ErrorRenderer, resource::Resource, route::Route};
 
@@ -13,6 +14,7 @@ pub struct WebAppConfig {
     host: String,
     addr: SocketAddr,
     config: CfgContext,
+    pool_size: usize,
 }
 
 impl Default for WebAppConfig {
@@ -49,6 +51,7 @@ impl WebAppConfig {
             secure,
             host,
             addr,
+            pool_size: 128,
             config: CfgContext::default(),
         }
     }
@@ -92,6 +95,41 @@ impl WebAppConfig {
     pub fn set_local_addr(mut self, addr: SocketAddr) -> Self {
         self.addr = addr;
         self
+    }
+
+    /// Set size of HttpRequest pool size.
+    ///
+    /// By default pool size is 128.
+    pub fn set_pool_size(mut self, size: usize) -> Self {
+        self.pool_size = size;
+        self
+    }
+
+    /// Get message from the pool
+    pub(crate) fn get_request(&self) -> Option<HttpRequest> {
+        CACHE.with(|cache| {
+            cache.with(self.config.id(), |cache| cache.pop().map(HttpRequest))
+        })
+    }
+
+    /// Put message from the pool
+    pub(crate) fn put_request(&self, req: &mut Rc<HttpRequestInner>) {
+        CACHE.with(|cache| {
+            cache.with(self.config.id(), |cache| {
+                if cache.len() < self.pool_size
+                    && let Some(inner) = Rc::get_mut(req)
+                {
+                    inner.head.remove_io();
+                    inner.head.extensions.borrow_mut().clear();
+                    cache.push(req.clone());
+                }
+            })
+        });
+    }
+
+    /// Get message from the pool
+    pub(crate) fn clear_requests(&self) {
+        CACHE.with(|cache| cache.with(self.config.id(), |cache| cache.clear()));
     }
 }
 
@@ -165,6 +203,35 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
     }
 }
 
+thread_local! {
+    static CACHE: LocalCache = LocalCache::new();
+}
+
+/// Request's objects pool
+struct LocalCache {
+    cache: UnsafeCell<Vec<Vec<Rc<HttpRequestInner>>>>,
+}
+
+impl LocalCache {
+    fn new() -> Self {
+        Self {
+            cache: UnsafeCell::new(Vec::with_capacity(16)),
+        }
+    }
+
+    fn with<F, R>(&self, idx: usize, f: F) -> R
+    where
+        F: FnOnce(&mut Vec<Rc<HttpRequestInner>>) -> R,
+    {
+        let cache = unsafe { &mut *self.cache.get() };
+
+        while cache.len() <= idx {
+            cache.push(Vec::new());
+        }
+        f(&mut cache[idx])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +239,17 @@ mod tests {
     use crate::util::Bytes;
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, App, DefaultError, HttpRequest, HttpResponse};
+
+    #[crate::rt_test]
+    async fn test_webappconfig() {
+        let cfg = WebAppConfig::default()
+            .set_host("www.example.org".to_string())
+            .set_local_addr("127.0.0.1:8080".parse().unwrap())
+            .set_pool_size(256);
+        assert_eq!(cfg.host(), "www.example.org");
+        assert_eq!(cfg.local_addr(), "127.0.0.1:8080".parse().unwrap());
+        assert_eq!(cfg.pool_size, 256);
+    }
 
     #[crate::rt_test]
     async fn test_configure_state() {

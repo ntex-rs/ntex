@@ -81,7 +81,7 @@ async fn service(msg: DispatchItem<ws::Codec>) -> Result<Option<ws::Message>, io
 #[ntex::test]
 async fn test_simple() {
     let ws_service = WsService::new();
-    let mut srv = test::server_with_config(
+    let srv = test::server_with_config(
         {
             let ws_service = ws_service.clone();
             async move || {
@@ -266,7 +266,7 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_transport() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
             move |req: h1::Control<_, _>| {
                 let ack = if let h1::Control::Upgrade(upg) = req {

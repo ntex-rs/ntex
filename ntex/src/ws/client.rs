@@ -161,7 +161,7 @@ where
         let tag = io.tag();
 
         // create Framed and send request
-        let codec = h1::ClientCodec::default();
+        let codec = h1::ClientCodec::new(true, io.cfg());
 
         // send request and read response
         let fut = async {

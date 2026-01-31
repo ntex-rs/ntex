@@ -423,23 +423,20 @@ impl TestServer {
     }
 
     /// Load response's body
-    pub async fn load_body(
-        &mut self,
-        mut response: ClientResponse,
-    ) -> Result<Bytes, PayloadError> {
+    pub async fn load_body(&self, response: ClientResponse) -> Result<Bytes, PayloadError> {
         response.body().limit(10_485_760).await
     }
 
     #[cfg(feature = "ws")]
     /// Connect to a websocket server
-    pub async fn ws(&mut self) -> Result<WsConnection<impl Filter>, WsClientError> {
+    pub async fn ws(&self) -> Result<WsConnection<impl Filter>, WsClientError> {
         self.ws_at("/").await
     }
 
     #[cfg(feature = "ws")]
     /// Connect to websocket server at a given path
     pub async fn ws_at(
-        &mut self,
+        &self,
         path: &str,
     ) -> Result<WsConnection<impl Filter>, WsClientError> {
         WsClient::build(self.url(path))
@@ -455,7 +452,7 @@ impl TestServer {
     #[cfg(all(feature = "openssl", feature = "ws"))]
     /// Connect to a websocket server
     pub async fn wss(
-        &mut self,
+        &self,
     ) -> Result<
         WsConnection<crate::io::Layer<crate::connect::openssl::SslFilter>>,
         WsClientError,
@@ -466,7 +463,7 @@ impl TestServer {
     #[cfg(all(feature = "openssl", feature = "ws"))]
     /// Connect to secure websocket server at a given path
     pub async fn wss_at(
-        &mut self,
+        &self,
         path: &str,
     ) -> Result<
         WsConnection<crate::io::Layer<crate::connect::openssl::SslFilter>>,

@@ -7,7 +7,7 @@ async fn main() -> Result<(), SendRequestError> {
     let client = Client::new().await;
 
     // Create request builder, configure request and send
-    let mut response = client
+    let response = client
         .get("https://www.rust-lang.org/")
         .header("User-Agent", "ntex")
         .send()

@@ -10,7 +10,7 @@ use crate::util::{BoxFuture, Extensions, join};
 
 use super::error::ErrorRenderer;
 use super::guard::Guard;
-use super::httprequest::{HttpRequest, HttpRequestPool};
+use super::httprequest::HttpRequest;
 use super::request::WebRequest;
 use super::response::WebResponse;
 use super::rmap::ResourceMap;
@@ -155,7 +155,6 @@ where
             rmap,
             state,
             service: middleware.create(service, cfg),
-            pool: HttpRequestPool::create(),
             _t: marker::PhantomData,
         })
     }
@@ -170,7 +169,6 @@ where
     service: T,
     rmap: Rc<ResourceMap>,
     state: AppState,
-    pool: &'static HttpRequestPool,
     _t: marker::PhantomData<Err>,
 }
 
@@ -193,7 +191,7 @@ where
     ) -> Result<Self::Response, Self::Error> {
         let (head, payload) = req.into_parts();
 
-        let req = if let Some(mut req) = self.pool.get_request() {
+        let req = if let Some(mut req) = self.state.config().get_request() {
             let inner = Rc::get_mut(&mut req.0).unwrap();
             inner.path.set(head.uri.clone());
             inner.head = head;
@@ -207,7 +205,6 @@ where
                 payload,
                 self.rmap.clone(),
                 self.state.clone(),
-                self.pool,
             )
         };
         ctx.call(&self.service, WebRequest::new(req)).await
@@ -220,7 +217,7 @@ where
     Err: ErrorRenderer,
 {
     fn drop(&mut self) {
-        self.pool.clear();
+        self.state.config().clear_requests();
     }
 }
 

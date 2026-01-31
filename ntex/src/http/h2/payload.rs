@@ -1,7 +1,7 @@
 //! Payload stream
 use std::collections::VecDeque;
 use std::task::{Context, Poll, Waker};
-use std::{cell::RefCell, future::poll_fn, pin::Pin, rc::Rc, rc::Weak};
+use std::{cell::Cell, cell::RefCell, fmt, future::poll_fn, pin::Pin, rc::Rc, rc::Weak};
 
 use ntex_h2::{self as h2};
 
@@ -25,7 +25,7 @@ bitflags::bitflags! {
 /// Payload stream can be used as `Response` body stream.
 #[derive(Debug)]
 pub struct Payload {
-    inner: Rc<RefCell<Inner>>,
+    inner: Rc<Inner>,
 }
 
 impl Payload {
@@ -38,7 +38,7 @@ impl Payload {
     ///
     /// * `Payload` - *Receiver* side of the stream
     pub fn create(cap: h2::Capacity) -> (PayloadSender, Payload) {
-        let shared = Rc::new(RefCell::new(Inner::new(cap)));
+        let shared = Rc::new(Inner::new(cap));
 
         (
             PayloadSender {
@@ -58,15 +58,14 @@ impl Payload {
         &self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, PayloadError>>> {
-        self.inner.borrow_mut().readany(cx)
+        self.inner.readany(cx)
     }
 }
 
 impl Drop for Payload {
     fn drop(&mut self) {
-        let mut inner = self.inner.borrow_mut();
-        inner.io_task.wake();
-        inner.flags.insert(Flags::DROPPED);
+        self.inner.io_task.wake();
+        self.inner.insert_flags(Flags::DROPPED);
     }
 }
 
@@ -77,55 +76,57 @@ impl Stream for Payload {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, PayloadError>>> {
-        self.inner.borrow_mut().readany(cx)
+        self.inner.readany(cx)
     }
 }
 
 #[derive(Debug)]
 /// Sender part of the payload stream
 pub struct PayloadSender {
-    inner: Weak<RefCell<Inner>>,
+    inner: Weak<Inner>,
 }
 
 impl Drop for PayloadSender {
     fn drop(&mut self) {
-        self.set_error(PayloadError::Incomplete(None))
+        if let Some(shared) = self.inner.upgrade()
+            && !shared.flags.get().contains(Flags::EOF)
+        {
+            self.set_error(PayloadError::Incomplete(None))
+        }
     }
 }
 
 impl PayloadSender {
-    pub fn set_error(&mut self, err: PayloadError) {
+    pub fn set_error(&self, err: PayloadError) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.borrow_mut().set_error(err);
-            self.inner = Weak::new();
+            shared.set_error(err);
         }
     }
 
-    pub fn feed_eof(&mut self, data: Bytes) {
+    pub fn feed_eof(&self, data: Bytes) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.borrow_mut().feed_eof(data);
-            self.inner = Weak::new();
+            shared.feed_eof(data);
         }
     }
 
-    pub fn feed_data(&mut self, data: Bytes, cap: h2::Capacity) {
+    pub fn feed_data(&self, data: Bytes, cap: h2::Capacity) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.borrow_mut().feed_data(data, cap)
+            shared.feed_data(data, cap)
         }
     }
 
     pub fn set_stream(&self, stream: Option<h2::Stream>) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.borrow_mut().stream = stream;
+            shared.stream.set(stream);
         }
     }
 
     pub(crate) fn on_cancel(&self, w: &Waker) -> Poll<()> {
         if let Some(shared) = self.inner.upgrade() {
-            if shared.borrow_mut().flags.contains(Flags::DROPPED) {
+            if shared.flags.get().contains(Flags::DROPPED) {
                 Poll::Ready(())
             } else {
-                shared.borrow_mut().io_task.register(w);
+                shared.io_task.register(w);
                 Poll::Pending
             }
         } else {
@@ -134,70 +135,93 @@ impl PayloadSender {
     }
 }
 
-#[derive(Debug)]
 struct Inner {
-    flags: Flags,
-    cap: h2::Capacity,
-    err: Option<PayloadError>,
-    items: VecDeque<Bytes>,
+    flags: Cell<Flags>,
+    cap: Cell<Option<h2::Capacity>>,
+    err: Cell<Option<PayloadError>>,
+    items: RefCell<VecDeque<Bytes>>,
     task: LocalWaker,
     io_task: LocalWaker,
-    stream: Option<h2::Stream>,
+    stream: Cell<Option<h2::Stream>>,
 }
 
 impl Inner {
     fn new(cap: h2::Capacity) -> Self {
         Inner {
-            cap,
-            flags: Flags::empty(),
-            err: None,
-            stream: None,
-            items: VecDeque::new(),
+            cap: Cell::new(Some(cap)),
+            flags: Cell::new(Flags::empty()),
+            err: Cell::new(None),
+            stream: Cell::new(None),
+            items: RefCell::new(VecDeque::new()),
             task: LocalWaker::new(),
             io_task: LocalWaker::new(),
         }
     }
 
-    fn set_error(&mut self, err: PayloadError) {
-        self.err = Some(err);
+    fn insert_flags(&self, f: Flags) {
+        let mut flags = self.flags.get();
+        flags.insert(f);
+        self.flags.set(flags);
+    }
+
+    fn set_error(&self, err: PayloadError) {
+        self.err.set(Some(err));
         self.task.wake()
     }
 
-    fn feed_eof(&mut self, data: Bytes) {
-        self.flags.insert(Flags::EOF);
+    fn feed_eof(&self, data: Bytes) {
+        self.insert_flags(Flags::EOF);
         if !data.is_empty() {
-            self.items.push_back(data);
+            self.items.borrow_mut().push_back(data);
         }
         self.task.wake()
     }
 
-    fn feed_data(&mut self, data: Bytes, cap: h2::Capacity) {
-        self.cap += cap;
-        self.items.push_back(data);
+    fn feed_data(&self, data: Bytes, cap: h2::Capacity) {
+        self.cap.set(Some(self.cap.take().unwrap() + cap));
+        self.items.borrow_mut().push_back(data);
         self.task.wake();
     }
 
-    fn readany(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, PayloadError>>> {
-        if let Some(data) = self.items.pop_front() {
-            if !self.flags.contains(Flags::EOF) {
-                self.cap.consume(data.len() as u32);
+    fn readany(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, PayloadError>>> {
+        if let Some(data) = self.items.borrow_mut().pop_front() {
+            if !self.flags.get().contains(Flags::EOF) {
+                let cap = self.cap.take().unwrap();
+                cap.consume(data.len() as u32);
+                let size = cap.size();
+                self.cap.set(Some(cap));
 
-                if self.cap.size() == 0 {
+                if size == 0 {
                     self.task.register(cx.waker());
                 }
             }
             Poll::Ready(Some(Ok(data)))
         } else if let Some(err) = self.err.take() {
             Poll::Ready(Some(Err(err)))
-        } else if self.flags.contains(Flags::EOF) {
+        } else if self.flags.get().contains(Flags::EOF) {
             Poll::Ready(None)
         } else {
             self.task.register(cx.waker());
             self.io_task.wake();
             Poll::Pending
         }
+    }
+}
+
+impl fmt::Debug for Inner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let cap = self.cap.take().unwrap();
+        let err = self.err.take();
+        let result = f
+            .debug_struct("Inner")
+            .field("flags", &self.flags.get())
+            .field("capacity", &cap)
+            .field("error", &err)
+            .field("items", &self.items.borrow())
+            .finish();
+
+        self.cap.set(Some(cap));
+        self.err.set(err);
+        result
     }
 }

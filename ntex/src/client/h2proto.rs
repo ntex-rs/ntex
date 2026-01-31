@@ -129,7 +129,7 @@ async fn get_response(
                             stream.tag(),
                             stream.id()
                         );
-                        let (mut pl, payload) = H2Payload::create(stream.empty_capacity());
+                        let (pl, payload) = H2Payload::create(stream.empty_capacity());
 
                         let _ = crate::rt::spawn(async move {
                             loop {

@@ -29,7 +29,7 @@ async fn ws_service(
 
 #[ntex::test]
 async fn test_simple() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
             |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
@@ -88,7 +88,7 @@ async fn test_simple() {
 
 #[ntex::test]
 async fn test_transport() {
-    let mut srv = test_server(async || {
+    let srv = test_server(async || {
         HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::NotFound())).h1_control(
             |req: h1::Control<_, _>| async move {
                 let ack = if let h1::Control::Upgrade(upg) = req {
