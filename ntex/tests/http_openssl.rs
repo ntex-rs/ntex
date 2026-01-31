@@ -21,7 +21,14 @@ where
     S: Stream<Item = Result<Bytes, PayloadError>>,
 {
     let body = stream
-        .map(|res| if let Ok(chunk) = res { chunk } else { panic!() })
+        .map(|res| {
+            if let Ok(chunk) = res {
+                chunk
+            } else {
+                println!("======== {res:?}");
+                panic!()
+            }
+        })
         .fold(BytesMut::new(), move |mut body, chunk| async move {
             body.extend_from_slice(&chunk);
             body

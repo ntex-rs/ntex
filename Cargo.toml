@@ -42,7 +42,7 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
-ntex = "3.0.0-pre.15"
+ntex = "3.0.0"
 ntex-bytes = "1.4.1"
 ntex-codec = "1.1.0"
 ntex-io = "3.7.0"

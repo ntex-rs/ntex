@@ -88,7 +88,11 @@ pub struct PayloadSender {
 
 impl Drop for PayloadSender {
     fn drop(&mut self) {
-        self.set_error(PayloadError::Incomplete(None))
+        if let Some(shared) = self.inner.upgrade() {
+            if !shared.flags.get().contains(Flags::EOF) {
+                self.set_error(PayloadError::Incomplete(None))
+            }
+        }
     }
 }
 
