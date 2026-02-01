@@ -4,13 +4,12 @@ use std::{fmt, rc::Rc};
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{body::BodySize, h1, header, StatusCode};
-use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
     apply_fn, chain_factory, fn_factory_with_config, IntoServiceFactory, ServiceFactory,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
-use crate::{rt, time::Seconds, util::Either, util::Ready};
+use crate::{io::DispatchItem, rt, time::Seconds, util::Either, util::Ready};
 
 /// Returns an iterator over the subprotocols requested by the client
 /// in the `Sec-Websocket-Protocol` header.

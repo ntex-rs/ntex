@@ -165,11 +165,10 @@ async fn web_ws_client() {
 
 #[ntex::test]
 async fn web_ws_subprotocol() {
-    use ntex::service::cfg::SharedCfg;
     use ntex::time::Seconds;
     use ntex::ws::WsClient;
 
-    let srv = test::server(async || {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // choose first supported protocol, convert to owned String
@@ -187,16 +186,14 @@ async fn web_ws_subprotocol() {
                 .await
             },
         )))
-    })
-    .await;
+    });
 
     // client requests subprotocol
     let conn = WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["my-subprotocol"])
-        .finish(SharedCfg::default())
-        .await
+        .finish()
         .unwrap()
         .connect()
         .await
@@ -214,11 +211,10 @@ async fn web_ws_subprotocol() {
 
 #[ntex::test]
 async fn web_ws_subprotocol_none() {
-    use ntex::service::cfg::SharedCfg;
     use ntex::time::Seconds;
     use ntex::ws::WsClient;
 
-    let srv = test::server(async || {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // choose first supported protocol (none will match), convert to owned String
@@ -236,16 +232,14 @@ async fn web_ws_subprotocol_none() {
                 .await
             },
         )))
-    })
-    .await;
+    });
 
     // client requests subprotocol that server doesn't support
     let conn = WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["my-subprotocol"])
-        .finish(SharedCfg::default())
-        .await
+        .finish()
         .unwrap()
         .connect()
         .await
@@ -262,11 +256,10 @@ async fn web_ws_subprotocol_none() {
 
 #[ntex::test]
 async fn web_ws_protocols_parsing() {
-    use ntex::service::cfg::SharedCfg;
     use ntex::time::Seconds;
     use ntex::ws::WsClient;
 
-    let srv = test::server(async || {
+    let srv = test::server(|| {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // collect all requested protocols into owned Strings
@@ -290,16 +283,14 @@ async fn web_ws_protocols_parsing() {
                 .await
             },
         )))
-    })
-    .await;
+    });
 
     // client requests multiple protocols (comma-separated)
     let conn = WsClient::build(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["proto1", "proto2"])
-        .finish(SharedCfg::default())
-        .await
+        .finish()
         .unwrap()
         .connect()
         .await

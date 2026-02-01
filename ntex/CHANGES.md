@@ -1,5 +1,9 @@
 # Changes
 
+## [2.18.0] 2026-02-01
+
+* WebSocket subprotocol support #734
+
 ## [2.17.0] 2025-11-12
 
 * Update to compio 0.16
