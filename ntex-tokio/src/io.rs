@@ -257,6 +257,7 @@ pub struct SocketOptions(Weak<RefCell<TcpStream>>);
 
 impl SocketOptions {
     pub fn set_linger(&self, dur: Option<Millis>) -> io::Result<()> {
+        #[allow(deprecated)]
         self.try_self()
             .and_then(|s| s.borrow().set_linger(dur.map(|d| d.into())))
     }
