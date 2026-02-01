@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
-use crate::http::{StatusCode, body::BodySize, h1};
+use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
     IntoServiceFactory, ServiceFactory, chain_factory, fn_factory_with_config, fn_service,
@@ -18,12 +18,77 @@ thread_local! {
         .into();
 }
 
-/// Do websocket handshake and start websockets service.
+/// Returns an iterator over the subprotocols requested by the client
+/// in the `Sec-Websocket-Protocol` header.
+///
+/// # Example
+///
+/// ```ignore
+/// use ntex::web::{self, HttpRequest, HttpResponse};
+/// use ntex::web::ws;
+///
+/// async fn handler(req: HttpRequest) -> Result<HttpResponse, web::Error> {
+///     // Note: convert to owned String since `req` will be moved
+///     let chosen: Option<String> = ws::subprotocols(&req)
+///         .find(|p| *p == "my-subprotocol")
+///         .map(String::from);
+///
+///     ws::start_using_subprotocol(req, chosen, factory).await
+/// }
+/// ```
+pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
+    req.headers()
+        .get_all(header::SEC_WEBSOCKET_PROTOCOL)
+        .flat_map(|val| {
+            val.to_str()
+                .ok()
+                .into_iter()
+                .flat_map(|s| s.split(',').map(str::trim).filter(|s| !s.is_empty()))
+        })
+}
+
+/// Start websocket service handling Frame messages with automatic control/stop logic.
 pub async fn start<T, F, Err>(req: HttpRequest, factory: F) -> Result<HttpResponse, Err>
 where
     T: ServiceFactory<Frame, WsSink, Response = Option<Message>> + 'static,
     T::Error: fmt::Debug,
     F: IntoServiceFactory<T, Frame, WsSink>,
+    Err: From<T::InitError> + From<HandshakeError>,
+{
+    start_using_subprotocol(req, None::<&str>, factory).await
+}
+
+/// Start websocket service handling Frame messages with automatic control/stop logic,
+/// including the chosen subprotocol in the response.
+///
+/// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
+/// in the response with the chosen protocol. If `None`, the header is omitted.
+///
+/// # Example
+///
+/// ```ignore
+/// use ntex::web::{self, HttpRequest, HttpResponse};
+/// use ntex::web::ws;
+///
+/// async fn handler(req: HttpRequest) -> Result<HttpResponse, web::Error> {
+///     // Note: convert to owned String since `req` will be moved
+///     let chosen: Option<String> = ws::subprotocols(&req)
+///         .find(|p| *p == "graphql-ws" || *p == "graphql-transport-ws")
+///         .map(String::from);
+///
+///     ws::start_using_subprotocol(req, chosen, factory).await
+/// }
+/// ```
+pub async fn start_using_subprotocol<T, F, P, Err>(
+    req: HttpRequest,
+    subprotocol: Option<P>,
+    factory: F,
+) -> Result<HttpResponse, Err>
+where
+    T: ServiceFactory<Frame, WsSink, Response = Option<Message>> + 'static,
+    T::Error: fmt::Debug,
+    F: IntoServiceFactory<T, Frame, WsSink>,
+    P: AsRef<str>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
     let inner_factory = Rc::new(chain_factory(factory).map_err(WsError::Service));
@@ -54,10 +119,10 @@ where
         }))
     });
 
-    start_with(req, factory).await
+    start_using_subprotocol_with(req, subprotocol, factory).await
 }
 
-/// Do websocket handshake and start websockets service.
+/// Start websocket service handling raw DispatchItem messages requiring manual control/stop logic.
 pub async fn start_with<T, F, Err>(
     req: HttpRequest,
     factory: F,
@@ -69,10 +134,35 @@ where
     F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
     Err: From<T::InitError> + From<HandshakeError>,
 {
+    start_using_subprotocol_with(req, None::<&str>, factory).await
+}
+
+/// Start websocket service handling raw DispatchItem messages requiring manual control/stop logic,
+/// including the chosen subprotocol in the response.
+///
+/// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
+/// in the response with the chosen protocol. If `None`, the header is omitted.
+pub async fn start_using_subprotocol_with<T, F, P, Err>(
+    req: HttpRequest,
+    subprotocol: Option<P>,
+    factory: F,
+) -> Result<HttpResponse, Err>
+where
+    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
+        + 'static,
+    T::Error: fmt::Debug,
+    F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
+    P: AsRef<str>,
+    Err: From<T::InitError> + From<HandshakeError>,
+{
     log::trace!("Start ws handshake verification for {:?}", req.path());
 
     // ws handshake
-    let res = handshake(req.head())?.finish().into_parts().0;
+    let mut res = handshake(req.head())?;
+    if let Some(protocol) = subprotocol {
+        res.set_header(header::SEC_WEBSOCKET_PROTOCOL, protocol.as_ref());
+    }
+    let res = res.finish().into_parts().0;
 
     // extract io
     let item = req
