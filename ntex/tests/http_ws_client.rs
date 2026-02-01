@@ -203,8 +203,9 @@ async fn test_upgrade_handler_with_await() {
                 // some async context switch
                 ntex::time::sleep(ntex::time::Seconds::ZERO).await;
 
-                web::ws::start::<_, _, web::Error>(
+                web::ws::start::<_, _, _, web::Error>(
                     req,
+                    None::<&str>,
                     fn_factory_with_config(|_| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),

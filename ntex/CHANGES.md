@@ -1,6 +1,6 @@
 # Changes
 
-## [3.0.0] 2026-02-xx
+## [3.0.0] 2026-02-02
 
 * Refactor http control messages
 

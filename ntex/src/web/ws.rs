@@ -47,17 +47,6 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
         })
 }
 
-/// Start websocket service handling Frame messages with automatic control/stop logic.
-pub async fn start<T, F, Err>(req: HttpRequest, factory: F) -> Result<HttpResponse, Err>
-where
-    T: ServiceFactory<Frame, WsSink, Response = Option<Message>> + 'static,
-    T::Error: fmt::Debug,
-    F: IntoServiceFactory<T, Frame, WsSink>,
-    Err: From<T::InitError> + From<HandshakeError>,
-{
-    start_using_subprotocol(req, None::<&str>, factory).await
-}
-
 /// Start websocket service handling Frame messages with automatic control/stop logic,
 /// including the chosen subprotocol in the response.
 ///
@@ -79,7 +68,7 @@ where
 ///     ws::start_using_subprotocol(req, chosen, factory).await
 /// }
 /// ```
-pub async fn start_using_subprotocol<T, F, P, Err>(
+pub async fn start<T, F, P, Err>(
     req: HttpRequest,
     subprotocol: Option<P>,
     factory: F,
@@ -119,22 +108,7 @@ where
         }))
     });
 
-    start_using_subprotocol_with(req, subprotocol, factory).await
-}
-
-/// Start websocket service handling raw DispatchItem messages requiring manual control/stop logic.
-pub async fn start_with<T, F, Err>(
-    req: HttpRequest,
-    factory: F,
-) -> Result<HttpResponse, Err>
-where
-    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
-        + 'static,
-    T::Error: fmt::Debug,
-    F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
-    Err: From<T::InitError> + From<HandshakeError>,
-{
-    start_using_subprotocol_with(req, None::<&str>, factory).await
+    start_with(req, subprotocol, factory).await
 }
 
 /// Start websocket service handling raw DispatchItem messages requiring manual control/stop logic,
@@ -142,7 +116,7 @@ where
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. If `None`, the header is omitted.
-pub async fn start_using_subprotocol_with<T, F, P, Err>(
+pub async fn start_with<T, F, P, Err>(
     req: HttpRequest,
     subprotocol: Option<P>,
     factory: F,
