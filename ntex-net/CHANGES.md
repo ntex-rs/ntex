@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.0] - 2026-02-01
+
+* Update compio to 0.18
+
 ## [3.5.2] - 2026-01-29
 
 * Fix socket close process for polling driver
