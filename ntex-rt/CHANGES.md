@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.0] - 2026-02-01
+
+* Update compio to 0.18
+
 ## [3.5.0] - 2026-01-28
 
 * Use system name for arbiters

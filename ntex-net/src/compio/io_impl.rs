@@ -1,8 +1,8 @@
-use std::{any, future::poll_fn, io, task::Poll};
+use std::{any, future::poll_fn, io, mem, slice, task::Poll};
 
-use compio_buf::{BufResult, IoBuf, IoBufMut, SetBufInit};
+use compio_buf::{BufResult, IoBuf, IoBufMut, SetLen};
 use compio_io::{AsyncRead, AsyncWrite};
-use ntex_bytes::{Buf, BufMut, BytesMut};
+use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use ntex_util::future::{Either, select};
 
@@ -37,31 +37,26 @@ impl Handle for HandleWrapper {
 
 struct CompioBuf(BytesMut);
 
-unsafe impl IoBuf for CompioBuf {
+impl IoBuf for CompioBuf {
     #[inline]
-    fn as_buf_ptr(&self) -> *const u8 {
-        self.0.chunk().as_ptr()
-    }
-
-    #[inline]
-    fn buf_len(&self) -> usize {
-        self.0.len()
-    }
-
-    #[inline]
-    fn buf_capacity(&self) -> usize {
-        self.0.remaining_mut()
+    fn as_init(&self) -> &[u8] {
+        &self.0
     }
 }
 
-unsafe impl IoBufMut for CompioBuf {
-    fn as_buf_mut_ptr(&mut self) -> *mut u8 {
-        self.0.chunk_mut().as_mut_ptr()
+impl IoBufMut for CompioBuf {
+    fn as_uninit(&mut self) -> &mut [mem::MaybeUninit<u8>] {
+        unsafe {
+            slice::from_raw_parts_mut(
+                self.0.chunk_mut().as_mut_ptr() as *mut _,
+                self.0.remaining_mut(),
+            )
+        }
     }
 }
 
-impl SetBufInit for CompioBuf {
-    unsafe fn set_buf_init(&mut self, len: usize) {
+impl SetLen for CompioBuf {
+    unsafe fn set_len(&mut self, len: usize) {
         unsafe {
             self.0.set_len(len + self.0.len());
         }

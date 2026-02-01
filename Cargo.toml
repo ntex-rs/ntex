@@ -129,8 +129,8 @@ url = "2.5.2"
 url-pkg = { version = "2.5.2", package = "url" }
 uuid = { version = "1.19", features = ["v7"] }
 
-compio-buf = "0.7"
-compio-io = "0.8"
-compio-net = "0.10"
-compio-driver = "0.10"
-compio-runtime = "0.10"
+compio-buf = "0.8.0"
+compio-io = "0.9.0"
+compio-net = "0.11.0"
+compio-driver = "0.11.1"
+compio-runtime = "0.11.0"
