@@ -209,7 +209,11 @@ where
                         log::error!("{}: Control plain error: {}", inner.io.tag(), err);
                         return Poll::Ready(Err(Rc::new(err)));
                     }
-                    Poll::Pending => ready!(inner.poll_request(cx)),
+                    Poll::Pending => {
+                        // check for io changes, it could be close while waiting for service call
+                        let _ = inner._poll_request_payload::<F>(None, cx);
+                        return Poll::Pending;
+                    }
                 },
                 // read request and call service
                 State::ReadRequest => {
@@ -718,6 +722,18 @@ where
         }
     }
 
+    fn ctl_upgrade(&mut self, req: Request) -> State<F, C, S, B> {
+        self.codec.reset_upgrade();
+        self.control(Control::upgrade(req, self.io.clone(), self.codec.clone()))
+    }
+
+    fn ctl_keepalive(&mut self, enabled: bool) -> State<F, C, S, B> {
+        self.flags.insert(Flags::DISCONNECT_SENT);
+        State::CallControl {
+            fut: self.config.control.call_nowait(Control::keepalive(enabled)),
+        }
+    }
+
     fn ctl_error(&mut self, err: S::Error) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
@@ -732,28 +748,10 @@ where
         }
     }
 
-    fn ctl_keepalive(&mut self, enabled: bool) -> State<F, C, S, B> {
-        self.flags.insert(Flags::DISCONNECT_SENT);
-        State::CallControl {
-            fut: self.config.control.call_nowait(Control::keepalive(enabled)),
-        }
-    }
-
     fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
             fut: self.config.control.call_nowait(Control::peer_gone(err)),
-        }
-    }
-
-    fn ctl_upgrade(&mut self, req: Request) -> State<F, C, S, B> {
-        self.codec.reset_upgrade();
-        State::CallControl {
-            fut: self.config.control.call_nowait(Control::upgrade(
-                req,
-                self.io.clone(),
-                self.codec.clone(),
-            )),
         }
     }
 

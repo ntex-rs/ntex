@@ -105,13 +105,7 @@ pub mod time {
 pub mod io {
     //! IO streaming utilities.
     pub use ntex_dispatcher::*;
-
-    pub use ntex_io::{
-        Base, Decoded, Filter, FilterCtx, FilterLayer, FilterReadStatus, Flags, Framed,
-        Handle, Io, IoBoxed, IoConfig, IoContext, IoRef, IoStatusUpdate, IoStream,
-        IoTaskStatus, Layer, OnDisconnect, ReadBuf, Readiness, RecvError, Sealed,
-        TimerHandle, WriteBuf, cfg, seal, testing, types,
-    };
+    pub use ntex_io::*;
 }
 
 pub mod testing {
