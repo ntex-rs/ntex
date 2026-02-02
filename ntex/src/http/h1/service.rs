@@ -8,7 +8,7 @@ use crate::io::{Filter, Io, IoRef, types};
 use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 use crate::{SharedCfg, channel::oneshot, util::HashSet, util::join};
 
-use super::control::{Control, ControlAck};
+use super::control::{Control, ControlAck, ControlResult};
 use super::default::DefaultControlService;
 use super::dispatcher::Dispatcher;
 
@@ -56,7 +56,7 @@ mod openssl {
         C: ServiceFactory<
                 Control<Layer<SslFilter, F>, S::Error>,
                 SharedCfg,
-                Response = ControlAck,
+                Response = ControlAck<Layer<SslFilter, F>>,
             > + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
@@ -99,7 +99,7 @@ mod rustls {
         C: ServiceFactory<
                 Control<Layer<TlsServerFilter, F>, S::Error>,
                 SharedCfg,
-                Response = ControlAck,
+                Response = ControlAck<Layer<TlsServerFilter, F>>,
             > + 'static,
         C::Error: Error,
         C::InitError: fmt::Debug,
@@ -131,7 +131,7 @@ where
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
     B: MessageBody,
-    C: ServiceFactory<Control<F, S::Error>, SharedCfg, Response = ControlAck>,
+    C: ServiceFactory<Control<F, S::Error>, SharedCfg, Response = ControlAck<F>>,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -139,7 +139,7 @@ where
     pub fn control<C1, U>(self, ctl: U) -> H1Service<F, S, B, C1>
     where
         U: IntoServiceFactory<C1, Control<F, S::Error>, SharedCfg>,
-        C1: ServiceFactory<Control<F, S::Error>, SharedCfg, Response = ControlAck>,
+        C1: ServiceFactory<Control<F, S::Error>, SharedCfg, Response = ControlAck<F>>,
         C1::Error: Error,
         C1::InitError: fmt::Debug,
     {
@@ -159,7 +159,7 @@ where
     S::Response: Into<Response<B>>,
     S::InitError: fmt::Debug,
     B: MessageBody,
-    C: ServiceFactory<Control<F, S::Error>, SharedCfg, Response = ControlAck> + 'static,
+    C: ServiceFactory<Control<F, S::Error>, SharedCfg, Response = ControlAck<F>> + 'static,
     C::Error: Error,
     C::InitError: fmt::Debug,
 {
@@ -205,7 +205,7 @@ pub struct H1ServiceHandler<F, S, B, C> {
 impl<F, S, B, C> Service<Io<F>> for H1ServiceHandler<F, S, B, C>
 where
     F: Filter,
-    C: Service<Control<F, S::Error>, Response = ControlAck> + 'static,
+    C: Service<Control<F, S::Error>, Response = ControlAck<F>> + 'static,
     C::Error: Error,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
@@ -268,23 +268,21 @@ where
     }
 
     async fn call(&self, io: Io<F>, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        let id = self.config.next_id();
         let inflight = {
             let mut inflight = self.inflight.borrow_mut();
             inflight.insert(io.get_ref());
             inflight.len()
         };
+        let ioref = io.get_ref();
 
         log::trace!(
-            "New http1 connection, peer address {:?}, inflight: {}",
+            "New http1 connection {id}, peer address {:?}, inflight: {}",
             io.query::<types::PeerAddr>().get(),
             inflight
         );
-        let ioref = io.get_ref();
 
-        let result = Dispatcher::new(io, self.config.clone())
-            .await
-            .map_err(DispatchError::Control);
-
+        let result = handle_io(id, io, self.config.clone()).await;
         {
             let mut inflight = self.inflight.borrow_mut();
             inflight.remove(&ioref);
@@ -297,5 +295,38 @@ where
         }
 
         result
+    }
+}
+
+pub(crate) async fn handle_io<F, S, B, C>(
+    id: usize,
+    io: Io<F>,
+    config: Rc<DispatcherConfig<S, C>>,
+) -> Result<(), DispatchError>
+where
+    F: Filter,
+    C: Service<Control<F, S::Error>, Response = ControlAck<F>> + 'static,
+    C::Error: Error,
+    S: Service<Request> + 'static,
+    S::Error: ResponseError,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
+{
+    // Notify control service
+    let ack = config.control.call_nowait(Control::connect(id, io)).await;
+
+    match ack {
+        Ok(ack) => {
+            let io = if let ControlResult::Connect(io) = ack.result {
+                io
+            } else {
+                unreachable!();
+            };
+
+            Dispatcher::new(id, io, config)
+                .await
+                .map_err(DispatchError::Control)
+        }
+        Err(e) => Err(DispatchError::Control(Rc::new(e))),
     }
 }

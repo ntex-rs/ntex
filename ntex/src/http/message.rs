@@ -72,6 +72,7 @@ impl CurrentIo {
 
 #[derive(Debug)]
 pub struct RequestHead {
+    pub id: usize,
     pub uri: Uri,
     pub method: Method,
     pub version: Version,
@@ -84,6 +85,7 @@ pub struct RequestHead {
 impl Default for RequestHead {
     fn default() -> RequestHead {
         RequestHead {
+            id: 0,
             io: CurrentIo::None,
             uri: Uri::default(),
             method: Method::default(),
@@ -455,7 +457,7 @@ thread_local!(static RESPONSE_POOL: MessagePool<ResponseHead> = MessagePool::<Re
 
 impl<T: Head> MessagePool<T> {
     fn new() -> MessagePool<T> {
-        MessagePool(RefCell::new(Vec::with_capacity(128)))
+        MessagePool(RefCell::new(Vec::with_capacity(256)))
     }
 
     /// Get message from the pool

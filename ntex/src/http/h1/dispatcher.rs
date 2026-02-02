@@ -11,17 +11,15 @@ use crate::http::error::{PayloadError, ResponseError};
 use crate::http::message::CurrentIo;
 use crate::http::{self, config::DispatcherConfig, request::Request, response::Response};
 
-use super::control::{Control, ControlAck, ControlFlags, ControlResult};
+use super::control::{Control, ControlAck, ControlResult, ServiceDisconnectReason};
 use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 use super::{Message, ProtocolError, codec::Codec};
 
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     pub struct Flags: u8 {
-        /// Stopping
-        const SENDPAYLOAD_AND_STOP = 0b0000_0010;
-        /// Complete operation and disconnect
-        const DISCONNECT           = 0b0000_0100;
+        /// Disconnect
+        const DISCONNECT_SENT      = 0b0000_0001;
         /// Keep-alive is enabled
         const READ_KA_TIMEOUT      = 0b0001_0000;
         /// Read headers timer is enabled
@@ -62,14 +60,13 @@ where
     SendPayload {
         body: ResponseBody<B>,
     },
-    Stop {
-        fut: Option<PipelineCall<C, Control<F, S::Error>>>,
-    },
+    Stop,
 }
 
 struct DispatcherInner<F, C, S, B> {
     io: Rc<Io<F>>,
     flags: Flags,
+    disconnect: Option<ServiceDisconnectReason>,
     codec: Codec,
     config: Rc<DispatcherConfig<S, C>>,
     payload: Option<(PayloadDecoder, bstream::Sender<PayloadError>)>,
@@ -82,15 +79,19 @@ struct DispatcherInner<F, C, S, B> {
 impl<F, S, B, C> Dispatcher<F, S, B, C>
 where
     F: Filter,
-    C: Service<Control<F, S::Error>, Response = ControlAck>,
+    C: Service<Control<F, S::Error>, Response = ControlAck<F>>,
     S: Service<Request>,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
-    pub(in crate::http) fn new(io: Io<F>, config: Rc<DispatcherConfig<S, C>>) -> Self {
-        let codec = Codec::new(config.keep_alive_enabled(), io.cfg());
+    pub(in crate::http) fn new(
+        id: usize,
+        io: Io<F>,
+        config: Rc<DispatcherConfig<S, C>>,
+    ) -> Self {
+        let codec = Codec::new(id, config.keep_alive_enabled(), io.cfg());
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
@@ -111,6 +112,7 @@ where
                 read_remains: 0,
                 read_consumed: 0,
                 read_max_timeout: max_timeout,
+                disconnect: None,
                 _t: marker::PhantomData,
             },
         }
@@ -120,7 +122,7 @@ where
 impl<F, S, B, C> future::Future for Dispatcher<F, S, B, C>
 where
     F: Filter,
-    C: Service<Control<F, S::Error>, Response = ControlAck> + 'static,
+    C: Service<Control<F, S::Error>, Response = ControlAck<F>> + 'static,
     C::Error: error::Error,
     S: Service<Request> + 'static,
     S::Error: ResponseError + 'static,
@@ -141,7 +143,7 @@ where
                         let (res, body) = res.into().into_parts();
                         inner.send_response(res, body)
                     }
-                    Poll::Ready(Err(err)) => inner.control(Control::err(err)),
+                    Poll::Ready(Err(err)) => inner.ctl_error(err),
                     Poll::Pending => {
                         // state changed because of error.
                         // spawn current publish future to runtime
@@ -158,8 +160,12 @@ where
                 },
                 // handle control service responses
                 State::CallControl { fut } => match Pin::new(fut).poll(cx) {
-                    Poll::Ready(Ok(ControlAck { result, flags })) => {
-                        if flags.contains(ControlFlags::CONTINUE) {
+                    Poll::Ready(Ok(ControlAck { result })) => match result {
+                        ControlResult::Publish(req) => inner.publish(req),
+                        ControlResult::Response(res, body) => {
+                            inner.send_response(res, body.into())
+                        }
+                        ControlResult::Continue(req) => {
                             let result = inner.io.with_write_buf(|buf| {
                                 buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n")
                             });
@@ -167,33 +173,52 @@ where
                                 *this.st = inner.ctl_peer_gone(Some(err));
                                 continue;
                             }
-                        }
-                        if flags.contains(ControlFlags::DISCONNECT) {
-                            inner.flags.insert(Flags::DISCONNECT);
-                        }
-
-                        match result {
-                            ControlResult::Publish(req) => inner.publish(req),
-                            ControlResult::Response(res, body) => {
-                                inner.send_response(res, body.into())
+                            if req.upgrade() {
+                                inner.ctl_upgrade(req)
+                            } else {
+                                inner.publish(req)
                             }
-                            ControlResult::Expect(req) => {
-                                inner.control(Control::expect(req))
-                            }
-                            ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
-                            ControlResult::Stop => inner.stop(),
                         }
-                    }
+                        ControlResult::Expect(req) => inner.control(Control::expect(req)),
+                        ControlResult::ExpectFailed(res, body) => {
+                            inner.disconnect = Some(ServiceDisconnectReason::ExpectFailed);
+                            inner.send_response(res, body.into())
+                        }
+                        ControlResult::Error(res, body) => {
+                            inner.send_response(res, body.into())
+                        }
+                        ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
+                        ControlResult::UpgradeAck(req) => {
+                            inner.disconnect =
+                                Some(ServiceDisconnectReason::UpgradeHandled);
+                            inner.publish(req)
+                        }
+                        ControlResult::UpgradeHandled => inner
+                            .ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled),
+                        ControlResult::UpgradeFailed(res, body) => {
+                            inner.disconnect = Some(ServiceDisconnectReason::UpgradeFailed);
+                            inner.send_response(res, body.into())
+                        }
+                        ControlResult::ProtocolError(res, body) => {
+                            inner.send_response(res, body.into())
+                        }
+                        ControlResult::Stop => inner.stop(),
+                        ControlResult::Connect(_) => unreachable!(),
+                    },
                     Poll::Ready(Err(err)) => {
                         log::error!("{}: Control plain error: {}", inner.io.tag(), err);
                         return Poll::Ready(Err(Rc::new(err)));
                     }
-                    Poll::Pending => ready!(inner.poll_request(cx)),
+                    Poll::Pending => {
+                        // check for io changes, it could be close while waiting for service call
+                        let _ = inner._poll_request_payload::<F>(None, cx);
+                        return Poll::Pending;
+                    }
                 },
                 // read request and call service
                 State::ReadRequest => {
-                    if inner.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
-                        inner.stop()
+                    if let Some(st) = inner.check_disconnect() {
+                        st
                     } else {
                         ready!(inner.poll_read_request(cx))
                     }
@@ -201,8 +226,8 @@ where
                 // consume request's payload
                 State::ReadPayload => {
                     let result = inner.poll_request_payload(cx);
-                    if inner.flags.contains(Flags::SENDPAYLOAD_AND_STOP) {
-                        inner.stop()
+                    if let Some(st) = inner.check_disconnect() {
+                        st
                     } else {
                         ready!(result).unwrap_or(State::ReadRequest)
                     }
@@ -212,14 +237,7 @@ where
                     ready!(inner.poll_send_payload(cx, body))
                 }
                 // shutdown io
-                State::Stop { fut } => {
-                    if let Some(f) = fut {
-                        let _ = ready!(Pin::new(f).poll(cx));
-                        fut.take();
-                    }
-                    log::debug!("{}: Dispatcher is stopped", inner.io.tag());
-
-                    inner.io.stop_timer();
+                State::Stop => {
                     return Poll::Ready(
                         ready!(inner.io.poll_shutdown(cx))
                             .map_err(crate::util::dyn_rc_error),
@@ -233,7 +251,7 @@ where
 impl<F, C, S, B> DispatcherInner<F, C, S, B>
 where
     F: Filter,
-    C: Service<Control<F, S::Error>, Response = ControlAck> + 'static,
+    C: Service<Control<F, S::Error>, Response = ControlAck<F>> + 'static,
     S: Service<Request> + 'static,
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
@@ -243,7 +261,7 @@ where
         // stop dispatcher
         if self.config.is_shutdown() {
             log::trace!("{}: Service is shutting down", self.io.tag());
-            return Poll::Ready(self.stop());
+            return Poll::Ready(self.ctl_svc_disconnect(ServiceDisconnectReason::Shutdown));
         }
 
         log::trace!("{}: Trying to read http message", self.io.tag());
@@ -287,7 +305,7 @@ where
                         self.payload = Some((decoder, ps));
                     }
                 };
-                self.control(Control::new_req(req))
+                self.control(Control::request(req))
             }
             Err(RecvError::WriteBackpressure) => {
                 if let Err(err) = ready!(self.io.poll_flush(cx, false)) {
@@ -316,7 +334,7 @@ where
                     }
                 } else {
                     log::trace!("{}: Keep-alive timeout, close connection", self.io.tag());
-                    self.stop()
+                    self.ctl_keepalive(true)
                 }
             }
         };
@@ -340,7 +358,7 @@ where
         // but we still want to handle requests with app service
         // so we skip response processing for droppped connection
         if self.io.is_closed() {
-            self.stop()
+            self.ctl_peer_gone(None)
         } else {
             let result = self
                 .io
@@ -354,11 +372,8 @@ where
             match result {
                 Ok(()) => match body.size() {
                     BodySize::None | BodySize::Empty => {
-                        if self
-                            .flags
-                            .intersects(Flags::DISCONNECT | Flags::SENDPAYLOAD_AND_STOP)
-                        {
-                            self.stop()
+                        if let Some(st) = self.check_disconnect() {
+                            st
                         } else if self.payload.is_some() {
                             State::ReadPayload
                         } else {
@@ -367,7 +382,6 @@ where
                     }
                     _ => State::SendPayload { body },
                 },
-                Err(_) if self.flags.contains(Flags::DISCONNECT) => self.stop(),
                 Err(err) => self.ctl_proto_err(err.into()),
             }
         }
@@ -379,11 +393,11 @@ where
         body: &mut ResponseBody<B>,
     ) -> Poll<State<F, C, S, B>> {
         if self.io.is_closed() {
-            return Poll::Ready(self.stop());
-        } else if !self.flags.contains(Flags::SENDPAYLOAD_AND_STOP)
+            return Poll::Ready(self.ctl_peer_gone(None));
+        } else if self.disconnect.is_none()
             && let Poll::Ready(Some(_)) = self.poll_request_payload(cx)
         {
-            self.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
+            self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);
         }
         loop {
             let _ = ready!(self.io.poll_flush(cx, false));
@@ -401,8 +415,8 @@ where
                     log::trace!("{}: Response payload eof {:?}", self.io.tag(), self.flags);
                     if let Err(err) = self.io.encode(Message::Chunk(None), &self.codec) {
                         self.ctl_proto_err(err.into())
-                    } else if self.flags.contains(Flags::DISCONNECT) {
-                        self.stop()
+                    } else if let Some(st) = self.check_disconnect() {
+                        st
                     } else if self.payload.is_some() {
                         State::ReadPayload
                     } else {
@@ -432,10 +446,10 @@ where
                 Poll::Pending
             }
         } else {
-            // check for io changes, could close while waiting for service call
+            // check for io changes, it could be close while waiting for service call
             match ready!(self.io.poll_status_update(cx)) {
                 IoStatusUpdate::KeepAlive => Poll::Pending,
-                IoStatusUpdate::PeerGone(_) => Poll::Ready(self.stop()),
+                IoStatusUpdate::PeerGone(e) => Poll::Ready(self.ctl_peer_gone(e)),
                 IoStatusUpdate::WriteBackpressure => Poll::Pending,
             }
         }
@@ -565,7 +579,7 @@ where
                 // wait until future completes and then close
                 // connection
                 self.payload = None;
-                self.flags.insert(Flags::SENDPAYLOAD_AND_STOP);
+                self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);
                 Poll::Pending
             }
         }
@@ -656,7 +670,7 @@ where
                 }
             } else {
                 self.io.close();
-                return Some(self.stop());
+                return Some(self.ctl_keepalive(false));
             }
         } else if let Some(cfg) = self.config.headers_read_rate() {
             log::debug!(
@@ -708,28 +722,74 @@ where
         }
     }
 
-    fn ctl_proto_err(&self, err: ProtocolError) -> State<F, C, S, B> {
+    fn ctl_upgrade(&mut self, req: Request) -> State<F, C, S, B> {
+        self.codec.reset_upgrade();
+        self.control(Control::upgrade(req, self.io.clone(), self.codec.clone()))
+    }
+
+    fn ctl_keepalive(&mut self, enabled: bool) -> State<F, C, S, B> {
+        self.flags.insert(Flags::DISCONNECT_SENT);
+        State::CallControl {
+            fut: self.config.control.call_nowait(Control::keepalive(enabled)),
+        }
+    }
+
+    fn ctl_error(&mut self, err: S::Error) -> State<F, C, S, B> {
+        self.flags.insert(Flags::DISCONNECT_SENT);
+        State::CallControl {
+            fut: self.config.control.call_nowait(Control::err(err)),
+        }
+    }
+
+    fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, C, S, B> {
+        self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
             fut: self.config.control.call_nowait(Control::proto_err(err)),
         }
     }
 
-    fn ctl_peer_gone(&self, err: Option<io::Error>) -> State<F, C, S, B> {
+    fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, C, S, B> {
+        self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
             fut: self.config.control.call_nowait(Control::peer_gone(err)),
         }
     }
 
-    fn ctl_upgrade(&mut self, req: Request) -> State<F, C, S, B> {
-        self.codec.reset_upgrade();
-        let msg = Control::upgrade(req, self.io.clone(), self.codec.clone());
-        self.control(msg)
+    fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, C, S, B> {
+        if !self.flags.contains(Flags::DISCONNECT_SENT) {
+            self.flags.insert(Flags::DISCONNECT_SENT);
+            State::CallControl {
+                fut: self
+                    .config
+                    .control
+                    .call_nowait(Control::svc_disconnect(reason)),
+            }
+        } else {
+            self.stop()
+        }
+    }
+
+    fn check_disconnect(&mut self) -> Option<State<F, C, S, B>> {
+        if self.flags.contains(Flags::DISCONNECT_SENT) {
+            Some(self.stop())
+        } else if let Some(reason) = self.disconnect.take() {
+            self.flags.insert(Flags::DISCONNECT_SENT);
+            Some(State::CallControl {
+                fut: self
+                    .config
+                    .control
+                    .call_nowait(Control::svc_disconnect(reason)),
+            })
+        } else {
+            None
+        }
     }
 
     fn stop(&mut self) -> State<F, C, S, B> {
-        State::Stop {
-            fut: Some(self.config.control.call_nowait(Control::closed())),
-        }
+        log::debug!("{}: Dispatcher is stopped", self.io.tag());
+
+        self.io.stop_timer();
+        State::Stop
     }
 }
 
@@ -742,7 +802,7 @@ mod tests {
 
     use super::*;
     use crate::http::config::HttpServiceConfig;
-    use crate::http::h1::{ClientCodec, DefaultControlService};
+    use crate::http::h1::{ClientCodec, DefaultControlService, control::Reason};
     use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base, IoConfig};
     use crate::service::{IntoService, cfg::SharedCfg, fn_service};
@@ -771,6 +831,7 @@ mod tests {
             )
             .into();
         Dispatcher::new(
+            0,
             nio::Io::new(stream, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
                 config.get(),
@@ -789,6 +850,7 @@ mod tests {
         B: MessageBody + 'static,
     {
         crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
+            0,
             nio::Io::new(stream, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
                 SharedCfg::default().get(),
@@ -818,6 +880,7 @@ mod tests {
             )
             .into();
         let mut h1 = Dispatcher::<_, _, _, _>::new(
+            0,
             nio::Io::new(server, config),
             Rc::new(DispatcherConfig::new(
                 config.get(),
@@ -825,7 +888,7 @@ mod tests {
                     Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
                 }),
                 fn_service(move |req: Control<_, _>| {
-                    if let Control::NewRequest(_) = req {
+                    if let Control::Request(_) = req {
                         data2.set(true);
                     }
                     async move { Ok::<_, std::convert::Infallible>(req.ack()) }
@@ -1230,12 +1293,13 @@ mod tests {
             .into();
 
         let disp: Dispatcher<Base, _, _, _> = Dispatcher::new(
+            0,
             nio::Io::new(server, SharedCfg::default()),
             Rc::new(DispatcherConfig::new(
                 config.get(),
                 svc.into_service(),
                 fn_service(move |msg: Control<_, _>| {
-                    if let Control::ProtocolError(ref err) = msg
+                    if let Control::Disconnect(Reason::ProtocolError(ref err)) = msg
                         && matches!(err.err(), ProtocolError::SlowPayloadTimeout)
                     {
                         err_mark2.store(

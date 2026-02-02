@@ -18,7 +18,7 @@ pub use self::decoder::{PayloadDecoder, PayloadItem, PayloadType};
 pub use self::default::DefaultControlService;
 pub use self::service::{H1Service, H1ServiceHandler};
 
-pub(super) use self::dispatcher::Dispatcher;
+pub(super) use self::service::handle_io;
 use crate::{channel::bstream::Receiver, util::Bytes};
 
 pub type Payload = Receiver<super::error::PayloadError>;

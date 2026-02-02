@@ -5,9 +5,6 @@ mod service;
 
 pub use ntex_h2::{Control, ControlAck, ServiceConfig as Http2ServiceConfig};
 
-#[doc(hidden)]
-pub use ntex_h2::{ControlMessage, ControlResult};
-
 pub use self::default::DefaultControlService;
 pub use self::payload::Payload;
 pub use self::service::H2Service;

@@ -672,6 +672,7 @@ where
                         256,
                     ))
                     .add(WebAppConfig::with(
+                        &name,
                         secure,
                         local_addr,
                         format!("{local_addr}"),

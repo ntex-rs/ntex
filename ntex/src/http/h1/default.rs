@@ -15,7 +15,7 @@ where
     F: Filter,
     Err: ResponseError,
 {
-    type Response = ControlAck;
+    type Response = ControlAck<F>;
     type Error = io::Error;
     type Service = DefaultControlService;
     type InitError = io::Error;
@@ -31,7 +31,7 @@ where
     F: Filter,
     Err: ResponseError,
 {
-    type Response = ControlAck;
+    type Response = ControlAck<F>;
     type Error = io::Error;
 
     #[inline]

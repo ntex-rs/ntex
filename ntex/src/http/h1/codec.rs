@@ -25,6 +25,7 @@ bitflags! {
 
 /// HTTP/1 Codec
 pub struct Codec {
+    con_id: usize,
     decoder: decoder::MessageDecoder<Request>,
     version: Cell<Version>,
     ctype: Cell<ConnectionType>,
@@ -38,6 +39,7 @@ pub struct Codec {
 impl Clone for Codec {
     fn clone(&self) -> Self {
         Codec {
+            con_id: self.con_id,
             decoder: self.decoder.clone(),
             version: self.version.clone(),
             ctype: self.ctype.clone(),
@@ -51,6 +53,7 @@ impl Clone for Codec {
 impl fmt::Debug for Codec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("h1::Codec")
+            .field("con_id", &self.con_id)
             .field("version", &self.version)
             .field("flags", &self.flags)
             .field("ctype", &self.ctype)
@@ -65,7 +68,7 @@ impl Codec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(keep_alive: bool, cfg: &'static IoConfig) -> Self {
+    pub fn new(con_id: usize, keep_alive: bool, cfg: &'static IoConfig) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -74,6 +77,7 @@ impl Codec {
 
         Codec {
             cfg,
+            con_id,
             flags: Cell::new(flags),
             decoder: decoder::MessageDecoder::default(),
             version: Cell::new(Version::HTTP_11),
@@ -119,8 +123,9 @@ impl Decoder for Codec {
     type Error = DecodeError;
 
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if let Some((req, payload)) = self.decoder.decode(src)? {
-            let head = req.head();
+        if let Some((mut req, payload)) = self.decoder.decode(src)? {
+            let head = req.head_mut();
+            head.id = self.con_id;
             let mut flags = self.flags.get();
             flags.set(Flags::HEAD, head.method == Method::HEAD);
             self.flags.set(flags);
@@ -194,7 +199,11 @@ mod tests {
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
-        let codec = Codec::new(true, SharedCfg::default().get::<IoConfig>().into_static());
+        let codec = Codec::new(
+            0,
+            true,
+            SharedCfg::default().get::<IoConfig>().into_static(),
+        );
         assert!(format!("{codec:?}").contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
@@ -231,7 +240,11 @@ mod tests {
         assert_eq!(*req.method(), Method::POST);
         assert!(req.chunked().unwrap());
 
-        let codec = Codec::new(true, SharedCfg::default().get::<IoConfig>().into_static());
+        let codec = Codec::new(
+            0,
+            true,
+            SharedCfg::default().get::<IoConfig>().into_static(),
+        );
 
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\

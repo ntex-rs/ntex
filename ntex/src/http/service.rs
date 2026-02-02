@@ -80,7 +80,7 @@ where
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C1: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck>,
+    C1: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck<F>>,
     C1::Error: error::Error,
     C1::InitError: fmt::Debug,
     C2: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
@@ -91,7 +91,11 @@ where
     pub fn h1_control<CT, U>(self, control: U) -> HttpService<F, S, B, CT, C2>
     where
         U: IntoServiceFactory<CT, h1::Control<F, S::Error>, SharedCfg>,
-        CT: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck>,
+        CT: ServiceFactory<
+                h1::Control<F, S::Error>,
+                SharedCfg,
+                Response = h1::ControlAck<F>,
+            >,
         CT::Error: error::Error,
         CT::InitError: fmt::Debug,
     {
@@ -139,7 +143,7 @@ mod openssl {
         C1: ServiceFactory<
                 h1::Control<Layer<SslFilter, F>, S::Error>,
                 SharedCfg,
-                Response = h1::ControlAck,
+                Response = h1::ControlAck<Layer<SslFilter, F>>,
             > + 'static,
         C1::Error: error::Error,
         C1::InitError: fmt::Debug,
@@ -186,7 +190,7 @@ mod rustls {
         C1: ServiceFactory<
                 h1::Control<Layer<TlsServerFilter, F>, S::Error>,
                 SharedCfg,
-                Response = h1::ControlAck,
+                Response = h1::ControlAck<Layer<TlsServerFilter, F>>,
             > + 'static,
         C1::Error: error::Error,
         C1::InitError: fmt::Debug,
@@ -225,7 +229,7 @@ where
     S::InitError: fmt::Debug,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C1: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck>
+    C1: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck<F>>
         + 'static,
     C1::Error: error::Error,
     C1::InitError: fmt::Debug,
@@ -284,7 +288,7 @@ where
     S::Error: ResponseError,
     S::Response: Into<Response<B>>,
     B: MessageBody,
-    C1: Service<h1::Control<F, S::Error>, Response = h1::ControlAck> + 'static,
+    C1: Service<h1::Control<F, S::Error>, Response = h1::ControlAck<F>> + 'static,
     C1::Error: error::Error,
     C2: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
         + 'static,
@@ -352,16 +356,7 @@ where
         io: Io<F>,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        let inflight = {
-            let mut inflight = self.inflight.borrow_mut();
-            inflight.insert(io.get_ref());
-            inflight.len()
-        };
-
-        log::trace!(
-            "New http connection, peer address {:?}, in-flight: {inflight}",
-            io.query::<types::PeerAddr>().get(),
-        );
+        let id = self.config.next_id();
         let ioref = io.get_ref();
 
         let result = if io.query::<types::HttpProtocol>().get()
@@ -372,11 +367,30 @@ where
                     "Cannot construct control service: {e:?}"
                 )))
             })?;
-            h2::handle(io.into(), control, self.config.clone()).await
+            let inflight = {
+                let mut inflight = self.inflight.borrow_mut();
+                inflight.insert(io.get_ref());
+                inflight.len()
+            };
+
+            log::trace!(
+                "New http2 connection {id}, peer address {:?}, in-flight: {inflight}",
+                io.query::<types::PeerAddr>().get(),
+            );
+
+            h2::handle(id, io.into(), control, self.config.clone()).await
         } else {
-            h1::Dispatcher::new(io, self.config.clone())
-                .await
-                .map_err(DispatchError::Control)
+            let inflight = {
+                let mut inflight = self.inflight.borrow_mut();
+                inflight.insert(io.get_ref());
+                inflight.len()
+            };
+
+            log::trace!(
+                "New http1 connection {id}, peer address {:?}, in-flight: {inflight}",
+                io.query::<types::PeerAddr>().get(),
+            );
+            h1::handle_io(id, io, self.config.clone()).await
         };
 
         {

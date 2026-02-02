@@ -426,7 +426,10 @@ async fn test_http1_handle_not_consumed_payload() {
     let srv = test_server(async || {
         HttpService::h1(|_| async move { Ok::<_, io::Error>(Response::Ok().finish()) })
             .control(fn_service(move |msg: Control<_, _>| {
-                if matches!(msg, Control::ProtocolError(_)) {
+                if matches!(
+                    msg,
+                    Control::Disconnect(ntex::http::h1::control::Reason::ProtocolError(_))
+                ) {
                     panic!()
                 }
                 async move { Ok::<_, io::Error>(msg.ack()) }
