@@ -262,25 +262,26 @@ where
         io: Io<F>,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        let inflight = {
-            let mut inflight = self.inflight.borrow_mut();
-            inflight.insert(io.get_ref());
-            inflight.len()
-        };
-
-        log::trace!(
-            "{}: New http2 connection, peer address {:?}, inflight: {inflight}",
-            io.tag(),
-            io.query::<types::PeerAddr>().get()
-        );
         let control = self.control.create(self.cfg).await.map_err(|e| {
             DispatchError::Control(crate::util::str_rc_error(format!(
                 "Cannot construct control service: {e:?}"
             )))
         })?;
 
+        let id = self.config.next_id();
+        let inflight = {
+            let mut inflight = self.inflight.borrow_mut();
+            inflight.insert(io.get_ref());
+            inflight.len()
+        };
+        log::trace!(
+            "{}: New http2 connection {id}, peer address {:?}, inflight: {inflight}",
+            io.tag(),
+            io.query::<types::PeerAddr>().get()
+        );
+
         let ioref = io.get_ref();
-        let result = handle(io.into(), control, self.config.clone()).await;
+        let result = handle(id, io.into(), control, self.config.clone()).await;
         {
             let mut inflight = self.inflight.borrow_mut();
             inflight.remove(&ioref);
@@ -297,6 +298,7 @@ where
 }
 
 pub(in crate::http) async fn handle<S, B, C1: 'static, C2>(
+    id: usize,
     io: IoBoxed,
     control: C2,
     config: Rc<DispatcherConfig<S, C1>>,
@@ -311,12 +313,13 @@ where
 {
     let ioref = io.get_ref();
 
-    let _ = server::handle_one(io, PublishService::new(ioref, config), control).await;
+    let _ = server::handle_one(io, PublishService::new(id, ioref, config), control).await;
 
     Ok(())
 }
 
 struct PublishService<S: Service<Request>, B, C> {
+    id: usize,
     io: IoRef,
     config: Rc<DispatcherConfig<S, C>>,
     streams: RefCell<HashMap<StreamId, PayloadSender>>,
@@ -330,8 +333,9 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
 {
-    fn new(io: IoRef, config: Rc<DispatcherConfig<S, C>>) -> Self {
+    fn new(id: usize, io: IoRef, config: Rc<DispatcherConfig<S, C>>) -> Self {
         Self {
+            id,
             io,
             config,
             streams: RefCell::new(HashMap::default()),
@@ -453,6 +457,7 @@ where
         head.method = method;
         head.headers = headers;
         head.io = CurrentIo::Ref(io);
+        head.id = self.id;
 
         let (mut res, mut body) = match cfg.service.call(req).await {
             Ok(res) => res.into().into_parts(),

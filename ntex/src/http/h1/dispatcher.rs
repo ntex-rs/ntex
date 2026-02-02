@@ -390,7 +390,7 @@ where
     ) -> Poll<State<F, C, S, B>> {
         if self.io.is_closed() {
             return Poll::Ready(self.ctl_peer_gone(None));
-        } else if !self.disconnect.is_none()
+        } else if self.disconnect.is_none()
             && let Poll::Ready(Some(_)) = self.poll_request_payload(cx)
         {
             self.disconnect = Some(ServiceDisconnectReason::PayloadDropped);

@@ -357,16 +357,6 @@ where
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         let id = self.config.next_id();
-        let inflight = {
-            let mut inflight = self.inflight.borrow_mut();
-            inflight.insert(io.get_ref());
-            inflight.len()
-        };
-
-        log::trace!(
-            "New http connection {id}, peer address {:?}, in-flight: {inflight}",
-            io.query::<types::PeerAddr>().get(),
-        );
         let ioref = io.get_ref();
 
         let result = if io.query::<types::HttpProtocol>().get()
@@ -377,8 +367,29 @@ where
                     "Cannot construct control service: {e:?}"
                 )))
             })?;
-            h2::handle(io.into(), control, self.config.clone()).await
+            let inflight = {
+                let mut inflight = self.inflight.borrow_mut();
+                inflight.insert(io.get_ref());
+                inflight.len()
+            };
+
+            log::trace!(
+                "New http2 connection {id}, peer address {:?}, in-flight: {inflight}",
+                io.query::<types::PeerAddr>().get(),
+            );
+
+            h2::handle(id, io.into(), control, self.config.clone()).await
         } else {
+            let inflight = {
+                let mut inflight = self.inflight.borrow_mut();
+                inflight.insert(io.get_ref());
+                inflight.len()
+            };
+
+            log::trace!(
+                "New http1 connection {id}, peer address {:?}, in-flight: {inflight}",
+                io.query::<types::PeerAddr>().get(),
+            );
             h1::handle_io(id, io, self.config.clone()).await
         };
 
