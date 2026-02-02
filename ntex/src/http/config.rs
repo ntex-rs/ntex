@@ -207,6 +207,7 @@ bitflags::bitflags! {
 
 pub(super) struct DispatcherConfig<S, C> {
     flags: Cell<Flags>,
+    pub(super) idx: Cell<usize>,
     pub(super) config: &'static HttpServiceConfig,
     pub(super) service: Pipeline<S>,
     pub(super) control: Pipeline<C>,
@@ -216,6 +217,7 @@ impl<S, C> DispatcherConfig<S, C> {
     pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self {
         let config = config.into_static();
         DispatcherConfig {
+            idx: Cell::new(0),
             service: service.into(),
             control: control.into(),
             flags: Cell::new(if config.ka_enabled {
@@ -225,6 +227,13 @@ impl<S, C> DispatcherConfig<S, C> {
             }),
             config,
         }
+    }
+
+    /// Get connection id
+    pub(super) fn next_id(&self) -> usize {
+        let id = self.idx.get();
+        self.idx.set(id + 1);
+        id
     }
 
     /// Return state of connection keep-alive functionality

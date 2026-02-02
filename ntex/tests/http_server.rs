@@ -10,7 +10,7 @@ use ntex::http::{
     HttpService, HttpServiceConfig, KeepAlive, Method, Request, Response, StatusCode,
     Version,
 };
-use ntex::http::{body, h1::Control, test, test::server as test_server};
+use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
 use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, Ready};
 use ntex::{SharedCfg, channel::oneshot, rt, service::fn_service, web::error};
@@ -426,7 +426,10 @@ async fn test_http1_handle_not_consumed_payload() {
     let srv = test_server(async || {
         HttpService::h1(|_| async move { Ok::<_, io::Error>(Response::Ok().finish()) })
             .control(fn_service(move |msg: Control<_, _>| {
-                if matches!(msg, Control::ProtocolError(_)) {
+                if matches!(
+                    msg,
+                    Control::Disconnect(h1::control::Reason::ProtocolError(_))
+                ) {
                     panic!()
                 }
                 async move { Ok::<_, io::Error>(msg.ack()) }

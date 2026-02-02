@@ -2,6 +2,10 @@
 
 ## [3.0.0] 2026-02-xx
 
+* Refactor http control messages
+
+* WebSocket subprotocol support #734
+
 * Remove the need for mut in h2::Payload
 
 * Remove the need for mut in ClientResponse::json() and ClientResponse::body()

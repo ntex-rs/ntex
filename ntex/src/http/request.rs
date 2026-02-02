@@ -4,8 +4,7 @@ use crate::http::header::{self, HeaderMap};
 use crate::http::httpmessage::HttpMessage;
 use crate::http::message::{Message, RequestHead};
 use crate::http::{Method, Uri, Version, payload::Payload};
-use crate::io::{IoRef, types};
-use crate::util::Extensions;
+use crate::{io::IoRef, io::types, util::Extensions};
 
 /// Request
 pub struct Request {

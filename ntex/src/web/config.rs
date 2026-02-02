@@ -1,7 +1,7 @@
 use std::{cell::UnsafeCell, net::SocketAddr, rc::Rc};
 
 use crate::service::cfg::{CfgContext, Configuration};
-use crate::{router::ResourceDef, util::Extensions};
+use crate::{router::ResourceDef, util::ByteString, util::Extensions};
 
 use super::httprequest::{HttpRequest, HttpRequestInner};
 use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory};
@@ -10,6 +10,7 @@ use super::{DefaultError, ErrorRenderer, resource::Resource, route::Route};
 /// Application configuration
 #[derive(Debug, Clone)]
 pub struct WebAppConfig {
+    name: ByteString,
     secure: bool,
     host: String,
     addr: SocketAddr,
@@ -39,6 +40,7 @@ impl WebAppConfig {
     /// Create an default WebAppConfig instance.
     pub fn new() -> Self {
         WebAppConfig::with(
+            "ntex:web",
             false,
             "127.0.0.1:8080".parse().unwrap(),
             "localhost:8080".to_owned(),
@@ -46,17 +48,23 @@ impl WebAppConfig {
     }
 
     /// Create an WebAppConfig instance.
-    pub fn with(secure: bool, addr: SocketAddr, host: String) -> Self {
+    pub fn with(name: &str, secure: bool, addr: SocketAddr, host: String) -> Self {
         WebAppConfig {
             secure,
             host,
             addr,
+            name: name.into(),
             pool_size: 128,
             config: CfgContext::default(),
         }
     }
 
-    /// Server host name.
+    /// Server name
+    pub fn name(&self) -> &ByteString {
+        &self.name
+    }
+
+    /// Server host name
     ///
     /// Host name is used by application router as a hostname for url generation.
     /// Check [ConnectionInfo](./struct.ConnectionInfo.html#method.host)
