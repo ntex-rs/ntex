@@ -63,7 +63,7 @@ struct Inner<F, T> {
 
 impl WsClient<Base, ()> {
     /// Create new websocket client builder
-    pub fn build<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
+    pub fn builder<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -541,7 +541,7 @@ where
     }
 
     /// Complete building process and construct websockets client.
-    pub async fn finish<U: Into<SharedCfg>>(
+    pub async fn build<U: Into<SharedCfg>>(
         &mut self,
         cfg: U,
     ) -> Result<WsClient<F, T::Service>, WsClientBuilderError<T::InitError>> {
@@ -787,14 +787,14 @@ mod tests {
 
     #[crate::rt_test]
     async fn test_debug() {
-        let mut builder = WsClient::build("http://localhost")
+        let mut builder = WsClient::builder("http://localhost")
             .header("x-test", "111")
             .take();
         let repr = format!("{builder:?}");
         assert!(repr.contains("WsClientBuilder"));
         assert!(repr.contains("x-test"));
 
-        let client = builder.finish(SharedCfg::default()).await.unwrap();
+        let client = builder.build(SharedCfg::default()).await.unwrap();
         let repr = format!("{client:?}");
         assert!(repr.contains("WsClient"));
         assert!(repr.contains("x-test"));
@@ -802,10 +802,10 @@ mod tests {
 
     #[crate::rt_test]
     async fn header_override() {
-        let req = WsClient::build("http://localhost")
+        let req = WsClient::builder("http://localhost")
             .header(header::CONTENT_TYPE, "111")
             .set_header(header::CONTENT_TYPE, "222")
-            .finish(SharedCfg::default())
+            .build(SharedCfg::default())
             .await
             .unwrap();
 
@@ -822,20 +822,20 @@ mod tests {
 
     #[crate::rt_test]
     async fn basic_errs() {
-        let err = WsClient::build("localhost")
-            .finish(SharedCfg::default())
+        let err = WsClient::builder("localhost")
+            .build(SharedCfg::default())
             .await
             .err()
             .unwrap();
         assert!(matches!(err, WsClientBuilderError::MissingScheme));
-        let err = WsClient::build("unknown://localhost")
-            .finish(SharedCfg::default())
+        let err = WsClient::builder("unknown://localhost")
+            .build(SharedCfg::default())
             .await
             .err()
             .unwrap();
         assert!(matches!(err, WsClientBuilderError::UnknownScheme));
-        let err = WsClient::build("/")
-            .finish(SharedCfg::default())
+        let err = WsClient::builder("/")
+            .build(SharedCfg::default())
             .await
             .err()
             .unwrap();
@@ -844,9 +844,9 @@ mod tests {
 
     #[crate::rt_test]
     async fn basic_auth() {
-        let client = WsClient::build("http://localhost")
+        let client = WsClient::builder("http://localhost")
             .basic_auth("username", Some("password"))
-            .finish(SharedCfg::default())
+            .build(SharedCfg::default())
             .await
             .unwrap();
         assert_eq!(
@@ -860,9 +860,9 @@ mod tests {
             "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
         );
 
-        let client = WsClient::build("http://localhost")
+        let client = WsClient::builder("http://localhost")
             .basic_auth("username", None)
-            .finish(SharedCfg::default())
+            .build(SharedCfg::default())
             .await
             .unwrap();
         assert_eq!(
@@ -894,9 +894,9 @@ mod tests {
     #[crate::rt_test]
     #[allow(clippy::let_underscore_future)]
     async fn bearer_auth() {
-        let client = WsClient::build("http://localhost")
+        let client = WsClient::builder("http://localhost")
             .bearer_auth("someS3cr3tAutht0k3n")
-            .finish(SharedCfg::default())
+            .build(SharedCfg::default())
             .await
             .unwrap();
         assert_eq!(
@@ -930,7 +930,7 @@ mod tests {
     #[cfg(feature = "cookie")]
     #[crate::rt_test]
     async fn basics() {
-        let mut builder = WsClient::build("http://localhost/")
+        let mut builder = WsClient::builder("http://localhost/")
             .origin("test-origin")
             .max_frame_size(100)
             .server_mode()
@@ -947,7 +947,7 @@ mod tests {
         assert!(builder.inner.as_ref().unwrap().server_mode);
         assert_eq!(builder.protocols, Some("v1,v2".to_string()));
 
-        let client = builder.finish(SharedCfg::default()).await.unwrap();
+        let client = builder.build(SharedCfg::default()).await.unwrap();
         assert_eq!(
             client.head.headers.get(header::CONTENT_TYPE).unwrap(),
             header::HeaderValue::from_static("json")
@@ -956,20 +956,20 @@ mod tests {
         let _ = client.connect().await;
 
         assert!(
-            WsClient::build("/")
-                .finish(SharedCfg::default())
+            WsClient::builder("/")
+                .build(SharedCfg::default())
                 .await
                 .is_err()
         );
         assert!(
-            WsClient::build("http:///test")
-                .finish(SharedCfg::default())
+            WsClient::builder("http:///test")
+                .build(SharedCfg::default())
                 .await
                 .is_err()
         );
         assert!(
-            WsClient::build("hmm://test.com/")
-                .finish(SharedCfg::default())
+            WsClient::builder("hmm://test.com/")
+                .build(SharedCfg::default())
                 .await
                 .is_err()
         );

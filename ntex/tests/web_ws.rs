@@ -26,8 +26,9 @@ async fn web_ws() {
     let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
-                ws::start::<_, _, web::Error>(
+                ws::start::<_, _, &str, web::Error>(
                     req,
+                    None,
                     fn_factory_with_config(|_| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
@@ -119,8 +120,9 @@ async fn web_ws_client() {
     let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
-                ws::start::<_, _, web::Error>(
+                ws::start::<_, _, _, web::Error>(
                     req,
+                    None::<&str>,
                     fn_factory_with_config(|_| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
@@ -181,7 +183,7 @@ async fn web_ws_subprotocol() {
                     .find(|p| *p == "my-subprotocol" || *p == "others-subprotocol")
                     .map(String::from);
 
-                ws::start_using_subprotocol::<_, _, _, web::Error>(
+                ws::start::<_, _, _, web::Error>(
                     req,
                     protocol,
                     fn_factory_with_config(|_| async {
@@ -195,11 +197,11 @@ async fn web_ws_subprotocol() {
     .await;
 
     // client requests subprotocol
-    let conn = WsClient::build(srv.url("/"))
+    let conn = WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["my-subprotocol"])
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap()
         .connect()
@@ -230,7 +232,7 @@ async fn web_ws_subprotocol_none() {
                     .find(|p| *p == "unsupported")
                     .map(String::from);
 
-                ws::start_using_subprotocol::<_, _, _, web::Error>(
+                ws::start::<_, _, _, web::Error>(
                     req,
                     protocol,
                     fn_factory_with_config(|_| async {
@@ -244,11 +246,11 @@ async fn web_ws_subprotocol_none() {
     .await;
 
     // client requests subprotocol that server doesn't support
-    let conn = WsClient::build(srv.url("/"))
+    let conn = WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["my-subprotocol"])
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap()
         .connect()
@@ -285,7 +287,7 @@ async fn web_ws_protocols_parsing() {
                     .or_else(|| protocols.iter().find(|p| *p == "proto1"))
                     .cloned();
 
-                ws::start_using_subprotocol::<_, _, _, web::Error>(
+                ws::start::<_, _, _, web::Error>(
                     req,
                     protocol,
                     fn_factory_with_config(|_| async {
@@ -299,11 +301,11 @@ async fn web_ws_protocols_parsing() {
     .await;
 
     // client requests multiple protocols (comma-separated)
-    let conn = WsClient::build(srv.url("/"))
+    let conn = WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
         .protocols(["proto1", "proto2"])
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap()
         .connect()

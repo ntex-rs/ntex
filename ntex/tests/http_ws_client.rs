@@ -168,10 +168,10 @@ async fn test_keepalive_timeout() {
     .await;
 
     // client service
-    let con = ws::WsClient::build(srv.url("/"))
+    let con = ws::WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(30))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap()
         .connect()
@@ -203,8 +203,9 @@ async fn test_upgrade_handler_with_await() {
                 // some async context switch
                 ntex::time::sleep(ntex::time::Seconds::ZERO).await;
 
-                web::ws::start::<_, _, web::Error>(
+                web::ws::start::<_, _, _, web::Error>(
                     req,
+                    None::<&str>,
                     fn_factory_with_config(|_| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
@@ -215,10 +216,10 @@ async fn test_upgrade_handler_with_await() {
     })
     .await;
 
-    let _ = ws::WsClient::build(srv.url("/"))
+    let _ = ws::WsClient::builder(srv.url("/"))
         .address(srv.addr())
         .timeout(Seconds(1))
-        .finish(SharedCfg::default())
+        .build(SharedCfg::default())
         .await
         .unwrap()
         .connect()
