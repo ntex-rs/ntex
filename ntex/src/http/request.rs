@@ -237,6 +237,6 @@ mod tests {
         assert!(s.contains("Request HTTP/1.1 GET:/index.html"));
 
         let s = format!("{:?}", req.head());
-        assert!(s.contains("RequestHead { uri:"));
+        assert!(s.contains("RequestHead { id: 0, uri:"));
     }
 }
