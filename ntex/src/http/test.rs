@@ -439,10 +439,10 @@ impl TestServer {
         &self,
         path: &str,
     ) -> Result<WsConnection<impl Filter>, WsClientError> {
-        WsClient::build(self.url(path))
+        WsClient::builder(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))
-            .finish(SharedCfg::default())
+            .build(SharedCfg::default())
             .await
             .unwrap()
             .connect()
@@ -477,12 +477,12 @@ impl TestServer {
             .set_alpn_protos(b"\x08http/1.1")
             .map_err(|e| log::error!("Cannot set alpn protocol: {e:?}"));
 
-        WsClient::build(self.url(path))
+        WsClient::builder(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))
             .openssl(builder.build())
             .take()
-            .finish(SharedCfg::default())
+            .build(SharedCfg::default())
             .await
             .unwrap()
             .connect()

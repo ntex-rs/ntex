@@ -4,6 +4,8 @@
 
 * Refactor http control messages
 
+* Change naming for WebSocketBuilder
+
 * WebSocket subprotocol support #734
 
 * Remove the need for mut in h2::Payload
