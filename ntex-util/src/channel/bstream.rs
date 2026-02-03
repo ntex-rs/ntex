@@ -172,7 +172,7 @@ impl<E> Sender<E> {
     /// Add chunk to the stream
     pub fn feed_data(&self, data: Bytes) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.feed_data(data)
+            shared.feed_data(data);
         }
     }
 

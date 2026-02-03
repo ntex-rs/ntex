@@ -137,7 +137,7 @@ impl ByteString {
     /// Shortens the buffer to `len` bytes and dropping the rest.
     #[inline]
     pub fn trimdown(&mut self) {
-        self.0.trimdown()
+        self.0.trimdown();
     }
 
     /// Clears the buffer, removing all data.
@@ -154,7 +154,7 @@ impl ByteString {
     /// ```
     #[inline]
     pub fn clear(&mut self) {
-        self.0.clear()
+        self.0.clear();
     }
 
     /// Creates a new `ByteString` from a Bytes.

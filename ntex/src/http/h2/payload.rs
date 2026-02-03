@@ -91,7 +91,7 @@ impl Drop for PayloadSender {
         if let Some(shared) = self.inner.upgrade()
             && !shared.flags.get().contains(Flags::EOF)
         {
-            self.set_error(PayloadError::Incomplete(None))
+            self.set_error(PayloadError::Incomplete(None));
         }
     }
 }
@@ -111,7 +111,7 @@ impl PayloadSender {
 
     pub fn feed_data(&self, data: Bytes, cap: h2::Capacity) {
         if let Some(shared) = self.inner.upgrade() {
-            shared.feed_data(data, cap)
+            shared.feed_data(data, cap);
         }
     }
 
@@ -166,7 +166,7 @@ impl Inner {
 
     fn set_error(&self, err: PayloadError) {
         self.err.set(Some(err));
-        self.task.wake()
+        self.task.wake();
     }
 
     fn feed_eof(&self, data: Bytes) {
@@ -174,7 +174,7 @@ impl Inner {
         if !data.is_empty() {
             self.items.borrow_mut().push_back(data);
         }
-        self.task.wake()
+        self.task.wake();
     }
 
     fn feed_data(&self, data: Bytes, cap: h2::Capacity) {

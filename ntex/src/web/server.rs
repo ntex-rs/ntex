@@ -123,7 +123,7 @@ where
     /// Set server host name.
     ///
     /// Host name is used by application router as a hostname for url generation.
-    /// Check [ConnectionInfo](./dev/struct.ConnectionInfo.html#method.host)
+    /// Check [`ConnectionInfo`](./dev/struct.ConnectionInfo.html#method.host)
     /// documentation for more information.
     ///
     /// By default host name is set to a "localhost" value.
@@ -176,8 +176,8 @@ where
 
     /// Use listener for accepting incoming connection requests
     ///
-    /// HttpServer does not change any configuration for TcpListener,
-    /// it needs to be configured before passing it to listen() method.
+    /// `HttpServer` does not change any configuration for `TcpListener`,
+    /// it needs to be configured before passing it to `listen()` method.
     pub fn listen(mut self, lst: net::TcpListener) -> io::Result<Self> {
         let cfg = self.config.clone();
         let factory = self.factory.clone();
@@ -287,17 +287,15 @@ where
             }
         }
 
-        if !succ {
-            if let Some(e) = err.take() {
-                Err(e)
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Cannot bind to address.",
-                ))
-            }
-        } else {
+        if succ {
             Ok(sockets)
+        } else if let Some(e) = err.take() {
+            Err(e)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot bind to address.",
+            ))
         }
     }
 
@@ -367,7 +365,7 @@ where
         let factory = self.factory.clone();
 
         self.builder = self.builder.bind_uds(
-            format!("ntex-web-service-{:?}", addr.as_ref()),
+            format!("ntex-web-service-{:?}", addr.as_ref().display()),
             addr,
             async move |r| {
                 r.config(cfg.lock().unwrap().cfg);

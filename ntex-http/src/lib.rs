@@ -1,5 +1,13 @@
 //! Http protocol support.
-#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+#![deny(clippy::pedantic)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::needless_pass_by_value,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    clippy::missing_errors_doc,
+    clippy::struct_field_names
+)]
 
 pub mod body;
 pub mod error;
@@ -19,11 +27,11 @@ pub use http::header::HeaderName;
 pub use http::uri::{self, Uri};
 pub use http::{Method, StatusCode, Version};
 
-/// Convert http::HeaderMap to a HeaderMap
+/// Convert `http::HeaderMap` to a `HeaderMap`
 impl From<http::HeaderMap> for HeaderMap {
     fn from(map: http::HeaderMap) -> HeaderMap {
         let mut new_map = HeaderMap::with_capacity(map.capacity());
-        for (h, v) in map.iter() {
+        for (h, v) in &map {
             new_map.append(h.clone(), HeaderValue::from(v));
         }
         new_map

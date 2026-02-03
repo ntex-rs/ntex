@@ -62,7 +62,7 @@ pub(super) trait MessageType: Sized {
         if let Some(status) = self.status() {
             match status {
                 StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
-                    length = BodySize::None
+                    length = BodySize::None;
                 }
                 StatusCode::SWITCHING_PROTOCOLS => {
                     skip_len = true;
@@ -78,7 +78,7 @@ pub(super) trait MessageType: Sized {
             BodySize::Stream => {
                 if chunked {
                     skip_len = true;
-                    dst.extend_from_slice(b"\r\ntransfer-encoding: chunked\r\n")
+                    dst.extend_from_slice(b"\r\ntransfer-encoding: chunked\r\n");
                 } else {
                     skip_len = false;
                     dst.extend_from_slice(b"\r\n");
@@ -90,10 +90,10 @@ pub(super) trait MessageType: Sized {
         match ctype {
             ConnectionType::Upgrade => dst.extend_from_slice(b"connection: upgrade\r\n"),
             ConnectionType::KeepAlive if version < Version::HTTP_11 => {
-                dst.extend_from_slice(b"connection: keep-alive\r\n")
+                dst.extend_from_slice(b"connection: keep-alive\r\n");
             }
             ConnectionType::Close if version >= Version::HTTP_11 => {
-                dst.extend_from_slice(b"connection: close\r\n")
+                dst.extend_from_slice(b"connection: close\r\n");
             }
             _ => (),
         }
@@ -184,11 +184,11 @@ pub(super) trait MessageType: Sized {
         }
 
         // optimized date header, set_date writes \r\n
-        if !has_date {
-            DateService.set_date_header(dst);
-        } else {
+        if has_date {
             // msg eof
             dst.extend_from_slice(b"\r\n");
+        } else {
+            DateService.set_date_header(dst);
         }
 
         Ok(())
@@ -246,7 +246,7 @@ impl MessageType for RequestHeadType {
             helpers::Writer(dst),
             "{} {} {}",
             head.method,
-            head.uri.path_and_query().map(|u| u.as_str()).unwrap_or("/"),
+            head.uri.path_and_query().map_or("/", |u| u.as_str()),
             // only HTTP-0.9/1.1
             match head.version {
                 Version::HTTP_09 => "HTTP/0.9",
@@ -293,9 +293,11 @@ impl<T: MessageType> MessageEncoder<T> {
         cfg: &IoConfig,
     ) -> Result<(), EncodeError> {
         // transfer encoding
-        if !head {
+        if head {
+            self.te.set(TransferEncoding::empty());
+        } else {
             self.te.set(match length {
-                BodySize::Empty => TransferEncoding::empty(),
+                BodySize::Empty | BodySize::None => TransferEncoding::empty(),
                 BodySize::Sized(len) => TransferEncoding::length(len),
                 BodySize::Stream => {
                     if message.chunked() && !stream {
@@ -304,10 +306,7 @@ impl<T: MessageType> MessageEncoder<T> {
                         TransferEncoding::eof()
                     }
                 }
-                BodySize::None => TransferEncoding::empty(),
             });
-        } else {
-            self.te.set(TransferEncoding::empty());
         }
 
         message.encode_status(dst)?;
@@ -523,7 +522,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
                 DEC_DIGITS_LUT.as_ptr().add(d1 as usize),
                 buf.as_mut_ptr().offset(19),
                 2,
-            )
+            );
         };
 
         // decode last 1

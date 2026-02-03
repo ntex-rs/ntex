@@ -220,7 +220,7 @@ impl Filter for NullFilter {
 
     #[inline]
     fn process_read_buf(&self, _: FilterCtx<'_>, _: usize) -> io::Result<FilterReadStatus> {
-        Ok(Default::default())
+        Ok(FilterReadStatus::default())
     }
 
     #[inline]

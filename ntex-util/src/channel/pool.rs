@@ -67,7 +67,7 @@ impl<T> Pool<T> {
 
     /// Shrinks the capacity of the pool as much as possible.
     pub fn shrink_to_fit(&self) {
-        self.0.get_mut().shrink_to_fit()
+        self.0.get_mut().shrink_to_fit();
     }
 }
 
@@ -169,11 +169,11 @@ impl<T> Receiver<T> {
         }
 
         // Check if sender is dropped and return error if it is.
-        if !inner.flags.contains(Flags::SENDER) {
-            Poll::Ready(Err(Canceled))
-        } else {
+        if inner.flags.contains(Flags::SENDER) {
             inner.rx_waker.register(cx.waker());
             Poll::Pending
+        } else {
+            Poll::Ready(Err(Canceled))
         }
     }
 }

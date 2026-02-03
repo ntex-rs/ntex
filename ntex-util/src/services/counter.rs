@@ -57,7 +57,7 @@ impl Counter {
                 Poll::Pending
             }
         })
-        .await
+        .await;
     }
 
     /// Wait untile counter becomes at capacity.
@@ -69,7 +69,7 @@ impl Counter {
                 Poll::Ready(())
             }
         })
-        .await
+        .await;
     }
 
     /// Check if counter is not at capacity. If counter at capacity
@@ -137,7 +137,7 @@ impl CounterInner {
     fn notify(&self) {
         let tasks = self.tasks.borrow();
         for (_, task) in &*tasks {
-            task.wake()
+            task.wake();
         }
     }
 }

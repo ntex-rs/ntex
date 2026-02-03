@@ -121,7 +121,10 @@ impl IoRef {
     where
         U: Encoder,
     {
-        if !self.is_closed() {
+        if self.is_closed() {
+            log::trace!("{}: Io is closed/closing, skip frame encoding", self.tag());
+            Ok(())
+        } else {
             self.with_write_buf(|buf| {
                 // make sure we've got room
                 self.cfg().write_buf().resize(buf);
@@ -140,9 +143,6 @@ impl IoRef {
                 self.0.io_stopped(Some(err));
                 Ok(())
             })
-        } else {
-            log::trace!("{}: Io is closed/closing, skip frame encoding", self.tag());
-            Ok(())
         }
     }
 
@@ -243,7 +243,7 @@ impl IoRef {
     #[inline]
     /// Wakeup dispatcher and send keep-alive error
     pub fn notify_timeout(&self) {
-        self.0.notify_timeout()
+        self.0.notify_timeout();
     }
 
     #[inline]
@@ -257,26 +257,24 @@ impl IoRef {
     pub fn start_timer(&self, timeout: Seconds) -> timer::TimerHandle {
         let cur_hnd = self.0.timeout.get();
 
-        if !timeout.is_zero() {
-            if cur_hnd.is_set() {
-                let hnd = timer::update(cur_hnd, timeout, self);
-                if hnd != cur_hnd {
-                    log::trace!("{}: Update timer {:?}", self.tag(), timeout);
-                    self.0.timeout.set(hnd);
-                }
-                hnd
-            } else {
-                log::trace!("{}: Start timer {:?}", self.tag(), timeout);
-                let hnd = timer::register(timeout, self);
-                self.0.timeout.set(hnd);
-                hnd
-            }
-        } else {
+        if timeout.is_zero() {
             if cur_hnd.is_set() {
                 self.0.timeout.set(timer::TimerHandle::ZERO);
                 timer::unregister(cur_hnd, self);
             }
             timer::TimerHandle::ZERO
+        } else if cur_hnd.is_set() {
+            let hnd = timer::update(cur_hnd, timeout, self);
+            if hnd != cur_hnd {
+                log::trace!("{}: Update timer {:?}", self.tag(), timeout);
+                self.0.timeout.set(hnd);
+            }
+            hnd
+        } else {
+            log::trace!("{}: Start timer {:?}", self.tag(), timeout);
+            let hnd = timer::register(timeout, self);
+            self.0.timeout.set(hnd);
+            hnd
         }
     }
 
@@ -287,7 +285,7 @@ impl IoRef {
         if hnd.is_set() {
             log::trace!("{}: Stop timer", self.tag());
             self.0.timeout.set(timer::TimerHandle::ZERO);
-            timer::unregister(hnd, self)
+            timer::unregister(hnd, self);
         }
     }
 

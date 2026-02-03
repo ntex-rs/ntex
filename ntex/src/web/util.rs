@@ -69,9 +69,9 @@ pub fn resource<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Resource<Err> {
 /// ```
 ///
 /// In the above example, three routes get added:
-///  * /{project_id}/path1
-///  * /{project_id}/path2
-///  * /{project_id}/path3
+///  * `/{project_id}/path1`
+///  * `/{project_id}/path2`
+///  * `/{project_id}/path3`
 ///
 pub fn scope<T: IntoPattern, Err: ErrorRenderer>(path: T) -> Scope<Err> {
     Scope::new(path)
@@ -94,7 +94,7 @@ pub fn route<Err: ErrorRenderer>() -> Route<Err> {
 /// ```
 ///
 /// In the above example, one `GET` route gets added:
-///  * /{project_id}
+///  * `/{project_id}`
 ///
 pub fn get<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::GET)
@@ -112,7 +112,7 @@ pub fn get<Err: ErrorRenderer>() -> Route<Err> {
 /// ```
 ///
 /// In the above example, one `POST` route gets added:
-///  * /{project_id}
+///  * `/{project_id}`
 ///
 pub fn post<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::POST)
@@ -130,7 +130,7 @@ pub fn post<Err: ErrorRenderer>() -> Route<Err> {
 /// ```
 ///
 /// In the above example, one `PUT` route gets added:
-///  * /{project_id}
+///  * `/{project_id}`
 ///
 pub fn put<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::PUT)
@@ -148,7 +148,7 @@ pub fn put<Err: ErrorRenderer>() -> Route<Err> {
 /// ```
 ///
 /// In the above example, one `PATCH` route gets added:
-///  * /{project_id}
+///  * `/{project_id}`
 ///
 pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::PATCH)
@@ -166,7 +166,7 @@ pub fn patch<Err: ErrorRenderer>() -> Route<Err> {
 /// ```
 ///
 /// In the above example, one `DELETE` route gets added:
-///  * /{project_id}
+///  * `/{project_id}`
 ///
 pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::DELETE)
@@ -184,7 +184,7 @@ pub fn delete<Err: ErrorRenderer>() -> Route<Err> {
 /// ```
 ///
 /// In the above example, one `HEAD` route gets added:
-///  * /{project_id}
+///  * `/{project_id}`
 ///
 pub fn head<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::HEAD)
@@ -202,7 +202,7 @@ pub fn head<Err: ErrorRenderer>() -> Route<Err> {
 /// ```
 ///
 /// In the above example, one `GET` route gets added:
-///  * /{project_id}
+///  * `/{project_id}`
 ///
 pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
     Route::new().method(method)

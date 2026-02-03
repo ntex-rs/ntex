@@ -4,18 +4,18 @@ use std::{fs::File, io::BufReader, sync::Arc};
 use tls_rustls::ClientConfig;
 use tls_rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
-pub fn tls_connector() -> ClientConfig {
+pub(crate) fn tls_connector() -> ClientConfig {
     ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(NoCertificateVerification {}))
         .with_no_client_auth()
 }
 
-pub fn tls_acceptor_arc() -> Arc<tls_rustls::ServerConfig> {
+pub(crate) fn tls_acceptor_arc() -> Arc<tls_rustls::ServerConfig> {
     Arc::new(tls_acceptor())
 }
 
-pub fn tls_acceptor() -> tls_rustls::ServerConfig {
+pub(crate) fn tls_acceptor() -> tls_rustls::ServerConfig {
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let key_file = &mut BufReader::new(File::open("tests/key.pem").unwrap());
     let cert_chain = rustls_pemfile::certs(cert_file)
@@ -29,7 +29,7 @@ pub fn tls_acceptor() -> tls_rustls::ServerConfig {
 }
 
 #[derive(Debug)]
-pub struct NoCertificateVerification {}
+pub(crate) struct NoCertificateVerification {}
 
 impl tls_rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
     fn verify_server_cert(

@@ -57,6 +57,10 @@ pub struct State<T>(AppState, PhantomData<T>);
 
 impl<T: 'static> State<T> {
     /// Get reference to inner app data.
+    ///
+    /// # Panics
+    ///
+    /// Panics is `T` is not stored in app state
     pub fn get_ref(&self) -> &T {
         self.0.get::<T>().expect("Unexpected state")
     }

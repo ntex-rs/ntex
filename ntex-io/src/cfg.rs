@@ -285,8 +285,8 @@ impl BufConfig {
                     if v.len() < self.cache_size {
                         v.push(buf);
                     }
-                })
-            })
+                });
+            });
         }
     }
 }
@@ -309,7 +309,7 @@ impl LocalCache {
         let cache = unsafe { &mut *self.cache.get() };
 
         while cache.len() <= idx {
-            cache.push((Vec::new(), Vec::new()))
+            cache.push((Vec::new(), Vec::new()));
         }
         if first {
             f(&mut cache[idx].0)

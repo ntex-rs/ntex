@@ -157,14 +157,14 @@ impl HttpServiceConfig {
         max_timeout: Seconds,
         rate: u32,
     ) -> Self {
-        if !timeout.is_zero() {
+        if timeout.is_zero() {
+            self.headers_read_rate = None;
+        } else {
             self.headers_read_rate = Some(FrameReadRate {
                 rate,
                 timeout,
                 max_timeout,
             });
-        } else {
-            self.headers_read_rate = None;
         }
         self
     }
@@ -182,14 +182,14 @@ impl HttpServiceConfig {
         max_timeout: Seconds,
         rate: u32,
     ) -> Self {
-        if !timeout.is_zero() {
+        if timeout.is_zero() {
+            self.payload_read_rate = None;
+        } else {
             self.payload_read_rate = Some(FrameReadRate {
                 rate,
                 timeout,
                 max_timeout,
             });
-        } else {
-            self.payload_read_rate = None;
         }
         self
     }
@@ -310,7 +310,7 @@ impl DateServiceInner {
 }
 
 impl DateService {
-    fn check_date(&self) {
+    fn check_date() {
         DATE.with(|date| {
             if !date.current.get() {
                 date.update();
@@ -323,21 +323,21 @@ impl DateService {
                     });
                 });
             }
-        })
+        });
     }
 
-    pub(super) fn set_date<F: FnMut(&[u8])>(&self, mut f: F) {
-        self.check_date();
+    pub(super) fn set_date<F: FnMut(&[u8])>(mut f: F) {
+        DateService::check_date();
 
         DATE.with(|date| {
             let date = date.current_date.get();
-            f(&date[6..35])
-        })
+            f(&date[6..35]);
+        });
     }
 
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
-        self.check_date();
+        DateService::check_date();
 
         DATE.with(|date| {
             // SAFETY: reserves exact size
@@ -349,14 +349,14 @@ impl DateService {
                     dst.as_mut_ptr().add(len),
                     DATE_VALUE_LENGTH_HDR,
                 );
-                dst.set_len(len + DATE_VALUE_LENGTH_HDR)
+                dst.set_len(len + DATE_VALUE_LENGTH_HDR);
             }
-        })
+        });
     }
 
     #[doc(hidden)]
     pub fn bset_date_header(&self, dst: &mut BytesMut) {
-        self.check_date();
+        DateService::check_date();
 
         DATE.with(|date| {
             // SAFETY: reserves exact size
@@ -368,9 +368,9 @@ impl DateService {
                     dst.as_mut_ptr().add(len),
                     DATE_VALUE_LENGTH_HDR,
                 );
-                dst.set_len(len + DATE_VALUE_LENGTH_HDR)
+                dst.set_len(len + DATE_VALUE_LENGTH_HDR);
             }
-        })
+        });
     }
 }
 

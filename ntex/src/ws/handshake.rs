@@ -67,6 +67,10 @@ pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
 /// Create websocket's handshake response
 ///
 /// This function returns handshake `Response`, ready to send to peer.
+///
+/// # Panics
+///
+/// `RequestHead` must contain `SEC_WEBSOCKET_KEY` header
 pub fn handshake_response(req: &RequestHead) -> ResponseBuilder {
     let key = {
         let key = req.headers().get(header::SEC_WEBSOCKET_KEY).unwrap();

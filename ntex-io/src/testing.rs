@@ -1,5 +1,5 @@
 //! utilities and helpers for testing
-#![allow(clippy::let_underscore_future)]
+#![allow(clippy::missing_panics_doc)]
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::{any, cell::RefCell, cmp, fmt, future::poll_fn, io, mem, net, rc::Rc};
@@ -15,7 +15,7 @@ struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
 impl AtomicWaker {
     fn wake(&self) {
         if let Some(waker) = self.0.lock().unwrap().borrow_mut().take() {
-            waker.wake()
+            waker.wake();
         }
     }
 }
@@ -117,10 +117,12 @@ impl IoTest {
         )
     }
 
+    /// Check if client is dropped
     pub fn is_client_dropped(&self) -> bool {
         self.state.lock().unwrap().borrow().client_dropped
     }
 
+    /// Check if server is dropped
     pub fn is_server_dropped(&self) -> bool {
         self.state.lock().unwrap().borrow().server_dropped
     }
@@ -255,12 +257,11 @@ impl IoTest {
         }
 
         match mem::take(&mut ch.read) {
-            IoTestState::Ok => Poll::Pending,
+            IoTestState::Ok | IoTestState::Pending => Poll::Pending,
             IoTestState::Close => {
                 ch.read = IoTestState::Close;
                 Poll::Ready(Ok(0))
             }
-            IoTestState::Pending => Poll::Pending,
             IoTestState::Err(e) => Poll::Ready(Err(e)),
         }
     }
@@ -409,9 +410,7 @@ async fn run(io: Rc<IoTest>, ctx: IoContext) {
 fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
     let read = match ctx.poll_read_ready(cx) {
         Poll::Ready(Readiness::Ready) => read(io, ctx, cx),
-        Poll::Ready(Readiness::Shutdown) | Poll::Ready(Readiness::Terminate) => {
-            Poll::Ready(())
-        }
+        Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
         Poll::Pending => Poll::Pending,
     };
 
@@ -502,11 +501,10 @@ pub(super) fn write_io(
                     io::ErrorKind::WriteZero,
                     "failed to write frame to transport",
                 )));
-            } else {
-                written += n;
-                if written == len {
-                    break;
-                }
+            }
+            written += n;
+            if written == len {
+                break;
             }
         }
         log::debug!("{tag}: flushed {written} bytes");

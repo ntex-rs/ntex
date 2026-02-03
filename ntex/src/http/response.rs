@@ -44,8 +44,7 @@ impl Response<Body> {
     /// Convert response to response with body
     pub fn into_body<B>(self) -> Response<B> {
         let b = match self.body {
-            ResponseBody::Body(b) => b,
-            ResponseBody::Other(b) => b,
+            ResponseBody::Body(b) | ResponseBody::Other(b) => b,
         };
         Response {
             head: self.head,
@@ -250,7 +249,7 @@ impl<B: MessageBody> fmt::Debug for Response<B> {
             self.head.reason.unwrap_or(""),
         );
         let _ = writeln!(f, "  headers:");
-        for (key, val) in self.head.headers.iter() {
+        for (key, val) in &self.head.headers {
             let _ = writeln!(f, "    {key:?}: {val:?}");
         }
         let _ = writeln!(f, "  body: {:?}", self.body.size());
@@ -339,7 +338,7 @@ impl ResponseBuilder {
                     Err(e) => self.err = Some(log_error(e)),
                 },
                 Err(e) => self.err = Some(log_error(e)),
-            };
+            }
         }
         self
     }
@@ -372,7 +371,7 @@ impl ResponseBuilder {
                     Err(e) => self.err = Some(log_error(e)),
                 },
                 Err(e) => self.err = Some(log_error(e)),
-            };
+            }
         }
         self
     }
@@ -386,7 +385,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set connection type to KeepAlive
+    /// Set connection type to `KeepAlive`
     #[inline]
     pub fn keep_alive(&mut self) -> &mut Self {
         if let Some(parts) = parts(&mut self.head, &self.err) {
@@ -395,7 +394,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set connection type to Upgrade
+    /// Set connection type to `Upgrade`
     #[inline]
     pub fn upgrade<V>(&mut self, value: V) -> &mut Self
     where
@@ -439,7 +438,7 @@ impl ResponseBuilder {
                     parts.headers.insert(header::CONTENT_TYPE, value);
                 }
                 Err(e) => self.err = Some(log_error(e)),
-            };
+            }
         }
         self
     }
@@ -512,6 +511,7 @@ impl ResponseBuilder {
 
     /// Responses extensions
     #[inline]
+    #[allow(clippy::missing_panics_doc)]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
         head.extensions.borrow()
@@ -519,6 +519,7 @@ impl ResponseBuilder {
 
     /// Mutable reference to a the response's extensions
     #[inline]
+    #[allow(clippy::missing_panics_doc)]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
         head.extensions.borrow_mut()
@@ -535,6 +536,7 @@ impl ResponseBuilder {
     /// Set a body and generate `Response`.
     ///
     /// `ResponseBuilder` can not be used after this call.
+    #[allow(clippy::missing_panics_doc)]
     pub fn message_body<B>(&mut self, body: B) -> Response<B> {
         if let Some(e) = self.err.take() {
             return Response::from(e).into_body();
@@ -714,7 +716,7 @@ impl fmt::Debug for ResponseBuilder {
             head.reason.unwrap_or(""),
         );
         let _ = writeln!(f, "  headers:");
-        for (key, val) in head.headers.iter() {
+        for (key, val) in &head.headers {
             let _ = writeln!(f, "    {key:?}: {val:?}");
         }
         res

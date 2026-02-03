@@ -28,7 +28,7 @@ impl<Err: ErrorRenderer> Route<Err> {
         Route {
             handler: Rc::new(HandlerWrapper::new(|| async { HttpResponse::NotFound() })),
             methods: Vec::new(),
-            guards: Default::default(),
+            guards: Rc::default(),
         }
     }
 
@@ -244,7 +244,7 @@ where
     fn routes(self) -> Vec<Route<Err>> {
         let mut routes = Vec::with_capacity(N);
         for route in self {
-            routes.push(route.into())
+            routes.push(route.into());
         }
         routes
     }

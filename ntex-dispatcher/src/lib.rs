@@ -1,5 +1,6 @@
 //! Framed transport dispatcher
-#![allow(clippy::let_underscore_future)]
+#![deny(clippy::pedantic)]
+#![allow(clippy::similar_names, clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, ready};
 use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
 
@@ -60,12 +61,12 @@ pin_project_lite::pin_project! {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8  {
-        const READY_ERR     = 0b0000001;
-        const IO_ERR        = 0b0000010;
-        const KA_ENABLED    = 0b0000100;
-        const KA_TIMEOUT    = 0b0001000;
-        const READ_TIMEOUT  = 0b0010000;
-        const IDLE          = 0b0100000;
+        const READY_ERR     = 0b000_0001;
+        const IO_ERR        = 0b000_0010;
+        const KA_ENABLED    = 0b000_0100;
+        const KA_TIMEOUT    = 0b000_1000;
+        const READ_TIMEOUT  = 0b001_0000;
+        const IDLE          = 0b010_0000;
     }
 }
 
@@ -176,7 +177,7 @@ where
         match item {
             Ok(Some(val)) => {
                 if let Err(err) = io.encode(val, &self.codec) {
-                    self.error.set(Some(DispatcherError::Encoder(err)))
+                    self.error.set(Some(DispatcherError::Encoder(err)));
                 }
             }
             Err(err) => self.error.set(Some(DispatcherError::Service(err))),
@@ -221,9 +222,10 @@ where
 {
     type Output = Result<(), S::Error>;
 
+    #[allow(clippy::too_many_lines)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut().project();
-        let slf = &mut this.inner;
+        let this = self.as_mut().project();
+        let slf = this.inner;
 
         // handle service response future
         if let Some(fut) = slf.response.as_mut()
@@ -300,7 +302,7 @@ where
                         PollService::Item(item) => slf.call_service(cx, item, true),
                         PollService::ItemWait(item) => slf.call_service(cx, item, false),
                         PollService::Continue => continue,
-                    };
+                    }
 
                     let item = if let Err(err) = ready!(slf.shared.io.poll_flush(cx, false))
                     {
@@ -428,7 +430,7 @@ where
     fn poll_service(&mut self, cx: &mut Context<'_>) -> Poll<PollService<U>> {
         // wait until service becomes ready
         match self.shared.service.poll_ready(cx) {
-            Poll::Ready(Ok(_)) => Poll::Ready(self.check_error()),
+            Poll::Ready(Ok(())) => Poll::Ready(self.check_error()),
             // pause io read task
             Poll::Pending => {
                 log::trace!(

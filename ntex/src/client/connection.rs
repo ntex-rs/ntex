@@ -72,7 +72,7 @@ impl Connection {
                 close,
             );
         } else {
-            log::debug!("{:?}: http pool is not set, dropping", self);
+            log::debug!("{self:?}: http pool is not set, dropping");
         }
     }
 

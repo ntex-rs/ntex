@@ -1,4 +1,5 @@
 //! Various helpers for ntex applications to use during testing.
+#![allow(clippy::missing_panics_doc)]
 use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
@@ -120,7 +121,7 @@ where
     app.call(req).await.unwrap()
 }
 
-/// Helper function that returns a response body of a TestRequest
+/// Helper function that returns a response body of a `TestRequest`
 ///
 /// ```rust
 /// use ntex::{http::header, util::Bytes};
@@ -162,7 +163,7 @@ where
     bytes.freeze()
 }
 
-/// Helper function that returns a response body of a WebResponse.
+/// Helper function that returns a response body of a `WebResponse`
 ///
 /// ```rust
 /// use ntex::{util::Bytes, http::header};
@@ -209,7 +210,7 @@ where
     Ok(data.freeze())
 }
 
-/// Helper function that returns a deserialized response body of a TestRequest
+/// Helper function that returns a deserialized response body of a `TestRequest`
 ///
 /// ```rust
 /// use ntex::http::header;
@@ -274,8 +275,8 @@ pub async fn respond_to<T: Responder<DefaultError>>(
 
 /// Test `Request` builder.
 ///
-/// For unit testing, ntex provides a request builder type and a simple handler runner. TestRequest implements a builder-like pattern.
-/// You can generate various types of request via TestRequest's methods:
+/// For unit testing, ntex provides a request builder type and a simple handler runner. `TestRequest` implements a builder-like pattern.
+/// You can generate various types of request via `TestRequest`'s methods:
 ///  * `TestRequest::to_request` creates `ntex::http::Request` instance.
 ///  * `TestRequest::to_srv_request` creates `WebRequest` instance, which is used for testing middlewares and chain adapters.
 ///  * `TestRequest::to_srv_response` creates `WebResponse` instance.
@@ -331,12 +332,12 @@ impl Default for TestRequest {
 
 #[allow(clippy::wrong_self_convention)]
 impl TestRequest {
-    /// Create TestRequest and set request uri
+    /// Create `TestRequest` and set request uri
     pub fn with_uri(path: &str) -> TestRequest {
         TestRequest::default().uri(path)
     }
 
-    /// Create TestRequest and set header
+    /// Create `TestRequest` and set header
     pub fn with_header<K, V>(key: K, value: V) -> TestRequest
     where
         HeaderName: TryFrom<K>,
@@ -346,27 +347,27 @@ impl TestRequest {
         TestRequest::default().header(key, value)
     }
 
-    /// Create TestRequest and set method to `Method::GET`
+    /// Create `TestRequest` and set method to `Method::GET`
     pub fn get() -> TestRequest {
         TestRequest::default().method(Method::GET)
     }
 
-    /// Create TestRequest and set method to `Method::POST`
+    /// Create `TestRequest` and set method to `Method::POST`
     pub fn post() -> TestRequest {
         TestRequest::default().method(Method::POST)
     }
 
-    /// Create TestRequest and set method to `Method::PUT`
+    /// Create `TestRequest` and set method to `Method::PUT`
     pub fn put() -> TestRequest {
         TestRequest::default().method(Method::PUT)
     }
 
-    /// Create TestRequest and set method to `Method::PATCH`
+    /// Create `TestRequest` and set method to `Method::PATCH`
     pub fn patch() -> TestRequest {
         TestRequest::default().method(Method::PATCH)
     }
 
-    /// Create TestRequest and set method to `Method::DELETE`
+    /// Create `TestRequest` and set method to `Method::DELETE`
     pub fn delete() -> TestRequest {
         TestRequest::default().method(Method::DELETE)
     }
@@ -594,7 +595,7 @@ where
 
     let id = Uuid::now_v7();
     let (tx, rx) = mpsc::channel();
-    log::debug!("Starting {:?} web server {:?}", name, id);
+    log::debug!("Starting {name:?} web server {id:?}");
 
     let ssl = match cfg.stream {
         StreamType::Tcp => false,
@@ -940,7 +941,7 @@ impl TestServer {
                 .unwrap()
                 .connect()
                 .await
-                .map(|ws| ws.seal())
+                .map(WsConnection::seal)
         }
     }
 

@@ -81,7 +81,7 @@ where
     #[inline]
     async fn shutdown(&self) {
         if let Some(f) = self.f_shutdown.take() {
-            (f)().await
+            (f)().await;
         }
     }
 

@@ -74,12 +74,12 @@ impl Default for TestRequest {
 }
 
 impl TestRequest {
-    /// Create TestRequest and set request uri
+    /// Create `TestRequest` and set request uri
     pub fn with_uri(path: &str) -> TestRequest {
         TestRequest::default().uri(path).take()
     }
 
-    /// Create TestRequest and set header
+    /// Create `TestRequest` and set header
     pub fn with_header<K, V>(key: K, value: V) -> TestRequest
     where
         HeaderName: TryFrom<K>,
@@ -165,7 +165,7 @@ impl TestRequest {
             && let Ok(s) = conn.to_str()
             && s.to_lowercase().contains("upgrade")
         {
-            head.set_upgrade()
+            head.set_upgrade();
         }
 
         #[cfg(feature = "cookie")]
@@ -281,7 +281,7 @@ where
     let id = Uuid::now_v7();
     let cfg = cfg.into();
     let (tx, rx) = mpsc::channel();
-    log::debug!("Starting {:?} http server {:?}", name, id);
+    log::debug!("Starting {name:?} http server {id:?}");
 
     // run server in separate thread
     thread::spawn(move || {

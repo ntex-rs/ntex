@@ -13,7 +13,7 @@ use crate::web::{FromRequest, HttpRequest};
 /// be decoded into any type which depends upon data ordering e.g. tuples or tuple-structs.
 /// Attempts to do so will *fail at runtime*.
 ///
-/// [**QueryConfig**](struct.QueryConfig.html) allows to configure extraction process.
+/// [**`QueryConfig`**](struct.QueryConfig.html) allows to configure extraction process.
 ///
 /// ## Example
 ///
@@ -58,9 +58,10 @@ impl<T> Query<T> {
     where
         T: de::DeserializeOwned,
     {
-        serde_urlencoded::from_str::<T>(query_str)
-            .map(|val| Ok(Query(val)))
-            .unwrap_or_else(move |e| Err(QueryPayloadError::Deserialize(e)))
+        serde_urlencoded::from_str::<T>(query_str).map_or_else(
+            |e| Err(QueryPayloadError::Deserialize(e)),
+            |val| Ok(Query(val)),
+        )
     }
 }
 
@@ -131,18 +132,18 @@ where
 
     #[inline]
     async fn from_request(req: &HttpRequest, _: &mut Payload) -> Result<Self, Self::Error> {
-        serde_urlencoded::from_str::<T>(req.query_string())
-            .map(|val| Ok(Query(val)))
-            .unwrap_or_else(move |e| {
+        serde_urlencoded::from_str::<T>(req.query_string()).map_or_else(
+            move |e| {
                 let e = QueryPayloadError::Deserialize(e);
-
                 log::debug!(
                     "Failed during Query extractor deserialization. \
                      Request path: {:?}",
                     req.path()
                 );
                 Err(e)
-            })
+            },
+            |val| Ok(Query(val)),
+        )
     }
 }
 

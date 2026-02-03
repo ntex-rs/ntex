@@ -527,7 +527,7 @@ impl Buf for Bytes {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt)
+        self.advance_to(cnt);
     }
 }
 
@@ -544,7 +544,7 @@ impl bytes::buf::Buf for Bytes {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        self.advance_to(cnt)
+        self.advance_to(cnt);
     }
 }
 

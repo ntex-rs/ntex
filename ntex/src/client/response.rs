@@ -176,7 +176,7 @@ impl fmt::Debug for ClientResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\nClientResponse {:?} {}", self.version(), self.status(),)?;
         writeln!(f, "  headers:")?;
-        for (key, val) in self.headers().iter() {
+        for (key, val) in self.headers() {
             writeln!(f, "    {key:?}: {val:?}")?;
         }
         Ok(())
@@ -198,7 +198,7 @@ impl MessageBody {
         if let Some(l) = res.headers().get(&CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
                 if let Ok(l) = s.parse::<usize>() {
-                    len = Some(l)
+                    len = Some(l);
                 } else {
                     return Self::err(PayloadError::UnknownLength);
                 }
@@ -232,7 +232,7 @@ impl MessageBody {
     /// timeout.
     pub fn timeout(mut self, to: Millis) -> Self {
         if let Some(ref mut fut) = self.fut {
-            fut.timeout.reset(to)
+            fut.timeout.reset(to);
         }
         self
     }
@@ -307,7 +307,7 @@ where
             && let Ok(s) = l.to_str()
             && let Ok(l) = s.parse::<usize>()
         {
-            len = Some(l)
+            len = Some(l);
         }
 
         JsonBody {
@@ -336,7 +336,7 @@ where
     /// timeout.
     pub fn timeout(mut self, to: Millis) -> Self {
         if let Some(ref mut fut) = self.fut {
-            fut.timeout.reset(to)
+            fut.timeout.reset(to);
         }
         self
     }

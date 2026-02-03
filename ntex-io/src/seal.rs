@@ -54,6 +54,7 @@ pub struct IoBoxed(Io<Sealed>);
 
 impl IoBoxed {
     #[inline]
+    #[must_use]
     /// Clone current io object.
     ///
     /// Current io object becomes closed.

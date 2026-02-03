@@ -380,7 +380,7 @@ impl ResponseHead {
 
 impl Default for ResponseHead {
     fn default() -> Self {
-        Self::new(Default::default())
+        Self::new(StatusCode::default())
     }
 }
 
@@ -408,14 +408,14 @@ pub(crate) struct Message<T: Head> {
 impl<T: Head> Message<T> {
     /// Get new message from the pool of objects
     pub(crate) fn new() -> Self {
-        T::with_pool(|p| p.get_message())
+        T::with_pool(MessagePool::get_message)
     }
 }
 
 impl Message<ResponseHead> {
     /// Get new message from the pool of objects
     pub(crate) fn with_status(status: StatusCode) -> Self {
-        let mut msg = RESPONSE_POOL.with(|p| p.get_message());
+        let mut msg = RESPONSE_POOL.with(MessagePool::get_message);
         msg.status = status;
         msg
     }

@@ -1,3 +1,4 @@
+#![allow(clippy::cast_ptr_alignment, clippy::ptr_as_ptr)]
 use std::cell::{Cell, UnsafeCell};
 use std::future::{Future, poll_fn};
 use std::task::{Context, Poll};
@@ -96,9 +97,9 @@ impl IoState {
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
         if !self.flags.get().is_stopped() {
             log::trace!(
-                "{}: {} Io error {:?} flags: {:?}",
+                "{}: {:?} Io error {:?} flags: {:?}",
                 self.cfg.get().tag(),
-                self as *const _ as usize,
+                ptr::from_ref(self),
                 err,
                 self.flags.get()
             );
@@ -118,9 +119,9 @@ impl IoState {
             );
             if !self.dispatch_task.wake_checked() {
                 log::trace!(
-                    "{}: {} Dispatcher is not registered, flags: {:?}",
+                    "{}: {:?} Dispatcher is not registered, flags: {:?}",
                     self.cfg.get().tag(),
-                    self as *const _ as usize,
+                    ptr::from_ref(self),
                     self.flags.get()
                 );
             }
@@ -167,7 +168,7 @@ impl PartialEq for IoState {
 impl hash::Hash for IoState {
     #[inline]
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        (self as *const _ as usize).hash(state);
+        (ptr::from_ref(self) as usize).hash(state);
     }
 }
 
@@ -226,6 +227,7 @@ impl<I: IoStream> From<I> for Io {
 
 impl<F> Io<F> {
     #[inline]
+    #[must_use]
     /// Clone current io object.
     ///
     /// Current io object becomes closed.
@@ -318,7 +320,7 @@ impl<F: Filter> Io<F> {
         // Safety: .add_layer() only increases internal buffers
         // there is no api that holds references into buffers storage
         // all apis first removes buffer from storage and then work with it
-        unsafe { &mut *(Rc::as_ptr(&state.0) as *mut IoState) }
+        unsafe { &mut *(Rc::as_ptr(&state.0).cast_mut()) }
             .buffer
             .add_layer();
 
@@ -415,7 +417,7 @@ impl<F> Io<F> {
     #[inline]
     /// Wake write task and instruct to flush data.
     ///
-    /// This is async version of .poll_flush() method.
+    /// This is async version of `poll_flush()` method.
     pub async fn flush(&self, full: bool) -> io::Result<()> {
         poll_fn(|cx| self.poll_flush(cx, full)).await
     }
@@ -431,7 +433,7 @@ impl<F> Io<F> {
     ///
     /// If the io stream is not currently ready for reading,
     /// this method will store a clone of the Waker from the provided Context.
-    /// When the io stream becomes ready for reading, Waker::wake will be called on the waker.
+    /// When the io stream becomes ready for reading, `Waker::wake()` will be called on the waker.
     ///
     /// Return value
     /// The function returns:
@@ -746,9 +748,7 @@ impl FilterPtr {
     }
 
     fn update<F: Filter>(&self, filter: F) {
-        if self.is_set() {
-            panic!("Filter is set, must be dropped first");
-        }
+        assert!(!self.is_set(), "Filter is set, must be dropped first");
 
         let filter = Box::new(filter);
         let mut data = NULL;
@@ -759,7 +759,7 @@ impl FilterPtr {
             };
             self.filter.set(filter_ref);
 
-            let ptr = &mut data as *mut _ as *mut *mut F;
+            let ptr = &raw mut data as *mut *mut F;
             ptr.write(Box::into_raw(filter));
             data[KIND_IDX] |= KIND_PTR;
             self.data.set(data);
@@ -770,22 +770,23 @@ impl FilterPtr {
     fn filter<F: Filter>(&self) -> &F {
         let data = self.data.get();
         if data[KIND_IDX] & KIND_PTR != 0 {
-            let ptr = &data as *const _ as *const *mut F;
+            let ptr = &raw const data as *const *mut F;
             unsafe {
-                let p = (ptr.read() as *const _ as usize) & KIND_UNMASK_USIZE;
-                (p as *const F as *mut F).as_ref().unwrap()
+                let p = (ptr.read().cast_const() as usize) & KIND_UNMASK_USIZE;
+                (p as *const F).cast_mut().as_ref().unwrap()
             }
         } else {
             panic!("Wrong filter item");
         }
     }
 
+    #[allow(clippy::unnecessary_box_returns)]
     /// Get filter, panic if it is not set
     fn take_filter<F>(&self) -> Box<F> {
         let mut data = self.data.get();
         if data[KIND_IDX] & KIND_PTR != 0 {
             data[KIND_IDX] &= KIND_UNMASK;
-            let ptr = &mut data as *mut _ as *mut *mut F;
+            let ptr = &raw mut data as *mut *mut F;
             unsafe { Box::from_raw(*ptr) }
         } else {
             panic!(
@@ -801,7 +802,7 @@ impl FilterPtr {
 
         if data[KIND_IDX] & KIND_SEALED != 0 {
             data[KIND_IDX] &= KIND_UNMASK;
-            let ptr = &mut data as *mut _ as *mut Sealed;
+            let ptr = &raw mut data as *mut Sealed;
             unsafe { ptr.read() }
         } else {
             panic!(
@@ -854,7 +855,7 @@ impl FilterPtr {
             };
             self.filter.set(filter_ref);
 
-            let ptr = &mut data as *mut _ as *mut *mut Layer<T, F>;
+            let ptr = &raw mut data as *mut *mut Layer<T, F>;
             ptr.write(Box::into_raw(filter));
             data[KIND_IDX] |= KIND_PTR;
             self.data.set(data);
@@ -875,7 +876,7 @@ impl FilterPtr {
             };
             self.filter.set(filter_ref);
 
-            let ptr = &mut data as *mut _ as *mut *mut R;
+            let ptr = &raw mut data as *mut *mut R;
             ptr.write(Box::into_raw(filter));
             data[KIND_IDX] |= KIND_PTR;
             self.data.set(data);
@@ -903,7 +904,8 @@ impl FilterPtr {
             };
             self.filter.set(filter_ref);
 
-            let ptr = &mut data as *mut _ as *mut Sealed;
+            #[allow(clippy::cast_ptr_alignment)]
+            let ptr = (&raw mut data).cast::<Sealed>();
             ptr.write(filter);
             data[KIND_IDX] |= KIND_SEALED;
             self.data.set(data);
@@ -912,7 +914,7 @@ impl FilterPtr {
 }
 
 #[derive(Debug)]
-/// OnDisconnect future resolves when socket get disconnected
+/// `OnDisconnect` future resolves when socket get disconnected
 #[must_use = "OnDisconnect do nothing unless polled"]
 pub struct OnDisconnect {
     token: usize,

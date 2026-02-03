@@ -61,20 +61,20 @@ where
     match length {
         BodySize::None | BodySize::Stream => (),
         BodySize::Empty => {
-            hdrs.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"))
+            hdrs.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
         }
         BodySize::Sized(len) => hdrs.insert(
             header::CONTENT_LENGTH,
             HeaderValue::try_from(format!("{len}")).unwrap(),
         ),
-    };
+    }
 
     // send request
     let uri = &head.as_ref().uri;
-    let path = uri
-        .path_and_query()
-        .map(|p| ByteString::from(format!("{p}")))
-        .unwrap_or_else(|| ByteString::from(uri.path()));
+    let path = uri.path_and_query().map_or_else(
+        || ByteString::from(uri.path()),
+        |p| ByteString::from(format!("{p}")),
+    );
     let (snd_stream, rcv_stream) = client
         .client
         .send(head.as_ref().method.clone(), path, hdrs, eof)
@@ -94,7 +94,7 @@ where
 
     timeout_checked(timeout, get_response(rcv_stream))
         .await
-        .map_err(|_| SendRequestError::Timeout)
+        .map_err(|()| SendRequestError::Timeout)
         .and_then(|res| res)
 }
 
@@ -123,7 +123,9 @@ async fn get_response(
                     head.headers = headers;
                     head.version = Version::HTTP_2;
 
-                    let payload = if !eof {
+                    let payload = if eof {
+                        Payload::None
+                    } else {
                         log::debug!(
                             "{}: Creating local payload stream for {:?}",
                             stream.tag(),
@@ -144,7 +146,7 @@ async fn get_response(
                                         pl.feed_eof(Bytes::new());
                                         break;
                                     }
-                                    Either::Right(_) => break,
+                                    Either::Right(()) => break,
                                 };
 
                                 match kind {
@@ -171,7 +173,7 @@ async fn get_response(
                                                 pl.feed_eof(Bytes::new());
                                             }
                                             h2::StreamEof::Error(err) => {
-                                                pl.set_error(err.into())
+                                                pl.set_error(err.into());
                                             }
                                         }
                                     }
@@ -188,7 +190,7 @@ async fn get_response(
                                             .into(),
                                         );
                                     }
-                                    _ => {
+                                    h2::MessageKind::Headers { .. } => {
                                         pl.set_error(
                                             io::Error::new(
                                                 io::ErrorKind::Unsupported,
@@ -202,8 +204,6 @@ async fn get_response(
                             }
                         });
                         Payload::H2(payload)
-                    } else {
-                        Payload::None
                     };
                     Ok((head, payload))
                 }
@@ -232,7 +232,7 @@ async fn send_body<B: MessageBody>(
                     stream.id(),
                     b.len()
                 );
-                stream.send_payload(b, false).await?
+                stream.send_payload(b, false).await?;
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
@@ -259,7 +259,7 @@ impl H2Client {
     }
 
     pub(super) fn close(&self) {
-        self.client.close()
+        self.client.close();
     }
 
     pub(super) fn is_closed(&self) -> bool {

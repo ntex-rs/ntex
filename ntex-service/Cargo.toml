@@ -10,11 +10,14 @@ documentation = "https://docs.rs/ntex-service/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [lib]
 name = "ntex_service"
 path = "src/lib.rs"
+
+[lints]
+workspace = true
 
 [features]
 default = []

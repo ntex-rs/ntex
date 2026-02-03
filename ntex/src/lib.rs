@@ -6,22 +6,27 @@
 //! * `rustls` - enables ssl support via `rustls` crate
 //! * `compress` - enables compression support in http and web modules
 //! * `cookie` - enables cookie support in http and web modules
-#![warn(
-    rust_2018_idioms,
-    unreachable_pub,
-    // missing_debug_implementations,
-    // missing_docs
-)]
+#![deny(clippy::pedantic)]
 #![allow(
     type_alias_bounds,
-    clippy::type_complexity,
-    clippy::borrow_interior_mutable_const,
-    clippy::needless_doctest_main,
-    clippy::too_many_arguments,
-    clippy::new_without_default,
-    clippy::let_underscore_future,
     unsafe_op_in_unsafe_fn,
-    internal_features
+    missing_debug_implementations,
+    missing_docs,
+    clippy::borrow_interior_mutable_const,
+    clippy::cast_possible_truncation,
+    clippy::let_underscore_future,
+    clippy::missing_errors_doc,
+    clippy::missing_fields_in_debug,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate,
+    clippy::new_without_default,
+    clippy::needless_doctest_main,
+    clippy::return_self_not_must_use,
+    clippy::similar_names,
+    clippy::struct_field_names,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::type_complexity
 )]
 // Used for fake variadics
 #![cfg_attr(any(docsrs, docsrs_dep), feature(rustdoc_internals))]

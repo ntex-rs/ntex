@@ -101,7 +101,7 @@ impl Codec {
     #[inline]
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
-        DateService.set_date_header(dst)
+        DateService.set_date_header(dst);
     }
 
     fn insert_flags(&self, f: Flags) {
@@ -135,13 +135,13 @@ impl Decoder for Codec {
             if ctype == ConnectionType::KeepAlive
                 && !flags.contains(Flags::KEEPALIVE_ENABLED)
             {
-                self.ctype.set(ConnectionType::Close)
+                self.ctype.set(ConnectionType::Close);
             } else {
-                self.ctype.set(ctype)
+                self.ctype.set(ctype);
             }
 
             if let PayloadType::Stream(_) = payload {
-                self.insert_flags(Flags::STREAM)
+                self.insert_flags(Flags::STREAM);
             }
             Ok(Some((req, payload)))
         } else {
@@ -164,7 +164,7 @@ impl Encoder for Codec {
                 if let Some(ct) = res.head().ctype()
                     && ct != ConnectionType::KeepAlive
                 {
-                    self.ctype.set(ct)
+                    self.ctype.set(ct);
                 }
 
                 // encode message

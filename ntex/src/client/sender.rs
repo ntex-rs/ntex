@@ -185,10 +185,10 @@ impl RequestHeadType {
                     match HeaderValue::try_from(value) {
                         Ok(v) => {
                             let h = extra_headers.get_or_insert(HeaderMap::new());
-                            h.insert(key, v)
+                            h.insert(key, v);
                         }
                         Err(e) => return Err(e.into()),
-                    };
+                    }
                 }
             }
         }

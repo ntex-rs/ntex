@@ -232,7 +232,7 @@ where
     }
 }
 
-/// Convert `AsyncFn(Cfg) -> Result<Srv, Err>` fn to NewService
+/// `ServiceFactory` for a `AsyncFn(Cfg) -> Result<Srv, Err>` function
 pub struct FnServiceConfig<F, Cfg, Srv, Req, Err>
 where
     F: AsyncFn(Cfg) -> Result<Srv, Err>,
@@ -286,7 +286,7 @@ where
     }
 }
 
-/// Converter for `Fn() -> Future<Service>` fn
+/// `ServiceFactory` for a `Fn() -> Future<Service>` function
 pub struct FnServiceNoConfig<F, S, Req, E>
 where
     F: AsyncFn() -> Result<S, E>,

@@ -38,7 +38,7 @@ where
 
     #[inline]
     async fn shutdown(&self) {
-        util::shutdown(&self.svc1, &self.svc2).await
+        util::shutdown(&self.svc1, &self.svc2).await;
     }
 
     #[inline]
@@ -47,8 +47,8 @@ where
         req: Req,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<B::Response, A::Error> {
-        let res = ctx.call(&self.svc1, req).await?;
-        ctx.call(&self.svc2, res).await
+        let result = ctx.call(&self.svc1, req).await?;
+        ctx.call(&self.svc2, result).await
     }
 }
 

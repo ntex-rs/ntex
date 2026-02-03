@@ -364,7 +364,7 @@ impl<F> fmt::Debug for Upgrade<F> {
     }
 }
 
-/// KeepAlive
+/// Service disconnect initiated by server
 #[derive(Debug)]
 pub struct ServiceDisconnect(ServiceDisconnectReason);
 
@@ -477,7 +477,7 @@ impl ProtocolError {
     }
 
     #[inline]
-    /// Ack ProtocolError message
+    /// Ack `ProtocolError` message
     pub fn ack<F>(self) -> ControlAck<F> {
         let (res, body) = self.0.error_response().into_parts();
 
@@ -525,7 +525,7 @@ impl PeerGone {
     }
 
     #[inline]
-    /// Ack PeerGone message
+    /// Ack `PeerGone` message
     pub fn ack<F>(self) -> ControlAck<F> {
         ControlAck {
             result: ControlResult::Stop,

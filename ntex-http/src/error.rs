@@ -81,16 +81,13 @@ impl Error {
 
     /// Return a reference to the lower level, inner error.
     pub fn get_ref(&self) -> &(dyn error::Error + 'static) {
-        use self::ErrorKind::*;
-
         match self.inner {
-            StatusCode(ref e) => e,
-            Method(ref e) => e,
-            Uri(ref e) => e,
-            UriParts(ref e) => e,
-            HeaderName(ref e) => e,
-            HeaderValue(ref e) => e,
-            Http => &DEFAULT_ERR,
+            ErrorKind::StatusCode(ref e) => e,
+            ErrorKind::Method(ref e) => e,
+            ErrorKind::Uri(ref e) | ErrorKind::UriParts(ref e) => e,
+            ErrorKind::HeaderName(ref e) => e,
+            ErrorKind::HeaderValue(ref e) => e,
+            ErrorKind::Http => &DEFAULT_ERR,
         }
     }
 }

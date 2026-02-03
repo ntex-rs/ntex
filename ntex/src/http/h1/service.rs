@@ -185,7 +185,7 @@ where
 
         Ok(H1ServiceHandler {
             config,
-            inflight: RefCell::new(Default::default()),
+            inflight: RefCell::new(HashSet::default()),
             rx: Cell::new(Some(rx)),
             tx: Cell::new(Some(tx)),
             _t: marker::PhantomData,
@@ -317,9 +317,7 @@ where
 
     match ack {
         Ok(ack) => {
-            let io = if let ControlResult::Connect(io) = ack.result {
-                io
-            } else {
+            let ControlResult::Connect(io) = ack.result else {
                 unreachable!();
             };
 

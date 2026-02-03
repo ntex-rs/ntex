@@ -366,7 +366,7 @@ where
                 routing: router_factory,
             },
             None,
-        )
+        );
     }
 }
 
@@ -462,7 +462,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
         Ok(ResourceRouter {
             default,
             state: self.state.clone(),
-            routes: self.routes.iter().map(|route| route.service()).collect(),
+            routes: self.routes.iter().map(Route::service).collect(),
         })
     }
 }
@@ -482,7 +482,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {
         mut req: WebRequest<Err>,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        for route in self.routes.iter() {
+        for route in &self.routes {
             if route.check(&mut req) {
                 if let Some(ref state) = self.state {
                     req.set_state_container(state.clone());

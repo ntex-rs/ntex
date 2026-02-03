@@ -20,7 +20,7 @@ use crate::web::{FromRequest, HttpRequest, Responder};
 /// To extract typed information from request's body, the type `T` must
 /// implement the `Deserialize` trait from *serde*.
 ///
-/// [**JsonConfig**](struct.JsonConfig.html) allows to configure extraction
+/// [**`JsonConfig`**](struct.JsonConfig.html) allows to configure extraction
 /// process.
 ///
 /// ## Example
@@ -129,7 +129,7 @@ where
 /// To extract typed information from request's body, the type `T` must
 /// implement the `Deserialize` trait from *serde*.
 ///
-/// [**JsonConfig**](struct.JsonConfig.html) allows to configure extraction
+/// [**`JsonConfig`**](struct.JsonConfig.html) allows to configure extraction
 /// process.
 ///
 /// ## Example
@@ -167,8 +167,7 @@ where
         let req2 = req.clone();
         let (limit, ctype) = req
             .app_state::<JsonConfig>()
-            .map(|c| (c.limit, c.content_type.clone()))
-            .unwrap_or((32768, None));
+            .map_or((32768, None), |c| (c.limit, c.content_type.clone()));
 
         match JsonBody::new(req, payload, ctype).limit(limit).await {
             Err(e) => {
@@ -366,9 +365,8 @@ where
                 let chunk = item?;
                 if (body.len() + chunk.len()) > limit {
                     return Err(JsonPayloadError::Overflow);
-                } else {
-                    body.extend_from_slice(&chunk);
                 }
+                body.extend_from_slice(&chunk);
             }
             Ok(serde_json::from_slice::<U>(&body)?)
         }));

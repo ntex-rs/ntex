@@ -406,7 +406,7 @@ impl BytesMut {
     /// slice or if it comes after the `end` of the configured window.
     #[inline]
     pub unsafe fn set_len(&mut self, len: usize) {
-        self.storage.set_len(len)
+        self.storage.set_len(len);
     }
 
     /// Reserves capacity for at least `additional` more bytes to be inserted
@@ -620,7 +620,7 @@ unsafe impl bytes::buf::BufMut for BytesMut {
 
     #[inline]
     unsafe fn advance_mut(&mut self, cnt: usize) {
-        BufMut::advance_mut(self, cnt)
+        BufMut::advance_mut(self, cnt);
     }
 
     #[inline]
@@ -637,17 +637,17 @@ unsafe impl bytes::buf::BufMut for BytesMut {
 
     #[inline]
     fn put_slice(&mut self, src: &[u8]) {
-        BufMut::put_slice(self, src)
+        BufMut::put_slice(self, src);
     }
 
     #[inline]
     fn put_u8(&mut self, n: u8) {
-        BufMut::put_u8(self, n)
+        BufMut::put_u8(self, n);
     }
 
     #[inline]
     fn put_i8(&mut self, n: i8) {
-        BufMut::put_i8(self, n)
+        BufMut::put_i8(self, n);
     }
 }
 
@@ -810,7 +810,7 @@ impl<'a> Extend<&'a u8> for BytesMut {
     where
         T: IntoIterator<Item = &'a u8>,
     {
-        self.extend(iter.into_iter().copied())
+        self.extend(iter.into_iter().copied());
     }
 }
 

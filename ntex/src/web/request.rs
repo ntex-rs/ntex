@@ -17,7 +17,7 @@ use super::service::AppState;
 
 /// An service http request
 ///
-/// WebRequest allows mutable access to request's internal structures
+/// `WebRequest` allows mutable access to request's internal structures
 pub struct WebRequest<Err> {
     req: HttpRequest,
     _t: PhantomData<Err>,
@@ -163,7 +163,7 @@ impl<Err> WebRequest<Err> {
             .unwrap_or(None)
     }
 
-    /// Get *ConnectionInfo* for the current request.
+    /// Get `ConnectionInfo` for the current request.
     #[inline]
     pub fn connection_info(&self) -> Ref<'_, ConnectionInfo> {
         ConnectionInfo::get(self.head(), self.app_config())
@@ -283,7 +283,7 @@ impl<Err: ErrorRenderer> fmt::Debug for WebRequest<Err> {
             writeln!(f, "  params: {:?}", self.match_info())?;
         }
         writeln!(f, "  headers:")?;
-        for (key, val) in self.headers().iter() {
+        for (key, val) in self.headers() {
             if key == header::AUTHORIZATION {
                 writeln!(f, "    {key:?}: <REDACTED>")?;
             } else {

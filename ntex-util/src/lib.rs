@@ -1,5 +1,11 @@
 //! Utilities for ntex framework
-#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+#![deny(clippy::pedantic)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    clippy::missing_errors_doc
+)]
 
 pub mod channel;
 pub mod error;

@@ -91,11 +91,11 @@ impl Parser {
         max_size: usize,
     ) -> Result<Option<(bool, OpCode, Option<Bytes>)>, ProtocolError> {
         // try to parse ws frame metadata
-        let (idx, finished, opcode, length, mask) =
-            match Parser::parse_metadata(src, server, max_size)? {
-                None => return Ok(None),
-                Some(res) => res,
-            };
+        let Some((idx, finished, opcode, length, mask)) =
+            Parser::parse_metadata(src, server, max_size)?
+        else {
+            return Ok(None);
+        };
 
         // not enough data
         if src.len() < idx + length {
@@ -135,6 +135,7 @@ impl Parser {
     /// Parse the payload of a close frame.
     pub fn parse_close_payload(payload: &[u8]) -> Option<CloseReason> {
         if payload.len() >= 2 {
+            #[allow(clippy::missing_panics_doc)]
             let raw_code = u16::from_be_bytes(TryFrom::try_from(&payload[..2]).unwrap());
             let code = CloseCode::from(raw_code);
             let description = if payload.len() > 2 {
@@ -180,7 +181,7 @@ impl Parser {
             dst.reserve(p_len + 10);
             dst.extend_from_slice(&[one, two | 127]);
             dst.put_u64(payload_len as u64);
-        };
+        }
 
         if mask {
             let mask: u32 = WyRand::new().generate();
@@ -207,7 +208,7 @@ impl Parser {
             }
         };
 
-        Parser::write_message(dst, payload, OpCode::Close, true, mask)
+        Parser::write_message(dst, payload, OpCode::Close, true, mask);
     }
 }
 

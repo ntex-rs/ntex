@@ -52,9 +52,9 @@ type HttpNewService<Err: ErrorRenderer> =
 /// ```
 ///
 /// In the above example three routes get registered:
-///  * /{project_id}/path1 - reponds to all http method
-///  * /{project_id}/path2 - `GET` requests
-///  * /{project_id}/path3 - `HEAD` requests
+///  * `/{project_id}/path1` - reponds to all http method
+///  * `/{project_id}/path2` - `GET` requests
+///  * `/{project_id}/path3` - `HEAD` requests
 ///
 pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
@@ -214,9 +214,9 @@ where
     ///
     /// ntex web provides several services implementations:
     ///
-    /// * *Resource* is an entry in resource table which corresponds to requested URL.
-    /// * *Scope* is a set of resources with common root path.
-    /// * "StaticFiles" is a service for static files support
+    /// * *`Resource`* is an entry in resource table which corresponds to requested URL.
+    /// * *`Scope`* is a set of resources with common root path.
+    /// * *`StaticFiles`* is a service for static files support
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpRequest};
@@ -348,7 +348,7 @@ where
     /// necessary, across all requests managed by the *Scope*. Scope-level
     /// middleware is more limited in what it can modify, relative to Route or
     /// Application level middleware, in that Scope-level middleware can not modify
-    /// WebResponse.
+    /// `WebResponse`.
     ///
     /// Use middleware when you need to read or modify *every* request in some way.
     pub fn wrap<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
@@ -446,7 +446,7 @@ where
                 routing: router_factory,
             },
             Some(Rc::new(rmap)),
-        )
+        );
     }
 }
 

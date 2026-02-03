@@ -132,8 +132,8 @@ where
     type Output = Result<(), Rc<dyn error::Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
-        let inner = &mut this.inner;
+        let this = self.project();
+        let inner = this.inner;
 
         loop {
             *this.st = match this.st {
@@ -162,12 +162,14 @@ where
                 State::CallControl { fut } => match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(ControlAck { result })) => match result {
                         ControlResult::Publish(req) => inner.publish(req),
-                        ControlResult::Response(res, body) => {
+                        ControlResult::Response(res, body)
+                        | ControlResult::Error(res, body)
+                        | ControlResult::ProtocolError(res, body) => {
                             inner.send_response(res, body.into())
                         }
                         ControlResult::Continue(req) => {
                             let result = inner.io.with_write_buf(|buf| {
-                                buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n")
+                                buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                             });
                             if let Err(err) = result {
                                 *this.st = inner.ctl_peer_gone(Some(err));
@@ -184,9 +186,6 @@ where
                             inner.disconnect = Some(ServiceDisconnectReason::ExpectFailed);
                             inner.send_response(res, body.into())
                         }
-                        ControlResult::Error(res, body) => {
-                            inner.send_response(res, body.into())
-                        }
                         ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
                         ControlResult::UpgradeAck(req) => {
                             inner.disconnect =
@@ -197,9 +196,6 @@ where
                             .ctl_svc_disconnect(ServiceDisconnectReason::UpgradeHandled),
                         ControlResult::UpgradeFailed(res, body) => {
                             inner.disconnect = Some(ServiceDisconnectReason::UpgradeFailed);
-                            inner.send_response(res, body.into())
-                        }
-                        ControlResult::ProtocolError(res, body) => {
                             inner.send_response(res, body.into())
                         }
                         ControlResult::Stop => inner.stop(),
@@ -294,17 +290,12 @@ where
                 // configure request payload
                 match pl {
                     PayloadType::None => (),
-                    PayloadType::Payload(decoder) => {
+                    PayloadType::Payload(decoder) | PayloadType::Stream(decoder) => {
                         let (ps, pl) = bstream::channel();
                         req.replace_payload(http::Payload::H1(pl));
                         self.payload = Some((decoder, ps));
                     }
-                    PayloadType::Stream(decoder) => {
-                        let (ps, pl) = bstream::channel();
-                        req.replace_payload(http::Payload::H1(pl));
-                        self.payload = Some((decoder, ps));
-                    }
-                };
+                }
                 self.control(Control::request(req))
             }
             Err(RecvError::WriteBackpressure) => {
@@ -407,7 +398,7 @@ where
                 Some(Ok(item)) => {
                     log::trace!("{}: Got response chunk: {:?}", self.io.tag(), item.len());
                     match self.io.encode(Message::Chunk(Some(item)), &self.codec) {
-                        Ok(_) => continue,
+                        Ok(()) => continue,
                         Err(err) => self.ctl_proto_err(err.into()),
                     }
                 }
@@ -448,9 +439,10 @@ where
         } else {
             // check for io changes, it could be close while waiting for service call
             match ready!(self.io.poll_status_update(cx)) {
-                IoStatusUpdate::KeepAlive => Poll::Pending,
+                IoStatusUpdate::KeepAlive | IoStatusUpdate::WriteBackpressure => {
+                    Poll::Pending
+                }
                 IoStatusUpdate::PeerGone(e) => Poll::Ready(self.ctl_peer_gone(e)),
-                IoStatusUpdate::WriteBackpressure => Poll::Pending,
             }
         }
     }
@@ -485,7 +477,7 @@ where
         // check if payload data is required
         if self.payload.is_none() {
             return Poll::Ready(Ok(()));
-        };
+        }
 
         match self.payload.as_ref().unwrap().1.poll_ready(cx) {
             Poll::Ready(bstream::Status::Ready) => {
@@ -536,9 +528,8 @@ where
                                         .is_pending()
                                     {
                                         break;
-                                    } else {
-                                        continue;
                                     }
+                                    continue;
                                 }
                                 RecvError::KeepAlive => {
                                     if let Err(err) = self.handle_timeout() {
@@ -756,7 +747,9 @@ where
     }
 
     fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, C, S, B> {
-        if !self.flags.contains(Flags::DISCONNECT_SENT) {
+        if self.flags.contains(Flags::DISCONNECT_SENT) {
+            self.stop()
+        } else {
             self.flags.insert(Flags::DISCONNECT_SENT);
             State::CallControl {
                 fut: self
@@ -764,8 +757,6 @@ where
                     .control
                     .call_nowait(Control::svc_disconnect(reason)),
             }
-        } else {
-            self.stop()
         }
     }
 

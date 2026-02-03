@@ -160,8 +160,8 @@ async fn test_rustls_string() {
         )
         .and_then(
             fn_service(|io: Io<_>| async move {
-                assert!(io.query::<PeerCert>().as_ref().is_none());
-                assert!(io.query::<PeerCertChain>().as_ref().is_none());
+                assert!(io.query::<PeerCert<'_>>().as_ref().is_none());
+                assert!(io.query::<PeerCertChain<'_>>().as_ref().is_none());
                 io.send(Bytes::from_static(b"test"), &BytesCodec)
                     .await
                     .unwrap();
@@ -190,10 +190,13 @@ async fn test_rustls_string() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(
-        io.query::<PeerCert>().as_ref().unwrap().0,
+        io.query::<PeerCert<'_>>().as_ref().unwrap().0,
         *cert_chain.first().unwrap()
     );
-    assert_eq!(io.query::<PeerCertChain>().as_ref().unwrap().0, cert_chain);
+    assert_eq!(
+        io.query::<PeerCertChain<'_>>().as_ref().unwrap().0,
+        cert_chain
+    );
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 

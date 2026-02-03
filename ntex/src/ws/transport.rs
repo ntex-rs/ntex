@@ -1,4 +1,4 @@
-//! An implementation of WebSockets base bytes streams
+//! An implementation of `WebSockets` base bytes streams
 use std::{cell::Cell, io, task::Poll};
 
 use crate::codec::{Decoder, Encoder};
@@ -17,7 +17,7 @@ bitflags::bitflags! {
 }
 
 #[derive(Clone, Debug)]
-/// An implementation of WebSockets streams
+/// An implementation of `WebSockets` streams
 pub struct WsTransport {
     codec: Codec,
     flags: Cell<Flags>,
@@ -87,14 +87,12 @@ impl FilterLayer for WsTransport {
                 // make sure we've got room
                 buf.cfg().resize(&mut dst);
 
-                let frame = if let Some(frame) =
-                    self.codec.decode(&mut src).map_err(|e| {
-                        log::trace!("Failed to decode ws codec frames: {e:?}");
-                        self.insert_flags(Flags::PROTO_ERR);
-                        io::Error::new(io::ErrorKind::InvalidData, e)
-                    })? {
-                    frame
-                } else {
+                let Some(frame) = self.codec.decode(&mut src).map_err(|e| {
+                    log::trace!("Failed to decode ws codec frames: {e:?}");
+                    self.insert_flags(Flags::PROTO_ERR);
+                    io::Error::new(io::ErrorKind::InvalidData, e)
+                })?
+                else {
                     break;
                 };
 
@@ -139,7 +137,7 @@ impl FilterLayer for WsTransport {
                         buf.want_shutdown();
                         break;
                     }
-                };
+                }
             }
 
             let nb = dst.len() - dst_len;
@@ -166,7 +164,7 @@ impl FilterLayer for WsTransport {
 }
 
 #[derive(Clone, Debug)]
-/// WebSockets transport service
+/// `WebSockets` transport service
 pub struct WsTransportService {
     codec: Codec,
 }

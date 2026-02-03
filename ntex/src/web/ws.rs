@@ -1,4 +1,4 @@
-//! WebSockets protocol support
+//! `WebSockets` protocol support
 use std::{fmt, rc::Rc};
 
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
@@ -102,8 +102,9 @@ where
             DispatchItem::Control(_) => Ok(None),
             DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
             DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
-            DispatchItem::Stop(Reason::Decoder(e))
-            | DispatchItem::Stop(Reason::Encoder(e)) => Err(WsError::Protocol(e)),
+            DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+                Err(WsError::Protocol(e))
+            }
             DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
         }))
     });
@@ -111,7 +112,7 @@ where
     start_with(req, subprotocol, factory).await
 }
 
-/// Start websocket service handling raw DispatchItem messages requiring manual control/stop logic,
+/// Start websocket service handling raw `DispatchItem` messages requiring manual control/stop logic,
 /// including the chosen subprotocol in the response.
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included

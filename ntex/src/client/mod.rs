@@ -15,6 +15,7 @@
 //!     println!("Response: {:?}", response);
 //! }
 //! ```
+#![allow(clippy::missing_panics_doc)]
 use std::rc::Rc;
 
 mod builder;
@@ -115,7 +116,7 @@ impl Client {
     {
         let mut req = ClientRequest::new(method, url, self.0.clone());
 
-        for (key, value) in self.0.config.headers.iter() {
+        for (key, value) in &self.0.config.headers {
             req = req.set_header_if_none(key.clone(), value.clone());
         }
         req
@@ -131,7 +132,7 @@ impl Client {
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
         let mut req = self.request(head.method.clone(), url);
-        for (key, value) in head.headers.iter() {
+        for (key, value) in &head.headers {
             req = req.set_header_if_none(key.clone(), value.clone());
         }
         req

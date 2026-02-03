@@ -1,5 +1,5 @@
 //! Form extractor
-use std::{fmt, future::Future, ops, pin::Pin, task::Context, task::Poll};
+use std::{borrow::Cow, fmt, future::Future, ops, pin::Pin, task::Context, task::Poll};
 
 use encoding_rs::{Encoding, UTF_8};
 use serde::{Serialize, de::DeserializeOwned};
@@ -22,7 +22,7 @@ use crate::web::{FromRequest, HttpRequest, Responder};
 /// To extract typed information from request's body, the type `T` must
 /// implement the `Deserialize` trait from *serde*.
 ///
-/// [**FormConfig**](struct.FormConfig.html) allows to configure extraction
+/// [**`FormConfig`**](struct.FormConfig.html) allows to configure extraction
 /// process.
 ///
 /// ### Example
@@ -105,10 +105,7 @@ where
         req: &HttpRequest,
         payload: &mut Payload,
     ) -> Result<Self, Self::Error> {
-        let limit = req
-            .app_state::<FormConfig>()
-            .map(|c| c.limit)
-            .unwrap_or(16384);
+        let limit = req.app_state::<FormConfig>().map_or(16384, |c| c.limit);
 
         match UrlEncoded::new(req, payload).limit(limit).await {
             Err(e) => Err(e),
@@ -221,23 +218,22 @@ impl<U> UrlEncoded<U> {
         if req.content_type().to_lowercase() != "application/x-www-form-urlencoded" {
             return Self::err(UrlencodedError::ContentType);
         }
-        let encoding = match req.encoding() {
-            Ok(enc) => enc,
-            Err(_) => return Self::err(UrlencodedError::ContentType),
+        let Ok(encoding) = req.encoding() else {
+            return Self::err(UrlencodedError::ContentType);
         };
 
         let mut len = None;
         if let Some(l) = req.headers().get(&CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
                 if let Ok(l) = s.parse::<usize>() {
-                    len = Some(l)
+                    len = Some(l);
                 } else {
                     return Self::err(UrlencodedError::UnknownLength);
                 }
             } else {
                 return Self::err(UrlencodedError::UnknownLength);
             }
-        };
+        }
 
         #[cfg(feature = "compress")]
         let payload = Decoder::from_headers(payload.take(), req.headers());
@@ -309,9 +305,8 @@ where
                         size: body.len() + chunk.len(),
                         limit,
                     });
-                } else {
-                    body.extend_from_slice(&chunk);
                 }
+                body.extend_from_slice(&chunk);
             }
 
             if encoding == UTF_8 {
@@ -319,7 +314,7 @@ where
             } else {
                 let body = encoding
                     .decode_without_bom_handling_and_without_replacement(&body)
-                    .map(|s| s.into_owned())
+                    .map(Cow::into_owned)
                     .ok_or(UrlencodedError::Parse)?;
                 serde_urlencoded::from_str::<U>(&body).map_err(|_| UrlencodedError::Parse)
             }

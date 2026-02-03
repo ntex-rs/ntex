@@ -16,6 +16,9 @@ rust-version = "1.88"
 name = "ntex_util"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 ntex-bytes = { workspace = true }
 ntex-service = { workspace = true }

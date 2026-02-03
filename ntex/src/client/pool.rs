@@ -158,7 +158,7 @@ impl Service<Connect> for ConnectionPool {
     async fn shutdown(&self) {
         self.0.stop.take();
         self.0.inner.borrow_mut().stopped = true;
-        let _ = self.0.svc.shutdown().await;
+        self.0.svc.shutdown().await;
     }
 
     async fn call(
@@ -254,7 +254,7 @@ impl Waiters {
                     log::trace!("Waiter for {:?} is gone, remove waiter", req.uri);
                     waiters.pop_front();
                     continue;
-                };
+                }
                 break;
             }
 
@@ -367,7 +367,7 @@ async fn run_connection_pool(
                         cleanup = true;
                         waiters.pop_front();
                         continue;
-                    };
+                    }
 
                     let result = inner.borrow_mut().acquire(key);
                     match result {
@@ -408,7 +408,7 @@ async fn run_connection_pool(
             }
 
             if cleanup {
-                waiters.cleanup()
+                waiters.cleanup();
             }
         }
 
@@ -458,7 +458,7 @@ impl OpenConnection {
                 fut,
                 uri,
             }
-            .await
+            .await;
         });
     }
 }
@@ -538,7 +538,7 @@ impl future::Future for OpenConnection {
                     );
                     if let Err(Ok(conn)) = this.tx.take().unwrap().send(Ok(conn)) {
                         // waiter is gone, return connection to pool
-                        conn.release(false)
+                        conn.release(false);
                     }
                     this.inner.borrow_mut().check_availibility();
                     Poll::Ready(())

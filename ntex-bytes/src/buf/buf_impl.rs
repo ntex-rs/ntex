@@ -6,21 +6,20 @@ macro_rules! buf_get_impl {
         // try to convert directly from the bytes
         // this Option<ret> trick is to avoid keeping a borrow on self
         // when advance() is called (mut borrow) and to call bytes() only once
-        let ret = $this
-            .chunk()
-            .get(..SIZE)
-            .map(|src| unsafe { $typ::$conv(*(src as *const _ as *const [_; SIZE])) });
+        #[allow(clippy::ptr_as_ptr)]
+        let ret = $this.chunk().get(..SIZE).map(|src| unsafe {
+            $typ::$conv(*(std::ptr::from_ref(src) as *const [_; SIZE]))
+        });
 
         if let Some(ret) = ret {
             // if the direct conversion was possible, advance and return
             $this.advance(SIZE);
             return ret;
-        } else {
-            // if not we copy the bytes in a temp buffer then convert
-            let mut buf = [0; SIZE];
-            $this.copy_to_slice(&mut buf); // (do the advance)
-            return $typ::$conv(buf);
         }
+        // if not we copy the bytes in a temp buffer then convert
+        let mut buf = [0; SIZE];
+        $this.copy_to_slice(&mut buf); // (do the advance)
+        return $typ::$conv(buf);
     }};
     (le => $this:ident, $typ:tt, $len_to_read:expr) => {{
         debug_assert!(mem::size_of::<$typ>() >= $len_to_read);
@@ -804,7 +803,7 @@ impl<T: Buf + ?Sized> Buf for &mut T {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        (**self).advance(cnt)
+        (**self).advance(cnt);
     }
 }
 
@@ -820,7 +819,7 @@ impl<T: Buf + ?Sized> Buf for Box<T> {
     }
 
     fn advance(&mut self, cnt: usize) {
-        (**self).advance(cnt)
+        (**self).advance(cnt);
     }
 }
 

@@ -38,7 +38,7 @@ where
 {
     fn register(&mut self, config: &mut WebServiceConfig<Err>) {
         if let Some(item) = self.factory.take() {
-            item.register(config)
+            item.register(config);
         }
     }
 }
@@ -209,7 +209,7 @@ impl WebServiceAdapter {
         WebServiceAdapter {
             rdef: path.patterns(),
             name: None,
-            guards: Default::default(),
+            guards: AllGuard::default(),
         }
     }
 
@@ -298,7 +298,7 @@ where
         if let Some(ref name) = self.name {
             rdef.name_mut().clone_from(name);
         }
-        config.register_service(rdef, guards, self.srv, None)
+        config.register_service(rdef, guards, self.srv, None);
     }
 }
 
@@ -341,7 +341,7 @@ where
     }
 }
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::wildcard_imports)]
 #[rustfmt::skip]
 mod m {
     use super::*;

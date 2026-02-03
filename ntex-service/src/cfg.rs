@@ -158,38 +158,44 @@ impl SharedCfg {
 
     /// Get a reference to a previously inserted on configuration.
     ///
-    /// Panics if shared config is building
+    /// # Panics
+    /// if shared config is in building stage
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
     {
-        if self.0.building {
-            panic!("{}: Cannot access shared config while building", self.tag());
-        }
+        assert!(
+            !self.0.building,
+            "{}: Cannot access shared config while building",
+            self.tag()
+        );
+
         let tp = TypeId::of::<T>();
         self.0
             .data
             .get(&tp)
             .and_then(|boxed| boxed.downcast_ref())
-            .map(Cfg)
-            .unwrap_or_else(|| {
-                MAPPING.with(|store| {
-                    let key = (self.0.id, tp);
-                    if let Some(boxed) = store.borrow().get(&key) {
-                        Cfg(boxed.downcast_ref().unwrap())
-                    } else {
-                        log::info!(
-                            "{}: Configuration {:?} does not exist, using default",
-                            self.tag(),
-                            T::NAME
-                        );
-                        let mut val = T::default();
-                        val.set_ctx(CfgContext(self.0));
-                        store.borrow_mut().insert(key, Box::leak(Box::new(val)));
-                        Cfg(store.borrow().get(&key).unwrap().downcast_ref().unwrap())
-                    }
-                })
-            })
+            .map_or_else(
+                || {
+                    MAPPING.with(|store| {
+                        let key = (self.0.id, tp);
+                        if let Some(boxed) = store.borrow().get(&key) {
+                            Cfg(boxed.downcast_ref().unwrap())
+                        } else {
+                            log::info!(
+                                "{}: Configuration {:?} does not exist, using default",
+                                self.tag(),
+                                T::NAME
+                            );
+                            let mut val = T::default();
+                            val.set_ctx(CfgContext(self.0));
+                            store.borrow_mut().insert(key, Box::leak(Box::new(val)));
+                            Cfg(store.borrow().get(&key).unwrap().downcast_ref().unwrap())
+                        }
+                    })
+                },
+                Cfg,
+            )
     }
 }
 
@@ -211,17 +217,16 @@ impl SharedCfgBuilder {
         }
     }
 
+    #[must_use]
     /// Insert a type into this configuration.
     ///
     /// If a config of this type already existed, it will
     /// be replaced.
     pub fn add<T: Configuration>(mut self, mut val: T) -> Self {
         val.set_ctx(self.ctx);
-        self.storage
-            .as_mut()
-            .unwrap()
-            .data
-            .insert(TypeId::of::<T>(), Box::new(val));
+        if let Some(st) = self.storage.as_mut() {
+            st.data.insert(TypeId::of::<T>(), Box::new(val));
+        }
         self
     }
 }
@@ -277,7 +282,7 @@ mod tests {
             }
         }
         let _ = TestCfg::new().ctx();
-        SharedCfg::new("TEST").add(TestCfg::new());
+        let _ = SharedCfg::new("TEST").add(TestCfg::new());
     }
 
     #[test]

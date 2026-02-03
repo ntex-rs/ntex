@@ -1,9 +1,11 @@
 use std::collections::{self, VecDeque, hash_map, hash_map::Entry};
 use std::fmt;
 
+use foldhash::fast::RandomState;
+
 use crate::{HeaderName, HeaderValue};
 
-type HashMap<K, V> = collections::HashMap<K, V, foldhash::fast::RandomState>;
+type HashMap<K, V> = collections::HashMap<K, V, RandomState>;
 
 /// Combines two different futures, streams, or sinks having the same associated types into a single
 /// type.
@@ -80,7 +82,7 @@ impl Iterator for ValueIntoIter {
                 );
                 match val {
                     Value::One(val) => Some(val),
-                    _ => unreachable!(),
+                    Value::Multi(_) => unreachable!(),
                 }
             }
             Value::Multi(vec) => vec.pop_front(),
@@ -111,7 +113,7 @@ impl Extend<HeaderValue> for Value {
     where
         T: IntoIterator<Item = HeaderValue>,
     {
-        for h in iter.into_iter() {
+        for h in iter {
             self.append(h);
         }
     }
@@ -159,7 +161,7 @@ impl HeaderMap {
     /// More capacity than requested may be allocated.
     pub fn with_capacity(capacity: usize) -> HeaderMap {
         HeaderMap {
-            inner: HashMap::with_capacity_and_hasher(capacity, Default::default()),
+            inner: HashMap::with_capacity_and_hasher(capacity, RandomState::default()),
         }
     }
 
@@ -199,7 +201,7 @@ impl HeaderMap {
     /// patterns could cause additional allocations before the number is
     /// reached.
     pub fn reserve(&mut self, additional: usize) {
-        self.inner.reserve(additional)
+        self.inner.reserve(additional);
     }
 
     /// Returns a reference to the value associated with the key.
@@ -208,7 +210,7 @@ impl HeaderMap {
     /// is returned. Use `get_all` to get all values associated with a given
     /// key. Returns `None` if there are no values associated with the key.
     pub fn get<N: AsName>(&self, name: N) -> Option<&HeaderValue> {
-        self.get2(name).map(|v| v.get())
+        self.get2(name).map(Value::get)
     }
 
     fn get2<N: AsName>(&self, name: N) -> Option<&Value> {
@@ -245,10 +247,10 @@ impl HeaderMap {
     /// key. Returns `None` if there are no values associated with the key.
     pub fn get_mut<N: AsName>(&mut self, name: N) -> Option<&mut HeaderValue> {
         match name.as_name() {
-            Either::Left(name) => self.inner.get_mut(name).map(|v| v.get_mut()),
+            Either::Left(name) => self.inner.get_mut(name).map(Value::get_mut),
             Either::Right(s) => {
                 if let Ok(name) = HeaderName::try_from(s) {
-                    self.inner.get_mut(&name).map(|v| v.get_mut())
+                    self.inner.get_mut(&name).map(Value::get_mut)
                 } else {
                     None
                 }
@@ -440,7 +442,7 @@ impl TryFrom<&str> for Value {
         Ok(value
             .split(',')
             .filter(|v| !v.is_empty())
-            .map(|v| v.trim())
+            .map(str::trim)
             .filter_map(|v| HeaderValue::from_str(v).ok())
             .collect::<Value>())
     }
@@ -528,10 +530,9 @@ impl<'a> Iterator for Iter<'a> {
                 let item = (item.0, &item.1[self.idx]);
                 self.idx += 1;
                 return Some(item);
-            } else {
-                self.idx = 0;
-                self.current.take();
             }
+            self.idx = 0;
+            self.current.take();
         }
         if let Some(item) = self.iter.next() {
             match item.1 {
@@ -551,7 +552,7 @@ impl fmt::Debug for HeaderMap {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_map();
 
-        for (key, val) in self.inner.iter() {
+        for (key, val) in &self.inner {
             match val {
                 Value::One(val) => {
                     let _ = f.entry(&key, &val);

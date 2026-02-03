@@ -1,3 +1,4 @@
+#![allow(clippy::missing_panics_doc)]
 use super::tree::Tree;
 use super::{IntoPattern, Resource, ResourceDef, ResourcePath};
 
@@ -148,7 +149,7 @@ impl<T, U> RouterBuilder<T, U> {
         self.resources.last_mut().unwrap()
     }
 
-    /// Register resource for ResourceDef
+    /// Register resource for `ResourceDef`
     pub fn rdef(
         &mut self,
         rdef: ResourceDef,
@@ -165,7 +166,7 @@ impl<T, U> RouterBuilder<T, U> {
         } else {
             let mut tree = Tree::new(&self.resources[0].0, 0);
             for (idx, r) in self.resources[1..].iter().enumerate() {
-                tree.insert(&r.0, idx + 1)
+                tree.insert(&r.0, idx + 1);
             }
             tree
         };

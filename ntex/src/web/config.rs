@@ -37,7 +37,7 @@ impl Configuration for WebAppConfig {
 }
 
 impl WebAppConfig {
-    /// Create an default WebAppConfig instance.
+    /// Create an default `WebAppConfig` instance.
     pub fn new() -> Self {
         WebAppConfig::with(
             "ntex:web",
@@ -47,7 +47,7 @@ impl WebAppConfig {
         )
     }
 
-    /// Create an WebAppConfig instance.
+    /// Create an `WebAppConfig` instance.
     pub fn with(name: &str, secure: bool, addr: SocketAddr, host: String) -> Self {
         WebAppConfig {
             secure,
@@ -67,7 +67,7 @@ impl WebAppConfig {
     /// Server host name
     ///
     /// Host name is used by application router as a hostname for url generation.
-    /// Check [ConnectionInfo](./struct.ConnectionInfo.html#method.host)
+    /// Check [`ConnectionInfo`](./struct.ConnectionInfo.html#method.host)
     /// documentation for more information.
     ///
     /// By default host name is set to a "localhost" value.
@@ -105,7 +105,7 @@ impl WebAppConfig {
         self
     }
 
-    /// Set size of HttpRequest pool size.
+    /// Set size of `HttpRequest` pool size.
     ///
     /// By default pool size is 128.
     pub fn set_pool_size(mut self, size: usize) -> Self {
@@ -131,7 +131,7 @@ impl WebAppConfig {
                     inner.head.extensions.borrow_mut().clear();
                     cache.push(req.clone());
                 }
-            })
+            });
         });
     }
 

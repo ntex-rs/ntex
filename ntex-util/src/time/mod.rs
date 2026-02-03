@@ -1,4 +1,9 @@
 //! Utilities for tracking time.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 use std::{cmp, future::Future, future::poll_fn, pin::Pin, task, task::Poll};
 
 mod types;
@@ -91,7 +96,7 @@ impl Sleep {
     #[inline]
     pub fn new(duration: Millis) -> Sleep {
         Sleep {
-            hnd: TimerHandle::new(cmp::max(duration.0, 1) as u64),
+            hnd: TimerHandle::new(u64::from(cmp::max(duration.0, 1))),
         }
     }
 
@@ -104,7 +109,7 @@ impl Sleep {
     /// Complete sleep timer.
     #[inline]
     pub fn elapse(&self) {
-        self.hnd.elapse()
+        self.hnd.elapse();
     }
 
     /// Resets the `Sleep` instance to a new deadline.
@@ -115,13 +120,13 @@ impl Sleep {
     /// This function can be called both before and after the future has
     /// completed.
     pub fn reset<T: Into<Millis>>(&self, millis: T) {
-        self.hnd.reset(millis.into().0 as u64);
+        self.hnd.reset(u64::from(millis.into().0));
     }
 
     #[inline]
     /// Wait when `Sleep` instance get elapsed.
     pub async fn wait(&self) {
-        poll_fn(|cx| self.hnd.poll_elapsed(cx)).await
+        poll_fn(|cx| self.hnd.poll_elapsed(cx)).await;
     }
 
     #[inline]
@@ -165,7 +170,7 @@ impl Deadline {
     pub fn new(duration: Millis) -> Deadline {
         if duration.0 != 0 {
             Deadline {
-                hnd: Some(TimerHandle::new(duration.0 as u64)),
+                hnd: Some(TimerHandle::new(u64::from(duration.0))),
             }
         } else {
             Deadline { hnd: None }
@@ -175,7 +180,7 @@ impl Deadline {
     #[inline]
     /// Wait when `Sleep` instance get elapsed.
     pub async fn wait(&self) {
-        poll_fn(|cx| self.poll_elapsed(cx)).await
+        poll_fn(|cx| self.poll_elapsed(cx)).await;
     }
 
     /// Resets the `Deadline` instance to a new deadline.
@@ -189,9 +194,9 @@ impl Deadline {
         let millis = millis.into();
         if millis.0 != 0 {
             if let Some(ref mut hnd) = self.hnd {
-                hnd.reset(millis.0 as u64);
+                hnd.reset(u64::from(millis.0));
             } else {
-                self.hnd = Some(TimerHandle::new(millis.0 as u64));
+                self.hnd = Some(TimerHandle::new(u64::from(millis.0)));
             }
         } else {
             let _ = self.hnd.take();
@@ -201,15 +206,14 @@ impl Deadline {
     /// Returns `true` if `Deadline` has elapsed.
     #[inline]
     pub fn is_elapsed(&self) -> bool {
-        self.hnd.as_ref().map(|t| t.is_elapsed()).unwrap_or(true)
+        self.hnd.as_ref().is_none_or(TimerHandle::is_elapsed)
     }
 
     #[inline]
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         self.hnd
             .as_ref()
-            .map(|t| t.poll_elapsed(cx))
-            .unwrap_or(Poll::Pending)
+            .map_or(Poll::Pending, |t| t.poll_elapsed(cx))
     }
 }
 
@@ -323,7 +327,7 @@ impl Interval {
     #[inline]
     pub fn new(period: Millis) -> Interval {
         Interval {
-            hnd: TimerHandle::new(period.0 as u64),
+            hnd: TimerHandle::new(u64::from(period.0)),
             period: period.0,
         }
     }
@@ -336,7 +340,7 @@ impl Interval {
     #[inline]
     pub fn poll_tick(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         if self.hnd.poll_elapsed(cx).is_ready() {
-            self.hnd.reset(self.period as u64);
+            self.hnd.reset(u64::from(self.period));
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -352,7 +356,7 @@ impl crate::Stream for Interval {
         self: Pin<&mut Self>,
         cx: &mut task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.poll_tick(cx).map(|_| Some(()))
+        self.poll_tick(cx).map(|()| Some(()))
     }
 }
 

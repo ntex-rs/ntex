@@ -38,7 +38,7 @@ where
 
     #[inline]
     async fn shutdown(&self) {
-        util::shutdown(&self.svc1, &self.svc2).await
+        util::shutdown(&self.svc1, &self.svc2).await;
     }
 
     #[inline]

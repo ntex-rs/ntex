@@ -1,4 +1,5 @@
 //! Websockets client
+#![allow(clippy::missing_panics_doc)]
 use std::{cell::RefCell, fmt, marker, net, rc::Rc, str};
 
 #[cfg(feature = "openssl")]
@@ -181,7 +182,7 @@ where
         let response = if to.non_zero() {
             timeout(to, fut)
                 .await
-                .map_err(|_| WsClientError::Timeout)
+                .map_err(|()| WsClientError::Timeout)
                 .and_then(|res| res)?
         } else {
             fut.await?
@@ -238,7 +239,7 @@ where
         } else {
             log::trace!("{tag}: Missing SEC-WEBSOCKET-ACCEPT header");
             return Err(WsClientError::MissingWebSocketAcceptHeader);
-        };
+        }
         log::trace!("{tag}: Ws handshake response verification is completed");
 
         // response and ws io
@@ -258,7 +259,7 @@ impl<F, T> fmt::Debug for WsClient<F, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\nWsClient {}:{}", self.head.method, self.head.uri)?;
         writeln!(f, "  headers:")?;
-        for (key, val) in self.head.headers.iter() {
+        for (key, val) in &self.head.headers {
             writeln!(f, "    {key:?}: {val:?}")?;
         }
         Ok(())
@@ -280,7 +281,7 @@ impl WsClientBuilder<Base, ()> {
                 },
                 None,
             ),
-            Err(e) => (Default::default(), Some(e.into())),
+            Err(e) => (RequestHead::default(), Some(e.into())),
         };
 
         WsClientBuilder {
@@ -541,6 +542,10 @@ where
     }
 
     /// Complete building process and construct websockets client.
+    ///
+    /// # Panics
+    ///
+    /// Panics if client build is reused.
     pub async fn build<U: Into<SharedCfg>>(
         &mut self,
         cfg: U,
@@ -633,7 +638,7 @@ where
             server_mode: inner.server_mode,
             timeout: inner.timeout,
             extra_headers: RefCell::new(None),
-            client_cfg: Default::default(),
+            client_cfg: Rc::default(),
             _t: marker::PhantomData,
         })
     }
@@ -659,7 +664,7 @@ impl<F, T> fmt::Debug for WsClientBuilder<F, T> {
                 parts.head.method, parts.head.uri
             )?;
             writeln!(f, "  headers:")?;
-            for (key, val) in parts.head.headers.iter() {
+            for (key, val) in &parts.head.headers {
                 writeln!(f, "    {key:?}: {val:?}")?;
             }
         } else {
@@ -719,7 +724,7 @@ impl WsConnection<Sealed> {
                     match tx.send(Ok(item)) {
                         Ok(()) => (),
                         Err(_) => io.close(),
-                    };
+                    }
                     Ready::Ok::<Option<ws::Message>, ()>(None)
                 }))
                 .await;
@@ -746,8 +751,9 @@ impl WsConnection<Sealed> {
                     DispatchItem::Control(_) => Ok(None),
                     DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
                     DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
-                    DispatchItem::Stop(Reason::Decoder(e))
-                    | DispatchItem::Stop(Reason::Encoder(e)) => Err(WsError::Protocol(e)),
+                    DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+                        Err(WsError::Protocol(e))
+                    }
                     DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
                 }
             },

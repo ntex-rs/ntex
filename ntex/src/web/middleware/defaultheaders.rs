@@ -122,7 +122,7 @@ where
         let mut res = ctx.call(&self.service, req).await?;
 
         // set response headers
-        for (key, value) in self.inner.headers.iter() {
+        for (key, value) in &self.inner.headers {
             if !res.headers().contains_key(key) {
                 res.headers_mut().insert(key.clone(), value.clone());
             }

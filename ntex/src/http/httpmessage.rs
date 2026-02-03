@@ -66,11 +66,11 @@ pub trait HttpMessage: Sized {
                     Ok(mt) => Ok(Some(mt)),
                     Err(_) => Err(ContentTypeError::ParseError),
                 };
-            } else {
-                return Err(ContentTypeError::ParseError);
             }
+            Err(ContentTypeError::ParseError)
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
 
     /// Check if request has chunked transfer encoding

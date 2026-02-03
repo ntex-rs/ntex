@@ -77,8 +77,7 @@ impl<T> Either<T, T> {
     /// Extract the value of an either over two equivalent types.
     pub fn into_inner(self) -> T {
         match self {
-            Either::Left(x) => x,
-            Either::Right(x) => x,
+            Either::Left(x) | Either::Right(x) => x,
         }
     }
 }

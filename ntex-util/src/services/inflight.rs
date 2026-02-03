@@ -3,7 +3,7 @@ use ntex_service::{Middleware, Service, ServiceCtx};
 
 use super::counter::Counter;
 
-/// InFlight - service factory for service that can limit number of in-flight
+/// `InFlight` - service factory for service that can limit number of in-flight
 /// async requests.
 ///
 /// Default number of in-flight requests is 15
@@ -62,12 +62,12 @@ where
 
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        if !self.count.is_available() {
+        if self.count.is_available() {
+            ctx.ready(&self.service).await
+        } else {
             crate::future::join(self.count.available(), ctx.ready(&self.service))
                 .await
                 .1
-        } else {
-            ctx.ready(&self.service).await
         }
     }
 

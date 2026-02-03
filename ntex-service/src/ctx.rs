@@ -23,7 +23,7 @@ impl WaitersRef {
         let mut waiters = slab::Slab::new();
 
         (
-            waiters.insert(Default::default()) as u32,
+            waiters.insert(None) as u32,
             WaitersRef {
                 running: cell::Cell::new(false),
                 cur: cell::Cell::new(u32::MAX),
@@ -61,10 +61,10 @@ impl WaitersRef {
         if !wakers.is_empty() {
             let indexes = self.get();
             for idx in wakers.drain(..) {
-                if let Some(item) = indexes.get_mut(idx as usize) {
-                    if let Some(waker) = item.take() {
-                        waker.wake();
-                    }
+                if let Some(item) = indexes.get_mut(idx as usize)
+                    && let Some(waker) = item.take()
+                {
+                    waker.wake();
                 }
             }
         }

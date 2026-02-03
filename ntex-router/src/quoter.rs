@@ -31,7 +31,7 @@ pub(super) fn requote(val: &[u8]) -> Option<String> {
         } else if ch == b'%' {
             has_pct = 1;
         } else if let Some(ref mut cloned) = cloned {
-            cloned.push(ch)
+            cloned.push(ch);
         }
         idx += 1;
     }

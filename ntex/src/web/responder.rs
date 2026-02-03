@@ -242,7 +242,7 @@ impl<T: Responder<Err>, Err> CustomResponder<T, Err> {
                 Err(e) => self.error = Some(e.into()),
             },
             Err(e) => self.error = Some(e.into()),
-        };
+        }
         self
     }
 }

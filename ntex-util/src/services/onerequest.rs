@@ -5,7 +5,7 @@ use ntex_service::{Middleware, Service, ServiceCtx};
 
 use crate::task::LocalWaker;
 
-/// OneRequest - service factory for service that can limit number of in-flight
+/// `OneRequest` - service factory for service that can limit number of in-flight
 /// async requests to 1.
 #[derive(Copy, Clone, Default, Debug)]
 pub struct OneRequest;
@@ -60,7 +60,7 @@ where
                     Poll::Pending
                 }
             })
-            .await
+            .await;
         }
         ctx.ready(&self.service).await
     }
