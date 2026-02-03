@@ -506,7 +506,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
         unsafe {
             ptr::copy_nonoverlapping(
                 DEC_DIGITS_LUT.as_ptr().add(d1 as usize),
-                buf.as_mut_ptr().offset(18),
+                buf.as_mut_ptr().add(18),
                 2,
             );
         }
@@ -522,7 +522,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
         unsafe {
             ptr::copy_nonoverlapping(
                 DEC_DIGITS_LUT.as_ptr().add(d1 as usize),
-                buf.as_mut_ptr().offset(19),
+                buf.as_mut_ptr().add(19),
                 2,
             );
         };

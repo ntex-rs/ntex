@@ -175,7 +175,7 @@ impl Parser {
             dst.extend_from_slice(&[one, two | payload_len as u8]);
         } else if payload_len <= 65_535 {
             dst.reserve(p_len + 4);
-            dst.extend_from_slice(&[one, two | 126]);
+            dst.extend_from_slice(&[one, two | 0x007e]);
             dst.put_u16(payload_len as u16);
         } else {
             dst.reserve(p_len + 10);

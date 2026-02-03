@@ -537,7 +537,7 @@ mod tests {
             int.tick().await;
             let elapsed = time.elapsed();
             assert!(
-                elapsed > time::Duration::from_millis(1000)
+                elapsed > time::Duration::from_secs(1)
                     && elapsed < time::Duration::from_millis(1300),
                 "elapsed: {elapsed:?}"
             );

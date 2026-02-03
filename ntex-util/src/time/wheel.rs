@@ -746,29 +746,36 @@ mod tests {
         let fut2 = sleep(Millis(200));
 
         fut2.await;
-        let _elapsed = time.elapsed();
         #[cfg(not(target_os = "macos"))]
-        assert!(
-            _elapsed > Duration::from_millis(200) && _elapsed < Duration::from_millis(300),
-            "elapsed: {_elapsed:?}"
-        );
+        {
+            let elapsed = time.elapsed();
+            assert!(
+                elapsed > Duration::from_millis(200)
+                    && elapsed < Duration::from_millis(300),
+                "elapsed: {elapsed:?}"
+            );
+        }
 
         fut1.await;
-        let _elapsed = time.elapsed();
+
         #[cfg(not(target_os = "macos"))]
-        assert!(
-            _elapsed > Duration::from_millis(1000)
-                && _elapsed < Duration::from_millis(1200), // osx
-            "elapsed: {_elapsed:?}",
-        );
+        {
+            let elapsed = time.elapsed();
+            assert!(
+                elapsed > Duration::from_secs(1) && elapsed < Duration::from_millis(1200), // osx
+                "elapsed: {elapsed:?}",
+            );
+        }
 
         let time = Instant::now();
         sleep(Millis(25)).await;
-        let _elapsed = time.elapsed();
         #[cfg(not(target_os = "macos"))]
-        assert!(
-            _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),
-            "elapsed: {_elapsed:?}",
-        );
+        {
+            let elapsed = time.elapsed();
+            assert!(
+                elapsed > Duration::from_millis(20) && elapsed < Duration::from_millis(50),
+                "elapsed: {elapsed:?}",
+            );
+        }
     }
 }

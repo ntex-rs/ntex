@@ -569,10 +569,7 @@ mod tests {
 
     impl Body {
         pub(crate) fn get_ref(&self) -> &[u8] {
-            match *self {
-                Body::Bytes(ref bin) => bin,
-                _ => panic!(),
-            }
+            if let Body::Bytes(bin) = self { bin } else { panic!() }
         }
     }
 

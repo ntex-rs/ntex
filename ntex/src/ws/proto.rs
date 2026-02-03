@@ -258,9 +258,9 @@ mod test {
         opcode_from!(OpCode::Pong => 10);
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
     #[should_panic]
+    #[allow(clippy::should_panic_without_expect)]
     fn test_from_opcode_debug() {
         opcode_from!(OpCode::Bad => 99);
     }

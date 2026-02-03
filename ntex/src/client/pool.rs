@@ -677,7 +677,10 @@ mod tests {
             uri: Uri::try_from("/test").unwrap(),
             addr: None,
         };
-        assert!(matches!(pool.call(req).await, Err(ConnectError::Unresolved)));
+        assert!(matches!(
+            pool.call(req).await,
+            Err(ConnectError::Unresolved)
+        ));
 
         // connect one
         let req = Connect {
