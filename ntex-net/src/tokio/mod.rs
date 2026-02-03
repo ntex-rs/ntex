@@ -1,3 +1,4 @@
+#![allow(unused_variables)]
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
 
@@ -82,7 +83,6 @@ impl crate::Reactor for TokioDriver {
 
         #[cfg(not(unix))]
         {
-            drop(cfg);
             Receiver::new(Err(std::io::Error::other(
                 "Unix domain sockets are not supported",
             )))
