@@ -1,16 +1,15 @@
-#![allow(clippy::cast_ptr_alignment, clippy::ptr_as_ptr)]
 use std::{cell::UnsafeCell, mem, ptr};
 
 use crate::{Filter, FilterLayer, Layer, Sealed, filter::NullFilter};
 
 enum Repr {
-    Box(*const u8, &'static dyn Filter),
+    Filter(*const u8, *const dyn Filter),
     Sealed(Box<dyn Filter>),
 }
 
 impl Default for Repr {
     fn default() -> Self {
-        Repr::Box(ptr::null(), NullFilter::get())
+        Repr::Filter(ptr::null(), NullFilter::get())
     }
 }
 
@@ -18,30 +17,33 @@ pub(crate) struct FilterPtr(UnsafeCell<Repr>);
 
 impl FilterPtr {
     pub(crate) const fn null() -> Self {
-        Self(UnsafeCell::new(Repr::Box(ptr::null(), NullFilter::get())))
+        Self(UnsafeCell::new(Repr::Filter(
+            ptr::null(),
+            NullFilter::get(),
+        )))
     }
 
     pub(crate) fn get(&self) -> &dyn Filter {
         match self.as_ref() {
-            Repr::Box(_, filter) => *filter,
+            Repr::Filter(_, filter) => unsafe { filter.as_ref().unwrap() },
             Repr::Sealed(b) => b.as_ref(),
         }
     }
 
     pub(crate) fn set<F: Filter>(&self, filter: F) {
         let filter = Box::new(filter);
-        let filter_ref: &'static dyn Filter = unsafe {
+        let filter_ref = {
             let f: &dyn Filter = filter.as_ref();
-            mem::transmute(f)
+            f as *const dyn Filter
         };
-        *self.as_mut() = Repr::Box(Box::into_raw(filter).cast(), filter_ref);
+        *self.as_mut() = Repr::Filter(Box::into_raw(filter).cast(), filter_ref);
     }
 
     /// Get filter, panic if it is not filter
     pub(crate) fn filter<F: Filter>(&self) -> &F {
-        if let Repr::Box(ptr, _) = self.as_ref() {
+        if let Repr::Filter(ptr, _) = self.as_ref() {
             assert!(!ptr.is_null(), "Filter is not set");
-            unsafe { (*ptr as *const F).as_ref().unwrap() }
+            unsafe { (*ptr).cast::<F>().as_ref().unwrap() }
         } else {
             panic!("Filter is sealed")
         }
@@ -59,7 +61,7 @@ impl FilterPtr {
     #[allow(clippy::unnecessary_box_returns)]
     /// Get filter, panic if it is not set
     pub(crate) fn take_filter<F>(&self) -> Box<F> {
-        if let Repr::Box(ptr, _) = mem::take(self.as_mut()) {
+        if let Repr::Filter(ptr, _) = mem::take(self.as_mut()) {
             assert!(!ptr.is_null(), "Filter is not set");
             unsafe { Box::from_raw(ptr as *mut F) }
         } else {
@@ -78,7 +80,7 @@ impl FilterPtr {
 
     pub(crate) fn is_set(&self) -> bool {
         match self.as_ref() {
-            Repr::Box(ptr, _) => !ptr.is_null(),
+            Repr::Filter(ptr, _) => !ptr.is_null(),
             Repr::Sealed(_) => true,
         }
     }
@@ -87,14 +89,13 @@ impl FilterPtr {
         assert!(self.is_set(), "Filter is not set");
 
         let repr = match self.as_ref() {
-            Repr::Box(..) => {
+            Repr::Filter(..) => {
                 let filter = Box::new(Layer::new(new, *self.take_filter::<F>()));
-
-                let filter_ref: &'static dyn Filter = unsafe {
+                let filter_ref = {
                     let f: &dyn Filter = filter.as_ref();
-                    mem::transmute(f)
+                    f as *const dyn Filter
                 };
-                Repr::Box(Box::into_raw(filter).cast(), filter_ref)
+                Repr::Filter(Box::into_raw(filter).cast(), filter_ref)
             }
             Repr::Sealed(..) => Repr::Sealed(Box::new(Layer::new(new, self.take_sealed()))),
         };
@@ -107,23 +108,23 @@ impl FilterPtr {
         R: Filter,
     {
         let filter = Box::new(f(*self.take_filter::<F>()));
-        let filter_ref: &'static dyn Filter = unsafe {
+        let filter_ref = {
             let f: &dyn Filter = filter.as_ref();
-            mem::transmute(f)
+            f as *const dyn Filter
         };
-        *self.as_mut() = Repr::Box(Box::into_raw(filter).cast(), filter_ref);
+        *self.as_mut() = Repr::Filter(Box::into_raw(filter).cast(), filter_ref);
     }
 
     pub(crate) fn seal<F: Filter>(&self) {
         assert!(self.is_set(), "Filter is not set");
 
-        if matches!(self.as_ref(), Repr::Box(..)) {
+        if matches!(self.as_ref(), Repr::Filter(..)) {
             *self.as_mut() = Repr::Sealed(Box::new(*self.take_filter::<F>()));
         }
     }
 
     pub(crate) fn drop_filter<F>(&self) {
-        if let Repr::Box(ptr, _) = self.as_ref() {
+        if let Repr::Filter(ptr, _) = self.as_ref() {
             if !ptr.is_null() {
                 self.take_filter::<F>();
             }
@@ -141,7 +142,9 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{Io, ReadBuf, WriteBuf, testing::IoTest};
+    use crate::{
+        Base, Handle, Io, IoContext, IoStream, ReadBuf, WriteBuf, testing::IoTest,
+    };
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -172,6 +175,14 @@ mod tests {
                 buf.set_dst(Some(src));
             }
             Ok(())
+        }
+    }
+
+    struct IoTestWrapper;
+
+    impl IoStream for IoTestWrapper {
+        fn start(self, _: IoContext) -> Option<Box<dyn Handle>> {
+            None
         }
     }
 
@@ -206,12 +217,19 @@ mod tests {
         assert_eq!(p.get(), 1);
     }
 
-    #[ntex::test]
-    async fn test_take_sealed_filter() {
+    #[test]
+    fn take_sealed_filter() {
         let p = Rc::new(Cell::new(0));
         let f = DropFilter { p: p.clone() };
 
-        let io = Io::from(IoTest::create().0).seal();
+        let io = Io::from(IoTestWrapper).seal();
         let _io: Io<Layer<DropFilter, Sealed>> = io.add_filter(f);
+    }
+
+    #[test]
+    #[should_panic(expected = "Filter is not set")]
+    fn take_filter_access() {
+        let fptr = FilterPtr::null();
+        fptr.filter::<Base>();
     }
 }
