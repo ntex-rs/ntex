@@ -734,7 +734,7 @@ mod tests {
     use crate::time::{Millis, interval, sleep};
 
     #[ntex::test]
-    #[allow(clippy::used_underscore_binding)]
+    #[allow(unused_variables, clippy::used_underscore_binding)]
     async fn test_timer() {
         crate::spawn(async {
             let s = interval(Millis(25));
@@ -774,7 +774,8 @@ mod tests {
         {
             let _elapsed = time.elapsed();
             assert!(
-                _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),
+                _elapsed > Duration::from_millis(20)
+                    && _elapsed < Duration::from_millis(50),
                 "elapsed: {_elapsed:?}",
             );
         }
