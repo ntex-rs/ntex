@@ -16,6 +16,7 @@ pub mod types;
 
 mod buf;
 mod filter;
+mod filterptr;
 mod flags;
 mod framed;
 mod io;

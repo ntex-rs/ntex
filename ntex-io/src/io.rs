@@ -1,4 +1,3 @@
-#![allow(clippy::cast_ptr_alignment, clippy::ptr_as_ptr)]
 use std::cell::{Cell, UnsafeCell};
 use std::future::{Future, poll_fn};
 use std::task::{Context, Poll};
@@ -10,7 +9,8 @@ use ntex_util::{future::Either, task::LocalWaker};
 
 use crate::buf::Stack;
 use crate::cfg::{BufConfig, IoConfig};
-use crate::filter::{Base, Filter, Layer, NullFilter};
+use crate::filter::{Base, Filter, Layer};
+use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
 use crate::seal::{IoBoxed, Sealed};
 use crate::timer::TimerHandle;
@@ -39,7 +39,7 @@ pub(crate) struct IoState {
 
 impl IoState {
     pub(super) fn filter(&self) -> &dyn Filter {
-        self.filter.filter.get()
+        self.filter.get()
     }
 
     pub(super) fn insert_flags(&self, f: Flags) {
@@ -206,7 +206,7 @@ impl Io {
             timeout: Cell::new(TimerHandle::default()),
             on_disconnect: Cell::new(None),
         });
-        inner.filter.update(Base::new(IoRef(inner.clone())));
+        inner.filter.set(Base::new(IoRef(inner.clone())));
 
         let io_ref = IoRef(inner);
 
@@ -719,200 +719,6 @@ impl<F> Drop for Io<F> {
     }
 }
 
-const KIND_SEALED: u8 = 0b01;
-const KIND_PTR: u8 = 0b10;
-const KIND_MASK: u8 = 0b11;
-const KIND_UNMASK: u8 = !KIND_MASK;
-const KIND_MASK_USIZE: usize = 0b11;
-const KIND_UNMASK_USIZE: usize = !KIND_MASK_USIZE;
-const SEALED_SIZE: usize = mem::size_of::<Sealed>();
-const NULL: [u8; SEALED_SIZE] = [0u8; SEALED_SIZE];
-
-#[cfg(target_endian = "little")]
-const KIND_IDX: usize = 0;
-
-#[cfg(target_endian = "big")]
-const KIND_IDX: usize = SEALED_SIZE - 1;
-
-struct FilterPtr {
-    data: Cell<[u8; SEALED_SIZE]>,
-    filter: Cell<&'static dyn Filter>,
-}
-
-impl FilterPtr {
-    const fn null() -> Self {
-        Self {
-            data: Cell::new(NULL),
-            filter: Cell::new(NullFilter::get()),
-        }
-    }
-
-    fn update<F: Filter>(&self, filter: F) {
-        assert!(!self.is_set(), "Filter is set, must be dropped first");
-
-        let filter = Box::new(filter);
-        let mut data = NULL;
-        unsafe {
-            let filter_ref: &'static dyn Filter = {
-                let f: &dyn Filter = filter.as_ref();
-                mem::transmute(f)
-            };
-            self.filter.set(filter_ref);
-
-            let ptr = &raw mut data as *mut *mut F;
-            ptr.write(Box::into_raw(filter));
-            data[KIND_IDX] |= KIND_PTR;
-            self.data.set(data);
-        }
-    }
-
-    /// Get filter, panic if it is not filter
-    fn filter<F: Filter>(&self) -> &F {
-        let data = self.data.get();
-        if data[KIND_IDX] & KIND_PTR != 0 {
-            let ptr = &raw const data as *const *mut F;
-            unsafe {
-                let p = (ptr.read().cast_const() as usize) & KIND_UNMASK_USIZE;
-                (p as *const F).cast_mut().as_ref().unwrap()
-            }
-        } else {
-            panic!("Wrong filter item");
-        }
-    }
-
-    #[allow(clippy::unnecessary_box_returns)]
-    /// Get filter, panic if it is not set
-    fn take_filter<F>(&self) -> Box<F> {
-        let mut data = self.data.get();
-        if data[KIND_IDX] & KIND_PTR != 0 {
-            data[KIND_IDX] &= KIND_UNMASK;
-            let ptr = &raw mut data as *mut *mut F;
-            unsafe { Box::from_raw(*ptr) }
-        } else {
-            panic!(
-                "Wrong filter item {:?} expected: {:?}",
-                data[KIND_IDX], KIND_PTR
-            );
-        }
-    }
-
-    /// Get sealed, panic if it is already sealed
-    fn take_sealed(&self) -> Sealed {
-        let mut data = self.data.get();
-
-        if data[KIND_IDX] & KIND_SEALED != 0 {
-            data[KIND_IDX] &= KIND_UNMASK;
-            let ptr = &raw mut data as *mut Sealed;
-            unsafe { ptr.read() }
-        } else {
-            panic!(
-                "Wrong filter item {:?} expected: {:?}",
-                data[KIND_IDX], KIND_SEALED
-            );
-        }
-    }
-
-    fn is_set(&self) -> bool {
-        self.data.get()[KIND_IDX] & KIND_MASK != 0
-    }
-
-    fn drop_filter<F>(&self) {
-        let data = self.data.get();
-
-        if data[KIND_IDX] & KIND_MASK != 0 {
-            if data[KIND_IDX] & KIND_PTR != 0 {
-                self.take_filter::<F>();
-            } else if data[KIND_IDX] & KIND_SEALED != 0 {
-                self.take_sealed();
-            }
-            self.data.set(NULL);
-            self.filter.set(NullFilter::get());
-        }
-    }
-}
-
-impl FilterPtr {
-    fn add_filter<F: Filter, T: FilterLayer>(&self, new: T) {
-        let data = self.data.get();
-        let filter = if data[KIND_IDX] & KIND_PTR != 0 {
-            Box::new(Layer::new(new, *self.take_filter::<F>()))
-        } else if data[KIND_IDX] & KIND_SEALED != 0 {
-            let f = Box::new(Layer::new(new, self.take_sealed()));
-            // SAFETY: If filter is marked as Sealed, then F = Sealed
-            unsafe { mem::transmute::<Box<Layer<T, Sealed>>, Box<Layer<T, F>>>(f) }
-        } else {
-            panic!(
-                "Wrong filter item {:?} expected: {:?}",
-                data[KIND_IDX], KIND_PTR
-            );
-        };
-
-        let mut data = NULL;
-        unsafe {
-            let filter_ref: &'static dyn Filter = {
-                let f: &dyn Filter = filter.as_ref();
-                mem::transmute(f)
-            };
-            self.filter.set(filter_ref);
-
-            let ptr = &raw mut data as *mut *mut Layer<T, F>;
-            ptr.write(Box::into_raw(filter));
-            data[KIND_IDX] |= KIND_PTR;
-            self.data.set(data);
-        }
-    }
-
-    fn map_filter<F: Filter, U, R>(&self, f: U)
-    where
-        U: FnOnce(F) -> R,
-        R: Filter,
-    {
-        let mut data = NULL;
-        let filter = Box::new(f(*self.take_filter::<F>()));
-        unsafe {
-            let filter_ref: &'static dyn Filter = {
-                let f: &dyn Filter = filter.as_ref();
-                mem::transmute(f)
-            };
-            self.filter.set(filter_ref);
-
-            let ptr = &raw mut data as *mut *mut R;
-            ptr.write(Box::into_raw(filter));
-            data[KIND_IDX] |= KIND_PTR;
-            self.data.set(data);
-        }
-    }
-
-    fn seal<F: Filter>(&self) {
-        let mut data = self.data.get();
-
-        let filter = if data[KIND_IDX] & KIND_PTR != 0 {
-            Sealed(Box::new(*self.take_filter::<F>()))
-        } else if data[KIND_IDX] & KIND_SEALED != 0 {
-            self.take_sealed()
-        } else {
-            panic!(
-                "Wrong filter item {:?} expected: {:?}",
-                data[KIND_IDX], KIND_PTR
-            );
-        };
-
-        unsafe {
-            let filter_ref: &'static dyn Filter = {
-                let f: &dyn Filter = filter.0.as_ref();
-                mem::transmute(f)
-            };
-            self.filter.set(filter_ref);
-
-            #[allow(clippy::cast_ptr_alignment)]
-            let ptr = (&raw mut data).cast::<Sealed>();
-            ptr.write(filter);
-            data[KIND_IDX] |= KIND_SEALED;
-            self.data.set(data);
-        }
-    }
-}
-
 #[derive(Debug)]
 /// `OnDisconnect` future resolves when socket get disconnected
 #[must_use = "OnDisconnect do nothing unless polled"]
@@ -985,7 +791,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{ReadBuf, WriteBuf, testing::IoTest};
+    use crate::testing::IoTest;
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -1036,74 +842,5 @@ mod tests {
             .unwrap();
         let item = client.read_any();
         assert_eq!(item, TEXT);
-    }
-
-    #[derive(Debug)]
-    struct DropFilter {
-        p: Rc<Cell<usize>>,
-    }
-
-    impl Drop for DropFilter {
-        fn drop(&mut self) {
-            self.p.set(self.p.get() + 1);
-        }
-    }
-
-    impl FilterLayer for DropFilter {
-        fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
-            if let Some(src) = buf.take_src() {
-                let len = src.len();
-                buf.set_dst(Some(src));
-                Ok(len)
-            } else {
-                Ok(0)
-            }
-        }
-        fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
-            if let Some(src) = buf.take_src() {
-                buf.set_dst(Some(src));
-            }
-            Ok(())
-        }
-    }
-
-    #[ntex::test]
-    async fn drop_filter() {
-        let p = Rc::new(Cell::new(0));
-
-        let (client, server) = IoTest::create();
-        let f = DropFilter { p: p.clone() };
-        let _ = format!("{f:?}");
-        let io = Io::from(server).add_filter(f);
-
-        client.remote_buffer_cap(1024);
-        client.write(TEXT);
-        let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
-        assert_eq!(msg, Bytes::from_static(BIN));
-
-        io.send(Bytes::from_static(b"test"), &BytesCodec)
-            .await
-            .unwrap();
-        let buf = client.read().await.unwrap();
-        assert_eq!(buf, Bytes::from_static(b"test"));
-
-        let io2 = io.take();
-        let mut io3: crate::IoBoxed = io2.into();
-        let io4 = io3.take();
-
-        drop(io);
-        drop(io3);
-        drop(io4);
-
-        assert_eq!(p.get(), 1);
-    }
-
-    #[ntex::test]
-    async fn test_take_sealed_filter() {
-        let p = Rc::new(Cell::new(0));
-        let f = DropFilter { p: p.clone() };
-
-        let io = Io::from(IoTest::create().0).seal();
-        let _io: Io<Layer<DropFilter, Sealed>> = io.add_filter(f);
     }
 }

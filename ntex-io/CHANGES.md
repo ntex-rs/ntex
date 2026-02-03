@@ -1,5 +1,9 @@
 # Changes
 
+## [3.8.0] - 2026-02-03
+
+* Refactor Io filter management
+
 ## [3.7.0] - 2026-01-31
 
 * Fix BufferCfg::resize_min()
