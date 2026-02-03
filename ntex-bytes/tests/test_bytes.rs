@@ -36,32 +36,6 @@ fn test_size() {
     )
 }
 
-#[allow(dead_code)]
-#[test]
-fn test_size2() {
-    struct Test(String);
-    struct Test2(*const u8, *const dyn TestTrait);
-
-    trait TestTrait {
-        fn as_str_test(&self) -> &str;
-    }
-
-    impl TestTrait for Test {
-        fn as_str_test(&self) -> &str {
-            &self.0
-        }
-    }
-
-    enum TestEnum {
-        One(*const u8, &'static dyn TestTrait),
-        Two(Box<dyn TestTrait>),
-    }
-
-    println!("1 ==== {}", size_of::<Box<Test>>());
-    println!("2 ==== {}", size_of::<Box<dyn TestTrait>>());
-    println!("3 ==== {}", size_of::<TestEnum>());
-}
-
 #[test]
 fn test_bounds() {
     is_sync::<Bytes>();
