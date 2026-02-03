@@ -12,7 +12,7 @@ pub trait Address: Unpin + 'static {
     /// Port of the request
     fn port(&self) -> Option<u16>;
 
-    /// SocketAddr of the address
+    /// `SocketAddr` of the address
     fn addr(&self) -> Option<SocketAddr> {
         None
     }
@@ -49,7 +49,7 @@ impl Address for &'static str {
 }
 
 impl Address for SocketAddr {
-    fn host(&self) -> &str {
+    fn host(&self) -> &'static str {
         ""
     }
 
@@ -303,6 +303,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn connect() {
         let mut connect = Connect::new("www.rust-lang.org");
         assert_eq!(connect.host(), "www.rust-lang.org");

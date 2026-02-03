@@ -1,5 +1,13 @@
 //! Utility for async runtime abstraction
-#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+#![deny(clippy::pedantic)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_possible_truncation
+)]
 use std::{io, net, net::SocketAddr};
 
 use ntex_io::Io;
@@ -34,11 +42,11 @@ pub trait Reactor: Driver {
         cfg: SharedCfg,
     ) -> channel::Receiver<Io>;
 
-    /// Convert std TcpStream to Io
+    /// Convert std `TcpStream` to `Io`
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io>;
 
     #[cfg(unix)]
-    /// Convert std UnixStream to Io
+    /// Convert std `UnixStream` to `Io`
     fn from_unix_stream(
         &self,
         _: std::os::unix::net::UnixStream,
@@ -62,14 +70,14 @@ where
 }
 
 #[inline]
-/// Convert std TcpStream to TcpStream
+/// Convert std `TcpStream` to `TcpStream`
 pub fn from_tcp_stream(stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
     with_current(|driver| driver.from_tcp_stream(stream, cfg))
 }
 
 #[cfg(unix)]
 #[inline]
-/// Convert std UnixStream to UnixStream
+/// Convert std `UnixStream` to `UnixStream`
 pub fn from_unix_stream(
     stream: std::os::unix::net::UnixStream,
     cfg: SharedCfg,
@@ -96,13 +104,13 @@ scoped_tls::scoped_thread_local!(static CURRENT_DRIVER: Box<dyn Reactor>);
 pub struct DefaultRuntime;
 
 impl Runner for DefaultRuntime {
-    fn block_on(&self, _fut: BlockFuture) {
+    fn block_on(&self, fut: BlockFuture) {
         #[cfg(feature = "tokio")]
         {
             let driver: Box<dyn Reactor> = Box::new(self::tokio::TokioDriver);
 
             CURRENT_DRIVER.set(&driver, || {
-                crate::tokio::block_on(_fut);
+                crate::tokio::block_on(fut);
             });
         }
 
@@ -111,7 +119,7 @@ impl Runner for DefaultRuntime {
             let driver: Box<dyn Reactor> = Box::new(self::compio::CompioDriver);
 
             CURRENT_DRIVER.set(&driver, || {
-                crate::compio::block_on(_fut);
+                crate::compio::block_on(fut);
             });
         }
 
@@ -125,7 +133,7 @@ impl Runner for DefaultRuntime {
 
                 CURRENT_DRIVER.set(&driver, || {
                     let rt = ntex_rt::Runtime::new(driver.handle());
-                    rt.block_on(_fut, &*driver);
+                    rt.block_on(fut, &*driver);
                     driver.clear();
                 });
             }
@@ -138,7 +146,7 @@ impl Runner for DefaultRuntime {
 
                 CURRENT_DRIVER.set(&driver, || {
                     let rt = ntex_rt::Runtime::new(driver.handle());
-                    rt.block_on(_fut, &*driver);
+                    rt.block_on(fut, &*driver);
                     driver.clear();
                 });
             }
@@ -162,7 +170,7 @@ impl Runner for DefaultRuntime {
 
                 CURRENT_DRIVER.set(&driver, || {
                     let rt = ntex_rt::Runtime::new(driver.handle());
-                    rt.block_on(_fut, &*driver);
+                    rt.block_on(fut, &*driver);
                     driver.clear();
                 });
             }

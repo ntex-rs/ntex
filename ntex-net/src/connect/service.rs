@@ -36,7 +36,7 @@ impl<T> ConnectorService<T> {
     #[inline]
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
-        ConnectorService::with(Default::default())
+        ConnectorService::with(SharedCfg::default())
     }
 
     #[inline]
@@ -79,7 +79,7 @@ impl<T: Address> ConnectorService<T> {
             }
         })
         .await
-        .map_err(|_| {
+        .map_err(|()| {
             ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Connect timeout"))
         })
         .and_then(|item| item)

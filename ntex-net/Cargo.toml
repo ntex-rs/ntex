@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "3.6.0"
+version = "3.6.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -15,6 +15,9 @@ rust-version = "1.88"
 [lib]
 name = "ntex_net"
 path = "src/lib.rs"
+
+[lints]
+workspace = true
 
 [features]
 default = []

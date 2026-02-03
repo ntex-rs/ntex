@@ -1,4 +1,4 @@
-use std::{any, future::poll_fn, io, mem, slice, task::Poll};
+use std::{any, future::poll_fn, io, mem, task::Poll};
 
 use compio_buf::{BufResult, IoBuf, IoBufMut, SetLen};
 use compio_io::{AsyncRead, AsyncWrite};
@@ -26,10 +26,10 @@ struct HandleWrapper(compio_net::TcpStream);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
-        if id == any::TypeId::of::<types::PeerAddr>() {
-            if let Ok(addr) = self.0.peer_addr() {
-                return Some(Box::new(types::PeerAddr(addr)));
-            }
+        if id == any::TypeId::of::<types::PeerAddr>()
+            && let Ok(addr) = self.0.peer_addr()
+        {
+            return Some(Box::new(types::PeerAddr(addr)));
         }
         None
     }
@@ -46,12 +46,7 @@ impl IoBuf for CompioBuf {
 
 impl IoBufMut for CompioBuf {
     fn as_uninit(&mut self) -> &mut [mem::MaybeUninit<u8>] {
-        unsafe {
-            slice::from_raw_parts_mut(
-                self.0.chunk_mut().as_mut_ptr() as *mut _,
-                self.0.remaining_mut(),
-            )
-        }
+        self.0.chunk_mut().as_mut()
     }
 }
 
@@ -103,12 +98,11 @@ where
                 );
                 if result == IoTaskStatus::Stop {
                     break;
-                } else {
-                    let mut buf = ctx.get_read_buf();
-                    total = buf.len();
-                    ctx.resize_read_buf(&mut buf);
-                    read_fut = Some(Box::pin(read_buf(&io, buf)));
-                };
+                }
+                let mut buf = ctx.get_read_buf();
+                total = buf.len();
+                ctx.resize_read_buf(&mut buf);
+                read_fut = Some(Box::pin(read_buf(&io, buf)));
             }
             Either::Right(true) => break,
             Either::Right(false) => (),

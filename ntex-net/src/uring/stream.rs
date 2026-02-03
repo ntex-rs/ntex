@@ -107,12 +107,14 @@ impl StreamOps {
                 } else {
                     Flags::NO_ZC
                 };
-                if !api.is_supported(opcode::Close::CODE) {
-                    panic!("opcode::Close is required for io-uring support");
-                }
-                if !api.is_supported(opcode::Shutdown::CODE) {
-                    panic!("opcode::Shutdown is required for io-uring support");
-                }
+                assert!(
+                    api.is_supported(opcode::Close::CODE),
+                    "opcode::Close is required for io-uring support"
+                );
+                assert!(
+                    api.is_supported(opcode::Shutdown::CODE),
+                    "opcode::Shutdown is required for io-uring support"
+                );
 
                 let mut ops = Slab::new();
                 ops.insert(Some(Operation::Nop));
@@ -209,7 +211,7 @@ impl Handler for StreamOpsHandler {
                 | Operation::Poll { .. }
                 | Operation::Close { .. }
                 | Operation::Shutdown { .. } => {}
-            })
+            });
     }
 
     fn completed(&mut self, user_data: usize, flags: u32, res: io::Result<usize>) {
@@ -309,7 +311,7 @@ impl Handler for StreamOpsHandler {
 
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.storage.take() {
-            for (_, val) in v.streams.into_iter() {
+            for (_, val) in v.streams {
                 if val.flags.contains(Flags::DROPPED_PRI) {
                     mem::forget(val.io);
                 } else {
@@ -340,7 +342,7 @@ impl StreamOpsStorage {
                     let op = opcode2::Recv::with(entry, item.fd()).buffer(buf_ptr, buf_len);
                     if poll_first {
                         op.ioprio(IORING_RECVSEND_POLL_FIRST);
-                    };
+                    }
                 });
             } else if item.flags.contains(Flags::RD_CANCELING) {
                 item.flags.insert(Flags::RD_REISSUE);
@@ -506,16 +508,16 @@ impl StreamCtl {
 
     pub(crate) fn resume_read(&self) {
         self.inner
-            .with(|st| st.recv(self.id, false, &self.inner.api))
+            .with(|st| st.recv(self.id, false, &self.inner.api));
     }
 
     pub(crate) fn resume_write(&self) {
-        self.inner.with(|st| st.send(self.id, &self.inner.api))
+        self.inner.with(|st| st.send(self.id, &self.inner.api));
     }
 
     pub(crate) fn pause_read(&self) {
         self.inner
-            .with(|storage| storage.pause_read(self.id, &self.inner.api))
+            .with(|storage| storage.pause_read(self.id, &self.inner.api));
     }
 }
 

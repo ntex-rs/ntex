@@ -53,9 +53,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
                 ctl.resume_read();
                 Poll::Pending
             }
-            Poll::Ready(Readiness::Shutdown) | Poll::Ready(Readiness::Terminate) => {
-                Poll::Ready(())
-            }
+            Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
             Poll::Pending => {
                 ctl.pause_read();
                 Poll::Pending
