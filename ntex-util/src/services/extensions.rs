@@ -11,7 +11,7 @@ impl Extensions {
     #[inline]
     pub fn new() -> Extensions {
         Extensions {
-            map: Default::default(),
+            map: crate::HashMap::default(),
         }
     }
 

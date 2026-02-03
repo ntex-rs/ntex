@@ -115,7 +115,7 @@ impl<T: ResourcePath> Path<T> {
 
     /// Get matched parameter by name without type conversion
     pub fn get(&self, key: &str) -> Option<&str> {
-        for item in self.segments.iter() {
+        for item in &self.segments {
             if key == item.0 {
                 return match item.1 {
                     PathItem::Static(s) => Some(s),

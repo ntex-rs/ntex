@@ -1,5 +1,9 @@
 # Changes
 
+## [1.5.0] (2026-02-03)
+
+* Add AsMut impl for UninitSlice
+
 ## [1.4.1] (2026-01-22)
 
 * Allow only u32 ref counts

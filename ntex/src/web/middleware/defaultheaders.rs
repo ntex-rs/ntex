@@ -122,7 +122,7 @@ where
         let mut res = ctx.call(&self.service, req).await?;
 
         // set response headers
-        for (key, value) in self.inner.headers.iter() {
+        for (key, value) in &self.inner.headers {
             if !res.headers().contains_key(key) {
                 res.headers_mut().insert(key.clone(), value.clone());
             }
@@ -171,7 +171,7 @@ mod tests {
         let mw = Pipeline::new(
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
-                .create(srv.into_service(), Default::default()),
+                .create(srv.into_service(), SharedCfg::default()),
         );
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");

@@ -250,7 +250,7 @@ impl Service<Connect> for ConnectorService {
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         match req.uri.scheme_str() {
-            Some("https") | Some("wss") => {
+            Some("https" | "wss") => {
                 if let Some(ref conn) = self.ssl_pool {
                     ctx.call(conn, req).await
                 } else {

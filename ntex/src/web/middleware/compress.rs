@@ -166,6 +166,7 @@ impl AcceptEncoding {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use std::cmp::Ordering;
 

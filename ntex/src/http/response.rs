@@ -44,8 +44,7 @@ impl Response<Body> {
     /// Convert response to response with body
     pub fn into_body<B>(self) -> Response<B> {
         let b = match self.body {
-            ResponseBody::Body(b) => b,
-            ResponseBody::Other(b) => b,
+            ResponseBody::Body(b) | ResponseBody::Other(b) => b,
         };
         Response {
             head: self.head,
@@ -122,7 +121,7 @@ impl<B> Response<B> {
             .map(|c| {
                 h.append(header::SET_COOKIE, c);
             })
-            .map_err(|e| e.into())
+            .map_err(Into::into)
     }
 
     #[cfg(feature = "cookie")]
@@ -133,7 +132,7 @@ impl<B> Response<B> {
         let h = &mut self.head.headers;
         let vals: Vec<HeaderValue> = h
             .get_all(header::SET_COOKIE)
-            .map(|v| v.to_owned())
+            .map(ToOwned::to_owned)
             .collect();
         h.remove(header::SET_COOKIE);
 
@@ -230,13 +229,9 @@ impl<B> Response<B> {
 impl Response<Body> {
     pub(crate) fn get_body_ref(&self) -> &[u8] {
         let b = match *self.body() {
-            ResponseBody::Body(ref b) => b,
-            ResponseBody::Other(ref b) => b,
+            ResponseBody::Body(ref b) | ResponseBody::Other(ref b) => b,
         };
-        match b {
-            Body::Bytes(bin) => bin,
-            _ => panic!(),
-        }
+        if let Body::Bytes(bin) = b { bin } else { panic!() }
     }
 }
 
@@ -250,7 +245,7 @@ impl<B: MessageBody> fmt::Debug for Response<B> {
             self.head.reason.unwrap_or(""),
         );
         let _ = writeln!(f, "  headers:");
-        for (key, val) in self.head.headers.iter() {
+        for (key, val) in &self.head.headers {
             let _ = writeln!(f, "    {key:?}: {val:?}");
         }
         let _ = writeln!(f, "  body: {:?}", self.body.size());
@@ -339,7 +334,7 @@ impl ResponseBuilder {
                     Err(e) => self.err = Some(log_error(e)),
                 },
                 Err(e) => self.err = Some(log_error(e)),
-            };
+            }
         }
         self
     }
@@ -372,7 +367,7 @@ impl ResponseBuilder {
                     Err(e) => self.err = Some(log_error(e)),
                 },
                 Err(e) => self.err = Some(log_error(e)),
-            };
+            }
         }
         self
     }
@@ -386,7 +381,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set connection type to KeepAlive
+    /// Set connection type to `KeepAlive`
     #[inline]
     pub fn keep_alive(&mut self) -> &mut Self {
         if let Some(parts) = parts(&mut self.head, &self.err) {
@@ -395,7 +390,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set connection type to Upgrade
+    /// Set connection type to `Upgrade`
     #[inline]
     pub fn upgrade<V>(&mut self, value: V) -> &mut Self
     where
@@ -439,7 +434,7 @@ impl ResponseBuilder {
                     parts.headers.insert(header::CONTENT_TYPE, value);
                 }
                 Err(e) => self.err = Some(log_error(e)),
-            };
+            }
         }
         self
     }
@@ -478,7 +473,7 @@ impl ResponseBuilder {
         } else {
             let mut jar = CookieJar::new();
             jar.add(cookie.into());
-            self.cookies = Some(jar)
+            self.cookies = Some(jar);
         }
         self
     }
@@ -501,7 +496,7 @@ impl ResponseBuilder {
     /// ```
     pub fn del_cookie(&mut self, cookie: &Cookie<'_>) -> &mut Self {
         if self.cookies.is_none() {
-            self.cookies = Some(CookieJar::new())
+            self.cookies = Some(CookieJar::new());
         }
         let jar = self.cookies.as_mut().unwrap();
         let cookie = cookie.clone().into_owned();
@@ -512,6 +507,7 @@ impl ResponseBuilder {
 
     /// Responses extensions
     #[inline]
+    #[allow(clippy::missing_panics_doc)]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
         head.extensions.borrow()
@@ -519,6 +515,7 @@ impl ResponseBuilder {
 
     /// Mutable reference to a the response's extensions
     #[inline]
+    #[allow(clippy::missing_panics_doc)]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
         head.extensions.borrow_mut()
@@ -535,6 +532,7 @@ impl ResponseBuilder {
     /// Set a body and generate `Response`.
     ///
     /// `ResponseBuilder` can not be used after this call.
+    #[allow(clippy::missing_panics_doc)]
     pub fn message_body<B>(&mut self, body: B) -> Response<B> {
         if let Some(e) = self.err.take() {
             return Response::from(e).into_body();
@@ -550,7 +548,7 @@ impl ResponseBuilder {
                     match HeaderValue::from_str(&cookie.to_string()) {
                         Ok(val) => response.headers.append(header::SET_COOKIE, val),
                         Err(e) => return Response::from(HttpError::from(e)).into_body(),
-                    };
+                    }
                 }
             }
         }
@@ -614,6 +612,7 @@ impl ResponseBuilder {
 }
 
 #[inline]
+#[allow(clippy::ref_option)]
 fn parts<'a>(
     parts: &'a mut Option<Message<ResponseHead>>,
     err: &Option<HttpError>,
@@ -714,7 +713,7 @@ impl fmt::Debug for ResponseBuilder {
             head.reason.unwrap_or(""),
         );
         let _ = writeln!(f, "  headers:");
-        for (key, val) in head.headers.iter() {
+        for (key, val) in &head.headers {
             let _ = writeln!(f, "    {key:?}: {val:?}");
         }
         res
@@ -898,7 +897,7 @@ mod tests {
     #[test]
     fn test_force_close() {
         let resp = Response::build(StatusCode::OK).force_close().finish();
-        assert!(!resp.keep_alive())
+        assert!(!resp.keep_alive());
     }
 
     #[test]
@@ -906,7 +905,7 @@ mod tests {
         let resp = Response::build(StatusCode::OK)
             .content_type("text/plain")
             .body(Body::Empty);
-        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/plain")
+        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/plain");
     }
 
     #[test]

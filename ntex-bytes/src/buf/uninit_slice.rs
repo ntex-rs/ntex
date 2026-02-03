@@ -1,8 +1,7 @@
-use core::fmt;
-use core::mem::MaybeUninit;
-use core::ops::{
+use std::ops::{
     Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
 };
+use std::{fmt, mem::MaybeUninit, ptr};
 
 /// Uninitialized byte slice.
 ///
@@ -43,8 +42,8 @@ impl UninitSlice {
     #[inline]
     pub unsafe fn from_raw_parts_mut<'a>(ptr: *mut u8, len: usize) -> &'a mut UninitSlice {
         let maybe_init: &mut [MaybeUninit<u8>] =
-            core::slice::from_raw_parts_mut(ptr as *mut _, len);
-        &mut *(maybe_init as *mut [MaybeUninit<u8>] as *mut UninitSlice)
+            core::slice::from_raw_parts_mut(ptr.cast(), len);
+        &mut *(ptr::from_mut::<[MaybeUninit<u8>]>(maybe_init) as *mut UninitSlice)
     }
 
     /// Write a single byte at the specified offset.
@@ -121,7 +120,7 @@ impl UninitSlice {
     /// ```
     #[inline]
     pub fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.0.as_mut_ptr() as *mut _
+        self.0.as_mut_ptr().cast()
     }
 
     /// Returns the number of bytes in the slice.
@@ -144,6 +143,12 @@ impl UninitSlice {
     }
 }
 
+impl AsMut<[MaybeUninit<u8>]> for UninitSlice {
+    fn as_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        &mut self.0
+    }
+}
+
 impl fmt::Debug for UninitSlice {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("UninitSlice[...]").finish()
@@ -159,7 +164,7 @@ macro_rules! impl_index {
                 #[inline]
                 fn index(&self, index: $t) -> &UninitSlice {
                     let maybe_uninit: &[MaybeUninit<u8>] = &self.0[index];
-                    unsafe { &*(maybe_uninit as *const [MaybeUninit<u8>] as *const UninitSlice) }
+                    unsafe { &*(ptr::from_ref::<[MaybeUninit<u8>]>(maybe_uninit) as *const UninitSlice) }
                 }
             }
 
@@ -167,7 +172,7 @@ macro_rules! impl_index {
                 #[inline]
                 fn index_mut(&mut self, index: $t) -> &mut UninitSlice {
                     let maybe_uninit: &mut [MaybeUninit<u8>] = &mut self.0[index];
-                    unsafe { &mut *(maybe_uninit as *mut [MaybeUninit<u8>] as *mut UninitSlice) }
+                    unsafe { &mut *(ptr::from_mut::<[MaybeUninit<u8>]>(maybe_uninit) as *mut UninitSlice) }
                 }
             }
         )*

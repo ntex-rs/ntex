@@ -38,13 +38,14 @@ impl TimerHandle {
             if self.0 <= cur {
                 Seconds::ZERO
             } else {
+                #[allow(clippy::cast_possible_truncation)]
                 Seconds((self.0 - cur) as u16)
             }
         })
     }
 
     pub fn instant(&self) -> Instant {
-        TIMER.with(|timer| timer.base.get() + Duration::from_secs(self.0 as u64))
+        TIMER.with(|timer| timer.base.get() + Duration::from_secs(u64::from(self.0)))
     }
 }
 
@@ -53,7 +54,7 @@ impl ops::Add<Seconds> for TimerHandle {
 
     #[inline]
     fn add(self, other: Seconds) -> TimerHandle {
-        TimerHandle(self.0 + other.0 as u32)
+        TimerHandle(self.0 + u32::from(other.0))
     }
 }
 
@@ -80,12 +81,12 @@ impl InnerMut {
 pub(crate) fn unregister(hnd: TimerHandle, io: &IoRef) {
     TIMER.with(|timer| {
         timer.storage.borrow_mut().unregister(hnd, io);
-    })
+    });
 }
 
 pub(crate) fn update(hnd: TimerHandle, timeout: Seconds, io: &IoRef) -> TimerHandle {
     TIMER.with(|timer| {
-        let new_hnd = timer.current.get() + timeout.0 as u32;
+        let new_hnd = timer.current.get() + u32::from(timeout.0);
         if hnd.0 == new_hnd || hnd.0 == new_hnd + 1 {
             hnd
         } else {
@@ -99,6 +100,7 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
     TIMER.with(|timer| {
         // setup current delta
         if !timer.running.get() {
+            #[allow(clippy::cast_possible_truncation)]
             let current = (now() - timer.base.get()).as_secs() as u32;
             timer.current.set(current);
             log::debug!(
@@ -109,11 +111,11 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
         }
 
         let hnd = {
-            let hnd = timer.current.get() + timeout.0 as u32;
+            let hnd = timer.current.get() + u32::from(timeout.0);
             let mut inner = timer.storage.borrow_mut();
 
             // insert key
-            if let Some(item) = inner.notifications.range_mut(hnd..hnd + 1).next() {
+            if let Some(item) = inner.notifications.range_mut(hnd..=hnd).next() {
                 item.1.insert(io.0.clone());
                 *item.0
             } else {
@@ -142,7 +144,9 @@ pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
                             let key = *key;
                             if key <= current {
                                 let mut items = inner.notifications.remove(&key).unwrap();
-                                items.drain().for_each(|st| st.notify_timeout());
+                                for st in items.drain() {
+                                    st.notify_timeout();
+                                }
                                 if inner.cache.len() <= CAP {
                                     inner.cache.push_back(items);
                                 }
@@ -179,6 +183,6 @@ impl Drop for TimerGuard {
         TIMER.with(|timer| {
             timer.running.set(false);
             timer.storage.borrow_mut().notifications.clear();
-        })
+        });
     }
 }

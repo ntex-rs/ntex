@@ -35,19 +35,16 @@ enum PathState {
 impl Value {
     fn value(&self) -> usize {
         match self {
-            Value::Val(v) => *v,
-            Value::Slash(v) => *v,
-            Value::Prefix(v) => *v,
-            Value::PrefixSlash(v) => *v,
+            Value::Val(v) | Value::Slash(v) | Value::Prefix(v) | Value::PrefixSlash(v) => {
+                *v
+            }
         }
     }
 }
 
 impl Tree {
     pub(crate) fn new(resource: &ResourceDef, value: usize) -> Tree {
-        if resource.tp.is_empty() {
-            panic!("Non empty key is expected");
-        }
+        assert!(!resource.tp.is_empty(), "Non empty key is expected");
 
         let val = if resource.tp[0].slesh {
             if resource.prefix {
@@ -75,7 +72,7 @@ impl Tree {
             } else {
                 Value::Val(value)
             };
-            tree.insert_path(seg.tp.clone(), val)
+            tree.insert_path(&seg.tp, val);
         }
         tree
     }
@@ -102,13 +99,12 @@ impl Tree {
             } else {
                 Value::Val(value)
             };
-            let key: Vec<_> = seg.tp.to_vec();
-            self.insert_path(key, value);
+            self.insert_path(&seg.tp, value);
         }
     }
 
-    fn insert_path(&mut self, key: Vec<Segment>, value: Value) {
-        let p = common_prefix(&self.key, &key);
+    fn insert_path(&mut self, key: &[Segment], value: Value) {
+        let p = common_prefix(&self.key, key);
 
         // split current key, and move all children to sub tree
         if p < self.key.len() {
@@ -133,11 +129,11 @@ impl Tree {
         } else {
             // insert into sub tree
             for child in &mut self.items {
-                if let Item::Subtree(tree) = child {
-                    if common_prefix(&tree.key, &key[p..]) > 0 {
-                        tree.insert_path(key[p..].to_vec(), value);
-                        return;
-                    }
+                if let Item::Subtree(tree) = child
+                    && common_prefix(&tree.key, &key[p..]) > 0
+                {
+                    tree.insert_path(&key[p..], value);
+                    return;
                 }
             }
             self.items
@@ -208,7 +204,7 @@ impl Tree {
                                 Value::Slash(v)
                                 | Value::Prefix(v)
                                 | Value::PrefixSlash(v) => *v,
-                                _ => continue,
+                                Value::Val(_) => continue,
                             };
                             if check(v, resource) {
                                 resource.resource_path().segments = segments;
@@ -236,18 +232,15 @@ impl Tree {
                 }
             } else if path.is_empty() {
                 for val in &self.items {
-                    match val {
-                        Item::Value(val) => {
-                            let v = match val {
-                                Value::Val(v) | Value::Prefix(v) => *v,
-                                _ => continue,
-                            };
-                            if check(v, resource) {
-                                resource.resource_path().segments = segments;
-                                return Some(v);
-                            }
+                    if let Item::Value(val) = val {
+                        let v = match val {
+                            Value::Val(v) | Value::Prefix(v) => *v,
+                            _ => continue,
+                        };
+                        if check(v, resource) {
+                            resource.resource_path().segments = segments;
+                            return Some(v);
                         }
-                        _ => continue,
                     }
                 }
             } else {
@@ -369,7 +362,7 @@ impl Tree {
             if path.is_empty() {
                 for val in &self.items {
                     let v = match val {
-                        Item::Value(Value::Val(v)) | Item::Value(Value::Prefix(v)) => *v,
+                        Item::Value(Value::Val(v) | Value::Prefix(v)) => *v,
                         _ => continue,
                     };
                     if check(v, resource) {
@@ -420,7 +413,7 @@ impl Tree {
 
                     if let Some(captures) = pattern.captures(seg) {
                         let mut is_match = true;
-                        for name in names.iter() {
+                        for name in names {
                             if let Some(m) = captures.name(name) {
                                 let item = if quoted {
                                     PathItem::Segment(m.as_str().to_string())
@@ -485,7 +478,7 @@ impl Tree {
                     };
                 } else if key.is_empty() {
                     path = &path[idx..];
-                    let subtree_path = if path.len() != 1 { &path[1..] } else { path };
+                    let subtree_path = if path.len() == 1 { path } else { &path[1..] };
 
                     let p = if path.is_empty() {
                         PathState::Empty
@@ -513,14 +506,7 @@ impl Tree {
                                             continue;
                                         }
                                     }
-                                    Value::Prefix(v) => {
-                                        if p == PathState::Slash || p == PathState::Tail {
-                                            *v
-                                        } else {
-                                            continue;
-                                        }
-                                    }
-                                    Value::PrefixSlash(v) => {
+                                    Value::Prefix(v) | Value::PrefixSlash(v) => {
                                         if p == PathState::Slash || p == PathState::Tail {
                                             *v
                                         } else {
@@ -549,9 +535,8 @@ impl Tree {
                         }
                     }
                     return None;
-                } else {
-                    path = &path[idx + 1..];
                 }
+                path = &path[idx + 1..];
             } else {
                 return None;
             }

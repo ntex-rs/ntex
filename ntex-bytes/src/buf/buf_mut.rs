@@ -50,7 +50,7 @@ pub trait BufMut {
     /// function that is documented to change the `BufMut`'s current position.
     fn remaining_mut(&self) -> usize;
 
-    /// Advance the internal cursor of the BufMut
+    /// Advance the internal cursor of the `BufMut`
     ///
     /// The next call to `bytes_mut` will return a slice starting `cnt` bytes
     /// further into the underlying buffer.
@@ -114,7 +114,7 @@ pub trait BufMut {
         self.remaining_mut() > 0
     }
 
-    /// Returns a mutable slice starting at the current BufMut position and of
+    /// Returns a mutable slice starting at the current `BufMut` position and of
     /// length between 0 and `BufMut::remaining_mut()`. Note that this *can* be shorter than the
     /// whole remainder of the buffer (this allows non-continuous implementation).
     ///
@@ -280,8 +280,7 @@ pub trait BufMut {
     /// This function panics if there is not enough remaining capacity in
     /// `self`.
     fn put_i8(&mut self, n: i8) {
-        let src = [n as u8];
-        self.put_slice(&src)
+        self.put_slice(&[n as u8]);
     }
 
     /// Writes an unsigned 16 bit integer to `self` in big-endian byte order.
@@ -304,7 +303,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_u16(&mut self, n: u16) {
-        self.put_slice(&n.to_be_bytes())
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Writes an unsigned 16 bit integer to `self` in little-endian byte order.
@@ -327,7 +326,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_u16_le(&mut self, n: u16) {
-        self.put_slice(&n.to_le_bytes())
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Writes a signed 16 bit integer to `self` in big-endian byte order.
@@ -350,7 +349,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_i16(&mut self, n: i16) {
-        self.put_slice(&n.to_be_bytes())
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Writes a signed 16 bit integer to `self` in little-endian byte order.
@@ -373,7 +372,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_i16_le(&mut self, n: i16) {
-        self.put_slice(&n.to_le_bytes())
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Writes an unsigned 32 bit integer to `self` in big-endian byte order.
@@ -396,7 +395,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_u32(&mut self, n: u32) {
-        self.put_slice(&n.to_be_bytes())
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Writes an unsigned 32 bit integer to `self` in little-endian byte order.
@@ -419,7 +418,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_u32_le(&mut self, n: u32) {
-        self.put_slice(&n.to_le_bytes())
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Writes a signed 32 bit integer to `self` in big-endian byte order.
@@ -442,7 +441,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_i32(&mut self, n: i32) {
-        self.put_slice(&n.to_be_bytes())
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Writes a signed 32 bit integer to `self` in little-endian byte order.
@@ -465,7 +464,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_i32_le(&mut self, n: i32) {
-        self.put_slice(&n.to_le_bytes())
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Writes an unsigned 64 bit integer to `self` in the big-endian byte order.
@@ -488,7 +487,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_u64(&mut self, n: u64) {
-        self.put_slice(&n.to_be_bytes())
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Writes an unsigned 64 bit integer to `self` in little-endian byte order.
@@ -511,7 +510,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_u64_le(&mut self, n: u64) {
-        self.put_slice(&n.to_le_bytes())
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Writes a signed 64 bit integer to `self` in the big-endian byte order.
@@ -534,7 +533,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_i64(&mut self, n: i64) {
-        self.put_slice(&n.to_be_bytes())
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Writes a signed 64 bit integer to `self` in little-endian byte order.
@@ -557,7 +556,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_i64_le(&mut self, n: i64) {
-        self.put_slice(&n.to_le_bytes())
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Writes an unsigned 128 bit integer to `self` in the big-endian byte order.
@@ -580,7 +579,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_u128(&mut self, n: u128) {
-        self.put_slice(&n.to_be_bytes())
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Writes an unsigned 128 bit integer to `self` in little-endian byte order.
@@ -603,7 +602,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_u128_le(&mut self, n: u128) {
-        self.put_slice(&n.to_le_bytes())
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Writes a signed 128 bit integer to `self` in the big-endian byte order.
@@ -626,7 +625,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_i128(&mut self, n: i128) {
-        self.put_slice(&n.to_be_bytes())
+        self.put_slice(&n.to_be_bytes());
     }
 
     /// Writes a signed 128 bit integer to `self` in little-endian byte order.
@@ -649,7 +648,7 @@ pub trait BufMut {
     /// `self`.
     #[inline]
     fn put_i128_le(&mut self, n: i128) {
-        self.put_slice(&n.to_le_bytes())
+        self.put_slice(&n.to_le_bytes());
     }
 
     /// Writes an unsigned n-byte integer to `self` in big-endian byte order.
@@ -866,7 +865,7 @@ pub trait BufMut {
     where
         Self: Sized,
     {
-        super::writer::new(self)
+        Writer::new(self)
     }
 }
 
@@ -880,7 +879,7 @@ impl<T: BufMut + ?Sized> BufMut for &mut T {
     }
 
     unsafe fn advance_mut(&mut self, cnt: usize) {
-        (**self).advance_mut(cnt)
+        (**self).advance_mut(cnt);
     }
 }
 
@@ -894,7 +893,7 @@ impl<T: BufMut + ?Sized> BufMut for Box<T> {
     }
 
     unsafe fn advance_mut(&mut self, cnt: usize) {
-        (**self).advance_mut(cnt)
+        (**self).advance_mut(cnt);
     }
 }
 
@@ -940,7 +939,7 @@ impl BufMut for &mut [u8] {
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
         // UninitSlice is repr(transparent), so safe to transmute
-        unsafe { &mut *(*self as *mut [u8] as *mut _) }
+        unsafe { &mut *(ptr::from_mut::<[u8]>(*self) as *mut _) }
     }
 
     #[inline]
@@ -970,7 +969,7 @@ mod tests {
     use crate::BytesMut;
 
     #[test]
-    #[allow(clippy::needless_borrow)]
+    #[allow(clippy::needless_borrow, clippy::too_many_lines)]
     fn buf_mut_tests() {
         let mut buf = vec![];
         buf.put_u8(0x01);
@@ -1041,75 +1040,75 @@ mod tests {
         assert_eq!(buf, b"\x09\x08");
 
         let mut buf = vec![];
-        buf.put_u32(0x0809A0A1);
+        buf.put_u32(0x0809_A0A1);
         assert_eq!(buf, b"\x08\x09\xA0\xA1");
 
         let mut buf = vec![];
-        buf.put_i32(0x0809A0A1);
+        buf.put_i32(0x0809_A0A1);
         assert_eq!(buf, b"\x08\x09\xA0\xA1");
 
         let mut buf = vec![];
-        buf.put_i32_le(0x0809A0A1);
+        buf.put_i32_le(0x0809_A0A1);
         assert_eq!(buf, b"\xA1\xA0\x09\x08");
 
         let mut buf = vec![];
-        buf.put_u64(0x0102030405060708);
+        buf.put_u64(0x0102_0304_0506_0708);
         assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08");
 
         let mut buf = vec![];
-        buf.put_u64_le(0x0102030405060708);
+        buf.put_u64_le(0x0102_0304_0506_0708);
         assert_eq!(buf, b"\x08\x07\x06\x05\x04\x03\x02\x01");
 
         let mut buf = vec![];
-        buf.put_i64(0x0102030405060708);
+        buf.put_i64(0x0102_0304_0506_0708);
         assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08");
 
         let mut buf = vec![];
-        buf.put_i64_le(0x0102030405060708);
+        buf.put_i64_le(0x0102_0304_0506_0708);
         assert_eq!(buf, b"\x08\x07\x06\x05\x04\x03\x02\x01");
 
         let mut buf = vec![];
-        buf.put_u128(0x01020304050607080910111213141516);
+        buf.put_u128(0x0102_0304_0506_0708_0910_1112_1314_1516);
         assert_eq!(
             buf,
             b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16"
         );
 
         let mut buf = vec![];
-        buf.put_u128_le(0x01020304050607080910111213141516);
+        buf.put_u128_le(0x0102_0304_0506_0708_0910_1112_1314_1516);
         assert_eq!(
             buf,
             b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01"
         );
 
         let mut buf = vec![];
-        buf.put_i128(0x01020304050607080910111213141516);
+        buf.put_i128(0x0102_0304_0506_0708_0910_1112_1314_1516);
         assert_eq!(
             buf,
             b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16"
         );
 
         let mut buf = vec![];
-        buf.put_i128_le(0x01020304050607080910111213141516);
+        buf.put_i128_le(0x0102_0304_0506_0708_0910_1112_1314_1516);
         assert_eq!(
             buf,
             b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01"
         );
 
         let mut buf = vec![];
-        buf.put_uint(0x010203, 3);
+        buf.put_uint(0x01_0203, 3);
         assert_eq!(buf, b"\x01\x02\x03");
 
         let mut buf = vec![];
-        buf.put_uint_le(0x010203, 3);
+        buf.put_uint_le(0x01_0203, 3);
         assert_eq!(buf, b"\x03\x02\x01");
 
         let mut buf = vec![];
-        buf.put_int(0x010203, 3);
+        buf.put_int(0x01_0203, 3);
         assert_eq!(buf, b"\x01\x02\x03");
 
         let mut buf = vec![];
-        buf.put_int_le(0x010203, 3);
+        buf.put_int_le(0x01_0203, 3);
         assert_eq!(buf, b"\x03\x02\x01");
 
         let mut buf = vec![];

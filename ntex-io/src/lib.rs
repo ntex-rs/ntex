@@ -1,6 +1,11 @@
 //! Utilities for abstructing io streams
-#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
-#![allow(deprecated, async_fn_in_trait)]
+#![deny(clippy::pedantic)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    clippy::missing_errors_doc
+)]
 
 use std::io::{Error as IoError, Result as IoResult};
 use std::{any::Any, any::TypeId, fmt, task::Context, task::Poll};

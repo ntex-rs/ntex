@@ -16,6 +16,9 @@ rust-version = "1.88"
 name = "ntex_io"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 ntex-codec = { workspace = true }
 ntex-bytes = { workspace = true }

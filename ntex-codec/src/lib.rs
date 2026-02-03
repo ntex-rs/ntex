@@ -1,4 +1,3 @@
-#![deny(rust_2018_idioms, warnings)]
 //! Utilities for encoding and decoding frames.
 
 use std::{io, rc::Rc};

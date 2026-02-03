@@ -6,21 +6,20 @@ macro_rules! buf_get_impl {
         // try to convert directly from the bytes
         // this Option<ret> trick is to avoid keeping a borrow on self
         // when advance() is called (mut borrow) and to call bytes() only once
-        let ret = $this
-            .chunk()
-            .get(..SIZE)
-            .map(|src| unsafe { $typ::$conv(*(src as *const _ as *const [_; SIZE])) });
+        #[allow(clippy::ptr_as_ptr)]
+        let ret = $this.chunk().get(..SIZE).map(|src| unsafe {
+            $typ::$conv(*(std::ptr::from_ref(src) as *const [_; SIZE]))
+        });
 
         if let Some(ret) = ret {
             // if the direct conversion was possible, advance and return
             $this.advance(SIZE);
             return ret;
-        } else {
-            // if not we copy the bytes in a temp buffer then convert
-            let mut buf = [0; SIZE];
-            $this.copy_to_slice(&mut buf); // (do the advance)
-            return $typ::$conv(buf);
         }
+        // if not we copy the bytes in a temp buffer then convert
+        let mut buf = [0; SIZE];
+        $this.copy_to_slice(&mut buf); // (do the advance)
+        return $typ::$conv(buf);
     }};
     (le => $this:ident, $typ:tt, $len_to_read:expr) => {{
         debug_assert!(mem::size_of::<$typ>() >= $len_to_read);
@@ -804,7 +803,7 @@ impl<T: Buf + ?Sized> Buf for &mut T {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        (**self).advance(cnt)
+        (**self).advance(cnt);
     }
 }
 
@@ -820,7 +819,7 @@ impl<T: Buf + ?Sized> Buf for Box<T> {
     }
 
     fn advance(&mut self, cnt: usize) {
-        (**self).advance(cnt)
+        (**self).advance(cnt);
     }
 }
 
@@ -896,6 +895,7 @@ impl<T: AsRef<[u8]>> Buf for std::io::Cursor<T> {
 fn _assert_trait_object(_b: &dyn Buf) {}
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -950,56 +950,56 @@ mod tests {
         assert_eq!(0x0809, buf.get_i16_le());
 
         let mut buf = &b"\x08\x09\xA0\xA1 hello"[..];
-        assert_eq!(0x0809A0A1, buf.get_u32());
+        assert_eq!(0x0809_A0A1, buf.get_u32());
 
         let mut buf = &b"\xA1\xA0\x09\x08 hello"[..];
-        assert_eq!(0x0809A0A1, buf.get_u32_le());
+        assert_eq!(0x0809_A0A1, buf.get_u32_le());
 
         let mut buf = &b"\x08\x09\xA0\xA1 hello"[..];
-        assert_eq!(0x0809A0A1, buf.get_i32());
+        assert_eq!(0x0809_A0A1, buf.get_i32());
 
         let mut buf = &b"\xA1\xA0\x09\x08 hello"[..];
-        assert_eq!(0x0809A0A1, buf.get_i32_le());
+        assert_eq!(0x0809_A0A1, buf.get_i32_le());
 
         let mut buf = &b"\x01\x02\x03\x04\x05\x06\x07\x08 hello"[..];
-        assert_eq!(0x0102030405060708, buf.get_u64());
+        assert_eq!(0x0102_0304_0506_0708, buf.get_u64());
 
         let mut buf = &b"\x08\x07\x06\x05\x04\x03\x02\x01 hello"[..];
-        assert_eq!(0x0102030405060708, buf.get_u64_le());
+        assert_eq!(0x0102_0304_0506_0708, buf.get_u64_le());
 
         let mut buf = &b"\x01\x02\x03\x04\x05\x06\x07\x08 hello"[..];
-        assert_eq!(0x0102030405060708, buf.get_i64());
+        assert_eq!(0x0102_0304_0506_0708, buf.get_i64());
 
         let mut buf = &b"\x08\x07\x06\x05\x04\x03\x02\x01 hello"[..];
-        assert_eq!(0x0102030405060708, buf.get_i64_le());
+        assert_eq!(0x0102_0304_0506_0708, buf.get_i64_le());
 
         let mut buf =
             &b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16 hello"[..];
-        assert_eq!(0x01020304050607080910111213141516, buf.get_u128());
+        assert_eq!(0x0102_0304_0506_0708_0910_1112_1314_1516, buf.get_u128());
 
         let mut buf =
             &b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01 hello"[..];
-        assert_eq!(0x01020304050607080910111213141516, buf.get_u128_le());
+        assert_eq!(0x0102_0304_0506_0708_0910_1112_1314_1516, buf.get_u128_le());
 
         let mut buf =
             &b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16 hello"[..];
-        assert_eq!(0x01020304050607080910111213141516, buf.get_i128());
+        assert_eq!(0x0102_0304_0506_0708_0910_1112_1314_1516, buf.get_i128());
 
         let mut buf =
             &b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01 hello"[..];
-        assert_eq!(0x01020304050607080910111213141516, buf.get_i128_le());
+        assert_eq!(0x0102_0304_0506_0708_0910_1112_1314_1516, buf.get_i128_le());
 
         let mut buf = &b"\x01\x02\x03 hello"[..];
-        assert_eq!(0x010203, buf.get_uint(3));
+        assert_eq!(0x01_0203, buf.get_uint(3));
 
         let mut buf = &b"\x03\x02\x01 hello"[..];
-        assert_eq!(0x010203, buf.get_uint_le(3));
+        assert_eq!(0x01_0203, buf.get_uint_le(3));
 
         let mut buf = &b"\x01\x02\x03 hello"[..];
-        assert_eq!(0x010203, buf.get_int(3));
+        assert_eq!(0x01_0203, buf.get_int(3));
 
         let mut buf = &b"\x03\x02\x01 hello"[..];
-        assert_eq!(0x010203, buf.get_int_le(3));
+        assert_eq!(0x01_0203, buf.get_int_le(3));
 
         let mut buf = &b"\x3F\x99\x99\x9A hello"[..];
         assert_eq!(1.2f32, buf.get_f32());

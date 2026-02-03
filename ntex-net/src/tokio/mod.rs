@@ -1,3 +1,4 @@
+#![allow(unused_variables)]
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
 
@@ -64,14 +65,14 @@ impl crate::Reactor for TokioDriver {
         rx
     }
 
-    fn unix_connect(&self, _addr: std::path::PathBuf, _cfg: SharedCfg) -> Receiver<Io> {
+    fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> Receiver<Io> {
         #[cfg(unix)]
         {
             let (tx, rx) = channel::create();
             ntex_rt::spawn(async move {
                 let result = async {
-                    let sock = tok_io::net::UnixStream::connect(_addr).await?;
-                    Ok(Io::new(UnixStream(sock), _cfg))
+                    let sock = tok_io::net::UnixStream::connect(addr).await?;
+                    Ok(Io::new(UnixStream(sock), cfg))
                 }
                 .await;
                 let _ = tx.send(result);

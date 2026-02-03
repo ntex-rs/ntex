@@ -2,7 +2,6 @@ use std::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
-use self::OpCode::*;
 /// Operation codes as part of rfc6455.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpCode {
@@ -25,13 +24,13 @@ pub enum OpCode {
 impl fmt::Display for OpCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            Continue => write!(f, "CONTINUE"),
-            Text => write!(f, "TEXT"),
-            Binary => write!(f, "BINARY"),
-            Close => write!(f, "CLOSE"),
-            Ping => write!(f, "PING"),
-            Pong => write!(f, "PONG"),
-            Bad => write!(f, "BAD"),
+            OpCode::Continue => write!(f, "CONTINUE"),
+            OpCode::Text => write!(f, "TEXT"),
+            OpCode::Binary => write!(f, "BINARY"),
+            OpCode::Close => write!(f, "CLOSE"),
+            OpCode::Ping => write!(f, "PING"),
+            OpCode::Pong => write!(f, "PONG"),
+            OpCode::Bad => write!(f, "BAD"),
         }
     }
 }
@@ -39,13 +38,13 @@ impl fmt::Display for OpCode {
 impl From<OpCode> for u8 {
     fn from(code: OpCode) -> u8 {
         match code {
-            Continue => 0,
-            Text => 1,
-            Binary => 2,
-            Close => 8,
-            Ping => 9,
-            Pong => 10,
-            Bad => {
+            OpCode::Continue => 0,
+            OpCode::Text => 1,
+            OpCode::Binary => 2,
+            OpCode::Close => 8,
+            OpCode::Ping => 9,
+            OpCode::Pong => 10,
+            OpCode::Bad => {
                 log::error!("Attempted to convert invalid opcode to u8. This is a bug.");
                 8 // if this somehow happens, a close frame will help us tear down quickly
             }
@@ -56,18 +55,17 @@ impl From<OpCode> for u8 {
 impl From<u8> for OpCode {
     fn from(byte: u8) -> OpCode {
         match byte {
-            0 => Continue,
-            1 => Text,
-            2 => Binary,
-            8 => Close,
-            9 => Ping,
-            10 => Pong,
-            _ => Bad,
+            0 => OpCode::Continue,
+            1 => OpCode::Text,
+            2 => OpCode::Binary,
+            8 => OpCode::Close,
+            9 => OpCode::Ping,
+            10 => OpCode::Pong,
+            _ => OpCode::Bad,
         }
     }
 }
 
-use self::CloseCode::*;
 /// Status code used to indicate why an endpoint is closing the `WebSocket`
 /// connection.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -136,20 +134,20 @@ pub enum CloseCode {
 impl From<CloseCode> for u16 {
     fn from(code: CloseCode) -> u16 {
         match code {
-            Normal => 1000,
-            Away => 1001,
-            Protocol => 1002,
-            Unsupported => 1003,
-            Abnormal => 1006,
-            Invalid => 1007,
-            Policy => 1008,
-            Size => 1009,
-            Extension => 1010,
-            Error => 1011,
-            Restart => 1012,
-            Again => 1013,
-            Tls => 1015,
-            Other(code) => code,
+            CloseCode::Normal => 1000,
+            CloseCode::Away => 1001,
+            CloseCode::Protocol => 1002,
+            CloseCode::Unsupported => 1003,
+            CloseCode::Abnormal => 1006,
+            CloseCode::Invalid => 1007,
+            CloseCode::Policy => 1008,
+            CloseCode::Size => 1009,
+            CloseCode::Extension => 1010,
+            CloseCode::Error => 1011,
+            CloseCode::Restart => 1012,
+            CloseCode::Again => 1013,
+            CloseCode::Tls => 1015,
+            CloseCode::Other(code) => code,
         }
     }
 }
@@ -157,20 +155,20 @@ impl From<CloseCode> for u16 {
 impl From<u16> for CloseCode {
     fn from(code: u16) -> CloseCode {
         match code {
-            1000 => Normal,
-            1001 => Away,
-            1002 => Protocol,
-            1003 => Unsupported,
-            1006 => Abnormal,
-            1007 => Invalid,
-            1008 => Policy,
-            1009 => Size,
-            1010 => Extension,
-            1011 => Error,
-            1012 => Restart,
-            1013 => Again,
-            1015 => Tls,
-            _ => Other(code),
+            1000 => CloseCode::Normal,
+            1001 => CloseCode::Away,
+            1002 => CloseCode::Protocol,
+            1003 => CloseCode::Unsupported,
+            1006 => CloseCode::Abnormal,
+            1007 => CloseCode::Invalid,
+            1008 => CloseCode::Policy,
+            1009 => CloseCode::Size,
+            1010 => CloseCode::Extension,
+            1011 => CloseCode::Error,
+            1012 => CloseCode::Restart,
+            1013 => CloseCode::Again,
+            1015 => CloseCode::Tls,
+            _ => CloseCode::Other(code),
         }
     }
 }
@@ -260,9 +258,9 @@ mod test {
         opcode_from!(OpCode::Pong => 10);
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[test]
     #[should_panic]
+    #[allow(clippy::should_panic_without_expect)]
     fn test_from_opcode_debug() {
         opcode_from!(OpCode::Bad => 99);
     }

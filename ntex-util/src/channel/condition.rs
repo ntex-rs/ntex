@@ -80,7 +80,7 @@ impl<T: Default> Condition<T> {
     /// Notify all waiters
     pub fn notify(&self) {
         let inner = self.inner.get_ref();
-        for (_, item) in inner.data.iter() {
+        for (_, item) in &inner.data {
             if let Some(item) = item {
                 item.waker.wake();
             }
@@ -98,10 +98,11 @@ impl<T: Default> Condition<T> {
 }
 
 impl<T: Clone + Default> Condition<T> {
+    #[allow(clippy::needless_pass_by_value)]
     /// Notify all waiters
     pub fn notify_with(&self, val: T) {
         let inner = self.inner.get_ref();
-        for (_, item) in inner.data.iter() {
+        for (_, item) in &inner.data {
             if let Some(item) = item
                 && item.waker.wake_checked()
             {
@@ -125,7 +126,7 @@ impl<T: Default> Drop for Condition<T> {
         let inner = self.inner.get_mut();
         inner.count -= 1;
         if inner.count == 0 {
-            self.notify_and_lock_readiness()
+            self.notify_and_lock_readiness();
         }
     }
 }
@@ -142,6 +143,7 @@ impl<T: Default> Waiter<T> {
         poll_fn(|cx| self.poll_ready(cx)).await
     }
 
+    #[allow(clippy::missing_panics_doc)]
     /// Returns readiness state of the condition.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<T> {
         let parent = self.inner.get_mut();
@@ -271,19 +273,19 @@ mod tests {
         drop(cond);
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
     }
 
@@ -318,11 +320,11 @@ mod tests {
         );
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
@@ -330,13 +332,13 @@ mod tests {
         );
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
 
         let waiter2 = cond.wait();
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
     }
 }

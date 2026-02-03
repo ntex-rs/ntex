@@ -9,10 +9,10 @@ mod io_impl;
 
 use crate::channel::{self, Receiver};
 
-/// Tcp stream wrapper for compio TcpStream
+/// Tcp stream wrapper for compio `TcpStream`
 pub(crate) struct TcpStream(pub(crate) compio_net::TcpStream);
 
-/// Tcp stream wrapper for compio UnixStream
+/// Tcp stream wrapper for compio `UnixStream`
 pub(crate) struct UnixStream(pub(crate) compio_net::UnixStream);
 
 /// Runs the provided future, blocking the current thread until the future
@@ -20,7 +20,7 @@ pub(crate) struct UnixStream(pub(crate) compio_net::UnixStream);
 pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
     log::info!(
         "Starting compio runtime, driver {:?}",
-        compio_runtime::Runtime::try_with_current(|rt| rt.driver_type())
+        compio_runtime::Runtime::try_with_current(Runtime::driver_type)
             .unwrap_or(compio_driver::DriverType::Poll)
     );
     let rt = Runtime::new().unwrap();

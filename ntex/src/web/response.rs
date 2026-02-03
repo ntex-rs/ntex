@@ -144,7 +144,7 @@ impl fmt::Debug for WebResponse {
             self.response.head().reason.unwrap_or(""),
         );
         let _ = writeln!(f, "  headers:");
-        for (key, val) in self.response.head().headers.iter() {
+        for (key, val) in &self.response.head().headers {
             let _ = writeln!(f, "    {key:?}: {val:?}");
         }
         let _ = writeln!(f, "  body: {:?}", self.response.body().size());

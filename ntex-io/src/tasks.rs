@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt, io, task::Context, task::Poll};
+use std::{cell::Cell, fmt, io, ptr, task::Context, task::Poll};
 
 use ntex_bytes::BytesMut;
 use ntex_util::time::{Sleep, sleep};
@@ -22,7 +22,7 @@ impl IoContext {
     #[doc(hidden)]
     #[inline]
     pub fn id(&self) -> usize {
-        self.0.0.as_ref() as *const _ as usize
+        ptr::from_ref(self.0.0.as_ref()) as usize
     }
 
     #[inline]
@@ -186,7 +186,7 @@ impl IoContext {
         };
 
         match result {
-            Poll::Ready(Ok(_)) => {
+            Poll::Ready(Ok(())) => {
                 if let Err(e) = st_res {
                     inner.io_stopped(Some(e));
                     IoTaskStatus::Stop

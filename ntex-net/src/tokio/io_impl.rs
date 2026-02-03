@@ -1,5 +1,5 @@
 use std::task::{Context, Poll, ready};
-use std::{any, cell::RefCell, cmp, future::poll_fn, io, mem, pin::Pin, rc::Rc, rc::Weak};
+use std::{any, cell::RefCell, cmp, future::poll_fn, io, pin::Pin, rc::Rc, rc::Weak};
 
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{
@@ -56,7 +56,7 @@ where
     log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
-        let _ = poll_fn(|cx| {
+        poll_fn(|cx| {
             if write(&mut *io.borrow_mut(), &ctx, cx) == Poll::Ready(Status::Terminate) {
                 Poll::Ready(())
             } else {
@@ -80,9 +80,7 @@ where
 {
     let read = match ctx.poll_read_ready(cx) {
         Poll::Ready(Readiness::Ready) => read(io, ctx, cx),
-        Poll::Ready(Readiness::Shutdown) | Poll::Ready(Readiness::Terminate) => {
-            Poll::Ready(())
-        }
+        Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
         Poll::Pending => Poll::Pending,
     };
 
@@ -159,8 +157,7 @@ fn read_buf<T: AsyncRead>(
     buf: &mut BytesMut,
 ) -> Poll<io::Result<usize>> {
     let n = {
-        let dst =
-            unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [mem::MaybeUninit<u8>]) };
+        let dst = buf.chunk_mut().as_mut();
         let mut buf = ReadBuf::uninit(dst);
         let ptr = buf.filled().as_ptr();
         if io.poll_read(cx, &mut buf)?.is_pending() {
@@ -199,11 +196,10 @@ fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
                     io::ErrorKind::WriteZero,
                     "failed to write frame to transport",
                 )));
-            } else {
-                written += n;
-                if written == len {
-                    break;
-                }
+            }
+            written += n;
+            if written == len {
+                break;
             }
         }
         // log::trace!("flushed {written} bytes");
@@ -274,7 +270,7 @@ impl AsyncWrite for TokioIoBoxed {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.0.write(buf).map(|_| buf.len()))
+        Poll::Ready(self.0.write(buf).map(|()| buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -295,7 +291,7 @@ impl SocketOptions {
     pub fn set_linger(&self, dur: Option<Millis>) -> io::Result<()> {
         #[allow(deprecated)]
         self.try_self()
-            .and_then(|s| s.borrow().set_linger(dur.map(|d| d.into())))
+            .and_then(|s| s.borrow().set_linger(dur.map(Into::into)))
     }
 
     pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {

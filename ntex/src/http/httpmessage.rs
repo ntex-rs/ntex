@@ -66,11 +66,11 @@ pub trait HttpMessage: Sized {
                     Ok(mt) => Ok(Some(mt)),
                     Err(_) => Err(ContentTypeError::ParseError),
                 };
-            } else {
-                return Err(ContentTypeError::ParseError);
             }
+            Err(ContentTypeError::ParseError)
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
 
     /// Check if request has chunked transfer encoding
@@ -94,7 +94,7 @@ pub trait HttpMessage: Sized {
             for hdr in self.message_headers().get_all(header::COOKIE) {
                 let s =
                     str::from_utf8(hdr.as_bytes()).map_err(coo_kie::ParseError::from)?;
-                for cookie_str in s.split(';').map(|s| s.trim()) {
+                for cookie_str in s.split(';').map(str::trim) {
                     if !cookie_str.is_empty() {
                         cookies.push(Cookie::parse_encoded(cookie_str)?.into_owned());
                     }

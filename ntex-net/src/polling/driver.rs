@@ -50,7 +50,7 @@ impl DriverApi {
     /// `fd` must be attached to the driver before using register/unregister
     /// methods.
     pub fn attach(&self, fd: RawFd, id: u32, event: Event) {
-        self.attach_with_mode(fd, id, event, PollMode::Oneshot)
+        self.attach_with_mode(fd, id, event, PollMode::Oneshot);
     }
 
     /// Attach an fd to the driver with specific mode.
@@ -58,13 +58,13 @@ impl DriverApi {
     /// `fd` must be attached to the driver before using register/unregister
     /// methods.
     pub fn attach_with_mode(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
-        event.key = (id as u64 | self.batch) as usize;
+        event.key = (u64::from(id) | self.batch) as usize;
         if let Err(err) = unsafe { self.poll.add_with_mode(fd, event, mode) } {
             self.change(Change::Error {
                 batch: self.id,
                 user_data: id,
                 error: err,
-            })
+            });
         }
     }
 
@@ -75,18 +75,18 @@ impl DriverApi {
                 batch: self.id,
                 user_data: id,
                 error: err,
-            })
+            });
         }
     }
 
     /// Register interest for specified file descriptor.
     pub fn modify(&self, fd: RawFd, id: u32, event: Event) {
-        self.modify_with_mode(fd, id, event, PollMode::Oneshot)
+        self.modify_with_mode(fd, id, event, PollMode::Oneshot);
     }
 
     /// Register interest for specified file descriptor.
     pub fn modify_with_mode(&self, fd: RawFd, id: u32, mut event: Event, mode: PollMode) {
-        event.key = (id as u64 | self.batch) as usize;
+        event.key = (u64::from(id) | self.batch) as usize;
 
         let result =
             self.poll
@@ -96,7 +96,7 @@ impl DriverApi {
                 batch: self.id,
                 user_data: id,
                 error: err,
-            })
+            });
         }
     }
 
@@ -219,7 +219,7 @@ impl crate::Reactor for Driver {
         match result {
             Err(err) => Receiver::new(Err(err)),
             Ok((addr, sock)) => {
-                super::connect::ConnectOps::get(self).connect(sock, addr, cfg, false)
+                super::connect::ConnectOps::get(self).connect(sock, &addr, cfg, false)
             }
         }
     }
@@ -234,7 +234,7 @@ impl crate::Reactor for Driver {
         match result {
             Err(err) => Receiver::new(Err(err)),
             Ok((addr, sock)) => {
-                super::connect::ConnectOps::get(self).connect(sock, addr, cfg, true)
+                super::connect::ConnectOps::get(self).connect(sock, &addr, cfg, true)
             }
         }
     }
@@ -296,7 +296,7 @@ impl ntex_rt::Driver for Driver {
                 handlers[batch].modified = true;
                 handlers[batch]
                     .hnd
-                    .event((key & Self::DATA_MASK) as usize, event)
+                    .event((key & Self::DATA_MASK) as usize, event);
             }
             self.apply_changes(&mut handlers);
             for h in handlers.iter_mut() {
@@ -314,7 +314,7 @@ impl ntex_rt::Driver for Driver {
     /// Clear handlers
     fn clear(&self) {
         for mut h in self.handlers.take().unwrap().into_iter() {
-            h.hnd.cleanup()
+            h.hnd.cleanup();
         }
     }
 }

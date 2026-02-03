@@ -160,7 +160,7 @@ where
 
     #[inline]
     async fn shutdown(&self) {
-        self.0.shutdown().await
+        self.0.shutdown().await;
     }
 
     #[inline]

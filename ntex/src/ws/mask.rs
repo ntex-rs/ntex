@@ -57,10 +57,10 @@ fn xor_short(buf: ShortSlice<'_>, mask: u64) {
         let (ptr, len) = (buf.0.as_mut_ptr(), buf.0.len());
         let mut b: u64 = 0;
         #[allow(trivial_casts)]
-        copy_nonoverlapping(ptr, &mut b as *mut _ as *mut u8, len);
+        copy_nonoverlapping(ptr, (&raw mut b).cast::<u8>(), len);
         b ^= mask;
         #[allow(trivial_casts)]
-        copy_nonoverlapping(&b as *const _ as *const u8, ptr, len);
+        copy_nonoverlapping((&raw const b).cast::<u8>(), ptr, len);
     }
 }
 
@@ -72,7 +72,7 @@ unsafe fn cast_slice(buf: &mut [u8]) -> &mut [u64] {
         debug_assert!(buf.len().trailing_zeros() >= 3);
         debug_assert!((buf.as_ptr() as usize).trailing_zeros() >= 3);
 
-        slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u64, buf.len() >> 3)
+        slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u64>(), buf.len() >> 3)
     }
 }
 

@@ -162,7 +162,7 @@ mod tests {
             Ok(())
         }
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Ok(())
         }
 
@@ -174,7 +174,7 @@ mod tests {
     #[ntex::test]
     async fn test_service() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = Pipeline::new(Srv(cnt_sht.clone()).map(|_| "ok").clone());
+        let srv = Pipeline::new(Srv(cnt_sht.clone()).map(|()| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -187,7 +187,7 @@ mod tests {
         let _ = format!("{srv:?}");
 
         let cnt_sht = Rc::new(Cell::new(0));
-        let svc = Srv(cnt_sht.clone()).map(|_| "ok");
+        let svc = Srv(cnt_sht.clone()).map(|()| "ok");
         let srv = Pipeline::new(&svc);
         let res = srv.call(()).await;
         assert!(res.is_ok());
@@ -203,7 +203,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_pipeline() {
-        let srv = Pipeline::new(crate::chain(Srv::default()).map(|_| "ok").clone());
+        let srv = Pipeline::new(crate::chain(Srv::default()).map(|()| "ok").clone());
         let res = srv.call(()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
@@ -215,7 +215,7 @@ mod tests {
     #[ntex::test]
     async fn test_factory() {
         let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv::default()) })
-            .map(|_| "ok")
+            .map(|()| "ok")
             .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
@@ -229,7 +229,7 @@ mod tests {
     async fn test_pipeline_factory() {
         let new_srv =
             crate::chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
-                .map(|_| "ok")
+                .map(|()| "ok")
                 .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;

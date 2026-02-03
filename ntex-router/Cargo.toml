@@ -8,11 +8,14 @@ repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-router/"
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.88"
 
 [lib]
 name = "ntex_router"
 path = "src/lib.rs"
+
+[lints]
+workspace = true
 
 [features]
 default = ["http"]

@@ -1,5 +1,5 @@
 //! Payload/Bytes/String extractors
-use std::{future::Future, pin::Pin, str, task::Context, task::Poll};
+use std::{borrow::Cow, future::Future, pin::Pin, str, task::Context, task::Poll};
 
 use encoding_rs::UTF_8;
 use mime::Mime;
@@ -121,7 +121,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Payload {
 ///
 /// Loads request's payload and construct Bytes instance.
 ///
-/// [**PayloadConfig**](struct.PayloadConfig.html) allows to configure
+/// [**`PayloadConfig`**](struct.PayloadConfig.html) allows to configure
 /// extraction process.
 ///
 /// ## Example
@@ -169,7 +169,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for Bytes {
 ///
 /// Text extractor automatically decode body according to the request's charset.
 ///
-/// [**PayloadConfig**](struct.PayloadConfig.html) allows to configure
+/// [**`PayloadConfig`**](struct.PayloadConfig.html) allows to configure
 /// extraction process.
 ///
 /// ## Example
@@ -225,7 +225,7 @@ impl<Err: ErrorRenderer> FromRequest<Err> for String {
         } else {
             Ok(encoding
                 .decode_without_bom_handling_and_without_replacement(&body)
-                .map(|s| s.into_owned())
+                .map(Cow::into_owned)
                 .ok_or(PayloadError::Decoding)?)
         }
     }
@@ -317,7 +317,7 @@ impl HttpMessageBody {
         if let Some(l) = req.headers().get(&header::CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
                 if let Ok(l) = s.parse::<usize>() {
-                    len = Some(l)
+                    len = Some(l);
                 } else {
                     return Self::err(PayloadError::Payload(
                         error::PayloadError::UnknownLength,
@@ -392,9 +392,8 @@ impl Future for HttpMessageBody {
                 let chunk = item?;
                 if body.len() + chunk.len() > limit {
                     return Err(PayloadError::from(error::PayloadError::Overflow));
-                } else {
-                    body.extend_from_slice(&chunk);
                 }
+                body.extend_from_slice(&chunk);
             }
             Ok(body.freeze())
         }));

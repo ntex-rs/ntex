@@ -220,7 +220,7 @@ impl Stack {
     pub(crate) fn read_destination_size(&self) -> usize {
         let item = self.get_first_level();
         let rb = item.read.take();
-        let size = rb.as_ref().map(|b| b.len()).unwrap_or(0);
+        let size = rb.as_ref().map_or(0, BytesMut::len);
         item.read.set(rb);
         size
     }
@@ -228,7 +228,7 @@ impl Stack {
     pub(crate) fn write_destination_size(&self) -> usize {
         let item = self.get_last_level();
         let wb = item.write.take();
-        let size = wb.as_ref().map(|b| b.len()).unwrap_or(0);
+        let size = wb.as_ref().map_or(0, BytesMut::len);
         item.write.set(wb);
         size
     }
@@ -335,7 +335,7 @@ impl ReadBuf<'_> {
     #[inline]
     /// Initiate graceful io stream shutdown
     pub fn want_shutdown(&self) {
-        self.io.want_shutdown()
+        self.io.want_shutdown();
     }
 
     #[inline]
@@ -479,7 +479,7 @@ impl WriteBuf<'_> {
     #[inline]
     /// Initiate graceful io stream shutdown
     pub fn want_shutdown(&self) {
-        self.io.want_shutdown()
+        self.io.want_shutdown();
     }
 
     #[inline]

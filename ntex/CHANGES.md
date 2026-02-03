@@ -1,5 +1,11 @@
 # Changes
 
+## [3.0.1] 2026-02-03
+
+* Clippy warnings
+
+* Tune apis
+
 ## [3.0.0] 2026-02-02
 
 * Refactor http control messages

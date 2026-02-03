@@ -179,7 +179,7 @@ mod tests {
             if self.0 { Err(()) } else { Ok(()) }
         }
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _m: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Err(())
         }
 
@@ -191,7 +191,7 @@ mod tests {
     #[ntex::test]
     async fn test_ready() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let srv = Pipeline::new(Srv(true, cnt_sht.clone()).map_err(|_| "error"));
+        let srv = Pipeline::new(Srv(true, cnt_sht.clone()).map_err(|()| "error"));
         let res = srv.ready().await;
         assert_eq!(res, Err("error"));
 
@@ -203,7 +203,7 @@ mod tests {
     async fn test_service() {
         let srv = Pipeline::new(
             Srv(false, Rc::new(Cell::new(0)))
-                .map_err(|_| "error")
+                .map_err(|()| "error")
                 .clone(),
         );
         let res = srv.call(()).await;
@@ -217,7 +217,7 @@ mod tests {
     async fn test_pipeline() {
         let srv = Pipeline::new(
             crate::chain(Srv(false, Rc::new(Cell::new(0))))
-                .map_err(|_| "error")
+                .map_err(|()| "error")
                 .clone(),
         );
         let res = srv.call(()).await;
@@ -231,7 +231,7 @@ mod tests {
     async fn test_factory() {
         let new_srv =
             fn_factory(|| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
-                .map_err(|_| "error")
+                .map_err(|()| "error")
                 .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;
@@ -245,7 +245,7 @@ mod tests {
         let new_srv = crate::chain_factory(fn_factory(|| async {
             Ok::<Srv, ()>(Srv(false, Rc::new(Cell::new(0))))
         }))
-        .map_err(|_| "error")
+        .map_err(|()| "error")
         .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call(()).await;

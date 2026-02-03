@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.0.0"
+version = "3.0.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -23,12 +23,12 @@ features = ["tokio", "openssl", "rustls", "compress", "cookie", "ws", "ntex-tls/
 rustc-args = ["--cfg", "docsrs_dep"]
 rustdoc-args = ["--cfg", "docsrs_dep"]
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs_dep)'] }
-
 [lib]
 name = "ntex"
 path = "src/lib.rs"
+
+[lints]
+workspace = true
 
 [features]
 default = ["ws"]

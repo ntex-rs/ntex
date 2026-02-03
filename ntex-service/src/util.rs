@@ -18,7 +18,7 @@ where
             ready1 = true;
         }
         if !ready2 && Pin::new(&mut fut2).poll(cx).is_ready() {
-            ready2 = true
+            ready2 = true;
         }
         if ready1 && ready2 {
             Poll::Ready(())
@@ -26,7 +26,7 @@ where
             Poll::Pending
         }
     })
-    .await
+    .await;
 }
 
 pub(crate) async fn ready<S, A, AR, B, BR>(

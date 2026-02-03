@@ -1,3 +1,4 @@
+#![allow(clippy::needless_pass_by_value)]
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
@@ -11,7 +12,7 @@ pub(super) struct Segments {
     pub(super) slesh: bool,
 }
 
-/// ResourceDef describes an entry in resources table
+/// `ResourceDef` describes an entry in resources table
 ///
 /// Resource definition can contain only 16 dynamic segments
 #[derive(Clone, Debug)]
@@ -36,16 +37,16 @@ impl PathElement {
     }
 
     fn into_str(self) -> String {
-        match self {
-            PathElement::Str(s) => s,
-            _ => panic!(),
+        if let PathElement::Str(s) = self {
+            s
+        } else {
+            panic!()
         }
     }
 
     fn as_str(&self) -> &str {
         match self {
-            PathElement::Str(s) => s.as_str(),
-            PathElement::Var(s) => s.as_str(),
+            PathElement::Str(s) | PathElement::Var(s) => s.as_str(),
         }
     }
 }
@@ -67,7 +68,7 @@ impl PartialEq for Segment {
         match self {
             Segment::Static(p1) => match other {
                 Segment::Static(p2) => p1 == p2,
-                _ => false,
+                Segment::Dynamic { .. } => false,
             },
             Segment::Dynamic {
                 pattern: p1,
@@ -133,7 +134,7 @@ impl ResourceDef {
         let mut patterns = path.patterns();
         for path in &mut patterns {
             let p = insert_slash(path.as_str());
-            *path = p
+            *path = p;
         }
 
         ResourceDef::with_prefix(patterns)
@@ -200,7 +201,7 @@ impl ResourceDef {
                 PathElement::Str(ref s) => path.push_str(s),
                 PathElement::Var(_) => {
                     if let Some(val) = elements.next() {
-                        path.push_str(val.as_ref())
+                        path.push_str(val.as_ref());
                     } else {
                         return false;
                     }
@@ -226,7 +227,7 @@ impl ResourceDef {
                 PathElement::Str(ref s) => path.push_str(s),
                 PathElement::Var(ref name) => {
                     if let Some(val) = elements.get(name) {
-                        path.push_str(val.as_ref())
+                        path.push_str(val.as_ref());
                     } else {
                         return false;
                     }
@@ -252,10 +253,10 @@ impl ResourceDef {
         elems.push(PathElement::Str('/'.to_string()));
 
         while let Some(start_idx) = pattern.find('{') {
-            if let Some(end) = end {
-                if start_idx > end {
-                    break;
-                }
+            if let Some(end) = end
+                && start_idx > end
+            {
+                break;
             }
             let p = pattern.split_at(start_idx);
             pattern = p.1;
@@ -285,9 +286,7 @@ impl ResourceDef {
 
             let (name, pat) = match param.find(':') {
                 Some(idx) => {
-                    if tail {
-                        panic!("Custom regex is not supported for remainder match");
-                    }
+                    assert!(!tail, "Custom regex is not supported for remainder match");
                     let (name, pattern) = param.split_at(idx);
                     (name, &pattern[1..])
                 }
@@ -309,7 +308,6 @@ impl ResourceDef {
             if let Some(idx) = rem.find(['{', '/']) {
                 end = Some(idx);
                 pattern = rem;
-                continue;
             } else {
                 re += rem;
                 rem = "";
@@ -324,7 +322,7 @@ impl ResourceDef {
         } else {
             re.push_str(&escape(rem));
             rem = "";
-        };
+        }
         re.push('$');
 
         (re, rem, tail)
@@ -353,7 +351,7 @@ impl ResourceDef {
             };
 
             // static segment
-            if let Some(i) = pattern[start..idx + 1].find('/') {
+            if let Some(i) = pattern[start..=idx].find('/') {
                 elems.push(PathElement::Str(pattern[..i + start].to_string()));
                 pelems.push(Segment::Static(pattern[start..i + start].to_string()));
                 pattern = &pattern[i + start..];
@@ -406,7 +404,7 @@ impl ResourceDef {
 
         // insert last slesh
         if slesh {
-            elems.push(PathElement::Str("/".to_string()))
+            elems.push(PathElement::Str("/".to_string()));
         }
 
         // merge path elements
@@ -460,7 +458,7 @@ pub(crate) fn insert_slash(path: &str) -> String {
     let mut path = path.to_owned();
     if !path.is_empty() && !path.starts_with('/') {
         path.insert(0, '/');
-    };
+    }
     path
 }
 

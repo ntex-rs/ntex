@@ -1,4 +1,5 @@
 //! Request logging middleware
+#![allow(clippy::cast_precision_loss)]
 use std::task::{Context, Poll};
 use std::{env, error::Error, fmt, fmt::Display, rc::Rc, time};
 
@@ -57,11 +58,11 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 ///
 /// `%U`  Request URL
 ///
-/// `%{FOO}i`  request.headers['FOO']
+/// `%{FOO}i`  request.headers[`FOO`]
 ///
-/// `%{FOO}o`  response.headers['FOO']
+/// `%{FOO}o`  response.headers[`FOO`]
 ///
-/// `%{FOO}e`  os.environ['FOO']
+/// `%{FOO}e`  os.environ[`FOO`]
 ///
 #[derive(Debug)]
 pub struct Logger {
@@ -253,7 +254,7 @@ impl Format {
                     ),
                     "e" => FormatText::EnvironHeader(key.as_str().to_owned()),
                     _ => unreachable!(),
-                })
+                });
             } else {
                 let m = cap.get(1).unwrap();
                 results.push(match m.as_str() {
@@ -333,7 +334,7 @@ impl FormatText {
     fn render_response<B>(&mut self, res: &HttpResponse<B>) {
         match *self {
             FormatText::ResponseStatus => {
-                *self = FormatText::Str(format!("{}", res.status().as_u16()))
+                *self = FormatText::Str(format!("{}", res.status().as_u16()));
             }
             FormatText::ResponseHeader(ref name) => {
                 let s = if let Some(val) = res.headers().get(name) {
@@ -341,7 +342,7 @@ impl FormatText {
                 } else {
                     "-"
                 };
-                *self = FormatText::Str(s.to_string())
+                *self = FormatText::Str(s.to_string());
             }
             _ => (),
         }
@@ -370,7 +371,7 @@ impl FormatText {
             }
             FormatText::UrlPath => *self = FormatText::Str(req.path().to_string()),
             FormatText::RequestTime => {
-                *self = FormatText::Str(httpdate::HttpDate::from(now).to_string())
+                *self = FormatText::Str(httpdate::HttpDate::from(now).to_string());
             }
             FormatText::RequestHeader(ref name) => {
                 let s = if let Some(val) = req.headers().get(name) {

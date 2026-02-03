@@ -58,9 +58,7 @@ async fn run(ctl: StreamCtl, context: ntex_io::IoContext) {
                 readable = true;
                 Poll::Pending
             }
-            Poll::Ready(Readiness::Shutdown) | Poll::Ready(Readiness::Terminate) => {
-                Poll::Ready(())
-            }
+            Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
             Poll::Pending => {
                 modify = true;
                 Poll::Pending

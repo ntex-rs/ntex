@@ -302,7 +302,7 @@ impl ClientRequest {
         } else {
             let mut jar = CookieJar::new();
             jar.add(cookie.into());
-            self.cookies = Some(jar)
+            self.cookies = Some(jar);
         }
         self
     }
@@ -527,7 +527,7 @@ impl fmt::Debug for ClientRequest {
             self.head.version, self.head.method, self.head.uri
         )?;
         writeln!(f, "  headers:")?;
-        for (key, val) in self.head.headers.iter() {
+        for (key, val) in &self.head.headers {
             if key == header::AUTHORIZATION {
                 writeln!(f, "    {key:?}: <REDACTED>")?;
             } else {

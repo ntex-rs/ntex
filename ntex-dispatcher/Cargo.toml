@@ -16,6 +16,9 @@ rust-version = "1.88"
 name = "ntex_dispatcher"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 ntex-io = { workspace = true }
 ntex-codec = { workspace = true }

@@ -12,11 +12,11 @@ pub struct Writer<B> {
     buf: B,
 }
 
-pub fn new<B>(buf: B) -> Writer<B> {
-    Writer { buf }
-}
-
 impl<B: BufMut> Writer<B> {
+    pub(super) fn new(buf: B) -> Writer<B> {
+        Writer { buf }
+    }
+
     /// Gets a reference to the underlying `BufMut`.
     ///
     /// It is inadvisable to directly write to the underlying `BufMut`.

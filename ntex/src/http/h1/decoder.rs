@@ -95,7 +95,7 @@ pub(super) trait MessageType: Sized {
         {
             let headers = self.headers_mut();
 
-            for idx in raw_headers.iter() {
+            for idx in raw_headers {
                 let name = HeaderName::from_bytes(&slice[idx.name.0..idx.name.1]).unwrap();
 
                 // Unsafe: httparse check header value for valid utf-8
@@ -139,7 +139,7 @@ pub(super) trait MessageType: Sized {
                         if let Ok(s) = value.to_str().map(str::trim) {
                             if s.eq_ignore_ascii_case("chunked") && content_length.is_none()
                             {
-                                chunked = true
+                                chunked = true;
                             } else if s.eq_ignore_ascii_case("identity") {
                                 // allow silently since multiple TE headers are already checked
                             } else {
@@ -162,7 +162,7 @@ pub(super) trait MessageType: Sized {
                         has_upgrade = true;
                         // check content-length, some clients (dart)
                         // sends "content-length: 0" with websocket upgrade
-                        if let Ok(val) = value.to_str().map(|val| val.trim())
+                        if let Ok(val) = value.to_str().map(str::trim)
                             && val.eq_ignore_ascii_case("websocket")
                         {
                             content_length = None;
@@ -182,7 +182,7 @@ pub(super) trait MessageType: Sized {
         }
         self.set_connection_type(ka);
         if expect {
-            self.set_expect()
+            self.set_expect();
         }
 
         // https://tools.ietf.org/html/rfc7230#section-3.3.3
@@ -475,10 +475,7 @@ impl HeaderIndex {
         // SAFETY:
         //
         // The total initialized items are counted by iterator.
-        unsafe {
-            &*(&indices[..init_len] as *const [mem::MaybeUninit<HeaderIndex>]
-                as *const [HeaderIndex])
-        }
+        unsafe { &*(&raw const indices[..init_len] as *const [HeaderIndex]) }
     }
 }
 
@@ -579,7 +576,7 @@ impl Decoder for PayloadDecoder {
                     } else {
                         buf = src.split_to(*remaining as usize);
                         *remaining = 0;
-                    };
+                    }
                     self.kind.set(kind);
                     log::trace!("Length read: {}", buf.len());
                     Ok(Some(PayloadItem::Chunk(buf)))
@@ -635,23 +632,22 @@ macro_rules! byte (
 
 impl ChunkedState {
     fn step(
-        &self,
+        self,
         body: &mut BytesMut,
         size: &mut u64,
         buf: &mut Option<Bytes>,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
-        use self::ChunkedState::*;
-        match *self {
-            Size => ChunkedState::read_size(body, size),
-            SizeLws => ChunkedState::read_size_lws(body),
-            Extension => ChunkedState::read_extension(body),
-            SizeLf => ChunkedState::read_size_lf(body, size),
-            Body => ChunkedState::read_body(body, size, buf),
-            BodyCr => ChunkedState::read_body_cr(body),
-            BodyLf => ChunkedState::read_body_lf(body),
-            EndCr => ChunkedState::read_end_cr(body),
-            EndLf => ChunkedState::read_end_lf(body),
-            End => Poll::Ready(Ok(ChunkedState::End)),
+        match self {
+            ChunkedState::Size => ChunkedState::read_size(body, size),
+            ChunkedState::SizeLws => ChunkedState::read_size_lws(body),
+            ChunkedState::Extension => ChunkedState::read_extension(body),
+            ChunkedState::SizeLf => ChunkedState::read_size_lf(body, size),
+            ChunkedState::Body => ChunkedState::read_body(body, size, buf),
+            ChunkedState::BodyCr => ChunkedState::read_body_cr(body),
+            ChunkedState::BodyLf => ChunkedState::read_body_lf(body),
+            ChunkedState::EndCr => ChunkedState::read_end_cr(body),
+            ChunkedState::EndLf => ChunkedState::read_end_lf(body),
+            ChunkedState::End => Poll::Ready(Ok(ChunkedState::End)),
         }
     }
 
@@ -673,19 +669,16 @@ impl ChunkedState {
             }
         };
 
-        match size.checked_mul(16) {
-            Some(n) => {
-                *size = n;
-                *size += rem as u64;
+        if let Some(n) = size.checked_mul(16) {
+            *size = n;
+            *size += u64::from(rem);
 
-                Poll::Ready(Ok(ChunkedState::Size))
-            }
-            None => {
-                log::trace!("chunk size would overflow u64");
-                Poll::Ready(Err(DecodeError::InvalidInput(
-                    "Invalid chunk size line: Size is too big",
-                )))
-            }
+            Poll::Ready(Ok(ChunkedState::Size))
+        } else {
+            log::trace!("chunk size would overflow u64");
+            Poll::Ready(Err(DecodeError::InvalidInput(
+                "Invalid chunk size line: Size is too big",
+            )))
         }
     }
 
@@ -789,9 +782,10 @@ mod tests {
 
     impl PayloadType {
         fn unwrap(self) -> PayloadDecoder {
-            match self {
-                PayloadType::Payload(pl) => pl,
-                _ => panic!(),
+            if let PayloadType::Payload(pl) = self {
+                pl
+            } else {
+                panic!()
             }
         }
 
@@ -804,7 +798,7 @@ mod tests {
         fn chunk(self) -> Bytes {
             match self {
                 PayloadItem::Chunk(chunk) => chunk,
-                _ => panic!("error"),
+                PayloadItem::Eof => panic!("error"),
             }
         }
         fn eof(&self) -> bool {
@@ -949,7 +943,7 @@ mod tests {
         );
         let reader = MessageDecoder::<Request>::default();
         let err = reader.decode(&mut buf).unwrap_err();
-        assert!(err.to_string().contains("Header"))
+        assert!(err.to_string().contains("Header"));
     }
 
     #[test]
@@ -1196,7 +1190,7 @@ mod tests {
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chnked\r\n\r\n",
         );
-        expect_parse_err!(&mut buf)
+        expect_parse_err!(&mut buf);
     }
 
     #[test]
@@ -1206,7 +1200,7 @@ mod tests {
              content-length: line\r\n\r\n",
         );
 
-        expect_parse_err!(&mut buf)
+        expect_parse_err!(&mut buf);
     }
 
     #[test]

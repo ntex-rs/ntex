@@ -25,6 +25,15 @@ license = "MIT OR Apache-2.0"
 edition = "2024"
 rust-version = "1.86"
 
+[workspace.lints.rust]
+async_fn_in_trait =  { level = "allow", priority = -1 }
+rust_2018_idioms = "deny"
+warnings = "deny"
+unreachable_pub = "deny"
+missing_debug_implementations = "deny"
+
+unexpected_cfgs = { level = "warn", priority = -2, check-cfg = ['cfg(docsrs_dep)'] }
+
 [patch.crates-io]
 ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
@@ -42,12 +51,12 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
-ntex = "3.0.0"
-ntex-bytes = "1.4.1"
+ntex = "3.0.1"
+ntex-bytes = "1.5.0"
 ntex-codec = "1.1.0"
 ntex-io = "3.7.1"
 ntex-dispatcher = "3.0.0"
-ntex-net = "3.6.0"
+ntex-net = "3.6.1"
 ntex-http = "1.0.0"
 ntex-router = "1.0.0"
 ntex-rt = "3.6.0"

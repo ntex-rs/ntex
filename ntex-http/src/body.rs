@@ -73,8 +73,7 @@ pub enum ResponseBody<B> {
 impl ResponseBody<Body> {
     pub fn into_body<B>(self) -> ResponseBody<B> {
         match self {
-            ResponseBody::Body(b) => ResponseBody::Other(b),
-            ResponseBody::Other(b) => ResponseBody::Other(b),
+            ResponseBody::Body(b) | ResponseBody::Other(b) => ResponseBody::Other(b),
         }
     }
 }
@@ -82,8 +81,7 @@ impl ResponseBody<Body> {
 impl From<ResponseBody<Body>> for Body {
     fn from(b: ResponseBody<Body>) -> Self {
         match b {
-            ResponseBody::Body(b) => b,
-            ResponseBody::Other(b) => b,
+            ResponseBody::Body(b) | ResponseBody::Other(b) => b,
         }
     }
 }
@@ -188,8 +186,7 @@ impl MessageBody for Body {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
         match self {
-            Body::None => Poll::Ready(None),
-            Body::Empty => Poll::Ready(None),
+            Body::None | Body::Empty => Poll::Ready(None),
             Body::Bytes(bin) => {
                 let len = bin.len();
                 if len == 0 {
@@ -206,8 +203,7 @@ impl MessageBody for Body {
 impl PartialEq for Body {
     fn eq(&self, other: &Body) -> bool {
         match (self, other) {
-            (Body::None, Body::None) => true,
-            (Body::Empty, Body::Empty) => true,
+            (Body::None, Body::None) | (Body::Empty, Body::Empty) => true,
             (Body::Bytes(b), Body::Bytes(b2)) => b == b2,
             _ => false,
         }
@@ -573,10 +569,7 @@ mod tests {
 
     impl Body {
         pub(crate) fn get_ref(&self) -> &[u8] {
-            match *self {
-                Body::Bytes(ref bin) => bin,
-                _ => panic!(),
-            }
+            if let Body::Bytes(bin) = self { bin } else { panic!() }
         }
     }
 

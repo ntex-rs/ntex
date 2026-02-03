@@ -34,15 +34,15 @@ bitflags::bitflags! {
 }
 
 impl Flags {
-    pub(crate) fn is_stopped(&self) -> bool {
+    pub(crate) fn is_stopped(self) -> bool {
         self.contains(Flags::IO_STOPPED)
     }
 
-    pub(crate) fn is_task_waiting_for_write(&self) -> bool {
+    pub(crate) fn is_task_waiting_for_write(self) -> bool {
         self.contains(Flags::WR_TASK_WAIT)
     }
 
-    pub(crate) fn is_waiting_for_write(&self) -> bool {
+    pub(crate) fn is_waiting_for_write(self) -> bool {
         self.intersects(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE)
     }
 
@@ -54,11 +54,11 @@ impl Flags {
         self.remove(Flags::WR_TASK_WAIT);
     }
 
-    pub(crate) fn is_read_buf_ready(&self) -> bool {
+    pub(crate) fn is_read_buf_ready(self) -> bool {
         self.contains(Flags::BUF_R_READY)
     }
 
-    pub(crate) fn is_waiting_for_read(&self) -> bool {
+    pub(crate) fn is_waiting_for_read(self) -> bool {
         self.contains(Flags::RD_NOTIFY)
     }
 

@@ -358,7 +358,7 @@ impl StreamCtl {
                 );
                 self.inner.api.modify(io.fd(), self.id, event);
             }
-        })
+        });
     }
 }
 
@@ -396,7 +396,7 @@ impl StreamItem {
         if let Some(buf) = self.ctx.get_write_buf() {
             let fd = self.fd();
             log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), buf.len());
-            let res = syscall!(break libc::write(fd, buf[..].as_ptr() as _, buf.len()));
+            let res = syscall!(break libc::write(fd, buf[..].as_ptr().cast(), buf.len()));
             return self.ctx.release_write_buf(buf, res);
         }
         IoTaskStatus::Pause
@@ -414,7 +414,7 @@ impl StreamItem {
             let chunk_len = chunk.len();
             let chunk_ptr = chunk.as_mut_ptr();
 
-            let res = match syscall!(break libc::read(fd, chunk_ptr as _, chunk_len)) {
+            let res = match syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len)) {
                 Poll::Ready(Ok(size)) => {
                     total += size;
                     if size > 0 {

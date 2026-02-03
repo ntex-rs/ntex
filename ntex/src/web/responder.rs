@@ -242,7 +242,7 @@ impl<T: Responder<Err>, Err> CustomResponder<T, Err> {
                 Err(e) => self.error = Some(e.into()),
             },
             Err(e) => self.error = Some(e.into()),
-        };
+        }
         self
     }
 }
@@ -357,12 +357,11 @@ pub(crate) mod tests {
         let req = TestRequest::with_uri("/some").to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        match resp.response().body() {
-            ResponseBody::Body(Body::Bytes(b)) => {
-                let bytes: Bytes = b.clone();
-                assert_eq!(bytes, Bytes::from_static(b"some"));
-            }
-            _ => panic!(),
+        if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
+            let bytes: Bytes = b.clone();
+            assert_eq!(bytes, Bytes::from_static(b"some"));
+        } else {
+            panic!()
         }
     }
 

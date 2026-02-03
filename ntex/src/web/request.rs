@@ -17,7 +17,7 @@ use super::service::AppState;
 
 /// An service http request
 ///
-/// WebRequest allows mutable access to request's internal structures
+/// `WebRequest` allows mutable access to request's internal structures
 pub struct WebRequest<Err> {
     req: HttpRequest,
     _t: PhantomData<Err>,
@@ -26,7 +26,7 @@ pub struct WebRequest<Err> {
 impl<Err: ErrorRenderer> WebRequest<Err> {
     /// Create web response for error
     #[inline]
-    pub fn render_error<E: WebResponseError<Err>>(self, err: E) -> WebResponse {
+    pub fn render_error<E: WebResponseError<Err>>(self, err: &E) -> WebResponse {
         WebResponse::new(err.error_response(&self.req), self.req)
     }
 
@@ -159,11 +159,10 @@ impl<Err> WebRequest<Err> {
         self.head()
             .io
             .as_ref()
-            .map(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
-            .unwrap_or(None)
+            .and_then(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
     }
 
-    /// Get *ConnectionInfo* for the current request.
+    /// Get `ConnectionInfo` for the current request.
     #[inline]
     pub fn connection_info(&self) -> Ref<'_, ConnectionInfo> {
         ConnectionInfo::get(self.head(), self.app_config())
@@ -194,7 +193,7 @@ impl<Err> WebRequest<Err> {
 
     /// Service configuration
     #[inline]
-    pub fn app_config(&self) -> &Cfg<WebAppConfig> {
+    pub fn app_config(&self) -> Cfg<WebAppConfig> {
         self.req.app_config()
     }
 
@@ -283,7 +282,7 @@ impl<Err: ErrorRenderer> fmt::Debug for WebRequest<Err> {
             writeln!(f, "  params: {:?}", self.match_info())?;
         }
         writeln!(f, "  headers:")?;
-        for (key, val) in self.headers().iter() {
+        for (key, val) in self.headers() {
             if key == header::AUTHORIZATION {
                 writeln!(f, "    {key:?}: <REDACTED>")?;
             } else {
@@ -307,7 +306,7 @@ mod tests {
         assert!(req.peer_addr().is_none());
         let err = http::error::PayloadError::Overflow;
 
-        let res: HttpResponse = req.render_error(err).into();
+        let res: HttpResponse = req.render_error(&err).into();
         assert_eq!(res.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
 
         let req = TestRequest::default().to_srv_request();

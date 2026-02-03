@@ -66,7 +66,7 @@ impl DriverApi {
     pub fn submit(&self, id: u32, entry: SEntry) {
         self.submit_inner(|en| {
             *en = entry;
-            en.set_user_data(id as u64 | self.batch);
+            en.set_user_data(u64::from(id) | self.batch);
         });
     }
 
@@ -78,7 +78,7 @@ impl DriverApi {
     {
         self.submit_inner(|en| {
             f(en);
-            en.set_user_data(id as u64 | self.batch);
+            en.set_user_data(u64::from(id) | self.batch);
         });
     }
 
@@ -86,7 +86,7 @@ impl DriverApi {
     /// Attempt to cancel an already issued request.
     pub fn cancel(&self, id: u32) {
         self.submit_inner(|en| {
-            *en = AsyncCancel::new(id as u64 | self.batch)
+            *en = AsyncCancel::new(u64::from(id) | self.batch)
                 .build()
                 .user_data(Driver::CANCEL);
         });
@@ -234,19 +234,21 @@ impl Driver {
                 let s1_num = cmp::min(s1.len(), num);
                 if s1_num > 0 {
                     // safety: "changes" contains only initialized entries
-                    sq.push_multiple(mem::transmute::<
-                        &[mem::MaybeUninit<SEntry>],
-                        &[SEntry],
-                    >(&s1[0..s1_num]))
-                        .unwrap();
+                    sq.push_multiple(
+                        ((&raw const s1[0..s1_num]) as *const [SEntry])
+                            .as_ref()
+                            .unwrap(),
+                    )
+                    .unwrap();
                 } else if !s2.is_empty() {
                     let s2_num = cmp::min(s2.len(), num - s1_num);
                     if s2_num > 0 {
-                        sq.push_multiple(mem::transmute::<
-                            &[mem::MaybeUninit<SEntry>],
-                            &[SEntry],
-                        >(&s2[0..s2_num]))
-                            .unwrap();
+                        sq.push_multiple(
+                            ((&raw const s2[0..s2_num]) as *const [SEntry])
+                                .as_ref()
+                                .unwrap(),
+                        )
+                        .unwrap();
                     }
                 }
                 changes.drain(0..num);
@@ -260,7 +262,7 @@ impl Driver {
     fn poll_completions(
         &self,
         cq: &mut cqueue::CompletionQueue<'_, CEntry>,
-        sq: &SubmissionQueue<'_, SEntry>,
+        sq: SubmissionQueue<'_, SEntry>,
     ) {
         cq.sync();
 
@@ -303,6 +305,7 @@ impl Driver {
                             let result = if result < 0 {
                                 Err(io::Error::from_raw_os_error(-result))
                             } else {
+                                #[allow(clippy::cast_sign_loss)]
                                 Ok(result as _)
                             };
                             handlers[batch].modified = true;
@@ -389,7 +392,7 @@ impl ntex_rt::Driver for Driver {
         let mut cq = unsafe { ring.completion_shared() };
         let submitter = ring.submitter();
         loop {
-            self.poll_completions(&mut cq, &sq);
+            self.poll_completions(&mut cq, sq);
 
             let more_tasks = match rt.poll() {
                 PollResult::Pending => false,
@@ -410,9 +413,8 @@ impl ntex_rt::Driver for Driver {
 
             if let Err(e) = result {
                 match e.raw_os_error() {
-                    Some(libc::ETIME) | Some(libc::EBUSY) | Some(libc::EAGAIN)
-                    | Some(libc::EINTR) => {
-                        log::info!("Ring submit interrupted, {:?}", e);
+                    Some(libc::ETIME | libc::EBUSY | libc::EAGAIN | libc::EINTR) => {
+                        log::info!("Ring submit interrupted, {e:?}");
                     }
                     _ => return Err(e),
                 }
@@ -427,7 +429,7 @@ impl ntex_rt::Driver for Driver {
 
     fn clear(&self) {
         for mut h in self.handlers.take().unwrap().into_iter() {
-            h.hnd.cleanup()
+            h.hnd.cleanup();
         }
     }
 }
@@ -453,6 +455,7 @@ impl Notifier {
                 buffer.as_mut_ptr().cast(),
                 mem::size_of::<u64>()
             ));
+            #[allow(clippy::cast_possible_wrap)]
             match res {
                 Ok(len) => {
                     debug_assert_eq!(len, mem::size_of::<u64>() as isize);
@@ -461,7 +464,7 @@ impl Notifier {
                 // Clear the next time
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break Ok(()),
                 // Just like read_exact
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => break Err(e),
             }
         }
@@ -496,7 +499,7 @@ impl Notify for NotifyHandle {
         let data = 1u64;
         syscall!(libc::write(
             self.fd.as_raw_fd(),
-            &data as *const _ as *const _,
+            (&raw const data).cast(),
             std::mem::size_of::<u64>(),
         ))?;
         Ok(())

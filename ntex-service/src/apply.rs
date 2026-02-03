@@ -218,7 +218,7 @@ mod tests {
         type Response = ();
         type Error = ();
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Ok(())
         }
 
@@ -236,7 +236,7 @@ mod tests {
     struct Err;
 
     impl From<()> for Err {
-        fn from(_: ()) -> Self {
+        fn from(_e: ()) -> Self {
             Err
         }
     }

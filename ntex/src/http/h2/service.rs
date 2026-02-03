@@ -43,6 +43,7 @@ where
 }
 
 #[cfg(feature = "openssl")]
+#[allow(clippy::wildcard_imports)]
 mod openssl {
     use ntex_tls::openssl::{SslAcceptor, SslFilter};
     use tls_openssl::ssl;
@@ -77,13 +78,14 @@ mod openssl {
         > {
             SslAcceptor::new(acceptor)
                 .map_err(SslError::Ssl)
-                .map_init_err(|_| panic!())
+                .map_init_err(|()| panic!())
                 .and_then(self.map_err(SslError::Service))
         }
     }
 }
 
 #[cfg(feature = "rustls")]
+#[allow(clippy::wildcard_imports)]
 mod rustls {
     use ntex_tls::rustls::{TlsAcceptor, TlsServerFilter};
     use tls_rustls::ServerConfig;
@@ -120,7 +122,7 @@ mod rustls {
 
             TlsAcceptor::from(config)
                 .map_err(|e| SslError::Ssl(Box::new(e)))
-                .map_init_err(|_| panic!())
+                .map_init_err(|()| panic!())
                 .and_then(self.map_err(SslError::Service))
         }
     }
@@ -184,7 +186,7 @@ where
             cfg,
             config,
             control: self.ctl.clone(),
-            inflight: RefCell::new(Default::default()),
+            inflight: RefCell::new(HashSet::default()),
             rx: Cell::new(Some(rx)),
             tx: Cell::new(Some(tx)),
             _t: marker::PhantomData,
@@ -254,7 +256,7 @@ where
             log::trace!("Shutting down is complected",);
         }
 
-        self.config.service.shutdown().await
+        self.config.service.shutdown().await;
     }
 
     async fn call(
@@ -367,7 +369,9 @@ where
                 headers,
                 eof,
             } => {
-                let pl = if !eof {
+                let pl = if eof {
+                    None
+                } else {
                     log::debug!(
                         "{}: Creating local payload stream for {:?}",
                         self.io.tag(),
@@ -376,8 +380,6 @@ where
                     let (sender, payload) = Payload::create(stream.empty_capacity());
                     self.streams.borrow_mut().insert(stream.id(), sender);
                     Some(payload)
-                } else {
-                    None
                 };
                 (self.io.clone(), pseudo, headers, eof, pl)
             }
@@ -389,14 +391,14 @@ where
                     data.len()
                 );
                 if let Some(sender) = self.streams.borrow_mut().get_mut(&stream.id()) {
-                    sender.feed_data(data, cap)
+                    sender.feed_data(data, cap);
                 } else {
                     log::error!(
                         "{}: Payload stream does not exists for {:?}",
                         self.io.tag(),
                         stream.id()
                     );
-                };
+                }
                 return Ok(());
             }
             h2::MessageKind::Eof(item) => {
@@ -529,7 +531,7 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
     // Content length
     match head.status {
         StatusCode::NO_CONTENT | StatusCode::CONTINUE | StatusCode::PROCESSING => {
-            *size = BodySize::None
+            *size = BodySize::None;
         }
         StatusCode::SWITCHING_PROTOCOLS => {
             *size = BodySize::Stream;
@@ -547,7 +549,7 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
                 HeaderValue::try_from(format!("{len}")).unwrap(),
             );
         }
-    };
+    }
 
     // http2 specific1
     head.headers.remove(header::CONNECTION);
@@ -562,7 +564,7 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
     // set date header
     if !head.headers.contains_key(header::DATE) {
         let mut bytes = BytesMut::with_capacity(29);
-        DateService.set_date(|date| bytes.extend_from_slice(date));
+        DateService::set_date(|date| bytes.extend_from_slice(date));
         head.headers.insert(header::DATE, unsafe {
             HeaderValue::from_shared_unchecked(bytes.freeze())
         });

@@ -20,7 +20,7 @@ pub trait FromRequest<Err>: Sized {
 
 /// Optionally extract a field from the request
 ///
-/// If the FromRequest for T fails, return None rather than returning an error response
+/// If the `FromRequest` for T fails, return None rather than returning an error response
 ///
 /// ## Example
 ///
@@ -175,7 +175,7 @@ macro_rules! tuple_from_req {
     }
 }
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::wildcard_imports)]
 #[rustfmt::skip]
 mod m {
     use super::*;

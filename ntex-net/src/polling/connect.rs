@@ -57,7 +57,7 @@ impl ConnectOps {
     pub(crate) fn connect(
         &self,
         sock: Socket,
-        addr: SockAddr,
+        addr: &SockAddr,
         cfg: SharedCfg,
         uds: bool,
     ) -> Receiver<Io> {
@@ -123,8 +123,8 @@ impl Handler for ConnectOpsBatcher {
                     item.fd(),
                     libc::SOL_SOCKET,
                     libc::SO_ERROR,
-                    &mut err as *mut _ as *mut _,
-                    &mut err_len
+                    (&raw mut err).cast(),
+                    &raw mut err_len
                 ));
 
                 let res = if err == 0 {

@@ -132,8 +132,8 @@ where
     type Output = Result<(), Rc<dyn error::Error>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.project();
-        let inner = &mut this.inner;
+        let this = self.project();
+        let inner = this.inner;
 
         loop {
             *this.st = match this.st {
@@ -162,12 +162,14 @@ where
                 State::CallControl { fut } => match Pin::new(fut).poll(cx) {
                     Poll::Ready(Ok(ControlAck { result })) => match result {
                         ControlResult::Publish(req) => inner.publish(req),
-                        ControlResult::Response(res, body) => {
+                        ControlResult::Response(res, body)
+                        | ControlResult::Error(res, body)
+                        | ControlResult::ProtocolError(res, body) => {
                             inner.send_response(res, body.into())
                         }
                         ControlResult::Continue(req) => {
                             let result = inner.io.with_write_buf(|buf| {
-                                buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n")
+                                buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                             });
                             if let Err(err) = result {
                                 *this.st = inner.ctl_peer_gone(Some(err));
@@ -184,9 +186,6 @@ where
                             inner.disconnect = Some(ServiceDisconnectReason::ExpectFailed);
                             inner.send_response(res, body.into())
                         }
-                        ControlResult::Error(res, body) => {
-                            inner.send_response(res, body.into())
-                        }
                         ControlResult::Upgrade(req) => inner.ctl_upgrade(req),
                         ControlResult::UpgradeAck(req) => {
                             inner.disconnect =
@@ -199,9 +198,6 @@ where
                             inner.disconnect = Some(ServiceDisconnectReason::UpgradeFailed);
                             inner.send_response(res, body.into())
                         }
-                        ControlResult::ProtocolError(res, body) => {
-                            inner.send_response(res, body.into())
-                        }
                         ControlResult::Stop => inner.stop(),
                         ControlResult::Connect(_) => unreachable!(),
                     },
@@ -211,7 +207,7 @@ where
                     }
                     Poll::Pending => {
                         // check for io changes, it could be close while waiting for service call
-                        let _ = inner._poll_request_payload::<F>(None, cx);
+                        let _ = inner.poll_request_payload_inner::<F>(None, cx);
                         return Poll::Pending;
                     }
                 },
@@ -294,17 +290,12 @@ where
                 // configure request payload
                 match pl {
                     PayloadType::None => (),
-                    PayloadType::Payload(decoder) => {
+                    PayloadType::Payload(decoder) | PayloadType::Stream(decoder) => {
                         let (ps, pl) = bstream::channel();
                         req.replace_payload(http::Payload::H1(pl));
                         self.payload = Some((decoder, ps));
                     }
-                    PayloadType::Stream(decoder) => {
-                        let (ps, pl) = bstream::channel();
-                        req.replace_payload(http::Payload::H1(pl));
-                        self.payload = Some((decoder, ps));
-                    }
-                };
+                }
                 self.control(Control::request(req))
             }
             Err(RecvError::WriteBackpressure) => {
@@ -407,7 +398,7 @@ where
                 Some(Ok(item)) => {
                     log::trace!("{}: Got response chunk: {:?}", self.io.tag(), item.len());
                     match self.io.encode(Message::Chunk(Some(item)), &self.codec) {
-                        Ok(_) => continue,
+                        Ok(()) => continue,
                         Err(err) => self.ctl_proto_err(err.into()),
                     }
                 }
@@ -448,9 +439,10 @@ where
         } else {
             // check for io changes, it could be close while waiting for service call
             match ready!(self.io.poll_status_update(cx)) {
-                IoStatusUpdate::KeepAlive => Poll::Pending,
+                IoStatusUpdate::KeepAlive | IoStatusUpdate::WriteBackpressure => {
+                    Poll::Pending
+                }
                 IoStatusUpdate::PeerGone(e) => Poll::Ready(self.ctl_peer_gone(e)),
-                IoStatusUpdate::WriteBackpressure => Poll::Pending,
             }
         }
     }
@@ -466,7 +458,7 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<State<F, C, S, B>>> {
-        if let Err(err) = ready!(self._poll_request_payload::<F>(None, cx)) {
+        if let Err(err) = ready!(self.poll_request_payload_inner::<F>(None, cx)) {
             Poll::Ready(Some(match err {
                 Either::Left(e) => self.ctl_proto_err(e),
                 Either::Right(e) => self.ctl_peer_gone(e),
@@ -476,8 +468,9 @@ where
         }
     }
 
+    #[allow(clippy::map_unwrap_or)]
     /// Process request's payload
-    fn _poll_request_payload<Fi>(
+    fn poll_request_payload_inner<Fi>(
         &mut self,
         io: Option<&Io<Fi>>,
         cx: &mut Context<'_>,
@@ -485,7 +478,7 @@ where
         // check if payload data is required
         if self.payload.is_none() {
             return Poll::Ready(Ok(()));
-        };
+        }
 
         match self.payload.as_ref().unwrap().1.poll_ready(cx) {
             Poll::Ready(bstream::Status::Ready) => {
@@ -536,9 +529,8 @@ where
                                         .is_pending()
                                     {
                                         break;
-                                    } else {
-                                        continue;
                                     }
+                                    continue;
                                 }
                                 RecvError::KeepAlive => {
                                     if let Err(err) = self.handle_timeout() {
@@ -756,7 +748,9 @@ where
     }
 
     fn ctl_svc_disconnect(&mut self, reason: ServiceDisconnectReason) -> State<F, C, S, B> {
-        if !self.flags.contains(Flags::DISCONNECT_SENT) {
+        if self.flags.contains(Flags::DISCONNECT_SENT) {
+            self.stop()
+        } else {
             self.flags.insert(Flags::DISCONNECT_SENT);
             State::CallControl {
                 fut: self
@@ -764,8 +758,6 @@ where
                     .control
                     .call_nowait(Control::svc_disconnect(reason)),
             }
-        } else {
-            self.stop()
         }
     }
 
@@ -1130,6 +1122,7 @@ mod tests {
     }
 
     #[crate::rt_test]
+    #[allow(clippy::items_after_statements)]
     async fn test_write_backpressure() {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
@@ -1251,7 +1244,7 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(h1.inner.io.is_closed());
-        let buf = client.local_buffer(|buf| buf.take());
+        let buf = client.local_buffer(BytesMut::take);
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
         assert_eq!(&buf[buf.len() - 5..], b"error");
     }
@@ -1339,7 +1332,7 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(h1.inner.io.is_closed());
-        let buf = client.local_buffer(|buf| buf.take());
+        let buf = client.local_buffer(BytesMut::take);
         assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
     }
 }

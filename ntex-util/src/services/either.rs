@@ -163,7 +163,7 @@ mod tests {
         type Response = &'static str;
         type Error = ();
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<&'static str, ()> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<&'static str, ()> {
             Ok("svc1")
         }
     }
@@ -187,7 +187,7 @@ mod tests {
         type Response = &'static str;
         type Error = ();
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<&'static str, ()> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<&'static str, ()> {
             Ok("svc2")
         }
     }

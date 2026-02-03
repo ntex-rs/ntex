@@ -1,10 +1,10 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
-#![allow(async_fn_in_trait)]
-#![deny(
-    rust_2018_idioms,
-    warnings,
-    unreachable_pub,
-    missing_debug_implementations
+#![deny(clippy::pedantic)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::cast_possible_truncation
 )]
 use std::{rc::Rc, task::Context};
 
@@ -84,7 +84,7 @@ pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
 /// async fn my_service(req: u8) -> Result<u64, Infallible>;
 /// ```
 ///
-/// Service cannot be called directly, it must be wrapped to an instance of [`Pipeline``] or
+/// Service cannot be called directly, it must be wrapped to an instance of [`Pipeline`] or
 /// by using `ctx` argument of the call method in case of chanined services.
 ///
 pub trait Service<Req> {
@@ -263,7 +263,7 @@ where
 
     #[inline]
     async fn shutdown(&self) {
-        (**self).shutdown().await
+        (**self).shutdown().await;
     }
 
     #[inline]
@@ -290,7 +290,7 @@ where
 
     #[inline]
     async fn shutdown(&self) {
-        (**self).shutdown().await
+        (**self).shutdown().await;
     }
 
     #[inline]

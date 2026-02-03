@@ -102,12 +102,12 @@ impl TimerHandle {
 
     /// Resets the `TimerHandle` instance to a new deadline.
     pub fn reset(&self, millis: u64) {
-        TIMER.with(|t| t.update_timer(self.0, millis))
+        TIMER.with(|t| t.update_timer(self.0, millis));
     }
 
     /// Resets the `TimerHandle` instance to elapsed state.
     pub fn elapse(&self) {
-        TIMER.with(|t| t.remove_timer(self.0))
+        TIMER.with(|t| t.remove_timer(self.0));
     }
 
     pub fn is_elapsed(&self) -> bool {
@@ -131,7 +131,7 @@ impl TimerHandle {
 
 impl Drop for TimerHandle {
     fn drop(&mut self) {
-        TIMER.with(|t| t.with_mod(|inner| inner.remove_timer_bucket(self.0, true)))
+        TIMER.with(|t| t.with_mod(|inner| inner.remove_timer_bucket(self.0, true)));
     }
 }
 
@@ -209,7 +209,7 @@ impl Timer {
         for idx in 0..WHEEL_SIZE {
             let lvl = idx / (LVL_SIZE as usize);
             let offs = idx % (LVL_SIZE as usize);
-            buckets.push(Bucket::new(lvl, offs))
+            buckets.push(Bucket::new(lvl, offs));
         }
         buckets
     }
@@ -312,7 +312,7 @@ impl Timer {
         self.with_mod(|inner| {
             inner.remove_timer_bucket(hnd, false);
             inner.timers[hnd].complete();
-        })
+        });
     }
 
     /// Update existing timer
@@ -355,7 +355,7 @@ impl Timer {
                     TimerDriver::start(self.0.clone(), inner);
                 }
             }
-        })
+        });
     }
 }
 
@@ -532,7 +532,7 @@ impl TimerInner {
             if pos >= 0 {
                 let tmp = (clk + pos as u64) << lvl_shift(lvl);
                 if tmp < next {
-                    next = tmp
+                    next = tmp;
                 }
 
                 // If the next expiration happens before we reach
@@ -674,10 +674,9 @@ impl Future for TimerDriver {
                         let dur = Duration::from_millis(self.0.next_expiry_ms());
                         inner.driver_sleep.reset(dur);
                         continue;
-                    } else {
-                        self.0.next_expiry.set(u64::MAX);
-                        self.0.elapsed_time.set(None);
                     }
+                    self.0.next_expiry.set(u64::MAX);
+                    self.0.elapsed_time.set(None);
                 }
                 return Poll::Pending;
             }
@@ -735,6 +734,7 @@ mod tests {
     use crate::time::{Millis, interval, sleep};
 
     #[ntex::test]
+    #[allow(unused_variables, clippy::used_underscore_binding)]
     async fn test_timer() {
         crate::spawn(async {
             let s = interval(Millis(25));
@@ -747,29 +747,37 @@ mod tests {
         let fut2 = sleep(Millis(200));
 
         fut2.await;
-        let _elapsed = Instant::now() - time;
         #[cfg(not(target_os = "macos"))]
-        assert!(
-            _elapsed > Duration::from_millis(200) && _elapsed < Duration::from_millis(300),
-            "elapsed: {_elapsed:?}"
-        );
+        {
+            let _elapsed = time.elapsed();
+            assert!(
+                _elapsed > Duration::from_millis(200)
+                    && _elapsed < Duration::from_millis(300),
+                "elapsed: {_elapsed:?}"
+            );
+        }
 
         fut1.await;
-        let _elapsed = Instant::now() - time;
+
         #[cfg(not(target_os = "macos"))]
-        assert!(
-            _elapsed > Duration::from_millis(1000)
-                && _elapsed < Duration::from_millis(1200), // osx
-            "elapsed: {_elapsed:?}",
-        );
+        {
+            let _elapsed = time.elapsed();
+            assert!(
+                _elapsed > Duration::from_secs(1) && _elapsed < Duration::from_millis(1200), // osx
+                "elapsed: {_elapsed:?}",
+            );
+        }
 
         let time = Instant::now();
         sleep(Millis(25)).await;
-        let _elapsed = Instant::now() - time;
         #[cfg(not(target_os = "macos"))]
-        assert!(
-            _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),
-            "elapsed: {_elapsed:?}",
-        );
+        {
+            let _elapsed = time.elapsed();
+            assert!(
+                _elapsed > Duration::from_millis(20)
+                    && _elapsed < Duration::from_millis(50),
+                "elapsed: {_elapsed:?}",
+            );
+        }
     }
 }

@@ -53,7 +53,7 @@ where
     #[inline]
     /// Wake write task and instruct to flush data.
     ///
-    /// This is async version of .poll_flush() method.
+    /// This is async version of `poll_flush()` method.
     pub async fn flush(&self, full: bool) -> Result<(), io::Error> {
         self.io.flush(full).await
     }

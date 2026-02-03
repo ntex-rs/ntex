@@ -1,3 +1,4 @@
+#![allow(clippy::used_underscore_binding)]
 use std::{error::Error, net, rc::Rc};
 
 use serde::Serialize;
@@ -80,7 +81,7 @@ impl RequestHeadType {
             res.set_payload(Payload::from_stream(Decoder::from_headers(
                 payload,
                 &res.head.headers,
-            )))
+            )));
         }
         Ok(res)
     }
@@ -185,10 +186,10 @@ impl RequestHeadType {
                     match HeaderValue::try_from(value) {
                         Ok(v) => {
                             let h = extra_headers.get_or_insert(HeaderMap::new());
-                            h.insert(key, v)
+                            h.insert(key, v);
                         }
                         Err(e) => return Err(e.into()),
-                    };
+                    }
                 }
             }
         }

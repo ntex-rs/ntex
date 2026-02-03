@@ -10,7 +10,7 @@ use std::fmt;
 /// This struct wraps `&[u8]` just to override `fmt::Debug`.
 ///
 /// `BsDebug` is not a part of public API of bytes crate.
-pub struct BsDebug<'a>(pub &'a [u8]);
+pub(crate) struct BsDebug<'a>(pub &'a [u8]);
 
 impl fmt::Debug for BsDebug<'_> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {

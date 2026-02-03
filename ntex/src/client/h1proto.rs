@@ -32,7 +32,7 @@ where
         let mut wrt = BytesMut::with_capacity(host.len() + 5).writer();
 
         let _ = match head.as_ref().uri.port_u16() {
-            None | Some(80) | Some(443) => write!(wrt, "{host}"),
+            None | Some(80 | 443) => write!(wrt, "{host}"),
             Some(port) => write!(wrt, "{host}:{port}"),
         };
 
@@ -41,7 +41,7 @@ where
                 RequestHeadType::Owned(ref mut head) => head.headers.insert(HOST, value),
                 RequestHeadType::Rc(_, ref mut extra_headers) => {
                     let headers = extra_headers.get_or_insert(HeaderMap::new());
-                    headers.insert(HOST, value)
+                    headers.insert(HOST, value);
                 }
             },
             Err(e) => log::error!("Cannot set HOST header {e}"),
@@ -65,7 +65,7 @@ where
         _ => {
             send_body(body, &io, &codec).await?;
         }
-    };
+    }
 
     log::trace!("reading http1 response");
 
@@ -84,24 +84,21 @@ where
 
     let head = timeout_checked(timeout, fut)
         .await
-        .map_err(|_| SendRequestError::Timeout)
+        .map_err(|()| SendRequestError::Timeout)
         .and_then(|res| res)?;
 
-    match codec.message_type() {
-        h1::MessageType::None => {
-            release_connection(io, !codec.keepalive(), created, pool);
-            Ok((head, Payload::None))
-        }
-        _ => {
-            let pl: PayloadStream = Box::pin(PlStream::new(
-                io,
-                codec,
-                created,
-                pool,
-                head.version == Version::HTTP_10,
-            ));
-            Ok((head, pl.into()))
-        }
+    if codec.message_type() == h1::MessageType::None {
+        release_connection(io, !codec.keepalive(), created, pool);
+        Ok((head, Payload::None))
+    } else {
+        let pl: PayloadStream = Box::pin(PlStream::new(
+            io,
+            codec,
+            created,
+            pool,
+            head.version == Version::HTTP_10,
+        ));
+        Ok((head, pl.into()))
     }
 }
 
@@ -115,15 +112,12 @@ where
     B: MessageBody,
 {
     loop {
-        match poll_fn(|cx| body.poll_next_chunk(cx)).await {
-            Some(result) => {
-                io.encode(h1::Message::Chunk(Some(result?)), codec)?;
-                io.flush(false).await?;
-            }
-            None => {
-                io.encode(h1::Message::Chunk(None), codec)?;
-                break;
-            }
+        if let Some(result) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
+            io.encode(h1::Message::Chunk(Some(result?)), codec)?;
+            io.flush(false).await?;
+        } else {
+            io.encode(h1::Message::Chunk(None), codec)?;
+            break;
         }
     }
     io.flush(true).await?;

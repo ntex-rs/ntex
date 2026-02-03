@@ -134,7 +134,7 @@ where
                 .map_err(TimeoutError::Service)
         } else {
             match select(sleep(self.timeout), ctx.call(&self.service, request)).await {
-                Either::Left(_) => Err(TimeoutError::Timeout),
+                Either::Left(()) => Err(TimeoutError::Timeout),
                 Either::Right(res) => res.map_err(TimeoutError::Service),
             }
         }
@@ -169,7 +169,7 @@ mod tests {
         type Response = ();
         type Error = SrvError;
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), SrvError> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), SrvError> {
             crate::time::sleep(self.0).await;
             Ok::<_, SrvError>(())
         }

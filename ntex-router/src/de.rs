@@ -490,6 +490,7 @@ impl<'de> de::VariantAccess<'de> for UnitVariant {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_statements)]
 mod tests {
     use serde_derive::Deserialize;
 
@@ -564,6 +565,7 @@ mod tests {
 
         #[derive(Deserialize)]
         struct T(Test1);
+
         let s: T = de::Deserialize::deserialize(PathDeserializer::new(&path)).unwrap();
         assert_eq!((s.0).0, "name");
         assert_eq!((s.0).1, 32);

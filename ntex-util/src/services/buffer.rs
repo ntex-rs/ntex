@@ -24,7 +24,7 @@ impl<R> Buffer<R> {
 
     /// Cancel all buffered requests on shutdown
     ///
-    /// By default buffered requests are flushed during poll_shutdown
+    /// By default buffered requests are flushed during `poll_shutdown()`
     pub fn cancel_on_shutdown(mut self) -> Self {
         self.cancel_on_shutdown = true;
         self
@@ -198,7 +198,7 @@ where
                 } else {
                     log::trace!("Buffer limit exceeded");
                     // service is not ready
-                    let _ = self.readiness.take().map(|w| w.wake());
+                    let _ = self.readiness.take().map(Waker::wake);
                     Poll::Pending
                 }
             } else {
@@ -325,7 +325,7 @@ mod tests {
             .await
         }
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ok(())

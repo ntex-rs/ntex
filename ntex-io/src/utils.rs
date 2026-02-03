@@ -12,7 +12,7 @@ pub struct Decoded<T> {
     pub consumed: usize,
 }
 
-/// Service that converts any `Io<F>` stream to IoBoxed stream
+/// Service that converts any `Io<F>` stream to `IoBoxed` stream
 pub fn seal<F, S, C>(
     srv: S,
 ) -> impl ServiceFactory<
@@ -28,7 +28,7 @@ where
     C: Clone,
 {
     chain_factory(fn_service(|io: Io<F>| Ready::Ok(io.boxed())))
-        .map_init_err(|_| panic!())
+        .map_init_err(|()| unreachable!())
         .and_then(srv)
 }
 
@@ -94,7 +94,7 @@ mod tests {
             NullFilter
                 .process_read_buf(FilterCtx::new(&ioref, &stack), 0)
                 .unwrap(),
-            Default::default()
-        )
+            crate::FilterReadStatus::default()
+        );
     }
 }

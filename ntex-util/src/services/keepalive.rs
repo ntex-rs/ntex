@@ -4,7 +4,7 @@ use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
 use crate::time::{Millis, Sleep, now, sleep};
 
-/// KeepAlive service factory
+/// `KeepAlive` service factory
 ///
 /// Controls min time between requests.
 pub struct KeepAlive<R, E, F> {
@@ -17,7 +17,7 @@ impl<R, E, F> KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
-    /// Construct KeepAlive service factory.
+    /// Construct `KeepAlive` service factory.
     ///
     /// ka - keep-alive timeout
     /// err - error factory function
@@ -117,7 +117,7 @@ where
 
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         match self.sleep.poll_elapsed(cx) {
-            Poll::Ready(_) => {
+            Poll::Ready(()) => {
                 let now = now();
                 let expire = self.expire.get() + time::Duration::from(self.dur);
                 if expire <= now {

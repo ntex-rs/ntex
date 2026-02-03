@@ -81,7 +81,7 @@ where
     #[inline]
     async fn shutdown(&self) {
         if let Some(f) = self.f_shutdown.take() {
-            (f)().await
+            (f)().await;
         }
     }
 
@@ -102,7 +102,7 @@ mod tests {
     #[ntex::test]
     async fn test_fn_shutdown() {
         let is_called = Rc::new(Cell::new(false));
-        let srv = fn_service(|_| async { Ok::<_, ()>("pipe") });
+        let srv = fn_service(|()| async { Ok::<_, ()>("pipe") });
         let is_called2 = is_called.clone();
         let on_shutdown = fn_shutdown(async move || {
             is_called2.set(true);
@@ -125,7 +125,7 @@ mod tests {
         assert!(!pipe.is_shutdown());
 
         let pipe = pipe.bind();
-        let _ = poll_fn(|cx| pipe.poll_shutdown(cx)).await;
+        poll_fn(|cx| pipe.poll_shutdown(cx)).await;
         assert!(pipe.is_shutdown());
 
         let _ = format!("{pipe:?}");
@@ -133,6 +133,7 @@ mod tests {
 
     #[ntex::test]
     #[should_panic]
+    #[allow(clippy::should_panic_without_expect)]
     async fn test_fn_shutdown_panic() {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();

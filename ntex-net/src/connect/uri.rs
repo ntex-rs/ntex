@@ -20,13 +20,10 @@ impl Address for Uri {
 fn port(scheme: Option<&str>) -> Option<u16> {
     if let Some(scheme) = scheme {
         match scheme {
-            "http" => Some(80),
-            "https" => Some(443),
-            "ws" => Some(80),
-            "wss" => Some(443),
+            "http" | "ws" => Some(80),
+            "https" | "wss" => Some(443),
             "amqp" => Some(5672),
-            "amqps" => Some(5671),
-            "sb" => Some(5671),
+            "amqps" | "sb" => Some(5671),
             "mqtt" => Some(1883),
             "mqtts" => Some(8883),
             _ => None,
@@ -53,7 +50,7 @@ mod tests {
             ("mqtt", 1883),
             ("mqtts", 8883),
         ] {
-            assert_eq!(port(Some(s)), Some(p))
+            assert_eq!(port(Some(s)), Some(p));
         }
         assert_eq!(port(Some("unknowns")), None);
         assert_eq!(port(None), None);

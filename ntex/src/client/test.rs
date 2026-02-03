@@ -1,4 +1,7 @@
 //! Test helpers for ntex http client to use during testing.
+#![allow(clippy::missing_panics_doc)]
+use std::rc::Rc;
+
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
@@ -30,7 +33,7 @@ impl Default for TestResponse {
 }
 
 impl TestResponse {
-    /// Create TestResponse and set header
+    /// Create `TestResponse` and set header
     pub fn with_header<K, V>(key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -107,9 +110,9 @@ impl TestResponse {
         }
 
         if let Some(pl) = self.payload {
-            ClientResponse::new(head, pl, Default::default())
+            ClientResponse::new(head, pl, Rc::default())
         } else {
-            ClientResponse::new(head, bstream::empty(None).into(), Default::default())
+            ClientResponse::new(head, bstream::empty(None).into(), Rc::default())
         }
     }
 }

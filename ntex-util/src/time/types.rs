@@ -61,7 +61,10 @@ impl ops::Add<Seconds> for Millis {
     #[inline]
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn add(self, other: Seconds) -> Millis {
-        Millis(self.0.saturating_add((other.0 as u32).saturating_mul(1000)))
+        Millis(
+            self.0
+                .saturating_add((u32::from(other.0)).saturating_mul(1000)),
+        )
     }
 }
 
@@ -110,7 +113,7 @@ impl From<usize> for Millis {
 impl From<Seconds> for Millis {
     #[inline]
     fn from(s: Seconds) -> Millis {
-        Millis((s.0 as u32).saturating_mul(1000))
+        Millis((u32::from(s.0)).saturating_mul(1000))
     }
 }
 
@@ -127,7 +130,7 @@ impl From<std::time::Duration> for Millis {
 impl From<Millis> for std::time::Duration {
     #[inline]
     fn from(d: Millis) -> std::time::Duration {
-        std::time::Duration::from_millis(d.0 as u64)
+        std::time::Duration::from_millis(u64::from(d.0))
     }
 }
 
@@ -205,7 +208,7 @@ impl ops::Add<Seconds> for Seconds {
 impl From<Seconds> for std::time::Duration {
     #[inline]
     fn from(d: Seconds) -> std::time::Duration {
-        std::time::Duration::from_secs(d.0 as u64)
+        std::time::Duration::from_secs(u64::from(d.0))
     }
 }
 

@@ -51,7 +51,7 @@ pub enum Item {
 }
 
 #[derive(Debug, Clone)]
-/// WebSockets protocol codec
+/// `WebSockets` protocol codec
 pub struct Codec {
     flags: Cell<Flags>,
     max_size: usize,
@@ -152,36 +152,34 @@ impl Encoder for Codec {
             ),
             Message::Close(reason) => {
                 self.insert_flags(Flags::CLOSED);
-                Parser::write_close(dst, reason, !self.flags.get().contains(Flags::SERVER))
+                Parser::write_close(dst, reason, !self.flags.get().contains(Flags::SERVER));
             }
             Message::Continuation(cont) => match cont {
                 Item::FirstText(data) => {
                     if self.flags.get().contains(Flags::W_CONTINUATION) {
                         return Err(ProtocolError::ContinuationStarted);
-                    } else {
-                        self.insert_flags(Flags::W_CONTINUATION);
-                        Parser::write_message(
-                            dst,
-                            &data[..],
-                            OpCode::Text,
-                            false,
-                            !self.flags.get().contains(Flags::SERVER),
-                        )
                     }
+                    self.insert_flags(Flags::W_CONTINUATION);
+                    Parser::write_message(
+                        dst,
+                        &data[..],
+                        OpCode::Text,
+                        false,
+                        !self.flags.get().contains(Flags::SERVER),
+                    );
                 }
                 Item::FirstBinary(data) => {
                     if self.flags.get().contains(Flags::W_CONTINUATION) {
                         return Err(ProtocolError::ContinuationStarted);
-                    } else {
-                        self.insert_flags(Flags::W_CONTINUATION);
-                        Parser::write_message(
-                            dst,
-                            &data[..],
-                            OpCode::Binary,
-                            false,
-                            !self.flags.get().contains(Flags::SERVER),
-                        )
                     }
+                    self.insert_flags(Flags::W_CONTINUATION);
+                    Parser::write_message(
+                        dst,
+                        &data[..],
+                        OpCode::Binary,
+                        false,
+                        !self.flags.get().contains(Flags::SERVER),
+                    );
                 }
                 Item::Continue(data) => {
                     if self.flags.get().contains(Flags::W_CONTINUATION) {
@@ -191,7 +189,7 @@ impl Encoder for Codec {
                             OpCode::Continue,
                             false,
                             !self.flags.get().contains(Flags::SERVER),
-                        )
+                        );
                     } else {
                         return Err(ProtocolError::ContinuationNotStarted);
                     }
@@ -205,7 +203,7 @@ impl Encoder for Codec {
                             OpCode::Continue,
                             true,
                             !self.flags.get().contains(Flags::SERVER),
-                        )
+                        );
                     } else {
                         return Err(ProtocolError::ContinuationNotStarted);
                     }
@@ -224,50 +222,7 @@ impl Decoder for Codec {
         match Parser::parse(src, self.flags.get().contains(Flags::SERVER), self.max_size) {
             Ok(Some((finished, opcode, payload))) => {
                 // handle continuation
-                if !finished {
-                    match opcode {
-                        OpCode::Continue => {
-                            if self.flags.get().contains(Flags::R_CONTINUATION) {
-                                Ok(Some(Frame::Continuation(Item::Continue(
-                                    payload.unwrap_or_else(Bytes::new),
-                                ))))
-                            } else {
-                                Err(ProtocolError::ContinuationNotStarted)
-                            }
-                        }
-                        OpCode::Binary => {
-                            if !self.flags.get().contains(Flags::R_CONTINUATION) {
-                                self.insert_flags(Flags::R_CONTINUATION);
-                                Ok(Some(Frame::Continuation(Item::FirstBinary(
-                                    payload.unwrap_or_else(Bytes::new),
-                                ))))
-                            } else {
-                                Err(ProtocolError::ContinuationStarted)
-                            }
-                        }
-                        OpCode::Text => {
-                            if !self.flags.get().contains(Flags::R_CONTINUATION) {
-                                self.insert_flags(Flags::R_CONTINUATION);
-                                Ok(Some(Frame::Continuation(Item::FirstText(
-                                    payload.unwrap_or_else(Bytes::new),
-                                ))))
-                            } else {
-                                Err(ProtocolError::ContinuationStarted)
-                            }
-                        }
-                        OpCode::Ping => {
-                            Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new))))
-                        }
-                        OpCode::Pong => {
-                            Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new))))
-                        }
-                        OpCode::Bad => Err(ProtocolError::BadOpCode),
-                        _ => {
-                            log::error!("Unfinished fragment {opcode:?}");
-                            Err(ProtocolError::ContinuationFragment(opcode))
-                        }
-                    }
-                } else {
+                if finished {
                     match opcode {
                         OpCode::Continue => {
                             if self.flags.get().contains(Flags::R_CONTINUATION) {
@@ -299,6 +254,49 @@ impl Decoder for Codec {
                         }
                         OpCode::Text => {
                             Ok(Some(Frame::Text(payload.unwrap_or_else(Bytes::new))))
+                        }
+                    }
+                } else {
+                    match opcode {
+                        OpCode::Continue => {
+                            if self.flags.get().contains(Flags::R_CONTINUATION) {
+                                Ok(Some(Frame::Continuation(Item::Continue(
+                                    payload.unwrap_or_else(Bytes::new),
+                                ))))
+                            } else {
+                                Err(ProtocolError::ContinuationNotStarted)
+                            }
+                        }
+                        OpCode::Binary => {
+                            if self.flags.get().contains(Flags::R_CONTINUATION) {
+                                Err(ProtocolError::ContinuationStarted)
+                            } else {
+                                self.insert_flags(Flags::R_CONTINUATION);
+                                Ok(Some(Frame::Continuation(Item::FirstBinary(
+                                    payload.unwrap_or_else(Bytes::new),
+                                ))))
+                            }
+                        }
+                        OpCode::Text => {
+                            if self.flags.get().contains(Flags::R_CONTINUATION) {
+                                Err(ProtocolError::ContinuationStarted)
+                            } else {
+                                self.insert_flags(Flags::R_CONTINUATION);
+                                Ok(Some(Frame::Continuation(Item::FirstText(
+                                    payload.unwrap_or_else(Bytes::new),
+                                ))))
+                            }
+                        }
+                        OpCode::Ping => {
+                            Ok(Some(Frame::Ping(payload.unwrap_or_else(Bytes::new))))
+                        }
+                        OpCode::Pong => {
+                            Ok(Some(Frame::Pong(payload.unwrap_or_else(Bytes::new))))
+                        }
+                        OpCode::Bad => Err(ProtocolError::BadOpCode),
+                        OpCode::Close => {
+                            log::error!("Unfinished fragment {opcode:?}");
+                            Err(ProtocolError::ContinuationFragment(opcode))
                         }
                     }
                 }

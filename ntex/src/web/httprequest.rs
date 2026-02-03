@@ -108,8 +108,7 @@ impl HttpRequest {
     #[inline]
     pub fn peer_addr(&self) -> Option<net::SocketAddr> {
         self.io()
-            .map(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
-            .unwrap_or(None)
+            .and_then(|io| io.query::<types::PeerAddr>().get().map(|addr| addr.0))
     }
 
     /// Get a reference to the Path parameters.
@@ -190,7 +189,7 @@ impl HttpRequest {
         &self.0.rmap
     }
 
-    /// Get *ConnectionInfo* for the current request.
+    /// Get *`ConnectionInfo`* for the current request.
     ///
     /// This method panics if request's extensions container is already
     /// borrowed.
@@ -201,7 +200,7 @@ impl HttpRequest {
 
     /// App config
     #[inline]
-    pub fn app_config(&self) -> &Cfg<WebAppConfig> {
+    pub fn app_config(&self) -> Cfg<WebAppConfig> {
         self.0.app_state.config()
     }
 
@@ -240,8 +239,7 @@ impl HttpMessage for HttpRequest {
 
 impl Drop for HttpRequest {
     fn drop(&mut self) {
-        let cfg = *self.0.app_state.config();
-        cfg.put_request(&mut self.0);
+        self.0.app_state.config().put_request(&mut self.0);
     }
 }
 
@@ -289,7 +287,7 @@ impl fmt::Debug for HttpRequest {
             writeln!(f, "  params: {:?}", self.match_info())?;
         }
         writeln!(f, "  headers:")?;
-        for (key, val) in self.headers().iter() {
+        for (key, val) in self.headers() {
             writeln!(f, "    {key:?}: {val:?}")?;
         }
         Ok(())

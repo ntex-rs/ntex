@@ -187,7 +187,7 @@ impl Storage {
 
     #[inline]
     pub(crate) const fn from_static(bytes: &'static [u8]) -> Storage {
-        let ptr = bytes.as_ptr() as *mut _;
+        let ptr = bytes.as_ptr().cast_mut();
 
         Storage {
             ptr,
@@ -211,7 +211,7 @@ impl Storage {
             let shared = SharedVec::create(cap, src);
             Storage {
                 len: src.len(),
-                ptr: shared.as_ptr().add(1) as *mut u8,
+                ptr: shared.as_ptr().add(1).cast::<u8>(),
                 offset: DEFAUILT_OFFSET,
             }
         }
@@ -267,13 +267,15 @@ impl Storage {
     /// Pointer to the start of the inline buffer
     #[inline]
     unsafe fn inline_ptr(&mut self) -> *mut u8 {
-        (self as *mut Storage as *mut u8).offset(INLINE_DATA_OFFSET)
+        (ptr::from_mut::<Storage>(self).cast::<u8>()).offset(INLINE_DATA_OFFSET)
     }
 
     /// Pointer to the start of the inline buffer
     #[inline]
     unsafe fn inline_ptr_ro(&self) -> *const u8 {
-        (self as *const Storage as *const u8).offset(INLINE_DATA_OFFSET)
+        ptr::from_ref::<Storage>(self)
+            .cast::<u8>()
+            .offset(INLINE_DATA_OFFSET)
     }
 
     #[inline]
@@ -404,7 +406,7 @@ impl Storage {
                 // of the view.
                 let offset = (self.offset.get() >> KIND_OFFSET_BITS) + start;
 
-                self.ptr = (shared as *mut u8).add(offset);
+                self.ptr = (shared.cast::<u8>()).add(offset);
                 if self.len >= start {
                     self.len -= start;
                 } else {
@@ -428,7 +430,7 @@ impl Storage {
                     let new_len = len - start;
 
                     let dst = self.inline_ptr();
-                    let src = (dst as *const u8).add(start);
+                    let src = (dst.cast_const()).add(start);
 
                     ptr::copy(src, dst, new_len);
 
@@ -514,7 +516,10 @@ impl Storage {
     #[inline]
     fn shared_vec(&self) -> *mut SharedVec {
         let offset = self.offset.get() >> KIND_OFFSET_BITS;
-        unsafe { self.ptr.sub(offset) as *mut SharedVec }
+        #[allow(clippy::cast_ptr_alignment)]
+        unsafe {
+            self.ptr.sub(offset).cast::<SharedVec>()
+        }
     }
 
     #[inline]
@@ -630,7 +635,7 @@ impl StorageVec {
 
     /// Return a raw pointer to data
     pub(crate) unsafe fn as_ptr(&self) -> *mut u8 {
-        (self.0.as_ptr() as *mut u8).add((*self.0.as_ptr()).offset as usize)
+        (self.0.as_ptr().cast::<u8>()).add((*self.0.as_ptr()).offset as usize)
     }
 
     unsafe fn as_inner(&mut self) -> &mut SharedVec {
@@ -669,7 +674,7 @@ impl StorageVec {
                 let offset = inner.offset as usize;
 
                 let inner = Storage {
-                    ptr: (self.0.as_ptr() as *mut u8).add(offset),
+                    ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
                     len: self.len(),
                     offset: NonZeroUsize::new_unchecked(
                         (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
@@ -696,7 +701,7 @@ impl StorageVec {
 
                 let offset = inner.offset as usize;
                 Storage {
-                    ptr: (self.0.as_ptr() as *mut u8).add(offset),
+                    ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
                     len: at,
                     offset: NonZeroUsize::new_unchecked(
                         (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
@@ -760,7 +765,7 @@ impl StorageVec {
             return;
         }
 
-        self.reserve_inner(additional)
+        self.reserve_inner(additional);
     }
 
     fn reserve_inner(&mut self, additional: usize) {
@@ -785,7 +790,7 @@ impl StorageVec {
 
                     // The capacity is sufficient, reclaim the buffer
                     if len != 0 {
-                        let ptr = self.0.as_ptr() as *mut u8;
+                        let ptr = self.0.as_ptr().cast::<u8>();
                         ptr::copy(ptr.add(offset as usize), ptr.add(METADATA_SIZE), len);
                     }
                     return;
@@ -852,7 +857,8 @@ impl SharedVec {
             let dst = ptr.add(METADATA_SIZE);
             let sl = slice::from_raw_parts_mut(dst, src.len());
             sl.copy_from_slice(src);
-            NonNull::new_unchecked(ptr as *mut SharedVec)
+            #[allow(clippy::cast_ptr_alignment)]
+            NonNull::new_unchecked(ptr.cast::<SharedVec>())
         }
     }
 
@@ -867,8 +873,9 @@ impl SharedVec {
             }
             let capacity = (layout.size() - METADATA_SIZE) as u32;
 
+            #[allow(clippy::cast_ptr_alignment)]
             ptr::write(
-                ptr as *mut SharedVec,
+                ptr.cast::<SharedVec>(),
                 SharedVec {
                     len,
                     capacity,
@@ -921,7 +928,7 @@ fn release_shared_vec(ptr: *mut SharedVec) {
         let cap = (*ptr).offset as usize + (*ptr).capacity as usize;
         ptr::drop_in_place(ptr);
         let layout = shared_vec_layout(cap - METADATA_SIZE).unwrap();
-        alloc::dealloc(ptr as *mut _, layout);
+        alloc::dealloc(ptr.cast(), layout);
     }
 }
 
@@ -950,7 +957,6 @@ impl Drop for Abort {
 impl Kind {
     fn from_raw(n: usize) -> Kind {
         match n {
-            KIND_VEC => Kind::Vec,
             KIND_INLINE => Kind::Inline,
             KIND_STATIC => Kind::Static,
             _ => Kind::Vec,

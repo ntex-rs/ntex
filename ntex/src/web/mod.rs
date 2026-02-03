@@ -34,12 +34,12 @@
 //!   application and is used to configure routes and other common
 //!   settings.
 //!
-//! * [HttpServer](struct.HttpServer.html): This struct
+//! * [`HttpServer`](struct.HttpServer.html): This struct
 //!   represents an HTTP server instance and is used to instantiate and
 //!   configure servers.
 //!
-//! * [HttpRequest](struct.HttpRequest.html) and
-//!   [HttpResponse](struct.HttpResponse.html): These structs
+//! * [`HttpRequest`](struct.HttpRequest.html) and
+//!   [`HttpResponse`](struct.HttpResponse.html): These structs
 //!   represent HTTP requests and responses and expose various methods
 //!   for inspecting, creating and otherwise utilizing them.
 //!
@@ -48,7 +48,7 @@
 //! * Supported *HTTP/1.x* and *HTTP/2.0* protocols
 //! * Streaming and pipelining
 //! * Keep-alive and slow requests handling
-//! * *WebSockets* server/client
+//! * `WebSockets` server/client
 //! * Transparent content compression/decompression (br, gzip, deflate)
 //! * Configurable request routing
 //! * SSL support with OpenSSL or `rustls`
@@ -61,7 +61,6 @@
 //! * `compress` - enables content encoding compression support
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
-
 mod app;
 mod app_service;
 mod config;
@@ -127,7 +126,7 @@ pub mod dev {
     //! The `ntex::web` prelude for library developers
     //!
     //! The purpose of this module is to alleviate imports of many common
-    //! traits by adding a glob import to the top of ntex::web heavy modules:
+    //! traits by adding a glob import to the top of `ntex::web` heavy modules:
 
     pub use crate::web::app_service::AppService;
     pub use crate::web::info::ConnectionInfo;
@@ -141,7 +140,7 @@ pub mod dev {
         for path in &mut patterns {
             if !path.is_empty() && !path.starts_with('/') {
                 path.insert(0, '/');
-            };
+            }
         }
         patterns
     }
@@ -157,7 +156,7 @@ pub mod dev {
     // }
 
     #[doc(hidden)]
-    #[inline(always)]
+    #[inline]
     pub fn __assert_handler<Err, Fun, Res>(f: Fun) -> impl Handler<(), Err, Output = Res>
     where
         Err: super::ErrorRenderer,

@@ -38,6 +38,7 @@ where
 }
 
 #[cfg(feature = "openssl")]
+#[allow(clippy::wildcard_imports)]
 mod openssl {
     use ntex_tls::openssl::{SslAcceptor, SslFilter};
     use tls_openssl::ssl;
@@ -74,13 +75,14 @@ mod openssl {
         > {
             SslAcceptor::new(acceptor)
                 .map_err(SslError::Ssl)
-                .map_init_err(|_| panic!())
+                .map_init_err(|()| panic!())
                 .and_then(self.map_err(SslError::Service))
         }
     }
 }
 
 #[cfg(feature = "rustls")]
+#[allow(clippy::wildcard_imports)]
 mod rustls {
     use ntex_tls::rustls::{TlsAcceptor, TlsServerFilter};
     use tls_rustls::ServerConfig;
@@ -117,7 +119,7 @@ mod rustls {
         > {
             TlsAcceptor::from(config)
                 .map_err(|e| SslError::Ssl(Box::new(e)))
-                .map_init_err(|_| panic!())
+                .map_init_err(|()| panic!())
                 .and_then(self.map_err(SslError::Service))
         }
     }
@@ -185,7 +187,7 @@ where
 
         Ok(H1ServiceHandler {
             config,
-            inflight: RefCell::new(Default::default()),
+            inflight: RefCell::new(HashSet::default()),
             rx: Cell::new(Some(rx)),
             tx: Cell::new(Some(tx)),
             _t: marker::PhantomData,
@@ -317,9 +319,7 @@ where
 
     match ack {
         Ok(ack) => {
-            let io = if let ControlResult::Connect(io) = ack.result {
-                io
-            } else {
+            let ControlResult::Connect(io) = ack.result else {
                 unreachable!();
             };
 

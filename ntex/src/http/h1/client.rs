@@ -123,10 +123,12 @@ impl Decoder for ClientCodec {
                 // do not use peer's keep-alive
                 if ctype != ConnectionType::KeepAlive {
                     self.inner.ctype.set(ctype);
-                };
+                }
             }
 
-            if !self.inner.flags.get().contains(Flags::HEAD) {
+            if self.inner.flags.get().contains(Flags::HEAD) {
+                self.inner.payload.borrow_mut().take();
+            } else {
                 match payload {
                     PayloadType::None => {
                         self.inner.payload.borrow_mut().take();
@@ -139,8 +141,6 @@ impl Decoder for ClientCodec {
                         self.inner.flags.set(flags);
                     }
                 }
-            } else {
-                self.inner.payload.borrow_mut().take();
             }
             Ok(Some(req))
         } else {

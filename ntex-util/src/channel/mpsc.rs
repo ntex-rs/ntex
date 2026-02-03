@@ -45,7 +45,7 @@ impl<T> Sender<T> {
         let shared = self.shared.get_mut();
         if !shared.has_receiver {
             return Err(SendError(item)); // receiver was dropped
-        };
+        }
         shared.buffer.push_back(item);
         shared.blocked_recv.wake();
         Ok(())

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-bytes"
-version = "1.4.1"
+version = "1.5.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = ["buffers", "zero-copy", "io"]
 categories = ["network-programming", "data-structures"]
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 
 [features]
@@ -17,6 +17,9 @@ default = []
 
 # simd utf8 check support
 simd = ["simdutf8"]
+
+[lints]
+workspace = true
 
 [dependencies]
 bytes = { workspace = true }

@@ -69,12 +69,11 @@ where
 
         // update resource default service
         let default = self.default.clone().unwrap_or_else(|| {
-            Rc::new(boxed::factory(
-                fn_service(|req: WebRequest<Err>| async move {
+            Rc::new(boxed::factory(fn_service(
+                |req: WebRequest<Err>| async move {
                     Ok(req.into_response(Response::NotFound().finish()))
-                })
-                .map_init_err(|_| ()),
-            ))
+                },
+            )))
         });
 
         let filter_fut = self.filter.create(cfg);
@@ -92,7 +91,7 @@ where
         for fut in state_factories.iter() {
             extensions = fut(extensions)
                 .await
-                .map_err(|_| log::error!("Cannot initialize state factory"))?
+                .map_err(|()| log::error!("Cannot initialize state factory"))?;
         }
         let state = AppState::new(extensions, None, cfg.get());
 
@@ -100,9 +99,9 @@ where
         let mut config = WebServiceConfig::new(state.clone(), default.clone());
 
         // register services
-        services
-            .into_iter()
-            .for_each(|mut srv| srv.register(&mut config));
+        for mut srv in services {
+            srv.register(&mut config);
+        }
         let services = config.into_services();
 
         // resource map
@@ -122,14 +121,14 @@ where
 
         // complete ResourceMap tree creation
         let rmap = Rc::new(rmap);
-        rmap.finish(rmap.clone());
+        rmap.finish(&rmap);
 
         // create http services
         for (path, factory, guards) in &mut services.iter() {
             let service = factory
                 .create(cfg)
                 .await
-                .map_err(|_| log::error!("Cannot construct app service"))?;
+                .map_err(|()| log::error!("Cannot construct app service"))?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
@@ -139,7 +138,7 @@ where
                 default
                     .create(cfg)
                     .await
-                    .map_err(|_| log::error!("Cannot construct default service"))?,
+                    .map_err(|()| log::error!("Cannot construct default service"))?,
             ),
         };
 
@@ -148,7 +147,7 @@ where
             routing,
             filter: filter_fut
                 .await
-                .map_err(|_| log::error!("Cannot construct app filter"))?,
+                .map_err(|()| log::error!("Cannot construct app filter"))?,
         };
 
         Ok(AppFactoryService {

@@ -305,7 +305,7 @@ where
 }
 
 /// Helper function that creates wrapper of any error and generate
-/// *PAYMENT_REQUIRED* response.
+/// *`PAYMENT_REQUIRED`* response.
 #[allow(non_snake_case)]
 pub fn ErrorPaymentRequired<T, E>(err: T) -> InternalError<T, E>
 where
@@ -698,14 +698,14 @@ mod tests {
         assert_eq!(
             e.as_response_error().status_code(),
             StatusCode::LENGTH_REQUIRED
-        )
+        );
     }
 
     #[test]
     fn test_other_errors() {
-        let req = TestRequest::default().to_http_request();
-
         use crate::util::timeout::TimeoutError;
+
+        let req = TestRequest::default().to_http_request();
         let resp =
             Error::from(TimeoutError::<UrlencodedError>::Timeout).error_response(&req);
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);

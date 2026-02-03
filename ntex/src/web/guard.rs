@@ -382,9 +382,7 @@ impl HostGuard {
 
 impl Guard for HostGuard {
     fn check(&self, req: &RequestHead) -> bool {
-        let req_host_uri = if let Some(uri) = get_host_uri(req) {
-            uri
-        } else {
+        let Some(req_host_uri) = get_host_uri(req) else {
             return false;
         };
 
@@ -397,7 +395,7 @@ impl Guard for HostGuard {
         }
 
         if let Some(ref scheme) = self.1
-            && let Some(ref req_host_uri_scheme) = req_host_uri.scheme_str()
+            && let Some(req_host_uri_scheme) = req_host_uri.scheme_str()
         {
             return scheme == req_host_uri_scheme;
         }

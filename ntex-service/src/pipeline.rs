@@ -113,7 +113,7 @@ impl<S> Pipeline<S> {
     where
         S: Service<R>,
     {
-        self.state.svc.shutdown().await
+        self.state.svc.shutdown().await;
     }
 
     #[inline]
@@ -175,7 +175,7 @@ pub struct PipelineSvc<S> {
 
 impl<S> PipelineSvc<S> {
     #[inline]
-    /// Construct new PipelineSvc
+    /// Construct new `PipelineSvc`
     pub fn new(inner: Pipeline<S>) -> Self {
         Self { inner }
     }
@@ -204,7 +204,7 @@ where
 
     #[inline]
     async fn shutdown(&self) {
-        self.inner.shutdown().await
+        self.inner.shutdown().await;
     }
 
     #[inline]
@@ -287,7 +287,9 @@ where
     #[inline]
     /// Returns `Ready` when the pipeline is able to process requests.
     ///
-    /// panics if .poll_shutdown() was called before.
+    /// # Panics
+    ///
+    /// Call panics if `.poll_shutdown()` was called before.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
         let st = unsafe { &mut *self.st.get() };
 
@@ -370,7 +372,7 @@ where
     #[inline]
     /// Shutdown enclosed service.
     pub async fn shutdown(&self) {
-        self.pl.state.svc.shutdown().await
+        self.pl.state.svc.shutdown().await;
     }
 }
 
@@ -477,18 +479,18 @@ where
     type Output = Result<(), S::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut slf = self.as_mut();
+        let mut this = self.as_mut();
 
-        slf.pl.poll(cx)?;
+        this.pl.poll(cx)?;
 
-        slf.pl.state.waiters.run(slf.pl.index, cx, |cx| {
-            if slf.fut.is_none() {
-                slf.fut = Some((slf.f)(slf.pl));
+        this.pl.state.waiters.run(this.pl.index, cx, |cx| {
+            if this.fut.is_none() {
+                this.fut = Some((this.f)(this.pl));
             }
-            let fut = slf.fut.as_mut().unwrap();
+            let fut = this.fut.as_mut().unwrap();
             let result = unsafe { Pin::new_unchecked(fut) }.poll(cx);
             if result.is_ready() {
-                let _ = slf.fut.take();
+                let _ = this.fut.take();
             }
             result
         })
@@ -512,7 +514,7 @@ mod tests {
             Ok(())
         }
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _m: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Ok(())
         }
 
@@ -525,7 +527,7 @@ mod tests {
     async fn pipeline_service() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = Pipeline::new(
-            Pipeline::new(Srv(cnt_sht.clone()).map(|_| "ok"))
+            Pipeline::new(Srv(cnt_sht.clone()).map(|()| "ok"))
                 .into_service()
                 .clone(),
         );
@@ -541,7 +543,7 @@ mod tests {
         let _ = format!("{srv:?}");
 
         let cnt_sht = Rc::new(Cell::new(0));
-        let svc = Srv(cnt_sht.clone()).map(|_| "ok");
+        let svc = Srv(cnt_sht.clone()).map(|()| "ok");
         let srv = Pipeline::new(PipelineSvc::from(&svc));
         let res = srv.call(()).await;
         assert!(res.is_ok());

@@ -30,12 +30,12 @@ impl<F: FnOnce()> fmt::Debug for OnDropFn<F> {
 impl<F: FnOnce()> Drop for OnDropFn<F> {
     fn drop(&mut self) {
         if let Some(f) = self.f.take() {
-            f()
+            f();
         }
     }
 }
 
-/// Trait adds future on_drop support
+/// Trait adds future `on_drop` support
 pub trait OnDropFutureExt: Future + Sized {
     fn on_drop<F: FnOnce()>(self, on_drop: F) -> OnDropFuture<Self, F> {
         OnDropFuture::new(self, on_drop)

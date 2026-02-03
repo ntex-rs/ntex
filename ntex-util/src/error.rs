@@ -40,7 +40,7 @@ impl ErrorMessageChained {
         }
     }
 
-    /// Construct ErrorMessageChained from ByteString
+    /// Construct `ErrorMessageChained` from `ByteString`
     pub const fn from_bstr(msg: ByteString) -> Self {
         Self { msg, source: None }
     }
@@ -55,17 +55,17 @@ impl ErrorMessageChained {
 }
 
 impl ErrorMessage {
-    /// Construct new empty ErrorMessage
+    /// Construct new empty `ErrorMessage`
     pub const fn empty() -> Self {
         Self(ByteString::from_static(""))
     }
 
-    /// Construct ErrorMessage from ByteString
+    /// Construct `ErrorMessage` from `ByteString`
     pub const fn from_bstr(msg: ByteString) -> ErrorMessage {
         ErrorMessage(msg)
     }
 
-    /// Construct ErrorMessage from static string
+    /// Construct `ErrorMessage` from static string
     pub const fn from_static(msg: &'static str) -> Self {
         ErrorMessage(ByteString::from_static(msg))
     }
