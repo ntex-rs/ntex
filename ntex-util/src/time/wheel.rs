@@ -734,6 +734,7 @@ mod tests {
     use crate::time::{Millis, interval, sleep};
 
     #[ntex::test]
+    #[allow(clippy::used_underscore_binding)]
     async fn test_timer() {
         crate::spawn(async {
             let s = interval(Millis(25));
@@ -746,13 +747,12 @@ mod tests {
         let fut2 = sleep(Millis(200));
 
         fut2.await;
-        let _elapsed = time.elapsed();
         #[cfg(not(target_os = "macos"))]
         {
-            let elapsed = _elapsed;
+            let _elapsed = time.elapsed();
             assert!(
-                elapsed > Duration::from_millis(200)
-                    && elapsed < Duration::from_millis(300),
+                _elapsed > Duration::from_millis(200)
+                    && _elapsed < Duration::from_millis(300),
                 "elapsed: {elapsed:?}"
             );
         }
@@ -761,21 +761,20 @@ mod tests {
 
         #[cfg(not(target_os = "macos"))]
         {
-            let elapsed = time.elapsed();
+            let _elapsed = time.elapsed();
             assert!(
-                elapsed > Duration::from_secs(1) && elapsed < Duration::from_millis(1200), // osx
+                _elapsed > Duration::from_secs(1) && _elapsed < Duration::from_millis(1200), // osx
                 "elapsed: {elapsed:?}",
             );
         }
 
         let time = Instant::now();
         sleep(Millis(25)).await;
-        let _elapsed = time.elapsed();
         #[cfg(not(target_os = "macos"))]
         {
-            let elapsed = _elapsed;
+            let _elapsed = time.elapsed();
             assert!(
-                elapsed > Duration::from_millis(20) && elapsed < Duration::from_millis(50),
+                _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),
                 "elapsed: {elapsed:?}",
             );
         }
