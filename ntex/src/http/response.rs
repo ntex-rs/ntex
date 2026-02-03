@@ -231,10 +231,7 @@ impl Response<Body> {
         let b = match *self.body() {
             ResponseBody::Body(ref b) | ResponseBody::Other(ref b) => b,
         };
-        match b {
-            Body::Bytes(bin) => bin,
-            _ => panic!(),
-        }
+        if let Body::Bytes(bin) = b { bin } else { panic!() }
     }
 }
 

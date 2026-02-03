@@ -782,9 +782,10 @@ mod tests {
 
     impl PayloadType {
         fn unwrap(self) -> PayloadDecoder {
-            match self {
-                PayloadType::Payload(pl) => pl,
-                _ => panic!(),
+            if let PayloadType::Payload(pl) = self {
+                pl
+            } else {
+                panic!()
             }
         }
 
