@@ -753,7 +753,7 @@ mod tests {
             assert!(
                 _elapsed > Duration::from_millis(200)
                     && _elapsed < Duration::from_millis(300),
-                "elapsed: {elapsed:?}"
+                "elapsed: {_elapsed:?}"
             );
         }
 
@@ -764,7 +764,7 @@ mod tests {
             let _elapsed = time.elapsed();
             assert!(
                 _elapsed > Duration::from_secs(1) && _elapsed < Duration::from_millis(1200), // osx
-                "elapsed: {elapsed:?}",
+                "elapsed: {_elapsed:?}",
             );
         }
 
@@ -775,7 +775,7 @@ mod tests {
             let _elapsed = time.elapsed();
             assert!(
                 _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),
-                "elapsed: {elapsed:?}",
+                "elapsed: {_elapsed:?}",
             );
         }
     }
