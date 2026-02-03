@@ -240,7 +240,7 @@ impl WebResponseError<DefaultError> for client::error::SendRequestError {
 }
 
 #[cfg(feature = "ws")]
-/// Error renderer for ws::HandshakeError
+/// Error renderer for `ws::HandshakeError`
 impl WebResponseError<DefaultError> for HandshakeError {
     fn error_response(&self, _: &HttpRequest) -> HttpResponse {
         match *self {

@@ -171,7 +171,7 @@ mod tests {
         let mw = Pipeline::new(
             DefaultHeaders::new()
                 .header(CONTENT_TYPE, "0001")
-                .create(srv.into_service(), Default::default()),
+                .create(srv.into_service(), SharedCfg::default()),
         );
         let resp = mw.call(req).await.unwrap();
         assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "0002");

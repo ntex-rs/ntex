@@ -207,7 +207,7 @@ where
                     }
                     Poll::Pending => {
                         // check for io changes, it could be close while waiting for service call
-                        let _ = inner._poll_request_payload::<F>(None, cx);
+                        let _ = inner.poll_request_payload_inner::<F>(None, cx);
                         return Poll::Pending;
                     }
                 },
@@ -458,7 +458,7 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<Option<State<F, C, S, B>>> {
-        if let Err(err) = ready!(self._poll_request_payload::<F>(None, cx)) {
+        if let Err(err) = ready!(self.poll_request_payload_inner::<F>(None, cx)) {
             Poll::Ready(Some(match err {
                 Either::Left(e) => self.ctl_proto_err(e),
                 Either::Right(e) => self.ctl_peer_gone(e),
@@ -468,8 +468,9 @@ where
         }
     }
 
+    #[allow(clippy::map_unwrap_or)]
     /// Process request's payload
-    fn _poll_request_payload<Fi>(
+    fn poll_request_payload_inner<Fi>(
         &mut self,
         io: Option<&Io<Fi>>,
         cx: &mut Context<'_>,
@@ -1121,6 +1122,7 @@ mod tests {
     }
 
     #[crate::rt_test]
+    #[allow(clippy::items_after_statements)]
     async fn test_write_backpressure() {
         let num = Arc::new(AtomicUsize::new(0));
         let num2 = num.clone();
@@ -1242,7 +1244,7 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(h1.inner.io.is_closed());
-        let buf = client.local_buffer(|buf| buf.take());
+        let buf = client.local_buffer(BytesMut::take);
         assert_eq!(&buf[..28], b"HTTP/1.1 500 Internal Server");
         assert_eq!(&buf[buf.len() - 5..], b"error");
     }
@@ -1330,7 +1332,7 @@ mod tests {
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(h1.inner.io.is_closed());
-        let buf = client.local_buffer(|buf| buf.take());
+        let buf = client.local_buffer(BytesMut::take);
         assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
     }
 }

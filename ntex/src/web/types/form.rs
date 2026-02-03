@@ -339,7 +339,7 @@ mod tests {
         counter: i64,
     }
 
-    fn eq(err: UrlencodedError, other: UrlencodedError) -> bool {
+    fn eq(err: &UrlencodedError, other: &UrlencodedError) -> bool {
         if let UrlencodedError::Overflow { .. } = err
             && let UrlencodedError::Overflow { .. } = other
         {
@@ -392,7 +392,7 @@ mod tests {
                 .set_payload(Bytes::from_static(b"hello=world&counter=123"))
                 .to_http_parts();
         let res = from_request::<Form<Info>>(&req, &mut pl).await;
-        assert!(eq(res.err().unwrap(), UrlencodedError::UnknownLength));
+        assert!(eq(&res.err().unwrap(), &UrlencodedError::UnknownLength));
     }
 
     #[crate::rt_test]
@@ -402,7 +402,7 @@ mod tests {
                 .header(CONTENT_LENGTH, "xxxx")
                 .to_http_parts();
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
-        assert!(eq(info.err().unwrap(), UrlencodedError::UnknownLength));
+        assert!(eq(&info.err().unwrap(), &UrlencodedError::UnknownLength));
 
         let (req, mut pl) =
             TestRequest::with_header(CONTENT_TYPE, "application/x-www-form-urlencoded")
@@ -410,15 +410,15 @@ mod tests {
                 .to_http_parts();
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
         assert!(eq(
-            info.err().unwrap(),
-            UrlencodedError::Overflow { size: 0, limit: 0 }
+            &info.err().unwrap(),
+            &UrlencodedError::Overflow { size: 0, limit: 0 }
         ));
 
         let (req, mut pl) = TestRequest::with_header(CONTENT_TYPE, "text/plain")
             .header(CONTENT_LENGTH, "10")
             .to_http_parts();
         let info = UrlEncoded::<Info>::new(&req, &mut pl).await;
-        assert!(eq(info.err().unwrap(), UrlencodedError::ContentType));
+        assert!(eq(&info.err().unwrap(), &UrlencodedError::ContentType));
     }
 
     #[crate::rt_test]

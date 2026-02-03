@@ -58,6 +58,7 @@ pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
 }
 
 impl<Err: ErrorRenderer> Resource<Err> {
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new<T: IntoPattern>(path: T) -> Resource<Err> {
         Resource {
             routes: Vec::new(),
@@ -344,11 +345,7 @@ where
         }
 
         let state = self.state.take().map(|state| {
-            AppState::new(
-                state,
-                Some(config.state().clone()),
-                *config.state().config(),
-            )
+            AppState::new(state, Some(config.state().clone()), config.state().config())
         });
 
         let router_factory = ResourceRouterFactory {

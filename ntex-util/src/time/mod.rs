@@ -376,7 +376,7 @@ mod tests {
     async fn lowres_time_does_not_immediately_change() {
         let _ = sleep(Seconds(1));
 
-        assert_eq!(now(), now())
+        assert_eq!(now(), now());
     }
 
     /// State Under Test: `now()` updates returned value every ~1ms period.
@@ -426,7 +426,10 @@ mod tests {
             .duration_since(time::SystemTime::UNIX_EPOCH)
             .unwrap();
 
-        assert!(second_time - first_time >= time::Duration::from_millis(wait_time as u64));
+        assert!(
+            second_time.checked_sub(first_time).unwrap()
+                >= time::Duration::from_millis(u64::from(wait_time))
+        );
     }
 
     #[ntex::test]
@@ -461,7 +464,7 @@ mod tests {
         assert!(second_time - first_time < time::Duration::from_millis(1));
 
         let first_time = now();
-        let fut = Rc::new(sleep(Millis(100000)));
+        let fut = Rc::new(sleep(Millis(10_0000)));
         let s = fut.clone();
         ntex::rt::spawn(async move {
             s.elapse();
@@ -508,7 +511,7 @@ mod tests {
 
         let time = time::Instant::now();
         int.tick().await;
-        let elapsed = time::Instant::now() - time;
+        let elapsed = time.elapsed();
         assert!(
             elapsed > time::Duration::from_millis(200)
                 && elapsed < time::Duration::from_millis(450),
@@ -517,7 +520,7 @@ mod tests {
 
         let time = time::Instant::now();
         int.next().await;
-        let elapsed = time::Instant::now() - time;
+        let elapsed = time.elapsed();
         assert!(
             elapsed > time::Duration::from_millis(200)
                 && elapsed < time::Duration::from_millis(450),
@@ -532,7 +535,7 @@ mod tests {
         for _i in 0..3 {
             let time = time::Instant::now();
             int.tick().await;
-            let elapsed = time::Instant::now() - time;
+            let elapsed = time.elapsed();
             assert!(
                 elapsed > time::Duration::from_millis(1000)
                     && elapsed < time::Duration::from_millis(1300),

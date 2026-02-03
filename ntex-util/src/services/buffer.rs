@@ -325,7 +325,7 @@ mod tests {
             .await
         }
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ok(())

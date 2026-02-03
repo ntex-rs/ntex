@@ -167,7 +167,7 @@ where
         let req2 = req.clone();
         let (limit, ctype) = req
             .app_state::<JsonConfig>()
-            .map_or((32768, None), |c| (c.limit, c.content_type.clone()));
+            .map_or((32768, None), |c| (c.limit, c.content_type.as_ref()));
 
         match JsonBody::new(req, payload, ctype).limit(limit).await {
             Err(e) => {
@@ -287,7 +287,7 @@ where
     fn new(
         req: &HttpRequest,
         payload: &mut Payload,
-        ctype: Option<Arc<dyn Fn(mime::Mime) -> bool + Send + Sync>>,
+        ctype: Option<&Arc<dyn Fn(mime::Mime) -> bool + Send + Sync>>,
     ) -> Self {
         // check content-type
         let json = if let Ok(Some(mime)) = req.mime_type() {
@@ -388,7 +388,7 @@ mod tests {
         name: String,
     }
 
-    fn json_eq(err: JsonPayloadError, other: JsonPayloadError) -> bool {
+    fn json_eq(err: &JsonPayloadError, other: &JsonPayloadError) -> bool {
         if let JsonPayloadError::Overflow = err
             && let JsonPayloadError::Overflow = other
         {
@@ -496,7 +496,10 @@ mod tests {
     async fn test_json_body() {
         let (req, mut pl) = TestRequest::default().to_http_parts();
         let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
-        assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
+        assert!(json_eq(
+            &json.err().unwrap(),
+            &JsonPayloadError::ContentType
+        ));
 
         let (req, mut pl) = TestRequest::default()
             .header(
@@ -505,7 +508,10 @@ mod tests {
             )
             .to_http_parts();
         let json = JsonBody::<MyObject>::new(&req, &mut pl, None).await;
-        assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
+        assert!(json_eq(
+            &json.err().unwrap(),
+            &JsonPayloadError::ContentType
+        ));
 
         let (req, mut pl) = TestRequest::default()
             .header(
@@ -521,7 +527,7 @@ mod tests {
         let json = JsonBody::<MyObject>::new(&req, &mut pl, None)
             .limit(100)
             .await;
-        assert!(json_eq(json.err().unwrap(), JsonPayloadError::Overflow));
+        assert!(json_eq(&json.err().unwrap(), &JsonPayloadError::Overflow));
 
         let (req, mut pl) = TestRequest::default()
             .header(
@@ -559,7 +565,7 @@ mod tests {
         .to_http_parts();
 
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
-        assert!(s.is_err())
+        assert!(s.is_err());
     }
 
     #[crate::rt_test]
@@ -579,7 +585,7 @@ mod tests {
         .to_http_parts();
 
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
-        assert!(s.is_ok())
+        assert!(s.is_ok());
     }
 
     #[crate::rt_test]
@@ -599,6 +605,6 @@ mod tests {
         .to_http_parts();
 
         let s = from_request::<Json<MyObject>>(&req, &mut pl).await;
-        assert!(s.is_err())
+        assert!(s.is_err());
     }
 }

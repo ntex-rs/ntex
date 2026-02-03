@@ -121,7 +121,7 @@ impl<B> Response<B> {
             .map(|c| {
                 h.append(header::SET_COOKIE, c);
             })
-            .map_err(|e| e.into())
+            .map_err(Into::into)
     }
 
     #[cfg(feature = "cookie")]
@@ -132,7 +132,7 @@ impl<B> Response<B> {
         let h = &mut self.head.headers;
         let vals: Vec<HeaderValue> = h
             .get_all(header::SET_COOKIE)
-            .map(|v| v.to_owned())
+            .map(ToOwned::to_owned)
             .collect();
         h.remove(header::SET_COOKIE);
 
@@ -229,8 +229,7 @@ impl<B> Response<B> {
 impl Response<Body> {
     pub(crate) fn get_body_ref(&self) -> &[u8] {
         let b = match *self.body() {
-            ResponseBody::Body(ref b) => b,
-            ResponseBody::Other(ref b) => b,
+            ResponseBody::Body(ref b) | ResponseBody::Other(ref b) => b,
         };
         match b {
             Body::Bytes(bin) => bin,
@@ -477,7 +476,7 @@ impl ResponseBuilder {
         } else {
             let mut jar = CookieJar::new();
             jar.add(cookie.into());
-            self.cookies = Some(jar)
+            self.cookies = Some(jar);
         }
         self
     }
@@ -500,7 +499,7 @@ impl ResponseBuilder {
     /// ```
     pub fn del_cookie(&mut self, cookie: &Cookie<'_>) -> &mut Self {
         if self.cookies.is_none() {
-            self.cookies = Some(CookieJar::new())
+            self.cookies = Some(CookieJar::new());
         }
         let jar = self.cookies.as_mut().unwrap();
         let cookie = cookie.clone().into_owned();
@@ -552,7 +551,7 @@ impl ResponseBuilder {
                     match HeaderValue::from_str(&cookie.to_string()) {
                         Ok(val) => response.headers.append(header::SET_COOKIE, val),
                         Err(e) => return Response::from(HttpError::from(e)).into_body(),
-                    };
+                    }
                 }
             }
         }
@@ -616,6 +615,7 @@ impl ResponseBuilder {
 }
 
 #[inline]
+#[allow(clippy::ref_option)]
 fn parts<'a>(
     parts: &'a mut Option<Message<ResponseHead>>,
     err: &Option<HttpError>,
@@ -900,7 +900,7 @@ mod tests {
     #[test]
     fn test_force_close() {
         let resp = Response::build(StatusCode::OK).force_close().finish();
-        assert!(!resp.keep_alive())
+        assert!(!resp.keep_alive());
     }
 
     #[test]
@@ -908,7 +908,7 @@ mod tests {
         let resp = Response::build(StatusCode::OK)
             .content_type("text/plain")
             .body(Body::Empty);
-        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/plain")
+        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/plain");
     }
 
     #[test]

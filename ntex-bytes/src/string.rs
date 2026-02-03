@@ -452,6 +452,7 @@ mod test {
     }
 
     #[test]
+    #[allow(clippy::items_after_statements)]
     fn test_from() {
         // String
         let s: ByteString = "hello".to_owned().into();

@@ -1,8 +1,8 @@
-use std::cell::Ref;
+use std::{borrow::ToOwned, cell::Ref};
 
 use crate::Cfg;
-use crate::http::RequestHead;
 use crate::http::header::{self, HeaderName};
+use crate::http::{RequestHead, uri};
 
 use super::config::WebAppConfig;
 
@@ -20,8 +20,8 @@ pub struct ConnectionInfo {
 }
 
 impl ConnectionInfo {
-    /// Create *ConnectionInfo* instance for a request.
-    pub fn get<'a>(req: &'a RequestHead, cfg: &Cfg<WebAppConfig>) -> Ref<'a, Self> {
+    /// Create *`ConnectionInfo`* instance for a request.
+    pub fn get(req: &RequestHead, cfg: Cfg<WebAppConfig>) -> Ref<'_, Self> {
         if !req.extensions().contains::<ConnectionInfo>() {
             req.extensions_mut().insert(ConnectionInfo::new(req, cfg));
         }
@@ -29,7 +29,7 @@ impl ConnectionInfo {
     }
 
     #[allow(clippy::cognitive_complexity)]
-    fn new(req: &RequestHead, cfg: &Cfg<WebAppConfig>) -> ConnectionInfo {
+    fn new(req: &RequestHead, cfg: Cfg<WebAppConfig>) -> ConnectionInfo {
         let mut host = None;
         let mut scheme = None;
         let mut remote = None;
@@ -75,12 +75,12 @@ impl ConnectionInfo {
                 .get(HeaderName::from_lowercase(X_FORWARDED_PROTO).unwrap())
                 && let Ok(h) = h.to_str()
             {
-                scheme = h.split(',').next().map(|v| v.trim());
+                scheme = h.split(',').next().map(str::trim);
             }
             if scheme.is_none() {
-                scheme = req.uri.scheme().map(|a| a.as_str());
+                scheme = req.uri.scheme().map(uri::Scheme::as_str);
                 if scheme.is_none() && cfg.secure() {
-                    scheme = Some("https")
+                    scheme = Some("https");
                 }
             }
         }
@@ -92,14 +92,14 @@ impl ConnectionInfo {
                 .get(HeaderName::from_lowercase(X_FORWARDED_HOST).unwrap())
                 && let Ok(h) = h.to_str()
             {
-                host = h.split(',').next().map(|v| v.trim());
+                host = h.split(',').next().map(str::trim);
             }
             if host.is_none() {
                 if let Some(h) = req.headers.get(&header::HOST) {
                     host = h.to_str().ok();
                 }
                 if host.is_none() {
-                    host = req.uri.authority().map(|a| a.as_str());
+                    host = req.uri.authority().map(uri::Authority::as_str);
                     if host.is_none() {
                         host = Some(cfg.host());
                     }
@@ -114,7 +114,7 @@ impl ConnectionInfo {
                 .get(HeaderName::from_lowercase(X_FORWARDED_FOR).unwrap())
                 && let Ok(h) = h.to_str()
             {
-                remote = h.split(',').next().map(|v| v.trim());
+                remote = h.split(',').next().map(str::trim);
             }
             if remote.is_none() {
                 // get peeraddr from socketaddr
@@ -126,7 +126,7 @@ impl ConnectionInfo {
             peer,
             scheme: scheme.unwrap_or("http").to_owned(),
             host: host.unwrap_or("localhost").to_owned(),
-            remote: remote.map(|s| s.to_owned()),
+            remote: remote.map(ToOwned::to_owned),
         }
     }
 

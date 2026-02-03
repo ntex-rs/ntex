@@ -343,7 +343,7 @@ where
         } else {
             let mut jar = CookieJar::new();
             jar.add(cookie.into());
-            self.cookies = Some(jar)
+            self.cookies = Some(jar);
         }
         self
     }
@@ -644,6 +644,7 @@ where
     }
 }
 
+#[allow(clippy::ref_option)]
 #[inline]
 fn parts<'a, F, T>(
     parts: &'a mut Option<Inner<F, T>>,

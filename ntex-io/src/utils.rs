@@ -94,7 +94,7 @@ mod tests {
             NullFilter
                 .process_read_buf(FilterCtx::new(&ioref, &stack), 0)
                 .unwrap(),
-            Default::default()
-        )
+            crate::FilterReadStatus::default()
+        );
     }
 }

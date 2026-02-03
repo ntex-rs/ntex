@@ -93,21 +93,20 @@ where
                 Poll::Ready(Some(Ok(chunk))) => {
                     if let Some(mut decoder) = self.decoder.take() {
                         if chunk.len() < INPLACE {
-                            let chunk = decoder.feed_data(chunk)?;
+                            let chunk = decoder.feed_data(&chunk)?;
                             self.decoder = Some(decoder);
                             if let Some(chunk) = chunk {
                                 return Poll::Ready(Some(Ok(chunk)));
                             }
                         } else {
                             self.fut = Some(spawn_blocking(move || {
-                                let chunk = decoder.feed_data(chunk)?;
+                                let chunk = decoder.feed_data(&chunk)?;
                                 Ok((chunk, decoder))
                             }));
                         }
                         continue;
-                    } else {
-                        return Poll::Ready(Some(Ok(chunk)));
                     }
+                    return Poll::Ready(Some(Ok(chunk)));
                 }
                 Poll::Ready(None) => {
                     self.eof = true;
@@ -137,37 +136,37 @@ impl ContentDecoder {
     fn feed_eof(&mut self) -> io::Result<Option<Bytes>> {
         match self {
             ContentDecoder::Gzip(decoder) => match decoder.try_finish() {
-                Ok(_) => {
+                Ok(()) => {
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
+                    if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
                 }
                 Err(e) => Err(e),
             },
             ContentDecoder::Deflate(decoder) => match decoder.try_finish() {
-                Ok(_) => {
+                Ok(()) => {
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
+                    if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
                 }
                 Err(e) => Err(e),
             },
         }
     }
 
-    fn feed_data(&mut self, data: Bytes) -> io::Result<Option<Bytes>> {
+    fn feed_data(&mut self, data: &Bytes) -> io::Result<Option<Bytes>> {
         match self {
-            ContentDecoder::Gzip(decoder) => match decoder.write_all(&data) {
-                Ok(_) => {
+            ContentDecoder::Gzip(decoder) => match decoder.write_all(data) {
+                Ok(()) => {
                     decoder.flush()?;
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
+                    if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
                 }
                 Err(e) => Err(e),
             },
-            ContentDecoder::Deflate(decoder) => match decoder.write_all(&data) {
-                Ok(_) => {
+            ContentDecoder::Deflate(decoder) => match decoder.write_all(data) {
+                Ok(()) => {
                     decoder.flush()?;
                     let b = decoder.get_mut().take();
-                    if !b.is_empty() { Ok(Some(b)) } else { Ok(None) }
+                    if b.is_empty() { Ok(None) } else { Ok(Some(b)) }
                 }
                 Err(e) => Err(e),
             },

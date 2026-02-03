@@ -597,7 +597,7 @@ mod tests {
                 &HeaderValue::from_static("application/xml;q=0.9"),
                 &HeaderValue::from_static("image/webp"),
             ]
-        )
+        );
     }
 
     #[test]

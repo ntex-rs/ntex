@@ -70,8 +70,8 @@ impl AppState {
         }))
     }
 
-    pub(crate) fn config(&self) -> &Cfg<WebAppConfig> {
-        &self.0.config
+    pub(crate) fn config(&self) -> Cfg<WebAppConfig> {
+        self.0.config
     }
 
     pub(crate) fn get<T: 'static>(&self) -> Option<&T> {
@@ -150,7 +150,7 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
     }
 
     /// Service configuration
-    pub fn config(&self) -> &Cfg<WebAppConfig> {
+    pub fn config(&self) -> Cfg<WebAppConfig> {
         self.state.config()
     }
 
@@ -204,6 +204,7 @@ pub struct WebServiceAdapter {
 }
 
 impl WebServiceAdapter {
+    #[allow(clippy::needless_pass_by_value)]
     /// Create new `WebServiceAdapter` instance.
     pub fn new<T: IntoPattern>(path: T) -> Self {
         WebServiceAdapter {

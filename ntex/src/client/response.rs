@@ -464,7 +464,7 @@ mod tests {
         name: String,
     }
 
-    fn json_eq(err: JsonPayloadError, other: JsonPayloadError) -> bool {
+    fn json_eq(err: &JsonPayloadError, other: &JsonPayloadError) -> bool {
         match err {
             JsonPayloadError::Payload(PayloadError::Overflow) => {
                 matches!(other, JsonPayloadError::Payload(PayloadError::Overflow))
@@ -478,7 +478,10 @@ mod tests {
     async fn test_json_body() {
         let req = TestResponse::default().finish();
         let json = JsonBody::<MyObject>::new(&req).await;
-        assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
+        assert!(json_eq(
+            &json.err().unwrap(),
+            &JsonPayloadError::ContentType
+        ));
 
         let req = TestResponse::default()
             .header(
@@ -487,7 +490,10 @@ mod tests {
             )
             .finish();
         let json = JsonBody::<MyObject>::new(&req).await;
-        assert!(json_eq(json.err().unwrap(), JsonPayloadError::ContentType));
+        assert!(json_eq(
+            &json.err().unwrap(),
+            &JsonPayloadError::ContentType
+        ));
 
         let req = TestResponse::default()
             .header(
@@ -502,8 +508,8 @@ mod tests {
 
         let json = JsonBody::<MyObject>::new(&req).limit(100).await;
         assert!(json_eq(
-            json.err().unwrap(),
-            JsonPayloadError::Payload(PayloadError::Overflow)
+            &json.err().unwrap(),
+            &JsonPayloadError::Payload(PayloadError::Overflow)
         ));
 
         let req = TestResponse::default()

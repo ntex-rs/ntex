@@ -388,7 +388,7 @@ impl ServiceDisconnect {
     }
 }
 
-/// KeepAlive
+/// `KeepAlive` control message
 #[derive(Debug)]
 pub struct KeepAlive {
     enabled: bool,

@@ -35,9 +35,7 @@ impl<B: MessageBody> Encoder<B> {
                 || encoding == ContentEncoding::Identity
                 || encoding == ContentEncoding::Auto);
 
-        if !can_encode {
-            body
-        } else {
+        if can_encode {
             let body = match body {
                 ResponseBody::Other(b) => match b {
                     Body::None => return ResponseBody::Other(Body::None),
@@ -58,6 +56,8 @@ impl<B: MessageBody> Encoder<B> {
                 fut: None,
                 encoder: Some(encoder),
             }))
+        } else {
+            body
         }
     }
 }
@@ -167,13 +167,11 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                         let chunk = encoder.finish().map_err(dyn_rc_error)?;
                         if chunk.is_empty() {
                             return Poll::Ready(None);
-                        } else {
-                            self.eof = true;
-                            return Poll::Ready(Some(Ok(chunk)));
                         }
-                    } else {
-                        return Poll::Ready(None);
+                        self.eof = true;
+                        return Poll::Ready(Some(Ok(chunk)));
                     }
+                    return Poll::Ready(None);
                 }
                 val => return val,
             }
@@ -234,20 +232,12 @@ impl ContentEncoder {
 
     fn write(&mut self, data: &[u8]) -> Result<(), io::Error> {
         match *self {
-            ContentEncoder::Gzip(ref mut encoder) => match encoder.write_all(data) {
-                Ok(_) => Ok(()),
-                Err(err) => {
-                    log::trace!("Error decoding gzip encoding: {err}");
-                    Err(err)
-                }
-            },
-            ContentEncoder::Deflate(ref mut encoder) => match encoder.write_all(data) {
-                Ok(_) => Ok(()),
-                Err(err) => {
-                    log::trace!("Error decoding deflate encoding: {err}");
-                    Err(err)
-                }
-            },
+            ContentEncoder::Gzip(ref mut encoder) => encoder
+                .write_all(data)
+                .inspect_err(|err| log::trace!("Error decoding gzip encoding: {err}")),
+            ContentEncoder::Deflate(ref mut encoder) => encoder
+                .write_all(data)
+                .inspect_err(|err| log::trace!("Error decoding deflate encoding: {err}")),
         }
     }
 }

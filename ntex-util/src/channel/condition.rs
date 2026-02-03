@@ -273,19 +273,19 @@ mod tests {
         drop(cond);
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
     }
 
@@ -320,11 +320,11 @@ mod tests {
         );
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
@@ -332,13 +332,13 @@ mod tests {
         );
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
 
         let waiter2 = cond.wait();
         assert_eq!(
             lazy(|cx| waiter2.poll_ready(cx)).await,
-            Poll::Ready("".into())
+            Poll::Ready(String::new())
         );
     }
 }

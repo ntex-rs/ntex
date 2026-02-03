@@ -328,7 +328,7 @@ where
     pub fn bind_rustls<A: net::ToSocketAddrs>(
         mut self,
         addr: A,
-        config: RustlsServerConfig,
+        config: &RustlsServerConfig,
     ) -> io::Result<Self> {
         let sockets = self.bind2(addr)?;
         for lst in sockets {

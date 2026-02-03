@@ -797,7 +797,7 @@ mod tests {
         fn chunk(self) -> Bytes {
             match self {
                 PayloadItem::Chunk(chunk) => chunk,
-                _ => panic!("error"),
+                PayloadItem::Eof => panic!("error"),
             }
         }
         fn eof(&self) -> bool {
@@ -942,7 +942,7 @@ mod tests {
         );
         let reader = MessageDecoder::<Request>::default();
         let err = reader.decode(&mut buf).unwrap_err();
-        assert!(err.to_string().contains("Header"))
+        assert!(err.to_string().contains("Header"));
     }
 
     #[test]
@@ -1189,7 +1189,7 @@ mod tests {
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chnked\r\n\r\n",
         );
-        expect_parse_err!(&mut buf)
+        expect_parse_err!(&mut buf);
     }
 
     #[test]
@@ -1199,7 +1199,7 @@ mod tests {
              content-length: line\r\n\r\n",
         );
 
-        expect_parse_err!(&mut buf)
+        expect_parse_err!(&mut buf);
     }
 
     #[test]

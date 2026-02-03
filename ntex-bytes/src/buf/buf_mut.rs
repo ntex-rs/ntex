@@ -969,7 +969,7 @@ mod tests {
     use crate::BytesMut;
 
     #[test]
-    #[allow(clippy::needless_borrow)]
+    #[allow(clippy::needless_borrow, clippy::too_many_lines)]
     fn buf_mut_tests() {
         let mut buf = vec![];
         buf.put_u8(0x01);
@@ -1040,75 +1040,75 @@ mod tests {
         assert_eq!(buf, b"\x09\x08");
 
         let mut buf = vec![];
-        buf.put_u32(0x0809A0A1);
+        buf.put_u32(0x0809_A0A1);
         assert_eq!(buf, b"\x08\x09\xA0\xA1");
 
         let mut buf = vec![];
-        buf.put_i32(0x0809A0A1);
+        buf.put_i32(0x0809_A0A1);
         assert_eq!(buf, b"\x08\x09\xA0\xA1");
 
         let mut buf = vec![];
-        buf.put_i32_le(0x0809A0A1);
+        buf.put_i32_le(0x0809_A0A1);
         assert_eq!(buf, b"\xA1\xA0\x09\x08");
 
         let mut buf = vec![];
-        buf.put_u64(0x0102030405060708);
+        buf.put_u64(0x0102_0304_0506_0708);
         assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08");
 
         let mut buf = vec![];
-        buf.put_u64_le(0x0102030405060708);
+        buf.put_u64_le(0x0102_0304_0506_0708);
         assert_eq!(buf, b"\x08\x07\x06\x05\x04\x03\x02\x01");
 
         let mut buf = vec![];
-        buf.put_i64(0x0102030405060708);
+        buf.put_i64(0x0102_0304_0506_0708);
         assert_eq!(buf, b"\x01\x02\x03\x04\x05\x06\x07\x08");
 
         let mut buf = vec![];
-        buf.put_i64_le(0x0102030405060708);
+        buf.put_i64_le(0x0102_0304_0506_0708);
         assert_eq!(buf, b"\x08\x07\x06\x05\x04\x03\x02\x01");
 
         let mut buf = vec![];
-        buf.put_u128(0x01020304050607080910111213141516);
+        buf.put_u128(0x0102_0304_0506_0708_0910_1112_1314_1516);
         assert_eq!(
             buf,
             b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16"
         );
 
         let mut buf = vec![];
-        buf.put_u128_le(0x01020304050607080910111213141516);
+        buf.put_u128_le(0x0102_0304_0506_0708_0910_1112_1314_1516);
         assert_eq!(
             buf,
             b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01"
         );
 
         let mut buf = vec![];
-        buf.put_i128(0x01020304050607080910111213141516);
+        buf.put_i128(0x0102_0304_0506_0708_0910_1112_1314_1516);
         assert_eq!(
             buf,
             b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x10\x11\x12\x13\x14\x15\x16"
         );
 
         let mut buf = vec![];
-        buf.put_i128_le(0x01020304050607080910111213141516);
+        buf.put_i128_le(0x0102_0304_0506_0708_0910_1112_1314_1516);
         assert_eq!(
             buf,
             b"\x16\x15\x14\x13\x12\x11\x10\x09\x08\x07\x06\x05\x04\x03\x02\x01"
         );
 
         let mut buf = vec![];
-        buf.put_uint(0x010203, 3);
+        buf.put_uint(0x01_0203, 3);
         assert_eq!(buf, b"\x01\x02\x03");
 
         let mut buf = vec![];
-        buf.put_uint_le(0x010203, 3);
+        buf.put_uint_le(0x01_0203, 3);
         assert_eq!(buf, b"\x03\x02\x01");
 
         let mut buf = vec![];
-        buf.put_int(0x010203, 3);
+        buf.put_int(0x01_0203, 3);
         assert_eq!(buf, b"\x01\x02\x03");
 
         let mut buf = vec![];
-        buf.put_int_le(0x010203, 3);
+        buf.put_int_le(0x01_0203, 3);
         assert_eq!(buf, b"\x03\x02\x01");
 
         let mut buf = vec![];

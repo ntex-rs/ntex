@@ -223,9 +223,9 @@ where
     ///
     /// ntex provides several services implementations:
     ///
-    /// * *Resource* is an entry in resource table which corresponds to requested URL.
-    /// * *Scope* is a set of resources with common root path.
-    /// * "StaticFiles" is a service for static files support
+    /// * `Resource` is an entry in resource table which corresponds to requested URL.
+    /// * `Scope` is a set of resources with common root path.
+    /// * `StaticFiles` is a service for static files support
     pub fn service<F>(mut self, factory: F) -> Self
     where
         F: WebServiceFactory<Err> + 'static,

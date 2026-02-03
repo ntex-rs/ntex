@@ -211,9 +211,8 @@ mod tests {
              transfer-encoding: chunked\r\n\r\n",
         );
         let (req, pl) = codec.decode(&mut buf).unwrap().unwrap();
-        let pl = match pl {
-            PayloadType::Payload(pl) => pl,
-            _ => panic!(),
+        let PayloadType::Payload(pl) = pl else {
+            panic!()
         };
 
         assert_eq!(req.method(), Method::GET);

@@ -99,9 +99,9 @@ where
         let mut config = WebServiceConfig::new(state.clone(), default.clone());
 
         // register services
-        services
-            .into_iter()
-            .for_each(|mut srv| srv.register(&mut config));
+        for mut srv in services {
+            srv.register(&mut config);
+        }
         let services = config.into_services();
 
         // resource map
@@ -121,7 +121,7 @@ where
 
         // complete ResourceMap tree creation
         let rmap = Rc::new(rmap);
-        rmap.finish(rmap.clone());
+        rmap.finish(&rmap);
 
         // create http services
         for (path, factory, guards) in &mut services.iter() {

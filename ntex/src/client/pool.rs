@@ -199,7 +199,7 @@ impl Service<Connect> for ConnectionPool {
                 log::trace!("{}: Connecting to {:?}", self.0.config.tag(), req.uri);
                 let uri = req.uri.clone();
                 let (tx, rx) = waiters.borrow_mut().pool.channel();
-                OpenConnection::spawn(key, tx, uri, inner, self.0.svc.clone(), req);
+                OpenConnection::spawn(key, tx, uri, inner, &self.0.svc, req);
 
                 match rx.await {
                     Err(_) => Err(ConnectError::Disconnected(None)),
@@ -399,7 +399,7 @@ async fn run_connection_pool(
                                 tx,
                                 uri,
                                 inner.clone(),
-                                svc.clone(),
+                                &svc,
                                 connect,
                             );
                         }
@@ -443,7 +443,7 @@ impl OpenConnection {
         tx: Waiter,
         uri: Uri,
         inner: Rc<RefCell<Inner>>,
-        pipeline: Pipeline<Connector>,
+        pipeline: &Pipeline<Connector>,
         msg: Connect,
     ) {
         let fut = pipeline.call_static(msg);
@@ -702,10 +702,10 @@ mod tests {
         // release connection and push it to next waiter
         conn.release(false);
         assert_eq!(pool.get_ref().0.inner.borrow().acquired, 0);
-        let _conn = fut.await.unwrap();
+        let conn = fut.await.unwrap();
         assert_eq!(store.borrow().len(), 1);
         assert!(pool.get_ref().0.waiters.borrow().waiters.is_empty());
-        drop(_conn);
+        drop(conn);
 
         // close connnection
         let conn = pool.call(req.clone()).await.unwrap();

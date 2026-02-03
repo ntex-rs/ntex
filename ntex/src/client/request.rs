@@ -302,7 +302,7 @@ impl ClientRequest {
         } else {
             let mut jar = CookieJar::new();
             jar.add(cookie.into());
-            self.cookies = Some(jar)
+            self.cookies = Some(jar);
         }
         self
     }

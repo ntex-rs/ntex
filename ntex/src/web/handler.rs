@@ -26,6 +26,7 @@ where
 {
     type Output = R;
 
+    #[allow(clippy::ignored_unit_patterns)]
     async fn call(&self, _: ()) -> R {
         (self)().await
     }
@@ -83,7 +84,7 @@ where
     }
 }
 
-/// FromRequest trait impl for tuples
+/// `FromRequest` trait impl for tuples
 macro_rules! factory_tuple (
     {$(#[$meta:meta])* $(($T:ident, $t:ident)),+} => {
         $(#[$meta])*
@@ -101,6 +102,7 @@ macro_rules! factory_tuple (
     }
 );
 
+#[allow(clippy::wildcard_imports)]
 #[rustfmt::skip]
 mod m {
     use super::*;

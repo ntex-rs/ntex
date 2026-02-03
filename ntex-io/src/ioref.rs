@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(io.read_ready().await.unwrap(), Some(()));
         assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
 
-        let item = io.with_read_buf(|buffer| buffer.take());
+        let item = io.with_read_buf(BytesMut::take);
         assert_eq!(item, Bytes::from_static(BIN));
 
         client.write(TEXT);
@@ -499,7 +499,7 @@ mod tests {
             self.out_bytes.set(
                 self.out_bytes.get()
                     + ctx.write_buf(|buf| {
-                        buf.with_src(|b| b.as_ref().map(|b| b.len()).unwrap_or_default())
+                        buf.with_src(|b| b.as_ref().map(BytesMut::len).unwrap_or_default())
                     }),
             );
             self.layer.process_write_buf(ctx)
@@ -583,10 +583,7 @@ mod tests {
 
         assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 8);
-        assert_eq!(
-            state.with_write_dest_buf(|b| b.map(|b| b.len()).unwrap_or(0)),
-            0
-        );
+        assert_eq!(state.with_write_dest_buf(|b| b.map_or(0, |b| b.len())), 0);
 
         // refs
         assert_eq!(Rc::strong_count(&in_bytes), 3);

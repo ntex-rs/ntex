@@ -1,3 +1,4 @@
+#![allow(clippy::used_underscore_binding)]
 use std::{error::Error, net, rc::Rc};
 
 use serde::Serialize;
@@ -80,7 +81,7 @@ impl RequestHeadType {
             res.set_payload(Payload::from_stream(Decoder::from_headers(
                 payload,
                 &res.head.headers,
-            )))
+            )));
         }
         Ok(res)
     }

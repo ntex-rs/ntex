@@ -926,7 +926,7 @@ impl TestServer {
                     .unwrap()
                     .connect()
                     .await
-                    .map(|ws| ws.seal())
+                    .map(WsConnection::seal)
             }
             #[cfg(not(feature = "openssl"))]
             {

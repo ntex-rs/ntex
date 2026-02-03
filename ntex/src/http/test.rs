@@ -334,9 +334,9 @@ impl TestServer {
         TestServer {
             id,
             addr,
+            client,
             system,
             server,
-            client,
         }
     }
 

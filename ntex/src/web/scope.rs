@@ -69,6 +69,7 @@ pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
 }
 
 impl<Err: ErrorRenderer> Scope<Err> {
+    #[allow(clippy::needless_pass_by_value)]
     /// Create a new scope
     pub fn new<T: IntoPattern>(path: T) -> Scope<Err> {
         Scope {
@@ -386,11 +387,7 @@ where
         }
 
         let state = self.state.take().map(|state| {
-            AppState::new(
-                state,
-                Some(config.state().clone()),
-                *config.state().config(),
-            )
+            AppState::new(state, Some(config.state().clone()), config.state().config())
         });
 
         // register nested services

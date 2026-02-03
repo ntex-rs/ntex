@@ -250,6 +250,7 @@ where
     }
 }
 
+#[allow(clippy::wildcard_imports)]
 #[rustfmt::skip]
 mod m {
     use variadics_please::all_tuples_enumerated;

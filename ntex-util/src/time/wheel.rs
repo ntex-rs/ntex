@@ -746,7 +746,7 @@ mod tests {
         let fut2 = sleep(Millis(200));
 
         fut2.await;
-        let _elapsed = Instant::now() - time;
+        let _elapsed = time.elapsed();
         #[cfg(not(target_os = "macos"))]
         assert!(
             _elapsed > Duration::from_millis(200) && _elapsed < Duration::from_millis(300),
@@ -754,7 +754,7 @@ mod tests {
         );
 
         fut1.await;
-        let _elapsed = Instant::now() - time;
+        let _elapsed = time.elapsed();
         #[cfg(not(target_os = "macos"))]
         assert!(
             _elapsed > Duration::from_millis(1000)
@@ -764,7 +764,7 @@ mod tests {
 
         let time = Instant::now();
         sleep(Millis(25)).await;
-        let _elapsed = Instant::now() - time;
+        let _elapsed = time.elapsed();
         #[cfg(not(target_os = "macos"))]
         assert!(
             _elapsed > Duration::from_millis(20) && _elapsed < Duration::from_millis(50),

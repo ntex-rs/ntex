@@ -179,7 +179,7 @@ async fn test_rustls() {
             .shutdown_timeout(Seconds(1))
             .stop_runtime()
             .disable_signals()
-            .bind_rustls(format!("{addr}"), config)
+            .bind_rustls(format!("{addr}"), &config)
             .unwrap()
             .config(SharedCfg::new("WEB").add(WebAppConfig::new().set_secure()))
             .run();

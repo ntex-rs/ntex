@@ -253,6 +253,7 @@ impl<S: ?Sized, F: Future> Future for ReadyCall<'_, S, F> {
 }
 
 #[cfg(test)]
+#[allow(clippy::should_panic_without_expect)]
 mod tests {
     use std::{cell::Cell, cell::RefCell, future::poll_fn};
 
@@ -389,7 +390,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
         let srv = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
-        let _ = poll_fn(|cx| srv.poll_shutdown(cx)).await;
+        poll_fn(|cx| srv.poll_shutdown(cx)).await;
         let _ = poll_fn(|cx| srv.poll_ready(cx)).await;
     }
 
@@ -408,7 +409,7 @@ mod tests {
         ntex::rt::spawn(async move {
             let _ = poll_fn(|cx| srv1.poll_ready(cx)).await;
             let fut = srv1.call_nowait("srv1");
-            assert!(format!("{:?}", fut).contains("PipelineCall"));
+            assert!(format!("{fut:?}").contains("PipelineCall"));
             let i = fut.await.unwrap();
             data1.borrow_mut().push(i);
         });

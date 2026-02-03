@@ -258,13 +258,13 @@ mod tests {
         type Response = usize;
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _c: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+        async fn call(&self, _r: (), _c: ServiceCtx<'_, Self>) -> Result<usize, ()> {
             Ok(1)
         }
     }
@@ -276,13 +276,13 @@ mod tests {
         type Response = usize;
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _c: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
             Ok(2)
         }
     }
@@ -326,7 +326,7 @@ mod tests {
                 Ok(())
             }
             async fn shutdown(&self) {}
-            async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+            async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
                 Ok(2)
             }
         }

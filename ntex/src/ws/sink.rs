@@ -21,7 +21,8 @@ impl WsSink {
         &self.0.io
     }
 
-    /// Endcode and send message to the peer.
+    #[allow(clippy::unused_async)]
+    /// Endcode and send message to the peer
     pub async fn send(&self, item: ws::Message) -> Result<(), ws::error::ProtocolError> {
         let close = match item {
             ws::Message::Close(_) => self.0.codec.is_closed(),

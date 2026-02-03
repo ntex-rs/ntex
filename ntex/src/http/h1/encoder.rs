@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 use std::marker::PhantomData;
 use std::{cell::Cell, cmp, io::Write, mem, ptr, ptr::copy_nonoverlapping, slice};
 
@@ -448,6 +449,7 @@ const DEC_DIGITS_LUT: &[u8] = b"0001020304050607080910111213141516171819\
 
 const STATUS_LINE_BUF_SIZE: usize = 13;
 
+#[allow(clippy::cast_possible_wrap)]
 fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesMut) {
     let mut buf: [u8; STATUS_LINE_BUF_SIZE] = match version {
         Version::HTTP_2 => *b"HTTP/2       ",

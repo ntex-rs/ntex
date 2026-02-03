@@ -36,11 +36,11 @@ impl ResourceMap {
         }
     }
 
-    pub(crate) fn finish(&self, current: Rc<ResourceMap>) {
+    pub(crate) fn finish(&self, current: &Rc<ResourceMap>) {
         for (_, nested) in &self.patterns {
             if let Some(nested) = nested {
                 *nested.parent.borrow_mut() = Some(current.clone());
-                nested.finish(nested.clone());
+                nested.finish(nested);
             }
         }
     }
@@ -50,8 +50,7 @@ impl ResourceMap {
 impl ResourceMap {
     /// Generate url for named resource
     ///
-    /// Check [`HttpRequest::url_for()`](../struct.HttpRequest.html#method.
-    /// url_for) for detailed information.
+    /// Check [`HttpRequest::url_for()`](../struct.HttpRequest.html#method.url_for) for detailed information.
     pub fn url_for<U, I>(
         &self,
         req: &HttpRequest,

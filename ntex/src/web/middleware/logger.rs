@@ -1,4 +1,5 @@
 //! Request logging middleware
+#![allow(clippy::cast_precision_loss)]
 use std::task::{Context, Poll};
 use std::{env, error::Error, fmt, fmt::Display, rc::Rc, time};
 

@@ -253,6 +253,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::should_panic_without_expect)]
     #[should_panic]
     fn access_cfg_in_building_state() {
         #[derive(Debug)]
@@ -307,7 +308,7 @@ mod tests {
         let t = cfg.get::<TestCfg>();
         assert_eq!(t.tag(), "TEST");
         assert_eq!(t.shared(), cfg);
-        let t: Cfg<TestCfg> = Default::default();
+        let t: Cfg<TestCfg> = Cfg::default();
         assert_eq!(t.tag(), "--");
         assert_eq!(t.ctx().id(), t.id());
         assert_eq!(t.ctx().id(), t.ctx().clone().id());

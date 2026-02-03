@@ -828,6 +828,7 @@ mod tests {
     }
 
     #[ntex::test]
+    #[allow(clippy::items_after_statements)]
     async fn err_in_service_ready() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);

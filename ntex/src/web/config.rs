@@ -137,7 +137,7 @@ impl WebAppConfig {
 
     /// Get message from the pool
     pub(crate) fn clear_requests(&self) {
-        CACHE.with(|cache| cache.with(self.config.id(), |cache| cache.clear()));
+        CACHE.with(|cache| cache.with(self.config.id(), Vec::clear));
     }
 }
 

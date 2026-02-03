@@ -169,7 +169,7 @@ mod tests {
         type Response = ();
         type Error = SrvError;
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), SrvError> {
+        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), SrvError> {
             crate::time::sleep(self.0).await;
             Ok::<_, SrvError>(())
         }

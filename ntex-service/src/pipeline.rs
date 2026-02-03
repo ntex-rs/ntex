@@ -514,7 +514,7 @@ mod tests {
             Ok(())
         }
 
-        async fn call(&self, _: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _m: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Ok(())
         }
 
@@ -527,7 +527,7 @@ mod tests {
     async fn pipeline_service() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = Pipeline::new(
-            Pipeline::new(Srv(cnt_sht.clone()).map(|_| "ok"))
+            Pipeline::new(Srv(cnt_sht.clone()).map(|()| "ok"))
                 .into_service()
                 .clone(),
         );
@@ -543,7 +543,7 @@ mod tests {
         let _ = format!("{srv:?}");
 
         let cnt_sht = Rc::new(Cell::new(0));
-        let svc = Srv(cnt_sht.clone()).map(|_| "ok");
+        let svc = Srv(cnt_sht.clone()).map(|()| "ok");
         let srv = Pipeline::new(PipelineSvc::from(&svc));
         let res = srv.call(()).await;
         assert!(res.is_ok());
