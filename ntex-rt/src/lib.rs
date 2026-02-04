@@ -133,11 +133,13 @@ mod compio {
 
     impl std::error::Error for JoinError {}
 
+    #[derive(Debug)]
     enum Either<T> {
         Compio(compio_runtime::JoinHandle<T>),
         Spawn(oneshot::Receiver<T>),
     }
 
+    #[derive(Debug)]
     pub struct JoinHandle<T> {
         fut: Option<Either<T>>,
     }
