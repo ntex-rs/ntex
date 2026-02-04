@@ -5,7 +5,7 @@ use ntex_rt::System;
 use crate::server::Server;
 
 thread_local! {
-    static HANDLERS: RefCell<Vec<oneshot::Sender<Signal>>> = Default::default();
+    static HANDLERS: RefCell<Vec<oneshot::Sender<Signal>>> = RefCell::default();
 }
 
 type CB = Box<dyn Fn(Signal) + Send>;
@@ -30,19 +30,16 @@ pub fn signal() -> oneshot::Receiver<Signal> {
     System::current().arbiter().exec_fn(|| {
         HANDLERS.with(|handlers| {
             handlers.borrow_mut().push(tx);
-        })
+        });
     });
 
     rx
 }
 
 fn register_system<T: Send + 'static>(srv: Server<T>) -> bool {
-    let guard = match CUR_SYS.lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            log::error!("Cannot lock mutex");
-            return true;
-        }
+    let Ok(guard) = CUR_SYS.lock() else {
+        log::error!("Cannot lock mutex");
+        return true;
     };
 
     let mut sys = guard.borrow_mut();
@@ -61,7 +58,7 @@ fn handle_signal(sig: Signal) {
                 for tx in handlers.borrow_mut().drain(..) {
                     let _ = tx.send(sig);
                 }
-            })
+            });
         });
     }
 }
@@ -76,7 +73,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
         let _ = thread::Builder::new()
             .name("ntex-server signals".to_string())
             .spawn(move || {
-                use signal_hook::consts::signal::*;
+                use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
                 use signal_hook::iterator::Signals;
 
                 let sigs = vec![SIGHUP, SIGINT, SIGTERM, SIGQUIT];

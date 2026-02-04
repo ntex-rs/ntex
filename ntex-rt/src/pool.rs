@@ -17,15 +17,14 @@ impl fmt::Display for BlockingError {
     }
 }
 
+#[derive(Debug)]
 pub struct BlockingResult<T> {
     rx: Option<oneshot::Receiver<Result<T, Box<dyn Any + Send>>>>,
 }
 
 type BoxedDispatchable = Box<dyn Dispatchable + Send>;
 
-/// A trait for dispatching a closure. It's implemented for all `FnOnce() + Send
-/// + 'static` but may also be implemented for any other types that are `Send`
-///   and `'static`.
+/// A trait for dispatching a closure
 pub(crate) trait Dispatchable: Send + 'static {
     /// Run the dispatchable
     fn run(self: Box<Self>);
@@ -36,7 +35,7 @@ where
     F: FnOnce() + Send + 'static,
 {
     fn run(self: Box<Self>) {
-        (*self)()
+        (*self)();
     }
 }
 
@@ -83,7 +82,7 @@ impl ThreadPool {
             receiver,
             thread_limit,
             recv_timeout,
-            name: format!("{}:pool-wrk", name),
+            name: format!("{name}:pool-wrk"),
             counter: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -104,7 +103,7 @@ impl ThreadPool {
         });
 
         match self.sender.try_send(f) {
-            Ok(_) => BlockingResult { rx: Some(rx) },
+            Ok(()) => BlockingResult { rx: Some(rx) },
             Err(e) => match e {
                 TrySendError::Full(f) => {
                     let cnt = self.counter.load(Ordering::Acquire);

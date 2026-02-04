@@ -26,7 +26,7 @@ struct Arbiters {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Id(pub(crate) usize);
 
-/// System is a runtime manager.
+/// System is a runtime manager
 #[derive(Clone, Debug)]
 pub struct System {
     id: usize,
@@ -71,7 +71,7 @@ impl System {
         sys
     }
 
-    /// Build a new system with a customized tokio runtime.
+    /// Build a new system with a customized tokio runtime
     ///
     /// This allows to customize the runtime. See struct level docs on
     /// `Builder` for more information.
@@ -80,7 +80,7 @@ impl System {
     }
 
     #[allow(clippy::new_ret_no_self)]
-    /// Create new system.
+    /// Create new system
     ///
     /// This method panics if it can not create tokio runtime
     pub fn new<R: Runner>(name: &str, runner: R) -> SystemRunner {
@@ -88,14 +88,18 @@ impl System {
     }
 
     #[allow(clippy::new_ret_no_self)]
-    /// Create new system.
+    /// Create new system
     ///
     /// This method panics if it can not create tokio runtime
     pub fn with_config(name: &str, config: SystemConfig) -> SystemRunner {
         Self::build().name(name).build_with(config)
     }
 
-    /// Get current running system.
+    /// Get current running system
+    ///
+    /// # Panics
+    ///
+    /// Panics if System is not running
     pub fn current() -> System {
         CURRENT.with(|cell| match *cell.borrow() {
             Some(ref sys) => sys.clone(),
@@ -103,12 +107,12 @@ impl System {
         })
     }
 
-    /// Set current running system.
+    /// Set current running system
     #[doc(hidden)]
     pub fn set_current(sys: System) {
         CURRENT.with(|s| {
             *s.borrow_mut() = Some(sys);
-        })
+        });
     }
 
     /// System id
@@ -123,15 +127,17 @@ impl System {
 
     /// Stop the system
     pub fn stop(&self) {
-        self.stop_with_code(0)
+        self.stop_with_code(0);
     }
 
-    /// Stop the system with a particular exit code.
+    /// Stop the system with a particular exit code
     pub fn stop_with_code(&self, code: i32) {
         let _ = self.sys.try_send(SystemCommand::Exit(code));
     }
 
-    /// Return status of 'stop_on_panic' option which controls whether the System is stopped when an
+    /// Return status of `stop_on_panic` option
+    ///
+    /// It controls whether the System is stopped when an
     /// uncaught panic is thrown from a worker thread.
     pub fn stop_on_panic(&self) -> bool {
         self.config.stop_on_panic
@@ -142,7 +148,7 @@ impl System {
         &self.arbiter
     }
 
-    /// Retrieves a list of all arbiters in the system.
+    /// Retrieves a list of all arbiters in the system
     ///
     /// This method should be called from the thread where the system has been initialized,
     /// typically the "main" thread.
@@ -153,7 +159,7 @@ impl System {
         ARBITERS.with(|arbs| f(arbs.borrow().list.as_ref()))
     }
 
-    /// Retrieves a list of last pings records for specified arbiter.
+    /// Retrieves a list of last pings records for specified arbiter
     ///
     /// This method should be called from the thread where the system has been initialized,
     /// typically the "main" thread.
@@ -184,7 +190,7 @@ impl System {
         self.config.testing()
     }
 
-    /// Spawns a blocking task in a new thread, and wait for it.
+    /// Spawns a blocking task in a new thread, and wait for it
     ///
     /// The task will not be cancelled even if the future is dropped.
     pub fn spawn_blocking<F, R>(&self, f: F) -> BlockingResult<R>
@@ -203,7 +209,7 @@ impl SystemConfig {
         self.testing
     }
 
-    /// Execute a future with custom `block_on` method and wait for result.
+    /// Execute a future with custom `block_on` method and wait for result
     #[inline]
     pub(super) fn block_on<F, R>(&self, fut: F) -> R
     where
@@ -225,6 +231,7 @@ impl SystemConfig {
 impl fmt::Debug for SystemConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemConfig")
+            .field("name", &self.name)
             .field("testing", &self.testing)
             .field("stack_size", &self.stack_size)
             .field("stop_on_panic", &self.stop_on_panic)
@@ -239,6 +246,7 @@ pub(super) enum SystemCommand {
     UnregisterArbiter(Id),
 }
 
+#[derive(Debug)]
 pub(super) struct SystemSupport {
     stop: Option<oneshot::Sender<i32>>,
     commands: Receiver<SystemCommand>,
@@ -360,7 +368,7 @@ async fn ping_arbiter(arb: Arbiter, interval: Duration) {
                 .unwrap()
                 .front_mut()
                 .unwrap()
-                .rtt = Some(Instant::now() - start);
+                .rtt = Some(start.elapsed());
         });
     }
 }
@@ -398,6 +406,6 @@ where
 {
     #[allow(clippy::boxed_local)]
     fn call_box(self: Box<Self>) {
-        (*self)()
+        (*self)();
     }
 }

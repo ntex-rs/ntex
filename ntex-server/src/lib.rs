@@ -1,5 +1,11 @@
-#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
-#![allow(clippy::let_underscore_future)]
+#![deny(clippy::pedantic)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::let_underscore_future,
+    clippy::struct_field_names
+)]
 
 use ntex_service::ServiceFactory;
 

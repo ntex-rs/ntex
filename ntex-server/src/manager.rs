@@ -150,11 +150,10 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                 WorkerStatus::Failed => {
                     mgr.unavailable(wrk);
                     sleep(RESTART_DELAY).await;
-                    if !mgr.stopping() {
-                        wrk = Worker::start(name.clone(), mgr.factory(), cid);
-                    } else {
+                    if mgr.stopping() {
                         return;
                     }
+                    wrk = Worker::start(name.clone(), mgr.factory(), cid);
                 }
             }
             wrk.wait_for_status().await;
@@ -181,30 +180,29 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
 
     fn process(&mut self, mut item: F::Item) {
         loop {
-            if !self.workers.is_empty() {
-                if self.next >= self.workers.len() {
-                    self.next = self.workers.len() - 1;
-                }
-                match self.workers[self.next].send(item) {
-                    Ok(()) => {
-                        self.next = (self.next + 1) % self.workers.len();
-                        break;
-                    }
-                    Err(i) => {
-                        if !self.mgr.0.stopping.get() {
-                            log::trace!("Worker failed while processing item");
-                        }
-                        item = i;
-                        self.workers.remove(self.next);
-                    }
-                }
-            } else {
+            if self.workers.is_empty() {
                 if !self.mgr.0.stopping.get() {
                     log::error!("No workers");
                     self.backlog.push_back(item);
                     self.mgr.pause();
                 }
                 break;
+            }
+            if self.next >= self.workers.len() {
+                self.next = self.workers.len() - 1;
+            }
+            match self.workers[self.next].send(item) {
+                Ok(()) => {
+                    self.next = (self.next + 1) % self.workers.len();
+                    break;
+                }
+                Err(i) => {
+                    if !self.mgr.0.stopping.get() {
+                        log::trace!("Worker failed while processing item");
+                    }
+                    item = i;
+                    self.workers.remove(self.next);
+                }
             }
         }
     }
@@ -300,9 +298,7 @@ async fn handle_cmd<F: ServerConfiguration>(
     let mut state = HandleCmdState::new(mgr);
 
     loop {
-        let item = if let Ok(item) = rx.recv().await {
-            item
-        } else {
+        let Ok(item) = rx.recv().await else {
             return;
         };
         match item {
@@ -343,7 +339,7 @@ async fn handle_cmd<F: ServerConfiguration>(
                         state.stop(false, None).await;
                         return;
                     }
-                    _ => (),
+                    Signal::Hup => (),
                 }
             }
         }

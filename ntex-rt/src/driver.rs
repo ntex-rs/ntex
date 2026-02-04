@@ -36,6 +36,7 @@ pub trait Driver: 'static {
     fn clear(&self);
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PollResult {
     Ready,
     Pending,

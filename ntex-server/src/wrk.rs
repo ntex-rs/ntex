@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, ready};
 use std::{cmp, future::Future, future::poll_fn, hash, pin::Pin, sync::Arc};
 
-use async_channel::{Receiver, Sender, unbounded};
+use async_channel::{Receiver, Sender, TrySendError, unbounded};
 use atomic_waker::AtomicWaker;
 use core_affinity::CoreId;
 
@@ -133,7 +133,7 @@ impl<T> Worker<T> {
     /// Returns `Ok` if message got accepted by the worker.
     /// Otherwise return message back as `Err`
     pub fn send(&self, msg: T) -> Result<(), T> {
-        self.tx1.try_send(msg).map_err(|msg| msg.into_inner())
+        self.tx1.try_send(msg).map_err(TrySendError::into_inner)
     }
 
     /// Check worker status.
@@ -301,18 +301,15 @@ where
                 }
             }
 
-            match ready!(recv.as_mut().poll(cx)) {
-                Ok(item) => {
-                    let fut = svc.call(item);
-                    let _ = spawn(async move {
-                        let _ = fut.await;
-                    });
-                    Poll::Ready(Ok::<_, F::Error>(true))
-                }
-                Err(_) => {
-                    log::error!("Server is gone");
-                    Poll::Ready(Ok(false))
-                }
+            if let Ok(item) = ready!(recv.as_mut().poll(cx)) {
+                let fut = svc.call(item);
+                let _ = spawn(async move {
+                    let _ = fut.await;
+                });
+                Poll::Ready(Ok::<_, F::Error>(true))
+            } else {
+                log::error!("Server is gone");
+                Poll::Ready(Ok(false))
             }
         });
 
@@ -386,13 +383,12 @@ where
 
     let svc = match select(factory.create(()), stream_recv(&mut stop)).await {
         Either::Left(Ok(svc)) => Pipeline::new(svc).bind(),
-        Either::Left(Err(_)) => return Err(()),
         Either::Right(Some(Shutdown { result, .. })) => {
             log::trace!("Shutdown uninitialized worker");
             let _ = result.send(false);
             return Err(());
         }
-        Either::Right(None) => return Err(()),
+        Either::Left(Err(_)) | Either::Right(None) => return Err(()),
     };
     availability.set(true);
 

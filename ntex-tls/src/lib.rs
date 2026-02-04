@@ -1,5 +1,12 @@
 //! An implementations of SSL streams for ntex ecosystem
-#![deny(rust_2018_idioms, unreachable_pub, missing_debug_implementations)]
+#![deny(clippy::pedantic)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::let_underscore_future,
+    clippy::struct_field_names
+)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -67,6 +74,7 @@ impl Configuration for TlsConfig {
 }
 
 impl TlsConfig {
+    #[must_use]
     #[allow(clippy::new_without_default)]
     /// Create instance of `TlsConfig`
     pub fn new() -> Self {
@@ -82,6 +90,7 @@ impl TlsConfig {
         self.handshake_timeout
     }
 
+    #[must_use]
     /// Set tls handshake timeout.
     ///
     /// Defines a timeout for connection tls handshake negotiation.

@@ -33,6 +33,7 @@ pub enum ServerStatus {
 pub struct Token(usize);
 
 impl Token {
+    #[must_use]
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Token {
         let token = Token(self.0);
@@ -71,5 +72,5 @@ pub(super) fn max_concurrent_connections(num: usize) {
 }
 
 pub(super) fn num_connections() -> usize {
-    MAX_CONNS_COUNTER.with(|conns| conns.total())
+    MAX_CONNS_COUNTER.with(Counter::total)
 }

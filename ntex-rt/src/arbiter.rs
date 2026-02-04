@@ -1,4 +1,4 @@
-#![allow(clippy::let_underscore_future)]
+#![allow(clippy::missing_panics_doc)]
 use std::any::{Any, TypeId};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, thread};
@@ -63,8 +63,11 @@ impl Arbiter {
         (arb, ArbiterController { rx, stop: None })
     }
 
-    /// Returns the current thread's arbiter's address. If no Arbiter is present, then this
-    /// function will panic!
+    /// Returns the current thread's arbiter's address
+    ///
+    /// # Panics
+    ///
+    /// Panics if Arbiter is not running
     pub fn current() -> Arbiter {
         ADDR.with(|cell| match *cell.borrow() {
             Some(ref addr) => addr.clone(),
@@ -84,7 +87,8 @@ impl Arbiter {
         Arbiter::with_name(format!("{}:arb:{}", System::current().name(), id))
     }
 
-    /// Spawn new thread and run runtime in spawned thread.
+    /// Spawn new thread and run runtime in spawned thread
+    ///
     /// Returns address of newly created arbiter.
     pub fn with_name(name: String) -> Arbiter {
         let id = COUNT.fetch_add(1, Ordering::Relaxed);
@@ -107,7 +111,7 @@ impl Arbiter {
 
         let handle = builder
             .spawn(move || {
-                log::info!("Starting {:?} arbiter", name2);
+                log::info!("Starting {name2:?} arbiter");
 
                 let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
 
@@ -254,9 +258,11 @@ impl Arbiter {
         STORAGE.with(move |cell| cell.borrow().get(&TypeId::of::<T>()).is_some())
     }
 
-    /// Get a reference to a type previously inserted on this arbiter's storage.
+    /// Get a reference to a type previously inserted on this arbiter's storage
     ///
-    /// Panics is item is not inserted
+    /// # Panics
+    ///
+    /// Panics if item is not inserted
     pub fn get_item<T: 'static, F, R>(f: F) -> R
     where
         F: FnOnce(&T) -> R,
@@ -318,7 +324,7 @@ impl Drop for ArbiterController {
         if thread::panicking() {
             if System::current().stop_on_panic() {
                 eprintln!("Panic in Arbiter thread, shutting down system.");
-                System::current().stop_with_code(1)
+                System::current().stop_with_code(1);
             } else {
                 eprintln!("Panic in Arbiter thread.");
             }
@@ -333,7 +339,7 @@ impl ArbiterController {
                 Ok(ArbiterCommand::Stop) => {
                     if let Some(stop) = self.stop.take() {
                         let _ = stop.send(0);
-                    };
+                    }
                     break;
                 }
                 Ok(ArbiterCommand::Execute(fut)) => {

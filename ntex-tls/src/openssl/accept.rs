@@ -68,7 +68,7 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
 
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
-            self.conns.available().await
+            self.conns.available().await;
         }
         Ok(())
     }
@@ -106,7 +106,7 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
             Ok(io)
         })
         .await
-        .map_err(|_| {
+        .map_err(|()| {
             io::Error::new(io::ErrorKind::TimedOut, "ssl handshake timeout").into()
         })
         .and_then(|item| item)

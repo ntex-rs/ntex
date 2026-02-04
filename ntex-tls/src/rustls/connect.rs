@@ -119,7 +119,7 @@ where
                 log::trace!("{tag}: TLS Handshake error: {e:?}");
                 Err(e.into())
             }
-            Err(_) => {
+            Err(()) => {
                 log::trace!("{tag}: TLS Handshake timeout");
                 Err(io::Error::new(io::ErrorKind::TimedOut, "SSL Handshake timeout").into())
             }
@@ -140,8 +140,10 @@ mod tests {
             ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
         });
 
-        let cert_store =
-            RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let cert_store = webpki_roots::TLS_SERVER_ROOTS
+            .iter()
+            .cloned()
+            .collect::<RootCertStore>();
         let config = ClientConfig::builder()
             .with_root_certificates(cert_store)
             .with_no_client_auth();
