@@ -1,4 +1,4 @@
-#![allow(clippy::op_ref, clippy::let_underscore_future)]
+#![allow(clippy::op_ref)]
 use std::{borrow::Borrow, borrow::BorrowMut};
 
 use ntex_bytes::info::Kind;

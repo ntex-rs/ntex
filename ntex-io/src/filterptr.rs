@@ -32,10 +32,7 @@ impl FilterPtr {
 
     pub(crate) fn set<F: Filter>(&self, filter: F) {
         let filter = Box::new(filter);
-        let filter_ref = {
-            let f: &dyn Filter = filter.as_ref();
-            f as *const dyn Filter
-        };
+        let filter_ref = ptr::from_ref::<dyn Filter>(filter.as_ref());
         *self.as_mut() = Repr::Filter(Box::into_raw(filter).cast(), filter_ref);
     }
 
@@ -91,10 +88,7 @@ impl FilterPtr {
         let repr = match self.as_ref() {
             Repr::Filter(..) => {
                 let filter = Box::new(Layer::new(new, *self.take_filter::<F>()));
-                let filter_ref = {
-                    let f: &dyn Filter = filter.as_ref();
-                    f as *const dyn Filter
-                };
+                let filter_ref = ptr::from_ref::<dyn Filter>(filter.as_ref());
                 Repr::Filter(Box::into_raw(filter).cast(), filter_ref)
             }
             Repr::Sealed(..) => Repr::Sealed(Box::new(Layer::new(new, self.take_sealed()))),
@@ -108,10 +102,7 @@ impl FilterPtr {
         R: Filter,
     {
         let filter = Box::new(f(*self.take_filter::<F>()));
-        let filter_ref = {
-            let f: &dyn Filter = filter.as_ref();
-            f as *const dyn Filter
-        };
+        let filter_ref = ptr::from_ref::<dyn Filter>(filter.as_ref());
         *self.as_mut() = Repr::Filter(Box::into_raw(filter).cast(), filter_ref);
     }
 

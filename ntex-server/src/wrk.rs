@@ -95,7 +95,7 @@ impl<T> Worker<T> {
                 log::info!("Set affinity to {cid:?} for worker {name2:?}");
             }
 
-            let _ = spawn(async move {
+            spawn(async move {
                 log::info!("Starting worker {name2:?}");
 
                 log::debug!("Creating server instance in {name2:?}");
@@ -303,7 +303,7 @@ where
 
             if let Ok(item) = ready!(recv.as_mut().poll(cx)) {
                 let fut = svc.call(item);
-                let _ = spawn(async move {
+                spawn(async move {
                     let _ = fut.await;
                 });
                 Poll::Ready(Ok::<_, F::Error>(true))
@@ -316,7 +316,7 @@ where
         match select(fut, stream_recv(&mut wrk.stop)).await {
             Either::Left(Ok(true)) => continue,
             Either::Left(Err(_)) => {
-                let _ = ntex_rt::spawn(async move {
+                ntex_rt::spawn(async move {
                     svc.shutdown().await;
                 });
             }

@@ -316,7 +316,7 @@ impl DateService {
                 date.update();
 
                 // periodic date update
-                let _ = crate::rt::spawn(async move {
+                crate::rt::spawn(async move {
                     sleep(Millis(500)).await;
                     DATE.with(|date| {
                         date.current.set(false);

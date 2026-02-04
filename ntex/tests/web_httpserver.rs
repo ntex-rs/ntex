@@ -1,4 +1,3 @@
-#![allow(clippy::let_underscore_future)]
 use std::{sync::mpsc, thread, time::Duration};
 
 #[cfg(feature = "openssl")]
@@ -68,9 +67,9 @@ async fn test_run() {
     assert!(response.status().is_success());
 
     // stop
-    let _ = srv.stop(false);
+    srv.stop(false).await;
 
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(25));
     sys.stop();
 }
 
@@ -148,9 +147,9 @@ async fn test_openssl() {
     assert!(response.status().is_success());
 
     // stop
-    let _ = srv.stop(false);
+    srv.stop(false).await;
 
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(25));
     sys.stop();
 }
 
@@ -195,9 +194,9 @@ async fn test_rustls() {
     assert!(response.status().is_success());
 
     // stop
-    let _ = srv.stop(false);
+    srv.stop(false).await;
 
-    sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(25)).await;
     sys.stop();
 }
 
@@ -250,9 +249,9 @@ async fn test_bind_uds() {
     assert!(response.status().is_success());
 
     // stop
-    let _ = srv.stop(false);
+    srv.stop(false).await;
 
-    sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(25)).await;
     sys.stop();
 }
 
@@ -308,8 +307,8 @@ async fn test_listen_uds() {
     assert!(response.status().is_success());
 
     // stop
-    let _ = srv.stop(false);
+    srv.stop(false).await;
 
-    sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(25)).await;
     sys.stop();
 }

@@ -4,7 +4,6 @@
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc,
-    clippy::let_underscore_future,
     clippy::struct_field_names
 )]
 

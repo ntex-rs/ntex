@@ -1,5 +1,3 @@
-#![allow(clippy::let_underscore_future)]
-
 #[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(any(feature = "tokio", feature = "neon"))]
@@ -109,7 +107,7 @@ async fn test_run() {
     assert_eq!(buf, b"test"[..]);
 
     // pause
-    let _ = srv.pause();
+    srv.pause().await;
     thread::sleep(time::Duration::from_millis(200));
     let mut conn = net::TcpStream::connect(addr).unwrap();
     conn.set_read_timeout(Some(time::Duration::from_millis(100)))
@@ -118,7 +116,7 @@ async fn test_run() {
     assert!(res.is_err());
 
     // resume
-    let _ = srv.resume();
+    srv.resume().await;
     thread::sleep(time::Duration::from_millis(100));
     assert!(net::TcpStream::connect(addr).is_ok());
     assert!(net::TcpStream::connect(addr).is_ok());

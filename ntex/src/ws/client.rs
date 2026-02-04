@@ -716,7 +716,7 @@ impl WsConnection<Sealed> {
     pub fn receiver(self) -> mpsc::Receiver<Result<ws::Frame, WsError<()>>> {
         let (tx, rx): (_, mpsc::Receiver<Result<ws::Frame, WsError<()>>>) = mpsc::channel();
 
-        let _ = rt::spawn(async move {
+        rt::spawn(async move {
             let tx2 = tx.clone();
             let io = self.io.get_ref();
 
@@ -899,7 +899,6 @@ mod tests {
     }
 
     #[crate::rt_test]
-    #[allow(clippy::let_underscore_future)]
     async fn bearer_auth() {
         let client = WsClient::builder("http://localhost")
             .bearer_auth("someS3cr3tAutht0k3n")
@@ -931,7 +930,7 @@ mod tests {
             "Bearer someS3cr3tAutht0k2n"
         );
 
-        let _ = client.connect();
+        let _ = client.connect().await;
     }
 
     #[cfg(feature = "cookie")]

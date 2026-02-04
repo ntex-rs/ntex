@@ -122,7 +122,7 @@ impl Arbiter {
 
                 config.block_on(async move {
                     // start arbiter controller
-                    let _ = crate::spawn(
+                    crate::spawn(
                         ArbiterController {
                             stop: Some(stop),
                             rx: arb_rx,
@@ -343,7 +343,7 @@ impl ArbiterController {
                     break;
                 }
                 Ok(ArbiterCommand::Execute(fut)) => {
-                    let _ = crate::spawn(fut);
+                    crate::spawn(fut);
                 }
                 Ok(ArbiterCommand::ExecuteFn(f)) => {
                     f.call_box();

@@ -1,5 +1,13 @@
 # Changes
 
+## [3.7.0] - 2026-02-04
+
+* Unify JoinHandle for all runtimes
+
+## [3.6.0] - 2026-02-02
+
+* Update compio to 0.18
+
 ## [3.5.0] - 2026-02-01
 
 * Update compio to 0.18
