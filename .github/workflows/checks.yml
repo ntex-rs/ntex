@@ -14,7 +14,7 @@ jobs:
       - run:
           cargo check --tests --all --no-default-features --features="ntex/neon,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
-  clippy:
+  clippy-polling:
     name: Clippy (neon)
     runs-on: ubuntu-latest
     steps:
@@ -26,7 +26,7 @@ jobs:
       - run:
           cargo clippy --tests --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
-  clippy:
+  clippy-uring:
     name: Clippy (neon-uring)
     runs-on: ubuntu-latest
     steps:
@@ -37,7 +37,8 @@ jobs:
           components: clippy
       - run:
           cargo clippy --tests --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
-  clippy:
+
+  clippy-tokio:
     name: Clippy (tokio)
     runs-on: ubuntu-latest
     steps:
@@ -49,7 +50,7 @@ jobs:
       - run:
           cargo clippy --tests --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
-  clippy:
+  clippy-compio:
     name: Clippy (compio)
     runs-on: ubuntu-latest
     steps:
