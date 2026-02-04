@@ -1,4 +1,5 @@
 //! Test server
+#![allow(clippy::missing_panics_doc)]
 use std::{fmt, io, marker::PhantomData, net, thread, time};
 
 use ntex_io::{Io, IoConfig};
@@ -34,6 +35,8 @@ where
     F: AsyncFn() -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedCfg> + 'static,
 {
+    #[must_use]
+    /// Create test server builder
     pub fn new(factory: F) -> Self {
         Self {
             factory,
@@ -44,12 +47,14 @@ where
         }
     }
 
+    #[must_use]
     /// Set server io configuration
     pub fn config<T: Into<SharedCfg>>(mut self, cfg: T) -> Self {
         self.config = cfg.into();
         self
     }
 
+    #[must_use]
     /// Set client io configuration
     pub fn client_config<T: Into<SharedCfg>>(mut self, cfg: T) -> Self {
         self.client_config = cfg.into();
@@ -148,7 +153,7 @@ where
     let name = System::current().name().to_string();
 
     let id = Uuid::now_v7();
-    log::debug!("Starting {:?} server {:?}", name, id);
+    log::debug!("Starting {name:?} server {id:?}");
 
     let (tx, rx) = oneshot::channel();
 
@@ -196,6 +201,7 @@ impl TestServer {
         self.addr
     }
 
+    #[must_use]
     pub fn set_addr(mut self, addr: net::SocketAddr) -> Self {
         self.addr = addr;
         self

@@ -56,7 +56,7 @@ impl TlsServerFilter {
             Ok(io)
         })
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "rustls handshake timeout"))
+        .map_err(|()| io::Error::new(io::ErrorKind::TimedOut, "rustls handshake timeout"))
         .and_then(|item| item)
     }
 }

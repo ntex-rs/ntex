@@ -1,5 +1,5 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::{any, cell::RefCell, cmp, error::Error, io, task::Poll};
+use std::{any, borrow::ToOwned, cell::RefCell, cmp, error::Error, io, task::Poll};
 
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf, types};
@@ -68,7 +68,7 @@ impl SslFilter {
         F: FnOnce() -> R,
     {
         self.inner.borrow_mut().get_mut().destination = Some(buf.take_dst());
-        self.inner.borrow_mut().get_mut().source = buf.with_read_buf(|b| b.take_src());
+        self.inner.borrow_mut().get_mut().source = buf.with_read_buf(ReadBuf::take_src);
         let result = f();
         buf.set_dst(self.inner.borrow_mut().get_mut().destination.take());
         buf.with_read_buf(|b| b.set_src(self.inner.borrow_mut().get_mut().source.take()));
@@ -86,8 +86,7 @@ impl FilterLayer for SslFilter {
                 .borrow()
                 .ssl()
                 .selected_alpn_protocol()
-                .map(|protos| protos.windows(2).any(|w| w == H2))
-                .unwrap_or(false);
+                .is_some_and(|protos| protos.windows(2).any(|w| w == H2));
             let proto = if h2 {
                 types::HttpProtocol::Http2
             } else {
@@ -103,7 +102,7 @@ impl FilterLayer for SslFilter {
         } else if id == any::TypeId::of::<PeerCertChain>() {
             if let Some(cert_chain) = self.inner.borrow().ssl().peer_cert_chain() {
                 Some(Box::new(PeerCertChain(
-                    cert_chain.iter().map(|c| c.to_owned()).collect(),
+                    cert_chain.iter().map(ToOwned::to_owned).collect(),
                 )))
             } else {
                 None
@@ -151,7 +150,7 @@ impl FilterLayer for SslFilter {
                         buf.resize_buf(dst);
 
                         let chunk: &mut [u8] =
-                            unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
+                            unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
                         let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
                         let result = match ssl_result {
                             Ok(v) => {
@@ -194,7 +193,6 @@ impl FilterLayer for SslFilter {
                         match ssl_result {
                             Ok(v) => {
                                 src.advance_to(v);
-                                continue;
                             }
                             Err(e) => {
                                 return match e.code() {

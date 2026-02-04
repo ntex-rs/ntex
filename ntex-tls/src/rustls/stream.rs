@@ -18,7 +18,7 @@ impl<'a, S> Stream<'a, S> {
     }
 }
 
-impl<'a, S, SD> Stream<'a, S>
+impl<S, SD> Stream<'_, S>
 where
     S: DerefMut + Deref<Target = ConnectionCommon<SD>>,
     SD: SideData,
@@ -30,8 +30,7 @@ where
             let h2 = self
                 .session
                 .alpn_protocol()
-                .map(|protos| protos.windows(2).any(|w| w == H2))
-                .unwrap_or(false);
+                .is_some_and(|protos| protos.windows(2).any(|w| w == H2));
 
             let proto = if h2 {
                 types::HttpProtocol::Http2
@@ -86,7 +85,7 @@ where
                         if new_b > 0 {
                             dst.reserve(new_b);
                             let chunk: &mut [u8] =
-                                unsafe { std::mem::transmute(&mut *dst.chunk_mut()) };
+                                unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
                             let v = self.session.reader().read(chunk)?;
                             unsafe { dst.advance_mut(v) };
                             new_bytes += v;
@@ -113,7 +112,7 @@ where
                         loop {
                             match self.session.write_tls(&mut io) {
                                 Ok(0) => continue 'outer,
-                                Ok(_) => continue,
+                                Ok(_) => (),
                                 Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
                                     break;
                                 }
@@ -144,7 +143,7 @@ where
 
             while session.wants_read() {
                 let has_data = buf.with_read_buf(|rbuf| {
-                    rbuf.with_src(|b| b.as_ref().map(|b| !b.is_empty()).unwrap_or_default())
+                    rbuf.with_src(|b| b.as_ref().is_some_and(|b| !b.is_empty()))
                 });
 
                 if has_data {

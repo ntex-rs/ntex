@@ -1,3 +1,4 @@
+#![allow(clippy::missing_panics_doc)]
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 use std::task::{Context, Poll, ready};
 use std::{future::Future, io, pin::Pin};

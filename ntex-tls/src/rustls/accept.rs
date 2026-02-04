@@ -48,7 +48,7 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for TlsAcceptor {
 }
 
 #[derive(Debug)]
-/// RusTLS based `Acceptor` service
+/// `RusTLS` based `Acceptor` service
 pub struct TlsAcceptorService {
     cfg: Cfg<TlsConfig>,
     config: Arc<ServerConfig>,
@@ -61,7 +61,7 @@ impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
 
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
-            self.conns.available().await
+            self.conns.available().await;
         }
         Ok(())
     }

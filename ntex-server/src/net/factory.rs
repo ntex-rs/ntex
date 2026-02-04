@@ -18,6 +18,7 @@ pub(crate) struct NetService {
 }
 
 pub(crate) trait FactoryService: Send {
+    #[allow(clippy::unnecessary_literal_bound)]
     fn name(&self, _: Token) -> &str {
         ""
     }
@@ -54,7 +55,7 @@ where
     F: AsyncFn(Config) -> R + Send + Clone + 'static,
     R: ServiceFactory<Io, SharedCfg> + 'static,
 {
-    let name: Arc<str> = Arc::from(name.clone());
+    let name: Arc<str> = Arc::from(name);
 
     Box::from(Factory {
         tokens,

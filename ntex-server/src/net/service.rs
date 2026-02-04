@@ -30,8 +30,8 @@ impl StreamServer {
         Self {
             notify,
             services,
-            on_accept,
             on_worker_start,
+            on_accept,
         }
     }
 }
@@ -121,31 +121,28 @@ impl ServiceFactory<Connection> for StreamService {
     type Service = StreamServiceImpl;
     type InitError = ();
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _r: ()) -> Result<Self::Service, Self::InitError> {
         let mut tokens = HashMap::default();
         let mut services = Vec::new();
 
         for info in &self.services {
-            match info.factory.create(info.config).await {
-                Ok(svc) => {
-                    log::trace!("Constructed server service for {:?}", info.tokens);
-                    services.push(svc);
-                    let idx = services.len() - 1;
-                    for (token, cfg) in &info.tokens {
-                        tokens.insert(*token, (idx, info.name.clone(), *cfg));
-                    }
+            if let Ok(svc) = info.factory.create(info.config).await {
+                log::trace!("Constructed server service for {:?}", info.tokens);
+                services.push(svc);
+                let idx = services.len() - 1;
+                for (token, cfg) in &info.tokens {
+                    tokens.insert(*token, (idx, info.name.clone(), *cfg));
                 }
-                Err(_) => {
-                    log::error!("Cannot construct service: {:?}", info.tokens);
-                    return Err(());
-                }
+            } else {
+                log::error!("Cannot construct service: {:?}", info.tokens);
+                return Err(());
             }
         }
 
         Ok(StreamServiceImpl {
             tokens,
             services,
-            conns: MAX_CONNS_COUNTER.with(|conns| conns.clone()),
+            conns: MAX_CONNS_COUNTER.with(Clone::clone),
             on_accept: self.on_accept.as_ref().map(|f| f.clone_fn()),
         })
     }
@@ -200,7 +197,7 @@ impl Service<Connection> for StreamServiceImpl {
     }
 
     async fn shutdown(&self) {
-        let _ = join_all(self.services.iter().map(|svc| svc.shutdown())).await;
+        let _ = join_all(self.services.iter().map(Service::shutdown)).await;
         log::info!(
             "Worker service shutdown, {} connections",
             super::num_connections()
@@ -213,7 +210,7 @@ impl Service<Connection> for StreamServiceImpl {
             if let Some(ref f) = self.on_accept {
                 match f.run(name.clone(), io).await {
                     Ok(st) => io = st,
-                    Err(_) => return Err(()),
+                    Err(()) => return Err(()),
                 }
             }
 

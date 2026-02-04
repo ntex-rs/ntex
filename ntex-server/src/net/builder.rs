@@ -1,11 +1,11 @@
+#![allow(clippy::missing_panics_doc)]
 use std::{fmt, io, net, sync::Arc};
-
-use socket2::{Domain, SockAddr, Socket, Type};
 
 use ntex_io::Io;
 use ntex_rt::System;
 use ntex_service::{ServiceFactory, cfg::SharedCfg};
 use ntex_util::time::Millis;
+use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::{Server, WorkerPool};
 
@@ -51,13 +51,14 @@ impl fmt::Debug for ServerBuilder {
 }
 
 impl ServerBuilder {
+    #[must_use]
     /// Create new Server builder instance
     pub fn new() -> ServerBuilder {
         let sys = System::current();
         let mut accept = AcceptLoop::default();
         accept.name(sys.name());
         if sys.testing() {
-            accept.testing()
+            accept.testing();
         }
 
         ServerBuilder {
@@ -73,6 +74,7 @@ impl ServerBuilder {
         }
     }
 
+    #[must_use]
     /// Set server name.
     ///
     /// Name is used for worker thread name
@@ -83,6 +85,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Set number of workers to start.
     ///
     /// By default server uses number of available logical cpu as workers
@@ -92,6 +95,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Set the maximum number of pending connections.
     ///
     /// This refers to the number of clients that can be waiting to be served.
@@ -107,6 +111,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Sets the maximum per-worker number of concurrent connections.
     ///
     /// All socket listeners will stop accepting connections when this limit is
@@ -118,6 +123,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Stop ntex runtime when server get dropped.
     ///
     /// By default "stop runtime" is disabled.
@@ -126,6 +132,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Disable signal handling.
     ///
     /// By default signal handling is enabled.
@@ -134,6 +141,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Enable cpu affinity
     ///
     /// By default affinity is disabled.
@@ -142,6 +150,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Timeout for graceful workers shutdown.
     ///
     /// After receiving a stop signal, workers have this much time to finish
@@ -154,6 +163,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Set server status handler.
     ///
     /// Server calls this handler on every inner status update.
@@ -186,6 +196,7 @@ impl ServerBuilder {
         Ok(self)
     }
 
+    #[must_use]
     /// Register async service configuration function.
     ///
     /// This function get called during worker runtime configuration stage.
@@ -199,6 +210,7 @@ impl ServerBuilder {
         self
     }
 
+    #[must_use]
     /// Register on-accept callback function.
     ///
     /// This function get called with accepted stream.
@@ -309,7 +321,12 @@ impl ServerBuilder {
         Ok(self)
     }
 
-    /// Set shared config for named service.
+    #[must_use]
+    /// Set shared config for named service
+    ///
+    /// # Panics
+    ///
+    /// Panics if named service is not registered
     pub fn config<N, U>(mut self, name: N, cfg: U) -> Self
     where
         N: AsRef<str>,
@@ -382,17 +399,15 @@ pub fn bind_addr<S: net::ToSocketAddrs>(
         }
     }
 
-    if !succ {
-        if let Some(e) = err.take() {
-            Err(e)
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cannot bind to address.",
-            ))
-        }
-    } else {
+    if succ {
         Ok(sockets)
+    } else if let Some(e) = err.take() {
+        Err(e)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Cannot bind to address.",
+        ))
     }
 }
 

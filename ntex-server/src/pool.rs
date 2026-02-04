@@ -22,13 +22,13 @@ impl Default for WorkerPool {
 }
 
 impl WorkerPool {
+    #[must_use]
     /// Create new Server builder instance
     pub fn new() -> Self {
-        let num = core_affinity::get_core_ids()
-            .map(|v| v.len())
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get)
-            });
+        let num = core_affinity::get_core_ids().map_or_else(
+            || std::thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get),
+            |v| v.len(),
+        );
 
         WorkerPool {
             num,
@@ -40,6 +40,7 @@ impl WorkerPool {
         }
     }
 
+    #[must_use]
     /// Set workers name.
     ///
     /// Name is used for worker thread name
@@ -48,6 +49,7 @@ impl WorkerPool {
         self
     }
 
+    #[must_use]
     /// Set number of workers to start.
     ///
     /// By default server uses number of available logical cpu as workers
@@ -57,6 +59,7 @@ impl WorkerPool {
         self
     }
 
+    #[must_use]
     /// Stop current ntex runtime when manager get dropped.
     ///
     /// By default "stop runtime" is disabled.
@@ -65,6 +68,7 @@ impl WorkerPool {
         self
     }
 
+    #[must_use]
     /// Disable signal handling.
     ///
     /// By default signal handling is enabled.
@@ -73,6 +77,7 @@ impl WorkerPool {
         self
     }
 
+    #[must_use]
     /// Timeout for graceful workers shutdown.
     ///
     /// After receiving a stop signal, workers have this much time to finish
@@ -85,6 +90,7 @@ impl WorkerPool {
         self
     }
 
+    #[must_use]
     /// Enable core affinity
     ///
     /// By default affinity is disabled.

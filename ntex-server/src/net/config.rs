@@ -289,7 +289,11 @@ impl ServiceRuntime {
     /// Register service.
     ///
     /// Name of the service must be registered during configuration stage with
-    /// *ServiceConfig::bind()* or *ServiceConfig::listen()* methods.
+    /// `ServiceConfig::bind()` or `ServiceConfig::listen()` methods.
+    ///
+    /// # Panics
+    ///
+    /// Panics if service with specified name is registered already
     pub fn service<T, F>(&self, name: &str, service: F) -> &Self
     where
         F: IntoServiceFactory<T, Io, SharedCfg>,

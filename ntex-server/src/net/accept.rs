@@ -1,3 +1,4 @@
+#![allow(clippy::missing_panics_doc)]
 use std::time::{Duration, Instant};
 use std::{cell::Cell, fmt, io, sync::Arc, sync::mpsc, thread};
 use std::{collections::VecDeque, num::NonZeroUsize};
@@ -172,7 +173,7 @@ impl Accept {
         let sys = System::current();
         let _ = thread::Builder::new().name(name).spawn(move || {
             System::set_current(sys);
-            Accept::new(tx, rx, poller, socks, srv, notify, testing, status_handler).poll()
+            Accept::new(tx, rx, poller, socks, srv, notify, testing, status_handler).poll();
         });
     }
 
@@ -188,7 +189,7 @@ impl Accept {
         status_handler: Option<Box<dyn FnMut(ServerStatus) + Send>>,
     ) -> Accept {
         let mut sockets = Vec::new();
-        for (hnd_token, lst) in socks.into_iter() {
+        for (hnd_token, lst) in socks {
             sockets.push(ServerSocketInfo {
                 addr: lst.local_addr(),
                 sock: lst,
@@ -214,7 +215,7 @@ impl Accept {
 
     fn update_status(&mut self, st: ServerStatus) {
         if let Some(ref mut hnd) = self.status_handler {
-            (*hnd)(st)
+            (*hnd)(st);
         }
     }
 
@@ -227,9 +228,10 @@ impl Accept {
             events.clear();
 
             if let Err(e) = self.poller.wait(&mut events, timeout) {
-                if e.kind() != io::ErrorKind::Interrupted {
-                    panic!("Cannot wait for events in poller: {e}")
-                }
+                assert!(
+                    e.kind() == io::ErrorKind::Interrupted,
+                    "Cannot wait for events in poller: {e}"
+                );
             } else if timeout.is_some() {
                 timeout = None;
                 let _ = self.tx.take().unwrap().send(());
@@ -245,11 +247,11 @@ impl Accept {
             }
 
             match self.process_cmd() {
-                Either::Left(_) => events.clear(),
+                Either::Left(()) => events.clear(),
                 Either::Right(rx) => {
                     // cleanup
                     for info in self.sockets.drain(..) {
-                        info.sock.remove_source()
+                        info.sock.remove_source();
                     }
                     log::info!("Accept loop has been stopped");
 
@@ -434,7 +436,7 @@ impl Accept {
                     }
                     Ok(None) => return true,
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return true,
-                    Err(ref e) if connection_error(e) => continue,
+                    Err(ref e) if connection_error(e) => (),
                     Err(e) => {
                         log::error!("Error accepting socket: {e}");
 

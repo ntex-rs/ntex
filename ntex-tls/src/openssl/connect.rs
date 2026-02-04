@@ -24,7 +24,7 @@ pub struct SslConnectorService<S> {
 }
 
 impl<A: Address> SslConnector<Connector<A>> {
-    /// Construct new OpensslConnectService factory
+    /// Construct new `OpensslConnectService` factory
     pub fn new(connector: OpensslConnector) -> Self {
         SslConnector {
             openssl: connector,
@@ -93,7 +93,7 @@ where
                         log::trace!("{tag}: SSL Handshake error: {e:?}");
                         Err(e.into())
                     }
-                    Err(_) => {
+                    Err(()) => {
                         log::trace!("{tag}: SSL Handshake timeout");
                         Err(io::Error::new(
                             io::ErrorKind::TimedOut,
