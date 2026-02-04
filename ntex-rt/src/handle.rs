@@ -2,6 +2,7 @@ use std::{fmt, pin::Pin, task::Context, task::Poll, task::ready};
 
 use async_task::Task;
 
+#[derive(Debug)]
 /// A spawned task.
 pub struct JoinHandle<T> {
     task: Option<Task<T>>,

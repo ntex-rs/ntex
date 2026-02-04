@@ -1,5 +1,12 @@
-#![allow(clippy::type_complexity, clippy::let_underscore_future)]
 //! A runtime implementation that runs everything on the current thread.
+#![deny(clippy::pedantic)]
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::let_underscore_future
+)]
+
 mod arbiter;
 mod builder;
 mod driver;

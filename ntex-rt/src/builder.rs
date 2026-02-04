@@ -1,4 +1,4 @@
-use std::{future::Future, io, marker::PhantomData, rc::Rc, sync::Arc, time};
+use std::{fmt, future::Future, io, marker::PhantomData, rc::Rc, sync::Arc, time};
 
 use async_channel::unbounded;
 
@@ -42,27 +42,33 @@ impl Builder {
         }
     }
 
+    #[must_use]
     /// Sets the name of the System.
     pub fn name<N: AsRef<str>>(mut self, name: N) -> Self {
         self.name = name.as_ref().into();
         self
     }
 
-    /// Sets the option 'stop_on_panic' which controls whether the System is stopped when an
+    #[must_use]
+    /// Sets the option `stop_on_panic`
+    ///
+    /// It controls whether the System is stopped when an
     /// uncaught panic is thrown from a worker thread.
     ///
-    /// Defaults to false.
+    /// Defaults is set to false.
     pub fn stop_on_panic(mut self, stop_on_panic: bool) -> Self {
         self.stop_on_panic = stop_on_panic;
         self
     }
 
+    #[must_use]
     /// Sets the size of the stack (in bytes) for the new thread.
     pub fn stack_size(mut self, size: usize) -> Self {
         self.stack_size = size;
         self
     }
 
+    #[must_use]
     /// Sets ping interval for spawned arbiters.
     ///
     /// Interval is in milliseconds. By default 5000 milliseconds is set.
@@ -72,6 +78,7 @@ impl Builder {
         self
     }
 
+    #[must_use]
     /// Set the thread number limit of the inner thread pool, if exists. The
     /// default value is 256.
     pub fn thread_pool_limit(mut self, value: usize) -> Self {
@@ -79,12 +86,14 @@ impl Builder {
         self
     }
 
+    #[must_use]
     /// Mark system as testing
     pub fn testing(mut self) -> Self {
         self.testing = true;
         self
     }
 
+    #[must_use]
     /// Set the waiting timeout of the inner thread, if exists. The default is
     /// 60 seconds.
     pub fn thread_pool_recv_timeout<T>(mut self, timeout: T) -> Self
@@ -241,5 +250,15 @@ impl SystemRunner {
                 fut.await
             })
             .await
+    }
+}
+
+impl fmt::Debug for SystemRunner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SystemRunner")
+            .field("system", &self.system)
+            .field("support", &self.support)
+            .field("config", &self.config)
+            .finish()
     }
 }

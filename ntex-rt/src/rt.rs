@@ -10,6 +10,7 @@ use crate::{driver::Driver, driver::Notify, driver::PollResult, handle::JoinHand
 
 scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
 
+#[derive(Debug)]
 /// The async runtime for ntex
 ///
 /// It is a thread local runtime, and cannot be sent to other threads.
@@ -97,8 +98,13 @@ impl Runtime {
         }
     }
 
-    /// Runs the provided future, blocking the current thread until the future
-    /// completes
+    /// Runs the provided future
+    ///
+    /// Blocking the current thread until the future completes
+    ///
+    /// # Panics
+    ///
+    /// Call may panic if driver fails to run provided future
     pub fn block_on<F: Future>(&self, future: F, driver: &dyn Driver) -> F::Output {
         self.stop.set(false);
 
@@ -122,7 +128,7 @@ impl Drop for Runtime {
     fn drop(&mut self) {
         CURRENT_RUNTIME.set(self, || {
             self.queue.clear();
-        })
+        });
     }
 }
 
@@ -137,7 +143,7 @@ impl Handle {
     ///
     /// Panics if runtime is not set
     pub fn current() -> Handle {
-        Runtime::with_current(|rt| rt.handle())
+        Runtime::with_current(Runtime::handle)
     }
 
     /// Wake up runtime

@@ -1,4 +1,4 @@
-use std::{cell::Cell, panic, ptr};
+use std::{cell::Cell, ptr};
 
 thread_local! {
     static CB: Cell<*const Callbacks> = const { Cell::new(ptr::null()) };
@@ -18,7 +18,7 @@ pub(crate) struct Data {
 
 impl Data {
     pub(crate) fn load() -> Option<Data> {
-        let cb = CB.with(|cb| cb.get());
+        let cb = CB.with(Cell::get);
 
         if let Some(cb) = unsafe { cb.as_ref() }
             && let Some(ptr) = (*cb.before)()
@@ -41,7 +41,7 @@ impl Data {
 
 impl Drop for Data {
     fn drop(&mut self) {
-        (*self.cb.after)(self.ptr)
+        (*self.cb.after)(self.ptr);
     }
 }
 
@@ -67,9 +67,7 @@ pub unsafe fn task_callbacks<FBefore, FEnter, FExit, FAfter>(
     FAfter: Fn(*const ()) + 'static,
 {
     CB.with(|cb| {
-        if !cb.get().is_null() {
-            panic!("Spawn callbacks already set");
-        }
+        assert!(cb.get().is_null(), "Spawn callbacks already set");
 
         let new: *mut Callbacks = Box::leak(Box::new(Callbacks {
             before: Box::new(before),
@@ -102,13 +100,13 @@ where
     FAfter: Fn(*const ()) + 'static,
 {
     CB.with(|cb| {
-        if !cb.get().is_null() {
-            false
-        } else {
+        if cb.get().is_null() {
             unsafe {
                 task_callbacks(before, enter, exit, after);
             }
             true
+        } else {
+            false
         }
     })
 }

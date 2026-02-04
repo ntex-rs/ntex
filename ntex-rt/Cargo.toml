@@ -17,6 +17,9 @@ rust-version = "1.88"
 name = "ntex_rt"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 
