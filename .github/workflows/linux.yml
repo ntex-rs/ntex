@@ -33,43 +33,41 @@ jobs:
         uses: Swatinem/rust-cache@v2.8.2
 
       - name: Run tests (neon-polling)
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           cargo nextest run --retries=3 --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run doc tests (neon-polling)
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           cargo test --doc --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (neon-uring)
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           cargo nextest run --retries=3 --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run doc tests (neon-uring)
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           cargo test --doc --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (tokio)
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           cargo nextest run --retries=3 --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run doc tests (tokio)
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           cargo test --doc --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (compio)
-        timeout-minutes: 15
-        if: matrix.version != '1.86.0'
+        timeout-minutes: 10
         run: |
           cargo nextest run --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run doc tests (compio)
-        timeout-minutes: 15
-        if: matrix.version != '1.86.0'
+        timeout-minutes: 10
         run: |
           cargo test --doc --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
