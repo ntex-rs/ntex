@@ -13,6 +13,21 @@ impl<T> JoinHandle<T> {
         JoinHandle { task: Some(task) }
     }
 
+    /// Cancels the task
+    pub fn cancel(mut self) {
+        if let Some(t) = self.task.take() {
+            drop(t.cancel());
+        }
+    }
+
+    /// Detaches the task to let it keep running in the background
+    pub fn detach(mut self) {
+        if let Some(t) = self.task.take() {
+            t.detach();
+        }
+    }
+
+    /// Returns true if the current task is finished
     pub fn is_finished(&self) -> bool {
         match &self.task {
             Some(fut) => fut.is_finished(),

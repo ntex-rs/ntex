@@ -1,7 +1,7 @@
 //! Time wheel based timer service.
 //!
 //! Inspired by linux kernel timers system
-#![allow(arithmetic_overflow, clippy::let_underscore_future)]
+#![allow(arithmetic_overflow)]
 use std::time::{Duration, Instant, SystemTime};
 use std::{cell::Cell, cmp::max, future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
 
@@ -630,7 +630,7 @@ impl TimerDriver {
         timer.flags.set(flags);
         inner.driver_sleep = Delay::new(Duration::from_millis(timer.next_expiry_ms()));
 
-        let _ = crate::spawn(TimerDriver(timer));
+        crate::spawn(TimerDriver(timer));
     }
 }
 
@@ -693,7 +693,7 @@ impl LowresTimerDriver {
         timer.flags.set(flags);
         inner.lowres_driver_sleep = Delay::new(LOWRES_RESOLUTION);
 
-        let _ = crate::spawn(LowresTimerDriver(timer));
+        crate::spawn(LowresTimerDriver(timer));
     }
 }
 

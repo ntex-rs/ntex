@@ -552,7 +552,6 @@ mod tests {
     }
 
     #[crate::rt_test]
-    #[allow(clippy::let_underscore_future)]
     async fn test_basics() {
         let mut req = Client::new()
             .await
@@ -579,7 +578,7 @@ mod tests {
         assert_eq!(req.get_version(), &Version::HTTP_2);
         assert_eq!(req.get_method(), Method::PUT);
         let _ = req.headers_mut();
-        let _ = req.send_body("");
+        let _ = req.send_body("").await;
     }
 
     #[crate::rt_test]

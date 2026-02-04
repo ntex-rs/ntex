@@ -14,7 +14,6 @@
     missing_docs,
     clippy::borrow_interior_mutable_const,
     clippy::cast_possible_truncation,
-    clippy::let_underscore_future,
     clippy::missing_errors_doc,
     clippy::missing_fields_in_debug,
     clippy::missing_panics_doc,

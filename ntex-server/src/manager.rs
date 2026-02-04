@@ -69,7 +69,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
         }));
 
         // handle cmd
-        let _ = ntex_rt::spawn(handle_cmd(mgr.clone(), rx));
+        ntex_rt::spawn(handle_cmd(mgr.clone(), rx));
 
         // Retrieve the IDs of all active CPU cores.
         let mut cores = if affinity {
@@ -138,7 +138,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
 }
 
 fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreId>) {
-    let _ = ntex_rt::spawn(async move {
+    ntex_rt::spawn(async move {
         let id = mgr.next_id();
         let name = format!("{}:worker:{}", mgr.0.cfg.name, id.0);
         let mut wrk = Worker::start(name.clone(), mgr.factory(), cid);
@@ -258,7 +258,7 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 let _ = timeout(to, join_all(futs)).await;
             } else {
                 self.workers.iter().for_each(|worker| {
-                    let _ = worker.stop(Millis::ZERO);
+                    worker.stop(Millis::ZERO);
                 });
             }
         }

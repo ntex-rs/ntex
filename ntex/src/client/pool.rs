@@ -286,7 +286,7 @@ impl Inner {
                     || (now - conn.created) > self.conn_lifetime
                 {
                     if let ConnectionType::H1(io) = conn.io {
-                        let _ = spawn(async move {
+                        spawn(async move {
                             let _ = io.shutdown().await;
                         });
                     }
@@ -448,8 +448,7 @@ impl OpenConnection {
     ) {
         let fut = pipeline.call_static(msg);
 
-        // #[allow(clippy::redundant_async_block)]
-        let _ = spawn(async move {
+        spawn(async move {
             OpenConnection {
                 tx: Some(tx),
                 key: key.clone(),
@@ -604,7 +603,7 @@ impl Acquired {
                 );
                 match io {
                     ConnectionType::H1(io) => {
-                        let _ = spawn(async move {
+                        spawn(async move {
                             let _ = io.shutdown().await;
                         });
                     }

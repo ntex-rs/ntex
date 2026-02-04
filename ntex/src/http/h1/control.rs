@@ -324,7 +324,7 @@ impl<F: Filter> Upgrade<F> {
         R: Future<Output = O>,
     {
         let io = self.io.take();
-        let _ = crate::rt::spawn(async move {
+        crate::rt::spawn(async move {
             let _ = f(self.req, io, self.codec).await;
         });
         ControlAck {

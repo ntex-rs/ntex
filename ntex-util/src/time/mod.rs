@@ -361,7 +361,6 @@ impl crate::Stream for Interval {
 }
 
 #[cfg(test)]
-#[allow(clippy::let_underscore_future)]
 mod tests {
     use futures_util::StreamExt;
     use std::{future::poll_fn, rc::Rc, time};
@@ -374,7 +373,7 @@ mod tests {
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
     #[ntex::test]
     async fn lowres_time_does_not_immediately_change() {
-        let _ = sleep(Seconds(1));
+        sleep(Millis(25)).await;
 
         assert_eq!(now(), now());
     }
@@ -385,7 +384,7 @@ mod tests {
     /// and second value is greater than the first one at least by a 1ms interval.
     #[ntex::test]
     async fn lowres_time_updates_after_resolution_interval() {
-        let _ = sleep(Seconds(1));
+        sleep(Millis(50)).await;
 
         let first_time = now();
 
@@ -400,7 +399,7 @@ mod tests {
     /// Expected Behavior: Two back-to-back calls of `now()` return the same value.
     #[ntex::test]
     async fn system_time_service_time_does_not_immediately_change() {
-        let _ = sleep(Seconds(1));
+        sleep(Seconds(1)).await;
 
         assert_eq!(system_time(), system_time());
         assert_eq!(system_time(), query_system_time());
@@ -412,7 +411,7 @@ mod tests {
     /// and second value is greater than the first one at least by a resolution interval.
     #[ntex::test]
     async fn system_time_service_time_updates_after_resolution_interval() {
-        let _ = sleep(Seconds(1));
+        sleep(Millis(100)).await;
 
         let wait_time = 300;
 
@@ -434,7 +433,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_sleep_0() {
-        let _ = sleep(Seconds(1));
+        sleep(Seconds(1)).await;
 
         let first_time = now();
         sleep(Millis(0)).await;
@@ -477,7 +476,7 @@ mod tests {
 
     #[ntex::test]
     async fn test_deadline() {
-        let _ = sleep(Seconds(1));
+        sleep(Seconds(1)).await;
 
         let first_time = now();
         let dl = deadline(Millis(1));

@@ -219,7 +219,7 @@ impl TestServer {
 
     /// Stop http server by stopping the runtime.
     pub fn stop(&self) {
-        let _ = self.server.stop(true);
+        drop(self.server.stop(true));
     }
 
     /// Get first available unused address
@@ -241,7 +241,7 @@ impl TestServer {
 impl Drop for TestServer {
     fn drop(&mut self) {
         log::debug!("Stopping test server {:?}", self.id);
-        let _ = self.server.stop(false);
+        drop(self.server.stop(false));
         thread::sleep(time::Duration::from_millis(75));
         self.system.stop();
         thread::sleep(time::Duration::from_millis(25));

@@ -84,7 +84,7 @@ where
     if !eof {
         // sending body is async process, we can handle upload and download
         // at the same time
-        let _ = crate::rt::spawn(async move {
+        crate::rt::spawn(async move {
             if let Err(e) = send_body(body, &snd_stream).await {
                 log::error!("{}: Cannot send body: {e:?}", snd_stream.tag());
                 snd_stream.reset(frame::Reason::INTERNAL_ERROR);
@@ -133,7 +133,7 @@ async fn get_response(
                         );
                         let (pl, payload) = H2Payload::create(stream.empty_capacity());
 
-                        let _ = crate::rt::spawn(async move {
+                        crate::rt::spawn(async move {
                             loop {
                                 let h2::Message { stream, kind } = match select(
                                     rcv_stream.recv(),

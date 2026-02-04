@@ -194,8 +194,8 @@ impl SystemRunner {
         config.block_on(async move {
             f()?;
 
-            let _ = crate::spawn(support.run());
-            let _ = crate::spawn(controller.run());
+            crate::spawn(support.run());
+            crate::spawn(controller.run());
             match stop.await {
                 Ok(code) => {
                     if code != 0 {
@@ -223,8 +223,8 @@ impl SystemRunner {
         } = self;
 
         config.block_on(async move {
-            let _ = crate::spawn(support.run());
-            let _ = crate::spawn(controller.run());
+            crate::spawn(support.run());
+            crate::spawn(controller.run());
             fut.await
         })
     }
@@ -245,8 +245,8 @@ impl SystemRunner {
         // run loop
         tok_io::task::LocalSet::new()
             .run_until(async move {
-                let _ = crate::spawn(support.run());
-                let _ = crate::spawn(controller.run());
+                crate::spawn(support.run());
+                crate::spawn(controller.run());
                 fut.await
             })
             .await
