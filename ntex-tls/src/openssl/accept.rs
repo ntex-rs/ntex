@@ -86,6 +86,7 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
             let inner = super::IoInner {
                 source: None,
                 destination: None,
+                stopped: false,
             };
             let filter = SslFilter {
                 inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),

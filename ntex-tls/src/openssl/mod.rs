@@ -32,6 +32,7 @@ pub struct SslFilter {
 struct IoInner {
     source: Option<BytesMut>,
     destination: Option<BytesMut>,
+    stopped: bool,
 }
 
 impl io::Read for IoInner {
@@ -125,6 +126,9 @@ impl FilterLayer for SslFilter {
     }
 
     fn shutdown(&self, buf: &WriteBuf<'_>) -> io::Result<Poll<()>> {
+        if self.inner.borrow().get_ref().stopped {
+            return Ok(Poll::Ready(()));
+        }
         let ssl_result = self.with_buffers(buf, || self.inner.borrow_mut().shutdown());
 
         match ssl_result {
@@ -165,7 +169,7 @@ impl FilterLayer for SslFilter {
                                 Ok(new_bytes)
                             }
                             Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                                log::debug!("{}: SSL Error: {:?}", buf.tag(), e);
+                                self.inner.borrow_mut().get_mut().stopped = true;
                                 buf.want_shutdown();
                                 Ok(new_bytes)
                             }
@@ -219,6 +223,7 @@ pub async fn connect<F: Filter>(
     let inner = IoInner {
         source: None,
         destination: None,
+        stopped: false,
     };
     let filter = SslFilter {
         inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),

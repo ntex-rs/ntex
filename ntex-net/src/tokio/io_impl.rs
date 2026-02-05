@@ -66,9 +66,9 @@ where
         .await;
     }
 
-    let _ = poll_fn(|cx| Pin::new(&mut *io.borrow_mut()).poll_shutdown(cx)).await;
+    let result = poll_fn(|cx| Pin::new(&mut *io.borrow_mut()).poll_shutdown(cx)).await;
 
-    log::trace!("{}: Shutdown complete", ctx.tag());
+    log::trace!("{}: Shutdown complete, result {result:?}", ctx.tag());
     if !ctx.is_stopped() {
         ctx.stop(None);
     }

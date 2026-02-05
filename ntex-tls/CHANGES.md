@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.1] - 2026-02-05
+
+* Fix openssl disconnect handling
+
 ## [3.1.0] - 2025-12-17
 
 * Upgrade to ntex-service v4
