@@ -126,13 +126,10 @@ impl FilterLayer for SslFilter {
     }
 
     fn shutdown(&self, buf: &WriteBuf<'_>) -> io::Result<Poll<()>> {
-        let ssl_result = {
-            let mut inner = self.inner.borrow_mut();
-            if inner.get_ref().stopped {
-                return Ok(Poll::Ready(()));
-            }
-            self.with_buffers(buf, || inner.shutdown())
-        };
+        if self.inner.borrow().get_ref().stopped {
+            return Ok(Poll::Ready(()));
+        }
+        let ssl_result = self.with_buffers(buf, || self.inner.borrow_mut().shutdown());
 
         match ssl_result {
             Ok(ssl::ShutdownResult::Sent) => Ok(Poll::Pending),
