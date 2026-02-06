@@ -91,7 +91,7 @@ mod tests {
     use std::{cell::Cell, cell::RefCell, rc::Rc, task::Poll, time::Duration};
 
     use async_channel as mpmc;
-    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
+    use ntex_service::{Pipeline, apply, fn_factory};
 
     use super::*;
     use crate::{channel::oneshot, future::lazy};
