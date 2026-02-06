@@ -1,5 +1,11 @@
 # Changes
 
+## [4.1.0] - 2026-02-06
+
+* Add Middleware::apply() helper method
+
+* Add ServiceFactory::boxed() helper method
+
 ## [4.0.0] - 2025-12-17
 
 * Replace Middleware with Middleware2

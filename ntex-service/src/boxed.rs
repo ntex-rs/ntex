@@ -8,7 +8,7 @@ pub struct BoxServiceFactory<Cfg, Req, Res, Err, InitErr>(
     Box<dyn ServiceFactoryObj<Req, Cfg, Response = Res, Error = Err, InitError = InitErr>>,
 );
 
-/// Create boxed service factory
+/// Creates a boxed service factory.
 pub fn factory<F, R, C>(
     factory: F,
 ) -> BoxServiceFactory<C, R, F::Response, F::Error, F::InitError>
@@ -21,7 +21,7 @@ where
     BoxServiceFactory(Box::new(factory))
 }
 
-/// Create boxed service
+/// Creates a boxed service.
 pub fn service<S, R>(service: S) -> BoxService<R, S::Response, S::Error>
 where
     R: 'static,
