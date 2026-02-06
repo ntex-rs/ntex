@@ -1,5 +1,9 @@
 # Changes
 
+## [3.1.0] 2026-02-06
+
+* Fix apply_fn/apply_fn_factory usage
+
 ## [3.0.1] 2026-02-03
 
 * Clippy warnings
