@@ -746,17 +746,15 @@ impl WsConnection<Sealed> {
     {
         let service = apply_fn(
             service.into_service().map_err(WsError::Service),
-            |req, svc| async move {
-                match req {
-                    DispatchItem::<ws::Codec>::Item(item) => svc.call(item).await,
-                    DispatchItem::Control(_) => Ok(None),
-                    DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
-                    DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
-                    DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
-                        Err(WsError::Protocol(e))
-                    }
-                    DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
+            async move |req, svc| match req {
+                DispatchItem::<ws::Codec>::Item(item) => svc.call(item).await,
+                DispatchItem::Control(_) => Ok(None),
+                DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
+                DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
+                DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+                    Err(WsError::Protocol(e))
                 }
+                DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
             },
         );
 

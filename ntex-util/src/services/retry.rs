@@ -133,7 +133,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
+    use ntex_service::{Pipeline, apply, fn_factory};
 
     use super::*;
 

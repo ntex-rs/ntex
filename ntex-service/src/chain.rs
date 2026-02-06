@@ -1,5 +1,5 @@
 #![allow(clippy::type_complexity)]
-use std::{fmt, future::Future, marker::PhantomData};
+use std::{fmt, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::apply::{Apply, ApplyFactory};
@@ -122,20 +122,16 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     /// Use function as middleware for current service.
     ///
     /// Short version of `apply_fn(chain(...), fn)`
-    pub fn apply_fn<F, R, In, Out, Err>(
+    pub fn apply_fn<F, In, Out, Err>(
         self,
         f: F,
-    ) -> ServiceChain<Apply<Svc, Req, F, R, In, Out, Err>, In>
+    ) -> ServiceChain<Apply<Svc, Req, F, In, Out, Err>, In>
     where
-        F: Fn(In, Pipeline<Svc>) -> R,
-        R: Future<Output = Result<Out, Err>>,
+        F: AsyncFn(In, &Pipeline<Svc>) -> Result<Out, Err>,
         Svc: Service<Req>,
         Err: From<Svc::Error>,
     {
-        ServiceChain {
-            service: Apply::new(self.service, f),
-            _t: PhantomData,
-        }
+        crate::apply_fn(self.service, f)
     }
 
     /// Create service pipeline
@@ -187,8 +183,8 @@ impl<Svc: Service<Req>, Req> Service<Req> for ServiceChain<Svc, Req> {
 
 /// Service factory builder
 pub struct ServiceChainFactory<Fac, Req, C = ()> {
-    factory: Fac,
-    _t: PhantomData<(Req, C)>,
+    pub(crate) factory: Fac,
+    pub(crate) _t: PhantomData<(Req, C)>,
 }
 
 impl<Fac: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<Fac, Req, C> {
@@ -215,29 +211,22 @@ impl<Fac: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<Fac, Req, C> {
     where
         U: Middleware<Fac::Service, C>,
     {
-        ServiceChainFactory {
-            factory: ApplyMiddleware::new(tr, self.factory),
-            _t: PhantomData,
-        }
+        crate::apply(tr, self.factory)
     }
 
     /// Apply function middleware to current service factory.
     ///
     /// Short version of `apply_fn_factory(chain_factory(...), fn)`
-    pub fn apply_fn<F, R, In, Out, Err>(
+    pub fn apply_fn<F, In, Out, Err>(
         self,
         f: F,
-    ) -> ServiceChainFactory<ApplyFactory<Fac, Req, C, F, R, In, Out, Err>, In, C>
+    ) -> ServiceChainFactory<ApplyFactory<Fac, Req, C, F, In, Out, Err>, In, C>
     where
-        F: Fn(In, Pipeline<Fac::Service>) -> R + Clone,
-        R: Future<Output = Result<Out, Err>>,
+        F: AsyncFn(In, &Pipeline<Fac::Service>) -> Result<Out, Err> + Clone,
         Fac: ServiceFactory<Req, C>,
         Err: From<Fac::Error>,
     {
-        ServiceChainFactory {
-            factory: ApplyFactory::new(self.factory, f),
-            _t: PhantomData,
-        }
+        crate::apply_fn_factory(self.factory, f)
     }
 
     /// Create chain factory to chain on a computation for when a call to the

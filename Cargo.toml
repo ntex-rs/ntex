@@ -23,7 +23,7 @@ repository = "https://github.com/ntex-rs/ntex"
 documentation = "https://docs.rs/ntex/"
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.88"
 
 [workspace.lints.rust]
 async_fn_in_trait =  { level = "allow", priority = -1 }
@@ -51,7 +51,7 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
-ntex = "3.0.1"
+ntex = "3.1.0"
 ntex-bytes = "1.5.0"
 ntex-codec = "1.1.0"
 ntex-io = "3.7.1"
@@ -61,7 +61,7 @@ ntex-http = "1.0.0"
 ntex-router = "1.0.0"
 ntex-rt = "3.7.0"
 ntex-server = "3.6.0"
-ntex-service = "4.1.0"
+ntex-service = "4.2.0"
 ntex-tls = "3.2.0"
 ntex-macros = "3.1.0"
 ntex-util = "3.4.0"

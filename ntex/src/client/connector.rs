@@ -45,7 +45,7 @@ impl Connector {
     pub fn new() -> Connector {
         let conn = Connector {
             connector: boxed::factory(
-                apply_fn_factory(TcpConnector::new(), |msg: Connect, svc| async move {
+                apply_fn_factory(TcpConnector::new(), async move |msg: Connect, svc| {
                     svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
                 })
                 .map(IoBoxed::from)
@@ -147,7 +147,7 @@ impl Connector {
         IoBoxed: From<T::Response>,
     {
         self.connector = boxed::factory(
-            apply_fn_factory(connector, |msg: Connect, svc| async move {
+            apply_fn_factory(connector, async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
             .map(IoBoxed::from)
@@ -166,7 +166,7 @@ impl Connector {
         IoBoxed: From<T::Response>,
     {
         self.secure_connector = Some(boxed::factory(
-            apply_fn_factory(connector, |msg: Connect, svc| async move {
+            apply_fn_factory(connector, async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
             .map(IoBoxed::from)

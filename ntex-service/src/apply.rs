@@ -1,55 +1,53 @@
 #![allow(clippy::type_complexity)]
-use std::{fmt, future::Future, marker};
+use std::{fmt, marker};
 
-use super::{
+use crate::dev::{ServiceChain, ServiceChainFactory};
+use crate::{
     IntoService, IntoServiceFactory, Pipeline, Service, ServiceCtx, ServiceFactory,
 };
 
 /// Apply transform function to a service.
-pub fn apply_fn<T, Req, F, R, In, Out, Err, U>(
+pub fn apply_fn<T, Req, F, In, Out, Err, U>(
     service: U,
     f: F,
-) -> Apply<T, Req, F, R, In, Out, Err>
+) -> ServiceChain<Apply<T, Req, F, In, Out, Err>, In>
 where
     T: Service<Req>,
-    F: Fn(In, Pipeline<T>) -> R,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err>,
     U: IntoService<T, Req>,
     Err: From<T::Error>,
 {
-    Apply::new(service.into_service(), f)
+    crate::chain(Apply::new(service.into_service(), f))
 }
 
 /// Service factory that produces `apply_fn` service.
-pub fn apply_fn_factory<T, Req, Cfg, F, R, In, Out, Err, U>(
+pub fn apply_fn_factory<T, Req, Cfg, F, In, Out, Err, U>(
     service: U,
     f: F,
-) -> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
+) -> ServiceChainFactory<ApplyFactory<T, Req, Cfg, F, In, Out, Err>, In, Cfg>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T::Service>) -> Result<Out, Err> + Clone,
     U: IntoServiceFactory<T, Req, Cfg>,
     Err: From<T::Error>,
 {
-    ApplyFactory::new(service.into_factory(), f)
+    crate::chain_factory(ApplyFactory::new(service.into_factory(), f))
 }
 
 /// `Apply` service combinator
-pub struct Apply<T, Req, F, R, In, Out, Err>
+pub struct Apply<T, Req, F, In, Out, Err>
 where
     T: Service<Req>,
 {
     service: Pipeline<T>,
     f: F,
-    r: marker::PhantomData<fn(Req) -> (In, Out, R, Err)>,
+    r: marker::PhantomData<fn(Req) -> (In, Out, Err)>,
 }
 
-impl<T, Req, F, R, In, Out, Err> Apply<T, Req, F, R, In, Out, Err>
+impl<T, Req, F, In, Out, Err> Apply<T, Req, F, In, Out, Err>
 where
     T: Service<Req>,
-    F: Fn(In, Pipeline<T>) -> R,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err>,
     Err: From<T::Error>,
 {
     pub(crate) fn new(service: T, f: F) -> Self {
@@ -61,11 +59,10 @@ where
     }
 }
 
-impl<T, Req, F, R, In, Out, Err> Clone for Apply<T, Req, F, R, In, Out, Err>
+impl<T, Req, F, In, Out, Err> Clone for Apply<T, Req, F, In, Out, Err>
 where
     T: Service<Req> + Clone,
-    F: Fn(In, Pipeline<T>) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
     fn clone(&self) -> Self {
@@ -77,7 +74,7 @@ where
     }
 }
 
-impl<T, Req, F, R, In, Out, Err> fmt::Debug for Apply<T, Req, F, R, In, Out, Err>
+impl<T, Req, F, In, Out, Err> fmt::Debug for Apply<T, Req, F, In, Out, Err>
 where
     T: Service<Req> + fmt::Debug,
 {
@@ -89,11 +86,10 @@ where
     }
 }
 
-impl<T, Req, F, R, In, Out, Err> Service<In> for Apply<T, Req, F, R, In, Out, Err>
+impl<T, Req, F, In, Out, Err> Service<In> for Apply<T, Req, F, In, Out, Err>
 where
     T: Service<Req>,
-    F: Fn(In, Pipeline<T>) -> R,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err>,
     Err: From<T::Error>,
 {
     type Response = Out;
@@ -110,7 +106,7 @@ where
         req: In,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        (self.f)(req, self.service.clone()).await
+        (self.f)(req, &self.service).await
     }
 
     crate::forward_poll!(service);
@@ -118,22 +114,20 @@ where
 }
 
 /// `apply()` service factory
-pub struct ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
+pub struct ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T::Service>) -> Result<Out, Err> + Clone,
 {
     service: T,
     f: F,
-    r: marker::PhantomData<fn(Req, Cfg) -> (R, In, Out)>,
+    r: marker::PhantomData<fn(Req, Cfg) -> (In, Out)>,
 }
 
-impl<T, Req, Cfg, F, R, In, Out, Err> ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, In, Out, Err> ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T::Service>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
     /// Create new `ApplyNewService` new service instance
@@ -146,12 +140,10 @@ where
     }
 }
 
-impl<T, Req, Cfg, F, R, In, Out, Err> Clone
-    for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, In, Out, Err> Clone for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg> + Clone,
-    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T::Service>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
     fn clone(&self) -> Self {
@@ -163,12 +155,10 @@ where
     }
 }
 
-impl<T, Req, Cfg, F, R, In, Out, Err> fmt::Debug
-    for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, In, Out, Err> fmt::Debug for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg> + fmt::Debug,
-    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T::Service>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -179,18 +169,17 @@ where
     }
 }
 
-impl<T, Req, Cfg, F, R, In, Out, Err> ServiceFactory<In, Cfg>
-    for ApplyFactory<T, Req, Cfg, F, R, In, Out, Err>
+impl<T, Req, Cfg, F, In, Out, Err> ServiceFactory<In, Cfg>
+    for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: Fn(In, Pipeline<T::Service>) -> R + Clone,
-    R: Future<Output = Result<Out, Err>>,
+    F: AsyncFn(In, &Pipeline<T::Service>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
     type Response = Out;
     type Error = Err;
 
-    type Service = Apply<T::Service, Req, F, R, In, Out, Err>;
+    type Service = Apply<T::Service, Req, F, In, Out, Err>;
     type InitError = T::InitError;
 
     #[inline]
@@ -245,7 +234,7 @@ mod tests {
     async fn test_call() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = chain(
-            apply_fn(Srv(cnt_sht.clone()), |req: &'static str, svc| async move {
+            apply_fn(Srv(cnt_sht.clone()), async move |req: &'static str, svc| {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
@@ -270,7 +259,7 @@ mod tests {
     async fn test_call_chain() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = chain(Srv(cnt_sht.clone()))
-            .apply_fn(|req: &'static str, svc| async move {
+            .apply_fn(async move |req: &'static str, svc| {
                 svc.call(()).await.unwrap();
                 Ok((req, ()))
             })
@@ -293,7 +282,7 @@ mod tests {
         let new_srv = chain_factory(
             apply_fn_factory(
                 fn_factory(|| async { Ok::<_, ()>(Srv::default()) }),
-                |req: &'static str, srv| async move {
+                async move |req: &'static str, srv| {
                     srv.call(()).await.unwrap();
                     Ok((req, ()))
                 },
@@ -316,7 +305,7 @@ mod tests {
     #[ntex::test]
     async fn test_create_chain() {
         let new_srv = chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
-            .apply_fn(|req: &'static str, srv| async move {
+            .apply_fn(async move |req: &'static str, srv| {
                 srv.call(()).await.unwrap();
                 Ok((req, ()))
             })

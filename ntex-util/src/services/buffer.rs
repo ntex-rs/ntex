@@ -293,7 +293,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
+    use ntex_service::{Pipeline, apply, fn_factory};
     use std::{rc::Rc, time::Duration};
 
     use super::*;

@@ -85,7 +85,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::{Pipeline, ServiceFactory, apply, fn_factory};
+    use ntex_service::{Pipeline, apply, fn_factory};
     use std::{cell::RefCell, time::Duration};
 
     use super::*;

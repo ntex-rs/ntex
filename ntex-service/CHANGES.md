@@ -1,5 +1,9 @@
 # Changes
 
+## [4.2.0] - 2026-02-06
+
+* Refactor apply_fn/apply_fn_factory helpers
+
 ## [4.1.0] - 2026-02-06
 
 * Add Middleware::apply() helper method
