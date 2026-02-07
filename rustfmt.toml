@@ -1,4 +1,10 @@
 max_width = 92
 reorder_imports = true
 use_field_init_shorthand = true
+#chain_width = 60
+#fn_call_width = 50
+edition = "2024"
 single_line_if_else_max_width = 56
+single_line_let_else_max_width = 56
+
+#where_single_line=false

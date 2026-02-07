@@ -4,6 +4,7 @@ use std::{fmt, marker::PhantomData};
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::apply::{Apply, ApplyFactory};
 use crate::ctx::ServiceCtx;
+use crate::inspect::{Inspect, InspectErr, InspectErrFactory, InspectFactory};
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
 use crate::map_init_err::MapInitErr;
@@ -65,9 +66,6 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
 
     /// Chain on a computation for when a call to the service finished,
     /// passing the result of the call to the next service `U`.
-    ///
-    /// Note that this function consumes the receiving pipeline and returns a
-    /// wrapped version of it.
     pub fn then<Next, F>(self, service: F) -> ServiceChain<Then<Svc, Next>, Req>
     where
         Self: Sized,
@@ -85,10 +83,6 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     ///
     /// This function is similar to the `Option::map` or `Iterator::map` where
     /// it will change the type of the underlying service.
-    ///
-    /// Note that this function consumes the receiving service and returns a
-    /// wrapped version of it, similar to the existing `map` methods in the
-    /// standard library.
     pub fn map<F, Res>(self, f: F) -> ServiceChain<Map<Svc, F, Req, Res>, Req>
     where
         Self: Sized,
@@ -105,9 +99,6 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     /// This function is similar to the `Result::map_err` where it will change
     /// the error type of the underlying service. This is useful for example to
     /// ensure that services have the same error type.
-    ///
-    /// Note that this function consumes the receiving service and returns a
-    /// wrapped version of it.
     pub fn map_err<F, Err>(self, f: F) -> ServiceChain<MapErr<Svc, F, Err>, Req>
     where
         Self: Sized,
@@ -115,6 +106,34 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     {
         ServiceChain {
             service: MapErr::new(self.service, f),
+            _t: PhantomData,
+        }
+    }
+
+    /// Calls a function with a reference to the contained value if Ok.
+    ///
+    /// Returns the original result.
+    pub fn inspect<F>(self, f: F) -> ServiceChain<Inspect<Svc, F>, Req>
+    where
+        Self: Sized,
+        F: Fn(&Svc::Response),
+    {
+        ServiceChain {
+            service: Inspect::new(self.service, f),
+            _t: PhantomData,
+        }
+    }
+
+    /// Calls a function with a reference to the contained value if Err.
+    ///
+    /// Returns the original result.
+    pub fn inspect_err<F>(self, f: F) -> ServiceChain<InspectErr<Svc, F>, Req>
+    where
+        Self: Sized,
+        F: Fn(&Svc::Error),
+    {
+        ServiceChain {
+            service: InspectErr::new(self.service, f),
             _t: PhantomData,
         }
     }
@@ -295,6 +314,37 @@ impl<Fac: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<Fac, Req, C> {
     {
         ServiceChainFactory {
             factory: MapInitErr::new(self.factory, f),
+            _t: PhantomData,
+        }
+    }
+
+    /// Calls a function with a reference to the contained value if Ok.
+    ///
+    /// Returns the original result.
+    pub fn inspect<F>(self, f: F) -> ServiceChainFactory<InspectFactory<Fac, F>, Req, C>
+    where
+        Self: Sized,
+        F: Fn(&Fac::Response) + Clone,
+    {
+        ServiceChainFactory {
+            factory: InspectFactory::new(self.factory, f),
+            _t: PhantomData,
+        }
+    }
+
+    /// Calls a function with a reference to the contained value if Err.
+    ///
+    /// Returns the original result.
+    pub fn inspect_err<F>(
+        self,
+        f: F,
+    ) -> ServiceChainFactory<InspectErrFactory<Fac, F>, Req, C>
+    where
+        Self: Sized,
+        F: Fn(&Fac::Error) + Clone,
+    {
+        ServiceChainFactory {
+            factory: InspectErrFactory::new(self.factory, f),
             _t: PhantomData,
         }
     }

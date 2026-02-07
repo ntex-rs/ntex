@@ -16,6 +16,7 @@ mod chain;
 mod ctx;
 mod fn_service;
 mod fn_shutdown;
+mod inspect;
 mod macros;
 mod map;
 mod map_config;
@@ -385,6 +386,7 @@ pub mod dev {
         FnService, FnServiceConfig, FnServiceFactory, FnServiceNoConfig,
     };
     pub use crate::fn_shutdown::FnShutdown;
+    pub use crate::inspect::{InspectErr, InspectErrFactory};
     pub use crate::map::{Map, MapFactory};
     pub use crate::map_config::{MapConfig, UnitConfig};
     pub use crate::map_err::{MapErr, MapErrFactory};

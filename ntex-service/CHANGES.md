@@ -1,5 +1,11 @@
 # Changes
 
+## [4.3.0] - 2026-02-07
+
+* Add .inspect() combinator
+
+* Add .inspect_err() combinator
+
 ## [4.2.0] - 2026-02-06
 
 * Refactor apply_fn/apply_fn_factory helpers
