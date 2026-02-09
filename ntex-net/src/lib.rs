@@ -104,6 +104,7 @@ scoped_tls::scoped_thread_local!(static CURRENT_DRIVER: Box<dyn Reactor>);
 pub struct DefaultRuntime;
 
 impl Runner for DefaultRuntime {
+    #[allow(unused_variables)]
     fn block_on(&self, fut: BlockFuture) {
         #[cfg(feature = "tokio")]
         {
@@ -123,7 +124,7 @@ impl Runner for DefaultRuntime {
             });
         }
 
-        #[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
+        #[cfg(all(unix, not(feature = "tokio"), not(feature = "compio")))]
         {
             #[cfg(feature = "neon-polling")]
             {
