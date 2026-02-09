@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.2] - 2026-02-09
+
+* Fix windows compilation
+
 ## [3.6.0] - 2026-02-01
 
 * Update compio to 0.18
