@@ -17,7 +17,7 @@ where
     U: IntoService<T, Req>,
     Err: From<T::Error>,
 {
-    crate::chain(Apply::new(service.into_service(), f))
+    crate::chain(Apply::new(Pipeline::new(service.into_service()), f))
 }
 
 /// Service factory that produces `apply_fn` service.
@@ -50,10 +50,10 @@ where
     F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err>,
     Err: From<T::Error>,
 {
-    pub(crate) fn new(service: T, f: F) -> Self {
+    pub(crate) fn new(service: Pipeline<T>, f: F) -> Self {
         Apply {
             f,
-            service: Pipeline::new(service),
+            service,
             r: marker::PhantomData,
         }
     }
