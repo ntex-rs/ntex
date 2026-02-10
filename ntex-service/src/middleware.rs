@@ -1,6 +1,7 @@
 use std::{fmt, marker::PhantomData, rc::Rc};
 
-use crate::{IntoServiceFactory, Service, ServiceFactory, dev::ServiceChainFactory};
+use crate::dev::{Apply, ServiceChainFactory};
+use crate::{IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Apply middleware to a service.
 pub fn apply<M, S, R, C, U>(
@@ -213,6 +214,55 @@ where
     }
 }
 
+#[doc(hidden)]
+/// Service factory that produces `middleware` from `Fn`.
+pub fn fn_layer<T, Req, F, In, Out, Err>(f: F) -> FnMiddleware<T, Req, F, In, Out, Err>
+where
+    F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err> + Clone,
+{
+    FnMiddleware { f, r: PhantomData }
+}
+
+#[allow(clippy::type_complexity)]
+/// `FnMiddleware` service combinator
+pub struct FnMiddleware<T, Req, F, In, Out, Err> {
+    f: F,
+    r: PhantomData<fn(T, Req) -> (In, Out, Err)>,
+}
+
+impl<T, Req, F, In, Out, Err> Clone for FnMiddleware<T, Req, F, In, Out, Err>
+where
+    F: Clone,
+{
+    fn clone(&self) -> Self {
+        FnMiddleware {
+            f: self.f.clone(),
+            r: PhantomData,
+        }
+    }
+}
+
+impl<T, Req, F, In, Out, Err> fmt::Debug for FnMiddleware<T, Req, F, In, Out, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FnMiddleware")
+            .field("layer", &std::any::type_name::<F>())
+            .finish()
+    }
+}
+
+impl<T, C, R, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, R, F, In, Out, Err>
+where
+    T: Service<R>,
+    F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err> + Clone,
+    Err: From<T::Error>,
+{
+    type Service = Apply<T, R, F, In, Out, Err>;
+
+    fn create(&self, service: T, _: C) -> Self::Service {
+        Apply::new(Pipeline::new(service), self.f.clone())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::redundant_clone)]
 mod tests {
@@ -343,5 +393,31 @@ mod tests {
         assert_eq!(pl.ready().await, Ok(()));
         pl.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
+    }
+
+    #[ntex::test]
+    async fn fn_middleware_service() {
+        let cnt_sht = Rc::new(Cell::new(0));
+        let cnt_sht2 = cnt_sht.clone();
+        let mw = fn_layer(async move |req: &'static str, svc| {
+            cnt_sht2.set(cnt_sht2.get() + 1);
+            let result = svc.call(1).await?;
+            Ok::<_, ()>((req, result))
+        })
+        .clone();
+        let _ = format!("{mw:?}");
+
+        let svc = Pipeline::new(
+            mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), ()),
+        );
+
+        let res = svc.call("test").await;
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), ("test", 2));
+        let _ = format!("{svc:?}");
+
+        assert_eq!(svc.ready().await, Ok(()));
+        svc.shutdown().await;
+        assert_eq!(cnt_sht.get(), 1);
     }
 }

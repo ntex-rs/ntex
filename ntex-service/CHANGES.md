@@ -1,5 +1,9 @@
 # Changes
 
+## [4.4.0] - 2026-02-11
+
+* Add fn_layer() helper
+
 ## [4.3.0] - 2026-02-07
 
 * Add .inspect() combinator
