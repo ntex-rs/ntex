@@ -2,7 +2,7 @@
 use std::{fmt, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
-use crate::apply::{Apply, ApplyFactory};
+use crate::apply::{Apply, ApplyCtx, ApplyFactory};
 use crate::ctx::ServiceCtx;
 use crate::inspect::{Inspect, InspectErr, InspectErrFactory, InspectFactory};
 use crate::map::{Map, MapFactory};
@@ -146,7 +146,7 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
         f: F,
     ) -> ServiceChain<Apply<Svc, Req, F, In, Out, Err>, In>
     where
-        F: AsyncFn(In, &Pipeline<Svc>) -> Result<Out, Err>,
+        F: AsyncFn(In, &ApplyCtx<'_, Svc>) -> Result<Out, Err>,
         Svc: Service<Req>,
         Err: From<Svc::Error>,
     {
@@ -241,7 +241,7 @@ impl<Fac: ServiceFactory<Req, C>, Req, C> ServiceChainFactory<Fac, Req, C> {
         f: F,
     ) -> ServiceChainFactory<ApplyFactory<Fac, Req, C, F, In, Out, Err>, In, C>
     where
-        F: AsyncFn(In, &Pipeline<Fac::Service>) -> Result<Out, Err> + Clone,
+        F: AsyncFn(In, &ApplyCtx<'_, Fac::Service>) -> Result<Out, Err> + Clone,
         Fac: ServiceFactory<Req, C>,
         Err: From<Fac::Error>,
     {
