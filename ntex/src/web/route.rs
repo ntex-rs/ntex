@@ -51,6 +51,12 @@ impl<Err: ErrorRenderer> Route<Err> {
     }
 }
 
+impl<Err: ErrorRenderer> Default for Route<Err> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Route")
@@ -112,6 +118,7 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
 }
 
 impl<Err: ErrorRenderer> Route<Err> {
+    #[must_use]
     /// Add method guard to the route.
     ///
     /// ```rust
@@ -130,6 +137,7 @@ impl<Err: ErrorRenderer> Route<Err> {
         self
     }
 
+    #[must_use]
     /// Add guard to the route.
     ///
     /// ```rust
@@ -148,6 +156,7 @@ impl<Err: ErrorRenderer> Route<Err> {
         self
     }
 
+    #[must_use]
     /// Set handler function, use request extractors for parameters.
     ///
     /// ```rust

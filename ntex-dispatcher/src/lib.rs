@@ -1,6 +1,6 @@
 //! Framed transport dispatcher
 #![deny(clippy::pedantic)]
-#![allow(clippy::similar_names, clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, ready};
 use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
 
@@ -225,25 +225,26 @@ where
     #[allow(clippy::too_many_lines)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
-        let slf = this.inner;
+        let inner = this.inner;
 
         // handle service response future
-        if let Some(fut) = slf.response.as_mut()
+        if let Some(fut) = inner.response.as_mut()
             && let Poll::Ready(item) = Pin::new(fut).poll(cx)
         {
-            slf.shared.handle_result(item, &slf.shared.io, false);
-            slf.response = None;
+            inner.shared.handle_result(item, &inner.shared.io, false);
+            inner.response = None;
         }
 
         loop {
-            match slf.st {
+            match inner.st {
                 DispatcherState::Processing => {
-                    let (item, nowait) = match ready!(slf.poll_service(cx)) {
+                    let (item, nowait) = match ready!(inner.poll_service(cx)) {
                         PollService::Ready => {
                             // decode incoming bytes if buffer is ready
-                            match slf.shared.io.poll_recv_decode(&slf.shared.codec, cx) {
+                            match inner.shared.io.poll_recv_decode(&inner.shared.codec, cx)
+                            {
                                 Ok(decoded) => {
-                                    slf.update_timer(&decoded);
+                                    inner.update_timer(&decoded);
                                     if let Some(el) = decoded.item {
                                         (DispatchItem::Item(el), true)
                                     } else {
@@ -251,8 +252,8 @@ where
                                     }
                                 }
                                 Err(RecvError::KeepAlive) => {
-                                    if let Err(ctl) = slf.handle_timeout() {
-                                        slf.st = DispatcherState::Stop;
+                                    if let Err(ctl) = inner.handle_timeout() {
+                                        inner.st = DispatcherState::Stop;
                                         (DispatchItem::Stop(ctl), true)
                                     } else {
                                         continue;
@@ -260,7 +261,7 @@ where
                                 }
                                 Err(RecvError::WriteBackpressure) => {
                                     // instruct write task to notify dispatcher when data is flushed
-                                    slf.st = DispatcherState::Backpressure;
+                                    inner.st = DispatcherState::Backpressure;
                                     (
                                         DispatchItem::Control(
                                             Control::WBackPressureEnabled,
@@ -271,19 +272,19 @@ where
                                 Err(RecvError::Decoder(err)) => {
                                     log::trace!(
                                         "{}: Decoder error, stopping dispatcher: {:?}",
-                                        slf.shared.io.tag(),
+                                        inner.shared.io.tag(),
                                         err
                                     );
-                                    slf.st = DispatcherState::Stop;
+                                    inner.st = DispatcherState::Stop;
                                     (DispatchItem::Stop(Reason::Decoder(err)), true)
                                 }
                                 Err(RecvError::PeerGone(err)) => {
                                     log::trace!(
                                         "{}: Peer is gone, stopping dispatcher: {:?}",
-                                        slf.shared.io.tag(),
+                                        inner.shared.io.tag(),
                                         err
                                     );
-                                    slf.st = DispatcherState::Stop;
+                                    inner.st = DispatcherState::Stop;
                                     (DispatchItem::Stop(Reason::Io(err)), true)
                                 }
                             }
@@ -293,71 +294,71 @@ where
                         PollService::Continue => continue,
                     };
 
-                    slf.call_service(cx, item, nowait);
+                    inner.call_service(cx, item, nowait);
                 }
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
-                    match ready!(slf.poll_service(cx)) {
+                    match ready!(inner.poll_service(cx)) {
                         PollService::Ready => (),
-                        PollService::Item(item) => slf.call_service(cx, item, true),
-                        PollService::ItemWait(item) => slf.call_service(cx, item, false),
+                        PollService::Item(item) => inner.call_service(cx, item, true),
+                        PollService::ItemWait(item) => inner.call_service(cx, item, false),
                         PollService::Continue => continue,
                     }
 
-                    let item = if let Err(err) = ready!(slf.shared.io.poll_flush(cx, false))
-                    {
-                        slf.st = DispatcherState::Stop;
-                        DispatchItem::Stop(Reason::Io(Some(err)))
-                    } else {
-                        slf.st = DispatcherState::Processing;
-                        DispatchItem::Control(Control::WBackPressureDisabled)
-                    };
-                    slf.call_service(cx, item, false);
+                    let item =
+                        if let Err(err) = ready!(inner.shared.io.poll_flush(cx, false)) {
+                            inner.st = DispatcherState::Stop;
+                            DispatchItem::Stop(Reason::Io(Some(err)))
+                        } else {
+                            inner.st = DispatcherState::Processing;
+                            DispatchItem::Control(Control::WBackPressureDisabled)
+                        };
+                    inner.call_service(cx, item, false);
                 }
                 // drain service responses and shutdown io
                 DispatcherState::Stop => {
-                    slf.shared.io.stop_timer();
+                    inner.shared.io.stop_timer();
 
                     // service may relay on poll_ready for response results
-                    if !slf.shared.contains(Flags::READY_ERR)
-                        && let Poll::Ready(res) = slf.shared.service.poll_ready(cx)
+                    if !inner.shared.contains(Flags::READY_ERR)
+                        && let Poll::Ready(res) = inner.shared.service.poll_ready(cx)
                         && res.is_err()
                     {
-                        slf.shared.insert_flags(Flags::READY_ERR);
+                        inner.shared.insert_flags(Flags::READY_ERR);
                     }
 
-                    if slf.shared.inflight.get() == 0 {
-                        if slf.shared.io.poll_shutdown(cx).is_ready() {
-                            slf.st = DispatcherState::Shutdown;
+                    if inner.shared.inflight.get() == 0 {
+                        if inner.shared.io.poll_shutdown(cx).is_ready() {
+                            inner.st = DispatcherState::Shutdown;
                             continue;
                         }
-                    } else if !slf.shared.contains(Flags::IO_ERR) {
-                        match ready!(slf.shared.io.poll_status_update(cx)) {
+                    } else if !inner.shared.contains(Flags::IO_ERR) {
+                        match ready!(inner.shared.io.poll_status_update(cx)) {
                             IoStatusUpdate::PeerGone(_) | IoStatusUpdate::KeepAlive => {
-                                slf.shared.insert_flags(Flags::IO_ERR);
+                                inner.shared.insert_flags(Flags::IO_ERR);
                                 continue;
                             }
                             IoStatusUpdate::WriteBackpressure => {
-                                if ready!(slf.shared.io.poll_flush(cx, true)).is_err() {
-                                    slf.shared.insert_flags(Flags::IO_ERR);
+                                if ready!(inner.shared.io.poll_flush(cx, true)).is_err() {
+                                    inner.shared.insert_flags(Flags::IO_ERR);
                                 }
                                 continue;
                             }
                         }
                     } else {
-                        slf.shared.io.poll_dispatch(cx);
+                        inner.shared.io.poll_dispatch(cx);
                     }
                     return Poll::Pending;
                 }
                 // shutdown service
                 DispatcherState::Shutdown => {
-                    return if slf.shared.service.poll_shutdown(cx).is_ready() {
+                    return if inner.shared.service.poll_shutdown(cx).is_ready() {
                         log::trace!(
                             "{}: Service shutdown is completed, stop",
-                            slf.shared.io.tag()
+                            inner.shared.io.tag()
                         );
 
-                        Poll::Ready(if let Some(err) = slf.error.take() {
+                        Poll::Ready(if let Some(err) = inner.error.take() {
                             Err(err)
                         } else {
                             Ok(())

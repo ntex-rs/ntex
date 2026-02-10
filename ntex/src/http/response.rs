@@ -26,13 +26,13 @@ impl Response<Body> {
         ResponseBuilder::new(status)
     }
 
-    /// Create http response builder
+    /// Create http response builder.
     #[inline]
     pub fn build_from<T: Into<ResponseBuilder>>(source: T) -> ResponseBuilder {
         source.into()
     }
 
-    /// Constructs a response
+    /// Constructs a response.
     #[inline]
     pub fn new(status: StatusCode) -> Response {
         Response {
@@ -41,7 +41,7 @@ impl Response<Body> {
         }
     }
 
-    /// Convert response to response with body
+    /// Convert response to response with body.
     pub fn into_body<B>(self) -> Response<B> {
         let b = match self.body {
             ResponseBody::Body(b) | ResponseBody::Other(b) => b,
@@ -54,7 +54,7 @@ impl Response<Body> {
 }
 
 impl<B> Response<B> {
-    /// Constructs a response with body
+    /// Constructs a response with body.
     #[inline]
     pub fn with_body(status: StatusCode, body: B) -> Response<B> {
         Response {
@@ -64,43 +64,43 @@ impl<B> Response<B> {
     }
 
     #[inline]
-    /// Http message part of the response
+    /// Http message part of the response.
     pub fn head(&self) -> &ResponseHead {
         &self.head
     }
 
     #[inline]
-    /// Mutable reference to a http message part of the response
+    /// Mutable reference to a http message part of the response.
     pub fn head_mut(&mut self) -> &mut ResponseHead {
         &mut self.head
     }
 
-    /// Get the response status code
+    /// Get the response status code.
     #[inline]
     pub fn status(&self) -> StatusCode {
         self.head.status
     }
 
-    /// Set the `StatusCode` for this response
+    /// Set the `StatusCode` for this response.
     #[inline]
     pub fn status_mut(&mut self) -> &mut StatusCode {
         &mut self.head.status
     }
 
-    /// Get the headers from the response
+    /// Get the headers from the response.
     #[inline]
     pub fn headers(&self) -> &HeaderMap {
         &self.head.headers
     }
 
-    /// Get a mutable reference to the headers
+    /// Get a mutable reference to the headers.
     #[inline]
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.head.headers
     }
 
     #[cfg(feature = "cookie")]
-    /// Get an iterator for the cookies set by this response
+    /// Get an iterator for the cookies set by this response.
     #[inline]
     pub fn cookies(&self) -> CookieIter<'_> {
         CookieIter {
@@ -109,7 +109,7 @@ impl<B> Response<B> {
     }
 
     #[cfg(feature = "cookie")]
-    /// Add a cookie to this response
+    /// Add a cookie to this response.
     #[inline]
     pub fn add_cookie<'a, C>(&mut self, cookie: C) -> Result<(), HttpError>
     where
@@ -125,8 +125,9 @@ impl<B> Response<B> {
     }
 
     #[cfg(feature = "cookie")]
-    /// Remove all cookies with the given name from this response. Returns
-    /// the number of cookies removed.
+    /// Remove all cookies with the given name from this response.
+    ///
+    /// Returns the number of cookies removed.
     #[inline]
     pub fn del_cookie(&mut self, name: &str) -> usize {
         let h = &mut self.head.headers;
@@ -150,36 +151,36 @@ impl<B> Response<B> {
         count
     }
 
-    /// Connection upgrade status
+    /// Connection upgrade status.
     #[inline]
     pub fn upgrade(&self) -> bool {
         self.head.upgrade()
     }
 
-    /// Keep-alive status for this connection
+    /// Keep-alive status for this connection.
     pub fn keep_alive(&self) -> bool {
         self.head.keep_alive()
     }
 
-    /// Responses extensions
+    /// Responses extensions.
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         self.head.extensions.borrow()
     }
 
-    /// Mutable reference to a the response's extensions
+    /// Mutable reference to a the response's extensions.
     #[inline]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.head.extensions.borrow_mut()
     }
 
-    /// Get body of this response
+    /// Get body of this response.
     #[inline]
     pub fn body(&self) -> &ResponseBody<B> {
         &self.body
     }
 
-    /// Set a body
+    /// Set a body.
     pub fn set_body<B2>(self, body: B2) -> Response<B2> {
         Response {
             head: self.head,
@@ -187,7 +188,7 @@ impl<B> Response<B> {
         }
     }
 
-    /// Split response and body
+    /// Split response and body.
     pub fn into_parts(self) -> (Response<()>, ResponseBody<B>) {
         (
             Response {
@@ -198,7 +199,7 @@ impl<B> Response<B> {
         )
     }
 
-    /// Drop request's body
+    /// Drop request's body.
     pub fn drop_body(self) -> Response<()> {
         Response {
             head: self.head,
@@ -206,7 +207,7 @@ impl<B> Response<B> {
         }
     }
 
-    /// Set a body and return previous body value
+    /// Set a body and return previous body value.
     pub fn map_body<F, B2>(mut self, f: F) -> Response<B2>
     where
         F: FnOnce(&mut ResponseHead, ResponseBody<B>) -> ResponseBody<B2>,
@@ -219,7 +220,7 @@ impl<B> Response<B> {
         }
     }
 
-    /// Extract response body
+    /// Extract response body.
     pub fn take_body(&mut self) -> ResponseBody<B> {
         self.body.take_body()
     }
@@ -287,6 +288,7 @@ pub struct ResponseBuilder {
 
 impl ResponseBuilder {
     #[inline]
+    #[must_use]
     /// Create response builder
     pub fn new(status: StatusCode) -> Self {
         ResponseBuilder {
@@ -421,7 +423,7 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set response content type
+    /// Set response content type.
     #[inline]
     pub fn content_type<V>(&mut self, value: V) -> &mut Self
     where
@@ -439,14 +441,14 @@ impl ResponseBuilder {
         self
     }
 
-    /// Set content length
+    /// Set content length.
     #[inline]
     pub fn content_length(&mut self, len: u64) -> &mut Self {
         self.header(header::CONTENT_LENGTH, len)
     }
 
     #[cfg(feature = "cookie")]
-    /// Set a cookie
+    /// Set a cookie.
     ///
     /// ```rust
     /// use coo_kie as cookie;
@@ -479,7 +481,7 @@ impl ResponseBuilder {
     }
 
     #[cfg(feature = "cookie")]
-    /// Remove cookie
+    /// Remove cookie.
     ///
     /// ```rust
     /// use ntex::http::{Request, Response, HttpMessage};
@@ -505,17 +507,15 @@ impl ResponseBuilder {
         self
     }
 
-    /// Responses extensions
+    /// Responses extensions.
     #[inline]
-    #[allow(clippy::missing_panics_doc)]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
         head.extensions.borrow()
     }
 
-    /// Mutable reference to a the response's extensions
+    /// Mutable reference to a the response's extensions.
     #[inline]
-    #[allow(clippy::missing_panics_doc)]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         let head = self.head.as_ref().expect("cannot reuse response builder");
         head.extensions.borrow_mut()
@@ -532,7 +532,6 @@ impl ResponseBuilder {
     /// Set a body and generate `Response`.
     ///
     /// `ResponseBuilder` can not be used after this call.
-    #[allow(clippy::missing_panics_doc)]
     pub fn message_body<B>(&mut self, body: B) -> Response<B> {
         if let Some(e) = self.err.take() {
             return Response::from(e).into_body();
@@ -560,6 +559,7 @@ impl ResponseBuilder {
     }
 
     #[inline]
+    #[must_use]
     /// Set a streaming body and generate `Response`.
     ///
     /// `ResponseBuilder` can not be used after this call.
@@ -571,7 +571,8 @@ impl ResponseBuilder {
         self.body(Body::from_message(BodyStream::new(stream)))
     }
 
-    /// Set a json body and generate `Response`
+    #[must_use]
+    /// Set a json body and generate `Response`.
     ///
     /// `ResponseBuilder` can not be used after this call.
     pub fn json<T: Serialize>(&mut self, value: &T) -> Response {
@@ -593,13 +594,15 @@ impl ResponseBuilder {
     }
 
     #[inline]
-    /// Set an empty body and generate `Response`
+    #[must_use]
+    /// Set an empty body and generate `Response`.
     ///
     /// `ResponseBuilder` can not be used after this call.
     pub fn finish(&mut self) -> Response {
         self.body(Body::Empty)
     }
 
+    #[must_use]
     /// This method construct new `ResponseBuilder`
     pub fn take(&mut self) -> ResponseBuilder {
         ResponseBuilder {
@@ -927,7 +930,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cognitive_complexity)]
     fn test_into_response() {
         let resp: Response = "test".into();
         assert_eq!(resp.status(), StatusCode::OK);

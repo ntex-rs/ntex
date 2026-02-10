@@ -123,11 +123,12 @@ pub fn Any<F: Guard + 'static>(guard: F) -> AnyGuard {
 }
 
 #[derive(Default)]
-/// Matches if any of supplied guards matche.
+/// Matches any of supplied guards match.
 pub struct AnyGuard(pub Vec<Box<dyn Guard>>);
 
 impl AnyGuard {
-    /// Add guard to a list of guards to check
+    #[must_use]
+    /// Add guard to a list of guards to check.
     pub fn or<F: Guard + 'static>(mut self, guard: F) -> Self {
         self.0.push(Box::new(guard));
         self
@@ -179,17 +180,18 @@ pub fn All<F: Guard + 'static>(guard: F) -> AllGuard {
 }
 
 #[derive(Default)]
-/// Matches if all of supplied guards.
+/// Matches all of supplied guards..
 pub struct AllGuard(pub(super) Vec<Box<dyn Guard>>);
 
 impl AllGuard {
-    /// Add new guard to the list of guards to check
+    #[must_use]
+    /// Add new guard to the list of guards to check.
     pub fn and<F: Guard + 'static>(mut self, guard: F) -> Self {
         self.0.push(Box::new(guard));
         self
     }
 
-    /// Add guard to a list of guards to check
+    /// Add guard to a list of guards to check.
     pub fn add<F: Guard + 'static>(&mut self, guard: F) {
         self.0.push(Box::new(guard));
     }
@@ -373,7 +375,8 @@ fn get_host_uri(req: &RequestHead) -> Option<Uri> {
 pub struct HostGuard(String, Option<String>);
 
 impl HostGuard {
-    /// Set request scheme to match
+    #[must_use]
+    /// Set request scheme to match.
     pub fn scheme<H: AsRef<str>>(mut self, scheme: H) -> HostGuard {
         self.1 = Some(scheme.as_ref().to_string());
         self

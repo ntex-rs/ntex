@@ -175,7 +175,10 @@ pub struct FormConfig {
 }
 
 impl FormConfig {
-    /// Change max size of payload. By default max size is 16Kb
+    #[must_use]
+    /// Change max size of payload.
+    ///
+    /// By default max size is 16Kb
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self

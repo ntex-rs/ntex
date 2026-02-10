@@ -1,6 +1,6 @@
 use std::{fmt, future::poll_fn, mem, pin::Pin, task::Context, task::Poll};
 
-use super::{error::PayloadError, h1, h2};
+use crate::http::{error::PayloadError, h1, h2};
 use crate::util::{Bytes, Stream};
 
 /// Type represent boxed payload
@@ -46,11 +46,13 @@ impl fmt::Debug for Payload {
 }
 
 impl Payload {
+    #[must_use]
     /// Takes current payload and replaces it with `None` value
     pub fn take(&mut self) -> Self {
         mem::take(self)
     }
 
+    #[must_use]
     /// Create payload from stream
     pub fn from_stream<S>(stream: S) -> Self
     where

@@ -99,6 +99,7 @@ impl<B> ResponseBody<B> {
     }
 
     #[inline]
+    #[must_use]
     pub fn take_body(&mut self) -> ResponseBody<B> {
         std::mem::replace(self, ResponseBody::Other(Body::None))
     }

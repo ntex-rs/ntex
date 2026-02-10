@@ -4,9 +4,7 @@
     clippy::missing_fields_in_debug,
     clippy::needless_pass_by_value,
     clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
-    clippy::missing_errors_doc,
-    clippy::struct_field_names
+    clippy::missing_errors_doc
 )]
 
 pub mod body;

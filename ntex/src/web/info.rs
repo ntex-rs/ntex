@@ -28,7 +28,6 @@ impl ConnectionInfo {
         Ref::map(req.extensions(), |e| e.get().unwrap())
     }
 
-    #[allow(clippy::cognitive_complexity)]
     fn new(req: &RequestHead, cfg: Cfg<WebAppConfig>) -> ConnectionInfo {
         let mut host = None;
         let mut scheme = None;

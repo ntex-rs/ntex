@@ -1,5 +1,4 @@
 //! Test helpers for ntex http client to use during testing.
-#![allow(clippy::missing_panics_doc)]
 use std::rc::Rc;
 
 #[cfg(feature = "cookie")]
@@ -33,7 +32,8 @@ impl Default for TestResponse {
 }
 
 impl TestResponse {
-    /// Create `TestResponse` and set header
+    #[must_use]
+    /// Create `TestResponse` and set header.
     pub fn with_header<K, V>(key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -43,13 +43,15 @@ impl TestResponse {
         Self::default().header(key, value)
     }
 
-    /// Set HTTP version of this response
+    #[must_use]
+    /// Set HTTP version of this response.
     pub fn version(mut self, ver: Version) -> Self {
         self.head.version = ver;
         self
     }
 
-    /// Append a header
+    #[must_use]
+    /// Append a header.
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -65,8 +67,9 @@ impl TestResponse {
         panic!("Cannot create header");
     }
 
+    #[must_use]
     #[cfg(feature = "cookie")]
-    /// Set cookie for this response
+    /// Set cookie for this response.
     pub fn cookie<C>(mut self, cookie: C) -> Self
     where
         C: Into<Cookie<'static>>,
@@ -75,13 +78,15 @@ impl TestResponse {
         self
     }
 
-    /// Set response's payload
+    #[must_use]
+    /// Set response's payload.
     pub fn set_payload<B: Into<Bytes>>(mut self, data: B) -> Self {
         self.payload = Some(bstream::empty(Some(data.into())).into());
         self
     }
 
-    /// Complete response creation and generate `ClientResponse` instance
+    #[must_use]
+    /// Complete response creation and generate `ClientResponse` instance.
     pub fn finish(self) -> ClientResponse {
         #[allow(unused_mut)]
         let mut head = self.head;

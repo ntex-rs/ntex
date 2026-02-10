@@ -221,13 +221,17 @@ pub struct JsonConfig {
 }
 
 impl JsonConfig {
-    /// Change max size of payload. By default max size is 32Kb
+    #[must_use]
+    /// Change max size of payload.
+    ///
+    /// By default max size is 32Kb
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }
 
-    /// Set predicate for allowed content types
+    #[must_use]
+    /// Set predicate for allowed content types.
     pub fn content_type<F>(mut self, predicate: F) -> Self
     where
         F: Fn(mime::Mime) -> bool + Send + Sync + 'static,

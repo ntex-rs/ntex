@@ -239,6 +239,7 @@ pub struct PayloadConfig {
 }
 
 impl PayloadConfig {
+    #[must_use]
     /// Create `PayloadConfig` instance and set max size of payload.
     pub fn new(limit: usize) -> Self {
         PayloadConfig {
@@ -247,14 +248,19 @@ impl PayloadConfig {
         }
     }
 
-    /// Change max size of payload. By default max size is 256Kb
+    #[must_use]
+    /// Change max size of payload.
+    ///
+    /// By default max size is 256Kb.
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }
 
-    /// Set required mime-type of the request. By default mime type is not
-    /// enforced.
+    #[must_use]
+    /// Set required mime-type of the request.
+    ///
+    /// By default mime type is not enforced.
     pub fn mimetype(mut self, mt: Mime) -> Self {
         self.mimetype = Some(mt);
         self

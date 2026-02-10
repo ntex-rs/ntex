@@ -17,14 +17,19 @@ pub struct Buffer<R> {
 }
 
 impl<R> Buffer<R> {
+    /// Set size of the buffer.
+    ///
+    /// Default is set to 16
+    #[must_use]
     pub fn buf_size(mut self, size: usize) -> Self {
         self.buf_size = size;
         self
     }
 
-    /// Cancel all buffered requests on shutdown
+    /// Cancel all buffered requests on shutdown.
     ///
     /// By default buffered requests are flushed during `poll_shutdown()`
+    #[must_use]
     pub fn cancel_on_shutdown(mut self) -> Self {
         self.cancel_on_shutdown = true;
         self
@@ -116,6 +121,7 @@ where
     S: Service<R> + 'static,
     R: 'static,
 {
+    #[must_use]
     pub fn new(size: usize, service: S) -> Self {
         Self {
             size,
@@ -129,6 +135,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn cancel_on_shutdown(self) -> Self {
         Self {
             cancel_on_shutdown: true,

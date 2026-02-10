@@ -138,6 +138,7 @@ impl Bytes {
     /// assert_eq!(&b[..], b"hello");
     /// ```
     #[inline]
+    #[must_use]
     pub const fn from_static(bytes: &'static [u8]) -> Bytes {
         Bytes {
             storage: Storage::from_static(bytes),
@@ -191,6 +192,7 @@ impl Bytes {
     /// Creates `Bytes` instance from slice, by copying it.
     ///
     /// Data from the slice could be inlined.
+    #[must_use]
     pub fn copy_from_slice(data: &[u8]) -> Self {
         Bytes {
             storage: Storage::from_slice(data),
@@ -221,6 +223,7 @@ impl Bytes {
     ///
     /// Requires that `begin <= end` and `end <= self.len()`, otherwise slicing
     /// will panic.
+    #[must_use]
     pub fn slice(&self, range: impl ops::RangeBounds<usize>) -> Bytes {
         self.slice_checked(range)
             .expect("Requires that `begin <= end` and `end <= self.len()`")
@@ -229,6 +232,7 @@ impl Bytes {
     /// Returns a slice of self for the provided range.
     ///
     /// Does nothing if `begin <= end` or `end <= self.len()`
+    #[must_use]
     pub fn slice_checked(&self, range: impl ops::RangeBounds<usize>) -> Option<Bytes> {
         use std::ops::Bound;
 
@@ -289,12 +293,14 @@ impl Bytes {
     ///
     /// Requires that the given `sub` slice is in fact contained within the
     /// `Bytes` buffer; otherwise this function will panic.
+    #[must_use]
     pub fn slice_ref(&self, subset: &[u8]) -> Bytes {
         self.slice_ref_checked(subset)
             .expect("Given `sub` slice is not contained within the `Bytes` buffer")
     }
 
     /// Returns a slice of self that is equivalent to the given `subset`.
+    #[must_use]
     pub fn slice_ref_checked(&self, subset: &[u8]) -> Option<Bytes> {
         let bytes_p = self.as_ptr() as usize;
         let bytes_len = self.len();
@@ -333,6 +339,7 @@ impl Bytes {
     /// # Panics
     ///
     /// Panics if `at > self.len()`.
+    #[must_use]
     pub fn split_off(&mut self, at: usize) -> Bytes {
         self.split_off_checked(at)
             .expect("at value must be <= self.len()`")
@@ -341,6 +348,7 @@ impl Bytes {
     /// Splits the bytes into two at the given index.
     ///
     /// Does nothing if `at > self.len()`
+    #[must_use]
     pub fn split_off_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
             if at == self.len() {
@@ -380,6 +388,7 @@ impl Bytes {
     /// # Panics
     ///
     /// Panics if `at > len`.
+    #[must_use]
     pub fn split_to(&mut self, at: usize) -> Bytes {
         self.split_to_checked(at)
             .expect("at value must be <= self.len()`")
@@ -388,6 +397,7 @@ impl Bytes {
     /// Splits the bytes into two at the given index.
     ///
     /// Does nothing if `at > len`.
+    #[must_use]
     pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
             if at == self.len() {
@@ -423,6 +433,7 @@ impl Bytes {
     /// # Panics
     ///
     /// Panics if `cnt > len`.
+    #[inline]
     pub fn advance_to(&mut self, cnt: usize) {
         unsafe {
             self.storage.set_start(cnt);
@@ -867,6 +878,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(unused_must_use)]
 mod tests {
     use std::collections::HashMap;
 

@@ -68,7 +68,7 @@ pub struct BufConfig {
 
 impl IoConfig {
     #[inline]
-    #[allow(clippy::new_without_default)]
+    #[must_use]
     /// Create new config object
     pub fn new() -> IoConfig {
         let config = CfgContext::default();
@@ -146,6 +146,7 @@ impl IoConfig {
     /// To disable timeout set value to 0.
     ///
     /// By default connect timeout is disabled.
+    #[must_use]
     pub fn set_connect_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.connect_timeout = timeout.into();
         self
@@ -156,6 +157,7 @@ impl IoConfig {
     /// To disable timeout set value to 0.
     ///
     /// By default keep-alive timeout is disabled.
+    #[must_use]
     pub fn set_keepalive_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
         self.keepalive_timeout = timeout.into();
         self
@@ -169,6 +171,7 @@ impl IoConfig {
     /// To disable timeout set value to 0.
     ///
     /// By default disconnect timeout is set to 1 seconds.
+    #[must_use]
     pub fn set_disconnect_timeout<T: Into<Seconds>>(mut self, timeout: T) -> Self {
         self.disconnect_timeout = timeout.into();
         self
@@ -181,6 +184,7 @@ impl IoConfig {
     /// But no more than `max_timeout` timeout.
     ///
     /// By default frame read rate is disabled.
+    #[must_use]
     pub fn set_frame_read_rate(
         mut self,
         timeout: Seconds,
@@ -198,6 +202,7 @@ impl IoConfig {
     /// Set read buffer parameters.
     ///
     /// By default high watermark is set to 16Kb, low watermark 1kb.
+    #[must_use]
     pub fn set_read_buf(
         mut self,
         high_watermark: usize,
@@ -214,6 +219,7 @@ impl IoConfig {
     /// Set write buffer parameters.
     ///
     /// By default high watermark is set to 16Kb, low watermark 1kb.
+    #[must_use]
     pub fn set_write_buf(
         mut self,
         high_watermark: usize,

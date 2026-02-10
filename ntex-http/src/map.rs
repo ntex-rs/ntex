@@ -507,13 +507,13 @@ impl<'a> IntoIterator for &'a HeaderMap {
 pub struct Iter<'a> {
     idx: usize,
     current: Option<(&'a HeaderName, &'a VecDeque<HeaderValue>)>,
-    iter: hash_map::Iter<'a, HeaderName, Value>,
+    inner: hash_map::Iter<'a, HeaderName, Value>,
 }
 
 impl<'a> Iter<'a> {
-    fn new(iter: hash_map::Iter<'a, HeaderName, Value>) -> Self {
+    fn new(inner: hash_map::Iter<'a, HeaderName, Value>) -> Self {
         Self {
-            iter,
+            inner,
             idx: 0,
             current: None,
         }
@@ -534,7 +534,7 @@ impl<'a> Iterator for Iter<'a> {
             self.idx = 0;
             self.current.take();
         }
-        if let Some(item) = self.iter.next() {
+        if let Some(item) = self.inner.next() {
             match item.1 {
                 Value::One(value) => Some((item.0, value)),
                 Value::Multi(vec) => {

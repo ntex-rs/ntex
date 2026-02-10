@@ -1,5 +1,4 @@
 //! Various helpers for ntex applications to use during testing.
-#![allow(clippy::missing_panics_doc)]
 use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
@@ -332,12 +331,14 @@ impl Default for TestRequest {
 
 #[allow(clippy::wrong_self_convention)]
 impl TestRequest {
-    /// Create `TestRequest` and set request uri
+    #[must_use]
+    /// Create `TestRequest` and set request uri.
     pub fn with_uri(path: &str) -> TestRequest {
         TestRequest::default().uri(path)
     }
 
-    /// Create `TestRequest` and set header
+    #[must_use]
+    /// Create `TestRequest` and set header.
     pub fn with_header<K, V>(key: K, value: V) -> TestRequest
     where
         HeaderName: TryFrom<K>,
@@ -347,50 +348,59 @@ impl TestRequest {
         TestRequest::default().header(key, value)
     }
 
-    /// Create `TestRequest` and set method to `Method::GET`
+    #[must_use]
+    /// Create `TestRequest` and set method to `Method::GET`.
     pub fn get() -> TestRequest {
         TestRequest::default().method(Method::GET)
     }
 
-    /// Create `TestRequest` and set method to `Method::POST`
+    #[must_use]
+    /// Create `TestRequest` and set method to `Method::POST`.
     pub fn post() -> TestRequest {
         TestRequest::default().method(Method::POST)
     }
 
-    /// Create `TestRequest` and set method to `Method::PUT`
+    #[must_use]
+    /// Create `TestRequest` and set method to `Method::PUT`.
     pub fn put() -> TestRequest {
         TestRequest::default().method(Method::PUT)
     }
 
-    /// Create `TestRequest` and set method to `Method::PATCH`
+    #[must_use]
+    /// Create `TestRequest` and set method to `Method::PATCH`.
     pub fn patch() -> TestRequest {
         TestRequest::default().method(Method::PATCH)
     }
 
-    /// Create `TestRequest` and set method to `Method::DELETE`
+    #[must_use]
+    /// Create `TestRequest` and set method to `Method::DELETE`.
     pub fn delete() -> TestRequest {
         TestRequest::default().method(Method::DELETE)
     }
 
-    /// Set HTTP version of this request
+    #[must_use]
+    /// Set HTTP version of this request.
     pub fn version(mut self, ver: Version) -> Self {
         self.req.version(ver);
         self
     }
 
-    /// Set HTTP method of this request
+    #[must_use]
+    /// Set HTTP method of this request.
     pub fn method(mut self, meth: Method) -> Self {
         self.req.method(meth);
         self
     }
 
-    /// Set HTTP Uri of this request
+    #[must_use]
+    /// Set HTTP Uri of this request.
     pub fn uri(mut self, path: &str) -> Self {
         self.req.uri(path);
         self
     }
 
-    /// Set a header
+    #[must_use]
+    /// Set a header.
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -401,8 +411,9 @@ impl TestRequest {
         self
     }
 
+    #[must_use]
     #[cfg(feature = "cookie")]
-    /// Set cookie for this request
+    /// Set cookie for this request.
     pub fn cookie<C>(mut self, cookie: C) -> Self
     where
         C: Into<Cookie<'static>>,
@@ -411,26 +422,31 @@ impl TestRequest {
         self
     }
 
-    /// Set request path pattern parameter
+    #[must_use]
+    /// Set request path pattern parameter.
     pub fn param(mut self, name: &'static str, value: &'static str) -> Self {
         self.path.add_static(name, value);
         self
     }
 
-    /// Set peer addr
+    #[must_use]
+    /// Set peer addr.
     pub fn peer_addr(mut self, addr: SocketAddr) -> Self {
         self.peer_addr = Some(addr);
         self
     }
 
-    /// Set request payload
+    #[must_use]
+    /// Set request payload.
     pub fn set_payload<B: Into<Bytes>>(mut self, data: B) -> Self {
         self.req.set_payload(data);
         self
     }
 
-    /// Serialize `data` to a URL encoded form and set it as the request payload. The `Content-Type`
-    /// header is set to `application/x-www-form-urlencoded`.
+    #[must_use]
+    /// Serialize `data` to a URL encoded form and set it as the request payload.
+    ///
+    /// The `Content-Type` header is set to `application/x-www-form-urlencoded`.
     pub fn set_form<T: Serialize>(mut self, data: &T) -> Self {
         let bytes = serde_urlencoded::to_string(data)
             .expect("Failed to serialize test data as a urlencoded form");
@@ -440,8 +456,10 @@ impl TestRequest {
         self
     }
 
-    /// Serialize `data` to JSON and set it as the request payload. The `Content-Type` header is
-    /// set to `application/json`.
+    #[must_use]
+    /// Serialize `data` to JSON and set it as the request payload.
+    ///
+    /// The `Content-Type` header is set to `application/json`.
     pub fn set_json<T: Serialize>(mut self, data: &T) -> Self {
         let bytes =
             serde_json::to_string(data).expect("Failed to serialize test data to json");
@@ -450,13 +468,16 @@ impl TestRequest {
         self
     }
 
-    /// Set application data. This is equivalent of `App::data()` method
-    /// for testing purpose.
+    #[must_use]
+    /// Set application data.
+    ///
+    /// This is equivalent of `App::data()` method for testing purpose.
     pub fn state<T: 'static>(mut self, data: T) -> Self {
         self.app_state.insert(data);
         self
     }
 
+    #[must_use]
     #[cfg(test)]
     /// Set request config
     pub(crate) fn rmap(mut self, rmap: ResourceMap) -> Self {
@@ -464,12 +485,14 @@ impl TestRequest {
         self
     }
 
-    /// Complete request creation and generate `Request` instance
+    #[must_use]
+    /// Complete request creation and generate `Request` instance.
     pub fn to_request(mut self) -> Request {
         self.req.finish()
     }
 
-    /// Complete request creation and generate `WebRequest` instance
+    #[must_use]
+    /// Complete request creation and generate `WebRequest` instance.
     pub fn to_srv_request(mut self) -> WebRequest<DefaultError> {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
@@ -484,12 +507,14 @@ impl TestRequest {
         ))
     }
 
-    /// Complete request creation and generate `WebResponse` instance
+    #[must_use]
+    /// Complete request creation and generate `WebResponse` instance.
     pub fn to_srv_response(self, res: HttpResponse) -> WebResponse {
         self.to_srv_request().into_response(res)
     }
 
-    /// Complete request creation and generate `HttpRequest` instance
+    #[must_use]
+    /// Complete request creation and generate `HttpRequest` instance.
     pub fn to_http_request(mut self) -> HttpRequest {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
@@ -498,7 +523,8 @@ impl TestRequest {
         HttpRequest::new(self.path, head, payload, Rc::new(self.rmap), app_state)
     }
 
-    /// Complete request creation and generate `HttpRequest` and `Payload` instances
+    #[must_use]
+    /// Complete request creation and generate `HttpRequest` and `Payload` instances.
     pub fn to_http_parts(mut self) -> (HttpRequest, Payload) {
         let (head, payload) = self.req.finish().into_parts();
         *self.path.get_mut() = head.uri.clone();
@@ -781,12 +807,14 @@ impl Default for TestServerConfig {
     }
 }
 
+#[must_use]
 /// Create default test server config
 pub fn config() -> TestServerConfig {
     TestServerConfig::new()
 }
 
 impl TestServerConfig {
+    #[must_use]
     /// Create default server configuration
     pub(crate) fn new() -> TestServerConfig {
         TestServerConfig {
@@ -796,32 +824,37 @@ impl TestServerConfig {
         }
     }
 
-    /// Start http/1.1 server only
+    #[must_use]
+    /// Start http/1.1 server only.
     pub fn h1(mut self) -> Self {
         self.tp = HttpVer::Http1;
         self
     }
 
-    /// Start http/2 server only
+    #[must_use]
+    /// Start http/2 server only.
     pub fn h2(mut self) -> Self {
         self.tp = HttpVer::Http2;
         self
     }
 
-    /// Start openssl server
+    #[must_use]
+    /// Start openssl server.
     #[cfg(feature = "openssl")]
     pub fn openssl(mut self, acceptor: tls_openssl::ssl::SslAcceptor) -> Self {
         self.stream = StreamType::Openssl(acceptor);
         self
     }
 
-    /// Start rustls server
+    #[must_use]
+    /// Start rustls server.
     #[cfg(feature = "rustls")]
     pub fn rustls(mut self, config: tls_rustls::ServerConfig) -> Self {
         self.stream = StreamType::Rustls(config);
         self
     }
 
+    #[must_use]
     /// Set server client timeout in seconds for first request.
     pub fn client_timeout(mut self, val: Seconds) -> Self {
         self.client_timeout = val;

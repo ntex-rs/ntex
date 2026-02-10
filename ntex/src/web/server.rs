@@ -59,6 +59,7 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody + 'static,
 {
+    #[must_use]
     /// Create new http server with application factory
     pub fn new(factory: F) -> Self {
         HttpServer {
@@ -73,6 +74,7 @@ where
         }
     }
 
+    #[must_use]
     /// Set number of workers to start.
     ///
     /// By default http server uses number of available logical cpu as threads
@@ -82,6 +84,7 @@ where
         self
     }
 
+    #[must_use]
     /// Set the maximum number of pending connections.
     ///
     /// This refers to the number of clients that can be waiting to be served.
@@ -98,6 +101,7 @@ where
         self
     }
 
+    #[must_use]
     /// Sets the maximum per-worker number of concurrent connections.
     ///
     /// All socket listeners will stop accepting connections when this limit is reached
@@ -109,6 +113,7 @@ where
         self
     }
 
+    #[must_use]
     /// Sets the maximum per-worker concurrent connection establish process.
     ///
     /// All listeners will stop accepting connections when this limit is reached. It
@@ -120,6 +125,7 @@ where
         self
     }
 
+    #[must_use]
     /// Set server host name.
     ///
     /// Host name is used by application router as a hostname for url generation.
@@ -132,6 +138,7 @@ where
         self
     }
 
+    #[must_use]
     /// Stop ntex runtime when server get dropped.
     ///
     /// By default "stop runtime" is disabled.
@@ -140,6 +147,7 @@ where
         self
     }
 
+    #[must_use]
     /// Disable signal handling.
     ///
     /// By default signal handling is enabled.
@@ -148,6 +156,7 @@ where
         self
     }
 
+    #[must_use]
     /// Timeout for graceful workers shutdown.
     ///
     /// After receiving a stop signal, workers have this much time to finish
@@ -160,7 +169,8 @@ where
         self
     }
 
-    /// Enable cpu affinity
+    #[must_use]
+    /// Enable cpu affinity.
     ///
     /// By default affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
@@ -168,6 +178,7 @@ where
         self
     }
 
+    #[must_use]
     /// Set io config for named service.
     pub fn config<T: Into<SharedCfg>>(self, cfg: T) -> Self {
         self.config.lock().unwrap().cfg = cfg.into();
@@ -195,7 +206,7 @@ where
     }
 
     #[cfg(feature = "openssl")]
-    /// Use listener for accepting incoming tls connection requests
+    /// Use listener for accepting incoming tls connection requests.
     ///
     /// This method sets alpn protocols to "h2" and "http/1.1"
     pub fn listen_openssl(
@@ -228,7 +239,7 @@ where
     }
 
     #[cfg(feature = "rustls")]
-    /// Use listener for accepting incoming tls connection requests
+    /// Use listener for accepting incoming tls connection requests.
     ///
     /// This method sets alpn protocols to "h2" and "http/1.1"
     pub fn listen_rustls(
@@ -260,7 +271,7 @@ where
         Ok(self)
     }
 
-    /// The socket address to bind
+    /// The socket address to bind.
     ///
     /// To bind multiple addresses this method can be called multiple times.
     pub fn bind<A: net::ToSocketAddrs>(mut self, addr: A) -> io::Result<Self> {

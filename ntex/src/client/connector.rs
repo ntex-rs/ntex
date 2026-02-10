@@ -31,8 +31,8 @@ pub struct Connector {
     conn_lifetime: Duration,
     conn_keep_alive: Duration,
     limit: usize,
-    connector: BoxedConnector,
-    secure_connector: Option<BoxedConnector>,
+    svc: BoxedConnector,
+    secure_svc: Option<BoxedConnector>,
 }
 
 impl Default for Connector {
@@ -44,7 +44,7 @@ impl Default for Connector {
 impl Connector {
     pub fn new() -> Connector {
         let conn = Connector {
-            connector: boxed::factory(
+            svc: boxed::factory(
                 apply_fn_factory(TcpConnector::new(), async move |msg: Connect, svc| {
                     svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
                 })
@@ -52,7 +52,7 @@ impl Connector {
                 .map_err(ConnectError::from)
                 .map_init_err(|e| Box::new(e) as Box<dyn Error>),
             ),
-            secure_connector: None,
+            secure_svc: None,
             conn_lifetime: Duration::from_secs(75),
             conn_keep_alive: Duration::from_secs(15),
             limit: 8,
@@ -92,6 +92,7 @@ impl Connector {
 }
 
 impl Connector {
+    #[must_use]
     #[cfg(feature = "openssl")]
     /// Use openssl connector for secured connections.
     pub fn openssl(self, connector: OpensslConnector) -> Self {
@@ -100,6 +101,7 @@ impl Connector {
         self.secure_connector(SslConnector::new(connector))
     }
 
+    #[must_use]
     #[cfg(feature = "rustls")]
     /// Use rustls connector for secured connections.
     pub fn rustls(self, connector: ClientConfig) -> Self {
@@ -108,6 +110,7 @@ impl Connector {
         self.secure_connector(TlsConnector::new(connector))
     }
 
+    #[must_use]
     /// Set total number of simultaneous connections per type of scheme.
     ///
     /// If limit is 0, the connector has no limit.
@@ -117,6 +120,7 @@ impl Connector {
         self
     }
 
+    #[must_use]
     /// Set keep-alive period for opened connection.
     ///
     /// Keep-alive period is the period between connection usage. If
@@ -128,6 +132,7 @@ impl Connector {
         self
     }
 
+    #[must_use]
     /// Set max lifetime period for connection.
     ///
     /// Connection lifetime is max lifetime of any opened connection
@@ -138,6 +143,7 @@ impl Connector {
         self
     }
 
+    #[must_use]
     /// Use custom connector to open un-secured connections.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
@@ -146,7 +152,7 @@ impl Connector {
         T::InitError: Error,
         IoBoxed: From<T::Response>,
     {
-        self.connector = boxed::factory(
+        self.svc = boxed::factory(
             apply_fn_factory(connector, async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
@@ -157,6 +163,7 @@ impl Connector {
         self
     }
 
+    #[must_use]
     /// Use custom connector to open secure connections.
     pub fn secure_connector<T>(mut self, connector: T) -> Self
     where
@@ -165,7 +172,7 @@ impl Connector {
         T::InitError: Error,
         IoBoxed: From<T::Response>,
     {
-        self.secure_connector = Some(boxed::factory(
+        self.secure_svc = Some(boxed::factory(
             apply_fn_factory(connector, async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
@@ -185,15 +192,15 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let tcp_pool = ConnectionPool::new(
-            self.connector.create(cfg).await?.into(),
+            self.svc.create(cfg).await?.into(),
             self.conn_lifetime,
             self.conn_keep_alive,
             self.limit,
             cfg,
         );
-        let ssl_pool = if let Some(ref connector) = self.secure_connector {
+        let ssl_pool = if let Some(ref svc) = self.secure_svc {
             Some(ConnectionPool::new(
-                connector.create(cfg).await?.into(),
+                svc.create(cfg).await?.into(),
                 self.conn_lifetime,
                 self.conn_keep_alive,
                 self.limit,

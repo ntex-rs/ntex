@@ -10,6 +10,7 @@ pub struct ByteString(Bytes);
 impl ByteString {
     /// Creates a new empty `ByteString`.
     #[inline]
+    #[must_use]
     pub const fn new() -> Self {
         ByteString(Bytes::new())
     }
@@ -34,12 +35,14 @@ impl ByteString {
 
     /// Unwraps this `ByteString` into the underlying `Bytes` object.
     #[inline]
+    #[must_use]
     pub fn into_bytes(self) -> Bytes {
         self.0
     }
 
     /// Creates a new `ByteString` from a `&'static str`.
     #[inline]
+    #[must_use]
     pub const fn from_static(src: &'static str) -> ByteString {
         Self(Bytes::from_static(src.as_bytes()))
     }
@@ -66,6 +69,7 @@ impl ByteString {
     ///
     /// Requires that `begin <= end` and `end <= self.len()`, otherwise slicing
     /// will panic.
+    #[must_use]
     pub fn slice(
         &self,
         range: impl ops::RangeBounds<usize> + slice::SliceIndex<str> + Clone,
@@ -97,6 +101,7 @@ impl ByteString {
     /// # Panics
     ///
     /// Panics if `at > len`.
+    #[must_use]
     pub fn split_off(&mut self, at: usize) -> ByteString {
         // check str
         let _ = self.split_at(at);
@@ -127,6 +132,7 @@ impl ByteString {
     /// # Panics
     ///
     /// Panics if `at > len`.
+    #[must_use]
     pub fn split_to(&mut self, at: usize) -> ByteString {
         // check str
         let _ = self.split_at(at);

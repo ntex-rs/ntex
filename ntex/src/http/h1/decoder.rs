@@ -1,3 +1,4 @@
+#![allow(clippy::borrow_interior_mutable_const)]
 use std::{cell::Cell, marker::PhantomData, mem, task::Poll};
 
 use ntex_http::header::{HeaderName, HeaderValue};

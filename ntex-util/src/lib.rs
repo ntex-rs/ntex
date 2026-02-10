@@ -3,7 +3,6 @@
 #![allow(
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
     clippy::missing_errors_doc
 )]
 

@@ -77,6 +77,7 @@ impl BytesMut {
     /// assert_eq!(&bytes[..], b"hello world");
     /// ```
     #[inline]
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> BytesMut {
         BytesMut {
             storage: StorageVec::with_capacity(capacity),
@@ -84,6 +85,8 @@ impl BytesMut {
     }
 
     /// Creates a new `BytesMut` from slice, by copying it.
+    #[inline]
+    #[must_use]
     pub fn copy_from_slice<T: AsRef<[u8]>>(src: T) -> Self {
         let slice = src.as_ref();
         BytesMut {
@@ -110,6 +113,7 @@ impl BytesMut {
     /// assert_eq!(&b"xy"[..], &bytes[..]);
     /// ```
     #[inline]
+    #[must_use]
     pub fn new() -> BytesMut {
         BytesMut {
             storage: StorageVec::with_capacity(crate::storage::MIN_CAPACITY),
@@ -186,6 +190,7 @@ impl BytesMut {
     /// th.join().unwrap();
     /// ```
     #[inline]
+    #[must_use]
     pub fn freeze(self) -> Bytes {
         Bytes {
             storage: self.storage.freeze(),
@@ -218,6 +223,7 @@ impl BytesMut {
     /// assert_eq!(other, b"hello world"[..]);
     /// ```
     #[inline]
+    #[must_use]
     pub fn take(&mut self) -> Bytes {
         Bytes {
             storage: self.storage.split_to(self.len()),
@@ -250,6 +256,7 @@ impl BytesMut {
     ///
     /// Panics if `at > len`.
     #[inline]
+    #[must_use]
     pub fn split_to(&mut self, at: usize) -> Bytes {
         self.split_to_checked(at)
             .expect("at value must be <= self.len()`")
@@ -287,6 +294,7 @@ impl BytesMut {
     ///
     /// Does nothing if `at > len`.
     #[inline]
+    #[must_use]
     pub fn split_to_checked(&mut self, at: usize) -> Option<Bytes> {
         if at <= self.len() {
             Some(Bytes {

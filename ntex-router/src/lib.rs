@@ -1,9 +1,6 @@
 #![deny(clippy::pedantic)]
 #![allow(
-    clippy::similar_names,
-    clippy::struct_field_names,
     clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
     clippy::missing_errors_doc,
     clippy::iter_without_into_iter,
     clippy::cast_possible_wrap,

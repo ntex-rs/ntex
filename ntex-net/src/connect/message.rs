@@ -72,6 +72,7 @@ pub struct Connect<T> {
 
 impl<T: Address> Connect<T> {
     /// Create `Connect` instance by spliting the string by ':' and convert the second part to u16
+    #[must_use]
     pub fn new(req: T) -> Connect<T> {
         let (_, port) = parse(req.host());
         Connect {
@@ -82,6 +83,7 @@ impl<T: Address> Connect<T> {
     }
 
     /// Create new `Connect` instance from host and address. Connector skips name resolution stage for such connect messages.
+    #[must_use]
     pub fn with(req: T, addr: SocketAddr) -> Connect<T> {
         Connect {
             req,
@@ -93,12 +95,14 @@ impl<T: Address> Connect<T> {
     /// Use port if address does not provide one.
     ///
     /// By default it set to 0
+    #[must_use]
     pub fn set_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
 
     /// Use address.
+    #[must_use]
     pub fn set_addr(mut self, addr: Option<SocketAddr>) -> Self {
         if let Some(addr) = addr {
             self.addr = Some(Either::Left(addr));
@@ -107,6 +111,7 @@ impl<T: Address> Connect<T> {
     }
 
     /// Use addresses.
+    #[must_use]
     pub fn set_addrs<I>(mut self, addrs: I) -> Self
     where
         I: IntoIterator<Item = SocketAddr>,

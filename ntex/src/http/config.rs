@@ -67,7 +67,8 @@ impl Configuration for HttpServiceConfig {
 }
 
 impl HttpServiceConfig {
-    /// Create instance of `HttpServiceConfig`
+    #[must_use]
+    /// Create instance of `HttpServiceConfig`.
     pub fn new() -> HttpServiceConfig {
         Self::_new(KeepAlive::Timeout(Seconds(5)), Seconds::ONE)
     }
@@ -93,7 +94,8 @@ impl HttpServiceConfig {
         }
     }
 
-    /// Set server keep-alive setting
+    #[must_use]
+    /// Set server keep-alive setting.
     ///
     /// By default keep alive is set to a 5 seconds.
     pub fn set_keepalive<W: Into<KeepAlive>>(mut self, val: W) -> Self {
@@ -109,6 +111,7 @@ impl HttpServiceConfig {
         self
     }
 
+    #[must_use]
     /// Set keep-alive timeout in seconds.
     ///
     /// To disable timeout set value to 0.
@@ -120,6 +123,7 @@ impl HttpServiceConfig {
         self
     }
 
+    #[must_use]
     /// Set request headers read timeout.
     ///
     /// Defines a timeout for reading client request header. If a client does not transmit
@@ -144,6 +148,7 @@ impl HttpServiceConfig {
         self
     }
 
+    #[must_use]
     /// Set read rate parameters for request headers.
     ///
     /// Set read timeout, max timeout and rate for reading request headers. If the client
@@ -169,6 +174,7 @@ impl HttpServiceConfig {
         self
     }
 
+    #[must_use]
     /// Set read rate parameters for request's payload.
     ///
     /// Set read timeout, max timeout and rate for reading payload. If the client

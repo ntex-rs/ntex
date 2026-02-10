@@ -133,6 +133,7 @@ impl IoTest {
     }
 
     /// Set peer addr
+    #[must_use]
     pub fn set_peer_addr(mut self, addr: net::SocketAddr) -> Self {
         self.peer_addr = Some(addr);
         self

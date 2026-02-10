@@ -205,7 +205,7 @@ pub fn head<Err: ErrorRenderer>() -> Route<Err> {
 ///  * `/{project_id}`
 ///
 pub fn method<Err: ErrorRenderer>(method: Method) -> Route<Err> {
-    Route::new().method(method)
+    Route::default().method(method)
 }
 
 /// Create a new route and add handler.
