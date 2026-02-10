@@ -287,7 +287,7 @@ where
     /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
     /// Resource level middlewares are not allowed to change response
     /// type (i.e modify response's body).
-    pub fn wrap<U>(self, mw: U) -> Resource<Err, WebStack<M, U, Err>, T> {
+    pub fn middleware<U>(self, mw: U) -> Resource<Err, WebStack<M, U, Err>, T> {
         Resource {
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
@@ -298,6 +298,12 @@ where
             routes: self.routes,
             default: self.default,
         }
+    }
+
+    #[deprecated]
+    #[doc(hidden)]
+    pub fn wrap<U>(self, mw: U) -> Resource<Err, WebStack<M, U, Err>, T> {
+        self.middleware(mw)
     }
 
     #[must_use]
@@ -540,6 +546,7 @@ mod tests {
     }
 
     #[crate::rt_test]
+    #[allow(deprecated)]
     async fn test_middleware() {
         let srv = init_service(
             App::new().service(

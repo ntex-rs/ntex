@@ -101,7 +101,7 @@ async fn test_body() {
 async fn test_body_gzip() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
-            .wrap(Compress::new(ContentEncoding::Gzip))
+            .middleware(Compress::new(ContentEncoding::Gzip))
             .service(
                 web::resource("/")
                     .route(web::to(|| async { HttpResponse::Ok().body(STR) })),
@@ -132,7 +132,7 @@ async fn test_body_gzip() {
 async fn test_body_gzip2() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
-            .wrap(Compress::new(ContentEncoding::Gzip))
+            .middleware(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::to(|| async {
                 HttpResponse::Ok().body(STR).into_body::<Body>()
             })))
@@ -162,7 +162,7 @@ async fn test_body_gzip2() {
 async fn test_body_encoding_override() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
-            .wrap(Compress::new(ContentEncoding::Gzip))
+            .middleware(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::to(|| async {
                 HttpResponse::Ok()
                     .encoding(ContentEncoding::Deflate)
@@ -226,7 +226,7 @@ async fn test_body_gzip_large() {
     let srv = test::server_with(test::config().h1(), async move || {
         let data = srv_data.clone();
         App::new()
-            .wrap(Compress::new(ContentEncoding::Gzip))
+            .middleware(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::to(move || {
                 Ready::Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
             })))
@@ -264,7 +264,7 @@ async fn test_body_gzip_large_random() {
     let srv = test::server_with(test::config().h1(), async move || {
         let data = srv_data.clone();
         App::new()
-            .wrap(Compress::new(ContentEncoding::Gzip))
+            .middleware(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::to(move || {
                 Ready::Ok::<_, io::Error>(HttpResponse::Ok().body(data.clone()))
             })))
@@ -295,7 +295,7 @@ async fn test_body_gzip_large_random() {
 async fn test_body_chunked_implicit() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
-            .wrap(Compress::new(ContentEncoding::Gzip))
+            .middleware(Compress::new(ContentEncoding::Gzip))
             .service(web::resource("/").route(web::get().to(move || async {
                 HttpResponse::Ok()
                     .streaming(TestBody::new(Bytes::from_static(STR.as_ref()), 24))
@@ -376,7 +376,7 @@ async fn test_no_chunking() {
 async fn test_body_deflate() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
-            .wrap(Compress::new(ContentEncoding::Deflate))
+            .middleware(Compress::new(ContentEncoding::Deflate))
             .service(
                 web::resource("/")
                     .route(web::to(move || async { HttpResponse::Ok().body(STR) })),
@@ -407,7 +407,7 @@ async fn test_body_deflate() {
 async fn test_encoding() {
     let srv = test::server_with(test::config().h1(), async || {
         App::new()
-            .wrap(Compress::default())
+            .middleware(Compress::default())
             .service(web::resource("/").route(web::to(move |body: Bytes| async {
                 HttpResponse::Ok().body(body)
             })))

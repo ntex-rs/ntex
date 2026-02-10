@@ -185,7 +185,7 @@ where
     ///
     /// fn main() {
     ///     let app = App::new()
-    ///         .wrap(middleware::Logger::default())
+    ///         .middleware(middleware::Logger::default())
     ///         .configure(config)  // <- register resources
     ///         .route("/index.html", web::get().to(|| async { HttpResponse::Ok() }));
     /// }
@@ -360,7 +360,7 @@ where
     ///
     /// fn main() {
     ///     let app = App::new()
-    ///         .wrap(middleware::Logger::default())
+    ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
@@ -413,8 +413,7 @@ where
     /// Use middleware when you need to read or modify *every* request or
     /// response in some way.
     ///
-    /// Notice that the keyword for registering middleware is `wrap`. As you
-    /// register middleware using `wrap` in the App builder, imagine wrapping
+    /// As you register middleware in the App builder, imagine wrapping
     /// layers around an inner App.
     ///
     /// ```rust
@@ -427,11 +426,11 @@ where
     ///
     /// fn main() {
     ///     let app = App::new()
-    ///         .wrap(middleware::Logger::default())
+    ///         .middleware(middleware::Logger::default())
     ///         .route("/index.html", web::get().to(index));
     /// }
     /// ```
-    pub fn wrap<U>(self, mw: U) -> App<WebStack<M, U, Err>, T, Err> {
+    pub fn middleware<U>(self, mw: U) -> App<WebStack<M, U, Err>, T, Err> {
         App {
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
@@ -443,6 +442,12 @@ where
             error_renderer: self.error_renderer,
             case_insensitive: self.case_insensitive,
         }
+    }
+
+    #[deprecated]
+    #[doc(hidden)]
+    pub fn wrap<U>(self, mw: U) -> App<WebStack<M, U, Err>, T, Err> {
+        self.middleware(mw)
     }
 
     #[must_use]
@@ -687,7 +692,7 @@ mod tests {
     async fn test_wrap() {
         let srv = init_service(
             App::new()
-                .wrap(
+                .middleware(
                     DefaultHeaders::new()
                         .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
                 )
@@ -708,7 +713,7 @@ mod tests {
         let srv = init_service(
             App::new()
                 .route("/test", web::get().to(|| async { HttpResponse::Ok() }))
-                .wrap(
+                .middleware(
                     DefaultHeaders::new()
                         .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
                 ),

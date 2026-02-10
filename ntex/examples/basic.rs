@@ -23,12 +23,14 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(async || {
         App::new()
-            .wrap(middleware::Logger::default())
+            .middleware(middleware::Logger::default())
             .service((index, no_params))
             .service(
                 web::resource("/resource2/index.html")
-                    .wrap(ntex::util::timeout::Timeout::new(ntex::time::Millis(5000)))
-                    .wrap(middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"))
+                    .middleware(ntex::util::timeout::Timeout::new(ntex::time::Millis(5000)))
+                    .middleware(
+                        middleware::DefaultHeaders::new().header("X-Version-R2", "0.3"),
+                    )
                     .default_service(
                         web::route().to(|| async { HttpResponse::MethodNotAllowed() }),
                     )

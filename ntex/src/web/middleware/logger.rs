@@ -32,8 +32,8 @@ use crate::web::{HttpResponse, WebRequest, WebResponse};
 ///
 /// fn main() {
 ///     let app = App::new()
-///         .wrap(Logger::default())
-///         .wrap(Logger::new("%a %{User-Agent}i"));
+///         .middleware(Logger::default())
+///         .middleware(Logger::new("%a %{User-Agent}i"));
 /// }
 /// ```
 ///

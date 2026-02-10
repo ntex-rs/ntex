@@ -2,7 +2,9 @@
 
 ## [3.2.0] 2026-02-11
 
-* Add `middlewares` support for http client
+* client: Add `middlewares` support for http client
+
+* web: Rename wrap() to middleware()
 
 ## [3.1.0] 2026-02-06
 

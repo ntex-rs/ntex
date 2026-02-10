@@ -17,7 +17,7 @@ use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 ///
 /// fn main() {
 ///     let app = App::new()
-///         .wrap(middleware::Compress::default())
+///         .middleware(middleware::Compress::default())
 ///         .service(
 ///             web::resource("/test")
 ///                 .route(web::get().to(|| async { HttpResponse::Ok() }))

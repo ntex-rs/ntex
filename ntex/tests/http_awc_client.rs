@@ -375,7 +375,7 @@ async fn test_with_query_parameter() {
 async fn test_no_decompress() {
     let srv = test::server(async || {
         App::new()
-            .wrap(Compress::default())
+            .middleware(Compress::default())
             .service(web::resource("/").route(web::to(|| async {
                 let mut res = HttpResponse::Ok().body(STR);
                 res.encoding(header::ContentEncoding::Gzip);
