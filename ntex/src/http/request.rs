@@ -171,6 +171,12 @@ impl Request {
     }
 }
 
+impl Default for Request {
+    fn default() -> Request {
+        Request::new()
+    }
+}
+
 impl fmt::Debug for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
@@ -202,6 +208,8 @@ mod tests {
     #[test]
     fn test_basics() {
         let msg = Message::new();
+        let req = Request::new();
+        assert!(req.io().is_none());
         let mut req = Request::from(msg);
         assert!(req.io().is_none());
 

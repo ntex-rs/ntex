@@ -52,7 +52,6 @@
 #![allow(
     unsafe_op_in_unsafe_fn,
     clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation

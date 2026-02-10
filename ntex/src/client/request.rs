@@ -72,6 +72,7 @@ impl ClientRequest {
 
     /// Set HTTP URI of request.
     #[inline]
+    #[must_use]
     pub fn uri<U>(mut self, uri: U) -> Self
     where
         Uri: TryFrom<U>,
@@ -89,6 +90,7 @@ impl ClientRequest {
         &self.head.uri
     }
 
+    #[must_use]
     /// Set socket address of the server.
     ///
     /// This address is used for connection. If address is not
@@ -100,13 +102,15 @@ impl ClientRequest {
 
     /// Set HTTP method of this request.
     #[inline]
+    #[must_use]
     pub fn method(mut self, method: Method) -> Self {
         self.head.method = method;
         self
     }
 
     #[inline]
-    /// Get HTTP method of this request
+    #[must_use]
+    /// Get HTTP method of this request.
     pub fn get_method(&self) -> &Method {
         &self.head.method
     }
@@ -115,6 +119,7 @@ impl ClientRequest {
     ///
     /// By default requests's HTTP version depends on network stream
     #[inline]
+    #[must_use]
     pub fn version(mut self, version: Version) -> Self {
         self.head.version = version;
         self
@@ -138,6 +143,7 @@ impl ClientRequest {
         &mut self.head.headers
     }
 
+    #[must_use]
     /// Append a header.
     ///
     /// Header gets appended to existing header.
@@ -172,6 +178,7 @@ impl ClientRequest {
         self
     }
 
+    #[must_use]
     /// Insert a header, replaces existing header.
     pub fn set_header<K, V>(mut self, key: K, value: V) -> Self
     where
@@ -190,6 +197,7 @@ impl ClientRequest {
         self
     }
 
+    #[must_use]
     /// Insert a header only if it is not yet set.
     pub fn set_header_if_none<K, V>(mut self, key: K, value: V) -> Self
     where
@@ -213,22 +221,26 @@ impl ClientRequest {
     }
 
     #[inline]
-    /// Set connection type of the message
+    #[must_use]
+    /// Set connection type of the message.
     pub fn set_connection_type(mut self, ctype: ConnectionType) -> Self {
         self.head.set_connection_type(ctype);
         self
     }
 
     /// Force close connection instead of returning it back to connections pool.
+    ///
     /// This setting affect only http/1 connections.
     #[inline]
+    #[must_use]
     pub fn force_close(mut self) -> Self {
         self.head.set_connection_type(ConnectionType::Close);
         self
     }
 
-    /// Set request's content type
+    /// Set request's content type.
     #[inline]
+    #[must_use]
     pub fn content_type<V>(mut self, value: V) -> Self
     where
         HeaderValue: TryFrom<V>,
@@ -241,13 +253,15 @@ impl ClientRequest {
         self
     }
 
-    /// Set content length
+    /// Set content length.
     #[inline]
+    #[must_use]
     pub fn content_length(self, len: u64) -> Self {
         self.header(header::CONTENT_LENGTH, len)
     }
 
-    /// Set HTTP basic authorization header
+    #[must_use]
+    /// Set HTTP basic authorization header.
     pub fn basic_auth<U>(self, username: U, password: Option<&str>) -> Self
     where
         U: fmt::Display,
@@ -262,7 +276,8 @@ impl ClientRequest {
         )
     }
 
-    /// Set HTTP bearer authentication header
+    #[must_use]
+    /// Set HTTP bearer authentication header.
     pub fn bearer_auth<T>(self, token: T) -> Self
     where
         T: fmt::Display,
@@ -270,8 +285,9 @@ impl ClientRequest {
         self.header(header::AUTHORIZATION, format!("Bearer {token}"))
     }
 
+    #[must_use]
     #[cfg(feature = "cookie")]
-    /// Set a cookie
+    /// Set a cookie.
     ///
     /// ```rust
     /// use coo_kie as cookie;
@@ -307,13 +323,17 @@ impl ClientRequest {
         self
     }
 
-    /// Disable automatic decompress of response's body
+    #[must_use]
+    /// Disable automatic decompress of response's body.
     pub fn no_decompress(mut self) -> Self {
         self.response_decompress = false;
         self
     }
 
-    /// Set request timeout in millis. Overrides client wide timeout setting.
+    #[must_use]
+    /// Set request timeout in millis.
+    ///
+    /// Overrides client wide timeout setting.
     ///
     /// Request timeout is the total time before a response must be received.
     /// Default value is 5 seconds.
@@ -322,6 +342,7 @@ impl ClientRequest {
         self
     }
 
+    #[must_use]
     /// This method calls provided closure with builder reference if
     /// value is `true`.
     pub fn if_true<F>(self, value: bool, f: F) -> Self
@@ -331,6 +352,7 @@ impl ClientRequest {
         if value { f(self) } else { self }
     }
 
+    #[must_use]
     /// This method calls provided closure with builder reference if
     /// value is `Some`.
     pub fn if_some<T, F>(self, value: Option<T>, f: F) -> Self
@@ -364,13 +386,13 @@ impl ClientRequest {
     /// Freeze request builder and construct `FrozenClientRequest`,
     /// which could be used for sending same request multiple times.
     pub fn freeze(self) -> Result<FrozenClientRequest, FreezeRequestError> {
-        let slf = self.prep_for_sending()?;
+        let this = self.prep_for_sending()?;
         let request = FrozenClientRequest {
-            head: Rc::new(*slf.head),
-            addr: slf.addr,
-            response_decompress: slf.response_decompress,
-            timeout: slf.timeout,
-            config: slf.config,
+            head: Rc::new(*this.head),
+            addr: this.addr,
+            response_decompress: this.response_decompress,
+            timeout: this.timeout,
+            config: this.config,
         };
 
         Ok(request)
@@ -381,52 +403,52 @@ impl ClientRequest {
     where
         B: Into<Body>,
     {
-        let slf = self.prep_for_sending()?;
+        let this = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head)
+        RequestHeadType::Owned(this.head)
             .send_body(
-                slf.addr,
-                slf.response_decompress,
-                slf.timeout,
-                slf.config,
+                this.addr,
+                this.response_decompress,
+                this.timeout,
+                this.config,
                 body,
             )
             .await
     }
 
-    /// Set a JSON body and generate `ClientRequest`
+    /// Set a JSON body and generate `ClientRequest`.
     pub async fn send_json<T: Serialize>(
         self,
         value: &T,
     ) -> Result<ClientResponse, SendRequestError> {
-        let slf = self.prep_for_sending()?;
+        let this = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head)
+        RequestHeadType::Owned(this.head)
             .send_json(
-                slf.addr,
-                slf.response_decompress,
-                slf.timeout,
-                slf.config,
+                this.addr,
+                this.response_decompress,
+                this.timeout,
+                this.config,
                 value,
             )
             .await
     }
 
-    /// Set a urlencoded body and generate `ClientRequest`
+    /// Set a urlencoded body and generate `ClientRequest`.
     ///
     /// `ClientRequestBuilder` can not be used after this call.
     pub async fn send_form<T: Serialize>(
         self,
         value: &T,
     ) -> Result<ClientResponse, SendRequestError> {
-        let slf = self.prep_for_sending()?;
+        let this = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head)
+        RequestHeadType::Owned(this.head)
             .send_form(
-                slf.addr,
-                slf.response_decompress,
-                slf.timeout,
-                slf.config,
+                this.addr,
+                this.response_decompress,
+                this.timeout,
+                this.config,
                 value,
             )
             .await
@@ -441,14 +463,14 @@ impl ClientRequest {
         S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
     {
-        let slf = self.prep_for_sending()?;
+        let this = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head)
+        RequestHeadType::Owned(this.head)
             .send_stream(
-                slf.addr,
-                slf.response_decompress,
-                slf.timeout,
-                slf.config,
+                this.addr,
+                this.response_decompress,
+                this.timeout,
+                this.config,
                 stream,
             )
             .await
@@ -456,10 +478,15 @@ impl ClientRequest {
 
     /// Set an empty body and generate `ClientRequest`.
     pub async fn send(self) -> Result<ClientResponse, SendRequestError> {
-        let slf = self.prep_for_sending()?;
+        let this = self.prep_for_sending()?;
 
-        RequestHeadType::Owned(slf.head)
-            .send(slf.addr, slf.response_decompress, slf.timeout, slf.config)
+        RequestHeadType::Owned(this.head)
+            .send(
+                this.addr,
+                this.response_decompress,
+                this.timeout,
+                this.config,
+            )
             .await
     }
 
@@ -508,14 +535,14 @@ impl ClientRequest {
             }
         }
 
-        let mut slf = self;
+        let mut this = self;
 
         #[cfg(feature = "compress")]
-        if slf.response_decompress {
-            slf = slf.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate");
+        if this.response_decompress {
+            this = this.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate");
         }
 
-        Ok(slf)
+        Ok(this)
     }
 }
 

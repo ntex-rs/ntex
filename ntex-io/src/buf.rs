@@ -259,6 +259,7 @@ impl<'a> FilterCtx<'a> {
     }
 
     #[inline]
+    #[must_use]
     /// Get filter ctx for next filter in chain
     pub fn next(&self) -> Self {
         Self {

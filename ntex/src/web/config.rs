@@ -37,6 +37,7 @@ impl Configuration for WebAppConfig {
 }
 
 impl WebAppConfig {
+    #[must_use]
     /// Create an default `WebAppConfig` instance.
     pub fn new() -> Self {
         WebAppConfig::with(
@@ -47,6 +48,7 @@ impl WebAppConfig {
         )
     }
 
+    #[must_use]
     /// Create an `WebAppConfig` instance.
     pub fn with(name: &str, secure: bool, addr: SocketAddr, host: String) -> Self {
         WebAppConfig {
@@ -85,6 +87,7 @@ impl WebAppConfig {
         self.addr
     }
 
+    #[must_use]
     /// Set server host name.
     ///
     /// By default host name is set to a "localhost" value.
@@ -93,18 +96,21 @@ impl WebAppConfig {
         self
     }
 
-    /// Connection is secure(https)
+    #[must_use]
+    /// Connection is secure(https).
     pub fn set_secure(mut self) -> Self {
         self.secure = true;
         self
     }
 
-    /// Returns the socket address of the local half of this TCP connection
+    #[must_use]
+    /// Returns the socket address of the local half of this TCP connection.
     pub fn set_local_addr(mut self, addr: SocketAddr) -> Self {
         self.addr = addr;
         self
     }
 
+    #[must_use]
     /// Set size of `HttpRequest` pool size.
     ///
     /// By default pool size is 128.
@@ -113,14 +119,14 @@ impl WebAppConfig {
         self
     }
 
-    /// Get message from the pool
+    /// Get message from the pool.
     pub(crate) fn get_request(&self) -> Option<HttpRequest> {
         CACHE.with(|cache| {
             cache.with(self.config.id(), |cache| cache.pop().map(HttpRequest))
         })
     }
 
-    /// Put message from the pool
+    /// Put message from the pool.
     pub(crate) fn put_request(&self, req: &mut Rc<HttpRequestInner>) {
         CACHE.with(|cache| {
             cache.with(self.config.id(), |cache| {
@@ -135,7 +141,7 @@ impl WebAppConfig {
         });
     }
 
-    /// Get message from the pool
+    /// Get message from the pool.
     pub(crate) fn clear_requests(&self) {
         CACHE.with(|cache| cache.with(self.config.id(), Vec::clear));
     }
@@ -208,6 +214,12 @@ impl<Err: ErrorRenderer> ServiceConfig<Err> {
         *rdef.name_mut() = name.as_ref().to_string();
         self.external.push(rdef);
         self
+    }
+}
+
+impl<Err: ErrorRenderer> Default for ServiceConfig<Err> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -333,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_new_service_config() {
-        let cfg: ServiceConfig<DefaultError> = ServiceConfig::new();
+        let cfg: ServiceConfig<DefaultError> = ServiceConfig::default();
         assert!(cfg.services.is_empty());
         assert!(cfg.external.is_empty());
     }

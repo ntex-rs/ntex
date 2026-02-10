@@ -11,7 +11,7 @@ use crate::util::{Bytes, Stream};
 const INPLACE: usize = 2049;
 
 pub struct Decoder<S> {
-    decoder: Option<ContentDecoder>,
+    inner: Option<ContentDecoder>,
     stream: S,
     eof: bool,
     fut: Option<BlockingResult<Result<(Option<Bytes>, ContentDecoder), io::Error>>>,
@@ -24,7 +24,7 @@ where
     /// Construct a decoder.
     #[inline]
     pub fn new(stream: S, encoding: ContentEncoding) -> Decoder<S> {
-        let decoder = match encoding {
+        let inner = match encoding {
             ContentEncoding::Deflate => Some(ContentDecoder::Deflate(Box::new(
                 ZlibDecoder::new(Writer::new()),
             ))),
@@ -34,7 +34,7 @@ where
             _ => None,
         };
         Decoder {
-            decoder,
+            inner,
             stream,
             fut: None,
             eof: false,
@@ -77,7 +77,7 @@ where
                     Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e.into()))),
                     Poll::Pending => return Poll::Pending,
                 };
-                self.decoder = Some(decoder);
+                self.inner = Some(decoder);
                 self.fut.take();
                 if let Some(chunk) = chunk {
                     return Poll::Ready(Some(Ok(chunk)));
@@ -91,10 +91,10 @@ where
             match Pin::new(&mut self.stream).poll_next(cx) {
                 Poll::Ready(Some(Err(err))) => return Poll::Ready(Some(Err(err))),
                 Poll::Ready(Some(Ok(chunk))) => {
-                    if let Some(mut decoder) = self.decoder.take() {
+                    if let Some(mut decoder) = self.inner.take() {
                         if chunk.len() < INPLACE {
                             let chunk = decoder.feed_data(&chunk)?;
-                            self.decoder = Some(decoder);
+                            self.inner = Some(decoder);
                             if let Some(chunk) = chunk {
                                 return Poll::Ready(Some(Ok(chunk)));
                             }
@@ -110,7 +110,7 @@ where
                 }
                 Poll::Ready(None) => {
                     self.eof = true;
-                    return if let Some(mut decoder) = self.decoder.take() {
+                    return if let Some(mut decoder) = self.inner.take() {
                         match decoder.feed_eof() {
                             Ok(Some(res)) => Poll::Ready(Some(Ok(res))),
                             Ok(None) => Poll::Ready(None),

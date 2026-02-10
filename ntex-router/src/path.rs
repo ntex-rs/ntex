@@ -17,7 +17,7 @@ pub(super) enum PathItem {
 /// If resource path contains variable patterns, `Path` stores them.
 #[derive(Debug)]
 pub struct Path<T> {
-    path: T,
+    resource: T,
     pub(super) skip: u16,
     pub(super) segments: Vec<(&'static str, PathItem)>,
 }
@@ -25,7 +25,7 @@ pub struct Path<T> {
 impl<T: Default> Default for Path<T> {
     fn default() -> Self {
         Path {
-            path: T::default(),
+            resource: T::default(),
             skip: 0,
             segments: Vec::new(),
         }
@@ -35,7 +35,7 @@ impl<T: Default> Default for Path<T> {
 impl<T: Clone> Clone for Path<T> {
     fn clone(&self) -> Self {
         Path {
-            path: self.path.clone(),
+            resource: self.resource.clone(),
             skip: self.skip,
             segments: self.segments.clone(),
         }
@@ -43,9 +43,9 @@ impl<T: Clone> Clone for Path<T> {
 }
 
 impl<T: ResourcePath> Path<T> {
-    pub fn new(path: T) -> Path<T> {
+    pub fn new(resource: T) -> Path<T> {
         Path {
-            path,
+            resource,
             skip: 0,
             segments: Vec::new(),
         }
@@ -54,28 +54,28 @@ impl<T: ResourcePath> Path<T> {
     #[inline]
     /// Get reference to inner path instance
     pub fn get_ref(&self) -> &T {
-        &self.path
+        &self.resource
     }
 
     #[inline]
     /// Get mutable reference to inner path instance
     pub fn get_mut(&mut self) -> &mut T {
-        &mut self.path
+        &mut self.resource
     }
 
     #[inline]
     /// Path
     pub fn path(&self) -> &str {
         let skip = self.skip as usize;
-        let path = self.path.path();
+        let path = self.resource.path();
         if skip <= path.len() { &path[skip..] } else { "" }
     }
 
     #[inline]
     /// Set new path
-    pub fn set(&mut self, path: T) {
+    pub fn set(&mut self, resource: T) {
         self.skip = 0;
-        self.path = path;
+        self.resource = resource;
         self.segments.clear();
     }
 
@@ -121,13 +121,13 @@ impl<T: ResourcePath> Path<T> {
                     PathItem::Static(s) => Some(s),
                     PathItem::Segment(ref s) => Some(s),
                     PathItem::IdxSegment(s, e) => {
-                        Some(&self.path.path()[(s as usize)..(e as usize)])
+                        Some(&self.resource.path()[(s as usize)..(e as usize)])
                     }
                 };
             }
         }
         if key == "tail" {
-            Some(&self.path.path()[(self.skip as usize)..])
+            Some(&self.resource.path()[(self.skip as usize)..])
         } else {
             None
         }
@@ -135,7 +135,7 @@ impl<T: ResourcePath> Path<T> {
 
     /// Get unprocessed part of the path
     pub fn unprocessed(&self) -> &str {
-        &self.path.path()[(self.skip as usize)..]
+        &self.resource.path()[(self.skip as usize)..]
     }
 
     /// Get matched parameter by name.
@@ -178,7 +178,7 @@ impl<'a, T: ResourcePath> Iterator for PathIter<'a, T> {
                 PathItem::Static(s) => s,
                 PathItem::Segment(ref s) => s.as_str(),
                 PathItem::IdxSegment(s, e) => {
-                    &self.params.path.path()[(s as usize)..(e as usize)]
+                    &self.params.resource.path()[(s as usize)..(e as usize)]
                 }
             };
             self.idx += 1;
@@ -204,7 +204,7 @@ impl<T: ResourcePath> Index<usize> for Path<T> {
         match self.segments[idx].1 {
             PathItem::Static(s) => s,
             PathItem::Segment(ref s) => s,
-            PathItem::IdxSegment(s, e) => &self.path.path()[(s as usize)..(e as usize)],
+            PathItem::IdxSegment(s, e) => &self.resource.path()[(s as usize)..(e as usize)],
         }
     }
 }

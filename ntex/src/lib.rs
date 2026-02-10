@@ -9,21 +9,12 @@
 #![deny(clippy::pedantic)]
 #![allow(
     type_alias_bounds,
-    unsafe_op_in_unsafe_fn,
     missing_debug_implementations,
-    missing_docs,
-    clippy::borrow_interior_mutable_const,
     clippy::cast_possible_truncation,
     clippy::missing_errors_doc,
     clippy::missing_fields_in_debug,
     clippy::missing_panics_doc,
     clippy::must_use_candidate,
-    clippy::new_without_default,
-    clippy::needless_doctest_main,
-    clippy::return_self_not_must_use,
-    clippy::similar_names,
-    clippy::struct_field_names,
-    clippy::too_many_arguments,
     clippy::too_many_lines,
     clippy::type_complexity
 )]

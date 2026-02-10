@@ -6,19 +6,20 @@ use crate::http::{HeaderMap, Response, ResponseHead, StatusCode};
 use super::error::{ErrorContainer, ErrorRenderer};
 use super::httprequest::HttpRequest;
 
-/// An service http response
+/// An http service response.
 pub struct WebResponse {
     request: HttpRequest,
     response: Response<Body>,
 }
 
 impl WebResponse {
-    /// Create web response instance
+    /// Create web response instance.
     pub fn new(response: Response<Body>, request: HttpRequest) -> Self {
         WebResponse { request, response }
     }
 
-    /// Create web response from the error
+    #[must_use]
+    /// Create web response from the error.
     pub fn from_err<Err: ErrorRenderer, E: Into<Err::Container>>(
         err: E,
         request: HttpRequest,
@@ -38,8 +39,9 @@ impl WebResponse {
         }
     }
 
-    /// Create web response for error
     #[inline]
+    #[must_use]
+    /// Create web response for error.
     pub fn error_response<Err: ErrorRenderer, E: Into<Err::Container>>(
         self,
         err: E,
@@ -47,32 +49,34 @@ impl WebResponse {
         Self::from_err::<Err, E>(err, self.request)
     }
 
-    /// Create web response
     #[inline]
+    #[must_use]
+    /// Create web response.
     pub fn into_response(self, response: Response) -> WebResponse {
         WebResponse::new(response, self.request)
     }
 
-    /// Get reference to original request
     #[inline]
+    #[must_use]
+    /// Get reference to original request.
     pub fn request(&self) -> &HttpRequest {
         &self.request
     }
 
-    /// Get reference to response
     #[inline]
+    /// Get reference to response.
     pub fn response(&self) -> &Response<Body> {
         &self.response
     }
 
-    /// Get mutable reference to response
     #[inline]
+    /// Get mutable reference to response.
     pub fn response_mut(&mut self) -> &mut Response<Body> {
         &mut self.response
     }
 
-    /// Get the response status code
     #[inline]
+    /// Get the response status code.
     pub fn status(&self) -> StatusCode {
         self.response.status()
     }
@@ -89,6 +93,7 @@ impl WebResponse {
         self.response.headers_mut()
     }
 
+    #[must_use]
     /// Execute closure and in case of error convert it to response.
     pub fn checked_expr<Err, F, E>(mut self, f: F) -> Self
     where
@@ -104,12 +109,14 @@ impl WebResponse {
         }
     }
 
-    /// Extract response body
+    #[must_use]
+    /// Extract response body.
     pub fn take_body(&mut self) -> ResponseBody<Body> {
         self.response.take_body()
     }
 
-    /// Set a new body
+    #[must_use]
+    /// Set a new body.
     pub fn map_body<F>(self, f: F) -> WebResponse
     where
         F: FnOnce(&mut ResponseHead, ResponseBody<Body>) -> ResponseBody<Body>,
@@ -122,7 +129,7 @@ impl WebResponse {
         }
     }
 
-    /// Destruct response into parts
+    /// Destruct response into parts.
     pub fn into_parts(self) -> (Response<Body>, HttpRequest) {
         (self.response, self.request)
     }

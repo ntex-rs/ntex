@@ -33,7 +33,7 @@ pub(crate) trait FactoryService: Send {
 struct Factory {
     name: Arc<str>,
     tokens: Vec<(Token, SharedCfg)>,
-    factory: Box<dyn FactoryWrapper + Send>,
+    wrapper: Box<dyn FactoryWrapper + Send>,
 }
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
@@ -60,7 +60,7 @@ where
     Box::from(Factory {
         tokens,
         name: name.clone(),
-        factory: Box::new(FactoryWrapperImpl(async move |cfg| {
+        wrapper: Box::new(FactoryWrapperImpl(async move |cfg| {
             boxed::factory(ServerServiceFactory {
                 name: name.clone(),
                 factory: (factory)(cfg).await,
@@ -99,7 +99,7 @@ impl FactoryService for Factory {
         Box::new(Factory {
             name: self.name.clone(),
             tokens: self.tokens.clone(),
-            factory: self.factory.clone(),
+            wrapper: self.wrapper.clone(),
         })
     }
 
@@ -118,7 +118,7 @@ impl FactoryService for Factory {
         for item in &tokens {
             cfg.config(item.1);
         }
-        let factory_fut = self.factory.run(cfg.clone());
+        let factory_fut = self.wrapper.run(cfg.clone());
 
         Box::pin(async move {
             let factory = factory_fut.await;

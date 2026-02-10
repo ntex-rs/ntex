@@ -97,6 +97,7 @@ where
         >,
     Err: ErrorRenderer,
 {
+    #[must_use]
     /// Add match guard to a scope.
     ///
     /// ```rust
@@ -122,8 +123,11 @@ where
         self
     }
 
-    /// Set or override application state. Application state could be accessed
-    /// by using `State<T>` extractor where `T` is state type.
+    #[must_use]
+    /// Set or override application state.
+    ///
+    /// Application state could be accessed by using `State<T>`
+    /// extractor where `T` is state type.
     ///
     /// ```rust
     /// use std::cell::Cell;
@@ -156,6 +160,7 @@ where
         self
     }
 
+    #[must_use]
     /// Use ascii case-insensitive routing.
     ///
     /// Only static segments could be case-insensitive.
@@ -164,6 +169,7 @@ where
         self
     }
 
+    #[must_use]
     /// Run external configuration as part of the scope building
     /// process
     ///
@@ -209,6 +215,7 @@ where
         self
     }
 
+    #[must_use]
     /// Register http service.
     ///
     /// This is similar to `App's` service registration.
@@ -245,6 +252,7 @@ where
         self
     }
 
+    #[must_use]
     /// Configure route for a specific path.
     ///
     /// This is a simplified version of the `Scope::service()` method.
@@ -274,6 +282,7 @@ where
         )
     }
 
+    #[must_use]
     /// Default service to be used if no matching route could be found.
     ///
     /// If default resource is not registered, app's default resource is being used.
@@ -297,6 +306,7 @@ where
         self
     }
 
+    #[must_use]
     /// Register request filter.
     ///
     /// Filter runs during inbound processing in the request
@@ -342,6 +352,7 @@ where
         }
     }
 
+    #[must_use]
     /// Registers middleware, in the form of a middleware component (type).
     ///
     /// That runs during inbound processing in the request

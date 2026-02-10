@@ -1,4 +1,8 @@
-#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+#![allow(
+    unsafe_op_in_unsafe_fn,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 use std::marker::PhantomData;
 use std::{cell::Cell, cmp, io::Write, mem, ptr, ptr::copy_nonoverlapping, slice};
 
@@ -282,6 +286,7 @@ impl<T: MessageType> MessageEncoder<T> {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn encode(
         &self,
         dst: &mut BytesMut,

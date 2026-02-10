@@ -29,6 +29,8 @@ impl Default for ClientBuilder {
 }
 
 impl ClientBuilder {
+    #[must_use]
+    /// Create new client builder instance.
     pub fn new() -> Self {
         ClientBuilder {
             default_headers: true,
@@ -39,12 +41,14 @@ impl ClientBuilder {
         }
     }
 
+    #[must_use]
     /// Use custom connector service.
     pub fn connector<T>(mut self, connector: Connector) -> Self {
         self.connector = connector;
         self
     }
 
+    #[must_use]
     /// Set response timeout.
     ///
     /// Response timeout is the total time before a response must be received.
@@ -54,12 +58,14 @@ impl ClientBuilder {
         self
     }
 
+    #[must_use]
     /// Disable response timeout.
     pub fn disable_timeout(mut self) -> Self {
         self.config.timeout = Millis::ZERO;
         self
     }
 
+    #[must_use]
     /// Do not follow redirects.
     ///
     /// Redirects are allowed by default.
@@ -68,6 +74,7 @@ impl ClientBuilder {
         self
     }
 
+    #[must_use]
     /// Set max number of redirects.
     ///
     /// Max redirects is set to 10 by default.
@@ -76,20 +83,25 @@ impl ClientBuilder {
         self
     }
 
+    #[must_use]
     /// Do not add default request headers.
+    ///
     /// By default `Date` and `User-Agent` headers are set.
     pub fn no_default_headers(mut self) -> Self {
         self.default_headers = false;
         self
     }
 
+    #[must_use]
     /// Max size of response payload.
+    ///
     /// By default max size is 256Kb
     pub fn response_payload_limit(mut self, limit: usize) -> Self {
         self.config.response_pl_limit = limit;
         self
     }
 
+    #[must_use]
     /// Set response timeout.
     ///
     /// Response payload timeout is the total time before a payload must be received.
@@ -99,8 +111,10 @@ impl ClientBuilder {
         self
     }
 
-    /// Add default header. Headers added by this method
-    /// get added to every request.
+    #[must_use]
+    /// Add default header.
+    ///
+    /// Headers added by this method get added to every request.
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -120,7 +134,8 @@ impl ClientBuilder {
         self
     }
 
-    /// Set client wide HTTP basic authorization header
+    #[must_use]
+    /// Set client wide HTTP basic authorization header.
     pub fn basic_auth<U>(self, username: U, password: Option<&str>) -> Self
     where
         U: fmt::Display,
@@ -135,7 +150,8 @@ impl ClientBuilder {
         )
     }
 
-    /// Set client wide HTTP bearer authentication header
+    #[must_use]
+    /// Set client wide HTTP bearer authentication header.
     pub fn bearer_auth<T>(self, token: T) -> Self
     where
         T: fmt::Display,

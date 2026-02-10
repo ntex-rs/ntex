@@ -18,7 +18,7 @@ const INPLACE: usize = 1024;
 pub struct Encoder<B> {
     eof: bool,
     body: EncoderBody<B>,
-    encoder: Option<ContentEncoder>,
+    inner: Option<ContentEncoder>,
     fut: Option<BlockingResult<Result<ContentEncoder, io::Error>>>,
 }
 
@@ -54,7 +54,7 @@ impl<B: MessageBody> Encoder<B> {
                 body,
                 eof: false,
                 fut: None,
-                encoder: Some(encoder),
+                inner: Some(encoder),
             }))
         } else {
             body
@@ -67,7 +67,7 @@ impl<B: fmt::Debug> fmt::Debug for Encoder<B> {
         f.debug_struct("Encoder")
             .field("eof", &self.eof)
             .field("body", &self.body)
-            .field("encoder", &self.encoder)
+            .field("encoder", &self.inner)
             .field("fut", &self.fut.as_ref().map(|_| "JoinHandle(_)"))
             .finish()
     }
@@ -91,7 +91,7 @@ impl<B> fmt::Debug for EncoderBody<B> {
 
 impl<B: MessageBody> MessageBody for Encoder<B> {
     fn size(&self) -> BodySize {
-        if self.encoder.is_none() {
+        if self.inner.is_none() {
             match self.body {
                 EncoderBody::Bytes(ref b) => b.size(),
                 EncoderBody::Stream(ref b) => b.size(),
@@ -124,7 +124,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                     Poll::Pending => return Poll::Pending,
                 };
                 let chunk = encoder.take();
-                self.encoder = Some(encoder);
+                self.inner = Some(encoder);
                 self.fut.take();
                 if !chunk.is_empty() {
                     return Poll::Ready(Some(Ok(chunk)));
@@ -144,11 +144,11 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
             };
             match result {
                 Poll::Ready(Some(Ok(chunk))) => {
-                    if let Some(mut encoder) = self.encoder.take() {
+                    if let Some(mut encoder) = self.inner.take() {
                         if chunk.len() < INPLACE {
                             encoder.write(&chunk).map_err(dyn_rc_error)?;
                             let chunk = encoder.take();
-                            self.encoder = Some(encoder);
+                            self.inner = Some(encoder);
                             if !chunk.is_empty() {
                                 return Poll::Ready(Some(Ok(chunk)));
                             }
@@ -163,7 +163,7 @@ impl<B: MessageBody> MessageBody for Encoder<B> {
                     }
                 }
                 Poll::Ready(None) => {
-                    if let Some(encoder) = self.encoder.take() {
+                    if let Some(encoder) = self.inner.take() {
                         let chunk = encoder.finish().map_err(dyn_rc_error)?;
                         if chunk.is_empty() {
                             return Poll::Ready(None);

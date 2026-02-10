@@ -168,6 +168,7 @@ impl FrozenSendBuilder {
         }
     }
 
+    #[must_use]
     /// Insert a header, it overrides existing header in `FrozenClientRequest`.
     pub fn extra_header<K, V>(mut self, key: K, value: V) -> Self
     where

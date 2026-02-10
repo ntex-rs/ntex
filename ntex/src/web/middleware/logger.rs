@@ -86,6 +86,7 @@ impl Logger {
         }
     }
 
+    #[must_use]
     /// Ignore and do not log access info for specified path.
     pub fn exclude<T: Into<String>>(mut self, path: T) -> Self {
         Rc::get_mut(&mut self.inner)

@@ -74,12 +74,14 @@ impl Default for TestRequest {
 }
 
 impl TestRequest {
-    /// Create `TestRequest` and set request uri
+    #[must_use]
+    /// Create `TestRequest` and set request uri.
     pub fn with_uri(path: &str) -> TestRequest {
         TestRequest::default().uri(path).take()
     }
 
-    /// Create `TestRequest` and set header
+    #[must_use]
+    /// Create `TestRequest` and set header.
     pub fn with_header<K, V>(key: K, value: V) -> TestRequest
     where
         HeaderName: TryFrom<K>,
@@ -89,25 +91,25 @@ impl TestRequest {
         TestRequest::default().header(key, value).take()
     }
 
-    /// Set HTTP version of this request
+    /// Set HTTP version of this request.
     pub fn version(&mut self, ver: Version) -> &mut Self {
         parts(&mut self.0).version = ver;
         self
     }
 
-    /// Set HTTP method of this request
+    /// Set HTTP method of this request.
     pub fn method(&mut self, meth: Method) -> &mut Self {
         parts(&mut self.0).method = meth;
         self
     }
 
-    /// Set HTTP Uri of this request
+    /// Set HTTP Uri of this request.
     pub fn uri(&mut self, path: &str) -> &mut Self {
         parts(&mut self.0).uri = Uri::from_str(path).unwrap();
         self
     }
 
-    /// Set a header
+    /// Set a header.
     pub fn header<K, V>(&mut self, key: K, value: V) -> &mut Self
     where
         HeaderName: TryFrom<K>,
@@ -124,7 +126,7 @@ impl TestRequest {
     }
 
     #[cfg(feature = "cookie")]
-    /// Set cookie for this request
+    /// Set cookie for this request.
     pub fn cookie<C>(&mut self, cookie: C) -> &mut Self
     where
         C: Into<Cookie<'static>>,
@@ -133,19 +135,21 @@ impl TestRequest {
         self
     }
 
-    /// Set request payload
+    /// Set request payload.
     pub fn set_payload<B: Into<Bytes>>(&mut self, data: B) -> &mut Self {
         let payload = bstream::empty(Some(data.into()));
         parts(&mut self.0).payload = Some(payload.into());
         self
     }
 
-    /// Take test request
+    #[must_use]
+    /// Take test request.
     pub fn take(&mut self) -> TestRequest {
         TestRequest(self.0.take())
     }
 
-    /// Complete request creation and generate `Request` instance
+    #[must_use]
+    /// Complete request creation and generate `Request` instance.
     pub fn finish(&mut self) -> Request {
         let inner = self.0.take().expect("cannot reuse test request builder");
 

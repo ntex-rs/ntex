@@ -15,7 +15,6 @@
 //!     println!("Response: {:?}", response);
 //! }
 //! ```
-#![allow(clippy::missing_panics_doc)]
 use std::rc::Rc;
 
 mod builder;

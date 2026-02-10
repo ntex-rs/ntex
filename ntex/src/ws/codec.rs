@@ -69,6 +69,7 @@ bitflags::bitflags! {
 
 impl Codec {
     /// Create new websocket frames decoder
+    #[must_use]
     pub fn new() -> Codec {
         Codec {
             max_size: 65_536,
@@ -79,6 +80,7 @@ impl Codec {
     /// Set max frame size
     ///
     /// By default max size is set to 64kb
+    #[must_use]
     pub fn max_size(mut self, size: usize) -> Self {
         self.max_size = size;
         self
@@ -87,6 +89,7 @@ impl Codec {
     /// Set decoder to client mode.
     ///
     /// By default decoder works in server mode.
+    #[must_use]
     pub fn client_mode(self) -> Self {
         self.remove_flags(Flags::SERVER);
         self

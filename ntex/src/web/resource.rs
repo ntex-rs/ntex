@@ -1,13 +1,12 @@
 use std::{cell::RefCell, fmt, rc::Rc};
 
-use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
 use crate::service::dev::{AndThen, ServiceChain, ServiceChainFactory};
 use crate::service::{Identity, IntoServiceFactory, Middleware, Service, ServiceFactory};
 use crate::service::{ServiceCtx, chain, chain_factory};
-use crate::util::Extensions;
+use crate::{http::Response, util::Extensions};
 
 use super::dev::{WebServiceConfig, WebServiceFactory, insert_slash};
 use super::extract::FromRequest;
@@ -84,6 +83,7 @@ where
         >,
     Err: ErrorRenderer,
 {
+    #[must_use]
     /// Set resource name.
     ///
     /// Name is used for url generation.
@@ -92,6 +92,7 @@ where
         self
     }
 
+    #[must_use]
     /// Add match guard to a resource.
     ///
     /// ```rust
@@ -125,9 +126,12 @@ where
         self
     }
 
-    /// Provide resource specific state. This method allows to add extractor
-    /// configuration or specific state available via `State<T>` extractor.
-    /// Provided state is available for all routes registered for the current resource.
+    #[must_use]
+    /// Provide resource specific state.
+    ///
+    /// This method allows to add extractor configuration or specific
+    /// state available via `State<T>` extractor. Provided state is available
+    /// for all routes registered for the current resource.
     /// Resource state overrides state registered by `App::state()` method.
     ///
     /// ```rust
@@ -157,6 +161,7 @@ where
         self
     }
 
+    #[must_use]
     /// Register a new route.
     ///
     /// ```rust
@@ -203,7 +208,10 @@ where
         self
     }
 
-    /// Register a new route and add handler. This route matches all requests.
+    #[must_use]
+    /// Register a new route and add handler.
+    ///
+    /// This route matches all requests.
     ///
     /// ```rust
     /// use ntex::web::{self, App, HttpRequest, HttpResponse};
@@ -232,6 +240,7 @@ where
         self
     }
 
+    #[must_use]
     /// Register request filter.
     ///
     /// This is similar to `App's` filters, but filter get invoked on resource level.
@@ -272,13 +281,12 @@ where
         }
     }
 
+    #[must_use]
     /// Register a resource middleware.
     ///
     /// This is similar to `App's` middlewares, but middleware get invoked on resource level.
     /// Resource level middlewares are not allowed to change response
     /// type (i.e modify response's body).
-    ///
-    /// **Note**: middlewares get called in opposite order of middlewares registration.
     pub fn wrap<U>(self, mw: U) -> Resource<Err, WebStack<M, U, Err>, T> {
         Resource {
             middleware: WebStack::new(self.middleware, mw),
@@ -292,7 +300,9 @@ where
         }
     }
 
+    #[must_use]
     /// Default service to be used if no matching route could be found.
+    ///
     /// By default *405* response get returned. Resource does not use
     /// default handler from `App` or `Scope`.
     pub fn default_service<F, S>(mut self, f: F) -> Self

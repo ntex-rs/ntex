@@ -36,7 +36,14 @@ pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     case_insensitive: bool,
 }
 
+impl Default for App<Identity, Filter<DefaultError>, DefaultError> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App<Identity, Filter<DefaultError>, DefaultError> {
+    #[must_use]
     /// Create application builder. Application can be configured with a builder-like pattern.
     pub fn new() -> Self {
         App {
@@ -54,6 +61,7 @@ impl App<Identity, Filter<DefaultError>, DefaultError> {
 }
 
 impl<Err: ErrorRenderer> App<Identity, Filter<Err>, Err> {
+    #[must_use]
     /// Create application builder with custom error renderer.
     pub fn with(err: Err) -> Self {
         App {
@@ -81,6 +89,7 @@ where
         >,
     Err: ErrorRenderer,
 {
+    #[must_use]
     /// Set application level arbitrary state item.
     ///
     /// Application state stored with `App::state()` method is available
@@ -118,9 +127,11 @@ where
         self
     }
 
-    /// Set application state factory. This function is
-    /// similar to `.state()` but it accepts state factory. State object get
-    /// constructed asynchronously during application initialization.
+    #[must_use]
+    /// Set application state factory.
+    ///
+    /// This function is similar to `.state()` but it accepts state factory.
+    /// State object get constructed asynchronously during application initialization.
     pub fn state_factory<F, D, E>(mut self, state: F) -> Self
     where
         F: AsyncFnOnce() -> Result<D, E> + 'static,
@@ -153,8 +164,9 @@ where
         self
     }
 
+    #[must_use]
     /// Run external configuration as part of the application building
-    /// process
+    /// process.
     ///
     /// This function is useful for moving parts of configuration to a
     /// different module or even library. For example,
@@ -190,6 +202,7 @@ where
         self
     }
 
+    #[must_use]
     /// Configure route for a specific path.
     ///
     /// This is a simplified version of the `App::service()` method.
@@ -217,6 +230,7 @@ where
         )
     }
 
+    #[must_use]
     /// Register http service.
     ///
     /// Http service is any type that implements `WebServiceFactory` trait.
@@ -235,6 +249,7 @@ where
         self
     }
 
+    #[must_use]
     /// Default service to be used if no matching resource could be found.
     ///
     /// It is possible to use services like `Resource`, `Route`.
@@ -289,6 +304,7 @@ where
         self
     }
 
+    #[must_use]
     /// Register an external resource.
     ///
     /// External resources are useful for URL generation purposes only
@@ -322,6 +338,7 @@ where
         self
     }
 
+    #[must_use]
     /// Register request filter.
     ///
     /// Filter runs during inbound processing in the request
@@ -385,7 +402,10 @@ where
         }
     }
 
-    /// Registers middleware, in the form of a middleware component (type),
+    #[must_use]
+    /// Registers middleware.
+    ///
+    /// Registers middleware in the form of a middleware component (type),
     /// that runs during inbound and/or outbound processing in the request
     /// lifecycle (request -> response), modifying request/response as
     /// necessary, across all requests managed by the *Application*.
@@ -394,7 +414,7 @@ where
     /// response in some way.
     ///
     /// Notice that the keyword for registering middleware is `wrap`. As you
-    /// register middleware using `wrap` in the App builder,  imagine wrapping
+    /// register middleware using `wrap` in the App builder, imagine wrapping
     /// layers around an inner App.
     ///
     /// ```rust
@@ -425,6 +445,7 @@ where
         }
     }
 
+    #[must_use]
     /// Use ascii case-insensitive routing.
     ///
     /// Only static segments could be case-insensitive.

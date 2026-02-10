@@ -1,4 +1,4 @@
-#![allow(clippy::op_ref)]
+#![allow(clippy::op_ref, unused_must_use)]
 use std::{borrow::Borrow, borrow::BorrowMut};
 
 use ntex_bytes::info::Kind;

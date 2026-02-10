@@ -1,6 +1,6 @@
-use std::cell::{Ref, RefMut};
+use std::cell::{Cell, Ref, RefMut};
 use std::task::{Context, Poll};
-use std::{cell::Cell, fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
+use std::{fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
 
 use serde::de::DeserializeOwned;
 
@@ -113,12 +113,13 @@ impl ClientResponse {
         &mut self.head_mut().headers
     }
 
-    /// Set a body and return previous body value
+    /// Set a body and return previous body value.
     pub fn set_payload(&self, payload: Payload) {
         self.payload.set(Some(payload));
     }
 
-    /// Get response's payload
+    #[must_use]
+    /// Get response's payload.
     pub fn take_payload(&self) -> Payload {
         if let Some(pl) = self.payload.take() {
             pl
@@ -127,13 +128,13 @@ impl ClientResponse {
         }
     }
 
-    /// Request extensions
+    /// Request extensions.
     #[inline]
     pub fn extensions(&self) -> Ref<'_, Extensions> {
         self.head().extensions()
     }
 
-    /// Mutable reference to a the request's extensions
+    /// Mutable reference to a the request's extensions.
     #[inline]
     pub fn extensions_mut(&self) -> RefMut<'_, Extensions> {
         self.head().extensions_mut()
@@ -218,7 +219,10 @@ impl MessageBody {
         }
     }
 
-    /// Change max size of payload. By default max size is 256Kb
+    #[must_use]
+    /// Change max size of payload.
+    ///
+    /// By default max size is 256Kb
     pub fn limit(mut self, limit: usize) -> Self {
         if let Some(ref mut fut) = self.fut {
             fut.limit = limit;
@@ -226,6 +230,7 @@ impl MessageBody {
         self
     }
 
+    #[must_use]
     /// Set operation timeout.
     ///
     /// By default timeout is set to 10 seconds. Set 0 millis to disable
@@ -285,6 +290,7 @@ impl<U> JsonBody<U>
 where
     U: DeserializeOwned,
 {
+    #[must_use]
     /// Create `JsonBody` for request.
     pub fn new(res: &ClientResponse) -> Self {
         // check content-type
@@ -322,7 +328,10 @@ where
         }
     }
 
-    /// Change max size of payload. By default max size is 64Kb
+    #[must_use]
+    /// Change max size of payload.
+    ///
+    /// By default max size is 64Kb.
     pub fn limit(mut self, limit: usize) -> Self {
         if let Some(ref mut fut) = self.fut {
             fut.limit = limit;
@@ -330,6 +339,7 @@ where
         self
     }
 
+    #[must_use]
     /// Set operation timeout.
     ///
     /// By default timeout is set to 10 seconds. Set 0 millis to disable

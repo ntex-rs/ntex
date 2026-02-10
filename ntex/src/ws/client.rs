@@ -1,5 +1,4 @@
 //! Websockets client
-#![allow(clippy::missing_panics_doc)]
 use std::{cell::RefCell, fmt, marker, net, rc::Rc, str};
 
 #[cfg(feature = "openssl")]
@@ -267,7 +266,8 @@ impl<F, T> fmt::Debug for WsClient<F, T> {
 }
 
 impl WsClientBuilder<Base, ()> {
-    /// Create new websocket connector
+    #[must_use]
+    /// Create new client builder.
     fn new<U>(uri: U) -> WsClientBuilder<Base, Connector<Uri>>
     where
         Uri: TryFrom<U>,
@@ -318,7 +318,7 @@ where
         self
     }
 
-    /// Set supported websocket protocols
+    /// Set supported websocket protocols.
     pub fn protocols<U, V>(&mut self, protos: U) -> &mut Self
     where
         U: IntoIterator<Item = V>,
@@ -333,7 +333,7 @@ where
     }
 
     #[cfg(feature = "cookie")]
-    /// Set a cookie
+    /// Set a cookie.
     pub fn cookie<C>(&mut self, cookie: C) -> &mut Self
     where
         C: Into<Cookie<'static>>,
@@ -348,7 +348,7 @@ where
         self
     }
 
-    /// Set request Origin
+    /// Set request Origin.
     pub fn origin<V, E>(&mut self, origin: V) -> &mut Self
     where
         HeaderValue: TryFrom<V, Error = E>,
@@ -361,7 +361,7 @@ where
         self
     }
 
-    /// Set max frame size
+    /// Set max frame size.
     ///
     /// By default max size is set to 64kb
     pub fn max_frame_size(&mut self, size: usize) -> &mut Self {
@@ -371,7 +371,9 @@ where
         self
     }
 
-    /// Disable payload masking. By default ws client masks frame payload.
+    /// Disable payload masking.
+    ///
+    /// By default ws client masks frame payload.
     pub fn server_mode(&mut self) -> &mut Self {
         if let Some(parts) = parts(&mut self.inner, &self.err) {
             parts.server_mode = true;
@@ -452,7 +454,7 @@ where
         self
     }
 
-    /// Set HTTP basic authorization header
+    /// Set HTTP basic authorization header.
     pub fn basic_auth<U>(&mut self, username: U, password: Option<&str>) -> &mut Self
     where
         U: fmt::Display,
@@ -464,7 +466,7 @@ where
         self.header(AUTHORIZATION, format!("Basic {}", base64.encode(auth)))
     }
 
-    /// Set HTTP bearer authentication header
+    /// Set HTTP bearer authentication header.
     pub fn bearer_auth<U>(&mut self, token: U) -> &mut Self
     where
         U: fmt::Display,
@@ -483,7 +485,7 @@ where
         self
     }
 
-    /// Use custom connector
+    /// Use custom connector.
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
         F1: Filter,
@@ -529,6 +531,7 @@ where
         self.connector(rustls::TlsConnector::from(config))
     }
 
+    #[must_use]
     /// This method construct new `WsClientBuilder`
     pub fn take(&mut self) -> WsClientBuilder<F, T> {
         WsClientBuilder {

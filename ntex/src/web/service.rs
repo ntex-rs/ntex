@@ -204,6 +204,7 @@ pub struct WebServiceAdapter {
 }
 
 impl WebServiceAdapter {
+    #[must_use]
     #[allow(clippy::needless_pass_by_value)]
     /// Create new `WebServiceAdapter` instance.
     pub fn new<T: IntoPattern>(path: T) -> Self {
@@ -217,6 +218,7 @@ impl WebServiceAdapter {
     /// Set service name.
     ///
     /// Name is used for url generation.
+    #[must_use]
     pub fn name(mut self, name: &str) -> Self {
         self.name = Some(name.to_string());
         self
@@ -240,6 +242,7 @@ impl WebServiceAdapter {
     ///         );
     /// }
     /// ```
+    #[must_use]
     pub fn guard<G: Guard + 'static>(mut self, guard: G) -> Self {
         self.guards.add(guard);
         self

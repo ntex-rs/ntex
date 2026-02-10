@@ -47,13 +47,14 @@ impl Default for DefaultHeaders {
 }
 
 impl DefaultHeaders {
+    #[must_use]
     /// Construct `DefaultHeaders` middleware.
     pub fn new() -> DefaultHeaders {
         DefaultHeaders::default()
     }
 
+    #[must_use]
     /// Set a header.
-    #[inline]
     pub fn header<K, V>(mut self, key: K, value: V) -> Self
     where
         HeaderName: TryFrom<K>,
@@ -77,6 +78,7 @@ impl DefaultHeaders {
         self
     }
 
+    #[must_use]
     /// Set *CONTENT-TYPE* header if response does not contain this header.
     pub fn content_type(mut self) -> Self {
         Rc::get_mut(&mut self.inner)
@@ -139,6 +141,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(unused_must_use)]
 mod tests {
     use super::*;
     use crate::service::{IntoService, Pipeline};
