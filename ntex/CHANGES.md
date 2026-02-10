@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.0] 2026-02-11
+
+* Add `middlewares` support for http client
+
 ## [3.1.0] 2026-02-06
 
 * Fix apply_fn/apply_fn_factory usage

@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, net, rc::Rc};
+use std::{error::Error, fmt, net};
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 #[cfg(feature = "cookie")]
@@ -8,12 +8,11 @@ use serde::Serialize;
 use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use crate::http::{ConnectionType, Method, RequestHead, RequestHeadType, Uri, Version};
-use crate::{time::Millis, util::Bytes, util::Stream};
+use crate::http::{ConnectionType, Method, Uri, Version};
+use crate::{Pipeline, Service, time::Millis, util::Bytes, util::Stream};
 
-use super::error::{FreezeRequestError, InvalidUrl, SendRequestError};
-use super::sender::PrepForSendingError;
-use super::{ClientInner, ClientResponse, frozen::FrozenClientRequest};
+use super::error::{InvalidUrl, SendRequestError};
+use super::{ClientResponse, ServiceRequest, ServiceResponse, sender::Sender};
 
 /// An HTTP Client request builder
 ///
@@ -38,33 +37,27 @@ use super::{ClientInner, ClientResponse, frozen::FrozenClientRequest};
 ///    });
 /// }
 /// ```
-pub struct ClientRequest {
-    pub(crate) head: Box<RequestHead>,
+pub struct ClientRequest<S = Sender> {
+    request: ServiceRequest,
+    svc: Pipeline<S>,
     err: Option<HttpError>,
-    addr: Option<net::SocketAddr>,
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
-    response_decompress: bool,
-    timeout: Millis,
-    config: Rc<ClientInner>,
 }
 
-impl ClientRequest {
+impl<S> ClientRequest<S> {
     /// Create new client request builder.
-    pub(super) fn new<U>(method: Method, uri: U, config: Rc<ClientInner>) -> Self
+    pub(super) fn new<U>(method: Method, uri: U, svc: Pipeline<S>) -> Self
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
         ClientRequest {
-            config,
-            head: Box::new(RequestHead::default()),
+            svc,
+            request: ServiceRequest::new(),
             err: None,
-            addr: None,
             #[cfg(feature = "cookie")]
             cookies: None,
-            timeout: Millis::ZERO,
-            response_decompress: true,
         }
         .method(method)
         .uri(uri)
@@ -79,7 +72,7 @@ impl ClientRequest {
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
         match Uri::try_from(uri) {
-            Ok(uri) => self.head.uri = uri,
+            Ok(uri) => self.request.head.uri = uri,
             Err(e) => self.err = Some(e.into()),
         }
         self
@@ -87,7 +80,7 @@ impl ClientRequest {
 
     /// Get HTTP URI of request.
     pub fn get_uri(&self) -> &Uri {
-        &self.head.uri
+        &self.request.head.uri
     }
 
     #[must_use]
@@ -96,7 +89,7 @@ impl ClientRequest {
     /// This address is used for connection. If address is not
     /// provided url's host name get resolved.
     pub fn address(mut self, addr: net::SocketAddr) -> Self {
-        self.addr = Some(addr);
+        self.request.addr = Some(addr);
         self
     }
 
@@ -104,7 +97,7 @@ impl ClientRequest {
     #[inline]
     #[must_use]
     pub fn method(mut self, method: Method) -> Self {
-        self.head.method = method;
+        self.request.head.method = method;
         self
     }
 
@@ -112,7 +105,7 @@ impl ClientRequest {
     #[must_use]
     /// Get HTTP method of this request.
     pub fn get_method(&self) -> &Method {
-        &self.head.method
+        &self.request.head.method
     }
 
     /// Set HTTP version of this request.
@@ -121,26 +114,26 @@ impl ClientRequest {
     #[inline]
     #[must_use]
     pub fn version(mut self, version: Version) -> Self {
-        self.head.version = version;
+        self.request.head.version = version;
         self
     }
 
     #[inline]
     /// Get HTTP version of this request.
     pub fn get_version(&self) -> &Version {
-        &self.head.version
+        &self.request.head.version
     }
 
     #[inline]
     /// Returns request's headers.
     pub fn headers(&self) -> &HeaderMap {
-        &self.head.headers
+        &self.request.head.headers
     }
 
     #[inline]
     /// Returns request's mutable headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
-        &mut self.head.headers
+        &mut self.request.head.headers
     }
 
     #[must_use]
@@ -170,7 +163,7 @@ impl ClientRequest {
     {
         match HeaderName::try_from(key) {
             Ok(key) => match HeaderValue::try_from(value) {
-                Ok(value) => self.head.headers.append(key, value),
+                Ok(value) => self.request.head.headers.append(key, value),
                 Err(e) => self.err = Some(e.into()),
             },
             Err(e) => self.err = Some(e.into()),
@@ -189,7 +182,7 @@ impl ClientRequest {
     {
         match HeaderName::try_from(key) {
             Ok(key) => match HeaderValue::try_from(value) {
-                Ok(value) => self.head.headers.insert(key, value),
+                Ok(value) => self.request.head.headers.insert(key, value),
                 Err(e) => self.err = Some(e.into()),
             },
             Err(e) => self.err = Some(e.into()),
@@ -208,9 +201,9 @@ impl ClientRequest {
     {
         match HeaderName::try_from(key) {
             Ok(key) => {
-                if !self.head.headers.contains_key(&key) {
+                if !self.request.head.headers.contains_key(&key) {
                     match HeaderValue::try_from(value) {
-                        Ok(value) => self.head.headers.insert(key, value),
+                        Ok(value) => self.request.head.headers.insert(key, value),
                         Err(e) => self.err = Some(e.into()),
                     }
                 }
@@ -224,7 +217,7 @@ impl ClientRequest {
     #[must_use]
     /// Set connection type of the message.
     pub fn set_connection_type(mut self, ctype: ConnectionType) -> Self {
-        self.head.set_connection_type(ctype);
+        self.request.head.set_connection_type(ctype);
         self
     }
 
@@ -234,7 +227,7 @@ impl ClientRequest {
     #[inline]
     #[must_use]
     pub fn force_close(mut self) -> Self {
-        self.head.set_connection_type(ConnectionType::Close);
+        self.request.head.set_connection_type(ConnectionType::Close);
         self
     }
 
@@ -247,7 +240,11 @@ impl ClientRequest {
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         match HeaderValue::try_from(value) {
-            Ok(value) => self.head.headers.insert(header::CONTENT_TYPE, value),
+            Ok(value) => self
+                .request
+                .head
+                .headers
+                .insert(header::CONTENT_TYPE, value),
             Err(e) => self.err = Some(e.into()),
         }
         self
@@ -326,7 +323,7 @@ impl ClientRequest {
     #[must_use]
     /// Disable automatic decompress of response's body.
     pub fn no_decompress(mut self) -> Self {
-        self.response_decompress = false;
+        self.request.response_decompress = false;
         self
     }
 
@@ -338,7 +335,7 @@ impl ClientRequest {
     /// Request timeout is the total time before a response must be received.
     /// Default value is 5 seconds.
     pub fn timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
-        self.timeout = timeout.into();
+        self.request.timeout = timeout.into();
         self
     }
 
@@ -347,7 +344,7 @@ impl ClientRequest {
     /// value is `true`.
     pub fn if_true<F>(self, value: bool, f: F) -> Self
     where
-        F: FnOnce(ClientRequest) -> ClientRequest,
+        F: FnOnce(ClientRequest<S>) -> ClientRequest<S>,
     {
         if value { f(self) } else { self }
     }
@@ -357,7 +354,7 @@ impl ClientRequest {
     /// value is `Some`.
     pub fn if_some<T, F>(self, value: Option<T>, f: F) -> Self
     where
-        F: FnOnce(T, ClientRequest) -> ClientRequest,
+        F: FnOnce(T, ClientRequest<S>) -> ClientRequest<S>,
     {
         if let Some(val) = value { f(val, self) } else { self }
     }
@@ -367,7 +364,7 @@ impl ClientRequest {
         mut self,
         query: &T,
     ) -> Result<Self, serde_urlencoded::ser::Error> {
-        let mut parts = self.head.uri.clone().into_parts();
+        let mut parts = self.request.head.uri.clone().into_parts();
 
         if let Some(path_and_query) = parts.path_and_query {
             let query = serde_urlencoded::to_string(query)?;
@@ -375,137 +372,86 @@ impl ClientRequest {
             parts.path_and_query = format!("{path}?{query}").parse().ok();
 
             match Uri::from_parts(parts) {
-                Ok(uri) => self.head.uri = uri,
+                Ok(uri) => self.request.head.uri = uri,
                 Err(e) => self.err = Some(e.into()),
             }
         }
 
         Ok(self)
     }
+}
 
-    /// Freeze request builder and construct `FrozenClientRequest`,
-    /// which could be used for sending same request multiple times.
-    pub fn freeze(self) -> Result<FrozenClientRequest, FreezeRequestError> {
-        let this = self.prep_for_sending()?;
-        let request = FrozenClientRequest {
-            head: Rc::new(*this.head),
-            addr: this.addr,
-            response_decompress: this.response_decompress,
-            timeout: this.timeout,
-            config: this.config,
-        };
-
-        Ok(request)
-    }
-
+impl<S> ClientRequest<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse, Error = SendRequestError>,
+{
     /// Complete request construction and send body.
-    pub async fn send_body<B>(self, body: B) -> Result<ClientResponse, SendRequestError>
+    pub async fn send_body<B>(mut self, body: B) -> Result<ClientResponse, SendRequestError>
     where
         B: Into<Body>,
     {
-        let this = self.prep_for_sending()?;
-
-        RequestHeadType::Owned(this.head)
-            .send_body(
-                this.addr,
-                this.response_decompress,
-                this.timeout,
-                this.config,
-                body,
-            )
-            .await
+        self.prep_for_sending()?;
+        *self.request.body() = body.into();
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     /// Set a JSON body and generate `ClientRequest`.
     pub async fn send_json<T: Serialize>(
-        self,
+        mut self,
         value: &T,
     ) -> Result<ClientResponse, SendRequestError> {
-        let this = self.prep_for_sending()?;
-
-        RequestHeadType::Owned(this.head)
-            .send_json(
-                this.addr,
-                this.response_decompress,
-                this.timeout,
-                this.config,
-                value,
-            )
-            .await
+        self.prep_for_sending()?;
+        self.request.set_json(value)?;
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     /// Set a urlencoded body and generate `ClientRequest`.
     ///
     /// `ClientRequestBuilder` can not be used after this call.
     pub async fn send_form<T: Serialize>(
-        self,
+        mut self,
         value: &T,
     ) -> Result<ClientResponse, SendRequestError> {
-        let this = self.prep_for_sending()?;
-
-        RequestHeadType::Owned(this.head)
-            .send_form(
-                this.addr,
-                this.response_decompress,
-                this.timeout,
-                this.config,
-                value,
-            )
-            .await
+        self.prep_for_sending()?;
+        self.request.set_form(value)?;
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     /// Set an streaming body and generate `ClientRequest`.
-    pub async fn send_stream<S, E>(
-        self,
-        stream: S,
+    pub async fn send_stream<T, E>(
+        mut self,
+        stream: T,
     ) -> Result<ClientResponse, SendRequestError>
     where
-        S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
+        T: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
     {
-        let this = self.prep_for_sending()?;
-
-        RequestHeadType::Owned(this.head)
-            .send_stream(
-                this.addr,
-                this.response_decompress,
-                this.timeout,
-                this.config,
-                stream,
-            )
-            .await
+        self.prep_for_sending()?;
+        self.request.set_stream(stream);
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     /// Set an empty body and generate `ClientRequest`.
-    pub async fn send(self) -> Result<ClientResponse, SendRequestError> {
-        let this = self.prep_for_sending()?;
-
-        RequestHeadType::Owned(this.head)
-            .send(
-                this.addr,
-                this.response_decompress,
-                this.timeout,
-                this.config,
-            )
-            .await
+    pub async fn send(mut self) -> Result<ClientResponse, SendRequestError> {
+        self.prep_for_sending()?;
+        self.svc.call(self.request).await.map(Into::into)
     }
 
     #[allow(unused_mut)]
-    fn prep_for_sending(mut self) -> Result<Self, PrepForSendingError> {
-        if let Some(e) = self.err {
+    fn prep_for_sending(&mut self) -> Result<(), SendRequestError> {
+        if let Some(e) = self.err.take() {
             return Err(e.into());
         }
 
         // validate uri
-        let uri = &self.head.uri;
+        let uri = &self.request.head.uri;
         if uri.host().is_none() {
             return Err(InvalidUrl::MissingHost.into());
         } else if uri.scheme().is_none() {
             return Err(InvalidUrl::MissingScheme.into());
         } else if let Some(scheme) = uri.scheme() {
-            match scheme.as_str() {
-                "http" | "ws" | "https" | "wss" => (),
-                _ => return Err(InvalidUrl::UnknownScheme.into()),
+            if !matches!(scheme.as_str(), "http" | "ws" | "https" | "wss") {
+                return Err(InvalidUrl::UnknownScheme.into());
             }
         } else {
             return Err(InvalidUrl::UnknownScheme.into());
@@ -528,33 +474,41 @@ impl ClientRequest {
                     );
                     let _ = write!(cookie, "; {name}={value}");
                 }
-                self.head.headers.insert(
+                self.request.head.headers.insert(
                     header::COOKIE,
                     HeaderValue::from_str(&cookie.as_str()[2..]).unwrap(),
                 );
             }
         }
 
-        let mut this = self;
-
         #[cfg(feature = "compress")]
-        if this.response_decompress {
-            this = this.set_header_if_none(header::ACCEPT_ENCODING, "gzip, deflate");
+        if self.request.response_decompress
+            && !self
+                .request
+                .head
+                .headers
+                .contains_key(&header::ACCEPT_ENCODING)
+        {
+            const COMPRESSION: HeaderValue = HeaderValue::from_static("gzip, deflate");
+            self.request
+                .head
+                .headers
+                .insert(header::ACCEPT_ENCODING, COMPRESSION);
         }
 
-        Ok(this)
+        Ok(())
     }
 }
 
-impl fmt::Debug for ClientRequest {
+impl<S> fmt::Debug for ClientRequest<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
             "\nClientRequest {:?} {}:{}",
-            self.head.version, self.head.method, self.head.uri
+            self.request.head.version, self.request.head.method, self.request.head.uri
         )?;
         writeln!(f, "  headers:")?;
-        for (key, val) in &self.head.headers {
+        for (key, val) in &self.request.head.headers {
             if key == header::AUTHORIZATION {
                 writeln!(f, "    {key:?}: <REDACTED>")?;
             } else {
@@ -601,7 +555,7 @@ mod tests {
         assert!(req.headers().contains_key(header::USER_AGENT));
         assert!(!req.headers().contains_key(header::ALLOW));
         assert!(!req.headers().contains_key(header::EXPECT));
-        assert_eq!(req.head.version, Version::HTTP_2);
+        assert_eq!(req.request.head.version, Version::HTTP_2);
         assert_eq!(req.get_version(), &Version::HTTP_2);
         assert_eq!(req.get_method(), Method::PUT);
         let _ = req.headers_mut();
@@ -618,7 +572,8 @@ mod tests {
             .get("/");
 
         assert_eq!(
-            req.head
+            req.request
+                .head
                 .headers
                 .get(header::CONTENT_TYPE)
                 .unwrap()
@@ -639,7 +594,8 @@ mod tests {
             .set_header(header::CONTENT_TYPE, "222");
 
         assert_eq!(
-            req.head
+            req.request
+                .head
                 .headers
                 .get(header::CONTENT_TYPE)
                 .unwrap()
@@ -656,7 +612,8 @@ mod tests {
             .get("/")
             .basic_auth("username", Some("password"));
         assert_eq!(
-            req.head
+            req.request
+                .head
                 .headers
                 .get(header::AUTHORIZATION)
                 .unwrap()
@@ -667,7 +624,8 @@ mod tests {
 
         let req = Client::new().await.get("/").basic_auth("username", None);
         assert_eq!(
-            req.head
+            req.request
+                .head
                 .headers
                 .get(header::AUTHORIZATION)
                 .unwrap()
@@ -684,7 +642,8 @@ mod tests {
             .get("/")
             .bearer_auth("someS3cr3tAutht0k3n");
         assert_eq!(
-            req.head
+            req.request
+                .head
                 .headers
                 .get(header::AUTHORIZATION)
                 .unwrap()

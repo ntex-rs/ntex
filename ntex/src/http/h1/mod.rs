@@ -1,17 +1,15 @@
 //! HTTP/1 implementation
 use std::rc::Rc;
 
-mod client;
 mod codec;
-mod decoder;
+pub(crate) mod decoder;
 mod default;
 mod dispatcher;
-mod encoder;
+pub(crate) mod encoder;
 mod service;
 
 pub mod control;
 
-pub use self::client::{ClientCodec, ClientPayloadCodec};
 pub use self::codec::Codec;
 pub use self::control::{Control, ControlAck};
 pub use self::decoder::{PayloadDecoder, PayloadItem, PayloadType};

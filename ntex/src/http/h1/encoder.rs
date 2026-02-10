@@ -1,7 +1,8 @@
 #![allow(
     unsafe_op_in_unsafe_fn,
     clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::too_many_arguments
 )]
 use std::marker::PhantomData;
 use std::{cell::Cell, cmp, io::Write, mem, ptr, ptr::copy_nonoverlapping, slice};
@@ -10,12 +11,12 @@ use crate::http::body::BodySize;
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
 use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
-use crate::http::message::{ConnectionType, RequestHeadType};
+use crate::http::message::{ConnectionType, RequestHead};
 use crate::http::{HeaderMap, Response, StatusCode, Version, helpers};
 use crate::{io::IoConfig, util::BufMut, util::BytesMut};
 
 #[derive(Debug)]
-pub(super) struct MessageEncoder<T: MessageType> {
+pub(crate) struct MessageEncoder<T: MessageType> {
     pub(super) length: BodySize,
     pub(super) te: Cell<TransferEncoding>,
     _t: PhantomData<T>,
@@ -41,12 +42,10 @@ impl<T: MessageType> Clone for MessageEncoder<T> {
     }
 }
 
-pub(super) trait MessageType: Sized {
+pub(crate) trait MessageType: Sized {
     fn status(&self) -> Option<StatusCode>;
 
     fn headers(&self) -> &HeaderMap;
-
-    fn extra_headers(&self) -> Option<&HeaderMap>;
 
     fn chunked(&self) -> bool;
 
@@ -58,6 +57,7 @@ pub(super) trait MessageType: Sized {
         version: Version,
         mut length: BodySize,
         ctype: ConnectionType,
+        extra_headers: Option<HeaderMap>,
         cfg: &IoConfig,
     ) -> Result<(), EncodeError> {
         let chunked = self.chunked();
@@ -104,8 +104,7 @@ pub(super) trait MessageType: Sized {
         }
 
         // merging headers from head and extra headers. HeaderMap::new() does not allocate.
-        let empty_headers = HeaderMap::new();
-        let extra_headers = self.extra_headers().unwrap_or(&empty_headers);
+        let extra_headers = extra_headers.unwrap_or_default();
         let headers = self
             .headers()
             .iter_inner()
@@ -213,10 +212,6 @@ impl MessageType for Response<()> {
         &self.head().headers
     }
 
-    fn extra_headers(&self) -> Option<&HeaderMap> {
-        None
-    }
-
     fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
         let head = self.head();
         let reason = head.reason().as_bytes();
@@ -228,36 +223,31 @@ impl MessageType for Response<()> {
     }
 }
 
-impl MessageType for RequestHeadType {
+impl MessageType for RequestHead {
     fn status(&self) -> Option<StatusCode> {
         None
     }
 
     fn chunked(&self) -> bool {
-        self.as_ref().chunked()
+        self.chunked()
     }
 
     fn headers(&self) -> &HeaderMap {
-        self.as_ref().headers()
-    }
-
-    fn extra_headers(&self) -> Option<&HeaderMap> {
-        self.extra_headers()
+        self.headers()
     }
 
     fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
-        let head = self.as_ref();
         write!(
             helpers::Writer(dst),
             "{} {} {}",
-            head.method,
-            head.uri.path_and_query().map_or("/", |u| u.as_str()),
+            self.method,
+            self.uri.path_and_query().map_or("/", |u| u.as_str()),
             // only HTTP-0.9/1.1
-            match head.version {
+            match self.version {
                 Version::HTTP_09 => "HTTP/0.9",
                 Version::HTTP_10 => "HTTP/1.0",
                 Version::HTTP_11 => "HTTP/1.1",
-                _ => return Err(EncodeError::UnsupportedVersion(head.version)),
+                _ => return Err(EncodeError::UnsupportedVersion(self.version)),
             }
         )
         .map_err(EncodeError::Fmt)
@@ -266,7 +256,7 @@ impl MessageType for RequestHeadType {
 
 impl<T: MessageType> MessageEncoder<T> {
     /// Encode message
-    pub(super) fn encode_chunk(
+    pub(crate) fn encode_chunk(
         &self,
         msg: &[u8],
         buf: &mut BytesMut,
@@ -279,23 +269,23 @@ impl<T: MessageType> MessageEncoder<T> {
     }
 
     /// Encode eof
-    pub(super) fn encode_eof(&self, buf: &mut BytesMut) -> Result<(), EncodeError> {
+    pub(crate) fn encode_eof(&self, buf: &mut BytesMut) -> Result<(), EncodeError> {
         let mut te = self.te.get();
         let result = te.encode_eof(buf);
         self.te.set(te);
         result
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn encode(
+    pub(crate) fn encode(
         &self,
         dst: &mut BytesMut,
-        message: &mut T,
+        message: &T,
         head: bool,
         stream: bool,
         version: Version,
         length: BodySize,
         ctype: ConnectionType,
+        extra_headers: Option<HeaderMap>,
         cfg: &IoConfig,
     ) -> Result<(), EncodeError> {
         // transfer encoding
@@ -316,7 +306,7 @@ impl<T: MessageType> MessageEncoder<T> {
         }
 
         message.encode_status(dst)?;
-        message.encode_headers(dst, version, length, ctype, cfg)
+        message.encode_headers(dst, version, length, ctype, extra_headers, cfg)
     }
 }
 
@@ -371,7 +361,7 @@ impl TransferEncoding {
 
     /// Encode message. Return `EOF` state of encoder
     #[inline]
-    pub(super) fn encode(
+    pub(crate) fn encode(
         &mut self,
         msg: &[u8],
         buf: &mut BytesMut,
@@ -425,7 +415,7 @@ impl TransferEncoding {
 
     /// Encode eof. Return `EOF` state of encoder
     #[inline]
-    pub(super) fn encode_eof(&mut self, buf: &mut BytesMut) -> Result<(), EncodeError> {
+    pub(crate) fn encode_eof(&mut self, buf: &mut BytesMut) -> Result<(), EncodeError> {
         match self.kind {
             TransferEncodingKind::Eof => Ok(()),
             TransferEncodingKind::Length(rem) => {
@@ -592,8 +582,6 @@ unsafe fn convert_usize(mut n: u64, bytes: &mut BytesMut) {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-
     use super::*;
     use crate::http::RequestHead;
     use crate::http::header::{AUTHORIZATION, HeaderValue};
@@ -635,13 +623,12 @@ mod tests {
         );
         extra_headers.insert(DATE, HeaderValue::from_static("date"));
 
-        let head = RequestHeadType::Rc(Rc::new(head), Some(extra_headers));
-
         let _ = head.encode_headers(
             &mut bytes,
             Version::HTTP_11,
             BodySize::Empty,
             ConnectionType::Close,
+            Some(extra_headers),
             &IoConfig::default(),
         );
         let data = String::from_utf8(Vec::from(bytes.take().as_ref())).unwrap();

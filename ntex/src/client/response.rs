@@ -1,6 +1,6 @@
 use std::cell::{Cell, Ref, RefMut};
 use std::task::{Context, Poll};
-use std::{fmt, future::Future, marker::PhantomData, pin::Pin, rc::Rc};
+use std::{fmt, future::Future, marker::PhantomData, pin::Pin};
 
 use serde::de::DeserializeOwned;
 
@@ -13,13 +13,13 @@ use crate::http::{HeaderMap, HttpMessage, Payload, ResponseHead, StatusCode, Ver
 use crate::time::{Deadline, Millis};
 use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
-use super::{ClientConfig, error::JsonPayloadError};
+use super::{ClientConfig, ServiceResponse, error::JsonPayloadError};
 
 /// Client Response
 pub struct ClientResponse {
     pub(crate) head: ResponseHead,
     pub(crate) payload: Cell<Option<Payload>>,
-    config: Rc<ClientConfig>,
+    config: ClientConfig,
 }
 
 impl HttpMessage for ClientResponse {
@@ -60,7 +60,7 @@ impl HttpMessage for ClientResponse {
 impl ClientResponse {
     /// Create new client response instance
     #[doc(hidden)]
-    pub fn new(head: ResponseHead, payload: Payload, config: Rc<ClientConfig>) -> Self {
+    pub fn new(head: ResponseHead, payload: Payload, config: ClientConfig) -> Self {
         ClientResponse {
             head,
             config,
@@ -69,7 +69,7 @@ impl ClientResponse {
     }
 
     #[cfg(feature = "ws")]
-    pub(crate) fn with_empty_payload(head: ResponseHead, config: Rc<ClientConfig>) -> Self {
+    pub(crate) fn with_empty_payload(head: ResponseHead, config: ClientConfig) -> Self {
         ClientResponse::new(head, Payload::None, config)
     }
 
@@ -173,6 +173,16 @@ impl Stream for ClientResponse {
     }
 }
 
+impl From<ServiceResponse> for ClientResponse {
+    fn from(res: ServiceResponse) -> Self {
+        Self {
+            head: res.head,
+            payload: Cell::new(Some(res.payload)),
+            config: res.config,
+        }
+    }
+}
+
 impl fmt::Debug for ClientResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "\nClientResponse {:?} {}", self.version(), self.status(),)?;
@@ -213,8 +223,8 @@ impl MessageBody {
             err: None,
             fut: Some(ReadBody::new(
                 res.take_payload(),
-                res.config.response_pl_limit,
-                res.config.response_pl_timeout,
+                res.config.payload_limit(),
+                res.config.payload_timeout(),
             )),
         }
     }
@@ -321,8 +331,8 @@ where
             err: None,
             fut: Some(ReadBody::new(
                 res.take_payload(),
-                res.config.response_pl_limit,
-                res.config.response_pl_timeout,
+                res.config.payload_limit(),
+                res.config.payload_timeout(),
             )),
             _t: PhantomData,
         }

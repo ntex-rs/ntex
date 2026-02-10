@@ -1,5 +1,5 @@
 //! Websockets client
-use std::{cell::RefCell, fmt, marker, net, rc::Rc, str};
+use std::{cell::RefCell, fmt, marker, net, str};
 
 #[cfg(feature = "openssl")]
 use crate::connect::openssl;
@@ -11,11 +11,11 @@ use coo_kie::{Cookie, CookieJar};
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use nanorand::{Rng, WyRand};
 
-use crate::client::{self, ClientResponse};
+use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
-use crate::http::{ConnectionType, RequestHead, RequestHeadType, StatusCode, Uri};
-use crate::http::{body::BodySize, error::HttpError, h1};
+use crate::http::{ConnectionType, Message, RequestHead, StatusCode, Uri};
+use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
@@ -31,13 +31,13 @@ thread_local! {
 /// `WebSocket` client builder
 pub struct WsClient<F, T> {
     connector: Pipeline<T>,
-    head: Rc<RequestHead>,
+    head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
     server_mode: bool,
     timeout: Millis,
     extra_headers: RefCell<Option<HeaderMap>>,
-    client_cfg: Rc<client::ClientConfig>,
+    client_cfg: ClientConfig,
     _t: marker::PhantomData<F>,
 }
 
@@ -53,7 +53,7 @@ pub struct WsClientBuilder<F, T> {
 
 struct Inner<F, T> {
     connector: T,
-    pub(crate) head: RequestHead,
+    pub(crate) head: Message<RequestHead>,
     addr: Option<net::SocketAddr>,
     max_size: usize,
     server_mode: bool,
@@ -161,13 +161,18 @@ where
         let tag = io.tag();
 
         // create Framed and send request
-        let codec = h1::ClientCodec::new(true, io.cfg());
+        let codec = ClientCodec::new(true, io.cfg());
 
         // send request and read response
         let fut = async {
             log::trace!("{tag}: Sending ws handshake http message");
             io.send(
-                (RequestHeadType::Rc(head, Some(headers)), BodySize::None).into(),
+                ClientRawRequest {
+                    head,
+                    headers: Some(headers),
+                    size: BodySize::None,
+                }
+                .into(),
                 &codec,
             )
             .await?;
@@ -273,15 +278,13 @@ impl WsClientBuilder<Base, ()> {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
-        let (head, err) = match Uri::try_from(uri) {
-            Ok(uri) => (
-                RequestHead {
-                    uri,
-                    ..Default::default()
-                },
-                None,
-            ),
-            Err(e) => (RequestHead::default(), Some(e.into())),
+        let mut head = Message::<RequestHead>::new();
+        let err = match Uri::try_from(uri) {
+            Ok(uri) => {
+                head.uri = uri;
+                None
+            }
+            Err(e) => Some(e.into()),
         };
 
         WsClientBuilder {
@@ -575,10 +578,8 @@ where
         }
 
         if !inner.head.headers.contains_key(header::HOST) {
-            inner.head.headers.insert(
-                header::HOST,
-                HeaderValue::from_str(uri.host().unwrap()).unwrap(),
-            );
+            let val = HeaderValue::from_str(inner.head.uri.host().unwrap()).unwrap();
+            inner.head.headers.insert(header::HOST, val);
         }
 
         #[cfg(feature = "cookie")]
@@ -635,13 +636,13 @@ where
 
         Ok(WsClient {
             connector: connector.into(),
-            head: Rc::new(inner.head),
+            head: inner.head,
             addr: inner.addr,
             max_size: inner.max_size,
             server_mode: inner.server_mode,
             timeout: inner.timeout,
             extra_headers: RefCell::new(None),
-            client_cfg: Rc::default(),
+            client_cfg: ClientConfig::default(),
             _t: marker::PhantomData,
         })
     }

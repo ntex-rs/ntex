@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{collections::HashMap, io::Read, io::Write, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, io::Read, io::Write, rc::Rc, sync::Arc};
 
 use coo_kie::Cookie;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
@@ -9,10 +9,10 @@ use ntex::client::{Client, Connector, error::SendRequestError};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, header};
 use ntex::io::IoConfig;
-use ntex::service::{cfg::SharedCfg, chain_factory};
+use ntex::service::{cfg::SharedCfg, chain_factory, fn_layer};
 use ntex::web::middleware::Compress;
 use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
-use ntex::{time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
+use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -62,43 +62,6 @@ async fn test_simple() {
 }
 
 #[ntex::test]
-async fn test_freeze() {
-    let srv = test::server(async || {
-        App::new().service(
-            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
-        )
-    })
-    .await;
-
-    // prep request
-    let request = srv.get("/").header("x-test", "111").freeze().unwrap();
-
-    // send one request
-    let response = request.send().await.unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
-
-    // send one request
-    let response = request.send().await.unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
-
-    // send one request
-    let response = request.extra_header("x-test2", "222").send().await.unwrap();
-    assert!(response.status().is_success());
-
-    // read response
-    let bytes = response.body().await.unwrap();
-    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
-}
-
-#[ntex::test]
 async fn test_json() {
     let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
@@ -110,19 +73,6 @@ async fn test_json() {
     let response = srv
         .get("/")
         .header("x-test", "111")
-        .send_json(&"TEST".to_string())
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-
-    // same with frozen request
-    let request = srv.get("/").header("x-test", "111").freeze().unwrap();
-
-    let response = request.send_json(&"TEST".to_string()).await.unwrap();
-    assert!(response.status().is_success());
-
-    let response = request
-        .extra_header("x-test2", "112")
         .send_json(&"TEST".to_string())
         .await
         .unwrap();
@@ -143,18 +93,6 @@ async fn test_form() {
 
     let request = srv.get("/").header("x-test", "111").send_form(&data);
     let response = request.await.unwrap();
-    assert!(response.status().is_success());
-
-    // same with frozen request
-    let request = srv.get("/").header("x-test", "111").freeze().unwrap();
-    let response = request.send_form(&data).await.unwrap();
-    assert!(response.status().is_success());
-
-    let response = request
-        .extra_header("x-test2", "112")
-        .send_form(&data)
-        .await
-        .unwrap();
     assert!(response.status().is_success());
 }
 
@@ -793,4 +731,48 @@ async fn client_bearer_auth() {
     let request = srv.get("/").bearer_auth("someS3cr3tAutht0k3n");
     let response = request.send().await.unwrap();
     assert!(response.status().is_success());
+}
+
+#[ntex::test]
+async fn middleware() {
+    let srv = test::server(async || {
+        App::new().service(
+            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+        )
+    })
+    .await;
+
+    let data = Rc::new(RefCell::new(Vec::new()));
+    let data2 = data.clone();
+
+    // client request
+    let client = Client::builder()
+        .middleware(fn_layer(
+            async move |mut req: client::ServiceRequest, svc| {
+                assert!(req.headers().is_empty());
+                assert!(req.address().is_none());
+                let s = format!("{:?}", req.head().uri);
+                data2.borrow_mut().push(format!("1 -- {}", s));
+                let result = svc.call(req).await;
+                data2.borrow_mut().push(format!("2 -- {}", s));
+                result
+            },
+        ))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+
+    let request = client.get(srv.url("/")).header("x-test", "111").send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    let host = srv.url("/");
+    assert_eq!(
+        &data.borrow()[..],
+        &[format!("1 -- {}", host), format!("2 -- {}", host)]
+    );
 }

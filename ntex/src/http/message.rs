@@ -226,30 +226,6 @@ impl RequestHead {
 }
 
 #[derive(Debug)]
-pub enum RequestHeadType {
-    Owned(Box<RequestHead>),
-    Rc(Rc<RequestHead>, Option<HeaderMap>),
-}
-
-impl RequestHeadType {
-    pub fn extra_headers(&self) -> Option<&HeaderMap> {
-        match self {
-            RequestHeadType::Owned(_) => None,
-            RequestHeadType::Rc(_, headers) => headers.as_ref(),
-        }
-    }
-}
-
-impl AsRef<RequestHead> for RequestHeadType {
-    fn as_ref(&self) -> &RequestHead {
-        match self {
-            RequestHeadType::Owned(head) => head.as_ref(),
-            RequestHeadType::Rc(head, _) => head.as_ref(),
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct ResponseHead {
     pub version: Version,
     pub status: StatusCode,
@@ -421,6 +397,14 @@ impl Message<ResponseHead> {
     }
 }
 
+impl<T: Head> Clone for Message<T> {
+    fn clone(&self) -> Self {
+        Self {
+            head: self.head.clone(),
+        }
+    }
+}
+
 impl<T: Head> std::ops::Deref for Message<T> {
     type Target = T;
 
@@ -437,15 +421,17 @@ impl<T: Head> std::ops::DerefMut for Message<T> {
 
 impl<T: Head> Drop for Message<T> {
     fn drop(&mut self) {
-        T::with_pool(|pool| {
-            let v = &mut pool.0.borrow_mut();
-            if v.len() < 128 {
-                Rc::get_mut(&mut self.head)
-                    .expect("Multiple copies exist")
-                    .clear();
-                v.push(self.head.clone());
-            }
-        });
+        if Rc::strong_count(&self.head) == 1 {
+            T::with_pool(|pool| {
+                let v = &mut pool.0.borrow_mut();
+                if v.len() < 128 {
+                    Rc::get_mut(&mut self.head)
+                        .expect("Multiple copies exist")
+                        .clear();
+                    v.push(self.head.clone());
+                }
+            });
+        }
     }
 }
 
