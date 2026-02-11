@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue};
-use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack};
+use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack, boxed};
 use crate::{SharedCfg, time::Millis};
 
 use super::error::{ClientBuilderError, SendRequestError};
@@ -198,15 +198,12 @@ impl<M> ClientBuilder<M> {
     }
 
     /// Finish build process and create `Client` instance.
-    pub async fn build<T>(
-        mut self,
-        cfg: T,
-    ) -> Result<Client<M::Service>, ClientBuilderError>
+    pub async fn build<T>(mut self, cfg: T) -> Result<Client, ClientBuilderError>
     where
         T: Into<SharedCfg>,
         M: Middleware<Sender, ClientConfig>,
-        M::Service:
-            Service<ServiceRequest, Response = ServiceResponse, Error = SendRequestError>,
+        M::Service: Service<ServiceRequest, Response = ServiceResponse, Error = SendRequestError>
+            + 'static,
     {
         let cfg = cfg.into();
         self.config.cfg = cfg;
@@ -218,9 +215,10 @@ impl<M> ClientBuilder<M> {
             .await
             .map_err(|_| ClientBuilderError::ConnectorFailed)?;
 
-        let svc = self
-            .middleware
-            .create(Sender::new(svc, config.clone()), config.clone());
+        let svc = boxed::service(
+            self.middleware
+                .create(Sender::new(svc, config.clone()), config.clone()),
+        );
 
         Ok(Client::with_service(svc.into(), config))
     }

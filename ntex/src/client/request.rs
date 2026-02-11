@@ -9,10 +9,10 @@ use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, Method, Uri, Version};
-use crate::{Pipeline, Service, time::Millis, util::Bytes, util::Stream};
+use crate::{Pipeline, time::Millis, util::Bytes, util::Stream};
 
 use super::error::{InvalidUrl, SendRequestError};
-use super::{ClientResponse, ServiceRequest, ServiceResponse, sender::Sender};
+use super::{BoxedSender, ClientResponse, ServiceRequest};
 
 /// An HTTP Client request builder
 ///
@@ -37,17 +37,17 @@ use super::{ClientResponse, ServiceRequest, ServiceResponse, sender::Sender};
 ///    });
 /// }
 /// ```
-pub struct ClientRequest<S = Sender> {
+pub struct ClientRequest {
     request: ServiceRequest,
-    svc: Pipeline<S>,
+    svc: Pipeline<BoxedSender>,
     err: Option<HttpError>,
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
 }
 
-impl<S> ClientRequest<S> {
+impl ClientRequest {
     /// Create new client request builder.
-    pub(super) fn new<U>(method: Method, uri: U, svc: Pipeline<S>) -> Self
+    pub(super) fn new<U>(method: Method, uri: U, svc: Pipeline<BoxedSender>) -> Self
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -344,7 +344,7 @@ impl<S> ClientRequest<S> {
     /// value is `true`.
     pub fn if_true<F>(self, value: bool, f: F) -> Self
     where
-        F: FnOnce(ClientRequest<S>) -> ClientRequest<S>,
+        F: FnOnce(ClientRequest) -> ClientRequest,
     {
         if value { f(self) } else { self }
     }
@@ -354,7 +354,7 @@ impl<S> ClientRequest<S> {
     /// value is `Some`.
     pub fn if_some<T, F>(self, value: Option<T>, f: F) -> Self
     where
-        F: FnOnce(T, ClientRequest<S>) -> ClientRequest<S>,
+        F: FnOnce(T, ClientRequest) -> ClientRequest,
     {
         if let Some(val) = value { f(val, self) } else { self }
     }
@@ -381,10 +381,7 @@ impl<S> ClientRequest<S> {
     }
 }
 
-impl<S> ClientRequest<S>
-where
-    S: Service<ServiceRequest, Response = ServiceResponse, Error = SendRequestError>,
-{
+impl ClientRequest {
     /// Complete request construction and send body.
     pub async fn send_body<B>(mut self, body: B) -> Result<ClientResponse, SendRequestError>
     where
@@ -500,7 +497,7 @@ where
     }
 }
 
-impl<S> fmt::Debug for ClientRequest<S> {
+impl fmt::Debug for ClientRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,

@@ -41,13 +41,16 @@ pub use self::test::TestResponse;
 
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
 use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
-use crate::{SharedCfg, client::sender::Sender, service::Pipeline};
+use crate::{Pipeline, SharedCfg, service::boxed};
 
 #[derive(Debug, Clone)]
 pub struct Connect {
     pub uri: Uri,
     pub addr: Option<std::net::SocketAddr>,
 }
+
+type BoxedSender =
+    boxed::BoxService<ServiceRequest, ServiceResponse, error::SendRequestError>;
 
 /// An HTTP Client
 ///
@@ -67,12 +70,12 @@ pub struct Connect {
 /// }
 /// ```
 #[derive(Debug, Clone)]
-pub struct Client<S = Sender> {
-    svc: Pipeline<S>,
+pub struct Client {
+    svc: Pipeline<BoxedSender>,
     config: ClientConfig,
 }
 
-impl Client<Sender> {
+impl Client {
     /// Create new client instance with default settings.
     pub async fn new() -> Client {
         ClientBuilder::new()
@@ -85,15 +88,18 @@ impl Client<Sender> {
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
-}
 
-impl<S> Client<S> {
-    pub(crate) fn with_service(svc: Pipeline<S>, config: ClientConfig) -> Self {
+    pub(crate) fn with_service(svc: Pipeline<BoxedSender>, config: ClientConfig) -> Self {
         Client { svc, config }
     }
 
+    /// Returns when the client is ready to process requests.
+    pub async fn ready(&self) -> Result<(), error::SendRequestError> {
+        self.svc.ready().await
+    }
+
     /// Construct HTTP request.
-    pub fn request<U>(&self, method: Method, url: U) -> ClientRequest<S>
+    pub fn request<U>(&self, method: Method, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -110,7 +116,7 @@ impl<S> Client<S> {
     ///
     /// It is useful for proxy requests. This implementation
     /// copies all headers and the method.
-    pub fn request_from<U>(&self, url: U, head: &RequestHead) -> ClientRequest<S>
+    pub fn request_from<U>(&self, url: U, head: &RequestHead) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -123,7 +129,7 @@ impl<S> Client<S> {
     }
 
     /// Construct HTTP *GET* request.
-    pub fn get<U>(&self, url: U) -> ClientRequest<S>
+    pub fn get<U>(&self, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -132,7 +138,7 @@ impl<S> Client<S> {
     }
 
     /// Construct HTTP *HEAD* request.
-    pub fn head<U>(&self, url: U) -> ClientRequest<S>
+    pub fn head<U>(&self, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -141,7 +147,7 @@ impl<S> Client<S> {
     }
 
     /// Construct HTTP *PUT* request.
-    pub fn put<U>(&self, url: U) -> ClientRequest<S>
+    pub fn put<U>(&self, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -150,7 +156,7 @@ impl<S> Client<S> {
     }
 
     /// Construct HTTP *POST* request.
-    pub fn post<U>(&self, url: U) -> ClientRequest<S>
+    pub fn post<U>(&self, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -159,7 +165,7 @@ impl<S> Client<S> {
     }
 
     /// Construct HTTP *PATCH* request.
-    pub fn patch<U>(&self, url: U) -> ClientRequest<S>
+    pub fn patch<U>(&self, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -168,7 +174,7 @@ impl<S> Client<S> {
     }
 
     /// Construct HTTP *DELETE* request.
-    pub fn delete<U>(&self, url: U) -> ClientRequest<S>
+    pub fn delete<U>(&self, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
@@ -177,7 +183,7 @@ impl<S> Client<S> {
     }
 
     /// Construct HTTP *OPTIONS* request.
-    pub fn options<U>(&self, url: U) -> ClientRequest<S>
+    pub fn options<U>(&self, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
