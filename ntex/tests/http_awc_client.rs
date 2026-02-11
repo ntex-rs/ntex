@@ -762,6 +762,8 @@ async fn middleware() {
         .await
         .unwrap();
 
+    assert!(client.ready().await.is_ok());
+
     let request = client.get(srv.url("/")).header("x-test", "111").send();
     let response = request.await.unwrap();
     assert!(response.status().is_success());
