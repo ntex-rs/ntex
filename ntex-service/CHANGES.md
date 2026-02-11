@@ -4,6 +4,8 @@
 
 * Add fn_layer() helper
 
+* Change service type for apply_fn() helper
+
 ## [4.3.0] - 2026-02-07
 
 * Add .inspect() combinator

@@ -1,7 +1,7 @@
 use std::{fmt, marker::PhantomData, rc::Rc};
 
-use crate::dev::{Apply, ServiceChainFactory};
-use crate::{IntoServiceFactory, Pipeline, Service, ServiceFactory};
+use crate::dev::{Apply, ApplyCtx, ServiceChainFactory};
+use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply middleware to a service.
 pub fn apply<M, S, R, C, U>(
@@ -218,7 +218,7 @@ where
 /// Service factory that produces `middleware` from `Fn`.
 pub fn fn_layer<T, Req, F, In, Out, Err>(f: F) -> FnMiddleware<T, Req, F, In, Out, Err>
 where
-    F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err> + Clone,
+    F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err> + Clone,
 {
     FnMiddleware { f, r: PhantomData }
 }
@@ -253,13 +253,13 @@ impl<T, Req, F, In, Out, Err> fmt::Debug for FnMiddleware<T, Req, F, In, Out, Er
 impl<T, C, R, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, R, F, In, Out, Err>
 where
     T: Service<R>,
-    F: AsyncFn(In, &Pipeline<T>) -> Result<Out, Err> + Clone,
+    F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
     type Service = Apply<T, R, F, In, Out, Err>;
 
     fn create(&self, service: T, _: C) -> Self::Service {
-        Apply::new(Pipeline::new(service), self.f.clone())
+        Apply::new(service, self.f.clone())
     }
 }
 
