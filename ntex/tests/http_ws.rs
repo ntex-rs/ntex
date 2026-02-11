@@ -7,7 +7,7 @@ use ntex::http::{
 };
 use ntex::io::{DispatchItem, Dispatcher, Io, IoConfig};
 use ntex::service::{Pipeline, Service, ServiceCtx, cfg::SharedCfg};
-use ntex::time::Seconds;
+use ntex::time::{Millis, Seconds, sleep};
 use ntex::util::{ByteString, Bytes, Ready};
 use ntex::ws::{self, handshake, handshake_response};
 
@@ -318,4 +318,101 @@ async fn test_transport() {
             description: None
         }))
     );
+}
+
+/// Stale h1 headers-read timer must not kill a WebSocket connection.
+/// The h1 dispatcher starts a timer that can fire after the WS upgrade,
+/// setting DSP_TIMEOUT on the shared IO. If the WS service is busy when
+/// this happens, the dispatcher must ignore the spurious timeout.
+#[ntex::test]
+async fn test_stale_timer_after_ws_upgrade() {
+    use ntex::util::inflight::InFlightService;
+
+    async fn slow_ws_service(
+        msg: DispatchItem<ws::Codec>,
+    ) -> Result<Option<ws::Message>, io::Error> {
+        match msg {
+            DispatchItem::Item(frame) => {
+                // sleep longer than the h1 headers_read_rate timer (1s)
+                // so the stale timer fires while this service is busy
+                sleep(Millis(2000)).await;
+                let msg = match frame {
+                    ws::Frame::Text(text) => {
+                        ws::Message::Text(String::from_utf8_lossy(&text).as_ref().into())
+                    }
+                    ws::Frame::Close(reason) => ws::Message::Close(reason),
+                    _ => return Ok(None),
+                };
+                Ok(Some(msg))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    let srv =
+        test::server_with_config(
+            async move || {
+                HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
+                    .control(move |req: h1::Control<_, _>| {
+                        let ack = if let h1::Control::Upgrade(upg) = req {
+                            upg.handle(|req, io, codec| async move {
+                                let res = handshake(req.head()).unwrap().message_body(());
+                                io.encode((res, body::BodySize::None).into(), &codec)
+                                    .unwrap();
+                                io.set_config(SharedCfg::new("WS").add(
+                                    IoConfig::new().set_keepalive_timeout(Seconds(0)),
+                                ));
+                                // let the stale h1 timer (1s) fire before starting the WS dispatcher
+                                sleep(Millis(2500)).await;
+                                // InFlightService(1) makes poll_ready return Pending while
+                                // slow_ws_service is processing, so the dispatcher enters
+                                // poll_service → poll_read_pause where DSP_TIMEOUT is observed
+                                Dispatcher::new(
+                                    io.seal(),
+                                    ws::Codec::new(),
+                                    InFlightService::new(
+                                        1,
+                                        ntex::service::fn_service(slow_ws_service),
+                                    ),
+                                )
+                                .await
+                                .map_err(|_| panic!())
+                            })
+                        } else {
+                            req.ack()
+                        };
+                        async move { Ok::<_, io::Error>(ack) }
+                    })
+            },
+            SharedCfg::new("SRV").add(
+                HttpServiceConfig::new()
+                    .set_keepalive(1)
+                    .set_headers_read_rate(Seconds(1), Seconds::ZERO, 16),
+            ),
+        )
+        .await;
+
+    let conn = srv.ws().await.unwrap();
+    assert_eq!(conn.response().status(), StatusCode::SWITCHING_PROTOCOLS);
+
+    let (io, codec, _) = conn.into_inner();
+
+    // send a message immediately — the service will sleep 2s,
+    // during which the stale h1 timer (1s) fires
+    io.send(ws::Message::Text(ByteString::from_static("hello")), &codec)
+        .await
+        .unwrap();
+
+    // connection must survive; we get the echo back after ~2s
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"hello")));
+
+    io.send(
+        ws::Message::Close(Some(ws::CloseCode::Normal.into())),
+        &codec,
+    )
+    .await
+    .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Normal.into())));
 }
