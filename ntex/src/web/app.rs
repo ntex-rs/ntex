@@ -444,7 +444,7 @@ where
         }
     }
 
-    #[deprecated]
+    #[deprecated(since = "3.2.0", note = "use `middleware()` instead")]
     #[doc(hidden)]
     pub fn wrap<U>(self, mw: U) -> App<WebStack<M, U, Err>, T, Err> {
         self.middleware(mw)
