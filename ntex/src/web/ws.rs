@@ -158,7 +158,9 @@ where
     // create ws service
     let srv = factory.into_factory().create(sink.clone()).await?;
     io.set_config(CFG.with(|cfg| *cfg));
-    // cancel stale timer inherited from the h1 dispatcher
+
+    // the h1 dispatcher may have started a headers-read timer on this IO;
+    // cancel it so DSP_TIMEOUT doesn't fire on the new WS dispatcher
     io.stop_timer();
 
     // start websockets service dispatcher
