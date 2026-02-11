@@ -456,8 +456,7 @@ where
                                 Reason::KeepAliveTimeout,
                             )))
                         } else {
-                            // spurious timeout (e.g. inherited from a previous
-                            // dispatcher on the same IO after protocol upgrade)
+                            // ignore spurious DSP_TIMEOUT when keep-alive is disabled
                             Poll::Ready(PollService::Continue)
                         }
                     }
