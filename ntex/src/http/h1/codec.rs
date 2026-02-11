@@ -170,12 +170,13 @@ impl Encoder for Codec {
                 // encode message
                 self.encoder.encode(
                     dst,
-                    &mut res,
+                    &res,
                     self.flags.get().contains(Flags::HEAD),
                     self.flags.get().contains(Flags::STREAM),
                     self.version.get(),
                     length,
                     self.ctype.get(),
+                    None,
                     self.cfg,
                 )?;
                 // self.headers_size = (dst.len() - len) as u32;

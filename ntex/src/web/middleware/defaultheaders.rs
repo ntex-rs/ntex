@@ -16,7 +16,7 @@ use crate::web::{WebRequest, WebResponse};
 ///
 /// fn main() {
 ///     let app = App::new()
-///         .wrap(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
+///         .middleware(middleware::DefaultHeaders::new().header("X-Version", "0.2"))
 ///         .service(
 ///             web::resource("/test")
 ///                 .route(web::get().to(|| async { HttpResponse::Ok() }))

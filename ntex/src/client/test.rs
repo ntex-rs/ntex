@@ -1,6 +1,4 @@
 //! Test helpers for ntex http client to use during testing.
-use std::rc::Rc;
-
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 
@@ -9,7 +7,7 @@ use crate::http::header::{HeaderName, HeaderValue};
 use crate::http::{Payload, ResponseHead, StatusCode, Version};
 use crate::{channel::bstream, util::Bytes};
 
-use super::ClientResponse;
+use super::{ClientConfig, ClientResponse};
 
 #[derive(Debug)]
 /// Test `ClientResponse` builder
@@ -115,9 +113,9 @@ impl TestResponse {
         }
 
         if let Some(pl) = self.payload {
-            ClientResponse::new(head, pl, Rc::default())
+            ClientResponse::new(head, pl, ClientConfig::default())
         } else {
-            ClientResponse::new(head, bstream::empty(None).into(), Rc::default())
+            ClientResponse::new(head, bstream::empty(None).into(), ClientConfig::default())
         }
     }
 }

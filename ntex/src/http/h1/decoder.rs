@@ -16,7 +16,7 @@ const MAX_BUFFER_SIZE: usize = 32_768;
 
 #[derive(Debug)]
 /// Incoming messagd decoder
-pub(super) struct MessageDecoder<T: MessageType>(PhantomData<T>);
+pub(crate) struct MessageDecoder<T: MessageType>(PhantomData<T>);
 
 #[derive(Debug, PartialEq, Eq)]
 /// Incoming request type
@@ -48,7 +48,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum PayloadLength {
+pub(crate) enum PayloadLength {
     Payload(PayloadType),
     Upgrade,
     None,
@@ -71,7 +71,7 @@ impl PayloadLength {
     }
 }
 
-pub(super) trait MessageType: Sized {
+pub(crate) trait MessageType: Sized {
     fn set_connection_type(&mut self, ctype: Option<ConnectionType>);
 
     fn set_expect(&mut self);
@@ -444,13 +444,13 @@ fn connection_type(val: &str) -> Option<ConnectionType> {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct HeaderIndex {
-    pub(super) name: (usize, usize),
-    pub(super) value: (usize, usize),
+pub(crate) struct HeaderIndex {
+    pub(crate) name: (usize, usize),
+    pub(crate) value: (usize, usize),
 }
 
 impl HeaderIndex {
-    pub(super) fn record<'a>(
+    pub(crate) fn record<'a>(
         bytes: &[u8],
         headers: &[httparse::Header<'_>],
         indices: &'a mut [mem::MaybeUninit<HeaderIndex>],

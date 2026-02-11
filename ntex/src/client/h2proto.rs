@@ -2,31 +2,29 @@ use std::{future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
-use crate::http::body::{BodySize, MessageBody};
+use crate::http::ResponseHead;
+use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::{Method, Payload, Version, h2::Payload as H2Payload};
-use crate::http::{RequestHeadType, ResponseHead};
 use crate::time::{Millis, timeout_checked};
 use crate::util::{ByteString, Bytes, Either, select};
 
+use super::ClientRawRequest;
 use super::error::{ConnectError, SendRequestError};
 
-pub(super) async fn send_request<B>(
+pub(super) async fn send_request(
     client: H2Client,
-    head: RequestHeadType,
-    body: B,
+    req: ClientRawRequest,
+    body: Body,
     timeout: Millis,
-) -> Result<(ResponseHead, Payload), SendRequestError>
-where
-    B: MessageBody,
-{
+) -> Result<(ResponseHead, Payload), SendRequestError> {
     log::trace!(
-        "{}: Sending client request: {head:?} {:?}",
+        "{}: Sending client request: {req:?} {:?}",
         client.client.tag(),
         body.size()
     );
     let length = body.size();
-    let eof = if head.as_ref().method == Method::HEAD {
+    let eof = if req.head.method == Method::HEAD {
         true
     } else {
         matches!(
@@ -35,18 +33,11 @@ where
         )
     };
 
-    // Extracting extra headers from RequestHeadType. HeaderMap::new() does not allocate.
-    let (head, extra_headers) = match head {
-        RequestHeadType::Owned(head) => (RequestHeadType::Owned(head), HeaderMap::new()),
-        RequestHeadType::Rc(head, extra_headers) => (
-            RequestHeadType::Rc(head, None),
-            extra_headers.unwrap_or_else(HeaderMap::new),
-        ),
-    };
-
     // merging headers from head and extra headers.
-    let mut hdrs: HeaderMap = head
-        .as_ref()
+    let empty = HeaderMap::new();
+    let extra_headers = req.headers.as_ref().unwrap_or(&empty);
+    let mut hdrs: HeaderMap = req
+        .head
         .headers
         .iter()
         .filter(|(name, _)| {
@@ -70,14 +61,14 @@ where
     }
 
     // send request
-    let uri = &head.as_ref().uri;
+    let uri = &req.head.uri;
     let path = uri.path_and_query().map_or_else(
         || ByteString::from(uri.path()),
         |p| ByteString::from(format!("{p}")),
     );
     let (snd_stream, rcv_stream) = client
         .client
-        .send(head.as_ref().method.clone(), path, hdrs, eof)
+        .send(req.head.method.clone(), path, hdrs, eof)
         .await?;
 
     // send body
@@ -219,8 +210,8 @@ async fn get_response(
     }
 }
 
-async fn send_body<B: MessageBody>(
-    mut body: B,
+async fn send_body(
+    mut body: Body,
     stream: &h2::client::SendStream,
 ) -> Result<(), SendRequestError> {
     loop {

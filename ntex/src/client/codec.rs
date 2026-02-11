@@ -3,14 +3,12 @@ use std::{cell::Cell, cell::RefCell};
 use bitflags::bitflags;
 
 use crate::codec::{Decoder, Encoder};
-use crate::http::body::BodySize;
 use crate::http::error::{DecodeError, EncodeError, PayloadError};
-use crate::http::message::{ConnectionType, RequestHeadType, ResponseHead};
-use crate::http::{Method, Version};
-use crate::{io::IoConfig, util::Bytes, util::BytesMut};
-
-use super::decoder::{PayloadDecoder, PayloadItem, PayloadType};
-use super::{Message, MessageType, decoder, encoder};
+use crate::http::h1::{
+    Message, MessageType, PayloadDecoder, PayloadItem, PayloadType, decoder, encoder,
+};
+use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, Version};
+use crate::{client::ClientRawRequest, io::IoConfig, util::Bytes, util::BytesMut};
 
 bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -23,13 +21,13 @@ bitflags! {
 
 #[derive(Debug)]
 /// HTTP/1 Codec
-pub struct ClientCodec {
+pub(crate) struct ClientCodec {
     inner: ClientCodecInner,
 }
 
 #[derive(Debug)]
 /// HTTP/1 Payload Codec
-pub struct ClientPayloadCodec {
+pub(crate) struct ClientPayloadCodec {
     inner: ClientCodecInner,
 }
 
@@ -43,14 +41,14 @@ struct ClientCodecInner {
 
     // encoder part
     flags: Cell<Flags>,
-    encoder: encoder::MessageEncoder<RequestHeadType>,
+    encoder: encoder::MessageEncoder<RequestHead>,
 }
 
 impl ClientCodec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(keep_alive: bool, cfg: &'static IoConfig) -> Self {
+    pub(crate) fn new(keep_alive: bool, cfg: &'static IoConfig) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -69,18 +67,13 @@ impl ClientCodec {
         }
     }
 
-    /// Check if request is upgrade
-    pub fn upgrade(&self) -> bool {
-        self.inner.ctype.get() == ConnectionType::Upgrade
-    }
-
     /// Check if last response is keep-alive
-    pub fn keepalive(&self) -> bool {
+    pub(crate) fn keepalive(&self) -> bool {
         self.inner.ctype.get() == ConnectionType::KeepAlive
     }
 
     /// Check last request's message type
-    pub fn message_type(&self) -> MessageType {
+    pub(crate) fn message_type(&self) -> MessageType {
         if self.inner.flags.get().contains(Flags::STREAM) {
             MessageType::Stream
         } else if self.inner.payload.borrow().is_none() {
@@ -91,20 +84,15 @@ impl ClientCodec {
     }
 
     /// Convert message codec to a payload codec
-    pub fn into_payload_codec(self) -> ClientPayloadCodec {
+    pub(crate) fn into_payload_codec(self) -> ClientPayloadCodec {
         ClientPayloadCodec { inner: self.inner }
     }
 }
 
 impl ClientPayloadCodec {
     /// Check if last response is keep-alive
-    pub fn keepalive(&self) -> bool {
+    pub(crate) fn keepalive(&self) -> bool {
         self.inner.ctype.get() == ConnectionType::KeepAlive
-    }
-
-    /// Transform payload codec to a message codec
-    pub fn into_message_codec(self) -> ClientCodec {
-        ClientCodec { inner: self.inner }
     }
 }
 
@@ -179,20 +167,20 @@ impl Decoder for ClientPayloadCodec {
 }
 
 impl Encoder for ClientCodec {
-    type Item = Message<(RequestHeadType, BodySize)>;
+    type Item = Message<ClientRawRequest>;
     type Error = EncodeError;
 
     fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         match item {
-            Message::Item((mut head, length)) => {
+            Message::Item(mut req) => {
                 let inner = &self.inner;
-                inner.version.set(head.as_ref().version);
+                inner.version.set(req.head.version);
                 let mut flags = inner.flags.get();
-                flags.set(Flags::HEAD, head.as_ref().method == Method::HEAD);
+                flags.set(Flags::HEAD, req.head.method == Method::HEAD);
                 inner.flags.set(flags);
 
                 // connection status
-                inner.ctype.set(match head.as_ref().connection_type() {
+                inner.ctype.set(match req.head.connection_type() {
                     ConnectionType::KeepAlive => {
                         if inner.flags.get().contains(Flags::KEEPALIVE_ENABLED) {
                             ConnectionType::KeepAlive
@@ -204,14 +192,16 @@ impl Encoder for ClientCodec {
                     ConnectionType::Close => ConnectionType::Close,
                 });
 
+                let headers = req.headers.take();
                 inner.encoder.encode(
                     dst,
-                    &mut head,
+                    &req.head,
                     false,
                     false,
                     inner.version.get(),
-                    length,
+                    req.size,
                     inner.ctype.get(),
+                    headers,
                     self.inner.cfg,
                 )?;
             }

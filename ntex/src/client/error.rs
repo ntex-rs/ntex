@@ -2,7 +2,6 @@
 use std::{error::Error, io, rc::Rc};
 
 use serde_json::error::Error as JsonError;
-use thiserror::Error;
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::{Error as SslError, HandshakeError};
@@ -201,26 +200,6 @@ impl From<Either<DecodeError, io::Error>> for SendRequestError {
         match err {
             Either::Left(err) => SendRequestError::Response(err),
             Either::Right(err) => SendRequestError::Send(err),
-        }
-    }
-}
-
-/// A set of errors that can occur during freezing a request
-#[derive(Error, Debug, Clone)]
-pub enum FreezeRequestError {
-    /// Invalid URL
-    #[error("Invalid URL: {0}")]
-    Url(#[from] InvalidUrl),
-    /// Http error
-    #[error("{0}")]
-    Http(#[from] HttpError),
-}
-
-impl From<FreezeRequestError> for SendRequestError {
-    fn from(e: FreezeRequestError) -> Self {
-        match e {
-            FreezeRequestError::Url(e) => e.into(),
-            FreezeRequestError::Http(e) => e.into(),
         }
     }
 }

@@ -190,7 +190,7 @@ where
     ///
     /// fn main() {
     ///     let app = App::new()
-    ///         .wrap(middleware::Logger::default())
+    ///         .middleware(middleware::Logger::default())
     ///         .service(
     ///             web::scope("/api")
     ///                 .configure(config)
@@ -361,9 +361,7 @@ where
     /// middleware is more limited in what it can modify, relative to Route or
     /// Application level middleware, in that Scope-level middleware can not modify
     /// `WebResponse`.
-    ///
-    /// Use middleware when you need to read or modify *every* request in some way.
-    pub fn wrap<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
+    pub fn middleware<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
         Scope {
             middleware: WebStack::new(self.middleware, mw),
             filter: self.filter,
@@ -375,6 +373,12 @@ where
             external: self.external,
             case_insensitive: self.case_insensitive,
         }
+    }
+
+    #[doc(hidden)]
+    #[deprecated]
+    pub fn wrap<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
+        self.middleware(mw)
     }
 }
 
@@ -1143,7 +1147,7 @@ mod tests {
         let srv = init_service(
             App::new().service(
                 web::scope("app")
-                    .wrap(
+                    .middleware(
                         DefaultHeaders::new()
                             .header(CONTENT_TYPE, HeaderValue::from_static("0001")),
                     )

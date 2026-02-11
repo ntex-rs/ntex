@@ -22,7 +22,7 @@ pub(crate) use self::message::Message;
 pub use self::config::{DateService, HttpServiceConfig, KeepAlive};
 pub use self::error::ResponseError;
 pub use self::httpmessage::HttpMessage;
-pub use self::message::{ConnectionType, RequestHead, RequestHeadType, ResponseHead};
+pub use self::message::{ConnectionType, RequestHead, ResponseHead};
 pub use self::payload::{Payload, PayloadStream};
 pub use self::request::Request;
 pub use self::response::{Response, ResponseBuilder};

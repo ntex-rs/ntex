@@ -1,46 +1,51 @@
-use std::{fmt, rc::Rc};
+use std::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue};
-use crate::{SharedCfg, service::ServiceFactory, time::Millis};
+use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack};
+use crate::{SharedCfg, time::Millis};
 
-use super::error::ClientBuilderError;
-use super::{Client, ClientConfig, ClientInner, Connector};
+use super::error::{ClientBuilderError, SendRequestError};
+use super::sender::Sender;
+use super::service::{ServiceRequest, ServiceResponse};
+use super::{Client, ClientConfig, Connector, cfg::ClientConfigInner};
 
-/// An HTTP Client builder
+/// An HTTP Client builder.
 ///
 /// This type can be used to construct an instance of `Client` through a
 /// builder-like pattern.
 #[derive(Debug)]
-pub struct ClientBuilder {
-    default_headers: bool,
+pub struct ClientBuilder<M = Identity> {
+    middleware: M,
     allow_redirects: bool,
     max_redirects: usize,
-    config: ClientConfig,
+    config: ClientConfigInner,
     connector: Connector,
 }
 
-impl Default for ClientBuilder {
+impl Default for ClientBuilder<Identity> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ClientBuilder {
+impl ClientBuilder<Identity> {
     #[must_use]
     /// Create new client builder instance.
     pub fn new() -> Self {
         ClientBuilder {
-            default_headers: true,
+            middleware: Identity,
             allow_redirects: true,
             max_redirects: 10,
-            config: ClientConfig::default(),
+            config: ClientConfigInner::default(),
             connector: Connector::default(),
         }
     }
+}
 
+impl<M> ClientBuilder<M> {
     #[must_use]
     /// Use custom connector service.
     pub fn connector<T>(mut self, connector: Connector) -> Self {
@@ -88,7 +93,7 @@ impl ClientBuilder {
     ///
     /// By default `Date` and `User-Agent` headers are set.
     pub fn no_default_headers(mut self) -> Self {
-        self.default_headers = false;
+        self.config.default_headers = false;
         self
     }
 
@@ -97,7 +102,7 @@ impl ClientBuilder {
     ///
     /// By default max size is 256Kb
     pub fn response_payload_limit(mut self, limit: usize) -> Self {
-        self.config.response_pl_limit = limit;
+        self.config.pl_limit = limit;
         self
     }
 
@@ -107,7 +112,7 @@ impl ClientBuilder {
     /// Response payload timeout is the total time before a payload must be received.
     /// Default value is 10 seconds.
     pub fn response_payload_timeout(mut self, timeout: Millis) -> Self {
-        self.config.response_pl_timeout = timeout;
+        self.config.pl_timeout = timeout;
         self
     }
 
@@ -159,21 +164,65 @@ impl ClientBuilder {
         self.header(header::AUTHORIZATION, format!("Bearer {token}"))
     }
 
+    #[must_use]
+    /// Apply middleware.
+    ///
+    /// Use middleware when you need to read or modify *every* request or
+    /// response in some way.
+    ///
+    /// ```rust
+    /// use ntex::client::{Client, ServiceRequest};
+    /// use ntex::service::{fn_layer, cfg::SharedCfg};
+    ///
+    /// #[ntex::main]
+    /// async fn main() {
+    ///     let client = Client::builder()
+    ///         .middleware(fn_layer(
+    ///             async move |mut req: ServiceRequest, svc| {
+    ///                 println!("{:?}", req.head().uri);
+    ///                 svc.call(req).await
+    ///             }
+    ///         ))
+    ///         .build(SharedCfg::default())
+    ///         .await;
+    /// }
+    /// ```
+    pub fn middleware<U>(self, mw: U) -> ClientBuilder<Stack<U, M>> {
+        ClientBuilder {
+            middleware: Stack::new(mw, self.middleware),
+            allow_redirects: self.allow_redirects,
+            max_redirects: self.max_redirects,
+            config: self.config,
+            connector: self.connector,
+        }
+    }
+
     /// Finish build process and create `Client` instance.
-    pub async fn build<T>(self, cfg: T) -> Result<Client, ClientBuilderError>
+    pub async fn build<T>(
+        mut self,
+        cfg: T,
+    ) -> Result<Client<M::Service>, ClientBuilderError>
     where
         T: Into<SharedCfg>,
+        M: Middleware<Sender, ClientConfig>,
+        M::Service:
+            Service<ServiceRequest, Response = ServiceResponse, Error = SendRequestError>,
     {
-        self.connector
-            .create(cfg.into())
+        let cfg = cfg.into();
+        self.config.cfg = cfg;
+        let config = ClientConfig::new(self.config);
+
+        let svc = self
+            .connector
+            .create(cfg)
             .await
-            .map_err(|_| ClientBuilderError::ConnectorFailed)
-            .map(|connector| {
-                Client(Rc::new(ClientInner {
-                    config: Rc::new(self.config),
-                    connector: connector.into(),
-                }))
-            })
+            .map_err(|_| ClientBuilderError::ConnectorFailed)?;
+
+        let svc = self
+            .middleware
+            .create(Sender::new(svc, config.clone()), config.clone());
+
+        Ok(Client::with_service(svc.into(), config))
     }
 }
 
@@ -189,26 +238,26 @@ mod tests {
             .max_redirects(10)
             .no_default_headers();
         assert!(!builder.allow_redirects);
-        assert!(!builder.default_headers);
+        assert!(!builder.config.default_headers);
         assert_eq!(builder.max_redirects, 10);
     }
 
     #[crate::rt_test]
     async fn response_payload_limit() {
         let builder = ClientBuilder::default();
-        assert_eq!(builder.config.response_pl_limit, 262_144);
+        assert_eq!(builder.config.pl_limit, 262_144);
 
         let builder = builder.response_payload_limit(10);
-        assert_eq!(builder.config.response_pl_limit, 10);
+        assert_eq!(builder.config.pl_limit, 10);
     }
 
     #[crate::rt_test]
     async fn response_payload_timeout() {
         let builder = ClientBuilder::default();
-        assert_eq!(builder.config.response_pl_timeout, Millis(10_000));
+        assert_eq!(builder.config.pl_timeout, Millis(10_000));
 
         let builder = builder.response_payload_timeout(Millis(10));
-        assert_eq!(builder.config.response_pl_timeout, Millis(10));
+        assert_eq!(builder.config.pl_timeout, Millis(10));
     }
 
     #[crate::rt_test]

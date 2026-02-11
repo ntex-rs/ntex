@@ -1,11 +1,11 @@
 use std::{fmt, time};
 
-use crate::http::body::MessageBody;
-use crate::http::{Payload, RequestHeadType, ResponseHead};
+use crate::http::body::Body;
+use crate::http::{Payload, ResponseHead};
 use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::time::Millis;
 
-use super::{error::SendRequestError, h1proto, h2proto, pool::Acquired};
+use super::{ClientRawRequest, error::SendRequestError, h1proto, h2proto, pool::Acquired};
 
 pub(super) enum ConnectionType {
     H1(IoBoxed),
@@ -88,27 +88,17 @@ impl Connection {
         }
     }
 
-    pub(super) async fn send_request<B: MessageBody + 'static, H: Into<RequestHeadType>>(
+    pub(super) async fn send_request(
         mut self,
-        head: H,
-        body: B,
+        req: ClientRawRequest,
+        body: Body,
         timeout: Millis,
     ) -> Result<(ResponseHead, Payload), SendRequestError> {
         match self.io.take().unwrap() {
             ConnectionType::H1(io) => {
-                h1proto::send_request(
-                    io,
-                    head.into(),
-                    body,
-                    self.created,
-                    timeout,
-                    self.pool,
-                )
-                .await
+                h1proto::send_request(io, req, body, self.created, timeout, self.pool).await
             }
-            ConnectionType::H2(io) => {
-                h2proto::send_request(io, head.into(), body, timeout).await
-            }
+            ConnectionType::H2(io) => h2proto::send_request(io, req, body, timeout).await,
         }
     }
 }

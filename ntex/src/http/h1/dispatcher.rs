@@ -793,8 +793,9 @@ mod tests {
     use rand::Rng;
 
     use super::*;
+    use crate::client::ClientCodec;
     use crate::http::config::HttpServiceConfig;
-    use crate::http::h1::{ClientCodec, DefaultControlService, control::Reason};
+    use crate::http::h1::{DefaultControlService, control::Reason};
     use crate::http::{ResponseHead, StatusCode, body};
     use crate::io::{self as nio, Base, IoConfig};
     use crate::service::{IntoService, cfg::SharedCfg, fn_service};

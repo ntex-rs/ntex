@@ -1,61 +1,48 @@
 use std::task::{Poll, ready};
 use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
-use crate::http::body::{BodySize, MessageBody};
+use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::error::PayloadError;
-use crate::http::header::{HOST, HeaderMap, HeaderValue};
-use crate::http::{Payload, PayloadStream, RequestHeadType, ResponseHead, Version, h1};
+use crate::http::header::{HOST, HeaderValue};
+use crate::http::{Payload, PayloadStream, ResponseHead, Version, h1};
 use crate::io::{IoBoxed, RecvError};
 use crate::time::{Millis, timeout_checked};
 use crate::util::{BufMut, Bytes, BytesMut, Stream};
 
 use super::connection::{Connection, ConnectionType};
 use super::error::{ConnectError, SendRequestError};
-use super::pool::Acquired;
+use super::{ClientCodec, ClientPayloadCodec, ClientRawRequest, pool::Acquired};
 
-pub(super) async fn send_request<B>(
+pub(super) async fn send_request(
     io: IoBoxed,
-    mut head: RequestHeadType,
-    body: B,
+    mut req: ClientRawRequest,
+    body: Body,
     created: Instant,
     timeout: Millis,
     pool: Option<Acquired>,
-) -> Result<(ResponseHead, Payload), SendRequestError>
-where
-    B: MessageBody,
-{
+) -> Result<(ResponseHead, Payload), SendRequestError> {
     // set request host header
-    if !head.as_ref().headers.contains_key(HOST)
-        && !head.extra_headers().iter().any(|h| h.contains_key(HOST))
-        && let Some(host) = head.as_ref().uri.host()
+    if !req.head.headers.contains_key(HOST)
+        && let Some(host) = req.head.uri.host()
     {
         let mut wrt = BytesMut::with_capacity(host.len() + 5).writer();
 
-        let _ = match head.as_ref().uri.port_u16() {
+        let _ = match req.head.uri.port_u16() {
             None | Some(80 | 443) => write!(wrt, "{host}"),
             Some(port) => write!(wrt, "{host}:{port}"),
         };
 
         match HeaderValue::from_shared(wrt.get_mut().take()) {
-            Ok(value) => match head {
-                RequestHeadType::Owned(ref mut head) => head.headers.insert(HOST, value),
-                RequestHeadType::Rc(_, ref mut extra_headers) => {
-                    let headers = extra_headers.get_or_insert(HeaderMap::new());
-                    headers.insert(HOST, value);
-                }
-            },
+            Ok(value) => req.head.headers.insert(HOST, value),
             Err(e) => log::error!("Cannot set HOST header {e}"),
         }
     }
 
-    log::trace!(
-        "sending http1 request {head:?} body size: {:?}",
-        body.size()
-    );
+    log::trace!("sending http1 request {req:?} body size: {:?}", body.size());
 
     // send request
-    let codec = h1::ClientCodec::new(true, io.cfg());
-    io.send((head, body.size()).into(), &codec).await?;
+    let codec = ClientCodec::new(true, io.cfg());
+    io.send(req.into(), &codec).await?;
 
     log::trace!("http1 request has been sent");
 
@@ -103,14 +90,11 @@ where
 }
 
 /// send request body to the peer
-pub(super) async fn send_body<B>(
-    mut body: B,
+pub(super) async fn send_body(
+    mut body: Body,
     io: &IoBoxed,
-    codec: &h1::ClientCodec,
-) -> Result<(), SendRequestError>
-where
-    B: MessageBody,
-{
+    codec: &ClientCodec,
+) -> Result<(), SendRequestError> {
     loop {
         if let Some(result) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
             io.encode(h1::Message::Chunk(Some(result?)), codec)?;
@@ -127,7 +111,7 @@ where
 
 pub(super) struct PlStream {
     io: Option<IoBoxed>,
-    codec: h1::ClientPayloadCodec,
+    codec: ClientPayloadCodec,
     created: Instant,
     http_10: bool,
     pool: Option<Acquired>,
@@ -136,7 +120,7 @@ pub(super) struct PlStream {
 impl PlStream {
     fn new(
         io: IoBoxed,
-        codec: h1::ClientCodec,
+        codec: ClientCodec,
         created: Instant,
         pool: Option<Acquired>,
         http_10: bool,
