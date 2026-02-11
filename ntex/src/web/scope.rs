@@ -376,7 +376,7 @@ where
     }
 
     #[doc(hidden)]
-    #[deprecated]
+    #[deprecated(since = "3.2.0", note = "use `middleware()` instead")]
     pub fn wrap<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
         self.middleware(mw)
     }

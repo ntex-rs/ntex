@@ -300,7 +300,7 @@ where
         }
     }
 
-    #[deprecated]
+    #[deprecated(since = "3.2.0", note = "use `middleware()` instead")]
     #[doc(hidden)]
     pub fn wrap<U>(self, mw: U) -> Resource<Err, WebStack<M, U, Err>, T> {
         self.middleware(mw)
@@ -552,7 +552,7 @@ mod tests {
             App::new().service(
                 web::resource("/test")
                     .name("test")
-                    .wrap(
+                    .middleware(
                         DefaultHeaders::new()
                             .header(header::CONTENT_TYPE, HeaderValue::from_static("0001")),
                     )
