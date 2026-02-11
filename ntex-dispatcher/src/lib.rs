@@ -446,14 +446,20 @@ where
 
                 match ready!(self.shared.io.poll_read_pause(cx)) {
                     IoStatusUpdate::KeepAlive => {
-                        log::trace!(
-                            "{}: Keep-alive error, stopping dispatcher during pause",
-                            self.shared.io.tag()
-                        );
-                        self.st = DispatcherState::Stop;
-                        Poll::Ready(PollService::ItemWait(DispatchItem::Stop(
-                            Reason::KeepAliveTimeout,
-                        )))
+                        if self.shared.contains(Flags::KA_ENABLED) {
+                            log::trace!(
+                                "{}: Keep-alive error, stopping dispatcher during pause",
+                                self.shared.io.tag()
+                            );
+                            self.st = DispatcherState::Stop;
+                            Poll::Ready(PollService::ItemWait(DispatchItem::Stop(
+                                Reason::KeepAliveTimeout,
+                            )))
+                        } else {
+                            // spurious timeout (e.g. inherited from a previous
+                            // dispatcher on the same IO after protocol upgrade)
+                            Poll::Ready(PollService::Continue)
+                        }
                     }
                     IoStatusUpdate::PeerGone(err) => {
                         log::trace!(
