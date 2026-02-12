@@ -159,6 +159,10 @@ where
     let srv = factory.into_factory().create(sink.clone()).await?;
     io.set_config(CFG.with(|cfg| *cfg));
 
+    // the h1 dispatcher may have started a headers-read timer on this IO;
+    // cancel it so DSP_TIMEOUT doesn't fire on the new WS dispatcher
+    io.stop_timer();
+
     // start websockets service dispatcher
     rt::spawn(async move {
         let res = crate::io::Dispatcher::new(io, codec, srv).await;
