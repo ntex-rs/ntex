@@ -10,23 +10,23 @@ jobs:
       - uses: actions/checkout@v6
       - uses: jlumbroso/free-disk-space@main
 
-    - name: Install Rust toolchain
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        profile: minimal
-        # Miri requires nightly Rust
-        toolchain: nightly
-        override: true
-        components: miri
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          profile: minimal
+          # Miri requires nightly Rust
+          toolchain: nightly
+          override: true
+          components: miri
 
-    - name: Generate Cargo.lock
-      uses: actions-rs/cargo@v1
-      with:
-        command: generate-lockfile
+      - name: Generate Cargo.lock
+        uses: actions-rs/cargo@v1
+        with:
+          command: generate-lockfile
 
-    - name: Cache Dependencies
-      uses: Swatinem/rust-cache@v2.8.2
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2.8.2
 
-    - name: Run Miri
-      # Run all of your tests inside of Miri interpreter
-      run: cargo miri test -p ntex-bytes
+      - name: Run Miri
+        # Run all of your tests inside of Miri interpreter
+        run: cargo miri test -p ntex-bytes
