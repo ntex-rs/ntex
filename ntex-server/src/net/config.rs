@@ -50,7 +50,7 @@ struct Socket {
 pub(super) struct ServiceConfigInner {
     token: Token,
     on_start_set: bool,
-    on_start: Option<Box<dyn OnWorkerStart>>,
+    on_start: Vec<Box<dyn OnWorkerStart>>,
     sockets: Vec<Socket>,
     backlog: i32,
 }
@@ -72,10 +72,10 @@ impl ServiceConfig {
             backlog,
             sockets: Vec::new(),
             on_start_set: false,
-            on_start: Some(OnWorkerStartWrapper::create(|_| {
+            on_start: vec![OnWorkerStartWrapper::create(|_| {
                 not_configured();
                 Ready::Ok::<_, &str>(())
-            })),
+            })],
         })))
     }
 
@@ -146,22 +146,17 @@ impl ServiceConfig {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
-    ///
-    /// # Panics
-    ///
-    /// `on worker start` callback could be set once.
     pub fn on_worker_start<F, E>(&self, f: F) -> &Self
     where
         F: AsyncFn(ServiceRuntime) -> Result<(), E> + Send + Clone + 'static,
         E: fmt::Display + 'static,
     {
         let mut inner = self.0.borrow_mut();
-        assert!(
-            !inner.on_start_set,
-            "on_worker_set is already set, can be set once"
-        );
-
-        inner.on_start = Some(OnWorkerStartWrapper::create(f));
+        if !inner.on_start_set {
+            inner.on_start.clear();
+            inner.on_start_set = true;
+        }
+        inner.on_start.push(OnWorkerStartWrapper::create(f));
         self
     }
 
@@ -199,33 +194,39 @@ impl ServiceConfig {
             sockets,
             Box::new(ConfiguredService {
                 names,
-                rt: inner.on_start.take().unwrap(),
+                on_start: mem::take(&mut inner.on_start),
             }),
         )
     }
 }
 
 struct ConfiguredService {
-    rt: Box<dyn OnWorkerStart>,
     names: HashMap<String, Entry>,
+    on_start: Vec<Box<dyn OnWorkerStart>>,
 }
 
 impl FactoryService for ConfiguredService {
     fn clone_factory(&self) -> FactoryServiceType {
         Box::new(Self {
-            rt: self.rt.clone(),
             names: self.names.clone(),
+            on_start: self.on_start.iter().map(|cb| (*cb).clone()).collect(),
         })
     }
 
     fn create(&self) -> BoxFuture<'static, Result<Vec<NetService>, ()>> {
         // configure services
         let rt = ServiceRuntime::new(self.names.clone());
-        let cfg_fut = self.rt.run(ServiceRuntime(rt.0.clone()));
+        let on_start: Vec<_> = self
+            .on_start
+            .iter()
+            .map(|cb| cb.run(ServiceRuntime(rt.0.clone())))
+            .collect();
 
         // construct services
         Box::pin(async move {
-            cfg_fut.await?;
+            for fut in on_start {
+                fut.await?;
+            }
             rt.validate();
 
             let names = mem::take(&mut rt.0.borrow_mut().names);

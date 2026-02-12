@@ -2,7 +2,7 @@
 
 ## [3.7.0] - 2026-02-12
 
-* ServiceConfig::on_worker_start() could be set once
+* Allow to set multiple ServiceConfig::on_worker_start() callbacks
 
 ## [3.6.0] - 2026-01-28
 
