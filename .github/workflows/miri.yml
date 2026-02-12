@@ -25,9 +25,6 @@ jobs:
     - name: Cache Dependencies
       uses: Swatinem/rust-cache@v2.8.2
 
-    - name: Clean
-      run: cargo clean
-
     - name: Run Miri
       # Run all of your tests inside of Miri interpreter
       run: cargo miri test -p ntex-bytes
