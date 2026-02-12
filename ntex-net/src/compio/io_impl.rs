@@ -108,6 +108,13 @@ where
             Either::Right(false) => (),
         }
     }
+
+    log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
+    if !ctx.is_stopped() {
+        ctx.stop(None);
+        let result = poll_fn(|cx| ctx.shutdown(false, cx)).await;
+        log::trace!("{}: Shuting down complete {result:?}", ctx.tag());
+    }
 }
 
 async fn read_buf<T>(io: &T, buf: BytesMut) -> BufResult<usize, CompioBuf>
@@ -155,13 +162,6 @@ where
             }
             Readiness::Terminate => return,
         }
-    }
-
-    log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
-    if !ctx.is_stopped() {
-        ctx.stop(None);
-        let result = poll_fn(|cx| ctx.shutdown(false, cx)).await;
-        log::trace!("{}: Shuting down complete {result:?}", ctx.tag());
     }
 }
 
