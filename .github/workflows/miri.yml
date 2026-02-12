@@ -17,7 +17,7 @@ jobs:
           # Miri requires nightly Rust
           toolchain: nightly
           override: true
-          components: miri
+          components: miri rust-src
 
       - name: Generate Cargo.lock
         uses: actions-rs/cargo@v1
@@ -26,6 +26,9 @@ jobs:
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Clean
+        run: cargo clean
 
       - name: Run Miri
         # Run all of your tests inside of Miri interpreter
