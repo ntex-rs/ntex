@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.0] 2026-02-12
+
+* Ignore spurious DSP_TIMEOUT when keep-alive is disabled #756
+
 ## [3.2.0] 2026-02-11
 
 * client: Add `middlewares` support for http client
