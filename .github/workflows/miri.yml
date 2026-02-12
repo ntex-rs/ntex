@@ -7,8 +7,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/checkout@v6
-      - uses: jlumbroso/free-disk-space@main
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -24,11 +22,11 @@ jobs:
         with:
           command: generate-lockfile
 
-      - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2.8.2
-
       - name: Clean
         run: cargo clean
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2.8.2
 
       - name: Run Miri
         # Run all of your tests inside of Miri interpreter
