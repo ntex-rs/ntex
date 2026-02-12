@@ -1,6 +1,6 @@
 [package]
 name = "ntex-server"
-version = "3.6.0"
+version = "3.7.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Server for ntex framework"
 keywords = ["network", "framework", "async", "futures"]

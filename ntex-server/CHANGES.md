@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.0] - 2026-02-12
+
+* Allow to set multiple ServiceConfig::on_worker_start() callbacks
+
 ## [3.6.0] - 2026-01-28
 
 * Use system name for workers
