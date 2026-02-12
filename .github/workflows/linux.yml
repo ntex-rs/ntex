@@ -32,9 +32,6 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2.8.2
 
-      - name: Clean
-        run: cargo clean
-
       - name: Run tests (neon-polling)
         timeout-minutes: 10
         run: |

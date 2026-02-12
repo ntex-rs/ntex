@@ -17,6 +17,14 @@ jobs:
         override: true
         components: miri
 
+    - name: Generate Cargo.lock
+      uses: actions-rs/cargo@v1
+      with:
+        command: generate-lockfile
+
+    - name: Cache Dependencies
+      uses: Swatinem/rust-cache@v2.8.2
+
     - name: Run Miri
       # Run all of your tests inside of Miri interpreter
       run: cargo miri test -p ntex-bytes
