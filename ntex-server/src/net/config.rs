@@ -49,7 +49,8 @@ struct Socket {
 
 pub(super) struct ServiceConfigInner {
     token: Token,
-    apply: Option<Box<dyn OnWorkerStart>>,
+    on_start_set: bool,
+    on_start: Option<Box<dyn OnWorkerStart>>,
     sockets: Vec<Socket>,
     backlog: i32,
 }
@@ -70,7 +71,8 @@ impl ServiceConfig {
             token,
             backlog,
             sockets: Vec::new(),
-            apply: Some(OnWorkerStartWrapper::create(|_| {
+            on_start_set: false,
+            on_start: Some(OnWorkerStartWrapper::create(|_| {
                 not_configured();
                 Ready::Ok::<_, &str>(())
             })),
@@ -149,7 +151,11 @@ impl ServiceConfig {
         F: AsyncFn(ServiceRuntime) -> Result<(), E> + Send + Clone + 'static,
         E: fmt::Display + 'static,
     {
-        self.0.borrow_mut().apply = Some(OnWorkerStartWrapper::create(f));
+        let mut inner = self.0.borrow_mut();
+        if inner.on_start_set {
+            panic!("on_worker_set is already set, can be set once");
+        }
+        inner.on_start = Some(OnWorkerStartWrapper::create(f));
         self
     }
 
@@ -187,7 +193,7 @@ impl ServiceConfig {
             sockets,
             Box::new(ConfiguredService {
                 names,
-                rt: inner.apply.take().unwrap(),
+                rt: inner.on_start.take().unwrap(),
             }),
         )
     }
