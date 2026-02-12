@@ -111,9 +111,9 @@ where
 
     log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
     if !ctx.is_stopped() {
-        ctx.stop(None);
-        let result = poll_fn(|cx| ctx.shutdown(false, cx)).await;
+        let result = poll_fn(|cx| ctx.shutdown(true, cx)).await;
         log::trace!("{}: Shuting down complete {result:?}", ctx.tag());
+        ctx.stop(None);
     }
 }
 
