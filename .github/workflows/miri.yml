@@ -6,25 +6,28 @@ jobs:
   miri:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-    - name: Install Rust toolchain
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        profile: minimal
-        # Miri requires nightly Rust
-        toolchain: nightly
-        override: true
-        components: miri
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          profile: minimal
+          # Miri requires nightly Rust
+          toolchain: nightly
+          override: true
+          components: miri rust-src
 
-    - name: Generate Cargo.lock
-      uses: actions-rs/cargo@v1
-      with:
-        command: generate-lockfile
+      - name: Generate Cargo.lock
+        uses: actions-rs/cargo@v1
+        with:
+          command: generate-lockfile
 
-    - name: Cache Dependencies
-      uses: Swatinem/rust-cache@v2.8.2
+      - name: Clean
+        run: cargo clean
 
-    - name: Run Miri
-      # Run all of your tests inside of Miri interpreter
-      run: cargo miri test -p ntex-bytes
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2.8.2
+
+      - name: Run Miri
+        # Run all of your tests inside of Miri interpreter
+        run: cargo miri test -p ntex-bytes

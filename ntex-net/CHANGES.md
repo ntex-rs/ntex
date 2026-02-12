@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.3] - 2026-02-12
+
+* Fix compio io shutdown
+
 ## [3.6.2] - 2026-02-09
 
 * Fix windows compilation

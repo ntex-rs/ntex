@@ -756,6 +756,7 @@ where
 
     TestServer {
         id,
+        cfg,
         addr,
         client,
         system,
@@ -866,6 +867,7 @@ impl TestServerConfig {
 /// Test server controller
 pub struct TestServer {
     id: Uuid,
+    cfg: SharedCfg,
     addr: net::SocketAddr,
     client: Client,
     system: crate::rt::System,
@@ -954,7 +956,7 @@ impl TestServer {
                     .timeout(Seconds(60))
                     .openssl(builder.build())
                     .take()
-                    .build(SharedCfg::default())
+                    .build(self.cfg)
                     .await
                     .unwrap()
                     .connect()
@@ -969,7 +971,7 @@ impl TestServer {
             WsClient::builder(self.url(path))
                 .address(self.addr)
                 .timeout(Seconds(60))
-                .build(SharedCfg::default())
+                .build(self.cfg)
                 .await
                 .unwrap()
                 .connect()
