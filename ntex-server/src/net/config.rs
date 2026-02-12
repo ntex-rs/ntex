@@ -146,15 +146,21 @@ impl ServiceConfig {
     ///
     /// This function get called during worker runtime configuration stage.
     /// It get executed in the worker thread.
+    ///
+    /// # Panics
+    ///
+    /// `on worker start` callback could be set once.
     pub fn on_worker_start<F, E>(&self, f: F) -> &Self
     where
         F: AsyncFn(ServiceRuntime) -> Result<(), E> + Send + Clone + 'static,
         E: fmt::Display + 'static,
     {
         let mut inner = self.0.borrow_mut();
-        if inner.on_start_set {
-            panic!("on_worker_set is already set, can be set once");
-        }
+        assert!(
+            !inner.on_start_set,
+            "on_worker_set is already set, can be set once"
+        );
+
         inner.on_start = Some(OnWorkerStartWrapper::create(f));
         self
     }
