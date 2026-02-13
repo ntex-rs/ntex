@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.1] - 2026-02-13
+
+* Export JoinHandle for neon runtime
+
 ## [3.7.0] - 2026-02-04
 
 * Unify JoinHandle for all runtimes

@@ -1,6 +1,6 @@
 use std::{fmt, future::Future, future::poll_fn};
 
-pub use crate::rt::{Handle, Runtime};
+pub use crate::{handle::JoinHandle, rt::Handle, rt::Runtime};
 
 #[derive(Debug, Copy, Clone)]
 pub struct JoinError;
@@ -13,7 +13,7 @@ impl fmt::Display for JoinError {
 
 impl std::error::Error for JoinError {}
 
-pub fn spawn<F>(fut: F) -> crate::handle::JoinHandle<F::Output>
+pub fn spawn<F>(fut: F) -> JoinHandle<F::Output>
 where
     F: Future + 'static,
 {
