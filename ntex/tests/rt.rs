@@ -1,8 +1,33 @@
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::{sync::mpsc, thread};
 
-use ntex::rt::{Arbiter, Handle, System};
+use ntex::rt::{self, Arbiter, Handle, System};
 use ntex::time::{Millis, sleep};
+
+#[ntex::test]
+async fn test_join_handle() {
+    fn __assert_send<Fut, T>(f: Fut) -> Fut
+    where
+        Fut: Future<Output = T> + Send,
+    {
+        f
+    }
+
+    let f = rt::spawn(async { "test" });
+    let f = __assert_send(f);
+    let (tx, rx) = oneshot::channel();
+
+    thread::spawn(move || {
+        let runner = crate::System::build()
+            .stop_on_panic(true)
+            .build(ntex::rt::DefaultRuntime);
+        let result = runner.block_on(f).unwrap();
+        let _ = tx.send(result);
+    });
+
+    let result = rx.await.unwrap();
+    assert_eq!(result, "test");
+}
 
 #[test]
 fn test_async() {
