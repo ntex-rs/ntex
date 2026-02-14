@@ -7,11 +7,14 @@ type Key = (usize, TypeId);
 type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
 
 thread_local! {
-    static DEFAULT_CFG: &'static Storage = Box::leak(Box::new(
-        Storage::new("--".to_string(), false)));
-    static MAPPING: RefCell<HashMap<Key, &'static dyn Any>> = {
+    #[allow(clippy::unnecessary_box_returns)]
+    static DEFAULT_CFG: Box<Storage> = Box::new(
+        Storage::new("--".to_string(), false));
+    static MAPPING: RefCell<HashMap<Key, Box<dyn Any>>> = {
         RefCell::new(HashMap::default())
     };
+    #[allow(clippy::vec_box)]
+    static STORAGE: RefCell<Vec<Box<Storage>>> = const { RefCell::new(Vec::new()) };
 }
 static IDX: AtomicUsize = AtomicUsize::new(0);
 
@@ -66,7 +69,7 @@ impl CfgContext {
 impl Default for CfgContext {
     #[inline]
     fn default() -> Self {
-        CfgContext(DEFAULT_CFG.with(|cfg| *cfg))
+        CfgContext(SharedCfg::default().0)
     }
 }
 
@@ -179,9 +182,8 @@ impl SharedCfg {
                 || {
                     MAPPING.with(|store| {
                         let key = (self.0.id, tp);
-                        if let Some(boxed) = store.borrow().get(&key) {
-                            Cfg(boxed.downcast_ref().unwrap())
-                        } else {
+                        let mut inner = store.borrow_mut();
+                        let boxed = inner.entry(key).or_insert_with(|| {
                             log::info!(
                                 "{}: Configuration {:?} does not exist, using default",
                                 self.tag(),
@@ -189,9 +191,14 @@ impl SharedCfg {
                             );
                             let mut val = T::default();
                             val.set_ctx(CfgContext(self.0));
-                            store.borrow_mut().insert(key, Box::leak(Box::new(val)));
-                            Cfg(store.borrow().get(&key).unwrap().downcast_ref().unwrap())
-                        }
+                            Box::new(val)
+                        });
+                        let cfg = unsafe {
+                            ptr::from_ref(boxed.downcast_ref::<T>().unwrap())
+                                .as_ref()
+                                .unwrap()
+                        };
+                        Cfg(cfg)
                     })
                 },
                 Cfg,
@@ -202,7 +209,10 @@ impl SharedCfg {
 impl Default for SharedCfg {
     #[inline]
     fn default() -> Self {
-        Self(DEFAULT_CFG.with(|cfg| *cfg))
+        Self(
+            DEFAULT_CFG
+                .with(|cfg| unsafe { ptr::from_ref(cfg.as_ref()).as_ref().unwrap() }),
+        )
     }
 }
 
@@ -231,20 +241,16 @@ impl SharedCfgBuilder {
     }
 }
 
-impl Drop for SharedCfgBuilder {
-    fn drop(&mut self) {
-        if let Some(mut st) = self.storage.take() {
-            st.building = false;
-            let _ = Box::leak(st);
-        }
-    }
-}
-
 impl From<SharedCfgBuilder> for SharedCfg {
     fn from(mut cfg: SharedCfgBuilder) -> SharedCfg {
         let mut st = cfg.storage.take().unwrap();
         st.building = false;
-        SharedCfg(Box::leak(st))
+        let cfg = STORAGE.with(move |store| {
+            let cfg: &'static _ = unsafe { ptr::from_ref(st.as_ref()).as_ref().unwrap() };
+            store.borrow_mut().push(st);
+            cfg
+        });
+        SharedCfg(cfg)
     }
 }
 
