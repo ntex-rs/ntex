@@ -13,6 +13,7 @@ async fn test_join_handle() {
         f
     }
 
+    let hnd = rt::Handle::current();
     let f = rt::spawn(async { "test" });
     let f = __assert_send(f);
     let (tx, rx) = oneshot::channel();
@@ -22,11 +23,17 @@ async fn test_join_handle() {
             .stop_on_panic(true)
             .build(ntex::rt::DefaultRuntime);
         let result = runner.block_on(f).unwrap();
+        assert_eq!(result, "test");
+
+        let runner = crate::System::build()
+            .stop_on_panic(true)
+            .build(ntex::rt::DefaultRuntime);
+        let result = runner.block_on(hnd.spawn(async { "test2" })).unwrap();
         let _ = tx.send(result);
     });
 
     let result = rx.await.unwrap();
-    assert_eq!(result, "test");
+    assert_eq!(result, "test2");
 }
 
 #[test]
