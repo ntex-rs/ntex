@@ -86,7 +86,7 @@ where
     let inner_factory = Rc::new(chain_factory(factory).map_err(WsError::Service));
 
     let factory = fn_factory_with_config(async move |sink: WsSink| {
-        let srv = inner_factory.pipeline(sink.clone()).await?;
+        let srv = inner_factory.create(sink.clone()).await?;
         let sink = sink.clone();
 
         Ok::<_, T::InitError>(DispatchService { srv, sink })
