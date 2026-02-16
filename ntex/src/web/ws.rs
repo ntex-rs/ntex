@@ -6,7 +6,7 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
-    IntoServiceFactory, ServiceFactory, chain_factory, fn_factory_with_config, fn_service,
+    IntoServiceFactory, Service, ServiceFactory, chain_factory, fn_factory_with_config,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
@@ -86,27 +86,7 @@ where
         let srv = inner_factory.pipeline(sink.clone()).await?;
         let sink = sink.clone();
 
-        Ok::<_, T::InitError>(fn_service(async move |req| match req {
-            DispatchItem::<ws::Codec>::Item(item) => {
-                let s = if matches!(item, Frame::Close(_)) {
-                    Some(sink.clone())
-                } else {
-                    None
-                };
-                let result = srv.call(item).await;
-                if let Some(s) = s {
-                    rt::spawn(async move { s.io().close() });
-                }
-                result
-            }
-            DispatchItem::Control(_) => Ok(None),
-            DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
-            DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
-            DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
-                Err(WsError::Protocol(e))
-            }
-            DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
-        }))
+        Ok::<_, T::InitError>(DispatchService { srv, sink })
     });
 
     start_with(req, subprotocol, factory).await
@@ -170,4 +150,52 @@ where
     });
 
     Ok(HttpResponse::new(StatusCode::OK))
+}
+
+/// Just a wrapper over a service handling WebSocket messages and propagating shutdown
+struct DispatchService<S> {
+    srv: crate::service::Pipeline<S>,
+    sink: WsSink,
+}
+
+impl<S, E> Service<DispatchItem<ws::Codec>> for DispatchService<S>
+where
+    S: crate::service::Service<Frame, Response = Option<Message>, Error = WsError<E>>,
+    E: fmt::Debug,
+{
+    type Response = Option<Message>;
+    type Error = WsError<E>;
+
+    async fn call(
+        &self,
+        req: DispatchItem<ws::Codec>,
+        _: crate::service::ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        match req {
+            DispatchItem::Item(item) => {
+                let s = if matches!(item, Frame::Close(_)) {
+                    Some(self.sink.clone())
+                } else {
+                    None
+                };
+                let result = self.srv.call(item).await;
+                if let Some(s) = s {
+                    rt::spawn(async move { s.io().close() });
+                }
+                result
+            }
+            DispatchItem::Control(_) => Ok(None),
+            DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
+            DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
+            DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+                Err(WsError::Protocol(e))
+            }
+            DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
+        }
+    }
+
+    async fn shutdown(&self) {
+        // propagate shutdown to the user service
+        self.srv.shutdown().await;
+    }
 }

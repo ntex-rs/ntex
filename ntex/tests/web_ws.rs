@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex::http::{StatusCode, header};
-use ntex::service::{fn_factory_with_config, fn_service};
+use ntex::service::{chain, fn_factory_with_config, fn_service, fn_shutdown};
 use ntex::util::{ByteString, Bytes};
 use ntex::web::{self, App, HttpRequest, HttpResponse, test, ws};
 use ntex::ws::error::WsClientError;
@@ -321,4 +321,58 @@ async fn web_ws_protocols_parsing() {
             .map(|v| v.to_str().unwrap()),
         Some("proto2")
     );
+}
+
+#[ntex::test]
+async fn web_ws_shutdown_propagation() {
+    let _ = env_logger::try_init();
+
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
+
+    let srv = test::server(async move || {
+        let shutdown_tx = shutdown_tx.clone();
+        App::new().service(web::resource("/").route(web::to(move |req: HttpRequest| {
+            let shutdown_tx = shutdown_tx.clone();
+            async move {
+                ws::start::<_, _, &str, web::Error>(
+                    req,
+                    None,
+                    fn_factory_with_config(move |_| {
+                        let shutdown_tx = shutdown_tx.clone();
+                        async move {
+                            let service = fn_service(service);
+                            let on_shutdown = fn_shutdown(move || async move {
+                                let _ = shutdown_tx.send(());
+                            });
+                            Ok::<_, web::Error>(chain(service).and_then(on_shutdown))
+                        }
+                    }),
+                )
+                .await
+            }
+        })))
+    })
+    .await;
+
+    // make ure the server is working
+    let (io, codec, _) = srv.ws().await.unwrap().into_inner();
+    io.send(ws::Message::Text(ByteString::from_static("test")), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"test")));
+
+    // close the connection to trigger shutdown
+    io.send(
+        ws::Message::Close(Some(ws::CloseCode::Normal.into())),
+        &codec,
+    )
+    .await
+    .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Close(Some(ws::CloseCode::Away.into())));
+
+    shutdown_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("Service shutdown was not called");
 }
