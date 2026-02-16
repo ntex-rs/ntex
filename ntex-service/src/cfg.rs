@@ -424,9 +424,12 @@ mod tests {
         assert_eq!(t3.tag(), "TEST3");
         assert_eq!(t3.id(), cfg2.id());
 
-        let t = SharedCfg::from(SharedCfg::new("TEST").add(TestCfg::default()))
+        let t = SharedCfg::from(SharedCfg::new("TEST4").add(TestCfg::default()))
             .get::<TestCfg>();
         let cfg = t.shared();
         assert_eq!(t.id(), cfg.id());
+        let t2 = t.clone();
+        assert_eq!(t2.id(), cfg.id());
+        assert_eq!(t2.tag(), "TEST4");
     }
 }
