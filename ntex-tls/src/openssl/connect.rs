@@ -43,7 +43,7 @@ where
     type InitError = S::InitError;
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg).await?;
+        let svc = self.connector.create(cfg.clone()).await?;
 
         Ok(SslConnectorService {
             svc,

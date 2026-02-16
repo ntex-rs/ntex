@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn take_sealed_filter() {
+    fn miri_sealed_filter() {
         let p = Rc::new(Cell::new(0));
         let f = DropFilter { p: p.clone() };
 
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Filter is not set")]
-    fn take_filter_access() {
+    fn miri_filter_access() {
         let fptr = FilterPtr::null();
         fptr.filter::<Base>();
     }

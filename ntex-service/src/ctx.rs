@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation)]
 use std::task::{Context, Poll, Waker};
 use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 

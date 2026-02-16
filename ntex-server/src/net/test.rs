@@ -209,12 +209,12 @@ impl TestServer {
 
     /// Test client shared config
     pub fn config(&self) -> SharedCfg {
-        self.cfg
+        self.cfg.clone()
     }
 
     /// Connect to server, return Io
     pub async fn connect(&self) -> io::Result<Io> {
-        tcp_connect(self.addr, self.cfg).await
+        tcp_connect(self.addr, self.cfg.clone()).await
     }
 
     /// Stop http server by stopping the runtime.

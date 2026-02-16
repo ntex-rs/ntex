@@ -41,7 +41,7 @@ pub(super) async fn send_request(
     log::trace!("sending http1 request {req:?} body size: {:?}", body.size());
 
     // send request
-    let codec = ClientCodec::new(true, io.cfg());
+    let codec = ClientCodec::new(true, io.shared().get());
     io.send(req.into(), &codec).await?;
 
     log::trace!("http1 request has been sent");

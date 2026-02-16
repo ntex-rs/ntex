@@ -1,5 +1,9 @@
 # Changes
 
+## [4.5.0] - 2026-02-16
+
+* Do not leak SharedCfg, use ref counting
+
 ## [4.4.0] - 2026-02-11
 
 * Add fn_layer() helper

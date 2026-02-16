@@ -3,7 +3,7 @@ use std::{cell::Ref, cell::RefMut, fmt, net, rc::Rc};
 use crate::http::{
     HeaderMap, HttpMessage, Message, Method, Payload, RequestHead, Uri, Version,
 };
-use crate::{Cfg, io::IoRef, io::types, router::Path, util::Extensions};
+use crate::{io::IoRef, io::types, router::Path, util::Extensions};
 
 use super::config::WebAppConfig;
 use super::error::ErrorRenderer;
@@ -200,7 +200,7 @@ impl HttpRequest {
 
     /// App config
     #[inline]
-    pub fn app_config(&self) -> Cfg<WebAppConfig> {
+    pub fn app_config(&self) -> &WebAppConfig {
         self.0.app_state.config()
     }
 
@@ -239,7 +239,9 @@ impl HttpMessage for HttpRequest {
 
 impl Drop for HttpRequest {
     fn drop(&mut self) {
-        self.0.app_state.config().put_request(&mut self.0);
+        let id = self.0.app_state.id();
+        let pool_size = self.0.app_state.config().pool_size;
+        super::config::put_request(id, pool_size, &mut self.0);
     }
 }
 

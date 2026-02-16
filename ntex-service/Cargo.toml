@@ -1,6 +1,6 @@
 [package]
 name = "ntex-service"
-version = "4.4.0"
+version = "4.5.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex service"
 keywords = ["network", "framework", "async", "futures"]
@@ -26,6 +26,8 @@ default = []
 log = { workspace = true }
 slab = { workspace = true }
 foldhash = { workspace = true }
+
+backtrace = "*"
 
 [dev-dependencies]
 ntex = { workspace = true }

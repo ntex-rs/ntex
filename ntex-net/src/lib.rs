@@ -1,11 +1,12 @@
 //! Utility for async runtime abstraction
 #![deny(clippy::pedantic)]
 #![allow(
+    clippy::clone_on_copy,
+    clippy::cast_possible_truncation,
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::cast_possible_truncation
+    clippy::missing_panics_doc
 )]
 use std::{io, net, net::SocketAddr};
 

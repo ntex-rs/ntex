@@ -1,6 +1,7 @@
 //! An implementations of SSL streams for ntex ecosystem
 #![deny(clippy::pedantic)]
 #![allow(
+    clippy::clone_on_copy,
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc
@@ -46,7 +47,7 @@ pub struct PskIdentity(pub Vec<u8>);
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Servername(pub String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Tls service configuration
 pub struct TlsConfig {
     handshake_timeout: Millis,

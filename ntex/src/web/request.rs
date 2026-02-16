@@ -5,7 +5,7 @@ use crate::http::{
 };
 use crate::io::{IoRef, types};
 use crate::router::{Path, Resource};
-use crate::{Cfg, util::Extensions};
+use crate::util::Extensions;
 
 use super::config::WebAppConfig;
 use super::error::{ErrorRenderer, WebResponseError};
@@ -193,7 +193,7 @@ impl<Err> WebRequest<Err> {
 
     /// Service configuration
     #[inline]
-    pub fn app_config(&self) -> Cfg<WebAppConfig> {
+    pub fn app_config(&self) -> &WebAppConfig {
         self.req.app_config()
     }
 

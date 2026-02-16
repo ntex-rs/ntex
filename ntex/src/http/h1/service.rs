@@ -173,12 +173,12 @@ where
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let service = self
             .srv
-            .create(cfg)
+            .create(cfg.clone())
             .await
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
         let control = self
             .ctl
-            .create(cfg)
+            .create(cfg.clone())
             .await
             .map_err(|e| log::error!("Cannot construct control service: {e:?}"))?;
 

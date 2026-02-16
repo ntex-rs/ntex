@@ -8,7 +8,7 @@ use crate::http::h1::{
     Message, MessageType, PayloadDecoder, PayloadItem, PayloadType, decoder, encoder,
 };
 use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, Version};
-use crate::{client::ClientRawRequest, io::IoConfig, util::Bytes, util::BytesMut};
+use crate::{Cfg, client::ClientRawRequest, io::IoConfig, util::Bytes, util::BytesMut};
 
 bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -33,11 +33,11 @@ pub(crate) struct ClientPayloadCodec {
 
 #[derive(Debug)]
 struct ClientCodecInner {
+    cfg: Cfg<IoConfig>,
     decoder: decoder::MessageDecoder<ResponseHead>,
     payload: RefCell<Option<PayloadDecoder>>,
     version: Cell<Version>,
     ctype: Cell<ConnectionType>,
-    cfg: &'static IoConfig,
 
     // encoder part
     flags: Cell<Flags>,
@@ -48,7 +48,7 @@ impl ClientCodec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub(crate) fn new(keep_alive: bool, cfg: &'static IoConfig) -> Self {
+    pub(crate) fn new(keep_alive: bool, cfg: Cfg<IoConfig>) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -202,13 +202,13 @@ impl Encoder for ClientCodec {
                     req.size,
                     inner.ctype.get(),
                     headers,
-                    self.inner.cfg,
+                    &self.inner.cfg,
                 )?;
             }
             Message::Chunk(Some(bytes)) => {
                 self.inner
                     .encoder
-                    .encode_chunk(bytes.as_ref(), dst, self.inner.cfg)?;
+                    .encode_chunk(bytes.as_ref(), dst, &self.inner.cfg)?;
             }
             Message::Chunk(None) => {
                 self.inner.encoder.encode_eof(dst)?;

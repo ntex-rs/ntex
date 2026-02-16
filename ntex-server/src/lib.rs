@@ -1,5 +1,6 @@
 #![deny(clippy::pedantic)]
 #![allow(
+    clippy::clone_on_copy,
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc

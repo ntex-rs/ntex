@@ -1,10 +1,7 @@
 use std::{borrow::ToOwned, cell::Ref};
 
-use crate::Cfg;
-use crate::http::header::{self, HeaderName};
-use crate::http::{RequestHead, uri};
-
 use super::config::WebAppConfig;
+use crate::http::{RequestHead, header, header::HeaderName, uri};
 
 const X_FORWARDED_FOR: &[u8] = b"x-forwarded-for";
 const X_FORWARDED_HOST: &[u8] = b"x-forwarded-host";
@@ -21,14 +18,14 @@ pub struct ConnectionInfo {
 
 impl ConnectionInfo {
     /// Create *`ConnectionInfo`* instance for a request.
-    pub fn get(req: &RequestHead, cfg: Cfg<WebAppConfig>) -> Ref<'_, Self> {
+    pub fn get<'a>(req: &'a RequestHead, cfg: &'a WebAppConfig) -> Ref<'a, Self> {
         if !req.extensions().contains::<ConnectionInfo>() {
             req.extensions_mut().insert(ConnectionInfo::new(req, cfg));
         }
         Ref::map(req.extensions(), |e| e.get().unwrap())
     }
 
-    fn new(req: &RequestHead, cfg: Cfg<WebAppConfig>) -> ConnectionInfo {
+    fn new(req: &RequestHead, cfg: &WebAppConfig) -> ConnectionInfo {
         let mut host = None;
         let mut scheme = None;
         let mut remote = None;

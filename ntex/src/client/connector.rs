@@ -191,24 +191,24 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
     type InitError = Box<dyn Error>;
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+        let ssl_pool = if let Some(ref svc) = self.secure_svc {
+            Some(ConnectionPool::new(
+                svc.create(cfg.clone()).await?.into(),
+                self.conn_lifetime,
+                self.conn_keep_alive,
+                self.limit,
+                cfg.clone(),
+            ))
+        } else {
+            None
+        };
         let tcp_pool = ConnectionPool::new(
-            self.svc.create(cfg).await?.into(),
+            self.svc.create(cfg.clone()).await?.into(),
             self.conn_lifetime,
             self.conn_keep_alive,
             self.limit,
             cfg,
         );
-        let ssl_pool = if let Some(ref svc) = self.secure_svc {
-            Some(ConnectionPool::new(
-                svc.create(cfg).await?.into(),
-                self.conn_lifetime,
-                self.conn_keep_alive,
-                self.limit,
-                cfg,
-            ))
-        } else {
-            None
-        };
         Ok(ConnectorService { tcp_pool, ssl_pool })
     }
 }

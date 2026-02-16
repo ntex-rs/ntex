@@ -76,7 +76,7 @@ where
             )))
         });
 
-        let filter_fut = self.filter.create(cfg);
+        let filter_fut = self.filter.create(cfg.clone());
         let state_factories = self.state_factories.clone();
         let mut extensions = self.extensions.borrow_mut().take().unwrap_or_default();
         let middleware = self.middleware.clone();
@@ -126,7 +126,7 @@ where
         // create http services
         for (path, factory, guards) in &mut services.iter() {
             let service = factory
-                .create(cfg)
+                .create(cfg.clone())
                 .await
                 .map_err(|()| log::error!("Cannot construct app service"))?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
@@ -136,7 +136,7 @@ where
             router: router.finish(),
             default: Some(
                 default
-                    .create(cfg)
+                    .create(cfg.clone())
                     .await
                     .map_err(|()| log::error!("Cannot construct default service"))?,
             ),

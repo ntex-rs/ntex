@@ -26,7 +26,7 @@ edition = "2024"
 rust-version = "1.88"
 
 [workspace.lints.rust]
-async_fn_in_trait =  { level = "allow", priority = -1 }
+async_fn_in_trait = { level = "allow", priority = -1 }
 rust_2018_idioms = "deny"
 warnings = "deny"
 unreachable_pub = "deny"
@@ -54,18 +54,18 @@ ntex-util = { path = "ntex-util" }
 ntex = "3.3.0"
 ntex-bytes = "1.5.0"
 ntex-codec = "1.1.0"
-ntex-io = "3.7.1"
+ntex-io = "3.9.0"
 ntex-dispatcher = "3.1.0"
-ntex-net = "3.6.3"
+ntex-net = "3.7.0"
 ntex-http = "1.0.0"
 ntex-router = "1.0.0"
 ntex-rt = "3.7.0"
-ntex-server = "3.7.0"
-ntex-service = "4.4.0"
-ntex-tls = "3.2.1"
+ntex-server = "3.8.0"
+ntex-service = "4.5.0"
+ntex-tls = "3.3.0"
 ntex-macros = "3.1.0"
 ntex-util = "3.4.0"
-ntex-h2 = "3.6.2"
+ntex-h2 = "3.7.1"
 
 ntex-polling = "3.10.0"
 ntex-io-uring = "0.7.120"

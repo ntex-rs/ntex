@@ -97,7 +97,7 @@ impl ConnectionPool {
             svc.clone(),
             inner.clone(),
             waiters.clone(),
-            config,
+            config.clone(),
             stop_rx,
         ));
 

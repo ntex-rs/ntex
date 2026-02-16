@@ -260,7 +260,7 @@ impl<T: MessageType> MessageEncoder<T> {
         &self,
         msg: &[u8],
         buf: &mut BytesMut,
-        cfg: &'static IoConfig,
+        cfg: &IoConfig,
     ) -> Result<bool, EncodeError> {
         let mut te = self.te.get();
         let result = te.encode(msg, buf, cfg);

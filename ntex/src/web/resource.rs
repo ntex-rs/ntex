@@ -361,7 +361,11 @@ where
         }
 
         let state = self.state.take().map(|state| {
-            AppState::new(state, Some(config.state().clone()), config.state().config())
+            AppState::new(
+                state,
+                Some(config.state().clone()),
+                config.state().0.config.clone(),
+            )
         });
 
         let router_factory = ResourceRouterFactory {
@@ -446,8 +450,8 @@ where
     type InitError = ();
 
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let filter = self.filter.create(cfg).await?;
-        let routing = self.routing.create(cfg).await?;
+        let filter = self.filter.create(cfg.clone()).await?;
+        let routing = self.routing.create(cfg.clone()).await?;
         Ok(self.middleware.create(chain(filter).and_then(routing), cfg))
     }
 }

@@ -8,14 +8,14 @@ use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory
 use super::{DefaultError, ErrorRenderer, resource::Resource, route::Route};
 
 /// Application configuration
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WebAppConfig {
     name: ByteString,
     secure: bool,
     host: String,
     addr: SocketAddr,
     config: CfgContext,
-    pool_size: usize,
+    pub(super) pool_size: usize,
 }
 
 impl Default for WebAppConfig {
@@ -126,25 +126,25 @@ impl WebAppConfig {
         })
     }
 
-    /// Put message from the pool.
-    pub(crate) fn put_request(&self, req: &mut Rc<HttpRequestInner>) {
-        CACHE.with(|cache| {
-            cache.with(self.config.id(), |cache| {
-                if cache.len() < self.pool_size
-                    && let Some(inner) = Rc::get_mut(req)
-                {
-                    inner.head.remove_io();
-                    inner.head.extensions.borrow_mut().clear();
-                    cache.push(req.clone());
-                }
-            });
-        });
-    }
-
     /// Get message from the pool.
     pub(crate) fn clear_requests(&self) {
         CACHE.with(|cache| cache.with(self.config.id(), Vec::clear));
     }
+}
+
+/// Put message from the pool.
+pub(crate) fn put_request(id: usize, pool_size: usize, req: &mut Rc<HttpRequestInner>) {
+    CACHE.with(|cache| {
+        cache.with(id, |cache| {
+            if cache.len() < pool_size
+                && let Some(inner) = Rc::get_mut(req)
+            {
+                inner.head.remove_io();
+                inner.head.extensions.borrow_mut().clear();
+                cache.push(req.clone());
+            }
+        });
+    });
 }
 
 /// Service config is used for external configuration.

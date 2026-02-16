@@ -11,7 +11,7 @@ use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
 /// Basic tcp stream connector
 pub struct Connector<T>(PhantomData<T>);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 /// Basic tcp stream connector
 pub struct ConnectorService<T> {
     cfg: Cfg<IoConfig>,
@@ -70,9 +70,9 @@ impl<T: Address> ConnectorService<T> {
             let Connect { req, addr, .. } = msg;
 
             if let Some(addr) = addr {
-                connect(req, port, addr, self.shared).await
+                connect(req, port, addr, self.shared.clone()).await
             } else if let Some(addr) = req.addr() {
-                connect(req, addr.port(), Either::Left(addr), self.shared).await
+                connect(req, addr.port(), Either::Left(addr), self.shared.clone()).await
             } else {
                 log::error!("{}: TCP connector: got unresolved address", self.cfg.tag());
                 Err(ConnectError::Unresolved)
@@ -124,11 +124,11 @@ async fn connect<T: Address>(
     );
 
     let io = match addr {
-        Either::Left(addr) => crate::tcp_connect(addr, cfg).await?,
+        Either::Left(addr) => crate::tcp_connect(addr, cfg.clone()).await?,
         Either::Right(mut addrs) => loop {
             let addr = addrs.pop_front().unwrap();
 
-            match crate::tcp_connect(addr, cfg).await {
+            match crate::tcp_connect(addr, cfg.clone()).await {
                 Ok(io) => break io,
                 Err(err) => {
                     log::trace!(
