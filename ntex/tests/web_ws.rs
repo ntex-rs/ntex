@@ -325,8 +325,6 @@ async fn web_ws_protocols_parsing() {
 
 #[ntex::test]
 async fn web_ws_shutdown_propagation() {
-    let _ = env_logger::try_init();
-
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
     let srv = test::server(async move || {
