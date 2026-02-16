@@ -8,7 +8,7 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
-    IntoServiceFactory, Pipeline, Service, ServiceCtx, ServiceFactory, chain_factory,
+    IntoServiceFactory, Service, ServiceCtx, ServiceFactory, chain_factory,
     fn_factory_with_config,
 };
 use crate::web::{HttpRequest, HttpResponse};
@@ -157,7 +157,7 @@ where
 
 /// Just a wrapper over a service handling WebSocket messages and propagating shutdown
 struct DispatchService<S> {
-    srv: Pipeline<S>,
+    srv: S,
     sink: WsSink,
 }
 
@@ -176,7 +176,7 @@ where
     async fn call(
         &self,
         req: DispatchItem<ws::Codec>,
-        _: ServiceCtx<'_, Self>,
+        ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         match req {
             DispatchItem::Item(item) => {
@@ -185,7 +185,7 @@ where
                 } else {
                     None
                 };
-                let result = self.srv.call(item).await;
+                let result = ctx.call(&self.srv, item).await;
                 if let Some(s) = s {
                     rt::spawn(async move { s.io().close() });
                 }
