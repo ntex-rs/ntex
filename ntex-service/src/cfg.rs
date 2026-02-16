@@ -158,13 +158,7 @@ impl<T: Configuration> Drop for Cfg<T> {
 impl<T: Configuration> Clone for Cfg<T> {
     #[inline]
     fn clone(&self) -> Self {
-        let cloned = unsafe {
-            let inner = Arc::<T>::from_raw(*self.0.get());
-            let cloned = inner.clone();
-            mem::forget(inner);
-            Arc::into_raw(cloned).cast_mut()
-        };
-        Cfg(UnsafeCell::new(cloned), PhantomData)
+        self.ctx().get()
     }
 }
 
