@@ -36,7 +36,7 @@ thread_local! {
 ///         .find(|p| *p == "my-subprotocol")
 ///         .map(String::from);
 ///
-///     ws::start_using_subprotocol(req, chosen, factory).await
+///     ws::start(req, chosen, factory).await
 /// }
 /// ```
 pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
@@ -68,7 +68,7 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 ///         .find(|p| *p == "graphql-ws" || *p == "graphql-transport-ws")
 ///         .map(String::from);
 ///
-///     ws::start_using_subprotocol(req, chosen, factory).await
+///     ws::start(req, chosen, factory).await
 /// }
 /// ```
 pub async fn start<T, F, P, Err>(
