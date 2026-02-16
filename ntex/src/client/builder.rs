@@ -206,7 +206,7 @@ impl<M> ClientBuilder<M> {
             + 'static,
     {
         let cfg = cfg.into();
-        self.config.cfg = cfg;
+        self.config.cfg = cfg.clone();
         let config = ClientConfig::new(self.config);
 
         let svc = self

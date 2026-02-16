@@ -334,7 +334,7 @@ impl TestServer {
         timeout: Seconds,
         connect_timeout: Millis,
     ) -> Self {
-        let cfg = SharedCfg::new("TEST-CLIENT")
+        let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
             .add(IoConfig::new().set_connect_timeout(connect_timeout))
             .add(TlsConfig::new().set_handshake_timeout(timeout))
             .add(
@@ -344,7 +344,7 @@ impl TestServer {
             )
             .into();
 
-        let client = Self::create_client(cfg).await;
+        let client = Self::create_client(cfg.clone()).await;
 
         TestServer {
             id,
@@ -371,7 +371,7 @@ impl TestServer {
                     .set_max_header_continuation_frames(96),
             )
             .into();
-        self.client = Self::create_client(self.cfg).await;
+        self.client = Self::create_client(self.cfg.clone()).await;
         self
     }
 
@@ -457,7 +457,7 @@ impl TestServer {
         WsClient::builder(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))
-            .build(self.cfg)
+            .build(self.cfg.clone())
             .await
             .unwrap()
             .connect()
@@ -497,7 +497,7 @@ impl TestServer {
             .timeout(Seconds(30))
             .openssl(builder.build())
             .take()
-            .build(self.cfg)
+            .build(self.cfg.clone())
             .await
             .unwrap()
             .connect()

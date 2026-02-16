@@ -106,7 +106,7 @@ impl FactoryService for Factory {
     fn set_config(&mut self, token: Token, cfg: SharedCfg) {
         for item in &mut self.tokens {
             if item.0 == token {
-                item.1 = cfg;
+                item.1 = cfg.clone();
             }
         }
     }
@@ -116,23 +116,22 @@ impl FactoryService for Factory {
         let name = self.name.clone();
         let mut tokens = self.tokens.clone();
         for item in &tokens {
-            cfg.config(item.1);
+            cfg.config(item.1.clone());
         }
         let factory_fut = self.wrapper.run(cfg.clone());
 
         Box::pin(async move {
             let factory = factory_fut.await;
-            if let Some(config) = cfg.get_config() {
-                for item in &mut tokens {
-                    item.1 = config;
-                }
+            let config = cfg.get_config();
+            for item in &mut tokens {
+                item.1 = config.clone();
             }
 
             Ok(vec![NetService {
                 name,
                 tokens,
                 factory,
-                config: cfg.get_config().unwrap_or_default(),
+                config: config.clone(),
             }])
         })
     }

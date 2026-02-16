@@ -175,7 +175,7 @@ where
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         let service = self
             .srv
-            .create(cfg)
+            .create(cfg.clone())
             .await
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
 
@@ -264,7 +264,7 @@ where
         io: Io<F>,
         _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        let control = self.control.create(self.cfg).await.map_err(|e| {
+        let control = self.control.create(self.cfg.clone()).await.map_err(|e| {
             DispatchError::Control(crate::util::str_rc_error(format!(
                 "Cannot construct control service: {e:?}"
             )))

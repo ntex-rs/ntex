@@ -1,4 +1,4 @@
-use std::{cell::Cell, cell::RefCell, fmt, io, marker, mem, net, rc::Rc};
+use std::{cell::RefCell, fmt, io, marker, mem, net, rc::Rc};
 
 use ntex_io::Io;
 use ntex_service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
@@ -14,13 +14,13 @@ pub struct Config(Rc<InnerServiceConfig>);
 
 #[derive(Debug)]
 pub(super) struct InnerServiceConfig {
-    pub(super) config: Cell<Option<SharedCfg>>,
+    pub(super) config: RefCell<SharedCfg>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self(Rc::new(InnerServiceConfig {
-            config: Cell::new(None),
+            config: RefCell::new(SharedCfg::default()),
         }))
     }
 }
@@ -28,12 +28,12 @@ impl Default for Config {
 impl Config {
     /// Set io config for the service.
     pub fn config<T: Into<SharedCfg>>(&self, cfg: T) -> &Self {
-        self.0.config.set(Some(cfg.into()));
+        *self.0.config.borrow_mut() = cfg.into();
         self
     }
 
-    pub(super) fn get_config(&self) -> Option<SharedCfg> {
-        self.0.config.get()
+    pub(super) fn get_config(&self) -> SharedCfg {
+        self.0.config.borrow().clone()
     }
 }
 
@@ -133,9 +133,9 @@ impl ServiceConfig {
         let mut inner = self.0.borrow_mut();
         for sock in &mut inner.sockets {
             if sock.name == name.as_ref() {
-                sock.config = cfg;
+                sock.config = cfg.clone();
                 for item in &mut sock.sockets {
-                    item.2 = cfg;
+                    item.2 = cfg.clone();
                 }
             }
         }
@@ -177,7 +177,7 @@ impl ServiceConfig {
                     tokens: s
                         .sockets
                         .iter()
-                        .map(|(token, _, tag)| (*token, *tag))
+                        .map(|(token, _, cfg)| (*token, cfg.clone()))
                         .collect(),
                 },
             );
@@ -238,7 +238,7 @@ impl FactoryService for ConfiguredService {
                     for entry in names.values() {
                         if entry.idx == services.len() {
                             res.push(NetService {
-                                config: entry.config,
+                                config: entry.config.clone(),
                                 name: std::sync::Arc::from(entry.name.clone()),
                                 tokens: entry.tokens.clone(),
                                 factory: svc,

@@ -344,7 +344,7 @@ impl ServerBuilder {
         if let Some(token) = token {
             for svc in &mut self.services {
                 if svc.name(token) == name.as_ref() {
-                    svc.set_config(token, cfg);
+                    svc.set_config(token, cfg.clone());
                 }
             }
         } else {

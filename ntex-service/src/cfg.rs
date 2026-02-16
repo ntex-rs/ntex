@@ -1,7 +1,8 @@
 //! Shared configuration for services
 #![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
+use std::cell::{RefCell, UnsafeCell};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{any::Any, any::TypeId, cell::RefCell, fmt, ops, ptr};
+use std::{any::Any, any::TypeId, fmt, marker::PhantomData, ops, ptr, rc};
 
 type Key = (usize, TypeId);
 type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
@@ -43,21 +44,33 @@ pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
     fn set_ctx(&mut self, ctx: CfgContext);
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct CfgContext(&'static Storage);
 
 impl CfgContext {
     #[inline]
+    /// Unique id of the context.
     pub fn id(&self) -> usize {
         self.0.id
     }
 
     #[inline]
+    /// Context tag
     pub fn tag(&self) -> &'static str {
         self.0.tag.as_ref()
     }
 
     #[inline]
+    /// Get a reference to a previously inserted on configuration.
+    pub fn get<T>(&self) -> Cfg<T>
+    where
+        T: Configuration,
+    {
+        SharedCfg(self.0).get()
+    }
+
+    #[inline]
+    /// Get a shared configuration.
     pub fn shared(&self) -> SharedCfg {
         SharedCfg(self.0)
     }
@@ -71,36 +84,55 @@ impl Default for CfgContext {
 }
 
 #[derive(Debug)]
-pub struct Cfg<T: Configuration>(&'static T);
+pub struct Cfg<T: Configuration>(UnsafeCell<&'static T>, PhantomData<rc::Rc<str>>);
 
 impl<T: Configuration> Cfg<T> {
     #[inline]
+    /// Unique id of the configuration.
     pub fn id(&self) -> usize {
-        self.0.ctx().0.id
+        self.get_ref().ctx().0.id
     }
 
     #[inline]
+    /// Context tag
     pub fn tag(&self) -> &'static str {
-        self.0.ctx().tag()
+        self.get_ref().ctx().tag()
     }
 
     #[inline]
+    /// Get a shared configuration.
     pub fn shared(&self) -> SharedCfg {
-        self.0.ctx().shared()
+        self.get_ref().ctx().shared()
     }
 
-    #[inline]
-    pub fn into_static(&self) -> &'static T {
-        self.0
+    fn get_ref(&self) -> &T {
+        unsafe { &*self.0.get() }
+    }
+
+    /// Replaces the inner value.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that no references to the inner `T` value
+    /// exist at the time this function is called.
+    pub unsafe fn replace(&self, cfg: &Cfg<T>) {
+        unsafe {
+            ptr::swap(self.0.get(), cfg.0.get());
+        }
     }
 }
-
-impl<T: Configuration> Copy for Cfg<T> {}
 
 impl<T: Configuration> Clone for Cfg<T> {
     #[inline]
     fn clone(&self) -> Self {
-        *self
+        Cfg(UnsafeCell::new(unsafe { &*self.0.get() }), PhantomData)
+    }
+}
+
+impl<'a, T: Configuration> From<&'a T> for Cfg<T> {
+    #[inline]
+    fn from(cfg: &'a T) -> Self {
+        SharedCfg(cfg.ctx().0).get()
     }
 }
 
@@ -108,8 +140,8 @@ impl<T: Configuration> ops::Deref for Cfg<T> {
     type Target = T;
 
     #[inline]
-    fn deref(&self) -> &'static T {
-        self.0
+    fn deref(&self) -> &T {
+        self.get_ref()
     }
 }
 
@@ -120,7 +152,7 @@ impl<T: Configuration> Default for Cfg<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 /// Shared configuration
 pub struct SharedCfg(&'static Storage);
 
@@ -180,7 +212,7 @@ impl SharedCfg {
                     MAPPING.with(|store| {
                         let key = (self.0.id, tp);
                         if let Some(boxed) = store.borrow().get(&key) {
-                            Cfg(boxed.downcast_ref().unwrap())
+                            Cfg(UnsafeCell::new(boxed.downcast_ref().unwrap()), PhantomData)
                         } else {
                             log::info!(
                                 "{}: Configuration {:?} does not exist, using default",
@@ -190,11 +222,21 @@ impl SharedCfg {
                             let mut val = T::default();
                             val.set_ctx(CfgContext(self.0));
                             store.borrow_mut().insert(key, Box::leak(Box::new(val)));
-                            Cfg(store.borrow().get(&key).unwrap().downcast_ref().unwrap())
+                            Cfg(
+                                UnsafeCell::new(
+                                    store
+                                        .borrow()
+                                        .get(&key)
+                                        .unwrap()
+                                        .downcast_ref()
+                                        .unwrap(),
+                                ),
+                                PhantomData,
+                            )
                         }
                     })
                 },
-                Cfg,
+                |v| Cfg(UnsafeCell::new(v), PhantomData),
             )
     }
 }
@@ -203,6 +245,13 @@ impl Default for SharedCfg {
     #[inline]
     fn default() -> Self {
         Self(DEFAULT_CFG.with(|cfg| *cfg))
+    }
+}
+
+impl<T: Configuration> From<SharedCfg> for Cfg<T> {
+    #[inline]
+    fn from(cfg: SharedCfg) -> Self {
+        cfg.get()
     }
 }
 
@@ -223,7 +272,7 @@ impl SharedCfgBuilder {
     /// If a config of this type already existed, it will
     /// be replaced.
     pub fn add<T: Configuration>(mut self, mut val: T) -> Self {
-        val.set_ctx(self.ctx);
+        val.set_ctx(self.ctx.clone());
         if let Some(st) = self.storage.as_mut() {
             st.data.insert(TypeId::of::<T>(), Box::new(val));
         }
@@ -278,8 +327,8 @@ mod tests {
                 &self.config
             }
             fn set_ctx(&mut self, ctx: CfgContext) {
-                self.config = ctx;
                 let _ = ctx.shared().get::<TestCfg>();
+                self.config = ctx;
             }
         }
         let _ = TestCfg::new().ctx();
@@ -309,6 +358,11 @@ mod tests {
         assert_eq!(t.tag(), "TEST");
         assert_eq!(t.shared(), cfg);
         let t: Cfg<TestCfg> = Cfg::default();
+        assert_eq!(t.tag(), "--");
+        assert_eq!(t.ctx().id(), t.id());
+        assert_eq!(t.ctx().id(), t.ctx().clone().id());
+
+        let t: Cfg<TestCfg> = t.ctx().get();
         assert_eq!(t.tag(), "--");
         assert_eq!(t.ctx().id(), t.id());
         assert_eq!(t.ctx().id(), t.ctx().clone().id());

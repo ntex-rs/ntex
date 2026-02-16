@@ -31,7 +31,9 @@ where
 
     fn create(&self, service: S, cfg: SharedCfg) -> Self::Service {
         WebMiddleware {
-            svc: self.outer.create(self.inner.create(service, cfg), cfg),
+            svc: self
+                .outer
+                .create(self.inner.create(service, cfg.clone()), cfg),
             err: PhantomData,
         }
     }

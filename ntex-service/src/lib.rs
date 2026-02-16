@@ -3,8 +3,7 @@
 #![allow(
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
-    clippy::missing_errors_doc,
-    clippy::cast_possible_truncation
+    clippy::missing_errors_doc
 )]
 use std::{rc::Rc, task::Context};
 

@@ -214,14 +214,13 @@ bitflags::bitflags! {
 pub(super) struct DispatcherConfig<S, C> {
     flags: Cell<Flags>,
     pub(super) idx: Cell<usize>,
-    pub(super) config: &'static HttpServiceConfig,
+    pub(super) config: Cfg<HttpServiceConfig>,
     pub(super) service: Pipeline<S>,
     pub(super) control: Pipeline<C>,
 }
 
 impl<S, C> DispatcherConfig<S, C> {
     pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self {
-        let config = config.into_static();
         DispatcherConfig {
             idx: Cell::new(0),
             service: service.into(),

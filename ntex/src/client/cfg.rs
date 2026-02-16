@@ -39,8 +39,8 @@ impl ClientConfig {
         Self(Rc::new(cfg))
     }
 
-    pub fn cfg(&self) -> SharedCfg {
-        self.0.cfg
+    pub fn cfg(&self) -> &SharedCfg {
+        &self.0.cfg
     }
 
     pub fn headers(&self) -> &HeaderMap {

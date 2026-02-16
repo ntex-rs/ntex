@@ -749,7 +749,7 @@ where
 
         Client::builder()
             .connector::<&str>(connector)
-            .build(cfg)
+            .build(cfg.clone())
             .await
             .unwrap()
     };
@@ -956,7 +956,7 @@ impl TestServer {
                     .timeout(Seconds(60))
                     .openssl(builder.build())
                     .take()
-                    .build(self.cfg)
+                    .build(self.cfg.clone())
                     .await
                     .unwrap()
                     .connect()
@@ -971,7 +971,7 @@ impl TestServer {
             WsClient::builder(self.url(path))
                 .address(self.addr)
                 .timeout(Seconds(60))
-                .build(self.cfg)
+                .build(self.cfg.clone())
                 .await
                 .unwrap()
                 .connect()

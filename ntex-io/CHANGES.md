@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.0] - 2026-02-16
+
+* SharedCfg is not Copy
+
 ## [3.8.0] - 2026-02-03
 
 * Refactor Io filter management

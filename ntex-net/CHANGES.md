@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.0] - 2026-02-16
+
+* SharedCfg is not Copy
+
 ## [3.6.3] - 2026-02-12
 
 * Fix compio io shutdown

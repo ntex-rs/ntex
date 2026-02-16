@@ -14,7 +14,7 @@ impl IoRef {
     #[inline]
     /// Get tag
     pub fn tag(&self) -> &'static str {
-        self.0.cfg.get().tag()
+        self.0.cfg.tag()
     }
 
     #[inline]
@@ -32,14 +32,14 @@ impl IoRef {
 
     #[inline]
     /// Get configuration
-    pub fn cfg(&self) -> &'static IoConfig {
-        self.0.cfg.get()
+    pub fn cfg(&self) -> &IoConfig {
+        &self.0.cfg
     }
 
     #[inline]
     /// Get shared configuration
     pub fn shared(&self) -> SharedCfg {
-        self.0.cfg.get().config.shared()
+        self.0.cfg.shared()
     }
 
     #[inline]

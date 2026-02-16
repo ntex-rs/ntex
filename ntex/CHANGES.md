@@ -1,5 +1,9 @@
 # Changes
 
+## [3.4.0] - 2026-02-16
+
+* SharedCfg is not Copy
+
 ## [3.3.0] 2026-02-12
 
 * Ignore spurious DSP_TIMEOUT when keep-alive is disabled #756

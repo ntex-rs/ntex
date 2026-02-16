@@ -10,7 +10,7 @@ use crate::http::message::ConnectionType;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::{Method, Version};
-use crate::{io::IoConfig, util::BytesMut};
+use crate::{Cfg, io::IoConfig, util::BytesMut};
 
 use super::{Message, decoder, decoder::PayloadType, encoder};
 
@@ -26,10 +26,10 @@ bitflags! {
 /// HTTP/1 Codec
 pub struct Codec {
     con_id: usize,
+    cfg: Cfg<IoConfig>,
     decoder: decoder::MessageDecoder<Request>,
     version: Cell<Version>,
     ctype: Cell<ConnectionType>,
-    cfg: &'static IoConfig,
 
     // encoder part
     flags: Cell<Flags>,
@@ -44,7 +44,7 @@ impl Clone for Codec {
             version: self.version.clone(),
             ctype: self.ctype.clone(),
             flags: self.flags.clone(),
-            cfg: self.cfg,
+            cfg: self.cfg.clone(),
             encoder: self.encoder.clone(),
         }
     }
@@ -68,7 +68,7 @@ impl Codec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(con_id: usize, keep_alive: bool, cfg: &'static IoConfig) -> Self {
+    pub fn new(con_id: usize, keep_alive: bool, cfg: Cfg<IoConfig>) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -177,12 +177,12 @@ impl Encoder for Codec {
                     length,
                     self.ctype.get(),
                     None,
-                    self.cfg,
+                    &self.cfg,
                 )?;
                 // self.headers_size = (dst.len() - len) as u32;
             }
             Message::Chunk(Some(bytes)) => {
-                self.encoder.encode_chunk(bytes.as_ref(), dst, self.cfg)?;
+                self.encoder.encode_chunk(bytes.as_ref(), dst, &self.cfg)?;
             }
             Message::Chunk(None) => {
                 self.encoder.encode_eof(dst)?;
@@ -200,11 +200,7 @@ mod tests {
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
-        let codec = Codec::new(
-            0,
-            true,
-            SharedCfg::default().get::<IoConfig>().into_static(),
-        );
+        let codec = Codec::new(0, true, SharedCfg::default().get::<IoConfig>());
         assert!(format!("{codec:?}").contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
@@ -238,12 +234,7 @@ mod tests {
         assert_eq!(*req.method(), Method::POST);
         assert!(req.chunked().unwrap());
 
-        let codec = Codec::new(
-            0,
-            true,
-            SharedCfg::default().get::<IoConfig>().into_static(),
-        );
-
+        let codec = Codec::new(0, true, SharedCfg::default().get::<IoConfig>());
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
              connection: upgrade\r\n\r\n",

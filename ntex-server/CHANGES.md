@@ -1,5 +1,9 @@
 # Changes
 
+## [3.8.0] - 2026-02-16
+
+* SharedCfg is not Copy
+
 ## [3.7.0] - 2026-02-12
 
 * Allow to set multiple ServiceConfig::on_worker_start() callbacks

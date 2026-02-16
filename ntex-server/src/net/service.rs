@@ -126,12 +126,12 @@ impl ServiceFactory<Connection> for StreamService {
         let mut services = Vec::new();
 
         for info in &self.services {
-            if let Ok(svc) = info.factory.create(info.config).await {
+            if let Ok(svc) = info.factory.create(info.config.clone()).await {
                 log::trace!("Constructed server service for {:?}", info.tokens);
                 services.push(svc);
                 let idx = services.len() - 1;
                 for (token, cfg) in &info.tokens {
-                    tokens.insert(*token, (idx, info.name.clone(), *cfg));
+                    tokens.insert(*token, (idx, info.name.clone(), cfg.clone()));
                 }
             } else {
                 log::error!("Cannot construct service: {:?}", info.tokens);
@@ -214,7 +214,7 @@ impl Service<Connection> for StreamServiceImpl {
                 }
             }
 
-            let stream = io.convert(*cfg).map_err(|e| {
+            let stream = io.convert(cfg.clone()).map_err(|e| {
                 log::error!("Cannot convert to an async io stream: {e}");
             })?;
 

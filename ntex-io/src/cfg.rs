@@ -43,9 +43,9 @@ impl Configuration for IoConfig {
     }
 
     fn set_ctx(&mut self, ctx: CfgContext) {
-        self.config = ctx;
         self.read_buf.idx = ctx.id();
         self.write_buf.idx = ctx.id();
+        self.config = ctx;
     }
 }
 
@@ -72,6 +72,7 @@ impl IoConfig {
     /// Create new config object
     pub fn new() -> IoConfig {
         let config = CfgContext::default();
+        let idx = config.id();
 
         IoConfig {
             config,
@@ -81,18 +82,18 @@ impl IoConfig {
             frame_read_rate: None,
 
             read_buf: BufConfig {
+                idx,
                 high: DEFAULT_HIGH,
                 low: DEFAULT_LOW,
                 half: DEFAULT_HALF,
-                idx: config.id(),
                 first: true,
                 cache_size: DEFAULT_CACHE_SIZE,
             },
             write_buf: BufConfig {
+                idx,
                 high: DEFAULT_HIGH,
                 low: DEFAULT_LOW,
                 half: DEFAULT_HALF,
-                idx: config.id(),
                 first: false,
                 cache_size: DEFAULT_CACHE_SIZE,
             },

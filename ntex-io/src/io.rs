@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
-use ntex_service::cfg::SharedCfg;
+use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_util::{future::Either, task::LocalWaker};
 
 use crate::buf::Stack;
@@ -24,7 +24,7 @@ pub struct IoRef(pub(super) Rc<IoState>);
 
 pub(crate) struct IoState {
     filter: FilterPtr,
-    pub(super) cfg: Cell<&'static IoConfig>,
+    pub(super) cfg: Cfg<IoConfig>,
     pub(super) flags: Cell<Flags>,
     pub(super) error: Cell<Option<io::Error>>,
     pub(super) read_task: LocalWaker,
@@ -65,7 +65,7 @@ impl IoState {
             flags.insert(Flags::DSP_TIMEOUT);
             self.flags.set(flags);
             self.dispatch_task.wake();
-            log::trace!("{}: Timer, notify dispatcher", self.cfg.get().tag());
+            log::trace!("{}: Timer, notify dispatcher", self.cfg.tag());
         }
     }
 
@@ -98,7 +98,7 @@ impl IoState {
         if !self.flags.get().is_stopped() {
             log::trace!(
                 "{}: {:?} Io error {:?} flags: {:?}",
-                self.cfg.get().tag(),
+                self.cfg.tag(),
                 ptr::from_ref(self),
                 err,
                 self.flags.get()
@@ -120,7 +120,7 @@ impl IoState {
             if !self.dispatch_task.wake_checked() {
                 log::trace!(
                     "{}: {:?} Dispatcher is not registered, flags: {:?}",
-                    self.cfg.get().tag(),
+                    self.cfg.tag(),
                     ptr::from_ref(self),
                     self.flags.get()
                 );
@@ -137,7 +137,7 @@ impl IoState {
         {
             log::trace!(
                 "{}: Initiate io shutdown {:?}",
-                self.cfg.get().tag(),
+                self.cfg.tag(),
                 self.flags.get()
             );
             self.insert_flags(Flags::IO_STOPPING_FILTERS);
@@ -147,12 +147,12 @@ impl IoState {
 
     #[inline]
     pub(super) fn read_buf(&self) -> &BufConfig {
-        self.cfg.get().read_buf()
+        self.cfg.read_buf()
     }
 
     #[inline]
     pub(super) fn write_buf(&self) -> &BufConfig {
-        self.cfg.get().write_buf()
+        self.cfg.write_buf()
     }
 }
 
@@ -194,7 +194,7 @@ impl Io {
     /// Create `Io` instance
     pub fn new<I: IoStream, T: Into<SharedCfg>>(io: I, cfg: T) -> Self {
         let inner = Rc::new(IoState {
-            cfg: Cell::new(cfg.into().get::<IoConfig>().into_static()),
+            cfg: cfg.into().get::<IoConfig>(),
             filter: FilterPtr::null(),
             flags: Cell::new(Flags::WR_PAUSED),
             error: Cell::new(None),
@@ -237,7 +237,7 @@ impl<F> Io<F> {
 
     fn take_io_ref(&self) -> IoRef {
         let inner = Rc::new(IoState {
-            cfg: Cell::new(SharedCfg::default().get::<IoConfig>().into_static()),
+            cfg: SharedCfg::default().get::<IoConfig>(),
             filter: FilterPtr::null(),
             flags: Cell::new(
                 Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
@@ -278,9 +278,9 @@ impl<F> Io<F> {
     #[inline]
     /// Set shared io config
     pub fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
-        self.st()
-            .cfg
-            .set(cfg.into().get::<IoConfig>().into_static());
+        unsafe {
+            self.st().cfg.replace(&cfg.into().get::<IoConfig>());
+        }
     }
 }
 
@@ -708,7 +708,7 @@ impl<F> Drop for Io<F> {
             if !st.flags.get().is_stopped() {
                 log::trace!(
                     "{}: Io is dropped, force stopping io streams {:?}",
-                    st.cfg.get().tag(),
+                    st.cfg.tag(),
                     st.flags.get()
                 );
             }

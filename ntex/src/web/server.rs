@@ -198,7 +198,7 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             async move |r| {
-                r.config(cfg.lock().unwrap().cfg);
+                r.config(cfg.lock().unwrap().cfg.clone());
                 HttpService::new(factory().await)
             },
         )?;
@@ -231,7 +231,7 @@ where
             format!("ntex-web-service-{addr}"),
             lst,
             async move |r| {
-                r.config(cfg.lock().unwrap().cfg);
+                r.config(cfg.lock().unwrap().cfg.clone());
                 HttpService::new(factory().await).openssl(acceptor.clone())
             },
         )?;
@@ -264,7 +264,7 @@ where
             format!("ntex-web-rustls-service-{addr}"),
             lst,
             async move |r| {
-                r.config(cfg.lock().unwrap().cfg);
+                r.config(cfg.lock().unwrap().cfg.clone());
                 HttpService::new(factory().await).rustls(config.clone())
             },
         )?;
@@ -358,7 +358,7 @@ where
         let addr = format!("ntex-web-service-{:?}", lst.local_addr()?);
 
         self.builder = self.builder.listen_uds(addr, lst, async move |r| {
-            r.config(cfg.lock().unwrap().cfg);
+            r.config(cfg.lock().unwrap().cfg.clone());
             HttpService::new(factory().await)
         })?;
         Ok(self)
@@ -379,7 +379,7 @@ where
             format!("ntex-web-service-{:?}", addr.as_ref().display()),
             addr,
             async move |r| {
-                r.config(cfg.lock().unwrap().cfg);
+                r.config(cfg.lock().unwrap().cfg.clone());
                 HttpService::new(factory().await)
             },
         )?;

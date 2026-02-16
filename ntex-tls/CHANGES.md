@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.0] - 2026-02-16
+
+* SharedCfg is not Copy
+
 ## [3.2.1] - 2026-02-05
 
 * Fix openssl disconnect handling

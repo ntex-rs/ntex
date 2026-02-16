@@ -402,7 +402,11 @@ where
         }
 
         let state = self.state.take().map(|state| {
-            AppState::new(state, Some(config.state().clone()), config.state().config())
+            AppState::new(
+                state,
+                Some(config.state().clone()),
+                config.state().0.config.clone(),
+            )
         });
 
         // register nested services
@@ -491,8 +495,8 @@ where
     async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(self.middleware.create(
             ScopeService {
-                filter: self.filter.create(cfg).await?,
-                routing: self.routing.create(cfg).await?,
+                filter: self.filter.create(cfg.clone()).await?,
+                routing: self.routing.create(cfg.clone()).await?,
             },
             cfg,
         ))
@@ -559,7 +563,7 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
             router.case_insensitive();
         }
         for (path, factory, guards) in &mut self.services.iter() {
-            let service = factory.create(cfg).await?;
+            let service = factory.create(cfg.clone()).await?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
