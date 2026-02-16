@@ -431,5 +431,9 @@ mod tests {
         let t2 = t.clone();
         assert_eq!(t2.id(), cfg.id());
         assert_eq!(t2.tag(), "TEST4");
+
+        let t3 = t.ctx().get::<TestCfg>();
+        assert_eq!(t3.id(), cfg.id());
+        assert_eq!(t3.tag(), "TEST4");
     }
 }
