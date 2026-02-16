@@ -1,6 +1,8 @@
 # Changes
 
-## [3.4.0] - 2026-02-16
+## [3.4.0] - 2026-02-17
+
+* Propagate shutdown to user service from `ws::start` #765
 
 * SharedCfg is not Copy
 
