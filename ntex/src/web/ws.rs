@@ -6,7 +6,8 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
-    IntoServiceFactory, Service, ServiceFactory, chain_factory, fn_factory_with_config,
+    IntoServiceFactory, Pipeline, Service, ServiceCtx, ServiceFactory, chain_factory,
+    fn_factory_with_config,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
@@ -154,13 +155,13 @@ where
 
 /// Just a wrapper over a service handling WebSocket messages and propagating shutdown
 struct DispatchService<S> {
-    srv: crate::service::Pipeline<S>,
+    srv: Pipeline<S>,
     sink: WsSink,
 }
 
 impl<S, E> Service<DispatchItem<ws::Codec>> for DispatchService<S>
 where
-    S: crate::service::Service<Frame, Response = Option<Message>, Error = WsError<E>>,
+    S: Service<Frame, Response = Option<Message>, Error = WsError<E>>,
     E: fmt::Debug,
 {
     type Response = Option<Message>;
@@ -169,7 +170,7 @@ where
     async fn call(
         &self,
         req: DispatchItem<ws::Codec>,
-        _: crate::service::ServiceCtx<'_, Self>,
+        _: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         match req {
             DispatchItem::Item(item) => {
