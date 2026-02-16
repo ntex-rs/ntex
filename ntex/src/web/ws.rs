@@ -1,6 +1,8 @@
 //! `WebSockets` protocol support
 use std::{fmt, rc::Rc};
 
+use ntex_service::{forward_poll, forward_ready, forward_shutdown};
+
 pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 
 use crate::http::{StatusCode, body::BodySize, h1, header};
@@ -166,6 +168,10 @@ where
 {
     type Response = Option<Message>;
     type Error = WsError<E>;
+
+    forward_ready!(srv);
+    forward_poll!(srv);
+    forward_shutdown!(srv);
 
     async fn call(
         &self,
