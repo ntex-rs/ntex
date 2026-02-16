@@ -200,9 +200,4 @@ where
             DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
         }
     }
-
-    async fn shutdown(&self) {
-        // propagate shutdown to the user service
-        self.srv.shutdown().await;
-    }
 }
