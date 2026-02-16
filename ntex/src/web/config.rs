@@ -8,7 +8,7 @@ use super::service::{AppServiceFactory, ServiceFactoryWrapper, WebServiceFactory
 use super::{DefaultError, ErrorRenderer, resource::Resource, route::Route};
 
 /// Application configuration
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WebAppConfig {
     name: ByteString,
     secure: bool,

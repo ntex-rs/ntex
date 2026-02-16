@@ -47,7 +47,7 @@ pub struct PskIdentity(pub Vec<u8>);
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Servername(pub String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Tls service configuration
 pub struct TlsConfig {
     handshake_timeout: Millis,

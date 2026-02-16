@@ -2,7 +2,7 @@
 
 ## [4.5.0] - 2026-02-16
 
-* SharedCfg is not Copy
+* Do not leak SharedCfg, use ref counting
 
 ## [4.4.0] - 2026-02-11
 

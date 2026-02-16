@@ -13,7 +13,7 @@ thread_local! {
     static CACHE: LocalCache = LocalCache::new();
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 /// Base io configuration
 pub struct IoConfig {
     connect_timeout: Millis,

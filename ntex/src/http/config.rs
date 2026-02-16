@@ -37,7 +37,7 @@ impl From<Option<usize>> for KeepAlive {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 /// Http service configuration
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
