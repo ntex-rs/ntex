@@ -279,7 +279,7 @@ impl<F> Io<F> {
     /// Set shared io config
     pub fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
         unsafe {
-            self.st().cfg.replace(&cfg.into().get::<IoConfig>());
+            self.st().cfg.replace(cfg.into().get::<IoConfig>());
         }
     }
 }

@@ -7,19 +7,17 @@ use std::{fmt, hash::Hash, hash::Hasher, marker::PhantomData, mem, ops, ptr, rc}
 
 type Key = (usize, TypeId);
 type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
-type HashSet<V> = std::collections::HashSet<V, foldhash::fast::RandomState>;
 
 thread_local! {
     static DEFAULT_CFG: Arc<Storage> = {
-        let mut st = Arc::new(Storage::new("--", false));
-        let ctx = CfgContext(Arc::as_ptr(&st));
-        Arc::get_mut(&mut st).unwrap().ctx = ctx;
+        let mut st = Arc::new(Storage::new("--", false, CfgContext(ptr::null())));
+        let p = Arc::as_ptr(&st);
+        Arc::get_mut(&mut st).unwrap().ctx.update(p);
         st
     };
-    static MAPPING: RefCell<HashMap<Key, Arc<dyn Any + Send + Sync>>> = {
+    static MAPPING: RefCell<HashMap<Key, Box<dyn Any + Send + Sync>>> = {
         RefCell::new(HashMap::default())
     };
-    static REFS: RefCell<HashSet<SharedCfg>> = RefCell::new(HashSet::default());
 }
 static IDX: AtomicUsize = AtomicUsize::new(0);
 
@@ -37,18 +35,18 @@ struct Storage {
     tag: &'static str,
     ctx: CfgContext,
     building: bool,
-    data: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 impl Storage {
-    fn new(tag: &'static str, building: bool) -> Self {
+    fn new(tag: &'static str, building: bool, ctx: CfgContext) -> Self {
         let id = IDX.fetch_add(1, Ordering::SeqCst);
         Storage {
             id,
             tag,
+            ctx,
             building,
             data: HashMap::default(),
-            ctx: CfgContext(ptr::null()),
         }
     }
 }
@@ -60,6 +58,10 @@ unsafe impl Send for CfgContext {}
 unsafe impl Sync for CfgContext {}
 
 impl CfgContext {
+    fn update(&mut self, new_p: *const Storage) {
+        self.0 = new_p;
+    }
+
     #[inline]
     /// Unique id of the context.
     pub fn id(&self) -> usize {
@@ -78,7 +80,10 @@ impl CfgContext {
     where
         T: Configuration,
     {
-        get(self.get_ref())
+        let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
+        let cfg = get(&inner);
+        mem::forget(inner);
+        cfg
     }
 
     #[inline]
@@ -128,13 +133,14 @@ impl<T: Configuration> Cfg<T> {
         unsafe { (*self.0.get()).as_ref().unwrap() }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     /// Replaces the inner value.
     ///
     /// # Safety
     ///
     /// The caller must guarantee that no references to the inner `T` value
     /// exist at the time this function is called.
-    pub unsafe fn replace(&self, cfg: &Cfg<T>) {
+    pub unsafe fn replace(&self, cfg: Cfg<T>) {
         unsafe {
             ptr::swap(self.0.get(), cfg.0.get());
         }
@@ -143,7 +149,9 @@ impl<T: Configuration> Cfg<T> {
 
 impl<T: Configuration> Drop for Cfg<T> {
     fn drop(&mut self) {
-        unsafe { drop(Arc::<T>::from_raw(*self.0.get())) }
+        unsafe {
+            Arc::decrement_strong_count(self.get_ref().ctx().0);
+        }
     }
 }
 
@@ -163,7 +171,7 @@ impl<T: Configuration> Clone for Cfg<T> {
 impl<'a, T: Configuration> From<&'a T> for Cfg<T> {
     #[inline]
     fn from(cfg: &'a T) -> Self {
-        get(cfg.ctx().get_ref())
+        cfg.ctx().get()
     }
 }
 
@@ -179,7 +187,7 @@ impl<T: Configuration> ops::Deref for Cfg<T> {
 impl<T: Configuration> Default for Cfg<T> {
     #[inline]
     fn default() -> Self {
-        CfgContext::default().shared().get()
+        SharedCfg::default().get()
     }
 }
 
@@ -203,7 +211,7 @@ impl PartialEq for SharedCfg {
 
 impl Hash for SharedCfg {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        ptr::from_ref(self.0.as_ref()).hash(state);
+        self.0.id.hash(state);
     }
 }
 
@@ -233,7 +241,7 @@ impl SharedCfg {
     where
         T: Configuration,
     {
-        get(self.0.as_ref())
+        get(&self.0)
     }
 }
 
@@ -253,9 +261,9 @@ impl<T: Configuration> From<SharedCfg> for Cfg<T> {
 
 impl SharedCfgBuilder {
     fn new(tag: &'static str) -> SharedCfgBuilder {
-        let mut storage = Arc::new(Storage::new(tag, true));
+        let mut storage = Arc::new(Storage::new(tag, true, CfgContext::default()));
         let ctx = CfgContext(Arc::as_ptr(&storage));
-        Arc::get_mut(&mut storage).unwrap().ctx = CfgContext(ctx.0);
+        Arc::get_mut(&mut storage).unwrap().ctx.update(ctx.0);
 
         SharedCfgBuilder { ctx, storage }
     }
@@ -271,8 +279,14 @@ impl SharedCfgBuilder {
         Arc::get_mut(&mut self.storage)
             .unwrap()
             .data
-            .insert(TypeId::of::<T>(), Arc::new(val));
+            .insert(TypeId::of::<T>(), Box::new(val));
         self
+    }
+
+    #[must_use]
+    /// Build `SharedCfg` instance.
+    pub fn build(self) -> SharedCfg {
+        self.into()
     }
 }
 
@@ -284,7 +298,7 @@ impl From<SharedCfgBuilder> for SharedCfg {
     }
 }
 
-fn get<T>(st: &Storage) -> Cfg<T>
+fn get<T>(st: &Arc<Storage>) -> Cfg<T>
 where
     T: Configuration,
 {
@@ -294,10 +308,14 @@ where
         st.tag
     );
 
+    // increase arc refs for storage instead of actual item
+    // CfgContext and Cfg::shared() relayes on Arc<Storage>
+    mem::forget(st.clone());
+
     let tp = TypeId::of::<T>();
     if let Some(arc) = st.data.get(&tp) {
         Cfg(
-            UnsafeCell::new(Arc::into_raw(arc.clone().downcast::<T>().unwrap())),
+            UnsafeCell::new(arc.as_ref().downcast_ref::<T>().unwrap()),
             PhantomData,
         )
     } else {
@@ -305,7 +323,7 @@ where
             let key = (st.id, tp);
             if let Some(arc) = store.borrow().get(&key) {
                 Cfg(
-                    UnsafeCell::new(Arc::into_raw(arc.clone().downcast::<T>().unwrap())),
+                    UnsafeCell::new(arc.as_ref().downcast_ref::<T>().unwrap()),
                     PhantomData,
                 )
             } else {
@@ -314,15 +332,14 @@ where
                     st.tag,
                     T::NAME
                 );
-                // store Storage ref, otherwise it could be deallocated
-                let ctx = CfgContext(st.ctx.0);
-                REFS.with(|refs| refs.borrow_mut().insert(ctx.shared()));
-
                 let mut val = T::default();
-                val.set_ctx(ctx);
-                let val = Arc::new(val);
-                store.borrow_mut().insert(key, val.clone());
-                Cfg(UnsafeCell::new(Arc::into_raw(val)), PhantomData)
+                val.set_ctx(CfgContext(st.ctx.0));
+                let arc: Box<dyn Any + Send + Sync> = Box::new(val);
+                let inner = UnsafeCell::new(ptr::from_ref(
+                    arc.as_ref().downcast_ref::<T>().unwrap(),
+                ));
+                store.borrow_mut().insert(key, arc);
+                Cfg(inner, PhantomData)
             }
         })
     }
@@ -396,9 +413,26 @@ mod tests {
         assert_eq!(t.tag(), "--");
         assert_eq!(t.ctx().id(), t.id());
 
-        let cfg: SharedCfg = SharedCfg::new("TEST2").into();
+        let cfg = SharedCfg::new("TEST2").build();
         let t = cfg.get::<TestCfg>();
         assert_eq!(t.tag(), "TEST2");
+        assert_eq!(t.id(), cfg.id());
+        drop(cfg);
+
+        let cfg2 = t.shared();
+        let t2 = cfg2.get::<TestCfg>();
+        assert_eq!(t2.tag(), "TEST2");
+        assert_eq!(t2.id(), cfg2.id());
+        unsafe { t2.replace(SharedCfg::from(SharedCfg::new("TEST3")).get::<TestCfg>()) };
+
+        let cfg2 = t2.shared();
+        let t3 = cfg2.get::<TestCfg>();
+        assert_eq!(t3.tag(), "TEST3");
+        assert_eq!(t3.id(), cfg2.id());
+
+        let t = SharedCfg::from(SharedCfg::new("TEST").add(TestCfg::default()))
+            .get::<TestCfg>();
+        let cfg = t.shared();
         assert_eq!(t.id(), cfg.id());
     }
 }

@@ -27,5 +27,7 @@ log = { workspace = true }
 slab = { workspace = true }
 foldhash = { workspace = true }
 
+backtrace = "*"
+
 [dev-dependencies]
 ntex = { workspace = true }
