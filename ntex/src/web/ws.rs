@@ -6,7 +6,8 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
-    IntoServiceFactory, ServiceFactory, chain_factory, fn_factory_with_config, fn_service,
+    IntoServiceFactory, Service, ServiceCtx, ServiceFactory, chain_factory,
+    fn_factory_with_config,
 };
 use crate::web::{HttpRequest, HttpResponse};
 use crate::ws::{self, error::HandshakeError, error::WsError, handshake};
@@ -33,7 +34,7 @@ thread_local! {
 ///         .find(|p| *p == "my-subprotocol")
 ///         .map(String::from);
 ///
-///     ws::start_using_subprotocol(req, chosen, factory).await
+///     ws::start(req, chosen, factory).await
 /// }
 /// ```
 pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
@@ -65,7 +66,7 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 ///         .find(|p| *p == "graphql-ws" || *p == "graphql-transport-ws")
 ///         .map(String::from);
 ///
-///     ws::start_using_subprotocol(req, chosen, factory).await
+///     ws::start(req, chosen, factory).await
 /// }
 /// ```
 pub async fn start<T, F, P, Err>(
@@ -83,30 +84,10 @@ where
     let inner_factory = Rc::new(chain_factory(factory).map_err(WsError::Service));
 
     let factory = fn_factory_with_config(async move |sink: WsSink| {
-        let srv = inner_factory.pipeline(sink.clone()).await?;
+        let srv = inner_factory.create(sink.clone()).await?;
         let sink = sink.clone();
 
-        Ok::<_, T::InitError>(fn_service(async move |req| match req {
-            DispatchItem::<ws::Codec>::Item(item) => {
-                let s = if matches!(item, Frame::Close(_)) {
-                    Some(sink.clone())
-                } else {
-                    None
-                };
-                let result = srv.call(item).await;
-                if let Some(s) = s {
-                    rt::spawn(async move { s.io().close() });
-                }
-                result
-            }
-            DispatchItem::Control(_) => Ok(None),
-            DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
-            DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
-            DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
-                Err(WsError::Protocol(e))
-            }
-            DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
-        }))
+        Ok::<_, T::InitError>(DispatchService { srv, sink })
     });
 
     start_with(req, subprotocol, factory).await
@@ -170,4 +151,51 @@ where
     });
 
     Ok(HttpResponse::new(StatusCode::OK))
+}
+
+/// Just a wrapper over a service handling WebSocket messages and propagating shutdown
+struct DispatchService<S> {
+    srv: S,
+    sink: WsSink,
+}
+
+impl<S, E> Service<DispatchItem<ws::Codec>> for DispatchService<S>
+where
+    S: Service<Frame, Response = Option<Message>, Error = WsError<E>>,
+    E: fmt::Debug,
+{
+    type Response = Option<Message>;
+    type Error = WsError<E>;
+
+    crate::forward_ready!(srv);
+    crate::forward_poll!(srv);
+    crate::forward_shutdown!(srv);
+
+    async fn call(
+        &self,
+        req: DispatchItem<ws::Codec>,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        match req {
+            DispatchItem::Item(item) => {
+                let s = if matches!(item, Frame::Close(_)) {
+                    Some(self.sink.clone())
+                } else {
+                    None
+                };
+                let result = ctx.call(&self.srv, item).await;
+                if let Some(s) = s {
+                    rt::spawn(async move { s.io().close() });
+                }
+                result
+            }
+            DispatchItem::Control(_) => Ok(None),
+            DispatchItem::Stop(Reason::KeepAliveTimeout) => Err(WsError::KeepAlive),
+            DispatchItem::Stop(Reason::ReadTimeout) => Err(WsError::ReadTimeout),
+            DispatchItem::Stop(Reason::Decoder(e) | Reason::Encoder(e)) => {
+                Err(WsError::Protocol(e))
+            }
+            DispatchItem::Stop(Reason::Io(e)) => Err(WsError::Disconnected(e)),
+        }
+    }
 }
