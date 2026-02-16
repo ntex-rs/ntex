@@ -34,4 +34,4 @@ jobs:
 
       - name: Run Miri (ntex-service::cfg)
         # Run all of your tests inside of Miri interpreter
-        run: cargo miri test -p ntex-service -- --test cfg::tests::
+        run: cargo miri test -p ntex-service -- --test "cfg::tests::"
