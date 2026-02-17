@@ -148,7 +148,7 @@ impl<T: Configuration> Cfg<T> {
 
     #[doc(hidden)]
     #[deprecated(since = "4.5.0")]
-	#[must_use]
+    #[must_use]
     pub fn into_static(&self) -> Cfg<T> {
         self.ctx().get()
     }
