@@ -425,15 +425,15 @@ pub fn set_item<T: 'static>(item: T) {
 }
 
 /// Get a reference to a type previously inserted on this runtime's storage
-pub fn get_item<T: 'static, F, R>(f: F) -> R
+pub fn get_item<T: Clone + 'static, F, R>(f: F) -> R
 where
-    F: FnOnce(Option<&T>) -> R,
+    F: FnOnce(Option<T>) -> R,
 {
     STORAGE.with(move |cell| {
         let st = cell.borrow();
         let item = st
             .get(&TypeId::of::<T>())
             .and_then(|boxed| boxed.downcast_ref());
-        f(item)
+        f(item.cloned())
     })
 }

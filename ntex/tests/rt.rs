@@ -159,7 +159,7 @@ fn test_arbiter_local_storage() {
     assert!(Arbiter::get_value(|| 64u64) == 64);
 
     ntex::rt::set_item(100u32);
-    assert!(ntex::rt::get_item::<u32, _, _>(|s| *s.unwrap() == 100));
+    assert!(ntex::rt::get_item::<u32, _, _>(|s| s.unwrap() == 100));
 }
 
 #[test]
