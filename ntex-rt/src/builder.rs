@@ -211,7 +211,7 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner { system, config, .. } = self;
+        let SystemRunner { mut system, .. } = self;
 
         // run loop
         tok_io::task::LocalSet::new()
