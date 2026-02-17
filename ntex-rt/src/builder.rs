@@ -108,43 +108,26 @@ impl Builder {
     ///
     /// This method panics if it can not create tokio runtime
     pub fn build<R: Runner>(self, runner: R) -> SystemRunner {
-        let name = self.name.clone();
-        let testing = self.testing;
-        let stack_size = self.stack_size;
-        let stop_on_panic = self.stop_on_panic;
-
-        self.build_with(SystemConfig {
-            name,
-            testing,
-            stack_size,
-            stop_on_panic,
+        let config = SystemConfig {
+            name: self.name.clone(),
+            testing: self.testing,
+            stack_size: self.stack_size,
+            stop_on_panic: self.stop_on_panic,
+            ping_interval: self.ping_interval,
+            pool_limit: self.pool_limit,
+            pool_recv_timeout: self.pool_recv_timeout,
             runner: Arc::new(runner),
-        })
+        };
+        self.build_with(config)
     }
 
     /// Create new System.
     ///
     /// This method panics if it can not create tokio runtime
     pub fn build_with(self, config: SystemConfig) -> SystemRunner {
-        let (stop_tx, stop) = oneshot::channel();
-        let (sys_sender, sys_receiver) = unbounded();
-
-        // thread pool
-        let pool = ThreadPool::new(&self.name, self.pool_limit, self.pool_recv_timeout);
-
-        let (arb, controller) = Arbiter::new_system(self.name.clone());
-        let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
-        let system = System::construct(sys_sender, arb, config.clone(), pool);
-
-        // system arbiter
-        let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);
-
         // init system arbiter and run configuration method
         SystemRunner {
-            stop,
-            support,
-            controller,
-            system,
+            runner: config.runner.clone(),
             config,
             _t: PhantomData,
         }
@@ -154,20 +137,12 @@ impl Builder {
 /// Helper object that runs System's event loop
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
-    stop: oneshot::Receiver<i32>,
-    support: SystemSupport,
-    controller: ArbiterController,
-    system: System,
     config: SystemConfig,
+    runner: Arc<dyn Runner>,
     _t: PhantomData<Rc<()>>,
 }
 
 impl SystemRunner {
-    /// Get current system.
-    pub fn system(&self) -> System {
-        self.system.clone()
-    }
-
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
     pub fn run_until_stop(self) -> io::Result<()> {
@@ -182,16 +157,12 @@ impl SystemRunner {
     {
         log::info!("Starting {:?} system", self.config.name);
 
-        let SystemRunner {
-            controller,
-            stop,
-            support,
-            config,
-            ..
-        } = self;
+        let SystemRunner { config, runner, .. } = self;
 
         // run loop
-        config.block_on(async move {
+        crate::driver::block_on(runner.as_ref(), async move {
+            let (_, support, controller, stop) = create(&config);
+
             f()?;
 
             crate::spawn(support.run());
@@ -215,14 +186,11 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner {
-            controller,
-            support,
-            config,
-            ..
-        } = self;
+        let SystemRunner { config, runner, .. } = self;
 
-        config.block_on(async move {
+        crate::driver::block_on(runner.as_ref(), async move {
+            let (_, support, controller, _) = create(&config);
+
             crate::spawn(support.run());
             crate::spawn(controller.run());
             fut.await
@@ -236,15 +204,13 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner {
-            controller,
-            support,
-            ..
-        } = self;
+        let SystemRunner { config, .. } = self;
 
         // run loop
         tok_io::task::LocalSet::new()
             .run_until(async move {
+                let (sys, support, controller, _) = create(&config);
+
                 crate::spawn(support.run());
                 crate::spawn(controller.run());
                 fut.await
@@ -256,9 +222,34 @@ impl SystemRunner {
 impl fmt::Debug for SystemRunner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemRunner")
-            .field("system", &self.system)
-            .field("support", &self.support)
             .field("config", &self.config)
             .finish()
     }
+}
+
+/// Create new System.
+///
+/// This method panics if it can not create tokio runtime
+fn create(
+    config: &SystemConfig,
+) -> (
+    System,
+    SystemSupport,
+    ArbiterController,
+    oneshot::Receiver<i32>,
+) {
+    let (stop_tx, stop) = oneshot::channel();
+    let (sys_sender, sys_receiver) = unbounded();
+
+    // thread pool
+    let pool = ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
+
+    let (arb, controller) = Arbiter::new_system(config.name.clone());
+    let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
+    let system = System::construct(sys_sender, arb, config.clone(), pool);
+
+    // system arbiter
+    let support = SystemSupport::new(stop_tx, sys_receiver, config.ping_interval);
+
+    (system, support, controller, stop)
 }

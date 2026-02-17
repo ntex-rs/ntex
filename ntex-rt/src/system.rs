@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
-use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, rc::Rc};
+use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin};
 
 use async_channel::{Receiver, Sender};
 use futures_timer::Delay;
@@ -39,10 +39,13 @@ pub struct System {
 #[derive(Clone)]
 pub struct SystemConfig {
     pub(super) name: String,
-    pub(super) runner: Arc<dyn Runner>,
     pub(super) stack_size: usize,
     pub(super) stop_on_panic: bool,
+    pub(super) ping_interval: usize,
+    pub(super) pool_limit: usize,
+    pub(super) pool_recv_timeout: Duration,
     pub(super) testing: bool,
+    pub(super) runner: Arc<dyn Runner>,
 }
 
 thread_local!(
@@ -208,24 +211,6 @@ impl SystemConfig {
     pub fn testing(&self) -> bool {
         self.testing
     }
-
-    /// Execute a future with custom `block_on` method and wait for result
-    #[inline]
-    pub(super) fn block_on<F, R>(&self, fut: F) -> R
-    where
-        F: Future<Output = R> + 'static,
-        R: 'static,
-    {
-        // run loop
-        let result = Rc::new(RefCell::new(None));
-        let result_inner = result.clone();
-
-        self.runner.block_on(Box::pin(async move {
-            let r = fut.await;
-            *result_inner.borrow_mut() = Some(r);
-        }));
-        result.borrow_mut().take().unwrap()
-    }
 }
 
 impl fmt::Debug for SystemConfig {
@@ -352,7 +337,8 @@ async fn ping_arbiter(arb: Arbiter, interval: Duration) {
         });
 
         let result = arb
-            .spawn_with(|| async {
+            .handle()
+            .spawn(async {
                 yield_to().await;
             })
             .await;

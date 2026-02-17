@@ -1,5 +1,11 @@
 # Changes
 
+## [3.8.0] - 2026-02-16
+
+* Export `get_item()` and `set_item()` methods
+
+* Deprecate Arbiter's spawn related helpers
+
 ## [3.7.1] - 2026-02-13
 
 * Export JoinHandle for neon runtime
