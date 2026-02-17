@@ -114,8 +114,10 @@ fn test_block_on() {
             .ping_interval(25)
             .build(Custom);
 
-        tx.send(runner.system()).unwrap();
-        let _ = runner.run_until_stop();
+        let _ = runner.run(move || {
+            tx.send(System::current()).unwrap();
+            Ok(())
+        });
     });
     let s = System::new("test", ntex::rt::DefaultRuntime);
 
