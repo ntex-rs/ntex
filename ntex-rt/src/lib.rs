@@ -22,7 +22,7 @@ pub mod rt_compio;
 #[cfg(feature = "tokio")]
 pub mod rt_tokio;
 
-pub use self::arbiter::Arbiter;
+pub use self::arbiter::{Arbiter, get_item, set_item};
 pub use self::builder::{Builder, SystemRunner};
 pub use self::driver::{BlockFuture, Driver, DriverType, Notify, PollResult, Runner};
 pub use self::pool::{BlockingError, BlockingResult};

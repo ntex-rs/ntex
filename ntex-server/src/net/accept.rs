@@ -288,10 +288,10 @@ impl Accept {
                 info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
 
                 let notify = self.notify.clone();
-                System::current().arbiter().spawn(Box::pin(async move {
+                System::current().handle().spawn(async move {
                     sleep(ERR_SLEEP_TIMEOUT).await;
                     notify.send(AcceptorCommand::Timer);
-                }));
+                });
             } else {
                 info.registered.set(true);
             }
@@ -444,10 +444,10 @@ impl Accept {
                         info.timeout.set(Some(Instant::now() + ERR_TIMEOUT));
 
                         let notify = self.notify.clone();
-                        System::current().arbiter().spawn(Box::pin(async move {
+                        System::current().handle().spawn(async move {
                             sleep(ERR_SLEEP_TIMEOUT).await;
                             notify.send(AcceptorCommand::Timer);
-                        }));
+                        });
                         return false;
                     }
                 }

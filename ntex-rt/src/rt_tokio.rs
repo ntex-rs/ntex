@@ -1,5 +1,9 @@
-use std::{future::Future, future::poll_fn, pin::Pin, task::Context, task::Poll};
-pub use tok_io::task::JoinError;
+use std::task::{Context, Poll, ready};
+use std::{fmt, future::Future, future::poll_fn, pin::Pin};
+
+use async_channel::Sender;
+
+use crate::arbiter::{Arbiter, ArbiterCommand};
 
 #[inline]
 /// Spawn a future on the current thread.
@@ -23,27 +27,59 @@ where
         tok_io::task::spawn_local(f)
     };
 
-    JoinHandle { task }
+    JoinHandle {
+        task: Some(Either::Task(task)),
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct JoinError;
+
+impl fmt::Display for JoinError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "JoinError")
+    }
+}
+
+impl std::error::Error for JoinError {}
+
+#[derive(Debug)]
+enum Either<T> {
+    Task(tok_io::task::JoinHandle<T>),
+    Spawn(oneshot::Receiver<T>),
 }
 
 #[derive(Debug)]
-/// A spawned task.
 pub struct JoinHandle<T> {
-    task: tok_io::task::JoinHandle<T>,
+    task: Option<Either<T>>,
 }
 
 impl<T> JoinHandle<T> {
-    /// Cancels the task and waits for it to stop running
-    pub fn cancel(self) {
-        self.task.abort();
+    /// Cancels the task.
+    pub fn cancel(mut self) {
+        if let Some(Either::Task(fut)) = self.task.take() {
+            fut.abort();
+        }
     }
 
-    /// Detaches the task to let it keep running in the background
-    pub fn detach(self) {}
+    /// Detaches the task to let it keep running in the background.
+    pub fn detach(mut self) {
+        self.task.take();
+    }
 
-    /// Returns true if the current task is finished
+    /// Returns true if the current task is finished.
     pub fn is_finished(&self) -> bool {
-        self.task.is_finished()
+        match &self.task {
+            Some(Either::Task(fut)) => fut.is_finished(),
+            Some(Either::Spawn(fut)) => fut.is_closed(),
+            None => true,
+        }
+    }
+}
+
+impl<T> Drop for JoinHandle<T> {
+    fn drop(&mut self) {
+        self.task.take();
     }
 }
 
@@ -51,25 +87,35 @@ impl<T> Future for JoinHandle<T> {
     type Output = Result<T, JoinError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        Pin::new(&mut self.task).poll(cx)
+        Poll::Ready(match self.task.as_mut() {
+            Some(Either::Task(fut)) => {
+                ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError)
+            }
+            Some(Either::Spawn(fut)) => {
+                ready!(Pin::new(fut).poll(cx)).map_err(|_| JoinError)
+            }
+            None => Err(JoinError),
+        })
     }
 }
 
 #[derive(Clone, Debug)]
 /// Handle to the runtime.
-pub struct Handle(tok_io::runtime::Handle);
+pub struct Handle(Sender<ArbiterCommand>);
 
 impl Handle {
-    #[inline]
+    pub(crate) fn new(sender: Sender<ArbiterCommand>) -> Self {
+        Self(sender)
+    }
+
     pub fn current() -> Self {
-        Self(tok_io::runtime::Handle::current())
+        Self(Arbiter::current().sender.clone())
     }
 
     #[inline]
     /// Wake up runtime.
     pub fn notify(&self) {}
 
-    #[inline]
     /// Spawns a new asynchronous task, returning a [`Task`] for it.
     ///
     /// Spawning a task enables the task to execute concurrently to other tasks.
@@ -79,8 +125,17 @@ impl Handle {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
+        let (tx, rx) = oneshot::channel();
+
+        let _ = self
+            .0
+            .try_send(ArbiterCommand::Execute(Box::pin(async move {
+                let result = future.await;
+                let _ = tx.send(result);
+            })));
+
         JoinHandle {
-            task: self.0.spawn(future),
+            task: Some(Either::Spawn(rx)),
         }
     }
 }

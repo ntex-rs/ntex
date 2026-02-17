@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.0] - 2026-02-17
+
+* Use new ntex-rt api
+
 ## [3.8.0] - 2026-02-16
 
 * SharedCfg is not Copy

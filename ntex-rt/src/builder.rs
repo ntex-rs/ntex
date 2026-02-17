@@ -1,17 +1,13 @@
 use std::{fmt, future::Future, io, marker::PhantomData, rc::Rc, sync::Arc, time};
 
-use async_channel::unbounded;
-
-use crate::arbiter::{Arbiter, ArbiterController};
 use crate::driver::Runner;
-use crate::pool::ThreadPool;
-use crate::system::{System, SystemCommand, SystemConfig, SystemSupport};
+use crate::system::{System, SystemConfig};
 
 #[derive(Debug, Clone)]
 /// Builder struct for a ntex runtime.
 ///
 /// Either use `Builder::build` to create a system and start actors.
-/// Alternatively, use `Builder::run` to start the tokio runtime and
+/// Alternatively, use `Builder::run` to start the runtime and
 /// run a function in its context.
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
@@ -106,46 +102,32 @@ impl Builder {
 
     /// Create new System.
     ///
-    /// This method panics if it can not create tokio runtime
+    /// This method panics if it can not create runtime
     pub fn build<R: Runner>(self, runner: R) -> SystemRunner {
-        let name = self.name.clone();
-        let testing = self.testing;
-        let stack_size = self.stack_size;
-        let stop_on_panic = self.stop_on_panic;
-
-        self.build_with(SystemConfig {
-            name,
-            testing,
-            stack_size,
-            stop_on_panic,
+        let config = SystemConfig {
+            name: self.name.clone(),
+            testing: self.testing,
+            stack_size: self.stack_size,
+            stop_on_panic: self.stop_on_panic,
+            ping_interval: self.ping_interval,
+            pool_limit: self.pool_limit,
+            pool_recv_timeout: self.pool_recv_timeout,
             runner: Arc::new(runner),
-        })
+        };
+        self.build_with(config)
     }
 
     /// Create new System.
     ///
-    /// This method panics if it can not create tokio runtime
+    /// This method panics if it can not create runtime
     pub fn build_with(self, config: SystemConfig) -> SystemRunner {
-        let (stop_tx, stop) = oneshot::channel();
-        let (sys_sender, sys_receiver) = unbounded();
-
-        // thread pool
-        let pool = ThreadPool::new(&self.name, self.pool_limit, self.pool_recv_timeout);
-
-        let (arb, controller) = Arbiter::new_system(self.name.clone());
-        let _ = sys_sender.try_send(SystemCommand::RegisterArbiter(arb.id(), arb.clone()));
-        let system = System::construct(sys_sender, arb, config.clone(), pool);
-
-        // system arbiter
-        let support = SystemSupport::new(stop_tx, sys_receiver, self.ping_interval);
+        let runner = config.runner.clone();
+        let system = System::construct(config);
 
         // init system arbiter and run configuration method
         SystemRunner {
-            stop,
-            support,
-            controller,
             system,
-            config,
+            runner,
             _t: PhantomData,
         }
     }
@@ -154,11 +136,8 @@ impl Builder {
 /// Helper object that runs System's event loop
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
-    stop: oneshot::Receiver<i32>,
-    support: SystemSupport,
-    controller: ArbiterController,
     system: System,
-    config: SystemConfig,
+    runner: Arc<dyn Runner>,
     _t: PhantomData<Rc<()>>,
 }
 
@@ -180,22 +159,18 @@ impl SystemRunner {
     where
         F: FnOnce() -> io::Result<()> + 'static,
     {
-        log::info!("Starting {:?} system", self.config.name);
+        log::info!("Starting {:?} system", self.system.name());
 
         let SystemRunner {
-            controller,
-            stop,
-            support,
-            config,
-            ..
+            mut system, runner, ..
         } = self;
 
         // run loop
-        config.block_on(async move {
+        crate::driver::block_on(runner.as_ref(), async move {
+            let stop = system.start();
+
             f()?;
 
-            crate::spawn(support.run());
-            crate::spawn(controller.run());
             match stop.await {
                 Ok(code) => {
                     if code != 0 {
@@ -216,15 +191,13 @@ impl SystemRunner {
         R: 'static,
     {
         let SystemRunner {
-            controller,
-            support,
-            config,
-            ..
+            mut system, runner, ..
         } = self;
 
-        config.block_on(async move {
-            crate::spawn(support.run());
-            crate::spawn(controller.run());
+        crate::driver::block_on(runner.as_ref(), async move {
+            let stop = system.start();
+            drop(stop);
+
             fut.await
         })
     }
@@ -236,17 +209,14 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner {
-            controller,
-            support,
-            ..
-        } = self;
+        let SystemRunner { mut system, .. } = self;
 
         // run loop
         tok_io::task::LocalSet::new()
             .run_until(async move {
-                crate::spawn(support.run());
-                crate::spawn(controller.run());
+                let stop = system.start();
+                drop(stop);
+
                 fut.await
             })
             .await
@@ -257,8 +227,6 @@ impl fmt::Debug for SystemRunner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemRunner")
             .field("system", &self.system)
-            .field("support", &self.support)
-            .field("config", &self.config)
             .finish()
     }
 }

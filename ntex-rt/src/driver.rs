@@ -1,5 +1,5 @@
 //! The platform-specified driver.
-use std::{fmt, io, pin::Pin};
+use std::{cell::RefCell, fmt, io, pin::Pin, rc::Rc};
 
 use crate::rt::Runtime;
 
@@ -101,4 +101,21 @@ macro_rules! syscall {
             Ok(res)
         }
     }};
+}
+
+/// Execute a future with custom `block_on` method and wait for result
+pub(super) fn block_on<F, R>(run: &dyn Runner, fut: F) -> R
+where
+    F: Future<Output = R> + 'static,
+    R: 'static,
+{
+    // run loop
+    let result = Rc::new(RefCell::new(None));
+    let result_inner = result.clone();
+
+    run.block_on(Box::pin(async move {
+        let r = fut.await;
+        *result_inner.borrow_mut() = Some(r);
+    }));
+    result.borrow_mut().take().unwrap()
 }
