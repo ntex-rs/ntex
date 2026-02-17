@@ -145,6 +145,12 @@ impl<T: Configuration> Cfg<T> {
             ptr::swap(self.0.get(), cfg.0.get());
         }
     }
+
+    #[doc(hidden)]
+    #[deprecated(since = "4.5.0")]
+    pub fn into_static(&self) -> Cfg<T> {
+        self.ctx().get()
+    }
 }
 
 impl<T: Configuration> Drop for Cfg<T> {
