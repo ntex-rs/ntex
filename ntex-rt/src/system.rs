@@ -3,11 +3,11 @@ use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin};
 
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver, Sender, unbounded};
 use futures_timer::Delay;
 
 use crate::pool::ThreadPool;
-use crate::{Arbiter, BlockingResult, Builder, Runner, SystemRunner};
+use crate::{Arbiter, BlockingResult, Builder, Handle, Runner, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -30,9 +30,10 @@ pub struct Id(pub(crate) usize);
 #[derive(Clone, Debug)]
 pub struct System {
     id: usize,
-    sys: Sender<SystemCommand>,
     arbiter: Arbiter,
     config: SystemConfig,
+    sender: Sender<SystemCommand>,
+    receiver: Receiver<SystemCommand>,
     pool: ThreadPool,
 }
 
@@ -54,24 +55,42 @@ thread_local!(
 
 impl System {
     /// Constructs new system and sets it as current
-    pub(super) fn construct(
-        sys: Sender<SystemCommand>,
-        mut arbiter: Arbiter,
-        config: SystemConfig,
-        pool: ThreadPool,
-    ) -> Self {
+    pub(super) fn construct(config: SystemConfig) -> Self {
         let id = SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst);
-        arbiter.sys_id = id;
+        let (sender, receiver) = unbounded();
 
-        let sys = System {
+        let pool =
+            ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
+
+        System {
             id,
-            sys,
-            arbiter,
             config,
+            sender,
+            receiver,
             pool,
-        };
-        System::set_current(sys.clone());
-        sys
+            arbiter: Arbiter::dummy(),
+        }
+    }
+
+    /// Constructs new system and sets it as current
+    pub(super) fn start(&mut self) -> oneshot::Receiver<i32> {
+        let (stop_tx, stop) = oneshot::channel();
+        let (arb, controller) = Arbiter::new_system(self.id, self.config.name.clone());
+
+        self.arbiter = arb.clone();
+        System::set_current(self.clone());
+
+        let _ = self
+            .sender
+            .try_send(SystemCommand::RegisterArbiter(arb.id(), arb));
+
+        // system support tasks
+        self.arbiter
+            .handle()
+            .spawn(SystemSupport::new(self, stop_tx).run());
+        self.arbiter.handle().spawn(controller.run());
+
+        stop
     }
 
     /// Build a new system with a customized tokio runtime
@@ -113,6 +132,7 @@ impl System {
     /// Set current running system
     #[doc(hidden)]
     pub fn set_current(sys: System) {
+        sys.arbiter.set_current();
         CURRENT.with(|s| {
             *s.borrow_mut() = Some(sys);
         });
@@ -135,7 +155,7 @@ impl System {
 
     /// Stop the system with a particular exit code
     pub fn stop_with_code(&self, code: i32) {
-        let _ = self.sys.try_send(SystemCommand::Exit(code));
+        let _ = self.sender.try_send(SystemCommand::Exit(code));
     }
 
     /// Return status of `stop_on_panic` option
@@ -180,12 +200,18 @@ impl System {
     }
 
     pub(super) fn sys(&self) -> &Sender<SystemCommand> {
-        &self.sys
+        &self.sender
     }
 
     /// System config
     pub fn config(&self) -> SystemConfig {
         self.config.clone()
+    }
+
+    #[inline]
+    /// Runtime handle for main thread
+    pub fn handle(&self) -> &Handle {
+        self.arbiter.handle()
     }
 
     /// Testing flag
@@ -239,15 +265,11 @@ pub(super) struct SystemSupport {
 }
 
 impl SystemSupport {
-    pub(super) fn new(
-        stop: oneshot::Sender<i32>,
-        commands: Receiver<SystemCommand>,
-        ping_interval: usize,
-    ) -> Self {
+    fn new(sys: &System, stop: oneshot::Sender<i32>) -> Self {
         Self {
-            commands,
             stop: Some(stop),
-            ping_interval: Duration::from_millis(ping_interval as u64),
+            commands: sys.receiver.clone(),
+            ping_interval: Duration::from_millis(sys.config.ping_interval as u64),
         }
     }
 

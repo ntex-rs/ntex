@@ -30,8 +30,8 @@ pub struct Arbiter {
     id: usize,
     pub(crate) sys_id: usize,
     name: Arc<String>,
-    hnd: Handle,
-    sender: Sender<ArbiterCommand>,
+    pub(crate) hnd: Option<Handle>,
+    pub(crate) sender: Sender<ArbiterCommand>,
     thread_handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -49,20 +49,38 @@ impl Default for Arbiter {
 
 impl Clone for Arbiter {
     fn clone(&self) -> Self {
-        Self::with_sender(self.sys_id, self.id, self.name.clone(), self.sender.clone())
+        Self {
+            id: self.id,
+            sys_id: self.sys_id,
+            name: self.name.clone(),
+            sender: self.sender.clone(),
+            hnd: self.hnd.clone(),
+            thread_handle: None,
+        }
     }
 }
 
 impl Arbiter {
     #[allow(clippy::borrowed_box)]
-    pub(super) fn new_system(name: String) -> (Self, ArbiterController) {
+    pub(super) fn new_system(sys_id: usize, name: String) -> (Self, ArbiterController) {
         let (tx, rx) = unbounded();
 
-        let arb = Arbiter::with_sender(0, 0, Arc::new(name), tx);
+        let arb = Arbiter::with_sender(sys_id, 0, Arc::new(name), tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
         (arb, ArbiterController { rx, stop: None })
+    }
+
+    pub(super) fn dummy() -> Self {
+        Arbiter {
+            id: 0,
+            hnd: None,
+            name: String::new().into(),
+            sys_id: 0,
+            sender: unbounded().0,
+            thread_handle: None,
+        }
     }
 
     /// Returns the current thread's arbiter's address
@@ -75,6 +93,12 @@ impl Arbiter {
             Some(ref addr) => addr.clone(),
             None => panic!("Arbiter is not running"),
         })
+    }
+
+    pub(crate) fn set_current(&self) {
+        ADDR.with(|cell| {
+            *cell.borrow_mut() = Some(self.clone());
+        });
     }
 
     /// Stop arbiter from continuing it's event loop.
@@ -173,12 +197,18 @@ impl Arbiter {
         name: Arc<String>,
         sender: Sender<ArbiterCommand>,
     ) -> Self {
+        #[cfg(feature = "compio")]
+        let hnd = { Handle::new(sender.clone()) };
+
+        #[cfg(not(feature = "compio"))]
+        let hnd = { Handle::current() };
+
         Self {
             id,
             sys_id,
             name,
             sender,
-            hnd: Handle::current(),
+            hnd: Some(hnd),
             thread_handle: None,
         }
     }
@@ -193,9 +223,10 @@ impl Arbiter {
         self.name.as_ref()
     }
 
+    #[inline]
     /// Handle to a runtime
     pub fn handle(&self) -> &Handle {
-        &self.hnd
+        self.hnd.as_ref().unwrap()
     }
 
     #[doc(hidden)]

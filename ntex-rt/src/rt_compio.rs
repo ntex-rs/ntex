@@ -1,6 +1,10 @@
 use std::task::{Context, Poll, ready};
 use std::{fmt, future::Future, future::poll_fn, pin::Pin};
 
+use async_channel::Sender;
+
+use crate::arbiter::{Arbiter, ArbiterCommand};
+
 /// Spawn a future on the current thread.
 ///
 /// This does not create a new Arbiter
@@ -101,11 +105,15 @@ impl<T> Future for JoinHandle<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct Handle(crate::Arbiter);
+pub struct Handle(Sender<ArbiterCommand>);
 
 impl Handle {
+    pub(crate) fn new(sender: Sender<ArbiterCommand>) -> Self {
+        Self(sender)
+    }
+
     pub fn current() -> Self {
-        Self(crate::Arbiter::current())
+        Self(Arbiter::current().sender.clone())
     }
 
     pub fn notify(&self) {}
@@ -116,10 +124,13 @@ impl Handle {
         F::Output: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
-        self.0.spawn(async move {
-            let result = future.await;
-            let _ = tx.send(result);
-        });
+
+        let _ = self
+            .0
+            .try_send(ArbiterCommand::Execute(Box::pin(async move {
+                let result = future.await;
+                let _ = tx.send(result);
+            })));
         JoinHandle {
             task: Some(Either::Spawn(rx)),
         }

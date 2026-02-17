@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::{sync::mpsc, thread};
 
@@ -34,6 +35,8 @@ async fn test_join_handle() {
 
     let result = rx.await.unwrap();
     assert_eq!(result, "test2");
+
+    assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
 }
 
 #[test]
@@ -45,8 +48,10 @@ fn test_async() {
             .stop_on_panic(true)
             .build(ntex::rt::DefaultRuntime);
 
-        tx.send(runner.system()).unwrap();
-        let _ = runner.run_until_stop();
+        let _ = runner.run(move || {
+            tx.send(System::current()).unwrap();
+            Ok(())
+        });
     });
     let s = System::new("test", ntex_net::DefaultRuntime);
 
@@ -54,6 +59,20 @@ fn test_async() {
     let id = sys.id();
     let (tx, rx) = mpsc::channel();
     sys.arbiter().exec_fn(move || {
+        let _ = tx.send(System::current().id());
+    });
+    let id2 = rx.recv().unwrap();
+    assert_eq!(id, id2);
+
+    let (tx, rx) = mpsc::channel();
+    sys.handle().spawn(async move {
+        let _ = tx.send(System::current().id());
+    });
+    let id2 = rx.recv().unwrap();
+    assert_eq!(id, id2);
+
+    let (tx, rx) = mpsc::channel();
+    sys.arbiter().handle().spawn(async move {
         let _ = tx.send(System::current().id());
     });
     let id2 = rx.recv().unwrap();
@@ -136,7 +155,9 @@ fn test_arbiter_local_storage() {
     assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
     assert!(Arbiter::contains_item::<&'static str>());
     assert!(Arbiter::get_value(|| 64u64) == 64);
-    assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
+
+    ntex::rt::set_item(100u32);
+    assert!(ntex::rt::get_item::<u32, _, _>(|s| *s.unwrap() == 100));
 }
 
 #[test]

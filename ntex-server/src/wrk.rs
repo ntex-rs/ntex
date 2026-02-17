@@ -88,7 +88,7 @@ impl<T> Worker<T> {
         let (avail, avail_tx) = WorkerAvailability::create();
         let name2 = name.clone();
 
-        Arbiter::with_name(name.clone()).exec_fn(move || {
+        Arbiter::with_name(name.clone()).handle().spawn(async move {
             if let Some(cid) = cid
                 && core_affinity::set_for_current(cid)
             {
