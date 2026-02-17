@@ -707,9 +707,7 @@ where
             )
             .run();
 
-            crate::rt::spawn(async move {
-                tx.send((System::current(), srv, local_addr)).unwrap();
-            });
+            tx.send((System::current(), srv, local_addr)).unwrap();
             Ok(())
         })
     });

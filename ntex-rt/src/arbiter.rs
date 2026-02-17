@@ -143,7 +143,7 @@ impl Arbiter {
                 let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
-                System::set_current(sys);
+                System::set_current(sys.clone());
 
                 crate::driver::block_on(config.runner.as_ref(), async move {
                     let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
@@ -162,7 +162,7 @@ impl Arbiter {
                     ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
                     // register arbiter
-                    let _ = System::current()
+                    let _ = sys
                         .sys()
                         .try_send(SystemCommand::RegisterArbiter(Id(id), arb));
 
@@ -199,10 +199,13 @@ impl Arbiter {
         name: Arc<String>,
         sender: Sender<ArbiterCommand>,
     ) -> Self {
+        #[cfg(feature = "tokio")]
+        let hnd = { Handle::new(sender.clone()) };
+
         #[cfg(feature = "compio")]
         let hnd = { Handle::new(sender.clone()) };
 
-        #[cfg(not(feature = "compio"))]
+        #[cfg(all(not(feature = "compio"), not(feature = "tokio")))]
         let hnd = { Handle::current() };
 
         Self {

@@ -7,7 +7,7 @@ use crate::system::{System, SystemConfig};
 /// Builder struct for a ntex runtime.
 ///
 /// Either use `Builder::build` to create a system and start actors.
-/// Alternatively, use `Builder::run` to start the tokio runtime and
+/// Alternatively, use `Builder::run` to start the runtime and
 /// run a function in its context.
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
@@ -102,7 +102,7 @@ impl Builder {
 
     /// Create new System.
     ///
-    /// This method panics if it can not create tokio runtime
+    /// This method panics if it can not create runtime
     pub fn build<R: Runner>(self, runner: R) -> SystemRunner {
         let config = SystemConfig {
             name: self.name.clone(),
@@ -119,7 +119,7 @@ impl Builder {
 
     /// Create new System.
     ///
-    /// This method panics if it can not create tokio runtime
+    /// This method panics if it can not create runtime
     pub fn build_with(self, config: SystemConfig) -> SystemRunner {
         let runner = config.runner.clone();
         let system = System::construct(config);
@@ -142,8 +142,6 @@ pub struct SystemRunner {
 }
 
 impl SystemRunner {
-    #[doc(hidden)]
-    #[deprecated(since = "3.8.0", note = "use `System::current()`")]
     /// Get current system.
     pub fn system(&self) -> System {
         self.system.clone()

@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.0] - 2026-02-17
+
+* Use new ntex-rt api
+
 ## [3.4.0] - 2026-02-17
 
 * Propagate shutdown to user service from `ws::start` #765
