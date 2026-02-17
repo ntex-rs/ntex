@@ -59,7 +59,7 @@ impl<T> JoinHandle<T> {
     /// Cancels the task.
     pub fn cancel(mut self) {
         if let Some(Either::Compio(fut)) = self.task.take() {
-            let _ = fut.cancel();
+            drop(fut.cancel());
         }
     }
 

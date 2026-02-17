@@ -178,6 +178,10 @@ impl System {
     }
 
     /// System arbiter
+    ///
+    /// # Panics
+    ///
+    /// Panics if system is not started
     pub fn arbiter(&self) -> Arbiter {
         if let Some(arb) = self.arbiter.take() {
             self.arbiter.set(Some(arb.clone()));
