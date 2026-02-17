@@ -174,6 +174,8 @@ impl Arbiter {
                 let _ = System::current()
                     .sys()
                     .try_send(SystemCommand::UnregisterArbiter(Id(id)));
+
+                STORAGE.with(|cell| cell.borrow_mut().clear());
             })
             .unwrap_or_else(|err| {
                 panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
