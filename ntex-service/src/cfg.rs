@@ -157,7 +157,9 @@ impl<T: Configuration> Cfg<T> {
 impl<T: Configuration> Drop for Cfg<T> {
     fn drop(&mut self) {
         unsafe {
-            Arc::decrement_strong_count(self.get_ref().ctx().0);
+            if !self.get_ref().ctx().0.is_null() {
+                Arc::decrement_strong_count(self.get_ref().ctx().0);
+            }
         }
     }
 }
