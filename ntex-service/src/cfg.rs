@@ -15,11 +15,13 @@ thread_local! {
         Arc::get_mut(&mut st).unwrap().ctx.update(p);
         st
     };
-    static MAPPING: RefCell<HashMap<Key, Box<dyn Any + Send + Sync>>> = {
+    static MAPPING: RefCell<HashMap<Key, Arc<dyn Any + Send + Sync>>> = {
         RefCell::new(HashMap::default())
     };
 }
 static IDX: AtomicUsize = AtomicUsize::new(0);
+const KIND_ARC: usize = 1;
+const KIND_UNMASK: usize = !KIND_ARC;
 
 pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
     const NAME: &'static str;
@@ -111,6 +113,10 @@ impl Default for CfgContext {
 pub struct Cfg<T: Configuration>(UnsafeCell<*const T>, PhantomData<rc::Rc<T>>);
 
 impl<T: Configuration> Cfg<T> {
+    fn new(ptr: *const T) -> Self {
+        Self(UnsafeCell::new(ptr), PhantomData)
+    }
+
     #[inline]
     /// Unique id of the configuration.
     pub fn id(&self) -> usize {
@@ -130,7 +136,12 @@ impl<T: Configuration> Cfg<T> {
     }
 
     fn get_ref(&self) -> &T {
-        unsafe { (*self.0.get()).as_ref().unwrap() }
+        unsafe {
+            (*self.0.get())
+                .map_addr(|addr| addr & KIND_UNMASK)
+                .as_ref()
+                .unwrap()
+        }
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -157,8 +168,11 @@ impl<T: Configuration> Cfg<T> {
 impl<T: Configuration> Drop for Cfg<T> {
     fn drop(&mut self) {
         unsafe {
-            if !self.get_ref().ctx().0.is_null() {
-                Arc::decrement_strong_count(self.get_ref().ctx().0);
+            let addr = (*self.0.get()).map_addr(|addr| addr & KIND_UNMASK);
+            Arc::decrement_strong_count(addr.as_ref().unwrap().ctx().0);
+
+            if ((*self.0.get()).addr() & KIND_ARC) != 0 {
+                Arc::from_raw(addr);
             }
         }
     }
@@ -317,17 +331,15 @@ where
 
     let tp = TypeId::of::<T>();
     if let Some(arc) = st.data.get(&tp) {
-        Cfg(
-            UnsafeCell::new(arc.as_ref().downcast_ref::<T>().unwrap()),
-            PhantomData,
-        )
+        Cfg::new(arc.as_ref().downcast_ref::<T>().unwrap())
     } else {
         MAPPING.with(|store| {
             let key = (st.id, tp);
             if let Some(arc) = store.borrow().get(&key) {
-                Cfg(
-                    UnsafeCell::new(arc.as_ref().downcast_ref::<T>().unwrap()),
-                    PhantomData,
+                Cfg::new(
+                    Arc::into_raw(arc.clone())
+                        .cast::<T>()
+                        .map_addr(|addr| addr ^ KIND_ARC),
                 )
             } else {
                 log::info!(
@@ -337,12 +349,13 @@ where
                 );
                 let mut val = T::default();
                 val.set_ctx(CfgContext(st.ctx.0));
-                let arc: Box<dyn Any + Send + Sync> = Box::new(val);
-                let inner = UnsafeCell::new(ptr::from_ref(
-                    arc.as_ref().downcast_ref::<T>().unwrap(),
-                ));
-                store.borrow_mut().insert(key, arc);
-                Cfg(inner, PhantomData)
+                let arc = Arc::new(val);
+                store.borrow_mut().insert(key, arc.clone());
+                Cfg::new(
+                    Arc::into_raw(arc)
+                        .cast::<T>()
+                        .map_addr(|addr| addr ^ KIND_ARC),
+                )
             }
         })
     }

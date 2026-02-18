@@ -2,7 +2,7 @@
 
 ## [4.5.1] - 2026-02-18
 
-* Add extra check for config
+* Handle thread local mapping destruction
 
 ## [4.5.0] - 2026-02-16
 
