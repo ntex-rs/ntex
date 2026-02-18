@@ -1,5 +1,9 @@
 # Changes
 
+## [4.5.1] - 2026-02-18
+
+* Handle thread local mapping destruction
+
 ## [4.5.0] - 2026-02-16
 
 * Do not leak SharedCfg, use ref counting
