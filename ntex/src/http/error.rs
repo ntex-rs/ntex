@@ -61,7 +61,7 @@ impl ResponseError for serde_json::error::Error {}
 #[derive(thiserror::Error, Debug)]
 pub enum EncodeError {
     /// An invalid `HttpVersion`, such as `HTP/1.1`
-    #[error("Unsupported HTTP version specified")]
+    #[error("Unsupported HTTP version specified, {0:?}")]
     UnsupportedVersion(super::Version),
 
     #[error("Unexpected end of bytes stream")]
