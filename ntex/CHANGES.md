@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.1] - 2026-02-19
+
+* Fix http client request version
+
 ## [3.5.0] - 2026-02-17
 
 * Use new ntex-rt api
