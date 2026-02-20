@@ -14,7 +14,7 @@ proc-macro = true
 [dependencies]
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
-syn = { version = "^1", features = ["full", "parsing"] }
+syn = { version = "^2", features = ["full", "parsing"] }
 
 [dev-dependencies]
 ntex = { workspace = true }

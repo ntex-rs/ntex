@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, TokenStreamExt, quote};
-use syn::{AttributeArgs, Ident, NestedMeta, Path};
+use syn::{Ident, Path};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MethodType {
@@ -46,57 +46,35 @@ struct Args {
     error: Path,
 }
 
-impl Args {
-    fn new(args: AttributeArgs) -> syn::Result<Self> {
-        let mut path = None;
+impl syn::parse::Parse for Args {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let path: syn::LitStr = input.parse()?;
         let mut guards = Vec::new();
         let mut error: Option<Path> = None;
-        for arg in args {
-            match arg {
-                NestedMeta::Lit(syn::Lit::Str(lit)) => match path {
-                    None => {
-                        path = Some(lit);
-                    }
-                    _ => {
-                        return Err(syn::Error::new_spanned(
-                            lit,
-                            "Multiple paths specified! Should be only one!",
-                        ));
-                    }
-                },
-                NestedMeta::Meta(syn::Meta::NameValue(nv)) => {
-                    if nv.path.is_ident("guard") {
-                        if let syn::Lit::Str(lit) = nv.lit {
-                            guards.push(Ident::new(&lit.value(), Span::call_site()));
-                        } else {
-                            return Err(syn::Error::new_spanned(
-                                nv.lit,
-                                "Attribute guard expects literal string!",
-                            ));
-                        }
-                    } else if nv.path.is_ident("error") {
-                        if let syn::Lit::Str(lit) = nv.lit {
-                            error = Some(syn::parse_str(&lit.value())?);
-                        } else {
-                            return Err(syn::Error::new_spanned(
-                                nv.lit,
-                                "Attribute error expects type path!",
-                            ));
-                        }
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            nv.path,
-                            "Unknown attribute key is specified. Allowed: guard or error",
-                        ));
-                    }
-                }
-                arg => {
-                    return Err(syn::Error::new_spanned(arg, "Unknown attribute"));
-                }
+
+        while !input.is_empty() {
+            input.parse::<syn::token::Comma>()?;
+            if input.is_empty() {
+                break;
+            }
+            let ident: syn::Ident = input.parse()?;
+            input.parse::<syn::token::Eq>()?;
+            if ident == "guard" {
+                let lit: syn::LitStr = input.parse()?;
+                guards.push(Ident::new(&lit.value(), Span::call_site()));
+            } else if ident == "error" {
+                let lit: syn::LitStr = input.parse()?;
+                error = Some(syn::parse_str(&lit.value())?);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    "Unknown attribute key is specified. Allowed: guard or error",
+                ));
             }
         }
+
         Ok(Args {
-            path: path.unwrap(),
+            path,
             guards,
             error: error
                 .unwrap_or_else(|| syn::parse_str("ntex::web::DefaultError").unwrap()),
@@ -113,7 +91,7 @@ pub struct Route {
 
 impl Route {
     pub fn new(
-        args: AttributeArgs,
+        args: TokenStream,
         input: TokenStream,
         method: MethodType,
     ) -> syn::Result<Self> {
@@ -128,7 +106,7 @@ impl Route {
         }
         let ast: syn::ItemFn = syn::parse(input)?;
         let name = ast.sig.ident.clone();
-        let args = Args::new(args)?;
+        let args = syn::parse::<Args>(args)?;
 
         Ok(Self {
             name,
