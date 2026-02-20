@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.0] - 2026-02-20
+
+* Upgrade to syn2
+
 ## [0.1.4] - 2025-03-14
 
 * Enable env_logger for test macro

@@ -1,12 +1,12 @@
 [package]
 name = "ntex-macros"
-version = "3.1.0"
+version = "3.2.0"
 description = "ntex proc macros"
 readme = "README.md"
 authors = ["ntex contributors <team@ntex.rs>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.88"
 
 [lib]
 proc-macro = true
