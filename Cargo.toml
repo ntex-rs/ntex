@@ -63,7 +63,7 @@ ntex-rt = "3.8.1"
 ntex-server = "3.9.0"
 ntex-service = "4.5.1"
 ntex-tls = "3.3.0"
-ntex-macros = "3.1.0"
+ntex-macros = "3.2.0"
 ntex-util = "3.4.0"
 ntex-h2 = "3.7.1"
 
