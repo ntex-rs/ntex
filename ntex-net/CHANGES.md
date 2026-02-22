@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.1] - 2026-02-22
+
+* Handle io shutdown for polling driver
+
 ## [3.7.0] - 2026-02-16
 
 * SharedCfg is not Copy
