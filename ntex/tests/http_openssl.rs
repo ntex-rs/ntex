@@ -436,7 +436,7 @@ impl Drop for SetOnDrop {
 async fn test_h2_client_drop() -> io::Result<()> {
     let count = Arc::new(AtomicUsize::new(0));
     let count2 = count.clone();
-    let (tx, rx) = ::oneshot::channel();
+    let (tx, rx) = ::oneshot::async_channel();
     let tx = Arc::new(Mutex::new(Some(tx)));
 
     let srv = test_server(async move || {

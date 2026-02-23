@@ -46,7 +46,7 @@ impl std::error::Error for JoinError {}
 #[derive(Debug)]
 enum Either<T> {
     Task(tok_io::task::JoinHandle<T>),
-    Spawn(oneshot::Receiver<T>),
+    Spawn(oneshot::AsyncReceiver<T>),
 }
 
 #[derive(Debug)]
@@ -125,7 +125,7 @@ impl Handle {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = oneshot::async_channel();
 
         let _ = self
             .0
