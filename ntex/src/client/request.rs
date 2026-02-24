@@ -1,10 +1,11 @@
-use std::{error::Error, fmt, net};
+use std::{error::Error as StdError, fmt, net};
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, CookieJar};
 use serde::Serialize;
 
+use crate::error::Error;
 use crate::http::body::Body;
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
@@ -12,7 +13,7 @@ use crate::http::{ConnectionType, Method, Uri, Version};
 use crate::{Pipeline, time::Millis, util::Bytes, util::Stream};
 
 use super::error::{ClientError, InvalidUrl};
-use super::{BoxedSender, ClientResponse, ServiceRequest};
+use super::{BoxedSender, ClientConfig, ClientResponse, ServiceRequest};
 
 /// An HTTP Client request builder
 ///
@@ -41,21 +42,28 @@ pub struct ClientRequest {
     request: ServiceRequest,
     svc: Pipeline<BoxedSender>,
     err: Option<HttpError>,
+    cfg: ClientConfig,
     #[cfg(feature = "cookie")]
     cookies: Option<CookieJar>,
 }
 
 impl ClientRequest {
     /// Create new client request builder.
-    pub(super) fn new<U>(method: Method, uri: U, svc: Pipeline<BoxedSender>) -> Self
+    pub(super) fn new<U>(
+        method: Method,
+        uri: U,
+        cfg: ClientConfig,
+        svc: Pipeline<BoxedSender>,
+    ) -> Self
     where
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
         ClientRequest {
             svc,
-            request: ServiceRequest::new(),
+            cfg,
             err: None,
+            request: ServiceRequest::new(),
             #[cfg(feature = "cookie")]
             cookies: None,
         }
@@ -383,7 +391,10 @@ impl ClientRequest {
 
 impl ClientRequest {
     /// Complete request construction and send body.
-    pub async fn send_body<B>(mut self, body: B) -> Result<ClientResponse, ClientError>
+    pub async fn send_body<B>(
+        mut self,
+        body: B,
+    ) -> Result<ClientResponse, Error<ClientError>>
     where
         B: Into<Body>,
     {
@@ -396,7 +407,7 @@ impl ClientRequest {
     pub async fn send_json<T: Serialize>(
         mut self,
         value: &T,
-    ) -> Result<ClientResponse, ClientError> {
+    ) -> Result<ClientResponse, Error<ClientError>> {
         self.prep_for_sending()?;
         self.request.set_json(value)?;
         self.svc.call(self.request).await.map(Into::into)
@@ -408,7 +419,7 @@ impl ClientRequest {
     pub async fn send_form<T: Serialize>(
         mut self,
         value: &T,
-    ) -> Result<ClientResponse, ClientError> {
+    ) -> Result<ClientResponse, Error<ClientError>> {
         self.prep_for_sending()?;
         self.request.set_form(value)?;
         self.svc.call(self.request).await.map(Into::into)
@@ -418,10 +429,10 @@ impl ClientRequest {
     pub async fn send_stream<T, E>(
         mut self,
         stream: T,
-    ) -> Result<ClientResponse, ClientError>
+    ) -> Result<ClientResponse, Error<ClientError>>
     where
         T: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
-        E: Error + 'static,
+        E: StdError + 'static,
     {
         self.prep_for_sending()?;
         self.request.set_stream(stream);
@@ -429,30 +440,40 @@ impl ClientRequest {
     }
 
     /// Set an empty body and generate `ClientRequest`.
-    pub async fn send(mut self) -> Result<ClientResponse, ClientError> {
+    pub async fn send(mut self) -> Result<ClientResponse, Error<ClientError>> {
         self.prep_for_sending()?;
         self.svc.call(self.request).await.map(Into::into)
     }
 
     #[allow(unused_mut)]
-    fn prep_for_sending(&mut self) -> Result<(), ClientError> {
+    fn prep_for_sending(&mut self) -> Result<(), Error<ClientError>> {
+        self.prep_for_sending_inner()
+            .map_err(|e| e.set_service(self.cfg.cfg().service()))
+    }
+
+    #[allow(unused_mut)]
+    fn prep_for_sending_inner(&mut self) -> Result<(), Error<ClientError>> {
         if let Some(e) = self.err.take() {
-            return Err(e.into());
+            return Err(ClientError::from(e).into());
         }
 
         // validate uri
         let uri = &self.request.head.uri;
-        if uri.host().is_none() {
-            return Err(InvalidUrl::MissingHost.into());
-        } else if uri.scheme().is_none() {
-            return Err(InvalidUrl::MissingScheme.into());
-        } else if let Some(scheme) = uri.scheme() {
-            if !matches!(scheme.as_str(), "http" | "ws" | "https" | "wss") {
-                return Err(InvalidUrl::UnknownScheme.into());
+        {
+            if uri.host().is_none() {
+                Err(ClientError::from(InvalidUrl::MissingHost))
+            } else if uri.scheme().is_none() {
+                Err(ClientError::from(InvalidUrl::MissingScheme))
+            } else if let Some(scheme) = uri.scheme() {
+                if matches!(scheme.as_str(), "http" | "ws" | "https" | "wss") {
+                    Ok(())
+                } else {
+                    Err(ClientError::from(InvalidUrl::UnknownScheme))
+                }
+            } else {
+                Err(ClientError::from(InvalidUrl::UnknownScheme))
             }
-        } else {
-            return Err(InvalidUrl::UnknownScheme.into());
-        }
+        }?;
 
         // set cookies
         #[cfg(feature = "cookie")]

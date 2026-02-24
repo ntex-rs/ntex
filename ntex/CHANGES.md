@@ -1,5 +1,7 @@
 # Changes
 
+* Use ntex_error::Error for http client
+
 ## [3.9.6] - 2026-05-19
 
 * Revert changes related to headers parsing #889
