@@ -13,6 +13,7 @@ use nanorand::{Rng, WyRand};
 
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
+use crate::error::Error;
 use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, Message, RequestHead, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError};
@@ -77,7 +78,12 @@ impl WsClient<Base, ()> {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter,
-        T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
+        T: ServiceFactory<
+                Connect<Uri>,
+                SharedCfg,
+                Response = Io<F>,
+                Error = Error<ConnectError>,
+            >,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
@@ -132,7 +138,7 @@ impl<F, T> WsClient<F, T> {
 impl<F, T> WsClient<F, T>
 where
     F: Filter,
-    T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
+    T: Service<Connect<Uri>, Response = Io<F>, Error = Error<ConnectError>>,
 {
     /// Complete request construction and connect to a websockets server.
     pub async fn connect(&self) -> Result<WsConnection<F>, WsClientError> {
@@ -308,7 +314,12 @@ impl WsClientBuilder<Base, ()> {
 
 impl<F, T> WsClientBuilder<F, T>
 where
-    T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
+    T: ServiceFactory<
+            Connect<Uri>,
+            SharedCfg,
+            Response = Io<F>,
+            Error = Error<ConnectError>,
+        >,
 {
     /// Set socket address of the server.
     ///
@@ -492,7 +503,12 @@ where
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
         F1: Filter,
-        T1: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F1>, Error = ConnectError>,
+        T1: ServiceFactory<
+                Connect<Uri>,
+                SharedCfg,
+                Response = Io<F1>,
+                Error = Error<ConnectError>,
+            >,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 

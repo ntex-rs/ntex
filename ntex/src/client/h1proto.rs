@@ -1,6 +1,7 @@
 use std::task::{Poll, ready};
 use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
+use crate::error::Error;
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::error::PayloadError;
 use crate::http::header::{HOST, HeaderValue};
@@ -65,7 +66,9 @@ pub(super) async fn send_request(
             );
             Ok(result)
         } else {
-            Err(SendRequestError::from(ConnectError::Disconnected(None)))
+            Err(SendRequestError::from(Error::from(
+                ConnectError::Disconnected(None),
+            )))
         }
     };
 

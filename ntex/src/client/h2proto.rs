@@ -92,10 +92,9 @@ pub(super) async fn send_request(
 async fn get_response(
     rcv_stream: RecvStream,
 ) -> Result<(ResponseHead, Payload), SendRequestError> {
-    let h2::Message { stream, kind } = rcv_stream
-        .recv()
-        .await
-        .ok_or(SendRequestError::Connect(ConnectError::Disconnected(None)))?;
+    let h2::Message { stream, kind } = rcv_stream.recv().await.ok_or(
+        SendRequestError::Connect(ConnectError::Disconnected(None).into()),
+    )?;
     match kind {
         h2::MessageKind::Headers {
             pseudo,
