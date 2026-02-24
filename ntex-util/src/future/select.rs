@@ -3,6 +3,14 @@ use std::{future::Future, pin::Pin, task::Context, task::Poll};
 use crate::future::Either;
 
 /// Waits for either one of two differently-typed futures to complete.
+///
+/// Polls `fut_a` first. If it is ready, returns `Either::Left` with its
+/// output. Otherwise polls `fut_b` and returns `Either::Right` if it is
+/// ready. If neither future is ready the current task is registered for
+/// wakeup and the call returns `Poll::Pending`.
+///
+/// Note that `fut_a` has priority: if both futures happen to be ready on
+/// the same poll, the output of `fut_a` is returned.
 pub async fn select<A, B>(fut_a: A, fut_b: B) -> Either<A::Output, B::Output>
 where
     A: Future,
