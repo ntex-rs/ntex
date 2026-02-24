@@ -259,7 +259,7 @@ impl<S, C> DispatcherConfig<S, C> {
         self.config.payload_read_rate.as_ref()
     }
 
-    /// Service is shuting down
+    /// Service is shutting down
     pub(super) fn is_shutdown(&self) -> bool {
         self.flags.get().contains(Flags::SHUTDOWN)
     }

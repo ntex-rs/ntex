@@ -402,7 +402,7 @@ impl ntex_rt::Driver for Driver {
             let more_changes = self.apply_changes(sq);
 
             // squeue has to sync after we apply all changes
-            // otherwise ring wont see any change in submit call
+            // otherwise ring won't see any change in submit call
             sq.sync();
 
             let result = if more_changes || more_tasks {

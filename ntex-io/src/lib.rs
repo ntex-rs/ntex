@@ -136,7 +136,7 @@ impl IoTaskStatus {
 /// Io status
 #[derive(Debug)]
 pub enum IoStatusUpdate {
-    /// Keep-alive timeout occured
+    /// Keep-alive timeout occurred
     KeepAlive,
     /// Write backpressure is enabled
     WriteBackpressure,
@@ -146,7 +146,7 @@ pub enum IoStatusUpdate {
 
 /// Recv error
 pub enum RecvError<U: Decoder> {
-    /// Keep-alive timeout occured
+    /// Keep-alive timeout occurred
     KeepAlive,
     /// Write backpressure is enabled
     WriteBackpressure,

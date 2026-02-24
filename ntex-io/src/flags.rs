@@ -5,7 +5,7 @@ bitflags::bitflags! {
         const IO_STOPPED          = 0b0000_0000_0000_0001;
         /// shutdown io tasks
         const IO_STOPPING         = 0b0000_0000_0000_0010;
-        /// shuting down filters
+        /// shutting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
 
         /// pause io read
@@ -28,7 +28,7 @@ bitflags::bitflags! {
         /// wait for write completion task
         const WR_TASK_WAIT        = 0b0000_1000_0000_0000;
 
-        /// timeout occured
+        /// timeout occurred
         const DSP_TIMEOUT         = 0b0010_0000_0000_0000;
     }
 }
