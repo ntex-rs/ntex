@@ -1,5 +1,6 @@
 use std::{fmt, io, sync::Arc};
 
+use ntex_error::Error;
 use ntex_io::{Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::cfg::{Cfg, SharedCfg};
@@ -66,10 +67,10 @@ impl<S: fmt::Debug> fmt::Debug for TlsConnector<S> {
 impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for TlsConnector<S>
 where
     A: Address,
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
+    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = Error<ConnectError>>,
 {
     type Response = Io<Layer<TlsClientFilter>>;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
     type Service = TlsConnectorService<S::Service>;
     type InitError = S::InitError;
 
@@ -86,10 +87,10 @@ where
 
 impl<A: Address, S> Service<Connect<A>> for TlsConnectorService<S>
 where
-    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
+    S: Service<Connect<A>, Response = Io, Error = Error<ConnectError>>,
 {
     type Response = Io<Layer<TlsClientFilter>>;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
 
     ntex_service::forward_ready!(svc);
     ntex_service::forward_poll!(svc);
@@ -107,7 +108,8 @@ where
         log::trace!("{tag}: TLS Handshake start for: {host:?}");
 
         let config = self.config.clone();
-        let host = ServerName::try_from(host).map_err(io::Error::other)?;
+        let host = ServerName::try_from(host)
+            .map_err(|e| ConnectError::from(io::Error::other(e)))?;
 
         let connect_fut = TlsClientFilter::create(io, config, host.clone());
         match timeout_checked(self.cfg.handshake_timeout(), connect_fut).await {
@@ -117,11 +119,15 @@ where
             }
             Ok(Err(e)) => {
                 log::trace!("{tag}: TLS Handshake error: {e:?}");
-                Err(e.into())
+                Err(ConnectError::from(e).into())
             }
             Err(()) => {
                 log::trace!("{tag}: TLS Handshake timeout");
-                Err(io::Error::new(io::ErrorKind::TimedOut, "SSL Handshake timeout").into())
+                Err(ConnectError::from(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "SSL Handshake timeout",
+                ))
+                .into())
             }
         }
     }

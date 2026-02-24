@@ -1,11 +1,12 @@
 //! Http client errors
-use std::{error::Error, io, rc::Rc};
+use std::{error::Error as StdError, io, rc::Rc};
 
 use serde_json::error::Error as JsonError;
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::{Error as SslError, HandshakeError};
 
+use crate::error::Error;
 use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::util::{Either, clone_io_error};
 
@@ -140,7 +141,7 @@ pub enum SendRequestError {
     Url(#[from] InvalidUrl),
     /// Failed to connect to host
     #[error("Failed to connect to host: {0}")]
-    Connect(#[from] ConnectError),
+    Connect(#[from] Error<ConnectError>),
     /// Error sending request
     #[error("Error sending request: {0}")]
     Send(#[from] io::Error),
@@ -164,7 +165,7 @@ pub enum SendRequestError {
     TunnelNotSupported,
     /// Error sending request body
     #[error("Error sending request body {0}")]
-    Error(#[from] Rc<dyn Error>),
+    Error(#[from] Rc<dyn StdError>),
 }
 
 impl Clone for SendRequestError {

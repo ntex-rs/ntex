@@ -113,6 +113,10 @@ pub mod tls {
     pub use ntex_tls::*;
 }
 
+pub mod error {
+    pub use ntex_error::{Error, ErrorDiagnostic, ErrorKind, ErrorType};
+}
+
 pub mod util {
     use std::{error::Error, io, rc::Rc};
 

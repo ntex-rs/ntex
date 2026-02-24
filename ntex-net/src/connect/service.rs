@@ -1,8 +1,8 @@
 use std::{collections::VecDeque, io, marker::PhantomData, net::SocketAddr};
 
+use ntex_error::Error;
 use ntex_io::{Io, IoConfig, types};
-use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory, cfg::Cfg, cfg::SharedCfg};
 use ntex_util::{future::Either, time::timeout_checked};
 
 use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
@@ -58,7 +58,7 @@ impl<T> Default for ConnectorService<T> {
 
 impl<T: Address> ConnectorService<T> {
     /// Resolve and connect to remote host
-    pub async fn connect<U>(&self, message: U) -> Result<Io, ConnectError>
+    pub async fn connect<U>(&self, message: U) -> Result<Io, Error<ConnectError>>
     where
         Connect<T>: From<U>,
     {
@@ -75,12 +75,15 @@ impl<T: Address> ConnectorService<T> {
                 connect(req, addr.port(), Either::Left(addr), self.shared.clone()).await
             } else {
                 log::error!("{}: TCP connector: got unresolved address", self.cfg.tag());
-                Err(ConnectError::Unresolved)
+                Err(Error::from(ConnectError::Unresolved))
             }
         })
         .await
         .map_err(|()| {
-            ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Connect timeout"))
+            Error::from(ConnectError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Connect timeout",
+            )))
         })
         .and_then(|item| item)
     }
@@ -88,7 +91,7 @@ impl<T: Address> ConnectorService<T> {
 
 impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
     type Response = Io;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
     type Service = ConnectorService<T>;
     type InitError = ConnectServiceError;
 
@@ -99,7 +102,7 @@ impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
 
 impl<T: Address> Service<Connect<T>> for ConnectorService<T> {
     type Response = Io;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
 
     async fn call(
         &self,
@@ -116,7 +119,7 @@ async fn connect<T: Address>(
     port: u16,
     addr: Either<SocketAddr, VecDeque<SocketAddr>>,
     cfg: SharedCfg,
-) -> Result<Io, ConnectError> {
+) -> Result<Io, Error<ConnectError>> {
     log::trace!(
         "{}: TCP connector - connecting to {:?} addr:{addr:?} port:{port}",
         cfg.tag(),
@@ -124,7 +127,9 @@ async fn connect<T: Address>(
     );
 
     let io = match addr {
-        Either::Left(addr) => crate::tcp_connect(addr, cfg.clone()).await?,
+        Either::Left(addr) => crate::tcp_connect(addr, cfg.clone())
+            .await
+            .map_err(ConnectError::from)?,
         Either::Right(mut addrs) => loop {
             let addr = addrs.pop_front().unwrap();
 
@@ -137,7 +142,7 @@ async fn connect<T: Address>(
                         req.host(),
                     );
                     if addrs.is_empty() {
-                        return Err(err.into());
+                        return Err(ConnectError::from(err).into());
                     }
                 }
             }
