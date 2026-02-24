@@ -5,10 +5,10 @@ use crate::http::Payload;
 #[cfg(feature = "compress")]
 use crate::http::encoding::Decoder;
 
-use crate::http::body::MessageBody;
+use crate::{error::Error, http::body::MessageBody};
 
 use super::connector::ConnectorService;
-use super::error::SendRequestError;
+use super::error::ClientError;
 use super::{ClientConfig, ClientRawRequest, Connect, ServiceRequest, ServiceResponse};
 
 #[derive(Debug)]
@@ -26,7 +26,7 @@ impl Sender {
 #[allow(unused_variables)]
 impl Service<ServiceRequest> for Sender {
     type Response = ServiceResponse;
-    type Error = SendRequestError;
+    type Error = Error<ClientError>;
 
     crate::forward_ready!(connector);
     crate::forward_poll!(connector);
@@ -46,15 +46,8 @@ impl Service<ServiceRequest> for Sender {
             response_decompress,
         } = req;
 
-        let con = ctx
-            .call(
-                &self.connector,
-                Connect {
-                    addr,
-                    uri: head.uri.clone(),
-                },
-            )
-            .await?;
+        let uri = head.uri.clone();
+        let con = ctx.call(&self.connector, Connect { uri, addr }).await?;
 
         if timeout.is_zero() {
             timeout = self.config.timeout();

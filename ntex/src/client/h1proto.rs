@@ -1,6 +1,7 @@
 use std::task::{Poll, ready};
 use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
+use crate::error::Error;
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::error::PayloadError;
 use crate::http::header::{HOST, HeaderValue};
@@ -10,7 +11,7 @@ use crate::time::{Millis, timeout_checked};
 use crate::util::{BufMut, Bytes, BytesMut, Stream};
 
 use super::connection::{Connection, ConnectionType};
-use super::error::{ConnectError, SendRequestError};
+use super::error::{ClientError, ConnectError};
 use super::{ClientCodec, ClientPayloadCodec, ClientRawRequest, pool::Acquired};
 
 pub(super) async fn send_request(
@@ -20,7 +21,7 @@ pub(super) async fn send_request(
     created: Instant,
     timeout: Millis,
     pool: Option<Acquired>,
-) -> Result<(ResponseHead, Payload), SendRequestError> {
+) -> Result<(ResponseHead, Payload), ClientError> {
     // set request host header
     if !req.head.headers.contains_key(HOST)
         && let Some(host) = req.head.uri.host()
@@ -65,13 +66,15 @@ pub(super) async fn send_request(
             );
             Ok(result)
         } else {
-            Err(SendRequestError::from(ConnectError::Disconnected(None)))
+            Err(ClientError::from(Error::from(ConnectError::Disconnected(
+                None,
+            ))))
         }
     };
 
     let head = timeout_checked(timeout, fut)
         .await
-        .map_err(|()| SendRequestError::Timeout)
+        .map_err(|()| ClientError::Timeout)
         .and_then(|res| res)?;
 
     if codec.message_type() == h1::MessageType::None {
@@ -94,7 +97,7 @@ pub(super) async fn send_body(
     mut body: Body,
     io: &IoBoxed,
     codec: &ClientCodec,
-) -> Result<(), SendRequestError> {
+) -> Result<(), ClientError> {
     loop {
         if let Some(result) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
             io.encode(h1::Message::Chunk(Some(result?)), codec)?;

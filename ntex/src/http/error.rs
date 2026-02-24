@@ -169,7 +169,9 @@ pub enum PayloadError {
 impl Clone for PayloadError {
     fn clone(&self) -> PayloadError {
         match self {
-            PayloadError::Incomplete(_) => PayloadError::Incomplete(None),
+            PayloadError::Incomplete(err) => {
+                PayloadError::Incomplete(err.as_ref().map(clone_io_error))
+            }
             PayloadError::EncodingCorrupted => PayloadError::EncodingCorrupted,
             PayloadError::Overflow => PayloadError::Overflow,
             PayloadError::UnknownLength => PayloadError::UnknownLength,
@@ -194,7 +196,7 @@ impl From<Either<PayloadError, io::Error>> for PayloadError {
 pub enum DispatchError {
     /// Service error
     #[error("Service error")]
-    Service(Rc<dyn super::ResponseError>),
+    Service(Rc<dyn ResponseError>),
 
     /// Control service error
     #[error("Control service error: {0}")]
