@@ -19,7 +19,7 @@ impl fmt::Display for BlockingError {
 
 #[derive(Debug)]
 pub struct BlockingResult<T> {
-    rx: Option<oneshot::Receiver<Result<T, Box<dyn Any + Send>>>>,
+    rx: Option<oneshot::AsyncReceiver<Result<T, Box<dyn Any + Send>>>>,
 }
 
 type BoxedDispatchable = Box<dyn Dispatchable + Send>;
@@ -96,7 +96,7 @@ impl ThreadPool {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = oneshot::async_channel();
         let f = Box::new(move || {
             let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
             let _ = tx.send(result);

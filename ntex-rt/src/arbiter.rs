@@ -259,7 +259,7 @@ impl Arbiter {
         R: Future<Output = O> + 'static,
         O: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = oneshot::async_channel();
         let _ = self
             .sender
             .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
@@ -283,7 +283,7 @@ impl Arbiter {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = oneshot::async_channel();
         let _ = self
             .sender
             .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {

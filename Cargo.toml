@@ -99,7 +99,7 @@ itoa = "1.0.15"
 libc = "0.2.164"
 log = "0.4"
 mime = "0.3"
-oneshot = "0.1"
+oneshot = { version = "0.2.1", features = ["std", "async"] }
 openssl = "0.10"
 tls_openssl = { version = "0.10", package = "openssl" }
 percent-encoding = "2.3"
