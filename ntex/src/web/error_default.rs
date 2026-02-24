@@ -227,11 +227,14 @@ impl WebResponseError<DefaultError> for http::error::ContentTypeError {
 /// Convert `ClientError` to a server `Response`
 impl WebResponseError<DefaultError> for client::error::ClientError {
     fn status_code(&self) -> StatusCode {
-        match *self {
-            client::error::ClientError::Connect(client::error::ConnectError::Timeout) => {
-                StatusCode::GATEWAY_TIMEOUT
+        match self {
+            client::error::ClientError::Connect(err) => {
+                if matches!(err, client::error::ConnectError::Timeout) {
+                    StatusCode::GATEWAY_TIMEOUT
+                } else {
+                    StatusCode::BAD_REQUEST
+                }
             }
-            client::error::ClientError::Connect(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

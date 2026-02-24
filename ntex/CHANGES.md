@@ -10,6 +10,8 @@
 
 * Move http types to ntex-http
 
+* Use ntex_error::Error for http client
+
 ## [3.6.1] - 2026-03-14
 
 * Re-export more types from ntex-error

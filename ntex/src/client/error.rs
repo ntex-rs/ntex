@@ -1,5 +1,5 @@
 //! Http client errors
-use std::{error::Error, io, ops::Deref, rc::Rc};
+use std::{error::Error as StdError, io, ops::Deref, rc::Rc};
 
 use serde_json::error::Error as JsonError;
 
@@ -195,10 +195,6 @@ pub enum InvalidUrl {
     Http(#[from] HttpError),
 }
 
-#[doc(hidden)]
-#[deprecated(since = "3.2.0", note = "ClientError")]
-pub type SendRequestError = ClientError;
-
 /// A set of errors that can occur during request sending and response reading
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -262,7 +258,7 @@ pub enum ClientError {
     Error(
         #[from]
         #[source]
-        Rc<dyn Error>,
+        Rc<dyn StdError>,
     ),
 }
 
@@ -324,3 +320,7 @@ impl From<ClientBuilderError> for io::Error {
         io::Error::other(err)
     }
 }
+
+#[doc(hidden)]
+#[deprecated(since = "3.7.0", note = "Use ntex::client::error::ClientError instead")]
+pub type SendRequestError = ClientError;
