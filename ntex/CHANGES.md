@@ -1,5 +1,10 @@
 # Changes
 
+
+## [3.7.0] - 2026-03-xx
+
+* Use ntex_error::Error for http client
+
 ## [3.6.1] - 2026-03-14
 
 * Re-export more types from ntex-error

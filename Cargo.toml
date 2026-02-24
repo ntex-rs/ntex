@@ -68,7 +68,7 @@ ntex-service = "4.6.0"
 ntex-tls = "3.4.0"
 ntex-macros = "3.2.0"
 ntex-util = "3.4.0"
-ntex-h2 = "3.8.0"
+ntex-h2 = "3.8.1"
 
 ntex-polling = "3.10.0"
 ntex-io-uring = "0.7.120"

@@ -1,19 +1,20 @@
 use std::cell::{Cell, Ref, RefMut};
-use std::task::{Context, Poll};
-use std::{fmt, future::Future, marker::PhantomData, pin::Pin};
+use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 
 use serde::de::DeserializeOwned;
 
 #[cfg(feature = "cookie")]
 use coo_kie::{Cookie, ParseError as CookieParseError};
 
+use crate::error::Error;
 use crate::http::error::PayloadError;
 use crate::http::header::{AsName, CONTENT_LENGTH, HeaderValue};
 use crate::http::{HeaderMap, HttpMessage, Payload, ResponseHead, StatusCode, Version};
 use crate::time::{Deadline, Millis};
 use crate::util::{Bytes, BytesMut, Extensions, Stream};
 
-use super::{ClientConfig, ServiceResponse, error::JsonPayloadError};
+use super::error::{ClientPayloadError, JsonPayloadError};
+use super::{ClientConfig, ServiceResponse};
 
 /// Client Response
 pub struct ClientResponse {
@@ -198,23 +199,34 @@ impl fmt::Debug for ClientResponse {
 /// Future that resolves to a complete http message body.
 pub struct MessageBody {
     length: Option<usize>,
-    err: Option<PayloadError>,
+    err: Option<Error<ClientPayloadError>>,
     fut: Option<ReadBody>,
+    config: ClientConfig,
 }
 
 impl MessageBody {
     /// Create `MessageBody` for request.
     pub fn new(res: &ClientResponse) -> MessageBody {
+        let config = res.config.clone();
+
         let mut len = None;
         if let Some(l) = res.headers().get(&CONTENT_LENGTH) {
             if let Ok(s) = l.to_str() {
                 if let Ok(l) = s.parse::<usize>() {
                     len = Some(l);
                 } else {
-                    return Self::err(PayloadError::UnknownLength);
+                    return Self::err(
+                        Error::from(ClientPayloadError(PayloadError::UnknownLength))
+                            .set_service(config.cfg().service()),
+                        config,
+                    );
                 }
             } else {
-                return Self::err(PayloadError::UnknownLength);
+                return Self::err(
+                    Error::from(ClientPayloadError(PayloadError::UnknownLength))
+                        .set_service(config.cfg().service()),
+                    config,
+                );
             }
         }
 
@@ -225,7 +237,9 @@ impl MessageBody {
                 res.take_payload(),
                 res.config.payload_limit(),
                 res.config.payload_timeout(),
+                res.config.clone(),
             )),
+            config: res.config.clone(),
         }
     }
 
@@ -252,8 +266,9 @@ impl MessageBody {
         self
     }
 
-    fn err(e: PayloadError) -> Self {
+    fn err(e: Error<ClientPayloadError>, config: ClientConfig) -> Self {
         MessageBody {
+            config,
             fut: None,
             err: Some(e),
             length: None,
@@ -262,7 +277,7 @@ impl MessageBody {
 }
 
 impl Future for MessageBody {
-    type Output = Result<Bytes, PayloadError>;
+    type Output = Result<Bytes, Error<ClientPayloadError>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -274,11 +289,16 @@ impl Future for MessageBody {
         if let Some(len) = this.length.take() {
             let limit = this.fut.as_ref().unwrap().limit;
             if limit > 0 && len > limit {
-                return Poll::Ready(Err(PayloadError::Overflow));
+                return Poll::Ready(Err(Error::from(ClientPayloadError(
+                    PayloadError::Overflow,
+                ))
+                .set_service(this.config.cfg().service())));
             }
         }
 
-        Pin::new(&mut this.fut.as_mut().unwrap()).poll(cx)
+        Pin::new(&mut this.fut.as_mut().unwrap())
+            .poll(cx)
+            .map_err(|e| e.map(ClientPayloadError::from))
     }
 }
 
@@ -291,8 +311,9 @@ impl Future for MessageBody {
 /// * content length is greater than 64k
 pub struct JsonBody<U> {
     length: Option<usize>,
-    err: Option<JsonPayloadError>,
+    err: Option<Error<JsonPayloadError>>,
     fut: Option<ReadBody>,
+    config: ClientConfig,
     _t: PhantomData<U>,
 }
 
@@ -303,6 +324,8 @@ where
     #[must_use]
     /// Create `JsonBody` for request.
     pub fn new(res: &ClientResponse) -> Self {
+        let config = res.config.clone();
+
         // check content-type
         let json = if let Ok(Some(mime)) = res.mime_type() {
             mime.subtype() == mime::JSON || mime.suffix() == Some(mime::JSON)
@@ -310,10 +333,16 @@ where
             false
         };
         if !json {
+            let err = Some(
+                Error::from(JsonPayloadError::ContentType)
+                    .set_service(config.cfg().service()),
+            );
+
             return JsonBody {
+                err,
+                config,
                 length: None,
                 fut: None,
-                err: Some(JsonPayloadError::ContentType),
                 _t: PhantomData,
             };
         }
@@ -327,12 +356,14 @@ where
         }
 
         JsonBody {
+            config,
             length: len,
             err: None,
             fut: Some(ReadBody::new(
                 res.take_payload(),
                 res.config.payload_limit(),
                 res.config.payload_timeout(),
+                res.config.clone(),
             )),
             _t: PhantomData,
         }
@@ -368,7 +399,7 @@ impl<U> Future for JsonBody<U>
 where
     U: DeserializeOwned,
 {
-    type Output = Result<U, JsonPayloadError>;
+    type Output = Result<U, Error<JsonPayloadError>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Some(err) = self.err.take() {
@@ -378,15 +409,21 @@ where
         if let Some(len) = self.length.take() {
             let limit = self.fut.as_ref().unwrap().limit;
             if limit > 0 && len > limit {
-                return Poll::Ready(Err(JsonPayloadError::Payload(PayloadError::Overflow)));
+                return Poll::Ready(Err(Error::from(JsonPayloadError::Payload(
+                    ClientPayloadError(PayloadError::Overflow),
+                ))
+                .set_service(self.config.cfg().service())));
             }
         }
 
-        let body = match Pin::new(&mut self.get_mut().fut.as_mut().unwrap()).poll(cx) {
-            Poll::Ready(result) => result?,
+        let this = self.get_mut();
+        let body = match Pin::new(&mut this.fut.as_mut().unwrap()).poll(cx) {
+            Poll::Ready(result) => result.map_err(|e| e.map(JsonPayloadError::from))?,
             Poll::Pending => return Poll::Pending,
         };
-        Poll::Ready(serde_json::from_slice::<U>(&body).map_err(JsonPayloadError::from))
+        Poll::Ready(serde_json::from_slice::<U>(&body).map_err(|e| {
+            Error::from(JsonPayloadError::from(e)).set_service(this.config.cfg().service())
+        }))
     }
 }
 
@@ -396,13 +433,15 @@ struct ReadBody {
     buf: BytesMut,
     limit: usize,
     timeout: Deadline,
+    config: ClientConfig,
 }
 
 impl ReadBody {
-    fn new(stream: Payload, limit: usize, timeout: Millis) -> Self {
+    fn new(stream: Payload, limit: usize, timeout: Millis, config: ClientConfig) -> Self {
         Self {
             stream,
             limit,
+            config,
             buf: BytesMut::with_capacity(std::cmp::min(limit, 32768)),
             timeout: Deadline::new(timeout),
         }
@@ -410,7 +449,7 @@ impl ReadBody {
 }
 
 impl Future for ReadBody {
-    type Output = Result<Bytes, PayloadError>;
+    type Output = Result<Bytes, Error<ClientPayloadError>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -419,22 +458,29 @@ impl Future for ReadBody {
             return match Pin::new(&mut this.stream).poll_next(cx) {
                 Poll::Ready(Some(Ok(chunk))) => {
                     if this.limit > 0 && (this.buf.len() + chunk.len()) > this.limit {
-                        Poll::Ready(Err(PayloadError::Overflow))
+                        Poll::Ready(Err(Error::from(ClientPayloadError(
+                            PayloadError::Overflow,
+                        ))
+                        .set_service(this.config.cfg().service())))
                     } else {
                         this.buf.extend_from_slice(&chunk);
                         continue;
                     }
                 }
                 Poll::Ready(None) => Poll::Ready(Ok(this.buf.take())),
-                Poll::Ready(Some(Err(err))) => Poll::Ready(Err(err)),
+                Poll::Ready(Some(Err(err))) => {
+                    Poll::Ready(Err(Error::from(ClientPayloadError(err))
+                        .set_service(this.config.cfg().service())))
+                }
                 Poll::Pending => {
                     if this.timeout.poll_elapsed(cx).is_ready() {
-                        Poll::Ready(Err(PayloadError::Incomplete(Some(
-                            std::io::Error::new(
+                        Poll::Ready(Err(Error::from(ClientPayloadError(
+                            PayloadError::Incomplete(Some(std::io::Error::new(
                                 std::io::ErrorKind::TimedOut,
                                 "Operation timed out",
-                            ),
-                        ))))
+                            ))),
+                        ))
+                        .set_service(this.config.cfg().service())))
                     } else {
                         Poll::Pending
                     }
@@ -454,13 +500,13 @@ mod tests {
     #[crate::rt_test]
     async fn test_body() {
         let req = TestResponse::with_header(header::CONTENT_LENGTH, "xxxx").finish();
-        match req.body().await.err().unwrap() {
+        match &*req.body().await.err().unwrap().into_error() {
             PayloadError::UnknownLength => (),
             _ => unreachable!("error"),
         }
 
         let req = TestResponse::with_header(header::CONTENT_LENGTH, "1000000").finish();
-        match req.body().await.err().unwrap() {
+        match &*req.body().await.err().unwrap().into_error() {
             PayloadError::Overflow => (),
             _ => unreachable!("error"),
         }
@@ -473,7 +519,7 @@ mod tests {
         let req = TestResponse::default()
             .set_payload(Bytes::from_static(b"11111111111111"))
             .finish();
-        match req.body().limit(5).await.err().unwrap() {
+        match &*req.body().limit(5).await.err().unwrap().into_error() {
             PayloadError::Overflow => (),
             _ => unreachable!("error"),
         }
@@ -486,8 +532,11 @@ mod tests {
 
     fn json_eq(err: &JsonPayloadError, other: &JsonPayloadError) -> bool {
         match err {
-            JsonPayloadError::Payload(PayloadError::Overflow) => {
-                matches!(other, JsonPayloadError::Payload(PayloadError::Overflow))
+            JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow)) => {
+                matches!(
+                    other,
+                    JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow))
+                )
             }
             JsonPayloadError::ContentType => matches!(other, JsonPayloadError::ContentType),
             _ => false,
@@ -529,7 +578,7 @@ mod tests {
         let json = JsonBody::<MyObject>::new(&req).limit(100).await;
         assert!(json_eq(
             &json.err().unwrap(),
-            &JsonPayloadError::Payload(PayloadError::Overflow)
+            &JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow))
         ));
 
         let req = TestResponse::default()
