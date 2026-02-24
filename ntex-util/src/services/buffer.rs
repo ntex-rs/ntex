@@ -1,4 +1,4 @@
-//! Service that buffers incomming requests.
+//! Service that buffers incoming requests.
 use std::cell::{Cell, RefCell};
 use std::task::{Poll, Waker, ready};
 use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};

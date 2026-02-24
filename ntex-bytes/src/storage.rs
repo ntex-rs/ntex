@@ -612,7 +612,7 @@ impl StorageVec {
 
     /// Create new storage with capacity and copy slice
     ///
-    /// Caller must garantee cap is larger or eaqual to src length
+    /// Caller must guarantee cap is larger or equal to src length
     pub(crate) fn from_slice(capacity: usize, src: &[u8]) -> StorageVec {
         StorageVec(SharedVec::create(capacity, src))
     }

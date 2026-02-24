@@ -47,8 +47,10 @@ impl Counter {
         self.1.count.get() < self.1.capacity.get()
     }
 
-    /// Check if counter is not at capacity. If counter at capacity
-    /// it registers notification for current task.
+    /// Waits until the counter has free capacity.
+    ///
+    /// Returns immediately if there is capacity available. Otherwise,
+    /// registers the current task for wakeup and waits until a slot is freed.
     pub async fn available(&self) {
         poll_fn(|cx| {
             if self.poll_available(cx) {
@@ -60,7 +62,7 @@ impl Counter {
         .await;
     }
 
-    /// Wait untile counter becomes at capacity.
+    /// Waits until the counter reaches its capacity (i.e., becomes unavailable).
     pub async fn unavailable(&self) {
         poll_fn(|cx| {
             if self.poll_available(cx) {

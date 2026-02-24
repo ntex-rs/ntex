@@ -704,7 +704,7 @@ impl<F> Drop for Io<F> {
 
         if st.filter.is_set() {
             // filter is unsafe and must be dropped explicitly,
-            // and wont be dropped without special attention
+            // and won't be dropped without special attention
             if !st.flags.get().is_stopped() {
                 log::trace!(
                     "{}: Io is dropped, force stopping io streams {:?}",

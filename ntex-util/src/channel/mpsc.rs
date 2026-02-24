@@ -97,7 +97,7 @@ pub struct Receiver<T> {
 }
 
 impl<T> Receiver<T> {
-    /// Create a Sender
+    /// Creates an additional sender for this channel.
     pub fn sender(&self) -> Sender<T> {
         Sender {
             shared: self.shared.clone(),

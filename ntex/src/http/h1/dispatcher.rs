@@ -345,9 +345,9 @@ where
             body.size()
         );
 
-        // we dont need to process responses if socket is disconnected
+        // we don't need to process responses if socket is disconnected
         // but we still want to handle requests with app service
-        // so we skip response processing for droppped connection
+        // so we skip response processing for dropped connection
         if self.io.is_closed() {
             self.ctl_peer_gone(None)
         } else {

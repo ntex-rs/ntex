@@ -29,9 +29,9 @@ impl<T> fmt::Debug for Inplace<T> {
 impl<T> Inplace<T> {
     /// Set a successful result.
     ///
-    /// If the value is successfully enqueued for the remote end to receive,
-    /// then `Ok(())` is returned. If previose value is not consumed
-    /// then `Err` is returned with the value provided.
+    /// If the value is successfully enqueued to be received, then `Ok(())` is
+    /// returned. If the previous value has not been consumed yet, then `Err` is
+    /// returned with the value provided.
     pub fn send(&self, val: T) -> Result<(), T> {
         if let Some(v) = self.value.take() {
             self.value.set(Some(v));

@@ -46,7 +46,7 @@ pub enum Reason<U: Encoder + Decoder> {
 
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
-    /// and pass then to the service.
+    /// and pass them to the service.
     pub struct Dispatcher<S, U>
     where
         S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
@@ -409,7 +409,7 @@ where
         // check for errors
         if let Some(err) = self.shared.error.take() {
             log::trace!(
-                "{}: Error occured, stopping dispatcher",
+                "{}: Error occurred, stopping dispatcher",
                 self.shared.io.tag()
             );
             self.st = DispatcherState::Stop;
