@@ -93,7 +93,6 @@ pub mod info {
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub enum Kind {
-        Arc,
         Inline,
         Static,
         Vec,

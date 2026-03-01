@@ -1,0 +1,24 @@
+[package]
+name = "ntex-error"
+version = "1.0.0"
+authors = ["ntex contributors <team@ntex.rs>"]
+description = "ntex error management"
+keywords = ["network", "framework"]
+homepage = "https://ntex.rs"
+repository = "https://github.com/ntex-rs/ntex.git"
+documentation = "https://docs.rs/ntex-error/"
+categories = ["network-programming"]
+license = "MIT OR Apache-2.0"
+edition = "2024"
+rust-version = "1.88"
+
+[lib]
+name = "ntex_error"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+ntex-bytes = { workspace = true }
+thiserror = { workspace = true }

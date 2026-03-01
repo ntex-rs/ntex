@@ -5,15 +5,16 @@ members = [
   "ntex-bytes",
   "ntex-codec",
   "ntex-dispatcher",
-  "ntex-io",
+  "ntex-error",
   "ntex-http",
+  "ntex-io",
+  "ntex-macros",
   "ntex-router",
   "ntex-rt",
   "ntex-net",
   "ntex-server",
   "ntex-service",
   "ntex-tls",
-  "ntex-macros",
   "ntex-util",
 ]
 
@@ -38,6 +39,7 @@ unexpected_cfgs = { level = "warn", priority = -2, check-cfg = ['cfg(docsrs_dep)
 ntex = { path = "ntex" }
 ntex-bytes = { path = "ntex-bytes" }
 ntex-codec = { path = "ntex-codec" }
+ntex-error = { path = "ntex-error" }
 ntex-io = { path = "ntex-io" }
 ntex-dispatcher = { path = "ntex-dispatcher" }
 ntex-net = { path = "ntex-net" }
@@ -54,6 +56,7 @@ ntex-util = { path = "ntex-util" }
 ntex = "3.5.0"
 ntex-bytes = "1.5.0"
 ntex-codec = "1.1.0"
+ntex-error = "1.0.0"
 ntex-io = "3.9.0"
 ntex-dispatcher = "3.1.0"
 ntex-net = "3.7.0"

@@ -1,5 +1,9 @@
 # Changes
 
+## [1.5.1] (2026-03-01)
+
+* fmt::Write impl does not fail
+
 ## [1.5.0] (2026-02-03)
 
 * Add AsMut impl for UninitSlice

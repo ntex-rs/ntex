@@ -97,10 +97,6 @@ fn fmt_write() {
     write!(b, "{}", &s[..32]).unwrap();
     write!(b, "{}", &s[32..64]).unwrap();
     assert_eq!(b, s[..64].as_bytes());
-
-    let mut c = BytesMut::with_capacity(2);
-    write!(c, "{s}").unwrap_err();
-    assert!(c.is_empty());
 }
 
 #[test]
