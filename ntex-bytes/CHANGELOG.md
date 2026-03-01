@@ -1,5 +1,9 @@
 # Changes
 
+## [1.5.2] (2026-03-01)
+
+* Add io::Write impl to BytesMut
+
 ## [1.5.1] (2026-03-01)
 
 * fmt::Write impl does not fail
