@@ -40,6 +40,7 @@ neon-polling = []
 [dependencies]
 ntex-service = { workspace = true }
 ntex-bytes = { workspace = true }
+ntex-error = { workspace = true }
 ntex-http = { workspace = true }
 ntex-io = { workspace = true }
 ntex-rt = { workspace = true }

@@ -31,6 +31,7 @@ rustls-ring = ["tls_rustls", "tls_rustls/ring", "tls_rustls/std"]
 
 [dependencies]
 ntex-bytes = { workspace = true }
+ntex-error = { workspace = true }
 ntex-io = { workspace = true }
 ntex-util = { workspace = true }
 ntex-service = { workspace = true }

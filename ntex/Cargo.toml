@@ -73,6 +73,7 @@ no-test-logging = []
 ntex-bytes = { workspace = true }
 ntex-codec = { workspace = true }
 ntex-dispatcher = { workspace = true }
+ntex-error = { workspace = true }
 ntex-http = { workspace = true }
 ntex-router = { workspace = true }
 ntex-service = { workspace = true }

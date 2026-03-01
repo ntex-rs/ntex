@@ -452,10 +452,6 @@ mod tests {
         assert_eq!(TestKind::ServiceError.to_string(), "ServiceError");
         assert_eq!(TestError::Service("").signature(), "Service-Internal");
 
-        println!("Error {:?} -- \n{:#?}", err.kind(), err.location());
-        println!("=== {:?}", std::mem::size_of::<Error<TestError>>());
-        println!("=== TestError: {:?}", std::mem::size_of::<TestError>());
-
         let err = err.into_error().chain();
         assert_eq!(err.kind(), TestKind::ServiceError);
         assert_eq!(err.kind(), TestError::Service("409 Error").kind());

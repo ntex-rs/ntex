@@ -3,6 +3,7 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::error::Error;
 use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
 use crate::http::{Response, StatusCode, header::ALLOW, header::HeaderValue};
 use crate::{connect::ConnectError, util::Either, util::clone_io_error};
@@ -110,7 +111,7 @@ pub enum WsClientError {
     Timeout,
     /// Failed to connect to host
     #[error("Failed to connect to host: {0}")]
-    Connect(#[from] ConnectError),
+    Connect(#[from] Error<ConnectError>),
     /// Connector has been disconnected
     #[error("Connector has been disconnected: {0:?}")]
     Disconnected(Option<io::Error>),
