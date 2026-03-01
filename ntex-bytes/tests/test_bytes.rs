@@ -105,7 +105,7 @@ fn fmt_io_write() {
     use std::io::Write;
 
     let mut a = BytesMut::new();
-    a.write(b"abcdefg").unwrap();
+    assert_eq!(a.write(b"abcdefg").unwrap(), 7);
     assert_eq!(&a, b"abcdefg");
 
     a.flush().unwrap();
