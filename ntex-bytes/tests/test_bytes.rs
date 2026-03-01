@@ -99,6 +99,18 @@ fn fmt_write() {
     assert_eq!(b, s[..64].as_bytes());
 }
 
+#[allow(clippy::sliced_string_as_bytes)]
+#[test]
+fn fmt_io_write() {
+    use std::io::Write;
+
+    let mut a = BytesMut::new();
+    assert_eq!(a.write(b"abcdefg").unwrap(), 7);
+    assert_eq!(&a, b"abcdefg");
+
+    a.flush().unwrap();
+}
+
 #[test]
 fn len() {
     let a = Bytes::from(&b"abcdefg"[..]);

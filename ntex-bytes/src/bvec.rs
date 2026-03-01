@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, borrow::BorrowMut, fmt, ops::Deref, ops::DerefMut, ptr};
+use std::{borrow::Borrow, borrow::BorrowMut, fmt, io, ops::Deref, ops::DerefMut, ptr};
 
 use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, storage::StorageVec};
 
@@ -735,6 +735,17 @@ impl fmt::Write for BytesMut {
     #[inline]
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.extend_from_slice(s.as_bytes());
+        Ok(())
+    }
+}
+
+impl io::Write for BytesMut {
+    fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
+        self.extend_from_slice(src);
+        Ok(src.len())
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
     }
 }
