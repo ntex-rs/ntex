@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.0] - 2026-03-02
+
+* Make task callbacks process wide
+
 ## [3.8.0] - 2026-02-16
 
 * Export `get_item()` and `set_item()` methods
