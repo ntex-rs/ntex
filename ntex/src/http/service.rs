@@ -343,7 +343,7 @@ where
                 let _ = rx.await;
             }
 
-            log::trace!("Shutting down is complected",);
+            log::trace!("Shutting down is complected");
         }
 
         join(
