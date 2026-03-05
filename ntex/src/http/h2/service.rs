@@ -253,7 +253,7 @@ where
                 let _ = rx.await;
             }
 
-            log::trace!("Shutting down is complected",);
+            log::trace!("Shutting down is complected");
         }
 
         self.config.service.shutdown().await;
@@ -421,7 +421,7 @@ where
                 return Ok(());
             }
             h2::MessageKind::Disconnect(err) => {
-                log::debug!("{}: Connection is disconnected {err:?}", self.io.tag(),);
+                log::debug!("{}: Connection is disconnected {err:?}", self.io.tag());
                 if let Some(sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     sender.set_error(
                         io::Error::new(io::ErrorKind::UnexpectedEof, err).into(),
