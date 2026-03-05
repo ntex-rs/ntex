@@ -1,5 +1,9 @@
 //! Shared configuration for services
-#![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
+#![allow(
+    clippy::should_implement_trait,
+    clippy::new_ret_no_self,
+    clippy::missing_panics_doc
+)]
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, UnsafeCell};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
@@ -312,7 +316,6 @@ impl SharedCfgBuilder {
     }
 
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     /// Insert a type into this configuration.
     ///
     /// If a config of this type already existed, it will
