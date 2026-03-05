@@ -10,7 +10,7 @@ type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState
 
 thread_local! {
     static DEFAULT_CFG: Arc<Storage> = {
-        let mut st = Arc::new(Storage::new("--", false, CfgContext(ptr::null())));
+        let mut st = Arc::new(Storage::new("--", "", false, CfgContext(ptr::null())));
         let p = Arc::as_ptr(&st);
         Arc::get_mut(&mut st).unwrap().ctx.update(p);
         st
@@ -35,18 +35,25 @@ pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
 struct Storage {
     id: usize,
     tag: &'static str,
+    service: &'static str,
     ctx: CfgContext,
     building: bool,
     data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 impl Storage {
-    fn new(tag: &'static str, building: bool, ctx: CfgContext) -> Self {
+    fn new(
+        tag: &'static str,
+        service: &'static str,
+        building: bool,
+        ctx: CfgContext,
+    ) -> Self {
         let id = IDX.fetch_add(1, Ordering::SeqCst);
         Storage {
             id,
-            tag,
             ctx,
+            tag,
+            service,
             building,
             data: HashMap::default(),
         }
@@ -64,20 +71,23 @@ impl CfgContext {
         self.0 = new_p;
     }
 
-    #[inline]
     /// Unique id of the context.
     pub fn id(&self) -> usize {
         self.get_ref().id
     }
 
     #[inline]
-    /// Context tag
+    /// Context tag.
     pub fn tag(&self) -> &'static str {
         self.get_ref().tag
     }
 
-    #[inline]
-    /// Get a reference to a previously inserted on configuration.
+    /// Service name.
+    pub fn service(&self) -> &'static str {
+        self.get_ref().service
+    }
+
+    /// Get a reference to a configuration.
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
@@ -88,7 +98,6 @@ impl CfgContext {
         cfg
     }
 
-    #[inline]
     /// Get a shared configuration.
     pub fn shared(&self) -> SharedCfg {
         let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
@@ -124,12 +133,16 @@ impl<T: Configuration> Cfg<T> {
     }
 
     #[inline]
-    /// Context tag
+    /// Context tag.
     pub fn tag(&self) -> &'static str {
         self.get_ref().ctx().tag()
     }
 
-    #[inline]
+    /// Service name.
+    pub fn service(&self) -> &'static str {
+        self.get_ref().ctx().service()
+    }
+
     /// Get a shared configuration.
     pub fn shared(&self) -> SharedCfg {
         self.get_ref().ctx().shared()
@@ -245,14 +258,20 @@ impl SharedCfg {
     }
 
     #[inline]
-    /// Get tag
+    /// Get tag.
     pub fn tag(&self) -> &'static str {
         self.0.tag
+    }
+
+    /// Service name.
+    pub fn service(&self) -> &'static str {
+        self.0.service
     }
 
     /// Get a reference to a previously inserted on configuration.
     ///
     /// # Panics
+    ///
     /// if shared config is in building stage
     pub fn get<T>(&self) -> Cfg<T>
     where
@@ -278,11 +297,18 @@ impl<T: Configuration> From<SharedCfg> for Cfg<T> {
 
 impl SharedCfgBuilder {
     fn new(tag: &'static str) -> SharedCfgBuilder {
-        let mut storage = Arc::new(Storage::new(tag, true, CfgContext::default()));
+        let mut storage = Arc::new(Storage::new(tag, tag, true, CfgContext::default()));
         let ctx = CfgContext(Arc::as_ptr(&storage));
         Arc::get_mut(&mut storage).unwrap().ctx.update(ctx.0);
 
         SharedCfgBuilder { ctx, storage }
+    }
+
+    #[must_use]
+    /// Set service name.
+    pub fn service(mut self, name: &'static str) -> Self {
+        Arc::get_mut(&mut self.storage).unwrap().service = name;
+        self
     }
 
     #[must_use]
@@ -415,14 +441,20 @@ mod tests {
             }
         }
 
-        let cfg: SharedCfg = SharedCfg::new("TEST").add(TestCfg::default()).into();
+        let cfg: SharedCfg = SharedCfg::new("TEST")
+            .add(TestCfg::default())
+            .service("SVC")
+            .into();
 
         assert_eq!(cfg.tag(), "TEST");
+        assert_eq!(cfg.service(), "SVC");
         let t = cfg.get::<TestCfg>();
         assert_eq!(t.tag(), "TEST");
+        assert_eq!(t.service(), "SVC");
         assert_eq!(t.shared(), cfg);
         let t: Cfg<TestCfg> = Cfg::default();
         assert_eq!(t.tag(), "--");
+        assert_eq!(t.service(), "");
         assert_eq!(t.ctx().id(), t.id());
 
         let t: Cfg<TestCfg> = t.ctx().get();

@@ -1,14 +1,14 @@
 use std::{sync::Arc, sync::atomic::AtomicUsize, sync::atomic::Ordering};
 
-// The Callbacks static holds a pointer to the global logger. It is protected by
-// the STATE static which determines whether LOGGER has been initialized yet.
+// The Callbacks static holds a pointer to the global callbacks. It is protected by
+// the STATE static which determines whether `CBS` has been initialized yet.
 static mut CBS: Option<Arc<dyn CallbacksApi>> = None;
 
 static STATE: AtomicUsize = AtomicUsize::new(0);
 
-// There are three different states that we care about: the logger's
-// uninitialized, the logger's initializing (set_logger's been called but
-// LOGGER hasn't actually been set yet), or the logger's active.
+// There are three different states that we care about: the callback's
+// uninitialized, the callback's initializing (set_cbs's been called but
+// CBS hasn't actually been set yet), or the callbacks's active.
 const UNINITIALIZED: usize = 0;
 const INITIALIZING: usize = 1;
 const INITIALIZED: usize = 2;
@@ -57,10 +57,8 @@ pub(crate) struct Data {
 impl Data {
     #[allow(clippy::if_not_else)]
     pub(crate) fn load() -> Option<Data> {
-        // Acquire memory ordering guarantees that current thread would see any
-        // memory writes that happened before store of the value
-        // into `STATE` with memory ordering `Release` or stronger.
-        let cb = if STATE.load(Ordering::Acquire) != INITIALIZED {
+        // We only care about validity of state nothing else
+        let cb = if STATE.load(Ordering::Relaxed) != INITIALIZED {
             None
         } else {
             #[allow(static_mut_refs)]
