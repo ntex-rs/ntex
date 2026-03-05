@@ -1,5 +1,5 @@
 # Changes
 
-## [1.0.0] - 2026-03-01
+## [1.0.0] - 2026-03-xx
 
-* Initial error management impl
+* Initial error management implementation
