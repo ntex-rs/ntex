@@ -1,5 +1,9 @@
 # Changes
 
+## [4.6.0] - 2026-03-05
+
+* Add `service` name to `SharedCfg`
+
 ## [4.5.1] - 2026-02-18
 
 * Handle thread local mapping destruction
