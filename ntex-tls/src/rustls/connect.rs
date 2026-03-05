@@ -108,28 +108,33 @@ where
         log::trace!("{tag}: TLS Handshake start for: {host:?}");
 
         let config = self.config.clone();
-        let host = ServerName::try_from(host)
-            .map_err(|e| ConnectError::from(io::Error::other(e)))?;
 
-        let connect_fut = TlsClientFilter::create(io, config, host.clone());
-        match timeout_checked(self.cfg.handshake_timeout(), connect_fut).await {
-            Ok(Ok(io)) => {
-                log::trace!("{tag}: TLS Handshake success: {host:?}");
-                Ok(io)
-            }
-            Ok(Err(e)) => {
-                log::trace!("{tag}: TLS Handshake error: {e:?}");
-                Err(ConnectError::from(e).into())
-            }
-            Err(()) => {
-                log::trace!("{tag}: TLS Handshake timeout");
-                Err(ConnectError::from(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "SSL Handshake timeout",
-                ))
-                .into())
+        async {
+            let host = ServerName::try_from(host)
+                .map_err(|e| ConnectError::from(io::Error::other(e)))?;
+
+            let connect_fut = TlsClientFilter::create(io, config, host.clone());
+            match timeout_checked(self.cfg.handshake_timeout(), connect_fut).await {
+                Ok(Ok(io)) => {
+                    log::trace!("{tag}: TLS Handshake success: {host:?}");
+                    Ok(io)
+                }
+                Ok(Err(e)) => {
+                    log::trace!("{tag}: TLS Handshake error: {e:?}");
+                    Err(ConnectError::from(e).into())
+                }
+                Err(()) => {
+                    log::trace!("{tag}: TLS Handshake timeout");
+                    Err(ConnectError::from(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "SSL Handshake timeout",
+                    ))
+                    .into())
+                }
             }
         }
+        .await
+        .map_err(|e: Error<_>| e.set_service(self.cfg.service()))
     }
 }
 

@@ -7,6 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
 use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::error::Error;
 use crate::http::body::MessageBody;
 use crate::http::error::{HttpError, PayloadError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
@@ -931,7 +932,10 @@ impl TestServer {
     }
 
     /// Load response's body
-    pub async fn load_body(&self, response: ClientResponse) -> Result<Bytes, PayloadError> {
+    pub async fn load_body(
+        &self,
+        response: ClientResponse,
+    ) -> Result<Bytes, Error<PayloadError>> {
         response.body().limit(10_485_760).await
     }
 

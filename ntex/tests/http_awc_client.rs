@@ -5,14 +5,15 @@ use coo_kie::Cookie;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
 use rand::Rng;
 
-use ntex::client::{Client, Connector, error::SendRequestError};
+use ntex::client::{Client, Connector, error::ClientError};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, header};
 use ntex::io::IoConfig;
 use ntex::service::{cfg::SharedCfg, chain_factory, fn_layer};
+use ntex::time::{Millis, Seconds, sleep};
 use ntex::web::middleware::Compress;
 use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
-use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
+use ntex::{client, error, util::Bytes, util::Ready};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -116,8 +117,8 @@ async fn test_timeout() {
         .unwrap();
 
     let request = client.get(srv.url("/")).send().await;
-    match request {
-        Err(SendRequestError::Timeout) => (),
+    match request.map_err(error::Error::into_error) {
+        Err(ClientError::Timeout) => (),
         _ => panic!(),
     }
 }
@@ -138,8 +139,8 @@ async fn test_timeout_override() {
         .await
         .unwrap();
     let request = client.get(srv.url("/")).timeout(Seconds(1)).send();
-    match request.await {
-        Err(SendRequestError::Timeout) => (),
+    match request.await.map_err(error::Error::into_error) {
+        Err(ClientError::Timeout) => (),
         _ => panic!(),
     }
 }

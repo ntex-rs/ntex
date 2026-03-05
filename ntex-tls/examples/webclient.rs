@@ -1,9 +1,9 @@
-use ntex::SharedCfg;
-use ntex::client::{Client, Connector, error::SendRequestError};
+use ntex::client::{Client, Connector, error::ClientError};
+use ntex::{SharedCfg, error::Error};
 use tls_openssl::ssl::{self, SslMethod, SslVerifyMode};
 
 #[ntex::main]
-async fn main() -> Result<(), SendRequestError> {
+async fn main() -> Result<(), Error<ClientError>> {
     env_logger::init();
     println!("Connecting to openssl webserver: 127.0.0.1:8443");
 

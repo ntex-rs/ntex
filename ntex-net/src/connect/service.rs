@@ -92,6 +92,7 @@ impl<T: Address> ConnectorService<T> {
             )))
         })
         .and_then(|item| item)
+        .map_err(|e| e.set_service(self.shared.service()))
     }
 }
 

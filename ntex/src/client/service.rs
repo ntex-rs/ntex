@@ -7,7 +7,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{Message, Payload, RequestHead, ResponseHead, error::HttpError};
 use crate::{time::Millis, util::Bytes, util::Stream};
 
-use super::{ClientConfig, error::SendRequestError};
+use super::{ClientConfig, error::ClientError};
 
 #[derive(Debug)]
 pub struct ServiceResponse {
@@ -62,23 +62,17 @@ impl ServiceRequest {
         &mut self.addr
     }
 
-    pub(super) fn set_json<T: Serialize>(
-        &mut self,
-        value: &T,
-    ) -> Result<(), SendRequestError> {
+    pub(super) fn set_json<T: Serialize>(&mut self, value: &T) -> Result<(), ClientError> {
         self.body = serde_json::to_string(value)
-            .map_err(|e| SendRequestError::Error(Rc::new(e)))?
+            .map_err(|e| ClientError::Error(Rc::new(e)))?
             .into();
         self.set_header_if_none(header::CONTENT_TYPE, "application/json")?;
         Ok(())
     }
 
-    pub(super) fn set_form<T: Serialize>(
-        &mut self,
-        value: &T,
-    ) -> Result<(), SendRequestError> {
+    pub(super) fn set_form<T: Serialize>(&mut self, value: &T) -> Result<(), ClientError> {
         self.body = serde_urlencoded::to_string(value)
-            .map_err(|e| SendRequestError::Error(Rc::new(e)))?
+            .map_err(|e| ClientError::Error(Rc::new(e)))?
             .into();
         self.set_header_if_none(header::CONTENT_TYPE, "application/x-www-form-urlencoded")?;
         Ok(())

@@ -143,7 +143,7 @@ pub enum InvalidUrl {
 
 /// A set of errors that can occur during request sending and response reading
 #[derive(thiserror::Error, Debug)]
-pub enum SendRequestError {
+pub enum ClientError {
     /// Invalid URL
     #[error("Invalid URL: {0}")]
     Url(#[from] InvalidUrl),
@@ -176,39 +176,63 @@ pub enum SendRequestError {
     Error(#[from] Rc<dyn StdError>),
 }
 
-impl Clone for SendRequestError {
-    fn clone(&self) -> SendRequestError {
+impl ErrorDiagnostic for ClientError {
+    type Kind = ErrorType;
+
+    fn kind(&self) -> ErrorType {
         match self {
-            SendRequestError::Url(err) => SendRequestError::Url(err.clone()),
-            SendRequestError::Connect(err) => SendRequestError::Connect(err.clone()),
-            SendRequestError::Request(err) => SendRequestError::Request(err.clone()),
-            SendRequestError::Response(err) => SendRequestError::Response(*err),
-            SendRequestError::Http(err) => SendRequestError::Http(err.clone()),
-            SendRequestError::H2(err) => SendRequestError::H2(err.clone()),
-            SendRequestError::Timeout => SendRequestError::Timeout,
-            SendRequestError::TunnelNotSupported => SendRequestError::TunnelNotSupported,
-            SendRequestError::Error(err) => SendRequestError::Error(err.clone()),
-            SendRequestError::Send(err) => {
-                SendRequestError::Send(crate::util::clone_io_error(err))
-            }
+            ClientError::Url(_) | ClientError::Http(_) => ErrorType::ClientError,
+            ClientError::Connect(err) => err.kind(),
+            ClientError::Send(_)
+            | ClientError::Request(_)
+            | ClientError::Response(_)
+            | ClientError::H2(_)
+            | ClientError::Timeout
+            | ClientError::TunnelNotSupported
+            | ClientError::Error(_) => ErrorType::ServiceError,
+        }
+    }
+
+    fn service(&self) -> Option<&'static str> {
+        if let ClientError::Connect(err) = self {
+            err.service()
+        } else {
+            None
         }
     }
 }
 
-impl From<Either<EncodeError, io::Error>> for SendRequestError {
+impl Clone for ClientError {
+    fn clone(&self) -> ClientError {
+        match self {
+            ClientError::Url(err) => ClientError::Url(err.clone()),
+            ClientError::Connect(err) => ClientError::Connect(err.clone()),
+            ClientError::Request(err) => ClientError::Request(err.clone()),
+            ClientError::Response(err) => ClientError::Response(*err),
+            ClientError::Http(err) => ClientError::Http(err.clone()),
+            ClientError::H2(err) => ClientError::H2(err.clone()),
+            ClientError::Timeout => ClientError::Timeout,
+            ClientError::TunnelNotSupported => ClientError::TunnelNotSupported,
+            ClientError::Error(err) => ClientError::Error(err.clone()),
+            ClientError::Send(err) => ClientError::Send(crate::util::clone_io_error(err)),
+        }
+    }
+}
+
+impl From<Either<EncodeError, io::Error>> for ClientError {
     fn from(err: Either<EncodeError, io::Error>) -> Self {
         match err {
-            Either::Left(err) => SendRequestError::Request(err),
-            Either::Right(err) => SendRequestError::Send(err),
+            Either::Left(err) => ClientError::Request(err),
+            Either::Right(err) => ClientError::Send(err),
         }
     }
 }
 
-impl From<Either<DecodeError, io::Error>> for SendRequestError {
+impl From<Either<DecodeError, io::Error>> for ClientError {
     fn from(err: Either<DecodeError, io::Error>) -> Self {
         match err {
-            Either::Left(err) => SendRequestError::Response(err),
-            Either::Right(err) => SendRequestError::Send(err),
+            Either::Left(err) => ClientError::Response(err),
+            Either::Right(err) => ClientError::Send(err),
         }
     }
 }
@@ -218,3 +242,7 @@ impl From<ClientBuilderError> for io::Error {
         io::Error::other(err)
     }
 }
+
+#[doc(hidden)]
+#[deprecated(since = "3.6.0", note = "Use ntex::client::error::ClientError instead")]
+pub type SendRequestError = ClientError;

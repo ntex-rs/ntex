@@ -4,7 +4,8 @@ use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
 use crate::service::{Service, ServiceCtx, ServiceFactory, apply_fn_factory, boxed};
 use crate::{SharedCfg, error::Error, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
-use super::{Connect, Connection, error::ConnectError, pool::ConnectionPool};
+use super::error::{ClientError, ConnectError};
+use super::{Connect, Connection, pool::ConnectionPool};
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::SslConnector as OpensslConnector;
@@ -197,7 +198,7 @@ impl Connector {
 
 impl ServiceFactory<Connect, SharedCfg> for Connector {
     type Response = Connection;
-    type Error = Error<ConnectError>;
+    type Error = Error<ClientError>;
     type Service = ConnectorService;
     type InitError = Box<dyn StdError>;
 
@@ -218,39 +219,44 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
             self.conn_lifetime,
             self.conn_keep_alive,
             self.limit,
-            cfg,
+            cfg.clone(),
         );
-        Ok(ConnectorService { tcp_pool, ssl_pool })
+        Ok(ConnectorService {
+            cfg,
+            tcp_pool,
+            ssl_pool,
+        })
     }
 }
 
 /// Manages http client network connectivity.
 #[derive(Clone, Debug)]
 pub struct ConnectorService {
+    cfg: SharedCfg,
     tcp_pool: ConnectionPool,
     ssl_pool: Option<ConnectionPool>,
 }
 
 impl Service<Connect> for ConnectorService {
     type Response = Connection;
-    type Error = Error<ConnectError>;
+    type Error = Error<ClientError>;
 
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {
             let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
-            r1?;
-            r2
+            r1.map_err(ClientError::from)?;
+            Ok(r2.map_err(ClientError::from)?)
         } else {
-            ctx.ready(&self.tcp_pool).await
+            Ok(ctx.ready(&self.tcp_pool).await.map_err(ClientError::from)?)
         }
     }
 
     #[inline]
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.tcp_pool.poll(cx)?;
+        self.tcp_pool.poll(cx).map_err(ClientError::from)?;
         if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.poll(cx)?;
+            ssl_pool.poll(cx).map_err(ClientError::from)?;
         }
         Ok(())
     }
@@ -270,13 +276,20 @@ impl Service<Connect> for ConnectorService {
         match req.uri.scheme_str() {
             Some("https" | "wss") => {
                 if let Some(ref conn) = self.ssl_pool {
-                    ctx.call(conn, req).await
+                    ctx.call(conn, req).await.map_err(ClientError::from)
                 } else {
-                    Err(ConnectError::SslIsNotSupported.into())
+                    Err(ClientError::from(
+                        Error::from(ConnectError::SslIsNotSupported)
+                            .set_service(self.cfg.service()),
+                    ))
                 }
             }
-            _ => ctx.call(&self.tcp_pool, req).await,
+            _ => ctx
+                .call(&self.tcp_pool, req)
+                .await
+                .map_err(ClientError::from),
         }
+        .map_err(Error::from)
     }
 }
 

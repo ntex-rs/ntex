@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::channel::bstream;
 use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::error::Error;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
@@ -437,7 +438,10 @@ impl TestServer {
     }
 
     /// Load response's body
-    pub async fn load_body(&self, response: ClientResponse) -> Result<Bytes, PayloadError> {
+    pub async fn load_body(
+        &self,
+        response: ClientResponse,
+    ) -> Result<Bytes, Error<PayloadError>> {
         response.body().limit(10_485_760).await
     }
 

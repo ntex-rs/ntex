@@ -226,11 +226,11 @@ impl WebResponseError<DefaultError> for http::error::ContentTypeError {
     }
 }
 
-/// Convert `SendRequestError` to a server `Response`
-impl WebResponseError<DefaultError> for client::error::SendRequestError {
+/// Convert `ClientError` to a server `Response`
+impl WebResponseError<DefaultError> for client::error::ClientError {
     fn status_code(&self) -> StatusCode {
         match self {
-            client::error::SendRequestError::Connect(err) => {
+            client::error::ClientError::Connect(err) => {
                 if matches!(**err, client::error::ConnectError::Timeout) {
                     StatusCode::GATEWAY_TIMEOUT
                 } else {
