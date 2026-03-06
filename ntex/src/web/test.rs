@@ -865,6 +865,7 @@ impl TestServerConfig {
         self
     }
 
+    #[must_use]
     /// Set server port. By default, test server binds to a random port assigned by OS.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
