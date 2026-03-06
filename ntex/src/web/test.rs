@@ -597,7 +597,7 @@ where
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = test::server_with(test::config().h1(), ||
+///     let mut srv = test::server_with(test::config().h1().port(4000), ||
 ///         App::new().service(web::resource("/").to(my_handler))
 ///     );
 ///
