@@ -597,7 +597,7 @@ where
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = test::server_with(test::config().h1(), ||
+///     let mut srv = test::server_with(test::config().h1().port(4000), ||
 ///         App::new().service(web::resource("/").to(my_handler))
 ///     );
 ///
@@ -638,7 +638,8 @@ where
         let cfg = cfg.clone();
         let factory = factory.clone();
         let ctimeout = cfg.client_timeout;
-        let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = cfg.port;
+        let tcp = net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
@@ -769,6 +770,7 @@ pub struct TestServerConfig {
     tp: HttpVer,
     stream: StreamType,
     client_timeout: Seconds,
+    port: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -820,6 +822,7 @@ impl TestServerConfig {
             tp: HttpVer::Both,
             stream: StreamType::Tcp,
             client_timeout: Seconds(5),
+            port: 0,
         }
     }
 
@@ -857,6 +860,13 @@ impl TestServerConfig {
     /// Set server client timeout in seconds for first request.
     pub fn client_timeout(mut self, val: Seconds) -> Self {
         self.client_timeout = val;
+        self
+    }
+
+    #[must_use]
+    /// Set server port. By default, test server binds to a random port assigned by OS.
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = port;
         self
     }
 }
