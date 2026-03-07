@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.0] - 2026-03-07
+
+* Set start backtrace code line for ntex-error
+
 ## [3.9.0] - 2026-03-02
 
 * Make task callbacks process wide

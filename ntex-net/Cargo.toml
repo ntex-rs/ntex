@@ -1,6 +1,6 @@
 [package]
 name = "ntex-net"
-version = "3.7.0"
+version = "3.8.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -40,6 +40,7 @@ neon-polling = []
 [dependencies]
 ntex-service = { workspace = true }
 ntex-bytes = { workspace = true }
+ntex-error = { workspace = true }
 ntex-http = { workspace = true }
 ntex-io = { workspace = true }
 ntex-rt = { workspace = true }

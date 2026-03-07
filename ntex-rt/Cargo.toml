@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "3.9.0"
+version = "3.10.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -33,6 +33,7 @@ compio = ["compio-driver", "compio-runtime"]
 neon = []
 
 [dependencies]
+ntex-error = { workspace = true }
 ntex-service = { workspace = true }
 
 async-channel = { workspace = true }
