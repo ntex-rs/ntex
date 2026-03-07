@@ -1,6 +1,5 @@
 use std::{io, rc::Rc};
 
-use ntex::error::{ErrorDiagnostic, ErrorKind, ErrorType};
 use ntex::io::{Io, types::PeerAddr};
 use ntex::service::{Pipeline, ServiceFactory, chain_factory, fn_service};
 use ntex::{SharedCfg, codec::BytesCodec, connect::Connect};
@@ -121,7 +120,6 @@ async fn test_openssl_string() {
     });
     let addr = "127.0.0.1".to_string();
     let err = conn.call(addr.into()).await.err().unwrap();
-    // assert_eq!(err.kind().error_type(), ErrorType::ClientError, "{err:#?}");
     assert!(format!("{err:?}").contains("connect::service::connect::{{closure}}"));
 }
 
