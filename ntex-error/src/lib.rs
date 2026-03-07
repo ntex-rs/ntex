@@ -1,12 +1,12 @@
 //! Error management.
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::{error, fmt, fmt::Write, marker::PhantomData, ops, panic::Location, sync::Arc};
+use std::panic::Location;
+use std::{cell::RefCell, error, fmt, fmt::Write, marker::PhantomData, ops, os, sync::Arc};
 
-use backtrace::{Backtrace as StdBacktrace, BacktraceFrame};
+use backtrace::{BacktraceFmt, BacktraceFrame, BytesOrWideString};
 
 thread_local! {
-    static BACKTRACES: RefCell<HashMap<&'static Location<'static>, Backtrace>> = RefCell::new(HashMap::default());
+    static FRAMES: RefCell<HashMap<*mut os::raw::c_void, Arc<BacktraceFrame>>> = RefCell::new(HashMap::default());
 }
 static mut START: Option<(&'static str, u32)> = None;
 
@@ -127,14 +127,7 @@ impl<E: ErrorDiagnostic> From<E> for Error<E> {
         let bt = if let Some(bt) = error.backtrace() {
             bt.clone()
         } else {
-            let loc = Location::caller();
-            BACKTRACES.with(move |backtraces| {
-                backtraces
-                    .borrow_mut()
-                    .entry(loc)
-                    .or_insert_with(|| Backtrace::new(loc))
-                    .clone()
-            })
+            Backtrace::new(Location::caller())
         };
         Self::new(error, None, bt)
     }
@@ -220,14 +213,7 @@ impl<K: ErrorKind> ErrorChain<K> {
         let backtrace = if let Some(bt) = error.backtrace() {
             bt.clone()
         } else {
-            let loc = Location::caller();
-            BACKTRACES.with(move |backtraces| {
-                backtraces
-                    .borrow_mut()
-                    .entry(loc)
-                    .or_insert_with(|| Backtrace::new(loc))
-                    .clone()
-            })
+            Backtrace::new(Location::caller())
         };
 
         Self {
@@ -341,15 +327,29 @@ where
 pub struct Backtrace(Arc<BacktraceInner>);
 
 struct BacktraceInner {
-    bt: StdBacktrace,
     repr: String,
 }
 
 impl Backtrace {
     fn new(loc: &Location<'_>) -> Self {
-        let bt = StdBacktrace::new();
+        let mut frames = Vec::new();
+        FRAMES.with(|cache| {
+            let mut frames_cache = cache.borrow_mut();
+            backtrace::trace(|frm| {
+                let frm = if let Some(frm) = frames_cache.get(&frm.ip()) {
+                    frm.clone()
+                } else {
+                    let mut frm = BacktraceFrame::from(frm.clone());
+                    frm.resolve();
+                    let frm = Arc::new(frm);
+                    frames_cache.insert(frm.ip(), frm.clone());
+                    frm
+                };
+                frames.push(frm);
+                true
+            });
+        });
 
-        let mut frames: Vec<BacktraceFrame> = bt.into();
         if let Some(idx) = find_loc(loc, &frames) {
             frames = frames.split_off(idx);
         }
@@ -361,24 +361,19 @@ impl Backtrace {
             frames.truncate(idx);
         }
 
-        let bt = frames.into();
+        let bt = Bt(&frames[..]);
         let mut repr = String::new();
         let _ = write!(&mut repr, "\n{:?}", bt);
-        Self(Arc::new(BacktraceInner { bt, repr }))
+        Self(Arc::new(BacktraceInner { repr }))
     }
 
     /// Backtrace repr
     pub fn repr(&self) -> &str {
         &self.0.repr
     }
-
-    /// Returns the frames from when this backtrace was captured.
-    pub fn frames(&self) -> &[BacktraceFrame] {
-        self.0.bt.frames()
-    }
 }
 
-fn find_loc(loc: &Location<'_>, frames: &[BacktraceFrame]) -> Option<usize> {
+fn find_loc(loc: &Location<'_>, frames: &[Arc<BacktraceFrame>]) -> Option<usize> {
     for (idx, frm) in frames.iter().enumerate() {
         for sym in frm.symbols() {
             if let Some(fname) = sym.filename()
@@ -393,7 +388,7 @@ fn find_loc(loc: &Location<'_>, frames: &[BacktraceFrame]) -> Option<usize> {
     None
 }
 
-fn find_loc_start(loc: (&str, u32), frames: &[BacktraceFrame]) -> Option<usize> {
+fn find_loc_start(loc: (&str, u32), frames: &[Arc<BacktraceFrame>]) -> Option<usize> {
     let mut idx = frames.len();
     while idx > 0 {
         idx -= 1;
@@ -409,6 +404,32 @@ fn find_loc_start(loc: (&str, u32), frames: &[BacktraceFrame]) -> Option<usize> 
         }
     }
     None
+}
+
+struct Bt<'a>(&'a [Arc<BacktraceFrame>]);
+
+impl<'a> fmt::Debug for Bt<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let cwd = std::env::current_dir();
+        let mut print_path =
+            move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
+                let path = path.into_path_buf();
+                if let Ok(cwd) = &cwd {
+                    if let Ok(suffix) = path.strip_prefix(cwd) {
+                        return fmt::Display::fmt(&suffix.display(), fmt);
+                    }
+                }
+                fmt::Display::fmt(&path.display(), fmt)
+            };
+
+        let mut f = BacktraceFmt::new(fmt, backtrace::PrintFmt::Short, &mut print_path);
+        f.add_context()?;
+        for frame in self.0 {
+            f.frame().backtrace_frame(frame)?;
+        }
+        f.finish()?;
+        Ok(())
+    }
 }
 
 impl fmt::Debug for Backtrace {
