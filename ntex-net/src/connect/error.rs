@@ -59,10 +59,10 @@ impl ErrorDiagnostic for ConnectError {
 
     fn kind(&self) -> Self::Kind {
         match self {
-            ConnectError::InvalidInput => ErrorType::ClientError,
+            ConnectError::InvalidInput => ErrorType::Client,
             ConnectError::Resolver(_)
             | ConnectError::NoRecords
-            | ConnectError::Unresolved => ErrorType::ServiceError,
+            | ConnectError::Unresolved => ErrorType::Service,
             ConnectError::Io(err) => {
                 if matches!(
                     err.kind(),
@@ -70,9 +70,9 @@ impl ErrorDiagnostic for ConnectError {
                         | ErrorKind::AddrNotAvailable
                         | ErrorKind::Unsupported
                 ) {
-                    ErrorType::ClientError
+                    ErrorType::Client
                 } else {
-                    ErrorType::ServiceError
+                    ErrorType::Service
                 }
             }
         }

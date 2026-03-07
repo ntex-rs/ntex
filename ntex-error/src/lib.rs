@@ -22,17 +22,15 @@ pub fn set_backtrace_start(file: &'static str, line: u32) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorType {
-    Success,
-    ClientError,
-    ServiceError,
+    Client,
+    Service,
 }
 
 impl ErrorType {
     pub const fn as_str(&self) -> &'static str {
         match self {
-            ErrorType::Success => "Success",
-            ErrorType::ClientError => "ClientError",
-            ErrorType::ServiceError => "ServiceError",
+            ErrorType::Client => "ClientError",
+            ErrorType::Service => "ServiceError",
         }
     }
 }
@@ -80,27 +78,41 @@ pub trait ErrorDiagnostic: error::Error + 'static {
 
 #[derive(Debug, Clone)]
 pub struct Error<E> {
+    inner: Box<ErrorInner<E>>,
+}
+
+#[derive(Debug, Clone)]
+struct ErrorInner<E> {
     error: E,
     service: Option<&'static str>,
     backtrace: Backtrace,
 }
 
 impl<E> Error<E> {
-    pub const fn new(
-        error: E,
-        service: Option<&'static str>,
-        backtrace: Backtrace,
-    ) -> Self {
+    #[track_caller]
+    pub fn new<T>(error: T, service: &'static str) -> Self
+    where
+        E: ErrorDiagnostic,
+        E: From<T>,
+    {
+        let error = E::from(error);
+        let backtrace = if let Some(bt) = error.backtrace() {
+            bt.clone()
+        } else {
+            Backtrace::new(Location::caller())
+        };
         Self {
-            error,
-            service,
-            backtrace,
+            inner: Box::new(ErrorInner {
+                error,
+                backtrace,
+                service: Some(service),
+            }),
         }
     }
 
     /// Set response service
     pub fn set_service(mut self, name: &'static str) -> Self {
-        self.service = Some(name);
+        self.inner.service = Some(name);
         self
     }
 
@@ -112,27 +124,35 @@ impl<E> Error<E> {
         F: FnOnce(E) -> U,
     {
         Error {
-            error: f(self.error),
-            service: self.service,
-            backtrace: self.backtrace,
+            inner: Box::new(ErrorInner {
+                error: f(self.inner.error),
+                service: self.inner.service,
+                backtrace: self.inner.backtrace,
+            }),
         }
     }
 
     /// Get inner error value
     pub fn into_error(self) -> E {
-        self.error
+        self.inner.error
     }
 }
 
 impl<E: ErrorDiagnostic> From<E> for Error<E> {
     #[track_caller]
     fn from(error: E) -> Self {
-        let bt = if let Some(bt) = error.backtrace() {
+        let backtrace = if let Some(bt) = error.backtrace() {
             bt.clone()
         } else {
             Backtrace::new(Location::caller())
         };
-        Self::new(error, None, bt)
+        Self {
+            inner: Box::new(ErrorInner {
+                error,
+                backtrace,
+                service: None,
+            }),
+        }
     }
 }
 
@@ -143,7 +163,7 @@ where
     E: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.error.eq(&other.error)
+        self.inner.error.eq(&other.inner.error)
     }
 }
 
@@ -152,7 +172,7 @@ where
     E: PartialEq,
 {
     fn eq(&self, other: &E) -> bool {
-        self.error.eq(other)
+        self.inner.error.eq(other)
     }
 }
 
@@ -160,7 +180,7 @@ impl<E> ops::Deref for Error<E> {
     type Target = E;
 
     fn deref(&self) -> &E {
-        &self.error
+        &self.inner.error
     }
 }
 
@@ -169,7 +189,7 @@ where
     E: ErrorDiagnostic,
 {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        Some(&self.error)
+        Some(&self.inner.error)
     }
 }
 
@@ -180,23 +200,23 @@ where
     type Kind = E::Kind;
 
     fn kind(&self) -> Self::Kind {
-        self.error.kind()
+        self.inner.error.kind()
     }
 
     fn service(&self) -> Option<&'static str> {
-        if self.service.is_some() {
-            self.service
+        if self.inner.service.is_some() {
+            self.inner.service
         } else {
-            self.error.service()
+            self.inner.error.service()
         }
     }
 
     fn signature(&self) -> &'static str {
-        self.error.signature()
+        self.inner.error.signature()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {
-        Some(&self.backtrace)
+        Some(&self.inner.backtrace)
     }
 }
 
@@ -240,8 +260,8 @@ where
         Self {
             error: Arc::new(ErrorChainWrapper {
                 service: err.service(),
-                error: err.error,
-                backtrace: err.backtrace,
+                error: err.inner.error,
+                backtrace: err.inner.backtrace,
                 _k: PhantomData,
             }),
         }
@@ -479,7 +499,7 @@ where
     E: ErrorDiagnostic,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.error, f)
+        fmt::Display::fmt(&self.inner.error, f)
     }
 }
 
@@ -513,9 +533,8 @@ where
 impl fmt::Display for ErrorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ErrorType::Success => write!(f, "Success"),
-            ErrorType::ClientError => write!(f, "ClientError"),
-            ErrorType::ServiceError => write!(f, "ServiceError"),
+            ErrorType::Client => write!(f, "ClientError"),
+            ErrorType::Service => write!(f, "ServiceError"),
         }
     }
 }
@@ -523,6 +542,8 @@ impl fmt::Display for ErrorType {
 #[allow(dead_code)]
 #[cfg(test)]
 mod tests {
+    use std::mem;
+
     use super::*;
 
     #[derive(Copy, Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -538,9 +559,9 @@ mod tests {
     impl ErrorKind for TestKind {
         fn error_type(&self) -> ErrorType {
             match self {
-                TestKind::Connect => ErrorType::ClientError,
-                TestKind::Disconnect => ErrorType::ClientError,
-                TestKind::ServiceError => ErrorType::ServiceError,
+                TestKind::Connect => ErrorType::Client,
+                TestKind::Disconnect => ErrorType::Client,
+                TestKind::ServiceError => ErrorType::Service,
             }
         }
     }
@@ -597,33 +618,24 @@ mod tests {
 
         assert_eq!(
             TestError::Connect("").kind().error_type(),
-            ErrorType::ClientError
+            ErrorType::Client
         );
-        assert_eq!(
-            TestError::Disconnect.kind().error_type(),
-            ErrorType::ClientError
-        );
+        assert_eq!(TestError::Disconnect.kind().error_type(), ErrorType::Client);
         assert_eq!(
             TestError::Service("").kind().error_type(),
-            ErrorType::ServiceError
+            ErrorType::Service
         );
         assert_eq!(TestError::Connect("").to_string(), "Connect err: ");
         assert_eq!(TestError::Disconnect.to_string(), "Disconnect");
         assert_eq!(TestError::Disconnect.service(), Some("test"));
         assert!(TestError::Disconnect.backtrace().is_none());
 
-        assert_eq!(ErrorType::Success.as_str(), "Success");
-        assert_eq!(ErrorType::ClientError.as_str(), "ClientError");
-        assert_eq!(ErrorType::ServiceError.as_str(), "ServiceError");
-        assert_eq!(ErrorType::Success.error_type(), ErrorType::Success);
-        assert_eq!(ErrorType::ClientError.error_type(), ErrorType::ClientError);
-        assert_eq!(
-            ErrorType::ServiceError.error_type(),
-            ErrorType::ServiceError
-        );
-        assert_eq!(ErrorType::Success.to_string(), "Success");
-        assert_eq!(ErrorType::ClientError.to_string(), "ClientError");
-        assert_eq!(ErrorType::ServiceError.to_string(), "ServiceError");
+        assert_eq!(ErrorType::Client.as_str(), "ClientError");
+        assert_eq!(ErrorType::Service.as_str(), "ServiceError");
+        assert_eq!(ErrorType::Client.error_type(), ErrorType::Client);
+        assert_eq!(ErrorType::Service.error_type(), ErrorType::Service);
+        assert_eq!(ErrorType::Client.to_string(), "ClientError");
+        assert_eq!(ErrorType::Service.to_string(), "ServiceError");
 
         assert_eq!(TestKind::Connect.to_string(), "Connect");
         assert_eq!(TestError::Connect("").signature(), "Client-Connect");
@@ -647,5 +659,8 @@ mod tests {
         assert_eq!(err.to_string(), "InternalServiceError");
         assert!(err.backtrace().is_some());
         assert!(format!("{:?}", err).contains("Service(\"404 Error\")"));
+
+        assert_eq!(24, mem::size_of::<TestError>());
+        assert_eq!(8, mem::size_of::<Error<TestError>>());
     }
 }
