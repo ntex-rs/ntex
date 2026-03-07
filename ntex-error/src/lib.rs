@@ -1,12 +1,15 @@
 //! Error management.
 use std::collections::HashMap;
+use std::hash::{BuildHasher, Hasher};
+use std::marker::PhantomData;
 use std::panic::Location;
-use std::{cell::RefCell, error, fmt, fmt::Write, marker::PhantomData, ops, os, sync::Arc};
+use std::{cell::RefCell, error, fmt, fmt::Write, ops, os, ptr, sync::Arc};
 
 use backtrace::{BacktraceFmt, BacktraceFrame, BytesOrWideString};
 
 thread_local! {
-    static FRAMES: RefCell<HashMap<*mut os::raw::c_void, Arc<BacktraceFrame>>> = RefCell::new(HashMap::default());
+    static FRAMES: RefCell<HashMap<*mut os::raw::c_void, BacktraceFrame>> = RefCell::new(HashMap::default());
+    static REPRS: RefCell<HashMap<u64, Arc<str>>> = RefCell::new(HashMap::default());
 }
 static mut START: Option<(&'static str, u32)> = None;
 
@@ -324,89 +327,116 @@ where
 /// This structure can be used to capture a backtrace at various
 /// points in a program and later used to inspect what the backtrace
 /// was at that time.
-pub struct Backtrace(Arc<BacktraceInner>);
-
-struct BacktraceInner {
-    repr: String,
-}
+pub struct Backtrace(Arc<str>);
 
 impl Backtrace {
     fn new(loc: &Location<'_>) -> Self {
-        let mut frames = Vec::new();
-        FRAMES.with(|cache| {
-            let mut frames_cache = cache.borrow_mut();
+        let repr = FRAMES.with(|c| {
+            let mut cache = c.borrow_mut();
+            let mut idx = 0;
+            let mut st = foldhash::fast::FixedState::default().build_hasher();
+            let mut idxs: [*mut os::raw::c_void; 128] = [ptr::null_mut(); 128];
+
             backtrace::trace(|frm| {
-                let frm = if let Some(frm) = frames_cache.get(&frm.ip()) {
-                    frm.clone()
-                } else {
-                    let mut frm = BacktraceFrame::from(frm.clone());
-                    frm.resolve();
-                    let frm = Arc::new(frm);
-                    frames_cache.insert(frm.ip(), frm.clone());
-                    frm
-                };
-                frames.push(frm);
-                true
+                let ip = frm.ip();
+                st.write_usize(ip as usize);
+                cache.entry(ip).or_insert_with(|| {
+                    let mut f = BacktraceFrame::from(frm.clone());
+                    f.resolve();
+                    f
+                });
+                idxs[idx] = ip;
+                idx += 1;
+
+                idx < 128
             });
+
+            let id = st.finish();
+
+            REPRS.with(|r| {
+                let mut reprs = r.borrow_mut();
+                if let Some(repr) = reprs.get(&id) {
+                    repr.clone()
+                } else {
+                    let mut frames: [Option<&BacktraceFrame>; 128] = [None; 128];
+                    for (idx, ip) in idxs.as_ref().iter().enumerate() {
+                        if !ip.is_null() {
+                            frames[idx] = Some(&cache[ip]);
+                        }
+                    }
+
+                    find_loc(loc, &mut frames);
+
+                    #[allow(static_mut_refs)]
+                    if let Some(start) = unsafe { START } {
+                        find_loc_start(start, &mut frames);
+                    }
+
+                    let bt = Bt(&frames[..]);
+                    let mut buf = String::new();
+                    let _ = write!(&mut buf, "\n{:?}", bt);
+                    let repr: Arc<str> = Arc::from(buf);
+                    reprs.insert(id, repr.clone());
+                    repr
+                }
+            })
         });
 
-        if let Some(idx) = find_loc(loc, &frames) {
-            frames = frames.split_off(idx);
-        }
-
-        #[allow(static_mut_refs)]
-        if let Some(start) = unsafe { START }
-            && let Some(idx) = find_loc_start(start, &frames)
-        {
-            frames.truncate(idx);
-        }
-
-        let bt = Bt(&frames[..]);
-        let mut repr = String::new();
-        let _ = write!(&mut repr, "\n{:?}", bt);
-        Self(Arc::new(BacktraceInner { repr }))
+        Self(repr)
     }
 
     /// Backtrace repr
     pub fn repr(&self) -> &str {
-        &self.0.repr
+        &self.0
     }
 }
 
-fn find_loc(loc: &Location<'_>, frames: &[Arc<BacktraceFrame>]) -> Option<usize> {
-    for (idx, frm) in frames.iter().enumerate() {
-        for sym in frm.symbols() {
-            if let Some(fname) = sym.filename()
-                && let Some(lineno) = sym.lineno()
-                && fname.ends_with(loc.file())
-                && lineno == loc.line()
-            {
-                return Some(idx);
+fn find_loc(loc: &Location<'_>, frames: &mut [Option<&BacktraceFrame>]) {
+    for (idx, frm) in frames.iter_mut().enumerate() {
+        if let Some(f) = frm {
+            for sym in f.symbols() {
+                if let Some(fname) = sym.filename()
+                    && let Some(lineno) = sym.lineno()
+                    && fname.ends_with(loc.file())
+                    && lineno == loc.line()
+                {
+                    for f in frames.iter_mut().take(idx) {
+                        *f = None;
+                    }
+                    return;
+                }
             }
+        } else {
+            break;
         }
     }
-    None
 }
 
-fn find_loc_start(loc: (&str, u32), frames: &[Arc<BacktraceFrame>]) -> Option<usize> {
+fn find_loc_start(loc: (&str, u32), frames: &mut [Option<&BacktraceFrame>]) {
     let mut idx = frames.len();
     while idx > 0 {
         idx -= 1;
-        let frm = &frames[idx];
-        for sym in frm.symbols() {
-            if let Some(fname) = sym.filename()
-                && let Some(lineno) = sym.lineno()
-                && fname.ends_with(loc.0)
-                && lineno == loc.1
-            {
-                return Some(idx + 1);
+        if let Some(frm) = &frames[idx] {
+            for sym in frm.symbols() {
+                if let Some(fname) = sym.filename()
+                    && let Some(lineno) = sym.lineno()
+                    && fname.ends_with(loc.0)
+                    && lineno == loc.1
+                {
+                    for f in frames.iter_mut().skip(idx + 1) {
+                        if f.is_some() {
+                            *f = None;
+                        } else {
+                            return;
+                        }
+                    }
+                }
             }
         }
     }
-    None
 }
 
-struct Bt<'a>(&'a [Arc<BacktraceFrame>]);
+struct Bt<'a>(&'a [Option<&'a BacktraceFrame>]);
 
 impl<'a> fmt::Debug for Bt<'a> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -424,8 +454,8 @@ impl<'a> fmt::Debug for Bt<'a> {
 
         let mut f = BacktraceFmt::new(fmt, backtrace::PrintFmt::Short, &mut print_path);
         f.add_context()?;
-        for frame in self.0 {
-            f.frame().backtrace_frame(frame)?;
+        for frm in self.0.iter().flatten() {
+            f.frame().backtrace_frame(frm)?;
         }
         f.finish()?;
         Ok(())
@@ -434,13 +464,13 @@ impl<'a> fmt::Debug for Bt<'a> {
 
 impl fmt::Debug for Backtrace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0.repr, f)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
 impl fmt::Display for Backtrace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0.repr, f)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
