@@ -33,6 +33,7 @@ compio = ["compio-driver", "compio-runtime"]
 neon = []
 
 [dependencies]
+ntex-error = { workspace = true }
 ntex-service = { workspace = true }
 
 async-channel = { workspace = true }

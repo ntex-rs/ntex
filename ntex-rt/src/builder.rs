@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, io, marker::PhantomData, rc::Rc, sync::Arc, time};
+use std::{fmt, future::Future, io, marker::PhantomData, panic, rc::Rc, sync::Arc, time};
 
 use crate::driver::Runner;
 use crate::system::{System, SystemConfig};
@@ -198,6 +198,8 @@ impl SystemRunner {
             let stop = system.start();
             drop(stop);
 
+            let loc = current_location();
+            ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
             fut.await
         })
     }
@@ -217,10 +219,17 @@ impl SystemRunner {
                 let stop = system.start();
                 drop(stop);
 
+                let loc = current_location();
+                ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
                 fut.await
             })
             .await
     }
+}
+
+#[track_caller]
+fn current_location() -> &'static panic::Location<'static> {
+    panic::Location::caller()
 }
 
 impl fmt::Debug for SystemRunner {

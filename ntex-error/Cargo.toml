@@ -21,4 +21,7 @@ workspace = true
 
 [dependencies]
 ntex-bytes = { workspace = true }
+backtrace = { workspace = true }
+
+[dev-dependencies]
 thiserror = { workspace = true }

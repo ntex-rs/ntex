@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, ErrorKind};
 
 use ntex_error::{ErrorDiagnostic, ErrorType};
 
@@ -64,7 +64,12 @@ impl ErrorDiagnostic for ConnectError {
             | ConnectError::NoRecords
             | ConnectError::Unresolved => ErrorType::ServiceError,
             ConnectError::Io(err) => {
-                if err.kind() == io::ErrorKind::InvalidInput {
+                if matches!(
+                    err.kind(),
+                    ErrorKind::InvalidInput
+                        | ErrorKind::AddrNotAvailable
+                        | ErrorKind::Unsupported
+                ) {
                     ErrorType::ClientError
                 } else {
                     ErrorType::ServiceError

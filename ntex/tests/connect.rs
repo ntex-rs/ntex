@@ -1,5 +1,6 @@
 use std::{io, rc::Rc};
 
+use ntex::error::{ErrorDiagnostic, ErrorKind, ErrorType};
 use ntex::io::{Io, types::PeerAddr};
 use ntex::service::{Pipeline, ServiceFactory, chain_factory, fn_service};
 use ntex::{SharedCfg, codec::BytesCodec, connect::Connect};
@@ -108,6 +109,20 @@ async fn test_openssl_string() {
     assert_eq!(io.query::<PeerCertChain>().as_ref().unwrap().0.len(), 1);
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
+
+    // error
+    let _srv2 = test_server(async || {
+        fn_service(|io: Io| async move {
+            io.send(Bytes::from_static(b"test"), &BytesCodec)
+                .await
+                .unwrap();
+            Ok::<_, io::Error>(())
+        })
+    });
+    let addr = "127.0.0.1".to_string();
+    let err = conn.call(addr.into()).await.err().unwrap();
+    assert_eq!(err.kind().error_type(), ErrorType::ClientError);
+    assert!(format!("{err:?}").contains("connect::service::connect::{{closure}}"));
 }
 
 #[cfg(feature = "openssl")]

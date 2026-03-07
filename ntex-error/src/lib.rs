@@ -1,15 +1,26 @@
 //! Error management.
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::{error, fmt, fmt::Write, marker::PhantomData, ops, panic::Location, sync::Arc};
 
-use ntex_bytes::{ByteString, BytesMut};
+use backtrace::{Backtrace as StdBacktrace, BacktraceFrame};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+thread_local! {
+    static BACKTRACES: RefCell<HashMap<&'static Location<'static>, Backtrace>> = RefCell::new(HashMap::default());
+}
+static mut START: Option<(&'static str, u32)> = None;
+
+#[track_caller]
+pub fn set_backtrace_start(file: &'static str, line: u32) {
+    unsafe {
+        START = Some((file, line));
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorType {
-    #[error("Success")]
     Success,
-    #[error("ClientError")]
     ClientError,
-    #[error("ServiceError")]
     ServiceError,
 }
 
@@ -51,16 +62,8 @@ pub trait ErrorDiagnostic: error::Error + 'static {
     }
 
     /// Provides error call location
-    fn location(&self) -> Option<&'static Location<'static>> {
+    fn backtrace(&self) -> Option<&Backtrace> {
         None
-    }
-
-    /// Traverse error chain
-    fn traverse(&self, f: &mut dyn FnMut(&dyn ErrorInfo))
-    where
-        Self: Sized,
-    {
-        f(&ErrorInfoWrapper { inner: self });
     }
 
     #[track_caller]
@@ -72,43 +75,23 @@ pub trait ErrorDiagnostic: error::Error + 'static {
     }
 }
 
-pub trait ErrorInfo {
-    fn error_type(&self) -> ErrorType;
-
-    fn error_signature(&self) -> ByteString;
-
-    fn service(&self) -> Option<&'static str>;
-
-    fn signature(&self) -> &'static str;
-
-    fn description(&self) -> ByteString;
-
-    fn location(&self) -> Option<&'static Location<'static>>;
-}
-
-trait Traversable<K>: ErrorDiagnostic<Kind = K> {
-    fn traverse(&self, f: &mut dyn FnMut(&dyn ErrorInfo));
-}
-
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("{error}")]
+#[derive(Debug, Clone)]
 pub struct Error<E> {
-    #[source]
     error: E,
     service: Option<&'static str>,
-    location: &'static Location<'static>,
+    backtrace: Backtrace,
 }
 
 impl<E> Error<E> {
     pub const fn new(
         error: E,
         service: Option<&'static str>,
-        location: &'static Location<'static>,
+        backtrace: Backtrace,
     ) -> Self {
         Self {
             error,
             service,
-            location,
+            backtrace,
         }
     }
 
@@ -128,7 +111,7 @@ impl<E> Error<E> {
         Error {
             error: f(self.error),
             service: self.service,
-            location: self.location,
+            backtrace: self.backtrace,
         }
     }
 
@@ -138,10 +121,22 @@ impl<E> Error<E> {
     }
 }
 
-impl<E> From<E> for Error<E> {
+impl<E: ErrorDiagnostic> From<E> for Error<E> {
     #[track_caller]
     fn from(error: E) -> Self {
-        Self::new(error, None, Location::caller())
+        let bt = if let Some(bt) = error.backtrace() {
+            bt.clone()
+        } else {
+            let loc = Location::caller();
+            BACKTRACES.with(move |backtraces| {
+                backtraces
+                    .borrow_mut()
+                    .entry(loc)
+                    .or_insert_with(|| Backtrace::new(loc))
+                    .clone()
+            })
+        };
+        Self::new(error, None, bt)
     }
 }
 
@@ -173,6 +168,15 @@ impl<E> ops::Deref for Error<E> {
     }
 }
 
+impl<E> error::Error for Error<E>
+where
+    E: ErrorDiagnostic,
+{
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
 impl<E> ErrorDiagnostic for Error<E>
 where
     E: ErrorDiagnostic,
@@ -195,22 +199,14 @@ where
         self.error.signature()
     }
 
-    fn location(&self) -> Option<&'static Location<'static>> {
-        Some(self.location)
-    }
-
-    /// Traverse error chain
-    fn traverse(&self, f: &mut dyn FnMut(&dyn ErrorInfo)) {
-        f(&ErrorInfoWrapper { inner: self });
-        self.error.traverse(f);
+    fn backtrace(&self) -> Option<&Backtrace> {
+        Some(&self.backtrace)
     }
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("{error}")]
+#[derive(Debug, Clone)]
 pub struct ErrorChain<K: ErrorKind> {
-    #[source]
-    error: Arc<dyn Traversable<K>>,
+    error: Arc<dyn ErrorDiagnostic<Kind = K>>,
 }
 
 impl<K: ErrorKind> ErrorChain<K> {
@@ -221,12 +217,24 @@ impl<K: ErrorKind> ErrorChain<K> {
         E::Kind: Into<K>,
     {
         let service = error.service();
+        let backtrace = if let Some(bt) = error.backtrace() {
+            bt.clone()
+        } else {
+            let loc = Location::caller();
+            BACKTRACES.with(move |backtraces| {
+                backtraces
+                    .borrow_mut()
+                    .entry(loc)
+                    .or_insert_with(|| Backtrace::new(loc))
+                    .clone()
+            })
+        };
 
         Self {
             error: Arc::new(ErrorChainWrapper {
                 error,
                 service,
-                location: Location::caller(),
+                backtrace,
                 _k: PhantomData,
             }),
         }
@@ -244,10 +252,19 @@ where
             error: Arc::new(ErrorChainWrapper {
                 service: err.service(),
                 error: err.error,
-                location: err.location,
+                backtrace: err.backtrace,
                 _k: PhantomData,
             }),
         }
+    }
+}
+
+impl<K> error::Error for ErrorChain<K>
+where
+    K: ErrorKind,
+{
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        self.error.source()
     }
 }
 
@@ -269,33 +286,24 @@ where
         self.error.signature()
     }
 
-    fn location(&self) -> Option<&'static Location<'static>> {
-        self.error.location()
-    }
-
-    fn traverse(&self, f: &mut dyn FnMut(&dyn ErrorInfo)) {
-        Traversable::traverse(self.error.as_ref(), f);
+    fn backtrace(&self) -> Option<&Backtrace> {
+        self.error.backtrace()
     }
 }
 
-#[derive(thiserror::Error)]
-#[error("{error}")]
 struct ErrorChainWrapper<E: Sized, K> {
-    #[source]
     error: E,
     service: Option<&'static str>,
-    location: &'static Location<'static>,
+    backtrace: Backtrace,
     _k: PhantomData<K>,
 }
 
-impl<E, K> Traversable<K> for ErrorChainWrapper<E, K>
+impl<E, K> error::Error for ErrorChainWrapper<E, K>
 where
     E: ErrorDiagnostic,
-    E::Kind: Into<K>,
-    K: ErrorKind,
 {
-    fn traverse(&self, f: &mut dyn FnMut(&dyn ErrorInfo)) {
-        f(&ErrorInfoWrapper { inner: self });
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        Some(&self.error)
     }
 }
 
@@ -319,13 +327,128 @@ where
         self.error.signature()
     }
 
-    fn location(&self) -> Option<&'static Location<'static>> {
-        Some(self.location)
+    fn backtrace(&self) -> Option<&Backtrace> {
+        Some(&self.backtrace)
+    }
+}
+
+#[derive(Clone)]
+/// Representation of a backtrace.
+///
+/// This structure can be used to capture a backtrace at various
+/// points in a program and later used to inspect what the backtrace
+/// was at that time.
+pub struct Backtrace(Arc<BacktraceInner>);
+
+struct BacktraceInner {
+    bt: StdBacktrace,
+    repr: String,
+}
+
+impl Backtrace {
+    fn new(loc: &Location<'_>) -> Self {
+        let bt = StdBacktrace::new();
+
+        let mut frames: Vec<BacktraceFrame> = bt.into();
+        if let Some(idx) = find_loc(loc, &frames) {
+            frames = frames.split_off(idx);
+        }
+
+        #[allow(static_mut_refs)]
+        if let Some(start) = unsafe { START }
+            && let Some(idx) = find_loc_start(start, &frames)
+        {
+            frames.truncate(idx);
+        }
+
+        let bt = frames.into();
+        let mut repr = String::new();
+        let _ = write!(&mut repr, "\n{:?}", bt);
+        Self(Arc::new(BacktraceInner { bt, repr }))
     }
 
-    fn traverse(&self, f: &mut dyn FnMut(&dyn ErrorInfo)) {
-        f(&ErrorInfoWrapper { inner: self });
-        self.error.traverse(f);
+    /// Backtrace repr
+    pub fn repr(&self) -> &str {
+        &self.0.repr
+    }
+
+    /// Returns the frames from when this backtrace was captured.
+    pub fn frames(&self) -> &[BacktraceFrame] {
+        self.0.bt.frames()
+    }
+}
+
+fn find_loc(loc: &Location<'_>, frames: &[BacktraceFrame]) -> Option<usize> {
+    for (idx, frm) in frames.iter().enumerate() {
+        for sym in frm.symbols() {
+            if let Some(fname) = sym.filename()
+                && let Some(lineno) = sym.lineno()
+                && let Some(column) = sym.colno()
+                && fname.ends_with(loc.file())
+                && lineno == loc.line()
+                && column == loc.column()
+            {
+                return Some(idx);
+            }
+        }
+    }
+    None
+}
+
+fn find_loc_start(loc: (&str, u32), frames: &[BacktraceFrame]) -> Option<usize> {
+    let mut idx = frames.len();
+    while idx > 0 {
+        idx -= idx;
+        let frm = &frames[idx];
+        for sym in frm.symbols() {
+            if let Some(fname) = sym.filename()
+                && let Some(lineno) = sym.lineno()
+                && fname.ends_with(loc.0)
+                && lineno == loc.1
+            {
+                return Some(idx + 1);
+            }
+        }
+    }
+    None
+}
+
+impl fmt::Debug for Backtrace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0.repr, f)
+    }
+}
+
+impl fmt::Display for Backtrace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0.repr, f)
+    }
+}
+
+impl<E> fmt::Display for Error<E>
+where
+    E: ErrorDiagnostic,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl<K> fmt::Display for ErrorChain<K>
+where
+    K: ErrorKind,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl<E, K> fmt::Display for ErrorChainWrapper<E, K>
+where
+    E: error::Error,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.error, f)
     }
 }
 
@@ -338,37 +461,13 @@ where
     }
 }
 
-struct ErrorInfoWrapper<'a, E: ErrorDiagnostic> {
-    inner: &'a E,
-}
-
-impl<'a, E: ErrorDiagnostic> ErrorInfo for ErrorInfoWrapper<'a, E> {
-    fn error_type(&self) -> ErrorType {
-        self.inner.kind().error_type()
-    }
-
-    fn error_signature(&self) -> ByteString {
-        let mut buf = BytesMut::new();
-        let _ = write!(&mut buf, "{}", self.inner.kind());
-        ByteString::try_from(buf).unwrap()
-    }
-
-    fn service(&self) -> Option<&'static str> {
-        self.inner.service()
-    }
-
-    fn signature(&self) -> &'static str {
-        self.inner.signature()
-    }
-
-    fn description(&self) -> ByteString {
-        let mut buf = BytesMut::new();
-        let _ = write!(&mut buf, "{}", self.inner);
-        ByteString::try_from(buf).unwrap()
-    }
-
-    fn location(&self) -> Option<&'static Location<'static>> {
-        self.inner.location()
+impl fmt::Display for ErrorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorType::Success => write!(f, "Success"),
+            ErrorType::ClientError => write!(f, "ClientError"),
+            ErrorType::ServiceError => write!(f, "ServiceError"),
+        }
     }
 }
 
@@ -442,16 +541,7 @@ mod tests {
             err,
             Into::<Error<TestError>>::into(TestError::Service("409 Error"))
         );
-        assert!(err.location().is_some());
-
-        err.traverse(&mut |info| {
-            let _ = info.location();
-            assert_eq!(info.error_type(), ErrorType::ServiceError);
-            assert_eq!(info.error_signature(), "ServiceError");
-            assert_eq!(info.signature(), "Service-Internal");
-            assert_eq!(info.description(), "InternalServiceError");
-            assert_eq!(info.service(), Some("test"));
-        });
+        assert!(err.backtrace().is_some());
 
         let err = err.set_service("SVC");
         assert_eq!(err.service(), Some("SVC"));
@@ -471,15 +561,7 @@ mod tests {
         assert_eq!(TestError::Connect("").to_string(), "Connect err: ");
         assert_eq!(TestError::Disconnect.to_string(), "Disconnect");
         assert_eq!(TestError::Disconnect.service(), Some("test"));
-        assert!(TestError::Disconnect.location().is_none());
-
-        TestError::Connect("").traverse(&mut |info| {
-            let _ = info.location();
-            assert_eq!(info.error_type(), ErrorType::ClientError);
-            assert_eq!(info.error_signature(), "Connect");
-            assert_eq!(info.signature(), "Client-Connect");
-            assert_eq!(info.description(), "Connect err: ");
-        });
+        assert!(TestError::Disconnect.backtrace().is_none());
 
         assert_eq!(ErrorType::Success.as_str(), "Success");
         assert_eq!(ErrorType::ClientError.as_str(), "ClientError");
@@ -514,15 +596,7 @@ mod tests {
         assert_eq!(err.service(), Some("test"));
         assert_eq!(err.signature(), "Service-Internal");
         assert_eq!(err.to_string(), "InternalServiceError");
-        assert!(err.location().is_some());
+        assert!(err.backtrace().is_some());
         assert!(format!("{:?}", err).contains("Service(\"404 Error\")"));
-
-        err.traverse(&mut |info| {
-            assert!(info.location().is_some());
-            assert_eq!(info.error_type(), ErrorType::ServiceError);
-            assert_eq!(info.error_signature(), "ServiceError");
-            assert_eq!(info.signature(), "Service-Internal");
-            assert_eq!(info.description(), "InternalServiceError");
-        });
     }
 }

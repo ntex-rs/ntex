@@ -171,7 +171,7 @@ where
 
         let io = ctx.call(&self.svc, message).await?;
         let tag = io.tag();
-        log::trace!("{tag}: SSL Handshake start for: {host:?}");
+        log::trace!("{tag}: SSL Handshake start for: {host:?} {io:?}");
 
         async {
             let config = self.openssl.configure().map_err(|e| {
