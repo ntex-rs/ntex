@@ -413,7 +413,7 @@ async fn basic_connect_service() {
     assert!(result.is_err());
     let result = srv.connect("localhost:99999").await;
     assert!(result.is_err());
-    assert!(format!("{srv:?}").contains("Connector"));
+    assert!(format!("{srv:?}").contains("ConnectorService"));
 
     let srv = ntex_net::connect::ConnectorService::default();
     let result = srv.connect(format!("{}", server.addr())).await;
@@ -445,7 +445,7 @@ async fn basic_connect_service() {
     assert!(result.is_err());
     let result = srv.connect("localhost:99999").await;
     assert!(result.is_err());
-    assert!(format!("{srv:?}").contains("Connector2"));
+    assert!(format!("{srv:?}").contains("ConnectorService2"));
 
     let srv = ntex_net::connect::ConnectorService2::default();
     let result = srv.connect(format!("{}", server.addr())).await;
