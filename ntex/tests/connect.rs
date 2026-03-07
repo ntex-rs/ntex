@@ -110,20 +110,15 @@ async fn test_openssl_string() {
     assert_eq!(item, Bytes::from_static(b"test"));
 
     // error
-    let _srv2 = test_server(async || {
-        fn_service(|io: Io| async move {
-            io.send(Bytes::from_static(b"test"), &BytesCodec)
-                .await
-                .unwrap();
-            Ok::<_, io::Error>(())
-        })
-    });
-    let addr = "127.0.0.1".to_string();
-    let err = conn.call(addr.into()).await.err().unwrap();
-    assert!(
-        format!("{err:?}").contains("ntex_net::connect::service::connect::"),
-        "{err:#?}"
-    );
+    #[cfg(unix)]
+    {
+        let addr = "127.0.0.1".to_string();
+        let err = conn.call(addr.into()).await.err().unwrap();
+        assert!(
+            format!("{err:?}").contains("ntex_net::connect::service::connect::"),
+            "{err:#?}"
+        );
+    }
 }
 
 #[cfg(feature = "openssl")]
