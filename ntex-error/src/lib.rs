@@ -379,8 +379,18 @@ impl Backtrace {
 }
 
 fn find_loc(loc: &Location<'_>, frames: &[BacktraceFrame]) -> Option<usize> {
+    println!(
+        "== {:?} - {:?} - {:?}",
+        loc.file(),
+        loc.line(),
+        loc.column()
+    );
+
     for (idx, frm) in frames.iter().enumerate() {
+        println!("=====================");
         for sym in frm.symbols() {
+            println!("-- {:?} - {:?}", sym.filename(), sym.lineno());
+
             if let Some(fname) = sym.filename()
                 && let Some(lineno) = sym.lineno()
                 && fname.ends_with(loc.file())
