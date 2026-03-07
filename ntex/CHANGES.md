@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.0] - 2026-03-xx
+
+* Use ntex_error::Error for http client
+
 ## [3.5.1] - 2026-02-19
 
 * Fix http client request version

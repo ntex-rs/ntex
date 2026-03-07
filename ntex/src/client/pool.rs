@@ -4,6 +4,7 @@ use std::{cell::Cell, cell::RefCell, collections::VecDeque, fmt, future, pin, rc
 
 use ntex_h2::{self as h2};
 
+use crate::error::Error;
 use crate::http::uri::{Authority, Scheme, Uri};
 use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::service::cfg::SharedCfg;
@@ -19,7 +20,7 @@ pub(super) struct Key {
     authority: Authority,
 }
 
-type Connector = boxed::BoxService<Connect, IoBoxed, ConnectError>;
+type Connector = boxed::BoxService<Connect, IoBoxed, Error<ConnectError>>;
 
 impl From<Authority> for Key {
     fn from(authority: Authority) -> Key {
@@ -27,8 +28,8 @@ impl From<Authority> for Key {
     }
 }
 
-type Waiter = pool::Sender<Result<Connection, ConnectError>>;
-type WaiterReceiver = pool::Receiver<Result<Connection, ConnectError>>;
+type Waiter = pool::Sender<Result<Connection, Error<ConnectError>>>;
+type WaiterReceiver = pool::Receiver<Result<Connection, Error<ConnectError>>>;
 
 enum Acquire {
     Acquired(ConnectionType, Instant),
@@ -142,7 +143,7 @@ impl fmt::Debug for ConnectionPool {
 
 impl Service<Connect> for ConnectionPool {
     type Response = Connection;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
 
     #[inline]
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
@@ -165,7 +166,7 @@ impl Service<Connect> for ConnectionPool {
         &self,
         req: Connect,
         _: ServiceCtx<'_, Self>,
-    ) -> Result<Connection, ConnectError> {
+    ) -> Result<Connection, Error<ConnectError>> {
         log::trace!("{}: Get connection for {:?}", self.0.config.tag(), req.uri);
 
         let inner = self.0.inner.clone();
@@ -174,7 +175,7 @@ impl Service<Connect> for ConnectionPool {
         let key = if let Some(authority) = req.uri.authority() {
             authority.clone().into()
         } else {
-            return Err(ConnectError::Unresolved);
+            return Err(ConnectError::Unresolved.into());
         };
 
         // acquire connection
@@ -202,7 +203,7 @@ impl Service<Connect> for ConnectionPool {
                 OpenConnection::spawn(key, tx, uri, inner, &self.0.svc, req);
 
                 match rx.await {
-                    Err(_) => Err(ConnectError::Disconnected(None)),
+                    Err(_) => Err(ConnectError::Disconnected(None).into()),
                     Ok(res) => res,
                 }
             }
@@ -215,7 +216,7 @@ impl Service<Connect> for ConnectionPool {
                 );
                 let rx = waiters.borrow_mut().wait_for(req);
                 match rx.await {
-                    Err(_) => Err(ConnectError::Disconnected(None)),
+                    Err(_) => Err(ConnectError::Disconnected(None).into()),
                     Ok(res) => res,
                 }
             }
@@ -226,7 +227,7 @@ impl Service<Connect> for ConnectionPool {
 #[derive(Debug)]
 struct Waiters {
     waiters: HashMap<Key, VecDeque<(Connect, Waiter)>>,
-    pool: pool::Pool<Result<Connection, ConnectError>>,
+    pool: pool::Pool<Result<Connection, Error<ConnectError>>>,
 }
 
 impl Waiters {
@@ -676,10 +677,8 @@ mod tests {
             uri: Uri::try_from("/test").unwrap(),
             addr: None,
         };
-        assert!(matches!(
-            pool.call(req).await,
-            Err(ConnectError::Unresolved)
-        ));
+        let _err = Error::from(ConnectError::Unresolved);
+        assert!(matches!(pool.call(req).await, Err(_err)));
 
         // connect one
         let req = Connect {

@@ -2,8 +2,7 @@ use std::{collections::VecDeque, io, marker::PhantomData, net::SocketAddr};
 
 use ntex_error::Error;
 use ntex_io::{Io, IoConfig, types};
-use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory, cfg::Cfg, cfg::SharedCfg};
 use ntex_util::{future::Either, time::timeout_checked};
 
 use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
@@ -59,7 +58,7 @@ impl<T> Default for ConnectorService<T> {
 
 impl<T: Address> ConnectorService<T> {
     /// Resolve and connect to remote host
-    pub async fn connect<U>(&self, message: U) -> Result<Io, ConnectError>
+    pub async fn connect<U>(&self, message: U) -> Result<Io, Error<ConnectError>>
     where
         Connect<T>: From<U>,
     {
@@ -82,20 +81,24 @@ impl<T: Address> ConnectorService<T> {
                     .map_err(Error::into_error)
             } else {
                 log::error!("{}: TCP connector: got unresolved address", self.cfg.tag());
-                Err(ConnectError::Unresolved)
+                Err(Error::from(ConnectError::Unresolved))
             }
         })
         .await
         .map_err(|()| {
-            ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Connect timeout"))
+            Error::from(ConnectError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Connect timeout",
+            )))
         })
         .and_then(|item| item)
+        .map_err(|e| e.set_service(self.shared.service()))
     }
 }
 
 impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
     type Response = Io;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
     type Service = ConnectorService<T>;
     type InitError = ConnectServiceError;
 
@@ -106,7 +109,7 @@ impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
 
 impl<T: Address> Service<Connect<T>> for ConnectorService<T> {
     type Response = Io;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
 
     async fn call(
         &self,

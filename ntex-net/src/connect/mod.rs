@@ -10,11 +10,12 @@ pub use self::message::{Address, Connect};
 pub use self::service::{Connector, ConnectorService};
 pub use self::service::{Connector2, ConnectorService2};
 
+use ntex_error::Error;
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
 /// Resolve and connect to remote host
-pub async fn connect<T, U>(message: U) -> Result<Io, ConnectError>
+pub async fn connect<T, U>(message: U) -> Result<Io, Error<ConnectError>>
 where
     T: Address,
     Connect<T>: From<U>,
@@ -23,7 +24,10 @@ where
 }
 
 /// Resolve and connect to remote host
-pub async fn connect_with<T, U>(message: U, cfg: SharedCfg) -> Result<Io, ConnectError>
+pub async fn connect_with<T, U>(
+    message: U,
+    cfg: SharedCfg,
+) -> Result<Io, Error<ConnectError>>
 where
     T: Address,
     Connect<T>: From<U>,

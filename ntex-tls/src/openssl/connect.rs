@@ -36,10 +36,10 @@ impl<A: Address> SslConnector<Connector<A>> {
 
 impl<A: Address, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector<S>
 where
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
+    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = Error<ConnectError>>,
 {
     type Response = Io<Layer<SslFilter>>;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
     type Service = SslConnectorService<S::Service>;
     type InitError = S::InitError;
 
@@ -56,10 +56,10 @@ where
 
 impl<A: Address, S> Service<Connect<A>> for SslConnectorService<S>
 where
-    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
+    S: Service<Connect<A>, Response = Io, Error = Error<ConnectError>>,
 {
     type Response = Io<Layer<SslFilter>>;
-    type Error = ConnectError;
+    type Error = Error<ConnectError>;
 
     ntex_service::forward_ready!(svc);
     ntex_service::forward_poll!(svc);
@@ -76,35 +76,35 @@ where
         let tag = io.tag();
         log::trace!("{tag}: SSL Handshake start for: {host:?}");
 
-        match self.openssl.configure() {
-            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e).into()),
-            Ok(config) => {
-                let ssl = config
-                    .into_ssl(&host)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        async {
+            let config = self.openssl.configure().map_err(|e| {
+                ConnectError::from(io::Error::new(io::ErrorKind::InvalidInput, e))
+            })?;
+            let ssl = config.into_ssl(&host).map_err(|e| {
+                ConnectError::from(io::Error::new(io::ErrorKind::InvalidInput, e))
+            })?;
 
-                match timeout_checked(self.cfg.handshake_timeout(), connect_io(io, ssl))
-                    .await
-                {
-                    Ok(Ok(io)) => {
-                        log::trace!("{tag}: SSL Handshake success: {host:?}");
-                        Ok(io)
-                    }
-                    Ok(Err(e)) => {
-                        log::trace!("{tag}: SSL Handshake error: {e:?}");
-                        Err(e.into())
-                    }
-                    Err(()) => {
-                        log::trace!("{tag}: SSL Handshake timeout");
-                        Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "SSL Handshake timeout",
-                        )
-                        .into())
-                    }
+            match timeout_checked(self.cfg.handshake_timeout(), connect_io(io, ssl)).await {
+                Ok(Ok(io)) => {
+                    log::trace!("{tag}: SSL Handshake success: {host:?}");
+                    Ok(io)
+                }
+                Ok(Err(e)) => {
+                    log::trace!("{tag}: SSL Handshake error: {e:?}");
+                    Err(ConnectError::from(e).into())
+                }
+                Err(()) => {
+                    log::trace!("{tag}: SSL Handshake timeout");
+                    Err(ConnectError::from(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "SSL Handshake timeout",
+                    ))
+                    .into())
                 }
             }
         }
+        .await
+        .map_err(|e: Error<_>| e.set_service(self.cfg.service()))
     }
 }
 

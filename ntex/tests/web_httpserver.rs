@@ -236,7 +236,8 @@ async fn test_bind_uds() {
                 ntex::service::fn_service(|_| async {
                     Ok(
                         rt::unix_connect("/tmp/uds-test", ntex::SharedCfg::default())
-                            .await?,
+                            .await
+                            .map_err(ntex::connect::ConnectError::from)?,
                     )
                 })
                 .map_init_err(|_| unreachable!()),
@@ -294,7 +295,8 @@ async fn test_listen_uds() {
                 ntex::service::fn_service(|_| async {
                     Ok(
                         rt::unix_connect("/tmp/uds-test2", ntex::SharedCfg::default())
-                            .await?,
+                            .await
+                            .map_err(ntex::connect::ConnectError::from)?,
                     )
                 })
                 .map_init_err(|_| unreachable!()),

@@ -10,14 +10,14 @@ use crate::time::{Millis, timeout_checked};
 use crate::util::{ByteString, Bytes, Either, select};
 
 use super::ClientRawRequest;
-use super::error::{ConnectError, SendRequestError};
+use super::error::{ClientError, ConnectError};
 
 pub(super) async fn send_request(
     client: H2Client,
     req: ClientRawRequest,
     body: Body,
     timeout: Millis,
-) -> Result<(ResponseHead, Payload), SendRequestError> {
+) -> Result<(ResponseHead, Payload), ClientError> {
     log::trace!(
         "{}: Sending client request: {req:?} {:?}",
         client.client.tag(),
@@ -85,17 +85,16 @@ pub(super) async fn send_request(
 
     timeout_checked(timeout, get_response(rcv_stream))
         .await
-        .map_err(|()| SendRequestError::Timeout)
+        .map_err(|()| ClientError::Timeout)
         .and_then(|res| res)
 }
 
 async fn get_response(
     rcv_stream: RecvStream,
-) -> Result<(ResponseHead, Payload), SendRequestError> {
-    let h2::Message { stream, kind } = rcv_stream
-        .recv()
-        .await
-        .ok_or(SendRequestError::Connect(ConnectError::Disconnected(None)))?;
+) -> Result<(ResponseHead, Payload), ClientError> {
+    let h2::Message { stream, kind } = rcv_stream.recv().await.ok_or(
+        ClientError::Connect(ConnectError::Disconnected(None).into()),
+    )?;
     match kind {
         h2::MessageKind::Headers {
             pseudo,
@@ -198,12 +197,12 @@ async fn get_response(
                     };
                     Ok((head, payload))
                 }
-                None => Err(SendRequestError::H2(h2::OperationError::Connection(
+                None => Err(ClientError::H2(h2::OperationError::Connection(
                     h2::ConnectionError::MissingPseudo("Status"),
                 ))),
             }
         }
-        _ => Err(SendRequestError::Error(Rc::new(io::Error::new(
+        _ => Err(ClientError::Error(Rc::new(io::Error::new(
             io::ErrorKind::Unsupported,
             "unexpected h2 message",
         )))),
@@ -213,7 +212,7 @@ async fn get_response(
 async fn send_body(
     mut body: Body,
     stream: &h2::client::SendStream,
-) -> Result<(), SendRequestError> {
+) -> Result<(), ClientError> {
     loop {
         match poll_fn(|cx| body.poll_next_chunk(cx)).await {
             Some(Ok(b)) => {
