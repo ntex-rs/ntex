@@ -41,7 +41,7 @@ pub trait ErrorDiagnostic: error::Error + 'static {
     fn kind(&self) -> Self::Kind;
 
     /// Provides a string to identify responsible service
-    fn service(&self) -> Option<ByteString> {
+    fn service(&self) -> Option<&'static str> {
         None
     }
 
@@ -77,7 +77,7 @@ pub trait ErrorInfo {
 
     fn error_signature(&self) -> ByteString;
 
-    fn service(&self) -> Option<ByteString>;
+    fn service(&self) -> Option<&'static str>;
 
     fn signature(&self) -> &'static str;
 
@@ -95,14 +95,14 @@ trait Traversable<K>: ErrorDiagnostic<Kind = K> {
 pub struct Error<E> {
     #[source]
     error: E,
-    service: Option<ByteString>,
+    service: Option<&'static str>,
     location: &'static Location<'static>,
 }
 
 impl<E> Error<E> {
     pub const fn new(
         error: E,
-        service: Option<ByteString>,
+        service: Option<&'static str>,
         location: &'static Location<'static>,
     ) -> Self {
         Self {
@@ -112,11 +112,15 @@ impl<E> Error<E> {
         }
     }
 
-    /// Get inner error value
-    pub fn into_error(self) -> E {
-        self.error
+    /// Set response service
+    pub fn set_service(mut self, name: &'static str) -> Self {
+        self.service = Some(name);
+        self
     }
 
+    /// Map inner error to new error
+    ///
+    /// Keep same `service` and `location`
     pub fn map<U, F>(self, f: F) -> Error<U>
     where
         F: FnOnce(E) -> U,
@@ -127,15 +131,21 @@ impl<E> Error<E> {
             location: self.location,
         }
     }
-}
 
-impl<E: ErrorDiagnostic> From<E> for Error<E> {
-    #[track_caller]
-    fn from(error: E) -> Self {
-        let service = error.service();
-        Self::new(error, service, Location::caller())
+    /// Get inner error value
+    pub fn into_error(self) -> E {
+        self.error
     }
 }
+
+impl<E> From<E> for Error<E> {
+    #[track_caller]
+    fn from(error: E) -> Self {
+        Self::new(error, None, Location::caller())
+    }
+}
+
+impl<E> Eq for Error<E> where E: Eq {}
 
 impl<E> PartialEq for Error<E>
 where
@@ -146,7 +156,14 @@ where
     }
 }
 
-impl<E> Eq for Error<E> where E: Eq {}
+impl<E> PartialEq<E> for Error<E>
+where
+    E: PartialEq,
+{
+    fn eq(&self, other: &E) -> bool {
+        self.error.eq(other)
+    }
+}
 
 impl<E> ops::Deref for Error<E> {
     type Target = E;
@@ -166,8 +183,12 @@ where
         self.error.kind()
     }
 
-    fn service(&self) -> Option<ByteString> {
-        self.service.clone()
+    fn service(&self) -> Option<&'static str> {
+        if self.service.is_some() {
+            self.service
+        } else {
+            self.error.service()
+        }
     }
 
     fn signature(&self) -> &'static str {
@@ -221,8 +242,8 @@ where
     fn from(err: Error<E>) -> Self {
         Self {
             error: Arc::new(ErrorChainWrapper {
+                service: err.service(),
                 error: err.error,
-                service: err.service,
                 location: err.location,
                 _k: PhantomData,
             }),
@@ -240,7 +261,7 @@ where
         self.error.kind()
     }
 
-    fn service(&self) -> Option<ByteString> {
+    fn service(&self) -> Option<&'static str> {
         self.error.service()
     }
 
@@ -262,7 +283,7 @@ where
 struct ErrorChainWrapper<E: Sized, K> {
     #[source]
     error: E,
-    service: Option<ByteString>,
+    service: Option<&'static str>,
     location: &'static Location<'static>,
     _k: PhantomData<K>,
 }
@@ -290,8 +311,8 @@ where
         self.error.kind().into()
     }
 
-    fn service(&self) -> Option<ByteString> {
-        self.service.clone()
+    fn service(&self) -> Option<&'static str> {
+        self.service
     }
 
     fn signature(&self) -> &'static str {
@@ -332,7 +353,7 @@ impl<'a, E: ErrorDiagnostic> ErrorInfo for ErrorInfoWrapper<'a, E> {
         ByteString::try_from(buf).unwrap()
     }
 
-    fn service(&self) -> Option<ByteString> {
+    fn service(&self) -> Option<&'static str> {
         self.inner.service()
     }
 
@@ -397,8 +418,8 @@ mod tests {
             }
         }
 
-        fn service(&self) -> Option<ByteString> {
-            Some(ByteString::from_static("test"))
+        fn service(&self) -> Option<&'static str> {
+            Some("test")
         }
 
         fn signature(&self) -> &'static str {
@@ -416,7 +437,7 @@ mod tests {
         assert_eq!(err.kind(), TestKind::ServiceError);
         assert_eq!((*err).kind(), TestKind::ServiceError);
         assert_eq!(err.to_string(), "InternalServiceError");
-        assert_eq!(err.service(), Some(ByteString::from_static("test")));
+        assert_eq!(err.service(), Some("test"));
         assert_eq!(
             err,
             Into::<Error<TestError>>::into(TestError::Service("409 Error"))
@@ -429,8 +450,11 @@ mod tests {
             assert_eq!(info.error_signature(), "ServiceError");
             assert_eq!(info.signature(), "Service-Internal");
             assert_eq!(info.description(), "InternalServiceError");
-            assert_eq!(info.service(), Some(ByteString::from_static("test")));
+            assert_eq!(info.service(), Some("test"));
         });
+
+        let err = err.set_service("SVC");
+        assert_eq!(err.service(), Some("SVC"));
 
         assert_eq!(
             TestError::Connect("").kind().error_type(),
@@ -446,10 +470,7 @@ mod tests {
         );
         assert_eq!(TestError::Connect("").to_string(), "Connect err: ");
         assert_eq!(TestError::Disconnect.to_string(), "Disconnect");
-        assert_eq!(
-            TestError::Disconnect.service(),
-            Some(ByteString::from_static("test"))
-        );
+        assert_eq!(TestError::Disconnect.service(), Some("test"));
         assert!(TestError::Disconnect.location().is_none());
 
         TestError::Connect("").traverse(&mut |info| {
@@ -490,7 +511,7 @@ mod tests {
         let err: ErrorChain<TestKind> = err.into();
         assert_eq!(err.kind(), TestKind::ServiceError);
         assert_eq!(err.kind(), TestError::Service("404 Error").kind());
-        assert_eq!(err.service(), Some(ByteString::from_static("test")));
+        assert_eq!(err.service(), Some("test"));
         assert_eq!(err.signature(), "Service-Internal");
         assert_eq!(err.to_string(), "InternalServiceError");
         assert!(err.location().is_some());

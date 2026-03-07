@@ -9,7 +9,9 @@ use tls_openssl::x509::X509;
 use crate::{PskIdentity, Servername};
 
 mod connect;
-pub use self::connect::{SslConnector, SslConnectorService};
+pub use self::connect::{
+    SslConnector, SslConnector2, SslConnectorService, SslConnectorService2,
+};
 
 mod accept;
 pub use self::accept::{SslAcceptor, SslAcceptorService};

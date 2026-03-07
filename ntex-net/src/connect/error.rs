@@ -1,5 +1,7 @@
 use std::io;
 
+use ntex_error::{ErrorDiagnostic, ErrorType};
+
 #[derive(thiserror::Error, Debug, Copy, Clone)]
 pub enum ConnectServiceError {
     /// Cannot create connect service
@@ -49,6 +51,26 @@ impl Clone for ConnectError {
 impl From<ConnectServiceError> for io::Error {
     fn from(err: ConnectServiceError) -> io::Error {
         io::Error::other(err)
+    }
+}
+
+impl ErrorDiagnostic for ConnectError {
+    type Kind = ErrorType;
+
+    fn kind(&self) -> Self::Kind {
+        match self {
+            ConnectError::InvalidInput => ErrorType::ClientError,
+            ConnectError::Resolver(_)
+            | ConnectError::NoRecords
+            | ConnectError::Unresolved => ErrorType::ServiceError,
+            ConnectError::Io(err) => {
+                if err.kind() == io::ErrorKind::InvalidInput {
+                    ErrorType::ClientError
+                } else {
+                    ErrorType::ServiceError
+                }
+            }
+        }
     }
 }
 

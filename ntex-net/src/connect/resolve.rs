@@ -1,5 +1,6 @@
 use std::{io, net};
 
+use ntex_error::Error;
 use ntex_rt::spawn_blocking;
 use ntex_util::future::Either;
 
@@ -9,7 +10,7 @@ use super::{Address, Connect, ConnectError};
 pub(crate) async fn lookup<T: Address>(
     mut req: Connect<T>,
     tag: &str,
-) -> Result<Connect<T>, ConnectError> {
+) -> Result<Connect<T>, Error<ConnectError>> {
     if req.addr.is_some() || req.req.addr().is_some() {
         Ok(req)
     } else if let Ok(ip) = req.host().parse() {
@@ -41,7 +42,7 @@ pub(crate) async fn lookup<T: Address>(
                 );
 
                 if req.addr.is_none() {
-                    Err(ConnectError::NoRecords)
+                    Err(ConnectError::NoRecords.into())
                 } else {
                     Ok(req)
                 }
@@ -53,7 +54,7 @@ pub(crate) async fn lookup<T: Address>(
                     req.host(),
                     e
                 );
-                Err(ConnectError::Resolver(e))
+                Err(ConnectError::Resolver(e).into())
             }
             Err(e) => {
                 log::trace!(
@@ -62,7 +63,7 @@ pub(crate) async fn lookup<T: Address>(
                     req.host(),
                     e
                 );
-                Err(ConnectError::Resolver(io::Error::other(e)))
+                Err(ConnectError::Resolver(io::Error::other(e)).into())
             }
         }
     }

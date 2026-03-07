@@ -1,5 +1,9 @@
 # Changes
 
+## [3.8.0] - 2026-03-08
+
+* Use ntex_error::Error<_> for connect service
+
 ## [3.7.0] - 2026-02-16
 
 * SharedCfg is not Copy
