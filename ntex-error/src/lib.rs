@@ -398,7 +398,7 @@ fn find_loc(loc: &Location<'_>, frames: &[BacktraceFrame]) -> Option<usize> {
 fn find_loc_start(loc: (&str, u32), frames: &[BacktraceFrame]) -> Option<usize> {
     let mut idx = frames.len();
     while idx > 0 {
-        idx -= idx;
+        idx -= 1;
         let frm = &frames[idx];
         for sym in frm.symbols() {
             if let Some(fname) = sym.filename()

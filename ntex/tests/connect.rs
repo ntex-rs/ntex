@@ -121,7 +121,7 @@ async fn test_openssl_string() {
     });
     let addr = "127.0.0.1".to_string();
     let err = conn.call(addr.into()).await.err().unwrap();
-    assert_eq!(err.kind().error_type(), ErrorType::ClientError);
+    assert_eq!(err.kind().error_type(), ErrorType::ClientError, "{err:#?}");
     assert!(format!("{err:?}").contains("connect::service::connect::{{closure}}"));
 }
 
