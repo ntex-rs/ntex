@@ -383,10 +383,8 @@ fn find_loc(loc: &Location<'_>, frames: &[BacktraceFrame]) -> Option<usize> {
         for sym in frm.symbols() {
             if let Some(fname) = sym.filename()
                 && let Some(lineno) = sym.lineno()
-                && let Some(column) = sym.colno()
                 && fname.ends_with(loc.file())
                 && lineno == loc.line()
-                && column == loc.column()
             {
                 return Some(idx);
             }
