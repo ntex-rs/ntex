@@ -287,7 +287,7 @@ mod tests {
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
-        assert!(format!("{srv:?}").contains("TlsConnector"));
+        assert!(format!("{srv:?}").contains("TlsConnectorService"));
     }
 
     #[ntex::test]
@@ -314,6 +314,6 @@ mod tests {
             .call(Connect::new("").set_addr(Some(server.addr())))
             .await;
         assert!(result.is_err());
-        assert!(format!("{srv:?}").contains("TlsConnector2"));
+        assert!(format!("{srv:?}").contains("TlsConnectorService2"));
     }
 }
