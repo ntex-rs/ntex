@@ -1,4 +1,6 @@
 //! Error management.
+#![deny(clippy::pedantic)]
+#![allow(clippy::must_use_candidate)]
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::marker::PhantomData;
@@ -57,6 +59,11 @@ pub trait ErrorDiagnostic: error::Error + 'static {
         None
     }
 
+    /// Check if error is service related
+    fn is_service(&self) -> bool {
+        self.kind().error_type() == ErrorType::Service
+    }
+
     /// Provides a string to identify specific kind of the error
     fn signature(&self) -> &'static str {
         self.kind().error_type().as_str()
@@ -110,6 +117,7 @@ impl<E> Error<E> {
         }
     }
 
+    #[must_use]
     /// Set response service
     pub fn set_service(mut self, name: &'static str) -> Self {
         self.inner.service = Some(name);
@@ -394,7 +402,7 @@ impl Backtrace {
 
                     let bt = Bt(&frames[..]);
                     let mut buf = String::new();
-                    let _ = write!(&mut buf, "\n{:?}", bt);
+                    let _ = write!(&mut buf, "\n{bt:?}");
                     let repr: Arc<str> = Arc::from(buf);
                     reprs.insert(id, repr.clone());
                     repr
@@ -458,7 +466,7 @@ fn find_loc_start(loc: (&str, u32), frames: &mut [Option<&BacktraceFrame>]) {
 
 struct Bt<'a>(&'a [Option<&'a BacktraceFrame>]);
 
-impl<'a> fmt::Debug for Bt<'a> {
+impl fmt::Debug for Bt<'_> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         let cwd = std::env::current_dir();
         let mut print_path =
@@ -559,8 +567,7 @@ mod tests {
     impl ErrorKind for TestKind {
         fn error_type(&self) -> ErrorType {
             match self {
-                TestKind::Connect => ErrorType::Client,
-                TestKind::Disconnect => ErrorType::Client,
+                TestKind::Connect | TestKind::Disconnect => ErrorType::Client,
                 TestKind::ServiceError => ErrorType::Service,
             }
         }
@@ -612,6 +619,7 @@ mod tests {
             Into::<Error<TestError>>::into(TestError::Service("409 Error"))
         );
         assert!(err.backtrace().is_some());
+        assert!(err.is_service());
 
         let err = err.set_service("SVC");
         assert_eq!(err.service(), Some("SVC"));
@@ -648,7 +656,7 @@ mod tests {
         assert_eq!(err.kind(), TestKind::ServiceError);
         assert_eq!(err.kind(), TestError::Service("409 Error").kind());
         assert_eq!(err.to_string(), "InternalServiceError");
-        assert!(format!("{:?}", err).contains("Service(\"409 Error\")"));
+        assert!(format!("{err:?}").contains("Service(\"409 Error\")"));
 
         let err: Error<TestError> = TestError::Service("404 Error").into();
         let err: ErrorChain<TestKind> = err.into();
@@ -658,7 +666,7 @@ mod tests {
         assert_eq!(err.signature(), "Service-Internal");
         assert_eq!(err.to_string(), "InternalServiceError");
         assert!(err.backtrace().is_some());
-        assert!(format!("{:?}", err).contains("Service(\"404 Error\")"));
+        assert!(format!("{err:?}").contains("Service(\"404 Error\")"));
 
         assert_eq!(24, mem::size_of::<TestError>());
         assert_eq!(8, mem::size_of::<Error<TestError>>());
