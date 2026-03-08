@@ -33,6 +33,8 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
             .enable_all()
             .build()
             .unwrap();
+
+        ntex_error::set_backtrace_start_alt("src/runtime/task/core.rs", 0);
         tok_io::task::LocalSet::new().block_on(&rt, fut);
     }
 }

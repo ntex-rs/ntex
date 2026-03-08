@@ -14,11 +14,18 @@ thread_local! {
     static REPRS: RefCell<HashMap<u64, Arc<str>>> = RefCell::new(HashMap::default());
 }
 static mut START: Option<(&'static str, u32)> = None;
+static mut START_ALT: Option<(&'static str, u32)> = None;
 
-#[track_caller]
 pub fn set_backtrace_start(file: &'static str, line: u32) {
     unsafe {
         START = Some((file, line));
+    }
+}
+
+#[doc(hidden)]
+pub fn set_backtrace_start_alt(file: &'static str, line: u32) {
+    unsafe {
+        START_ALT = Some((file, line));
     }
 }
 
@@ -83,7 +90,7 @@ pub trait ErrorDiagnostic: error::Error + 'static {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Error<E> {
     inner: Box<ErrorInner<E>>,
 }
@@ -358,7 +365,8 @@ where
 pub struct Backtrace(Arc<str>);
 
 impl Backtrace {
-    fn new(loc: &Location<'_>) -> Self {
+    /// Create new backtrace
+    pub fn new(loc: &Location<'_>) -> Self {
         let repr = FRAMES.with(|c| {
             let mut cache = c.borrow_mut();
             let mut idx = 0;
@@ -396,8 +404,13 @@ impl Backtrace {
                     find_loc(loc, &mut frames);
 
                     #[allow(static_mut_refs)]
-                    if let Some(start) = unsafe { START } {
-                        find_loc_start(start, &mut frames);
+                    {
+                        if let Some(start) = unsafe { START } {
+                            find_loc_start(start, &mut frames);
+                        }
+                        if let Some(start) = unsafe { START_ALT } {
+                            find_loc_start(start, &mut frames);
+                        }
                     }
 
                     let bt = Bt(&frames[..]);
@@ -441,26 +454,27 @@ fn find_loc(loc: &Location<'_>, frames: &mut [Option<&BacktraceFrame>]) {
 }
 
 fn find_loc_start(loc: (&str, u32), frames: &mut [Option<&BacktraceFrame>]) {
-    let mut idx = frames.len();
-    while idx > 0 {
-        idx -= 1;
+    let mut idx = 0;
+    while idx < frames.len() {
         if let Some(frm) = &frames[idx] {
             for sym in frm.symbols() {
                 if let Some(fname) = sym.filename()
                     && let Some(lineno) = sym.lineno()
                     && fname.ends_with(loc.0)
-                    && lineno == loc.1
+                    && (loc.1 == 0 || lineno == loc.1)
                 {
-                    for f in frames.iter_mut().skip(idx + 1) {
+                    for f in frames.iter_mut().skip(idx) {
                         if f.is_some() {
                             *f = None;
                         } else {
                             return;
                         }
                     }
+                    break;
                 }
             }
         }
+        idx += 1;
     }
 }
 
@@ -499,6 +513,19 @@ impl fmt::Debug for Backtrace {
 impl fmt::Display for Backtrace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl<E> fmt::Debug for Error<E>
+where
+    E: ErrorDiagnostic,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Error")
+            .field("error", &self.inner.error)
+            .field("service", &self.inner.service)
+            .field("backtrace", &self.inner.backtrace)
+            .finish()
     }
 }
 

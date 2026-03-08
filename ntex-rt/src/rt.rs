@@ -118,6 +118,7 @@ impl Runtime {
                 });
             }
 
+            ntex_error::set_backtrace_start_alt("src/raw.rs", 0);
             driver.run(self).expect("Driver failed");
             result.expect("Driver failed to poll")
         })

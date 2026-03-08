@@ -228,7 +228,7 @@ impl SystemRunner {
 }
 
 #[track_caller]
-fn current_location() -> &'static panic::Location<'static> {
+pub(crate) fn current_location() -> &'static panic::Location<'static> {
     panic::Location::caller()
 }
 
