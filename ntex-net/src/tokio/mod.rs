@@ -1,7 +1,6 @@
 #![allow(unused_variables)]
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
-use std::panic::Location;
 
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
