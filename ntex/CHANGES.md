@@ -1,5 +1,11 @@
 # Changes
 
+## [3.6.0] - 2026-03-08
+
+* Include ntex-error
+
+* web: Configure web test server port #790
+
 ## [3.5.1] - 2026-02-19
 
 * Fix http client request version

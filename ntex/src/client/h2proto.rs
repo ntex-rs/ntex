@@ -2,6 +2,7 @@ use std::{future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
+use crate::error::Error;
 use crate::http::ResponseHead;
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
@@ -69,7 +70,8 @@ pub(super) async fn send_request(
     let (snd_stream, rcv_stream) = client
         .client
         .send(req.head.method.clone(), path, hdrs, eof)
-        .await?;
+        .await
+        .map_err(Error::into_error)?;
 
     // send body
     if !eof {
@@ -164,7 +166,7 @@ async fn get_response(
                                                 pl.feed_eof(Bytes::new());
                                             }
                                             h2::StreamEof::Error(err) => {
-                                                pl.set_error(err.into());
+                                                pl.set_error(err.into_error().into());
                                             }
                                         }
                                     }
@@ -223,12 +225,18 @@ async fn send_body(
                     stream.id(),
                     b.len()
                 );
-                stream.send_payload(b, false).await?;
+                stream
+                    .send_payload(b, false)
+                    .await
+                    .map_err(Error::into_error)?;
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
                 log::trace!("{}: {:?} eof of send stream ", stream.tag(), stream.id());
-                stream.send_payload(Bytes::new(), true).await?;
+                stream
+                    .send_payload(Bytes::new(), true)
+                    .await
+                    .map_err(Error::into_error)?;
                 return Ok(());
             }
         }
