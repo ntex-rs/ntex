@@ -1,9 +1,12 @@
 use std::cell::{Cell, RefCell};
-use std::{error::Error, fmt, future::poll_fn, io, marker, mem, rc::Rc, task::Context};
+use std::{
+    error::Error as StdError, fmt, future::poll_fn, io, marker, mem, rc::Rc, task::Context,
+};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
 use crate::channel::oneshot;
+use crate::error::Error;
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
@@ -62,7 +65,7 @@ mod openssl {
         B: MessageBody,
         C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
             + 'static,
-        C::Error: Error,
+        C::Error: StdError,
         C::InitError: fmt::Debug,
     {
         /// Create ssl based service
@@ -103,7 +106,7 @@ mod rustls {
         B: MessageBody,
         C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
             + 'static,
-        C::Error: Error,
+        C::Error: StdError,
         C::InitError: fmt::Debug,
     {
         /// Create openssl based service
@@ -137,14 +140,14 @@ where
     S::InitError: fmt::Debug,
     B: MessageBody,
     C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
-    C::Error: Error,
+    C::Error: StdError,
     C::InitError: fmt::Debug,
 {
     /// Provide http/2 control service
     pub fn control<CT>(self, ctl: CT) -> H2Service<F, S, B, CT>
     where
         CT: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
-        CT::Error: Error,
+        CT::Error: StdError,
         CT::InitError: fmt::Debug,
     {
         H2Service {
@@ -164,7 +167,7 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
     C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck> + 'static,
-    C::Error: Error,
+    C::Error: StdError,
     C::InitError: fmt::Debug,
 {
     type Response = ();
@@ -213,7 +216,7 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
     C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck> + 'static,
-    C::Error: Error,
+    C::Error: StdError,
     C::InitError: fmt::Debug,
 {
     type Response = ();
@@ -311,7 +314,7 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
     C2: Service<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
-    C2::Error: Error,
+    C2::Error: StdError,
 {
     let ioref = io.get_ref();
 
@@ -415,7 +418,9 @@ where
                         h2::StreamEof::Trailers(_) => {
                             sender.feed_eof(Bytes::new());
                         }
-                        h2::StreamEof::Error(err) => sender.set_error(err.into()),
+                        h2::StreamEof::Error(err) => {
+                            sender.set_error(err.into_error().into());
+                        }
                     }
                 }
                 return Ok(());
@@ -480,9 +485,13 @@ where
 
         let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
         if size.is_eof() || is_head_req {
-            stream.send_response(head.status, hdrs, true)?;
+            stream
+                .send_response(head.status, hdrs, true)
+                .map_err(Error::into_error)?;
         } else {
-            stream.send_response(head.status, hdrs, false)?;
+            stream
+                .send_response(head.status, hdrs, false)
+                .map_err(Error::into_error)?;
 
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
@@ -492,7 +501,10 @@ where
                             self.io.tag(),
                             stream.id()
                         );
-                        stream.send_payload(Bytes::new(), true).await?;
+                        stream
+                            .send_payload(Bytes::new(), true)
+                            .await
+                            .map_err(Error::into_error)?;
                         break;
                     }
                     Some(Ok(chunk)) => {
@@ -503,7 +515,10 @@ where
                             chunk.len()
                         );
                         if !chunk.is_empty() {
-                            stream.send_payload(chunk, false).await?;
+                            stream
+                                .send_payload(chunk, false)
+                                .await
+                                .map_err(Error::into_error)?;
                         }
                     }
                     Some(Err(e)) => {
