@@ -171,7 +171,7 @@ where
     E: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.error.eq(&other.inner.error)
+        self.inner.error.eq(&other.inner.error) && self.inner.service == other.inner.service
     }
 }
 
@@ -550,7 +550,7 @@ impl fmt::Display for ErrorType {
 #[allow(dead_code)]
 #[cfg(test)]
 mod tests {
-    use std::mem;
+    use std::{error::Error as StdError, mem};
 
     use super::*;
 
@@ -607,6 +607,17 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+    #[error("TestError2")]
+    struct TestError2;
+    impl ErrorDiagnostic for TestError2 {
+        type Kind = ErrorType;
+
+        fn kind(&self) -> Self::Kind {
+            ErrorType::Client
+        }
+    }
+
     #[test]
     fn test_error() {
         let err: Error<TestError> = TestError::Service("409 Error").into();
@@ -614,15 +625,30 @@ mod tests {
         assert_eq!((*err).kind(), TestKind::ServiceError);
         assert_eq!(err.to_string(), "InternalServiceError");
         assert_eq!(err.service(), Some("test"));
+        assert_eq!(err.signature(), "Service-Internal");
         assert_eq!(
             err,
             Into::<Error<TestError>>::into(TestError::Service("409 Error"))
         );
         assert!(err.backtrace().is_some());
         assert!(err.is_service());
+        assert!(
+            format!("{:?}", err.source()).contains("Service(\"409 Error\")"),
+            "{:?}",
+            err.source().unwrap()
+        );
 
         let err = err.set_service("SVC");
         assert_eq!(err.service(), Some("SVC"));
+
+        let err2: Error<TestError> = Error::new(TestError::Service("409 Error"), "TEST");
+        assert!(err != err2);
+        assert_eq!(err, TestError::Service("409 Error"));
+
+        let err2 = err2.set_service("SVC");
+        assert_eq!(err, err2);
+        let err2 = err2.map(|_| TestError::Disconnect);
+        assert!(err != err2);
 
         assert_eq!(
             TestError::Connect("").kind().error_type(),
@@ -657,6 +683,11 @@ mod tests {
         assert_eq!(err.kind(), TestError::Service("409 Error").kind());
         assert_eq!(err.to_string(), "InternalServiceError");
         assert!(format!("{err:?}").contains("Service(\"409 Error\")"));
+        assert!(
+            format!("{:?}", err.source()).contains("Service(\"409 Error\")"),
+            "{:?}",
+            err.source().unwrap()
+        );
 
         let err: Error<TestError> = TestError::Service("404 Error").into();
         let err: ErrorChain<TestKind> = err.into();
@@ -670,5 +701,8 @@ mod tests {
 
         assert_eq!(24, mem::size_of::<TestError>());
         assert_eq!(8, mem::size_of::<Error<TestError>>());
+
+        assert_eq!(TestError2.service(), None);
+        assert_eq!(TestError2.signature(), "ClientError");
     }
 }

@@ -92,4 +92,21 @@ mod tests {
         let _ = ConnectError::Unresolved.clone();
         let _ = ConnectError::Io(io::Error::other("test")).clone();
     }
+
+    #[test]
+    fn error_diagnostic() {
+        assert_eq!(ConnectError::InvalidInput.kind(), ErrorType::Client);
+        assert_eq!(
+            ConnectError::Resolver(io::Error::other("test")).kind(),
+            ErrorType::Service
+        );
+        assert_eq!(
+            ConnectError::Io(io::Error::new(ErrorKind::InvalidInput, "test")).kind(),
+            ErrorType::Client
+        );
+        assert_eq!(
+            ConnectError::Io(io::Error::other("test")).kind(),
+            ErrorType::Service
+        );
+    }
 }
