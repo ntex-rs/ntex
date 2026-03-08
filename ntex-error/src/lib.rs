@@ -90,7 +90,7 @@ pub trait ErrorDiagnostic: error::Error + 'static {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Error<E> {
     inner: Box<ErrorInner<E>>,
 }
@@ -513,6 +513,19 @@ impl fmt::Debug for Backtrace {
 impl fmt::Display for Backtrace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl<E> fmt::Debug for Error<E>
+where
+    E: ErrorDiagnostic,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Error")
+            .field("error", &self.inner.error)
+            .field("service", &self.inner.service)
+            .field("backtrace", &self.inner.backtrace)
+            .finish()
     }
 }
 
