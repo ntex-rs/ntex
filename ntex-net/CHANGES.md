@@ -2,7 +2,7 @@
 
 ## [3.8.0] - 2026-03-08
 
-* Use ntex_error::Error<_> for connect service
+* Use ntex_error::Error for connect service
 
 ## [3.7.0] - 2026-02-16
 
