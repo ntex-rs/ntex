@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.1] - 2026-03-08
+
+* Resize buffer in blocks
+
 ## [3.9.0] - 2026-02-16
 
 * SharedCfg is not Copy
