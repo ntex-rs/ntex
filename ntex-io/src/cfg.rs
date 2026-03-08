@@ -267,13 +267,14 @@ impl BufConfig {
     pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
         let mut avail = buf.remaining_mut();
         if avail < size {
-            avail += self.high;
-            let mut new_size = self.high + self.high;
+            let cap = buf.capacity();
+            let mut new_cap = cap;
+
             while avail < size {
                 avail += self.high;
-                new_size += self.high;
+                new_cap += self.high;
             }
-            buf.reserve_capacity(new_size);
+            buf.reserve_capacity(new_cap);
         }
     }
 
