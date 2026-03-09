@@ -137,13 +137,8 @@ impl<E: ErrorDiagnostic + Clone> Clone for Error<E> {
 impl<E: ErrorDiagnostic> From<E> for Error<E> {
     #[track_caller]
     fn from(error: E) -> Self {
-        let backtrace = if let Some(bt) = error.backtrace() {
-            bt.clone()
-        } else {
-            Backtrace::new(Location::caller())
-        };
         Self {
-            inner: Arc::new(ErrorRepr::new2(error, None, backtrace)),
+            inner: Arc::new(ErrorRepr::new(error, None, Location::caller())),
         }
     }
 }
