@@ -113,6 +113,7 @@ where
     let result = Rc::new(RefCell::new(None));
     let result_inner = result.clone();
 
+    ntex_error::set_backtrace_start_alt("ntex/ntex-rt/src/driver.rs", 0);
     run.block_on(Box::pin(async move {
         let r = fut.await;
         *result_inner.borrow_mut() = Some(r);

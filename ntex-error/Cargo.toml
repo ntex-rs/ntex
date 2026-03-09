@@ -1,6 +1,6 @@
 [package]
 name = "ntex-error"
-version = "1.0.1"
+version = "1.1.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex error management"
 keywords = ["network", "framework"]
@@ -25,4 +25,5 @@ foldhash = { workspace = true }
 ntex-bytes = { workspace = true }
 
 [dev-dependencies]
+ntex = { workspace = true }
 thiserror = { workspace = true }

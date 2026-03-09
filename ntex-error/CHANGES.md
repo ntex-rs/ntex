@@ -1,5 +1,9 @@
 # Changes
 
+## [1.1.0] - 2026-03-09
+
+* Introduce ErrorInformation type
+
 ## [1.0.1] - 2026-03-08
 
 * Allow to create Backtrace
