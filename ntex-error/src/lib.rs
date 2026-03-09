@@ -97,9 +97,22 @@ impl<E: ErrorDiagnostic> Error<E> {
 
     #[must_use]
     /// Set response service
-    pub fn set_service(mut self, name: &'static str) -> Self {
-        Arc::get_mut(&mut self.inner).unwrap().service = Some(name);
-        self
+    pub fn set_service(mut self, name: &'static str) -> Self
+    where
+        E: Clone,
+    {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.service = Some(name);
+            self
+        } else {
+            Error {
+                inner: Arc::new(ErrorRepr::new2(
+                    self.inner.error.clone(),
+                    Some(name),
+                    self.inner.backtrace.clone(),
+                )),
+            }
+        }
     }
 
     /// Map inner error to new error
@@ -107,29 +120,42 @@ impl<E: ErrorDiagnostic> Error<E> {
     /// Keep same `service` and `location`
     pub fn map<U, F>(self, f: F) -> Error<U>
     where
+        E: Clone,
         F: FnOnce(E) -> U,
         U: ErrorDiagnostic,
     {
-        let inner = Arc::into_inner(self.inner).unwrap();
-        Error {
-            inner: Arc::new(ErrorRepr::new2(
-                f(inner.error),
-                inner.service,
-                inner.backtrace,
-            )),
+        match Arc::try_unwrap(self.inner) {
+            Ok(inner) => Error {
+                inner: Arc::new(ErrorRepr::new2(
+                    f(inner.error),
+                    inner.service,
+                    inner.backtrace,
+                )),
+            },
+            Err(inner) => Error {
+                inner: Arc::new(ErrorRepr::new2(
+                    f(inner.error.clone()),
+                    inner.service,
+                    inner.backtrace.clone(),
+                )),
+            },
         }
     }
 
     /// Get inner error value
-    pub fn into_error(self) -> E {
-        Arc::into_inner(self.inner).unwrap().error
+    pub fn into_error(self) -> E
+    where
+        E: Clone,
+    {
+        Arc::try_unwrap(self.inner)
+            .map_or_else(|inner| inner.error.clone(), |inner| inner.error)
     }
 }
 
 impl<E: ErrorDiagnostic + Clone> Clone for Error<E> {
     fn clone(&self) -> Error<E> {
         Error {
-            inner: Arc::new((*self.inner).clone()),
+            inner: self.inner.clone(),
         }
     }
 }
