@@ -298,9 +298,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_error() {
+    #[ntex::test]
+    async fn test_error() {
         let err: Error<TestError> = TestError::Service("409 Error").into();
+        let err = err.clone();
         assert_eq!(err.kind(), TestKind::ServiceError);
         assert_eq!((*err).kind(), TestKind::ServiceError);
         assert_eq!(err.to_string(), "InternalServiceError");
@@ -370,6 +371,21 @@ mod tests {
         );
 
         let err: Error<TestError> = TestError::Service("404 Error").into();
+        assert!(
+            format!("{}", err.backtrace().unwrap())
+                .contains("ntex_error::tests::test_error"),
+            "{}",
+            err.backtrace().unwrap()
+        );
+        assert!(
+            err.backtrace()
+                .unwrap()
+                .repr()
+                .contains("ntex_error::tests::test_error"),
+            "{}",
+            err.backtrace().unwrap()
+        );
+
         let err: ErrorChain<TestKind> = err.into();
         assert_eq!(err.kind(), TestKind::ServiceError);
         assert_eq!(err.kind(), TestError::Service("404 Error").kind());
@@ -384,5 +400,14 @@ mod tests {
 
         assert_eq!(TestError2.service(), None);
         assert_eq!(TestError2.signature(), "ClientError");
+
+        // ErrorInformation
+        let err: Error<TestError> = TestError::Service("409 Error").into();
+        let err: ErrorInformation = err.set_service("SVC").into();
+        assert_eq!(err.error_type(), ErrorType::Service);
+        assert_eq!(err.error_signature(), "ServiceError");
+        assert_eq!(err.service(), Some("SVC"));
+        assert_eq!(err.signature(), "Service-Internal");
+        assert!(err.backtrace().is_some());
     }
 }
