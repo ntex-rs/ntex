@@ -2,33 +2,26 @@ use std::{fmt, fmt::Write, sync::Arc};
 
 use ntex_bytes::{ByteString, BytesMut};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ErrorRepr, ErrorType};
+use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ResultType, repr::ErrorRepr};
 
 trait ErrorInfo: fmt::Debug + 'static {
-    fn error_type(&self) -> ErrorType;
-
-    fn error_signature(&self) -> ByteString;
+    fn tp(&self) -> ResultType;
 
     fn service(&self) -> Option<&'static str>;
 
     fn signature(&self) -> &'static str;
 
+    fn description(&self) -> ByteString;
+
     fn backtrace(&self) -> Option<&Backtrace>;
 }
 
-impl<E, K> ErrorInfo for ErrorRepr<E, K>
+impl<E> ErrorInfo for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
-    K: ErrorKind + From<E::Kind>,
 {
-    fn error_type(&self) -> ErrorType {
-        self.kind().error_type()
-    }
-
-    fn error_signature(&self) -> ByteString {
-        let mut buf = BytesMut::new();
-        let _ = write!(&mut buf, "{}", self.kind());
-        ByteString::try_from(buf).unwrap()
+    fn tp(&self) -> ResultType {
+        self.kind().tp()
     }
 
     fn service(&self) -> Option<&'static str> {
@@ -36,7 +29,13 @@ where
     }
 
     fn signature(&self) -> &'static str {
-        ErrorDiagnostic::signature(self)
+        self.kind().signature()
+    }
+
+    fn description(&self) -> ByteString {
+        let mut buf = BytesMut::with_capacity(64);
+        let _ = write!(buf, "{}", self.kind());
+        ByteString::try_from(buf).unwrap()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {
@@ -50,12 +49,8 @@ pub struct ErrorInformation {
 }
 
 impl ErrorInformation {
-    pub fn error_type(&self) -> ErrorType {
-        self.inner.error_type()
-    }
-
-    pub fn error_signature(&self) -> ByteString {
-        self.inner.error_signature()
+    pub fn tp(&self) -> ResultType {
+        self.inner.tp()
     }
 
     pub fn service(&self) -> Option<&'static str> {
@@ -64,6 +59,10 @@ impl ErrorInformation {
 
     pub fn signature(&self) -> &'static str {
         self.inner.signature()
+    }
+
+    pub fn description(&self) -> ByteString {
+        self.inner.description()
     }
 
     pub fn backtrace(&self) -> Option<&Backtrace> {
@@ -77,5 +76,16 @@ where
 {
     fn from(err: Error<E>) -> Self {
         Self { inner: err.inner }
+    }
+}
+
+impl<E> From<&Error<E>> for ErrorInformation
+where
+    E: ErrorDiagnostic,
+{
+    fn from(err: &Error<E>) -> Self {
+        Self {
+            inner: err.inner.clone(),
+        }
     }
 }

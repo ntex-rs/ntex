@@ -107,9 +107,7 @@ fn find_loc(loc: &Location<'_>, frames: &mut [Option<&BacktraceFrame>]) {
         if let Some(f) = frm {
             for sym in f.symbols() {
                 if let Some(fname) = sym.filename()
-                    && let Some(lineno) = sym.lineno()
                     && fname.ends_with(loc.file())
-                    && lineno == loc.line()
                 {
                     for f in frames.iter_mut().take(idx) {
                         *f = None;
@@ -129,6 +127,25 @@ fn find_loc_start(loc: (&str, u32), frames: &mut [Option<&BacktraceFrame>]) {
         if let Some(frm) = &frames[idx] {
             for sym in frm.symbols() {
                 if let Some(fname) = sym.filename()
+                    && (fname.ends_with("src\\ctx.rs")
+                        || fname.ends_with("src\\map_err.rs")
+                        || fname.ends_with("src\\and_then.rs")
+                        || fname.ends_with("src\\fn_service.rs")
+                        || fname.ends_with("src\\pipeline.rs")
+                        || fname.ends_with("src\\net\\factory.rs")
+                        || fname.ends_with("src\\future\\future.rs")
+                        || fname.ends_with("src\\net\\service.rs")
+                        || fname.ends_with("src\\boxed.rs")
+                        || fname.ends_with("src\\wrk.rs")
+                        || fname.ends_with("src\\future.rs")
+                        || fname.ends_with("std\\src\\thread\\local.rs"))
+                {
+                    frames[idx] = None;
+                    idx += 1;
+                    continue;
+                }
+
+                if let Some(fname) = sym.filename()
                     && let Some(lineno) = sym.lineno()
                     && fname.ends_with(loc.0)
                     && (loc.1 == 0 || lineno == loc.1)
@@ -136,11 +153,9 @@ fn find_loc_start(loc: (&str, u32), frames: &mut [Option<&BacktraceFrame>]) {
                     for f in frames.iter_mut().skip(idx) {
                         if f.is_some() {
                             *f = None;
-                        } else {
-                            return;
                         }
                     }
-                    break;
+                    return;
                 }
             }
         }

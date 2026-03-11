@@ -1,19 +1,14 @@
-use std::{error, fmt, marker::PhantomData, panic::Location};
+use std::{error, fmt, panic::Location};
 
-use crate::{Backtrace, ErrorDiagnostic, ErrorKind};
+use crate::{Backtrace, ErrorDiagnostic};
 
-pub(crate) struct ErrorRepr<E, K> {
+pub(crate) struct ErrorRepr<E> {
     pub(crate) error: E,
     pub(crate) service: Option<&'static str>,
     pub(crate) backtrace: Backtrace,
-    _t: PhantomData<K>,
 }
 
-impl<E, K> ErrorRepr<E, K>
-where
-    E: ErrorDiagnostic,
-    K: ErrorKind + From<E::Kind>,
-{
+impl<E: ErrorDiagnostic> ErrorRepr<E> {
     pub(crate) fn new(error: E, service: Option<&'static str>, loc: &Location<'_>) -> Self {
         let service = if service.is_none() {
             error.service()
@@ -30,10 +25,11 @@ where
             error,
             service,
             backtrace,
-            _t: PhantomData,
         }
     }
+}
 
+impl<E> ErrorRepr<E> {
     pub(crate) fn new2(
         error: E,
         service: Option<&'static str>,
@@ -43,20 +39,30 @@ where
             error,
             service,
             backtrace,
-            _t: PhantomData,
+        }
+    }
+
+    pub(crate) fn new3(
+        error: E,
+        service: Option<&'static str>,
+        loc: &Location<'_>,
+    ) -> Self {
+        Self {
+            error,
+            service,
+            backtrace: Backtrace::new(loc),
         }
     }
 }
 
-impl<E, K> ErrorDiagnostic for ErrorRepr<E, K>
+impl<E> ErrorDiagnostic for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
-    K: ErrorKind + From<E::Kind>,
 {
-    type Kind = K;
+    type Kind = E::Kind;
 
     fn kind(&self) -> Self::Kind {
-        self.error.kind().into()
+        self.error.kind()
     }
 
     fn service(&self) -> Option<&'static str> {
@@ -67,16 +73,12 @@ where
         }
     }
 
-    fn signature(&self) -> &'static str {
-        self.error.signature()
-    }
-
     fn backtrace(&self) -> Option<&Backtrace> {
         Some(&self.backtrace)
     }
 }
 
-impl<E, K> Clone for ErrorRepr<E, K>
+impl<E> Clone for ErrorRepr<E>
 where
     E: Clone,
 {
@@ -85,12 +87,11 @@ where
             error: self.error.clone(),
             service: self.service,
             backtrace: self.backtrace.clone(),
-            _t: PhantomData,
         }
     }
 }
 
-impl<E, K> error::Error for ErrorRepr<E, K>
+impl<E> error::Error for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
 {
@@ -99,7 +100,7 @@ where
     }
 }
 
-impl<E, K> fmt::Display for ErrorRepr<E, K>
+impl<E> fmt::Display for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
 {
@@ -108,7 +109,7 @@ where
     }
 }
 
-impl<E, K> fmt::Debug for ErrorRepr<E, K>
+impl<E> fmt::Debug for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
 {

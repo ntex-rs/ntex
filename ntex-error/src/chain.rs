@@ -1,6 +1,6 @@
 use std::{error, fmt, panic::Location, sync::Arc};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ErrorRepr};
+use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, repr::ErrorRepr};
 
 #[derive(Debug, Clone)]
 pub struct ErrorChain<K: ErrorKind> {
@@ -11,8 +11,7 @@ impl<K: ErrorKind> ErrorChain<K> {
     #[track_caller]
     pub fn new<E>(error: E) -> Self
     where
-        E: ErrorDiagnostic + Sized,
-        K: ErrorKind + From<E::Kind>,
+        E: ErrorDiagnostic<Kind = K> + Sized,
     {
         Self {
             error: Arc::new(ErrorRepr::new(error, None, Location::caller())),
@@ -60,10 +59,6 @@ where
 
     fn service(&self) -> Option<&'static str> {
         self.error.service()
-    }
-
-    fn signature(&self) -> &'static str {
-        self.error.signature()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {

@@ -114,7 +114,11 @@ pub mod tls {
 }
 
 pub mod error {
-    pub use ntex_error::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ErrorType};
+    pub use ntex_error::*;
+
+    #[doc(hidden)]
+    #[allow(deprecated)]
+    pub use ntex_error::ErrorType;
 }
 
 pub mod util {

@@ -1,6 +1,6 @@
 use std::io::{self, ErrorKind};
 
-use ntex_error::{ErrorDiagnostic, ErrorType};
+use ntex_error::{ErrorDiagnostic, ResultType};
 
 #[derive(thiserror::Error, Debug, Copy, Clone)]
 pub enum ConnectServiceError {
@@ -55,14 +55,14 @@ impl From<ConnectServiceError> for io::Error {
 }
 
 impl ErrorDiagnostic for ConnectError {
-    type Kind = ErrorType;
+    type Kind = ResultType;
 
     fn kind(&self) -> Self::Kind {
         match self {
-            ConnectError::InvalidInput => ErrorType::Client,
+            ConnectError::InvalidInput => ResultType::ClientError,
             ConnectError::Resolver(_)
             | ConnectError::NoRecords
-            | ConnectError::Unresolved => ErrorType::Service,
+            | ConnectError::Unresolved => ResultType::ServiceError,
             ConnectError::Io(err) => {
                 if matches!(
                     err.kind(),
@@ -70,9 +70,9 @@ impl ErrorDiagnostic for ConnectError {
                         | ErrorKind::AddrNotAvailable
                         | ErrorKind::Unsupported
                 ) {
-                    ErrorType::Client
+                    ResultType::ClientError
                 } else {
-                    ErrorType::Service
+                    ResultType::ServiceError
                 }
             }
         }
@@ -95,18 +95,18 @@ mod tests {
 
     #[test]
     fn error_diagnostic() {
-        assert_eq!(ConnectError::InvalidInput.kind(), ErrorType::Client);
+        assert_eq!(ConnectError::InvalidInput.kind(), ResultType::ClientError);
         assert_eq!(
             ConnectError::Resolver(io::Error::other("test")).kind(),
-            ErrorType::Service
+            ResultType::ServiceError
         );
         assert_eq!(
             ConnectError::Io(io::Error::new(ErrorKind::InvalidInput, "test")).kind(),
-            ErrorType::Client
+            ResultType::ClientError
         );
         assert_eq!(
             ConnectError::Io(io::Error::other("test")).kind(),
-            ErrorType::Service
+            ResultType::ServiceError
         );
     }
 }
