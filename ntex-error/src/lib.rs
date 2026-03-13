@@ -14,6 +14,7 @@ mod chain;
 mod error;
 mod info;
 mod repr;
+mod utils;
 
 pub use crate::bt::{Backtrace, set_backtrace_start, set_backtrace_start_alt};
 pub use crate::chain::ErrorChain;
