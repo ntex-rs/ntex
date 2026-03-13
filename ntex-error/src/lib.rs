@@ -47,7 +47,7 @@ impl ResultType {
     }
 }
 
-pub trait ErrorKind: fmt::Debug + 'static {
+pub trait ResultKind: fmt::Debug + 'static {
     /// Defines type of the error
     fn tp(&self) -> ResultType;
 
@@ -55,7 +55,7 @@ pub trait ErrorKind: fmt::Debug + 'static {
     fn signature(&self) -> &'static str;
 }
 
-impl ErrorKind for ResultType {
+impl ResultKind for ResultType {
     fn tp(&self) -> ResultType {
         *self
     }
@@ -66,7 +66,7 @@ impl ErrorKind for ResultType {
 }
 
 pub trait ErrorDiagnostic: StdError + 'static {
-    type Kind: ErrorKind;
+    type Kind: ResultKind;
 
     /// Provides specific kind of the error
     fn kind(&self) -> Self::Kind;
@@ -117,7 +117,7 @@ mod tests {
         ServiceError,
     }
 
-    impl ErrorKind for TestKind {
+    impl ResultKind for TestKind {
         fn tp(&self) -> ResultType {
             match self {
                 TestKind::Connect | TestKind::Disconnect => ResultType::ClientError,

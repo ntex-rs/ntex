@@ -1,6 +1,6 @@
 use std::{fmt, sync::Arc};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ResultType, repr::ErrorRepr};
+use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, ResultType, repr::ErrorRepr};
 
 trait ErrorInfo: fmt::Display + fmt::Debug + 'static {
     fn tp(&self) -> ResultType;
