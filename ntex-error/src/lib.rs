@@ -11,6 +11,7 @@ mod bt;
 mod chain;
 mod error;
 mod info;
+mod message;
 mod repr;
 mod utils;
 
@@ -18,6 +19,8 @@ pub use crate::bt::{Backtrace, set_backtrace_start, set_backtrace_start_alt};
 pub use crate::chain::ErrorChain;
 pub use crate::error::Error;
 pub use crate::info::ErrorInformation;
+pub use crate::message::{ErrorMessage, ErrorMessageChained, fmt_err, fmt_err_string};
+pub use crate::utils::Success;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultType {

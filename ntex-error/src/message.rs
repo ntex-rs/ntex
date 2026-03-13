@@ -1,14 +1,14 @@
-use std::{error::Error, fmt, rc::Rc};
+use std::{error::Error as StdError, fmt, rc::Rc};
 
 use ntex_bytes::ByteString;
 
-pub fn fmt_err_string(e: &dyn Error) -> String {
+pub fn fmt_err_string(e: &dyn StdError) -> String {
     let mut buf = String::new();
     _ = fmt_err(&mut buf, e);
     buf
 }
 
-pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn Error) -> fmt::Result {
+pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     let mut current = Some(e);
     while let Some(std_err) = current {
         writeln!(f, "{std_err}")?;
@@ -17,7 +17,7 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn Error) -> fmt::Result {
     Ok(())
 }
 
-#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub struct ErrorMessage(ByteString);
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -25,14 +25,14 @@ pub struct ErrorMessage(ByteString);
 pub struct ErrorMessageChained {
     msg: ByteString,
     #[source]
-    source: Option<Rc<dyn Error>>,
+    source: Option<Rc<dyn StdError>>,
 }
 
 impl ErrorMessageChained {
     pub fn new<M, E>(ctx: M, source: E) -> Self
     where
         M: Into<ErrorMessage>,
-        E: Error + 'static,
+        E: StdError + 'static,
     {
         ErrorMessageChained {
             msg: ctx.into().into_string(),
@@ -49,7 +49,7 @@ impl ErrorMessageChained {
         &self.msg
     }
 
-    pub fn source(&self) -> &Option<Rc<dyn Error>> {
+    pub fn source(&self) -> &Option<Rc<dyn StdError>> {
         &self.source
     }
 }
@@ -58,16 +58,6 @@ impl ErrorMessage {
     /// Construct new empty `ErrorMessage`
     pub const fn empty() -> Self {
         Self(ByteString::from_static(""))
-    }
-
-    /// Construct `ErrorMessage` from `ByteString`
-    pub const fn from_bstr(msg: ByteString) -> ErrorMessage {
-        ErrorMessage(msg)
-    }
-
-    /// Construct `ErrorMessage` from static string
-    pub const fn from_static(msg: &'static str) -> Self {
-        ErrorMessage(ByteString::from_static(msg))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -86,7 +76,7 @@ impl ErrorMessage {
         self.0
     }
 
-    pub fn with_source<E: Error + 'static>(self, source: E) -> ErrorMessageChained {
+    pub fn with_source<E: StdError + 'static>(self, source: E) -> ErrorMessageChained {
         ErrorMessageChained::new(self, source)
     }
 }
@@ -162,17 +152,12 @@ mod tests {
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
-        let msg = ErrorMessage::from_bstr(ByteString::from("test"));
-        assert!(!msg.is_empty());
-        assert_eq!(msg.as_str(), "test");
-        assert_eq!(msg.as_bstr(), ByteString::from("test"));
-
         let msg = ErrorMessage::from(ByteString::from("test"));
         assert!(!msg.is_empty());
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
-        let msg = ErrorMessage::from_static("test");
+        let msg = ErrorMessage::from("test");
         assert!(!msg.is_empty());
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));

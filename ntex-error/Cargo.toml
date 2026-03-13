@@ -20,9 +20,11 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+ntex-bytes = { workspace = true }
+
 backtrace = { workspace = true }
 foldhash = { workspace = true }
-ntex-bytes = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true }

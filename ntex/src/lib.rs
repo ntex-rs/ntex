@@ -125,7 +125,11 @@ pub mod util {
     use std::{error::Error, io, rc::Rc};
 
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
-    pub use ntex_util::{HashMap, HashSet, error::*, future::*, services::*};
+    pub use ntex_util::{HashMap, HashSet, future::*, services::*};
+
+    #[doc(hidden)]
+    #[allow(deprecated)]
+    pub use ntex_util::error::*;
 
     #[doc(hidden)]
     pub fn enable_test_logging() {
