@@ -1,6 +1,6 @@
-use std::{fmt, fmt::Write, sync::Arc};
+use std::{fmt, sync::Arc};
 
-use ntex_bytes::{ByteString, BytesMut};
+use ntex_bytes::ByteString;
 
 use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ResultType, repr::ErrorRepr};
 
@@ -33,9 +33,7 @@ where
     }
 
     fn description(&self) -> ByteString {
-        let mut buf = BytesMut::with_capacity(64);
-        let _ = write!(buf, "{}", self.kind());
-        ByteString::try_from(buf).unwrap()
+        self.kind().description()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {

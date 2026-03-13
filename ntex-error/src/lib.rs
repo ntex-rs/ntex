@@ -7,6 +7,8 @@
 )]
 use std::{error::Error as StdError, fmt};
 
+use ntex_bytes::ByteString;
+
 mod bt;
 mod chain;
 mod error;
@@ -46,12 +48,15 @@ impl ResultType {
     }
 }
 
-pub trait ErrorKind: fmt::Display + fmt::Debug + 'static {
+pub trait ErrorKind: fmt::Debug + 'static {
     /// Defines type of the error
     fn tp(&self) -> ResultType;
 
     /// Error signature
     fn signature(&self) -> &'static str;
+
+    /// Error description
+    fn description(&self) -> ByteString;
 }
 
 impl ErrorKind for ResultType {
@@ -61,6 +66,10 @@ impl ErrorKind for ResultType {
 
     fn signature(&self) -> &'static str {
         self.as_str()
+    }
+
+    fn description(&self) -> ByteString {
+        ByteString::from_static(self.signature())
     }
 }
 
