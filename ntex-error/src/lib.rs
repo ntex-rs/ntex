@@ -96,11 +96,7 @@ pub trait ErrorMapping<T, E, U> {
 impl fmt::Display for ResultType {
     #[allow(deprecated)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ResultType::Ok => write!(f, "Success"),
-            ResultType::ClientError | ResultType::Client => write!(f, "ClientError"),
-            ResultType::ServiceError | ResultType::Service => write!(f, "ServiceError"),
-        }
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -227,7 +223,7 @@ mod tests {
         assert_eq!(ResultType::ServiceError.tp(), ResultType::ServiceError);
         assert_eq!(ResultType::ClientError.to_string(), "ClientError");
         assert_eq!(ResultType::ServiceError.to_string(), "ServiceError");
-        assert_eq!(ResultType::ClientError.description(), "ClientError");
+        assert_eq!(format!("{}", ResultType::ClientError), "ClientError");
 
         assert_eq!(TestKind::Connect.to_string(), "Connect");
         assert_eq!(TestError::Connect("").kind().signature(), "Client-Connect");
