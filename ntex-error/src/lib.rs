@@ -22,7 +22,7 @@ pub use crate::info::ErrorInformation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultType {
-    Ok,
+    Success,
     ClientError,
     ServiceError,
     #[doc(hidden)]
@@ -41,7 +41,7 @@ impl ResultType {
     #[allow(deprecated)]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            ErrorType::Ok => "Success",
+            ErrorType::Success => "Success",
             ResultType::ClientError | ResultType::Client => "ClientError",
             ResultType::ServiceError | ResultType::Service => "ServiceError",
         }
@@ -140,6 +140,10 @@ mod tests {
                 TestKind::Disconnect => "Client-Disconnect",
                 TestKind::ServiceError => "Service-Internal",
             }
+        }
+
+        fn description(&self) -> ByteString {
+            self.to_string().into()
         }
     }
 
