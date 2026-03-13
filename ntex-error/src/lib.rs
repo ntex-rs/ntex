@@ -7,8 +7,6 @@
 )]
 use std::{error::Error as StdError, fmt};
 
-use ntex_bytes::ByteString;
-
 mod bt;
 mod chain;
 mod error;
@@ -55,9 +53,6 @@ pub trait ErrorKind: fmt::Debug + 'static {
 
     /// Error signature
     fn signature(&self) -> &'static str;
-
-    /// Error description
-    fn description(&self) -> ByteString;
 }
 
 impl ErrorKind for ResultType {
@@ -67,10 +62,6 @@ impl ErrorKind for ResultType {
 
     fn signature(&self) -> &'static str {
         self.as_str()
-    }
-
-    fn description(&self) -> ByteString {
-        ByteString::from_static(self.signature())
     }
 }
 
@@ -104,7 +95,6 @@ pub trait ErrorMapping<T, E, U> {
 }
 
 impl fmt::Display for ResultType {
-    #[allow(deprecated)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
     }
@@ -141,10 +131,6 @@ mod tests {
                 TestKind::Disconnect => "Client-Disconnect",
                 TestKind::ServiceError => "Service-Internal",
             }
-        }
-
-        fn description(&self) -> ByteString {
-            self.to_string().into()
         }
     }
 

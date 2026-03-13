@@ -1,17 +1,13 @@
 use std::{fmt, sync::Arc};
 
-use ntex_bytes::ByteString;
-
 use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ResultType, repr::ErrorRepr};
 
-trait ErrorInfo: fmt::Debug + 'static {
+trait ErrorInfo: fmt::Display + fmt::Debug + 'static {
     fn tp(&self) -> ResultType;
 
     fn service(&self) -> Option<&'static str>;
 
     fn signature(&self) -> &'static str;
-
-    fn description(&self) -> ByteString;
 
     fn backtrace(&self) -> Option<&Backtrace>;
 }
@@ -30,10 +26,6 @@ where
 
     fn signature(&self) -> &'static str {
         self.kind().signature()
-    }
-
-    fn description(&self) -> ByteString {
-        self.kind().description()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {
@@ -59,10 +51,6 @@ impl ErrorInformation {
         self.inner.signature()
     }
 
-    pub fn description(&self) -> ByteString {
-        self.inner.description()
-    }
-
     pub fn backtrace(&self) -> Option<&Backtrace> {
         self.inner.backtrace()
     }
@@ -85,5 +73,11 @@ where
         Self {
             inner: err.inner.clone(),
         }
+    }
+}
+
+impl fmt::Display for ErrorInformation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.inner)
     }
 }
