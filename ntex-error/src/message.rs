@@ -60,6 +60,16 @@ impl ErrorMessage {
         Self(ByteString::from_static(""))
     }
 
+    /// Construct `ErrorMessage` from `ByteString`
+    pub const fn from_bstr(msg: ByteString) -> ErrorMessage {
+        ErrorMessage(msg)
+    }
+
+    /// Construct `ErrorMessage` from static string
+    pub const fn from_static(msg: &'static str) -> Self {
+        ErrorMessage(ByteString::from_static(msg))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -147,7 +157,18 @@ mod tests {
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
+        let msg = ErrorMessage::from_static("test");
+        assert!(!msg.is_empty());
+        assert_eq!(format!("{msg}"), "test");
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
         let msg = ErrorMessage::from("test".to_string());
+        assert!(!msg.is_empty());
+        assert_eq!(msg.as_str(), "test");
+        assert_eq!(msg.as_bstr(), ByteString::from("test"));
+
+        let msg = ErrorMessage::from_bstr(ByteString::from("test"));
         assert!(!msg.is_empty());
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
