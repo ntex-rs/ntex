@@ -301,5 +301,11 @@ mod tests {
         assert_eq!(msg, "InternalServiceError\nInternalServiceError\n");
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("err: InternalServiceError"));
+
+        let err = ErrorInfo::from(err);
+        let msg = fmt_err_string(&err);
+        assert_eq!(msg, "InternalServiceError\nInternalServiceError\n");
+        let msg = fmt_diag_string(&err);
+        assert!(msg.contains("err: InternalServiceError"));
     }
 }
