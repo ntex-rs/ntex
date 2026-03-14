@@ -45,7 +45,7 @@ impl ResultType {
     #[allow(deprecated)]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            ErrorType::Success => "Success",
+            ResultType::Success => "Success",
             ResultType::ClientError | ResultType::Client => "ClientError",
             ResultType::ServiceError | ResultType::Service => "ServiceError",
         }
