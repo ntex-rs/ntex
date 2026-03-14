@@ -45,7 +45,7 @@ pub fn fmt_diag<K: ResultKind>(
     let k = e.kind();
     let tp = k.tp();
 
-    writeln!(f, "\n{e}")?;
+    writeln!(f, "err: {e}")?;
     writeln!(f, "type: {}", tp.as_str())?;
     writeln!(f, "signature: {}", k.signature())?;
 

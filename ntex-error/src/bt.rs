@@ -85,7 +85,18 @@ impl Backtrace {
                             for s in paths {
                                 find_loc_start((s.as_str(), 0), &mut frames);
                             }
-                        })
+                        });
+                    }
+
+                    let mut idx = 0;
+                    for frm in &mut frames {
+                        if frm.is_some() {
+                            if idx < 10 {
+                                *frm = None;
+                            } else {
+                                idx += 1
+                            }
+                        }
                     }
 
                     let bt = Bt(&frames[..]);
@@ -144,7 +155,7 @@ fn find_loc(loc: &Location<'_>, frames: &mut [Option<&BacktraceFrame>]) {
                 }
             }
         }
-    })
+    });
 }
 
 thread_local! {
