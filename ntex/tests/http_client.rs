@@ -2,8 +2,8 @@ use std::io;
 
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Method, Request, Response};
-use ntex::service::ServiceFactory;
-use ntex::{client::error::SendRequestError, time, util::Bytes, util::Ready};
+use ntex::util::{Bytes, Ready};
+use ntex::{ServiceFactory, client::error::ClientError, time};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -108,6 +108,7 @@ async fn test_client_timeout() {
         .send()
         .await
         .err()
-        .unwrap();
-    assert!(matches!(err, SendRequestError::Timeout));
+        .unwrap()
+        .into_error();
+    assert!(matches!(err, ClientError::Timeout));
 }
