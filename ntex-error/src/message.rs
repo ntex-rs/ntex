@@ -17,6 +17,41 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     Ok(())
 }
 
+pub fn fmt_diag_string(e: &impl ErrorDiagnostic) -> String {
+    let mut buf = String::new();
+    _ = fmt_diag(&mut buf, e);
+    buf
+}
+
+fn fmt_err_dbg(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
+    let mut current = Some(e);
+    while let Some(std_err) = current {
+        writeln!(f, "{std_err:?}")?;
+        current = std_err.source();
+    }
+    Ok(())
+}
+
+pub fn fmt_diag(f: &mut dyn std::fmt::Write, e: &impl ErrorDiagnostic) -> std::fmt::Result {
+    let tp = e.kind().tp();
+
+    writeln!(f, "{e}")?;
+    writeln!(f, "type: {}", tp.as_str())?;
+    writeln!(f, "signature: {}\n", e.kind().signature())?;
+
+    if let Some(src) = e.source() {
+        fmt_err_dbg(f, src)?;
+    }
+
+    if tp == ResultType::ServiceError
+        && let Some(bt) = e.backtrace()
+    {
+        writeln!(f, "{bt}")?;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub struct ErrorMessage(ByteString);
 

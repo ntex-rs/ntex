@@ -19,7 +19,9 @@ pub use crate::bt::{Backtrace, set_backtrace_start, set_backtrace_start_alt};
 pub use crate::chain::ErrorChain;
 pub use crate::error::Error;
 pub use crate::info::ErrorInfo;
-pub use crate::message::{ErrorMessage, ErrorMessageChained, fmt_err, fmt_err_string};
+pub use crate::message::{
+    ErrorMessage, ErrorMessageChained, fmt_diag, fmt_diag_string, fmt_err, fmt_err_string,
+};
 pub use crate::utils::Success;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
