@@ -2,6 +2,8 @@ use std::{error::Error as StdError, fmt, rc::Rc};
 
 use ntex_bytes::ByteString;
 
+use crate::{ErrorDiagnostic, ResultKind, ResultType};
+
 pub fn fmt_err_string(e: &dyn StdError) -> String {
     let mut buf = String::new();
     _ = fmt_err(&mut buf, e);
