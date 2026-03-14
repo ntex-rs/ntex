@@ -59,6 +59,21 @@ impl<E> Error<E> {
         }
     }
 
+    /// Map inner error to new error
+    ///
+    /// Keep same `service` and `location`
+    pub fn forward<U, F>(self, f: F) -> Error<U>
+    where
+        F: FnOnce(Error<E>) -> U,
+    {
+        let svc = self.inner.service;
+        let bt = self.inner.backtrace.clone();
+
+        Error {
+            inner: Arc::new(ErrorRepr::new2(f(self), svc, bt)),
+        }
+    }
+
     /// Try to map inner error to new error
     ///
     /// Keep same `service` and `location`

@@ -1,6 +1,6 @@
 use std::{convert::Infallible, error::Error as StdError, fmt};
 
-use crate::{ErrorDiagnostic, ResultType};
+use crate::{Error, ErrorDiagnostic, ResultType};
 
 impl ErrorDiagnostic for Infallible {
     type Kind = ResultType;
@@ -27,4 +27,21 @@ impl fmt::Display for Success {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Success")
     }
+}
+
+/// Execute future and set error service.
+///
+/// Sets service if it not set
+pub async fn with_service<F, T, E>(svc: &'static str, fut: F) -> F::Output
+where
+    F: Future<Output = Result<T, Error<E>>>,
+    E: ErrorDiagnostic + Clone,
+{
+    fut.await.map_err(|err: Error<E>| {
+        if err.service().is_none() {
+            err.set_service(svc)
+        } else {
+            err
+        }
+    })
 }

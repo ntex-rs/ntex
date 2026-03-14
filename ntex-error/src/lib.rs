@@ -22,7 +22,7 @@ pub use crate::info::ErrorInfo;
 pub use crate::message::{
     ErrorMessage, ErrorMessageChained, fmt_diag, fmt_diag_string, fmt_err, fmt_err_string,
 };
-pub use crate::utils::Success;
+pub use crate::utils::{Success, with_service};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultType {

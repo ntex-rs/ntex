@@ -114,10 +114,6 @@ where
     E: ErrorDiagnostic,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Error")
-            .field("error", &self.error)
-            .field("service", &self.service)
-            .field("backtrace", &self.backtrace)
-            .finish()
+        fmt::Debug::fmt(&self.error, f)
     }
 }

@@ -39,7 +39,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ErrorInfo {
     inner: Arc<dyn ErrorInfoInner>,
 }
@@ -90,6 +90,12 @@ impl error::Error for ErrorInfo {
 
 impl fmt::Display for ErrorInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.inner)
+        fmt::Display::fmt(&self.inner, f)
+    }
+}
+
+impl fmt::Debug for ErrorInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.inner, f)
     }
 }

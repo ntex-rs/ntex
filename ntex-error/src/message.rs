@@ -2,7 +2,7 @@ use std::{error::Error as StdError, fmt, rc::Rc};
 
 use ntex_bytes::ByteString;
 
-use crate::{ErrorDiagnostic, ResultKind, ResultType};
+use crate::{ErrorInfo, ResultType};
 
 pub fn fmt_err_string(e: &dyn StdError) -> String {
     let mut buf = String::new();
@@ -19,7 +19,7 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     Ok(())
 }
 
-pub fn fmt_diag_string(e: &impl ErrorDiagnostic) -> String {
+pub fn fmt_diag_string(e: &ErrorInfo) -> String {
     let mut buf = String::new();
     _ = fmt_diag(&mut buf, e);
     buf
@@ -28,23 +28,31 @@ pub fn fmt_diag_string(e: &impl ErrorDiagnostic) -> String {
 fn fmt_err_dbg(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     let mut current = Some(e);
     while let Some(std_err) = current {
-        writeln!(f, "{std_err:?}")?;
-        current = std_err.source();
+        if let Some(src) = std_err.source() {
+            current = Some(src);
+        } else {
+            writeln!(f, "{std_err:?}")?;
+            break;
+        }
     }
     Ok(())
 }
 
-pub fn fmt_diag(f: &mut dyn std::fmt::Write, e: &impl ErrorDiagnostic) -> std::fmt::Result {
-    let tp = e.kind().tp();
+pub fn fmt_diag(f: &mut dyn std::fmt::Write, e: &ErrorInfo) -> std::fmt::Result {
+    let tp = e.tp();
 
-    writeln!(f, "{e}")?;
+    writeln!(f, "\n{e}")?;
     writeln!(f, "type: {}", tp.as_str())?;
-    writeln!(f, "signature: {}\n", e.kind().signature())?;
+    writeln!(f, "signature: {}", e.signature())?;
 
+    if let Some(svc) = e.service() {
+        writeln!(f, "service: {svc}")?;
+    }
+
+    writeln!(f, "\n{e:?}")?;
     if let Some(src) = e.source() {
         fmt_err_dbg(f, src)?;
     }
-
     if tp == ResultType::ServiceError
         && let Some(bt) = e.backtrace()
     {
