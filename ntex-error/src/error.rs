@@ -86,7 +86,7 @@ impl<E: Clone> Error<E> {
     }
 }
 
-impl<E: Clone> Clone for Error<E> {
+impl<E> Clone for Error<E> {
     fn clone(&self) -> Error<E> {
         Error {
             inner: self.inner.clone(),
