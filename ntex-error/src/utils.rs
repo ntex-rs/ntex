@@ -1,4 +1,4 @@
-use std::{convert::Infallible, error::Error as StdError, fmt};
+use std::{convert::Infallible, error::Error as StdError, fmt, io};
 
 use crate::{Error, ErrorDiagnostic, ResultType};
 
@@ -7,6 +7,24 @@ impl ErrorDiagnostic for Infallible {
 
     fn kind(&self) -> Self::Kind {
         unreachable!()
+    }
+}
+
+impl ErrorDiagnostic for io::Error {
+    type Kind = ResultType;
+
+    fn kind(&self) -> Self::Kind {
+        match self.kind() {
+            io::ErrorKind::InvalidData
+            | io::ErrorKind::Unsupported
+            | io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::TimedOut => ResultType::ClientError,
+            _ => ResultType::ServiceError,
+        }
     }
 }
 
