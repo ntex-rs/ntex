@@ -1,8 +1,8 @@
-use std::{fmt, sync::Arc};
+use std::{error, fmt, sync::Arc};
 
 use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, ResultType, repr::ErrorRepr};
 
-trait ErrorInfo: fmt::Display + fmt::Debug + 'static {
+trait ErrorInfoInner: fmt::Display + fmt::Debug + 'static {
     fn tp(&self) -> ResultType;
 
     fn service(&self) -> Option<&'static str>;
@@ -10,9 +10,11 @@ trait ErrorInfo: fmt::Display + fmt::Debug + 'static {
     fn signature(&self) -> &'static str;
 
     fn backtrace(&self) -> Option<&Backtrace>;
+
+    fn source(&self) -> Option<&(dyn error::Error + 'static)>;
 }
 
-impl<E> ErrorInfo for ErrorRepr<E>
+impl<E> ErrorInfoInner for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
 {
@@ -31,14 +33,18 @@ where
     fn backtrace(&self) -> Option<&Backtrace> {
         ErrorDiagnostic::backtrace(self)
     }
+
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        Some(&self.error)
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct ErrorInformation {
-    inner: Arc<dyn ErrorInfo>,
+pub struct ErrorInfo {
+    inner: Arc<dyn ErrorInfoInner>,
 }
 
-impl ErrorInformation {
+impl ErrorInfo {
     pub fn tp(&self) -> ResultType {
         self.inner.tp()
     }
@@ -56,7 +62,7 @@ impl ErrorInformation {
     }
 }
 
-impl<E> From<Error<E>> for ErrorInformation
+impl<E> From<Error<E>> for ErrorInfo
 where
     E: ErrorDiagnostic,
 {
@@ -65,7 +71,7 @@ where
     }
 }
 
-impl<E> From<&Error<E>> for ErrorInformation
+impl<E> From<&Error<E>> for ErrorInfo
 where
     E: ErrorDiagnostic,
 {
@@ -76,7 +82,13 @@ where
     }
 }
 
-impl fmt::Display for ErrorInformation {
+impl error::Error for ErrorInfo {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        self.inner.source()
+    }
+}
+
+impl fmt::Display for ErrorInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.inner)
     }
