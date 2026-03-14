@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.0] - 2026-03-14
+
+* Move ErrorMessage to ntex-error
+
 ## [3.4.0] - 2025-12-17
 
 * Upgrade to ntex-service v4
