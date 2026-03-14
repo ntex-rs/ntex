@@ -91,7 +91,7 @@ impl Backtrace {
                     let mut idx = 0;
                     for frm in &mut frames {
                         if frm.is_some() {
-                            if idx < 10 {
+                            if idx > 10 {
                                 *frm = None;
                             } else {
                                 idx += 1
