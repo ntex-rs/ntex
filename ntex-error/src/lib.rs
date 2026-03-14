@@ -296,5 +296,10 @@ mod tests {
         let res = Err(TestError::Service("409 Error"));
         let res: Result<(), Error<TestError>> = res.into_error();
         let _res: Result<(), Error<TestError2>> = res.into_error();
+
+        let msg = fmt_err_string(&err);
+        assert_eq!(msg, "InternalServiceError\nInternalServiceError\n");
+        let msg = fmt_diag_string(&err);
+        assert!(msg.contains("err: InternalServiceError"));
     }
 }

@@ -252,6 +252,8 @@ mod tests {
         let chained = ErrorMessageChained::from_bstr(ByteString::from("test"));
         assert_eq!(chained.msg(), "test");
         assert!(chained.source().is_none());
+        assert_eq!(format!("{chained}"), "test");
+        assert_eq!(format!("{chained:?}"), "test");
 
         let err = ErrorMessageChained::new("test", io::Error::other("io-test"));
         let msg = fmt_err_string(&err);
