@@ -2,7 +2,7 @@ use std::{error, fmt, sync::Arc};
 
 use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, ResultType, repr::ErrorRepr};
 
-trait ErrorInfoInner: fmt::Display + fmt::Debug + 'static {
+trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
     fn tp(&self) -> ResultType;
 
     fn service(&self) -> Option<&'static str>;
@@ -14,7 +14,7 @@ trait ErrorInfoInner: fmt::Display + fmt::Debug + 'static {
     fn source(&self) -> Option<&(dyn error::Error + 'static)>;
 }
 
-impl<E> ErrorInfoInner for ErrorRepr<E>
+impl<E> ErrorInformation for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
 {
@@ -41,7 +41,13 @@ where
 
 #[derive(Clone)]
 pub struct ErrorInfo {
-    inner: Arc<dyn ErrorInfoInner>,
+    inner: Arc<dyn ErrorInformation>,
+}
+
+impl AsRef<dyn ErrorInformation> for ErrorInfo {
+    fn as_ref(&self) -> &dyn ErrorInformation {
+        self.inner.as_ref()
+    }
 }
 
 impl ErrorInfo {
@@ -88,14 +94,43 @@ impl error::Error for ErrorInfo {
     }
 }
 
+impl fmt::Debug for ErrorInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.inner, f)
+    }
+}
+
 impl fmt::Display for ErrorInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.inner, f)
     }
 }
 
-impl fmt::Debug for ErrorInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.inner, f)
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ErrorInfoType(ResultType, &'static str);
+
+impl ResultKind for ErrorInfoType {
+    fn tp(&self) -> ResultType {
+        self.0
+    }
+
+    fn signature(&self) -> &'static str {
+        self.1
+    }
+}
+
+impl ErrorDiagnostic for ErrorInfo {
+    type Kind = ErrorInfoType;
+
+    fn kind(&self) -> ErrorInfoType {
+        ErrorInfoType(self.tp(), self.inner.signature())
+    }
+
+    fn service(&self) -> Option<&'static str> {
+        self.inner.service()
+    }
+
+    fn backtrace(&self) -> Option<&Backtrace> {
+        self.inner.backtrace()
     }
 }
