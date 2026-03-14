@@ -45,7 +45,7 @@ impl ResultType {
     #[allow(deprecated)]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            ErrorType::Success => "Success",
+            ResultType::Success => "Success",
             ResultType::ClientError | ResultType::Client => "ClientError",
             ResultType::ServiceError | ResultType::Service => "ServiceError",
         }
@@ -287,6 +287,11 @@ mod tests {
 
         // ErrorInformation
         let err: Error<TestError> = TestError::Service("409 Error").into();
+        let msg = fmt_err_string(&err);
+        assert_eq!(msg, "InternalServiceError\nInternalServiceError\n");
+        let msg = fmt_diag_string(&err);
+        assert!(msg.contains("err: InternalServiceError"));
+
         let err: ErrorInfo = err.set_service("SVC").into();
         assert_eq!(err.tp(), ResultType::ServiceError);
         assert_eq!(err.service(), Some("SVC"));
@@ -296,5 +301,10 @@ mod tests {
         let res = Err(TestError::Service("409 Error"));
         let res: Result<(), Error<TestError>> = res.into_error();
         let _res: Result<(), Error<TestError2>> = res.into_error();
+
+        let msg = fmt_err_string(&err);
+        assert_eq!(msg, "InternalServiceError\nInternalServiceError\n");
+        let msg = fmt_diag_string(&err);
+        assert!(msg.contains("err: InternalServiceError"));
     }
 }

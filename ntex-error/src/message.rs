@@ -13,12 +13,8 @@ pub fn fmt_err_string(e: &dyn StdError) -> String {
 pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     let mut current = Some(e);
     while let Some(std_err) = current {
-        if let Some(src) = std_err.source() {
-            current = Some(src);
-        } else {
-            writeln!(f, "{std_err}")?;
-            break;
-        }
+        writeln!(f, "{std_err}")?;
+        current = std_err.source();
     }
     Ok(())
 }
@@ -29,23 +25,10 @@ pub fn fmt_diag_string<K: ResultKind>(e: &dyn ErrorDiagnostic<Kind = K>) -> Stri
     buf
 }
 
-fn fmt_err_dbg(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
-    let mut current = Some(e);
-    while let Some(std_err) = current {
-        if let Some(src) = std_err.source() {
-            current = Some(src);
-        } else {
-            writeln!(f, "{std_err:?}")?;
-            break;
-        }
-    }
-    Ok(())
-}
-
-pub fn fmt_diag<K: ResultKind>(
-    f: &mut dyn std::fmt::Write,
-    e: &dyn ErrorDiagnostic<Kind = K>,
-) -> std::fmt::Result {
+pub fn fmt_diag<K>(f: &mut dyn fmt::Write, e: &dyn ErrorDiagnostic<Kind = K>) -> fmt::Result
+where
+    K: ResultKind,
+{
     let k = e.kind();
     let tp = k.tp();
 
@@ -58,9 +41,13 @@ pub fn fmt_diag<K: ResultKind>(
     }
 
     writeln!(f, "\n{e:?}")?;
-    if let Some(src) = e.source() {
-        fmt_err_dbg(f, src)?;
+
+    let mut current = e.source();
+    while let Some(err) = current {
+        writeln!(f, "{err:?}")?;
+        current = err.source();
     }
+
     if tp == ResultType::ServiceError
         && let Some(bt) = e.backtrace()
     {
@@ -70,35 +57,34 @@ pub fn fmt_diag<K: ResultKind>(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub struct ErrorMessage(ByteString);
 
 #[derive(Clone)]
 pub struct ErrorMessageChained {
-    inner: ErrorMessageInner,
-}
-
-#[derive(Debug, Clone)]
-enum ErrorMessageInner {
-    Message(ByteString),
-    Error(Rc<dyn StdError>),
+    msg: ByteString,
+    source: Option<Rc<dyn StdError>>,
 }
 
 impl ErrorMessageChained {
-    pub fn new<E>(source: E) -> Self
+    pub fn new<M, E>(ctx: M, source: E) -> Self
     where
+        M: Into<ErrorMessage>,
         E: StdError + 'static,
     {
         ErrorMessageChained {
-            inner: ErrorMessageInner::Error(Rc::new(source)),
+            msg: ctx.into().into_string(),
+            source: Some(Rc::new(source)),
         }
     }
 
     /// Construct `ErrorMessageChained` from `ByteString`
     pub const fn from_bstr(msg: ByteString) -> Self {
-        Self {
-            inner: ErrorMessageInner::Message(msg),
-        }
+        Self { msg, source: None }
+    }
+
+    pub fn msg(&self) -> &ByteString {
+        &self.msg
     }
 }
 
@@ -133,6 +119,10 @@ impl ErrorMessage {
     pub fn into_string(self) -> ByteString {
         self.0
     }
+
+    pub fn with_source<E: StdError + 'static>(self, source: E) -> ErrorMessageChained {
+        ErrorMessageChained::new(self, source)
+    }
 }
 
 impl From<String> for ErrorMessage {
@@ -153,9 +143,15 @@ impl From<&'static str> for ErrorMessage {
     }
 }
 
+impl fmt::Debug for ErrorMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
 impl fmt::Display for ErrorMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -174,34 +170,30 @@ impl<'a> From<&'a ErrorMessage> for ByteString {
 impl<M: Into<ErrorMessage>> From<M> for ErrorMessageChained {
     fn from(value: M) -> Self {
         ErrorMessageChained {
-            inner: ErrorMessageInner::Message(value.into().0),
+            msg: value.into().0,
+            source: None,
         }
     }
 }
 
 impl StdError for ErrorMessageChained {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match &self.inner {
-            ErrorMessageInner::Message(_) => None,
-            ErrorMessageInner::Error(err) => Some(err.as_ref()),
-        }
-    }
-}
-
-impl fmt::Display for ErrorMessageChained {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.inner {
-            ErrorMessageInner::Message(msg) => fmt::Display::fmt(&msg, f),
-            ErrorMessageInner::Error(err) => fmt::Display::fmt(&err, f),
-        }
+        self.source.as_ref().map(AsRef::as_ref)
     }
 }
 
 impl fmt::Debug for ErrorMessageChained {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.inner {
-            ErrorMessageInner::Message(msg) => fmt::Display::fmt(&msg, f),
-            ErrorMessageInner::Error(err) => fmt::Debug::fmt(&err, f),
+        fmt::Display::fmt(&self, f)
+    }
+}
+
+impl fmt::Display for ErrorMessageChained {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.msg.is_empty() {
+            Ok(())
+        } else {
+            fmt::Display::fmt(&self.msg, f)
         }
     }
 }
@@ -227,12 +219,6 @@ mod tests {
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
-        let msg = ErrorMessage::from_static("test");
-        assert!(!msg.is_empty());
-        assert_eq!(format!("{msg}"), "test");
-        assert_eq!(msg.as_str(), "test");
-        assert_eq!(msg.as_bstr(), ByteString::from("test"));
-
         let msg = ErrorMessage::from("test".to_string());
         assert!(!msg.is_empty());
         assert_eq!(msg.as_str(), "test");
@@ -248,7 +234,7 @@ mod tests {
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
-        let msg = ErrorMessage::from("test");
+        let msg = ErrorMessage::from_static("test");
         assert!(!msg.is_empty());
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
@@ -259,8 +245,18 @@ mod tests {
 
     #[test]
     fn error_message_chained() {
-        let err = ErrorMessageChained::new(io::Error::other("io-test"));
+        let chained = ErrorMessageChained::from(ByteString::from("test"));
+        assert_eq!(chained.msg(), "test");
+        assert!(chained.source().is_none());
+
+        let chained = ErrorMessageChained::from_bstr(ByteString::from("test"));
+        assert_eq!(chained.msg(), "test");
+        assert!(chained.source().is_none());
+        assert_eq!(format!("{chained}"), "test");
+        assert_eq!(format!("{chained:?}"), "test");
+
+        let err = ErrorMessageChained::new("test", io::Error::other("io-test"));
         let msg = fmt_err_string(&err);
-        assert_eq!(msg, "io-test\n");
+        assert_eq!(msg, "test\nio-test\n");
     }
 }
