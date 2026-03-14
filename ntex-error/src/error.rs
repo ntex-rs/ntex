@@ -188,10 +188,6 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
 
 impl<E: fmt::Debug> fmt::Debug for Error<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Error")
-            .field("error", &self.inner.error)
-            .field("service", &self.inner.service)
-            .field("backtrace", &self.inner.backtrace)
-            .finish()
+        fmt::Debug::fmt(&self.inner.error, f)
     }
 }
