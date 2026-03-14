@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::panic::Location;
-use std::{cell::RefCell, fmt, fmt::Write, os, ptr, sync::Arc};
+use std::{cell::RefCell, fmt, fmt::Write, os, path, ptr, sync::Arc};
 
 use backtrace::{BacktraceFmt, BacktraceFrame, BytesOrWideString};
 
@@ -121,46 +121,69 @@ fn find_loc(loc: &Location<'_>, frames: &mut [Option<&BacktraceFrame>]) {
     }
 }
 
-fn find_loc_start(loc: (&str, u32), frames: &mut [Option<&BacktraceFrame>]) {
-    let mut idx = 0;
-    while idx < frames.len() {
-        if let Some(frm) = &frames[idx] {
-            for sym in frm.symbols() {
-                if let Some(fname) = sym.filename()
-                    && (fname.ends_with("src\\ctx.rs")
-                        || fname.ends_with("src\\map_err.rs")
-                        || fname.ends_with("src\\and_then.rs")
-                        || fname.ends_with("src\\fn_service.rs")
-                        || fname.ends_with("src\\pipeline.rs")
-                        || fname.ends_with("src\\net\\factory.rs")
-                        || fname.ends_with("src\\future\\future.rs")
-                        || fname.ends_with("src\\net\\service.rs")
-                        || fname.ends_with("src\\boxed.rs")
-                        || fname.ends_with("src\\wrk.rs")
-                        || fname.ends_with("src\\future.rs")
-                        || fname.ends_with("std\\src\\thread\\local.rs"))
-                {
-                    frames[idx] = None;
-                    idx += 1;
-                    continue;
-                }
+thread_local! {
+    static PATHS: Vec<String> = {
+        let mut paths = Vec::new();
+        for item in [
+            &["src", "ctx.rs"][..],
+            &["src", "map_err.rs"][..],
+            &["src", "and_then.rs"][..],
+            &["src", "fn_service.rs"][..],
+            &["src", "pipeline.rs"][..],
+            &["src", "net", "factory.rs"][..],
+            &["src", "future", "future.rs"][..],
+            &["src", "net", "service.rs"][..],
+            &["src", "boxed.rs"][..],
+            &["src", "wrk.rs"][..],
+            &["src", "future.rs"][..],
+            &["std", "src", "thread", "local.rs"][..],
+            &["src", "rt_compio.rs"][..],
+            &["src", "runtime", "task", "core.rs"][..],
+            &["core", "src", "panic", "unwind_safe.rs"][..],
+        ] {
+            let mut p = path::PathBuf::new();
+            for s in item {
+                p.push(s);
+            }
+            paths.push(format!("{:?}", p));
+        }
+        paths
+    };
+}
 
-                if let Some(fname) = sym.filename()
-                    && let Some(lineno) = sym.lineno()
-                    && fname.ends_with(loc.0)
-                    && (loc.1 == 0 || lineno == loc.1)
-                {
-                    for f in frames.iter_mut().skip(idx) {
-                        if f.is_some() {
-                            *f = None;
+fn find_loc_start(loc: (&str, u32), frames: &mut [Option<&BacktraceFrame>]) {
+    PATHS.with(|paths| {
+        let mut idx = 0;
+        'outter: while idx < frames.len() {
+            if let Some(frm) = &frames[idx] {
+                for sym in frm.symbols() {
+                    if let Some(fname) = sym.filename() {
+                        for p in paths {
+                            if fname.ends_with(p) {
+                                frames[idx] = None;
+                                idx += 1;
+                                continue 'outter;
+                            }
                         }
                     }
-                    return;
+
+                    if let Some(fname) = sym.filename()
+                        && let Some(lineno) = sym.lineno()
+                        && fname.ends_with(loc.0)
+                        && (loc.1 == 0 || lineno == loc.1)
+                    {
+                        for f in frames.iter_mut().skip(idx) {
+                            if f.is_some() {
+                                *f = None;
+                            }
+                        }
+                        return;
+                    }
                 }
             }
+            idx += 1;
         }
-        idx += 1;
-    }
+    })
 }
 
 struct Bt<'a>(&'a [Option<&'a BacktraceFrame>]);
