@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::panic::Location;
-use std::{cell::RefCell, fmt, fmt::Write, os, ptr, sync::Arc};
+use std::{cell::RefCell, fmt, fmt::Write, os, path, ptr, sync::Arc};
 
 use backtrace::{BacktraceFmt, BacktraceFrame, BytesOrWideString};
 
@@ -81,6 +81,22 @@ impl Backtrace {
                         if let Some(start) = unsafe { START_ALT } {
                             find_loc_start(start, &mut frames);
                         }
+                        PATHS2.with(|paths| {
+                            for s in paths {
+                                find_loc_start((s.as_str(), 0), &mut frames);
+                            }
+                        });
+                    }
+
+                    let mut idx = 0;
+                    for frm in &mut frames {
+                        if frm.is_some() {
+                            if idx > 10 {
+                                *frm = None;
+                            } else {
+                                idx += 1;
+                            }
+                        }
                     }
 
                     let bt = Bt(&frames[..]);
@@ -103,23 +119,79 @@ impl Backtrace {
 }
 
 fn find_loc(loc: &Location<'_>, frames: &mut [Option<&BacktraceFrame>]) {
-    for (idx, frm) in frames.iter_mut().enumerate() {
+    let mut idx = 0;
+
+    'outter: for (i, frm) in frames.iter().enumerate() {
         if let Some(f) = frm {
             for sym in f.symbols() {
                 if let Some(fname) = sym.filename()
-                    && let Some(lineno) = sym.lineno()
                     && fname.ends_with(loc.file())
-                    && lineno == loc.line()
                 {
-                    for f in frames.iter_mut().take(idx) {
-                        *f = None;
-                    }
-                    return;
+                    idx = i;
+                    break 'outter;
                 }
             }
         } else {
             break;
         }
+    }
+
+    for f in frames.iter_mut().take(idx) {
+        *f = None;
+    }
+
+    PATHS.with(|paths| {
+        'outter: for frm in &mut frames[idx..] {
+            if let Some(f) = frm {
+                for sym in f.symbols() {
+                    if let Some(fname) = sym.filename() {
+                        for p in paths {
+                            if fname.ends_with(p) {
+                                *frm = None;
+                                continue 'outter;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+thread_local! {
+    static PATHS: Vec<String> = {
+        let mut paths = Vec::new();
+        for item in [
+            &["src", "ctx.rs"][..],
+            &["src", "map_err.rs"][..],
+            &["src", "and_then.rs"][..],
+            &["src", "fn_service.rs"][..],
+            &["src", "pipeline.rs"][..],
+            &["src", "net", "factory.rs"][..],
+            &["src", "future", "future.rs"][..],
+            &["src", "net", "service.rs"][..],
+            &["src", "boxed.rs"][..],
+            &["src", "error.rs"][..],
+            &["src", "wrk.rs"][..],
+            &["src", "future.rs"][..],
+            &["std", "src", "thread", "local.rs"][..],
+        ] {
+            paths.push(item.iter().collect::<path::PathBuf>().to_string_lossy().into_owned());
+        }
+        paths
+    };
+
+    static PATHS2: Vec<String> = {
+        let mut paths = Vec::new();
+        for item in [
+            &["src", "driver.rs"][..],
+            &["src", "rt_compio.rs"][..],
+            &["core", "src", "panic", "unwind_safe.rs"][..],
+            &["src", "runtime", "task", "core.rs"][..]
+        ] {
+            paths.push(item.iter().collect::<path::PathBuf>().to_string_lossy().into_owned());
+        }
+        paths
     }
 }
 
@@ -136,11 +208,9 @@ fn find_loc_start(loc: (&str, u32), frames: &mut [Option<&BacktraceFrame>]) {
                     for f in frames.iter_mut().skip(idx) {
                         if f.is_some() {
                             *f = None;
-                        } else {
-                            return;
                         }
                     }
-                    break;
+                    return;
                 }
             }
         }

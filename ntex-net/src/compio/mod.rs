@@ -23,7 +23,6 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
         compio_runtime::Runtime::try_with_current(Runtime::driver_type)
             .unwrap_or(compio_driver::DriverType::Poll)
     );
-    ntex_error::set_backtrace_start_alt("src/future/future/catch_unwind.rs", 0);
     let rt = Runtime::new().unwrap();
     rt.block_on(fut);
 }

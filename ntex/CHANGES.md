@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.1] - 2026-03-14
+
+* Re-export more types from ntex-error
+
 ## [3.6.0] - 2026-03-08
 
 * Include ntex-error

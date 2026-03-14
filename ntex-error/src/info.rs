@@ -1,34 +1,25 @@
-use std::{fmt, fmt::Write, sync::Arc};
+use std::{error, fmt, sync::Arc};
 
-use ntex_bytes::{ByteString, BytesMut};
+use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, ResultType, repr::ErrorRepr};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ErrorRepr, ErrorType};
-
-trait ErrorInfo: fmt::Debug + 'static {
-    fn error_type(&self) -> ErrorType;
-
-    fn error_signature(&self) -> ByteString;
+trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
+    fn tp(&self) -> ResultType;
 
     fn service(&self) -> Option<&'static str>;
 
     fn signature(&self) -> &'static str;
 
     fn backtrace(&self) -> Option<&Backtrace>;
+
+    fn source(&self) -> Option<&(dyn error::Error + 'static)>;
 }
 
-impl<E, K> ErrorInfo for ErrorRepr<E, K>
+impl<E> ErrorInformation for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
-    K: ErrorKind + From<E::Kind>,
 {
-    fn error_type(&self) -> ErrorType {
-        self.kind().error_type()
-    }
-
-    fn error_signature(&self) -> ByteString {
-        let mut buf = BytesMut::new();
-        let _ = write!(&mut buf, "{}", self.kind());
-        ByteString::try_from(buf).unwrap()
+    fn tp(&self) -> ResultType {
+        self.kind().tp()
     }
 
     fn service(&self) -> Option<&'static str> {
@@ -36,26 +27,32 @@ where
     }
 
     fn signature(&self) -> &'static str {
-        ErrorDiagnostic::signature(self)
+        self.kind().signature()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {
         ErrorDiagnostic::backtrace(self)
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct ErrorInformation {
-    inner: Arc<dyn ErrorInfo>,
-}
-
-impl ErrorInformation {
-    pub fn error_type(&self) -> ErrorType {
-        self.inner.error_type()
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        Some(&self.error)
     }
+}
 
-    pub fn error_signature(&self) -> ByteString {
-        self.inner.error_signature()
+#[derive(Clone)]
+pub struct ErrorInfo {
+    inner: Arc<dyn ErrorInformation>,
+}
+
+impl AsRef<dyn ErrorInformation> for ErrorInfo {
+    fn as_ref(&self) -> &dyn ErrorInformation {
+        self.inner.as_ref()
+    }
+}
+
+impl ErrorInfo {
+    pub fn tp(&self) -> ResultType {
+        self.inner.tp()
     }
 
     pub fn service(&self) -> Option<&'static str> {
@@ -71,11 +68,69 @@ impl ErrorInformation {
     }
 }
 
-impl<E> From<Error<E>> for ErrorInformation
+impl<E> From<Error<E>> for ErrorInfo
 where
     E: ErrorDiagnostic,
 {
     fn from(err: Error<E>) -> Self {
         Self { inner: err.inner }
+    }
+}
+
+impl<E> From<&Error<E>> for ErrorInfo
+where
+    E: ErrorDiagnostic,
+{
+    fn from(err: &Error<E>) -> Self {
+        Self {
+            inner: err.inner.clone(),
+        }
+    }
+}
+
+impl error::Error for ErrorInfo {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        self.inner.source()
+    }
+}
+
+impl fmt::Debug for ErrorInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.inner, f)
+    }
+}
+
+impl fmt::Display for ErrorInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.inner, f)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ErrorInfoType(ResultType, &'static str);
+
+impl ResultKind for ErrorInfoType {
+    fn tp(&self) -> ResultType {
+        self.0
+    }
+
+    fn signature(&self) -> &'static str {
+        self.1
+    }
+}
+
+impl ErrorDiagnostic for ErrorInfo {
+    type Kind = ErrorInfoType;
+
+    fn kind(&self) -> ErrorInfoType {
+        ErrorInfoType(self.tp(), self.inner.signature())
+    }
+
+    fn service(&self) -> Option<&'static str> {
+        self.inner.service()
+    }
+
+    fn backtrace(&self) -> Option<&Backtrace> {
+        self.inner.backtrace()
     }
 }

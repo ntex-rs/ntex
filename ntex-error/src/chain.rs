@@ -1,18 +1,17 @@
 use std::{error, fmt, panic::Location, sync::Arc};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, ErrorKind, ErrorRepr};
+use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, repr::ErrorRepr};
 
 #[derive(Debug, Clone)]
-pub struct ErrorChain<K: ErrorKind> {
+pub struct ErrorChain<K: ResultKind> {
     error: Arc<dyn ErrorDiagnostic<Kind = K>>,
 }
 
-impl<K: ErrorKind> ErrorChain<K> {
+impl<K: ResultKind> ErrorChain<K> {
     #[track_caller]
     pub fn new<E>(error: E) -> Self
     where
-        E: ErrorDiagnostic + Sized,
-        K: ErrorKind + From<E::Kind>,
+        E: ErrorDiagnostic<Kind = K> + Sized,
     {
         Self {
             error: Arc::new(ErrorRepr::new(error, None, Location::caller())),
@@ -23,7 +22,7 @@ impl<K: ErrorKind> ErrorChain<K> {
 impl<E, K> From<Error<E>> for ErrorChain<K>
 where
     E: ErrorDiagnostic<Kind = K> + Sized,
-    K: ErrorKind,
+    K: ResultKind,
 {
     fn from(err: Error<E>) -> Self {
         Self { error: err.inner }
@@ -32,7 +31,7 @@ where
 
 impl<K> error::Error for ErrorChain<K>
 where
-    K: ErrorKind,
+    K: ResultKind,
 {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.error.source()
@@ -41,7 +40,7 @@ where
 
 impl<K> fmt::Display for ErrorChain<K>
 where
-    K: ErrorKind,
+    K: ResultKind,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.error, f)
@@ -50,7 +49,7 @@ where
 
 impl<K> ErrorDiagnostic for ErrorChain<K>
 where
-    K: ErrorKind,
+    K: ResultKind,
 {
     type Kind = K;
 
@@ -60,10 +59,6 @@ where
 
     fn service(&self) -> Option<&'static str> {
         self.error.service()
-    }
-
-    fn signature(&self) -> &'static str {
-        self.error.signature()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {

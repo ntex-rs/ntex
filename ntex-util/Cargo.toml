@@ -1,6 +1,6 @@
 [package]
 name = "ntex-util"
-version = "3.4.0"
+version = "3.5.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -21,6 +21,7 @@ workspace = true
 
 [dependencies]
 ntex-bytes = { workspace = true }
+ntex-error = { workspace = true }
 ntex-service = { workspace = true }
 ntex-rt = { workspace = true }
 
