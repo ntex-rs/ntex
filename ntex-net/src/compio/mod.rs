@@ -23,16 +23,6 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
         compio_runtime::Runtime::try_with_current(Runtime::driver_type)
             .unwrap_or(compio_driver::DriverType::Poll)
     );
-    #[cfg(unix)]
-    {
-        ntex_error::set_backtrace_start("src/rt_compio.rs", 0);
-        ntex_error::set_backtrace_start_alt("core/src/panic/unwind_safe.rs", 0);
-    }
-    #[cfg(not(unix))]
-    {
-        ntex_error::set_backtrace_start("src\\rt_compio.rs", 0);
-        ntex_error::set_backtrace_start_alt("core\\src\\panic\\unwind_safe.rs", 0);
-    }
     let rt = Runtime::new().unwrap();
     rt.block_on(fut);
 }
