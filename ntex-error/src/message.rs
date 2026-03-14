@@ -190,10 +190,10 @@ impl fmt::Debug for ErrorMessageChained {
 
 impl fmt::Display for ErrorMessageChained {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !self.msg.is_empty() {
-            fmt::Display::fmt(&self.msg, f)
-        } else {
+        if self.msg.is_empty() {
             Ok(())
+        } else {
+            fmt::Display::fmt(&self.msg, f)
         }
     }
 }
