@@ -94,7 +94,7 @@ impl Backtrace {
                             if idx > 10 {
                                 *frm = None;
                             } else {
-                                idx += 1
+                                idx += 1;
                             }
                         }
                     }
@@ -171,6 +171,7 @@ thread_local! {
             &["src", "future", "future.rs"][..],
             &["src", "net", "service.rs"][..],
             &["src", "boxed.rs"][..],
+            &["src", "error.rs"][..],
             &["src", "wrk.rs"][..],
             &["src", "future.rs"][..],
             &["std", "src", "thread", "local.rs"][..],

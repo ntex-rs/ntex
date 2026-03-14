@@ -91,6 +91,16 @@ impl<E> Error<E> {
             inner: Arc::new(ErrorRepr::new2(err, svc, bt)),
         })
     }
+
+    /// Print error debug information
+    pub fn debug(&self) -> impl fmt::Debug
+    where
+        E: fmt::Debug,
+    {
+        ErrorDebug {
+            inner: self.inner.as_ref(),
+        }
+    }
 }
 
 impl<E: Clone> Error<E> {
@@ -204,5 +214,19 @@ impl<E: fmt::Display> fmt::Display for Error<E> {
 impl<E: fmt::Debug> fmt::Debug for Error<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&self.inner.error, f)
+    }
+}
+
+struct ErrorDebug<'a, E> {
+    inner: &'a ErrorRepr<E>,
+}
+
+impl<E: fmt::Debug> fmt::Debug for ErrorDebug<'_, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Error")
+            .field("error", &self.inner.error)
+            .field("service", &self.inner.service)
+            .field("backtrace", &self.inner.backtrace)
+            .finish()
     }
 }

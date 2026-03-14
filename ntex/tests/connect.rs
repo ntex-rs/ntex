@@ -115,8 +115,9 @@ async fn test_openssl_string() {
         let addr = "127.0.0.1".to_string();
         let err = conn.call(addr.into()).await.err().unwrap();
         assert!(
-            format!("{err:?}").contains("ntex_net::connect::service::connect::"),
-            "{err:#?}"
+            format!("{:?}", err.debug()).contains("ntex_net::connect::service::connect::"),
+            "{:#?}",
+            err.debug()
         );
     }
 }
