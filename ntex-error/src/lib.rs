@@ -285,7 +285,7 @@ mod tests {
 
         // ErrorInformation
         let err: Error<TestError> = TestError::Service("409 Error").into();
-        let err: ErrorInformation = err.set_service("SVC").into();
+        let err: ErrorInfo = err.set_service("SVC").into();
         assert_eq!(err.tp(), ResultType::ServiceError);
         assert_eq!(err.service(), Some("SVC"));
         assert_eq!(err.signature(), "Service-Internal");
