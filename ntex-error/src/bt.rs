@@ -137,9 +137,6 @@ thread_local! {
             &["src", "wrk.rs"][..],
             &["src", "future.rs"][..],
             &["std", "src", "thread", "local.rs"][..],
-            &["src", "rt_compio.rs"][..],
-            &["src", "runtime", "task", "core.rs"][..],
-            &["core", "src", "panic", "unwind_safe.rs"][..],
         ] {
             let mut p = path::PathBuf::new();
             for s in item {
