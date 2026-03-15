@@ -214,6 +214,8 @@ mod tests {
         assert_eq!(err, err2);
         let err2 = err2.map(|_| TestError::Disconnect);
         assert!(err != err2);
+        let err2 = err2.forward(|_| TestError::Disconnect);
+        assert!(err != err2);
 
         assert_eq!(TestError::Connect("").kind().tp(), ResultType::ClientError);
         assert_eq!(TestError::Disconnect.kind().tp(), ResultType::ClientError);
