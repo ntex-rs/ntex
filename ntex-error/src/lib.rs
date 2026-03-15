@@ -260,15 +260,10 @@ mod tests {
         let err: Error<TestError> = TestError::Service("404 Error").into();
         if let Some(bt) = err.backtrace() {
             assert!(
-                format!("{}", bt).contains("ntex_error::tests::test_error"),
-                "{}",
-                bt
+                format!("{bt}").contains("ntex_error::tests::test_error"),
+                "{bt}",
             );
-            assert!(
-                bt.repr().contains("ntex_error::tests::test_error"),
-                "{}",
-                bt
-            );
+            assert!(bt.repr().contains("ntex_error::tests::test_error"), "{bt}",);
         }
 
         let err: ErrorChain<TestKind> = err.into();
