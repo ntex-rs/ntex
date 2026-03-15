@@ -1,5 +1,9 @@
 # Changes
 
+## [1.3.0] - 2026-03-15
+
+* Add error extensions api, get_item() and insert_item() methods
+
 ## [1.2.0] - 2026-03-14
 
 * Refactor ErrorDiagnostic trait
