@@ -1,11 +1,12 @@
 use std::{error, fmt, panic::Location};
 
-use crate::{Backtrace, ErrorDiagnostic};
+use crate::{Backtrace, ErrorDiagnostic, ext::Extensions};
 
 pub(crate) struct ErrorRepr<E> {
     pub(crate) error: E,
     pub(crate) service: Option<&'static str>,
     pub(crate) backtrace: Backtrace,
+    pub(crate) ext: Extensions,
 }
 
 impl<E: ErrorDiagnostic> ErrorRepr<E> {
@@ -25,6 +26,7 @@ impl<E: ErrorDiagnostic> ErrorRepr<E> {
             error,
             service,
             backtrace,
+            ext: Extensions::default(),
         }
     }
 }
@@ -34,11 +36,13 @@ impl<E> ErrorRepr<E> {
         error: E,
         service: Option<&'static str>,
         backtrace: Backtrace,
+        ext: Extensions,
     ) -> Self {
         Self {
             error,
             service,
             backtrace,
+            ext,
         }
     }
 
@@ -50,6 +54,7 @@ impl<E> ErrorRepr<E> {
         Self {
             error,
             service,
+            ext: Extensions::default(),
             backtrace: Backtrace::new(loc),
         }
     }
@@ -75,19 +80,6 @@ where
 
     fn backtrace(&self) -> Option<&Backtrace> {
         Some(&self.backtrace)
-    }
-}
-
-impl<E> Clone for ErrorRepr<E>
-where
-    E: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            error: self.error.clone(),
-            service: self.service,
-            backtrace: self.backtrace.clone(),
-        }
     }
 }
 

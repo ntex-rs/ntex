@@ -1,4 +1,4 @@
-use std::{error, fmt, sync::Arc};
+use std::{any::Any, any::TypeId, error, fmt, sync::Arc};
 
 use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, ResultType, repr::ErrorRepr};
 
@@ -12,6 +12,8 @@ trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
     fn backtrace(&self) -> Option<&Backtrace>;
 
     fn source(&self) -> Option<&(dyn error::Error + 'static)>;
+
+    fn get_item(&self, id: &TypeId) -> Option<&(dyn Any + Send + Sync)>;
 }
 
 impl<E> ErrorInformation for ErrorRepr<E>
@@ -36,6 +38,10 @@ where
 
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         Some(&self.error)
+    }
+
+    fn get_item(&self, id: &TypeId) -> Option<&(dyn Any + Send + Sync)> {
+        self.ext.map.get(id).map(AsRef::as_ref)
     }
 }
 
@@ -65,6 +71,12 @@ impl ErrorInfo {
 
     pub fn backtrace(&self) -> Option<&Backtrace> {
         self.inner.backtrace()
+    }
+
+    pub fn get_item<T: 'static>(&self) -> Option<&T> {
+        self.inner
+            .get_item(&TypeId::of::<T>())
+            .and_then(|boxed| boxed.downcast_ref())
     }
 }
 

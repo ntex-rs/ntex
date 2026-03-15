@@ -10,6 +10,7 @@ use std::{error::Error as StdError, fmt};
 mod bt;
 mod chain;
 mod error;
+mod ext;
 mod info;
 mod message;
 mod repr;
@@ -306,5 +307,19 @@ mod tests {
         assert_eq!(msg, "InternalServiceError\nInternalServiceError\n");
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("err: InternalServiceError"));
+
+        // Error extensions
+        let err: Error<TestError> = TestError::Service("409 Error").into();
+        assert_eq!(err.get_item::<&str>(), None);
+        let err = err.insert_item("Test");
+        assert_eq!(err.get_item::<&str>(), Some(&"Test"));
+        let err2 = err.clone();
+        assert_eq!(err2.get_item::<&str>(), Some(&"Test"));
+        let err2 = err2.insert_item("Test2");
+        assert_eq!(err2.get_item::<&str>(), Some(&"Test2"));
+        assert_eq!(err.get_item::<&str>(), Some(&"Test"));
+
+        let info = ErrorInfo::from(err2);
+        assert_eq!(info.get_item::<&str>(), Some(&"Test2"));
     }
 }
