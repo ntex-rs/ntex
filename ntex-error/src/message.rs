@@ -264,5 +264,8 @@ mod tests {
         let err = ErrorMessageChained::new("test", io::Error::other("io-test"));
         let msg = fmt_err_string(&err);
         assert_eq!(msg, "test\nio-test\n");
+
+        let chained = ErrorMessageChained::from(ByteString::new());
+        assert_eq!(format!("{chained}"), "");
     }
 }

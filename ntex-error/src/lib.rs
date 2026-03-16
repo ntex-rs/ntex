@@ -109,7 +109,7 @@ impl fmt::Display for ResultType {
 #[allow(dead_code)]
 #[cfg(test)]
 mod tests {
-    use std::{error::Error as StdError, mem};
+    use std::{error::Error as StdError, io, mem};
 
     use super::*;
 
@@ -332,5 +332,14 @@ mod tests {
 
         assert_eq!(Success.kind(), ResultType::Success);
         assert_eq!(format!("{Success}"), "Success");
+
+        assert_eq!(
+            ErrorDiagnostic::kind(&io::Error::other("")),
+            ResultType::ServiceError
+        );
+        assert_eq!(
+            ErrorDiagnostic::kind(&io::Error::new(io::ErrorKind::InvalidData, "")),
+            ResultType::ClientError
+        );
     }
 }
