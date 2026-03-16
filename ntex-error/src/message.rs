@@ -216,6 +216,7 @@ mod tests {
         let msg = ErrorMessage::from("test");
         assert!(!msg.is_empty());
         assert_eq!(format!("{msg}"), "test");
+        assert_eq!(format!("{msg:?}"), "test");
         assert_eq!(msg.as_str(), "test");
         assert_eq!(msg.as_bstr(), ByteString::from("test"));
 
@@ -254,6 +255,11 @@ mod tests {
         assert!(chained.source().is_none());
         assert_eq!(format!("{chained}"), "test");
         assert_eq!(format!("{chained:?}"), "test");
+
+        let msg = ErrorMessage::from(ByteString::from("test"));
+        let chained = msg.with_source(io::Error::other("io-test"));
+        assert_eq!(chained.msg(), "test");
+        assert!(chained.source().is_some());
 
         let err = ErrorMessageChained::new("test", io::Error::other("io-test"));
         let msg = fmt_err_string(&err);
