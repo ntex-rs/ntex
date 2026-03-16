@@ -1,11 +1,7 @@
-use crate::{Service, ServiceCtx};
-
 #[cfg(feature = "compress")]
-use crate::http::Payload;
-#[cfg(feature = "compress")]
-use crate::http::encoding::Decoder;
+use crate::http::{Payload, encoding::Decoder};
 
-use crate::{error::Error, http::body::MessageBody};
+use crate::{Service, ServiceCtx, error::Error, http::body::MessageBody};
 
 use super::connector::ConnectorService;
 use super::error::ClientError;

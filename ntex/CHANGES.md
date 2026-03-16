@@ -1,6 +1,5 @@
 # Changes
 
-
 ## [3.7.0] - 2026-03-xx
 
 * Use ntex_error::Error for http client
