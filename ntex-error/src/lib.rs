@@ -316,7 +316,7 @@ mod tests {
         let err2 = err.clone().map(|_| TestError::Disconnect);
         assert_eq!(err2.get_item::<&str>(), Some(&"Test"));
 
-        let info = ErrorInfo::from(err2);
+        let info = ErrorInfo::from(&err2);
         assert_eq!(info.get_item::<&str>(), Some(&"Test"));
 
         let err3 = err
