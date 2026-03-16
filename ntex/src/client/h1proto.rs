@@ -185,7 +185,7 @@ impl Stream for PlStream {
                     ready!(this.io.as_ref().unwrap().poll_flush(cx, false))?;
                     continue;
                 }
-                Err(RecvError::Decoder(err)) => Err(PayloadError::from(err)),
+                Err(RecvError::Decoder(err)) => Err(err),
                 Err(RecvError::PeerGone(Some(err))) => {
                     Err(PayloadError::Incomplete(Some(err)))
                 }

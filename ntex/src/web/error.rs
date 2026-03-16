@@ -717,13 +717,13 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let resp = WebResponseError::<DefaultError>::error_response(
-            &ClientError::Connect(ConnectError::Timeout.into()),
+            &ClientError::Connect(ConnectError::Timeout),
             &req,
         );
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
         let resp = WebResponseError::<DefaultError>::error_response(
-            &ClientError::Connect(ConnectError::SslIsNotSupported.into()),
+            &ClientError::Connect(ConnectError::SslIsNotSupported),
             &req,
         );
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);

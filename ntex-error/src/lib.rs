@@ -263,7 +263,7 @@ mod tests {
                 format!("{bt}").contains("ntex_error::tests::test_error"),
                 "{bt}",
             );
-            assert!(bt.repr().contains("ntex_error::tests::test_error"), "{bt}",);
+            assert!(bt.repr().contains("ntex_error::tests::test_error"), "{bt}");
         }
 
         let err: ErrorChain<TestKind> = err.into();
