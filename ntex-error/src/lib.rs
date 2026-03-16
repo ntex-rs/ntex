@@ -331,6 +331,6 @@ mod tests {
         assert_eq!(res, Ok(()));
 
         assert_eq!(Success.kind(), ResultType::Success);
-        assert_eq!(format!("{}", Success), "Success");
+        assert_eq!(format!("{Success}"), "Success");
     }
 }
