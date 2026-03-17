@@ -50,12 +50,6 @@ pub struct ErrorInfo {
     inner: Arc<dyn ErrorInformation>,
 }
 
-impl AsRef<dyn ErrorInformation> for ErrorInfo {
-    fn as_ref(&self) -> &dyn ErrorInformation {
-        self.inner.as_ref()
-    }
-}
-
 impl ErrorInfo {
     pub fn tp(&self) -> ResultType {
         self.inner.tp()
