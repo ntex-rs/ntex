@@ -109,7 +109,7 @@ impl fmt::Display for ResultType {
 #[allow(dead_code)]
 #[cfg(test)]
 mod tests {
-    use std::{error::Error as StdError, mem};
+    use std::{error::Error as StdError, io, mem};
 
     use super::*;
 
@@ -258,7 +258,7 @@ mod tests {
                 format!("{bt}").contains("ntex_error::tests::test_error"),
                 "{bt}",
             );
-            assert!(bt.repr().contains("ntex_error::tests::test_error"), "{bt}",);
+            assert!(bt.repr().contains("ntex_error::tests::test_error"), "{bt}");
         }
 
         let err: ErrorChain<TestKind> = err.into();
@@ -308,8 +308,33 @@ mod tests {
         let err2 = err2.insert_item("Test2");
         assert_eq!(err2.get_item::<&str>(), Some(&"Test2"));
         assert_eq!(err.get_item::<&str>(), Some(&"Test"));
+        let err2 = err.clone().map(|_| TestError::Disconnect);
+        assert_eq!(err2.get_item::<&str>(), Some(&"Test"));
 
-        let info = ErrorInfo::from(err2);
-        assert_eq!(info.get_item::<&str>(), Some(&"Test2"));
+        let info = ErrorInfo::from(&err2);
+        assert_eq!(info.get_item::<&str>(), Some(&"Test"));
+
+        let err3 = err
+            .clone()
+            .try_map(|_| Err::<(), _>(TestError2))
+            .err()
+            .unwrap();
+        assert_eq!(err3.kind().signature(), "ClientError");
+        assert_eq!(err3.get_item::<&str>(), Some(&"Test"));
+
+        let res = err.clone().try_map(|_| Ok::<_, TestError2>(()));
+        assert_eq!(res, Ok(()));
+
+        assert_eq!(Success.kind(), ResultType::Success);
+        assert_eq!(format!("{Success}"), "Success");
+
+        assert_eq!(
+            ErrorDiagnostic::kind(&io::Error::other("")),
+            ResultType::ServiceError
+        );
+        assert_eq!(
+            ErrorDiagnostic::kind(&io::Error::new(io::ErrorKind::InvalidData, "")),
+            ResultType::ClientError
+        );
     }
 }
