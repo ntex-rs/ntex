@@ -1,6 +1,8 @@
 # Changes
 
-## [1.3.1] - 2026-03-17
+## [1.4.0] - 2026-03-17
+
+* Fix Error::source()
 
 * Tune error formatter
 

@@ -21,7 +21,7 @@ impl<'a> Wrt<'a> {
     }
 }
 
-impl<'a> fmt::Write for Wrt<'a> {
+impl fmt::Write for Wrt<'_> {
     fn write_str(&mut self, s: &str) -> Result<(), fmt::Error> {
         self.written += s.len();
         self.fmt.write_str(s)
@@ -45,7 +45,7 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     while let Some(std_err) = current {
         write!(&mut wrt, "{std_err}")?;
         if wrt.wrote() {
-            write!(wrt.fmt, "\n")?;
+            writeln!(wrt.fmt)?;
         }
         current = std_err.source();
     }
@@ -72,19 +72,19 @@ where
     if let Some(svc) = e.service() {
         writeln!(f, "service: {svc}")?;
     }
-    write!(f, "\n")?;
+    writeln!(f)?;
 
     let mut wrt = Wrt::new(f);
     write!(&mut wrt, "{e:?}")?;
     if wrt.wrote() {
-        write!(wrt.fmt, "\n")?;
+        writeln!(wrt.fmt)?;
     }
 
     let mut current = e.source();
     while let Some(err) = current {
         write!(&mut wrt, "{err:?}")?;
         if wrt.wrote() {
-            write!(wrt.fmt, "\n")?;
+            writeln!(wrt.fmt)?;
         }
         current = err.source();
     }
