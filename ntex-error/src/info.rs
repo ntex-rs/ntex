@@ -37,7 +37,7 @@ where
     }
 
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        Some(&self.error)
+        self.error.source()
     }
 
     fn get_item(&self, id: &TypeId) -> Option<&(dyn Any + Send + Sync)> {
