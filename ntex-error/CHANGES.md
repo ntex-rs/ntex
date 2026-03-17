@@ -1,5 +1,9 @@
 # Changes
 
+## [1.3.1] - 2026-03-17
+
+* Tune error formatter
+
 ## [1.3.0] - 2026-03-15
 
 * Add error extensions api, get_item() and insert_item() methods
