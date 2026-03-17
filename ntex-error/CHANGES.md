@@ -1,5 +1,11 @@
 # Changes
 
+## [1.4.0] - 2026-03-17
+
+* Fix Error::source()
+
+* Tune error formatter
+
 ## [1.3.0] - 2026-03-15
 
 * Add error extensions api, get_item() and insert_item() methods
