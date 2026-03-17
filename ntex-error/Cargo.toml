@@ -29,3 +29,4 @@ thiserror = { workspace = true }
 [dev-dependencies]
 ntex = { workspace = true }
 thiserror = { workspace = true }
+derive_more = { workspace = true, features = ["debug", "display"] }
