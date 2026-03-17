@@ -193,7 +193,7 @@ impl<E> ops::Deref for Error<E> {
 
 impl<E: error::Error + 'static> error::Error for Error<E> {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        Some(&self.inner.error)
+        self.inner.error.source()
     }
 }
 

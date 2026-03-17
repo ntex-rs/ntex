@@ -1,6 +1,6 @@
 [package]
 name = "ntex-error"
-version = "1.3.0"
+version = "1.4.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex error management"
 keywords = ["network", "framework"]
@@ -29,3 +29,4 @@ thiserror = { workspace = true }
 [dev-dependencies]
 ntex = { workspace = true }
 thiserror = { workspace = true }
+derive_more = { workspace = true, features = ["debug", "display"] }
