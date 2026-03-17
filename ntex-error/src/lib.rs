@@ -197,11 +197,6 @@ mod tests {
             Into::<Error<TestError>>::into(TestError::Service("409 Error"))
         );
         assert!(err.backtrace().is_some());
-        assert!(
-            format!("{:?}", err.source()).contains("Service(\"409 Error\")"),
-            "{:?}",
-            err.source().unwrap()
-        );
 
         let err = err.set_service("SVC");
         assert_eq!(err.service(), Some("SVC"));
@@ -284,7 +279,7 @@ mod tests {
         // ErrorInformation
         let err: Error<TestError> = TestError::Service("409 Error").into();
         let msg = fmt_err_string(&err);
-        assert_eq!(msg, "InternalServiceError\nInternalServiceError\n");
+        assert_eq!(msg, "InternalServiceError\n");
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("err: InternalServiceError"));
 
@@ -299,7 +294,7 @@ mod tests {
         let _res: Result<(), Error<TestError2>> = res.into_error();
 
         let msg = fmt_err_string(&err);
-        assert_eq!(msg, "InternalServiceError\nInternalServiceError\n");
+        assert_eq!(msg, "InternalServiceError\n");
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("err: InternalServiceError"));
 

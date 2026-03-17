@@ -353,5 +353,11 @@ mod tests {
         let err = TestError::Disconnect(io::Error::other("Test io error"));
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("Test io error"));
+
+        assert!(
+            format!("{:?}", err.source()).contains("Test io erro"),
+            "{:?}",
+            err.source().unwrap()
+        );
     }
 }
