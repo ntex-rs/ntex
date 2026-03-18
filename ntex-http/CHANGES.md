@@ -1,5 +1,9 @@
 # Changes
 
+## [1.1.0] - 2026-03-18
+
+* Move types from ntex::http
+
 ## [1.0.0] - 2025-11-24
 
 * Use ntex-bytes 1.0

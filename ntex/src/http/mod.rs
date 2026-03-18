@@ -14,7 +14,6 @@ mod service;
 pub mod error;
 pub mod h1;
 pub mod h2;
-pub mod header;
 pub mod test;
 
 pub(crate) use self::message::Message;
@@ -31,4 +30,4 @@ pub use crate::io::types::HttpProtocol;
 
 // re-exports
 pub use ntex_http::uri::{self, Uri};
-pub use ntex_http::{HeaderMap, Method, StatusCode, Version, body};
+pub use ntex_http::{HeaderMap, Method, StatusCode, Version, body, header};

@@ -9,7 +9,6 @@ pub use serde_json::error::Error as JsonError;
 pub use url_pkg::ParseError as UrlParseError;
 
 use crate::http::body::Body;
-use crate::http::helpers::Writer;
 use crate::http::{StatusCode, error, header};
 use crate::util::{BytesMut, Either};
 
@@ -46,7 +45,7 @@ where
     fn error_response(&self, _: &HttpRequest) -> HttpResponse {
         let mut resp = HttpResponse::new(self.status_code());
         let mut buf = BytesMut::new();
-        let _ = write!(Writer(&mut buf), "{self}");
+        let _ = write!(&mut buf, "{self}");
         resp.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text/plain; charset=utf-8"),
@@ -266,7 +265,7 @@ where
             InternalErrorType::Status(st) => {
                 let mut res = HttpResponse::new(st);
                 let mut buf = BytesMut::new();
-                let _ = write!(Writer(&mut buf), "{self}");
+                let _ = write!(&mut buf, "{self}");
                 res.headers_mut().insert(
                     header::CONTENT_TYPE,
                     header::HeaderValue::from_static("text/plain; charset=utf-8"),
