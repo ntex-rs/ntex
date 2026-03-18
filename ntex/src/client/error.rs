@@ -174,7 +174,7 @@ impl Clone for SendRequestError {
             SendRequestError::Connect(err) => SendRequestError::Connect(err.clone()),
             SendRequestError::Request(err) => SendRequestError::Request(err.clone()),
             SendRequestError::Response(err) => SendRequestError::Response(*err),
-            SendRequestError::Http(err) => SendRequestError::Http(err.clone()),
+            SendRequestError::Http(err) => SendRequestError::Http(*err),
             SendRequestError::H2(err) => SendRequestError::H2(err.clone()),
             SendRequestError::Timeout => SendRequestError::Timeout,
             SendRequestError::TunnelNotSupported => SendRequestError::TunnelNotSupported,

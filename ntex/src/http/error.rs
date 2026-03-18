@@ -20,7 +20,7 @@ pub trait ResponseError: fmt::Display + fmt::Debug {
     fn error_response(&self) -> Response {
         let mut resp = Response::new(StatusCode::INTERNAL_SERVER_ERROR);
         let mut buf = BytesMut::new();
-        let _ = write!(crate::http::helpers::Writer(&mut buf), "{self}");
+        let _ = write!(&mut buf, "{self}");
         resp.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text/plain; charset=utf-8"),

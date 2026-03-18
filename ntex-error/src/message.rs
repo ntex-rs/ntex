@@ -323,12 +323,7 @@ mod tests {
 
     impl Clone for TestError {
         fn clone(&self) -> Self {
-            match self {
-                TestError::Service(msg) => TestError::Service(msg),
-                TestError::Disconnect(err) => {
-                    TestError::Disconnect(io::Error::other(format!("{err:?}")))
-                }
-            }
+            panic!()
         }
     }
 

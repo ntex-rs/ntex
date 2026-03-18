@@ -6,9 +6,7 @@ use serde_json::error::Error as JsonError;
 use serde_urlencoded::ser::Error as FormError;
 
 use crate::client;
-use crate::http::body::Body;
-use crate::http::helpers::Writer;
-use crate::http::{self, StatusCode, header};
+use crate::http::{self, StatusCode, body::Body, header};
 use crate::util::{BytesMut, timeout::TimeoutError};
 #[cfg(feature = "ws")]
 use crate::ws::error::HandshakeError;
@@ -62,7 +60,7 @@ impl crate::http::error::ResponseError for Error {
     fn error_response(&self) -> HttpResponse {
         let mut resp = HttpResponse::new(self.cause.status_code());
         let mut buf = BytesMut::new();
-        let _ = write!(Writer(&mut buf), "{}", self.cause);
+        let _ = write!(&mut buf, "{}", self.cause);
         resp.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text/plain; charset=utf-8"),

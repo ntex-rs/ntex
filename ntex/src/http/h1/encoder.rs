@@ -12,7 +12,7 @@ use crate::http::config::DateService;
 use crate::http::error::EncodeError;
 use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
 use crate::http::message::{ConnectionType, RequestHead};
-use crate::http::{HeaderMap, Response, StatusCode, Version, helpers};
+use crate::http::{HeaderMap, Response, StatusCode, Version};
 use crate::{io::IoConfig, util::BufMut, util::BytesMut};
 
 #[derive(Debug)]
@@ -238,7 +238,7 @@ impl MessageType for RequestHead {
 
     fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
         write!(
-            helpers::Writer(dst),
+            dst,
             "{} {} {}",
             self.method,
             self.uri.path_and_query().map_or("/", |u| u.as_str()),
@@ -383,8 +383,7 @@ impl TransferEncoding {
                     self.kind = TransferEncodingKind::Chunked(true);
                     true
                 } else {
-                    writeln!(helpers::Writer(buf), "{:X}\r", msg.len())
-                        .map_err(EncodeError::Fmt)?;
+                    writeln!(buf, "{:X}\r", msg.len()).map_err(EncodeError::Fmt)?;
 
                     cfg.write_buf().resize_min(buf, msg.len() + 2);
                     buf.extend_from_slice(msg);

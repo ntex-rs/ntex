@@ -315,7 +315,7 @@ where
     /// This address is used for connection. If address is not
     /// provided url's host name get resolved.
     pub fn address(&mut self, addr: net::SocketAddr) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, &self.err) {
+        if let Some(parts) = parts(&mut self.inner, self.err) {
             parts.addr = Some(addr);
         }
         self
@@ -368,7 +368,7 @@ where
     ///
     /// By default max size is set to 64kb
     pub fn max_frame_size(&mut self, size: usize) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, &self.err) {
+        if let Some(parts) = parts(&mut self.inner, self.err) {
             parts.max_size = size;
         }
         self
@@ -378,7 +378,7 @@ where
     ///
     /// By default ws client masks frame payload.
     pub fn server_mode(&mut self) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, &self.err) {
+        if let Some(parts) = parts(&mut self.inner, self.err) {
             parts.server_mode = true;
         }
         self
@@ -395,7 +395,7 @@ where
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
-        if let Some(parts) = parts(&mut self.inner, &self.err) {
+        if let Some(parts) = parts(&mut self.inner, self.err) {
             match HeaderName::try_from(key) {
                 Ok(key) => match HeaderValue::try_from(value) {
                     Ok(value) => {
@@ -417,7 +417,7 @@ where
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
-        if let Some(parts) = parts(&mut self.inner, &self.err) {
+        if let Some(parts) = parts(&mut self.inner, self.err) {
             match HeaderName::try_from(key) {
                 Ok(key) => match HeaderValue::try_from(value) {
                     Ok(value) => {
@@ -439,7 +439,7 @@ where
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
-        if let Some(parts) = parts(&mut self.inner, &self.err) {
+        if let Some(parts) = parts(&mut self.inner, self.err) {
             match HeaderName::try_from(key) {
                 Ok(key) => {
                     if !parts.head.headers.contains_key(&key) {
@@ -482,7 +482,7 @@ where
     /// Request timeout is the total time before a response must be received.
     /// Default value is 5 seconds.
     pub fn timeout<U: Into<Millis>>(&mut self, timeout: U) -> &mut Self {
-        if let Some(parts) = parts(&mut self.inner, &self.err) {
+        if let Some(parts) = parts(&mut self.inner, self.err) {
             parts.timeout = timeout.into();
         }
         self
@@ -650,10 +650,10 @@ where
 
 #[allow(clippy::ref_option)]
 #[inline]
-fn parts<'a, F, T>(
-    parts: &'a mut Option<Inner<F, T>>,
-    err: &Option<HttpError>,
-) -> Option<&'a mut Inner<F, T>> {
+fn parts<F, T>(
+    parts: &mut Option<Inner<F, T>>,
+    err: Option<HttpError>,
+) -> Option<&mut Inner<F, T>> {
     if err.is_some() {
         return None;
     }

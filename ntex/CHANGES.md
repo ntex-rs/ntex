@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.0] - 2026-03-xx
+
+* Move http types to ntex-http
+
 ## [3.6.1] - 2026-03-14
 
 * Re-export more types from ntex-error
