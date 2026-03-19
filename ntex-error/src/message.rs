@@ -91,8 +91,9 @@ where
 
     if tp == ResultType::ServiceError
         && let Some(bt) = e.backtrace()
+        && let Some(repr) = bt.repr()
     {
-        writeln!(wrt.fmt, "{bt}")?;
+        writeln!(wrt.fmt, "{repr}")?;
     }
 
     Ok(())
@@ -345,7 +346,11 @@ mod tests {
         let msg = fmt_err_string(&err);
         assert_eq!(msg, "InternalServiceError\n");
 
-        let err = TestError::Disconnect(io::Error::other("Test io error"));
+        let err =
+            crate::Error::from(TestError::Disconnect(io::Error::other("Test io error")));
+        if let Some(bt) = err.backtrace() {
+            bt.resolve();
+        }
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("Test io error"));
 

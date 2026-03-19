@@ -10,7 +10,11 @@ pub(crate) struct ErrorRepr<E> {
 }
 
 impl<E: ErrorDiagnostic> ErrorRepr<E> {
-    pub(crate) fn new(error: E, service: Option<&'static str>, loc: &Location<'_>) -> Self {
+    pub(crate) fn new(
+        error: E,
+        service: Option<&'static str>,
+        loc: &'static Location<'static>,
+    ) -> Self {
         let service = if service.is_none() {
             error.service()
         } else {
@@ -49,7 +53,7 @@ impl<E> ErrorRepr<E> {
     pub(crate) fn new3(
         error: E,
         service: Option<&'static str>,
-        loc: &Location<'_>,
+        loc: &'static Location<'static>,
     ) -> Self {
         Self {
             error,
