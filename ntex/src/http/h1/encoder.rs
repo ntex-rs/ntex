@@ -246,8 +246,8 @@ impl MessageType for RequestHead {
             match self.version {
                 Version::HTTP_09 => "HTTP/0.9",
                 Version::HTTP_10 => "HTTP/1.0",
-                Version::HTTP_11 => "HTTP/1.1",
-                _ => return Err(EncodeError::UnsupportedVersion(self.version)),
+                // Version::HTTP_11 => "HTTP/1.1",
+                _ => "HTTP/1.1",
             }
         )
         .map_err(EncodeError::Fmt)
