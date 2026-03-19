@@ -349,7 +349,7 @@ mod tests {
         let err =
             crate::Error::from(TestError::Disconnect(io::Error::other("Test io error")));
         if let Some(bt) = err.backtrace() {
-            bt.resolve();
+            bt.resolver().resolve();
         }
         let msg = fmt_diag_string(&err);
         assert!(msg.contains("Test io error"));
