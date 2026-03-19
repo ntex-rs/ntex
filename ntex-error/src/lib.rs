@@ -61,6 +61,14 @@ pub trait ResultKind: fmt::Debug + 'static {
     fn signature(&self) -> &'static str;
 }
 
+pub trait ErrorKind: fmt::Debug + 'static {
+    /// Defines type of the error
+    fn tp(&self) -> ResultType;
+
+    /// Error signature
+    fn signature(&self) -> &'static str;
+}
+
 impl ResultKind for ResultType {
     fn tp(&self) -> ResultType {
         *self
@@ -254,11 +262,15 @@ mod tests {
 
         let err: Error<TestError> = TestError::Service("404 Error").into();
         if let Some(bt) = err.backtrace() {
+            bt.resolve();
             assert!(
                 format!("{bt}").contains("ntex_error::tests::test_error"),
                 "{bt}",
             );
-            assert!(bt.repr().contains("ntex_error::tests::test_error"), "{bt}");
+            assert!(
+                bt.repr().unwrap().contains("ntex_error::tests::test_error"),
+                "{bt}"
+            );
         }
 
         let err: ErrorChain<TestKind> = err.into();

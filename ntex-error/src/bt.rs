@@ -1,10 +1,11 @@
 //! Backtrace
+#![allow(warnings)]
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::panic::Location;
 use std::{cell::RefCell, fmt, fmt::Write, os, path, ptr, sync::Arc};
 
-use backtrace::{BacktraceFmt, BacktraceFrame, BytesOrWideString};
+use backtrace::{BacktraceFmt, BacktraceFrame, BytesOrWideString, Frame};
 
 thread_local! {
     static FRAMES: RefCell<HashMap<*mut os::raw::c_void, BacktraceFrame>> = RefCell::new(HashMap::default());
@@ -32,89 +33,112 @@ pub fn set_backtrace_start_alt(file: &'static str, line: u32) {
 /// This structure can be used to capture a backtrace at various
 /// points in a program and later used to inspect what the backtrace
 /// was at that time.
-pub struct Backtrace(Arc<str>);
+pub struct Backtrace(Arc<BacktraceInner>);
+
+struct BacktraceInner {
+    id: u64,
+    frames: [Option<Frame>; 80],
+    location: &'static Location<'static>,
+}
 
 impl Backtrace {
     /// Create new backtrace
-    pub fn new(loc: &Location<'_>) -> Self {
-        let repr = FRAMES.with(|c| {
-            let mut cache = c.borrow_mut();
-            let mut idx = 0;
-            let mut st = foldhash::fast::FixedState::default().build_hasher();
-            let mut idxs: [*mut os::raw::c_void; 128] = [ptr::null_mut(); 128];
+    pub fn new(location: &'static Location<'static>) -> Self {
+        let mut st = foldhash::fast::FixedState::default().build_hasher();
+        let mut idx = 0;
+        let mut frames: [Option<Frame>; 80] = [const { None }; 80];
 
-            backtrace::trace(|frm| {
-                let ip = frm.ip();
-                st.write_usize(ip as usize);
-                cache.entry(ip).or_insert_with(|| {
-                    let mut f = BacktraceFrame::from(frm.clone());
-                    f.resolve();
-                    f
-                });
-                idxs[idx] = ip;
-                idx += 1;
-
-                idx < 128
-            });
-
-            let id = st.finish();
-
-            REPRS.with(|r| {
-                let mut reprs = r.borrow_mut();
-                if let Some(repr) = reprs.get(&id) {
-                    repr.clone()
-                } else {
-                    let mut frames: [Option<&BacktraceFrame>; 128] = [None; 128];
-                    for (idx, ip) in idxs.as_ref().iter().enumerate() {
-                        if !ip.is_null() {
-                            frames[idx] = Some(&cache[ip]);
-                        }
-                    }
-
-                    find_loc(loc, &mut frames);
-
-                    #[allow(static_mut_refs)]
-                    {
-                        if let Some(start) = unsafe { START } {
-                            find_loc_start(start, &mut frames);
-                        }
-                        if let Some(start) = unsafe { START_ALT } {
-                            find_loc_start(start, &mut frames);
-                        }
-                        PATHS2.with(|paths| {
-                            for s in paths {
-                                find_loc_start((s.as_str(), 0), &mut frames);
-                            }
-                        });
-                    }
-
-                    let mut idx = 0;
-                    for frm in &mut frames {
-                        if frm.is_some() {
-                            if idx > 10 {
-                                *frm = None;
-                            } else {
-                                idx += 1;
-                            }
-                        }
-                    }
-
-                    let bt = Bt(&frames[..]);
-                    let mut buf = String::new();
-                    let _ = write!(&mut buf, "\n{bt:?}");
-                    let repr: Arc<str> = Arc::from(buf);
-                    reprs.insert(id, repr.clone());
-                    repr
-                }
-            })
+        backtrace::trace(|frm| {
+            let ip = frm.ip();
+            st.write_usize(ip as usize);
+            frames[idx] = Some(frm.clone());
+            idx += 1;
+            idx < 80
         });
+        let id = st.finish();
 
-        Self(repr)
+        Self(Arc::new(BacktraceInner {
+            id,
+            frames,
+            location,
+        }))
     }
 
     /// Backtrace repr
-    pub fn repr(&self) -> &str {
-        &self.0
+    pub fn repr(&self) -> Option<Arc<str>> {
+        REPRS.with(|r| r.borrow_mut().get(&self.0.id).cloned())
+    }
+
+    pub fn is_resolved(&self) -> bool {
+        REPRS.with(|r| r.borrow_mut().contains_key(&self.0.id))
+    }
+
+    pub fn resolve(&self) {
+        REPRS.with(|r| {
+            let mut reprs = r.borrow_mut();
+            if reprs.contains_key(&self.0.id) {
+                return;
+            }
+
+            FRAMES.with(|c| {
+                let mut cache = c.borrow_mut();
+
+                for frm in &self.0.frames {
+                    if let Some(frm) = frm {
+                        let ip = frm.ip();
+                        cache.entry(ip).or_insert_with(|| {
+                            let mut f = BacktraceFrame::from(frm.clone());
+                            f.resolve();
+                            f
+                        });
+                    }
+                }
+
+                let mut idx = 0;
+                let mut frames: [Option<&BacktraceFrame>; 80] = [None; 80];
+                for frm in &self.0.frames {
+                    if let Some(frm) = frm {
+                        frames[idx] = Some(&cache[&frm.ip()]);
+                        idx += 1;
+                    }
+                }
+
+                find_loc(self.0.location, &mut frames);
+
+                #[allow(static_mut_refs)]
+                {
+                    if let Some(start) = unsafe { START } {
+                        find_loc_start(start, &mut frames);
+                    }
+                    if let Some(start) = unsafe { START_ALT } {
+                        find_loc_start(start, &mut frames);
+                    }
+                    PATHS2.with(|paths| {
+                        for s in paths {
+                            find_loc_start((s.as_str(), 0), &mut frames);
+                        }
+                    });
+                }
+
+                let mut idx = 0;
+                for frm in &mut frames {
+                    if frm.is_some() {
+                        if idx > 10 {
+                            *frm = None;
+                        } else {
+                            idx += 1;
+                        }
+                    }
+                }
+
+                let bt = Bt(&frames[..]);
+                let mut buf = String::new();
+                let _ = write!(&mut buf, "\n{bt:?}");
+                let repr: Arc<str> = Arc::from(buf);
+                reprs.insert(self.0.id, repr.clone());
+                repr
+            });
+        });
     }
 }
 
@@ -246,12 +270,20 @@ impl fmt::Debug for Bt<'_> {
 
 impl fmt::Debug for Backtrace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
+        if let Some(repr) = self.repr() {
+            fmt::Display::fmt(repr.as_ref(), f)
+        } else {
+            Ok(())
+        }
     }
 }
 
 impl fmt::Display for Backtrace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
+        if let Some(repr) = self.repr() {
+            fmt::Display::fmt(repr.as_ref(), f)
+        } else {
+            Ok(())
+        }
     }
 }

@@ -1,5 +1,9 @@
 # Changes
 
+## [1.5.0] - 2026-03-19
+
+* Delay backtrace resolve operation
+
 ## [1.4.0] - 2026-03-17
 
 * Fix Error::source()

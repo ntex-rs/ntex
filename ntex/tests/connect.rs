@@ -112,8 +112,11 @@ async fn test_openssl_string() {
     // error
     #[cfg(unix)]
     {
+        use ntex::error::ErrorDiagnostic;
+
         let addr = "127.0.0.1".to_string();
         let err = conn.call(addr.into()).await.err().unwrap();
+        err.backtrace().unwrap().resolve();
         assert!(
             format!("{:?}", err.debug()).contains("ntex_net::connect::service::connect::"),
             "{:#?}",
