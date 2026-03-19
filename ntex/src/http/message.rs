@@ -101,6 +101,7 @@ impl Head for RequestHead {
     fn clear(&mut self) {
         self.io = CurrentIo::None;
         self.flags = Flags::empty();
+        self.version = Version::HTTP_11;
         self.headers.clear();
         self.extensions.get_mut().clear();
     }
