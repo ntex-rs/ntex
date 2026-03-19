@@ -1,6 +1,6 @@
 [package]
 name = "ntex-error"
-version = "1.5.0"
+version = "1.5.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex error management"
 keywords = ["network", "framework"]

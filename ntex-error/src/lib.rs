@@ -16,14 +16,16 @@ mod message;
 mod repr;
 mod utils;
 
-pub use crate::bt::{Backtrace, set_backtrace_start, set_backtrace_start_alt};
+pub use crate::bt::{Backtrace, BacktraceResolver};
 pub use crate::chain::ErrorChain;
 pub use crate::error::Error;
 pub use crate::info::ErrorInfo;
-pub use crate::message::{
-    ErrorMessage, ErrorMessageChained, fmt_diag, fmt_diag_string, fmt_err, fmt_err_string,
-};
+pub use crate::message::{ErrorMessage, ErrorMessageChained};
+pub use crate::message::{fmt_diag, fmt_diag_string, fmt_err, fmt_err_string};
 pub use crate::utils::{Success, with_service};
+
+#[doc(hidden)]
+pub use crate::bt::{set_backtrace_start, set_backtrace_start_alt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultType {
@@ -262,7 +264,7 @@ mod tests {
 
         let err: Error<TestError> = TestError::Service("404 Error").into();
         if let Some(bt) = err.backtrace() {
-            bt.resolve();
+            bt.resolver().resolve();
             assert!(
                 format!("{bt}").contains("ntex_error::tests::test_error"),
                 "{bt}",
