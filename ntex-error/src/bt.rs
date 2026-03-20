@@ -10,7 +10,7 @@ use backtrace::{BacktraceFmt, BacktraceFrame, BytesOrWideString, Frame};
 thread_local! {
     static FRAMES: RefCell<HashMap<usize, Arc<BacktraceFrame>>> = RefCell::new(HashMap::default());
     static REPRS: RefCell<HashMap<u64, Arc<str>>> = RefCell::new(HashMap::default());
-    static DEFAULT: Arc<str> = Arc::from("Unresolved");
+    static DEFAULT: Arc<str> = Arc::from("Unresolved backtrace");
 }
 
 static mut START: Option<(&'static str, u32)> = None;
@@ -330,13 +330,8 @@ impl fmt::Debug for Bt<'_> {
         let cwd = std::env::current_dir();
         let mut print_path =
             move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
-                let path = path.into_path_buf();
-                if let Ok(cwd) = &cwd
-                    && let Ok(suffix) = path.strip_prefix(cwd)
-                {
-                    return fmt::Display::fmt(&suffix.display(), fmt);
-                }
-                fmt::Display::fmt(&path.display(), fmt)
+                let path = crate::utils::module_path_fs(path.to_str_lossy().as_ref());
+                fmt::Display::fmt(&path, fmt)
             };
 
         let mut f = BacktraceFmt::new(fmt, backtrace::PrintFmt::Short, &mut print_path);

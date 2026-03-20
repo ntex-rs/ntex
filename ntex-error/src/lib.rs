@@ -14,7 +14,7 @@ mod ext;
 mod info;
 mod message;
 mod repr;
-mod utils;
+pub mod utils;
 
 pub use crate::bt::{Backtrace, BacktraceResolver};
 pub use crate::chain::ErrorChain;
