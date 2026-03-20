@@ -10,7 +10,7 @@ use backtrace::{BacktraceFmt, BacktraceFrame, BytesOrWideString, Frame};
 thread_local! {
     static FRAMES: RefCell<HashMap<usize, Arc<BacktraceFrame>>> = RefCell::new(HashMap::default());
     static REPRS: RefCell<HashMap<u64, Arc<str>>> = RefCell::new(HashMap::default());
-    static DEFAULT: Arc<str> = Arc::from("Unresolved");
+    static DEFAULT: Arc<str> = Arc::from("Unresolved backtrace");
 }
 
 static mut START: Option<(&'static str, u32)> = None;

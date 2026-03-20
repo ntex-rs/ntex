@@ -69,17 +69,17 @@ where
     })
 }
 
-/// Generate module path for file path
+/// Generate module path for the file path
 pub fn module_path(file_path: &str) -> ByteString {
     module_path_ext("", "", "::", "", file_path)
 }
 
-/// Generate module path for file path
+/// Generate module path with prefix for the file path
 pub fn module_path_prefix(prefix: &'static str, file_path: &str) -> ByteString {
     module_path_ext(prefix, "", "::", "", file_path)
 }
 
-/// Generate module path for file path
+/// Generate module path for the file path
 pub fn module_path_fs(file_path: &str) -> ByteString {
     module_path_ext("", "/src", "/", ".rs", file_path)
 }
