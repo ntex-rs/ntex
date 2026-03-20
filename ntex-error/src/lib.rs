@@ -5,6 +5,7 @@
     clippy::missing_panics_doc,
     clippy::missing_errors_doc
 )]
+#![allow(dead_code, unreachable_pub)]
 use std::{error::Error as StdError, fmt};
 
 mod bt;
@@ -14,7 +15,7 @@ mod ext;
 mod info;
 mod message;
 mod repr;
-mod utils;
+pub mod utils;
 
 pub use crate::bt::{Backtrace, BacktraceResolver};
 pub use crate::chain::ErrorChain;

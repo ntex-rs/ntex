@@ -1,5 +1,9 @@
 # Changes
 
+## [1.5.2] - 2026-03-20
+
+* Add utility for module path generation
+
 ## [1.5.1] - 2026-03-19
 
 * Add BacktraceResolver

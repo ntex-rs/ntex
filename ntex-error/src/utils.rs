@@ -1,4 +1,9 @@
-use std::{convert::Infallible, error::Error as StdError, fmt, io};
+use std::{
+    borrow::Cow, cell::RefCell, convert::Infallible, error::Error as StdError, fmt, io,
+    path::Path, path::PathBuf,
+};
+
+use ntex_bytes::ByteString;
 
 use crate::{Error, ErrorDiagnostic, ResultType};
 
@@ -62,4 +67,164 @@ where
             err
         }
     })
+}
+
+/// Generate module path for file path
+pub fn find_module_path(file_path: &str) -> ByteString {
+    find_module_path_ext("", "/src", "/", ".rs", file_path)
+}
+
+pub fn find_module_path_ext(
+    prefix: &'static str,
+    mod_sep: &str,
+    sep: &str,
+    suffix: &str,
+    file_path: &str,
+) -> ByteString {
+    type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState>;
+    thread_local! {
+        static CACHE: RefCell<HashMap<&'static str, HashMap<String, ByteString>>> = RefCell::new(HashMap::default());
+    }
+
+    let cached = CACHE.with(|cache| {
+        if let Some(c) = cache.borrow().get(prefix) {
+            c.get(file_path).cloned()
+        } else {
+            None
+        }
+    });
+
+    if let Some(cached) = cached {
+        cached
+    } else {
+        let normalized_file_path = normalize_file_path(file_path);
+        let (module_name, module_root) =
+            module_root_from_file(mod_sep, &normalized_file_path);
+        let module = module_path_from_file_with_root(
+            prefix,
+            sep,
+            &normalized_file_path,
+            &module_name,
+            &module_root,
+            suffix,
+        );
+
+        let _ = CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .entry(prefix)
+                .or_default()
+                .insert(file_path.to_string(), module.clone())
+        });
+        module
+    }
+}
+
+fn normalize_file_path(file_path: &str) -> String {
+    let path = Path::new(file_path);
+    if path.is_absolute() {
+        return path.to_string_lossy().into_owned();
+    }
+
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(path).to_string_lossy().into_owned(),
+        Err(_) => file_path.to_string(),
+    }
+}
+
+/// Derives a module root (usually `<crate>/src`) from a file path.
+fn module_root_from_file(mod_sep: &str, file_path: &str) -> (String, PathBuf) {
+    let normalized = file_path.replace('\\', "/");
+    if let Some((root, _)) = normalized.rsplit_once("/src/") {
+        let mut root = PathBuf::from(root);
+        let mod_name = root
+            .file_name()
+            .map_or(Cow::Borrowed("crate"), |s| s.to_string_lossy());
+        let mod_name = if mod_sep.is_empty() {
+            mod_name.replace('-', "_")
+        } else {
+            mod_name.to_string()
+        };
+        root.push("src");
+        return (format!("{mod_name}{mod_sep}"), root);
+    }
+
+    let path = Path::new(file_path)
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+
+    let m = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map_or_else(|| Cow::Borrowed("crate"), |p| p.to_string_lossy());
+
+    (format!("{m}{mod_sep}"), path)
+}
+
+/// Converts a file path into a pseudo-Rust module path.
+fn module_path_from_file(sep: &str, file_path: &str) -> String {
+    let normalized = file_path.replace('\\', "/");
+    let relative = normalized
+        .split_once("/src/")
+        .map_or(normalized.as_str(), |(_, tail)| tail);
+
+    if relative == "lib.rs" || relative == "main.rs" {
+        return relative.to_string();
+    }
+
+    let without_ext = relative.strip_suffix(".rs").unwrap_or(relative);
+    if without_ext.ends_with("/mod") {
+        let parent = without_ext.strip_suffix("/mod").unwrap_or(without_ext);
+        let parent = parent.trim_matches('/');
+        return parent.replace('/', sep);
+    }
+
+    let module = without_ext.trim_matches('/').replace('/', sep);
+    if module.is_empty() {
+        "crate".to_string()
+    } else {
+        module
+    }
+}
+
+/// Converts a file path into a pseudo-Rust module path using a known module root.
+fn module_path_from_file_with_root(
+    prefix: &str,
+    sep: &str,
+    file_path: &str,
+    module_name: &str,
+    module_root: &Path,
+    suffix: &str,
+) -> ByteString {
+    let normalized = file_path.replace('\\', "/");
+    let module_root_norm = module_root.to_string_lossy().replace('\\', "/");
+
+    let Some(relative) = normalized.strip_prefix(&(module_root_norm.clone() + "/")) else {
+        return format!(
+            "{prefix}{module_name}{sep}{}{suffix}",
+            module_path_from_file(sep, file_path)
+        )
+        .into();
+    };
+    if relative == "lib.rs" || relative == "main.rs" {
+        return ByteString::from(format!("{prefix}{module_name}{sep}{relative}"));
+    }
+
+    let without_ext = relative.strip_suffix(".rs").unwrap_or(relative);
+    if without_ext.ends_with("/mod") {
+        let parent = without_ext.strip_suffix("/mod").unwrap_or(without_ext);
+        let parent = parent.trim_matches('/');
+        return format!(
+            "{prefix}{module_name}{sep}{}{sep}mod{suffix}",
+            parent.replace('/', sep)
+        )
+        .into();
+    }
+
+    let module = without_ext.trim_matches('/').replace('/', sep);
+    if module.is_empty() {
+        ByteString::from(format!("{prefix}{module_name}{suffix}"))
+    } else {
+        format!("{prefix}{module_name}{sep}{module}{suffix}").into()
+    }
 }
