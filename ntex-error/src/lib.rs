@@ -5,7 +5,6 @@
     clippy::missing_panics_doc,
     clippy::missing_errors_doc
 )]
-#![allow(dead_code, unreachable_pub)]
 use std::{error::Error as StdError, fmt};
 
 mod bt;

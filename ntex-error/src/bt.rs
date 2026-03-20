@@ -330,7 +330,7 @@ impl fmt::Debug for Bt<'_> {
         let cwd = std::env::current_dir();
         let mut print_path =
             move |fmt: &mut fmt::Formatter<'_>, path: BytesOrWideString<'_>| {
-                let path = crate::utils::find_module_path(path.to_str_lossy().as_ref());
+                let path = crate::utils::module_path_fs(path.to_str_lossy().as_ref());
                 fmt::Display::fmt(&path, fmt)
             };
 
