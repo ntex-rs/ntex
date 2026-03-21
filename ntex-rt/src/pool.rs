@@ -101,6 +101,7 @@ impl ThreadPool {
         }
     }
 
+    #[allow(clippy::missing_panics_doc)]
     /// Submits a task (closure) to the thread pool.
     ///
     /// The task will be executed by an available worker thread.

@@ -256,7 +256,7 @@ impl System {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.pool.dispatch(f)
+        self.pool.execute(f)
     }
 }
 
