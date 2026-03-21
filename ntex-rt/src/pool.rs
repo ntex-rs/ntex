@@ -1,4 +1,4 @@
-//! A thread pool to perform blocking operations in other threads.
+//! A thread pool for blocking operations.
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::task::{Context, Poll};
 use std::{any::Any, fmt, future::Future, panic, pin::Pin, thread, time::Duration};
@@ -24,9 +24,7 @@ pub struct BlockingResult<T> {
 
 type BoxedDispatchable = Box<dyn Dispatchable + Send>;
 
-/// A trait for dispatching a closure
 pub(crate) trait Dispatchable: Send + 'static {
-    /// Run the dispatchable
     fn run(self: Box<Self>);
 }
 
@@ -103,11 +101,16 @@ impl ThreadPool {
         }
     }
 
-    /// Send a dispatchable, usually a closure, to another thread for execution.
+    /// Submits a task (closure) to the thread pool.
     ///
-    /// When all threads are busy and thread number limit has been reached,
-    /// it will return an error with the original dispatchable.
-    pub fn dispatch<F, R>(&self, f: F) -> BlockingResult<R>
+    /// The task will be executed by an available worker thread.
+    /// If no threads are available and the pool has reached its maximum size,
+    /// the behavior depends on the `boundedness` configuration:
+    ///
+    /// - For a bounded pool, the function returns an error.
+    /// - For an unbounded pool, the task is queued and executed when a worker
+    ///   becomes available.
+    pub fn execute<F, R>(&self, f: F) -> BlockingResult<R>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
