@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.0] - 2026-03-21
+
+* Expose `ThreadPool` type as part of the public api
+
 ## [3.10.0] - 2026-03-07
 
 * Set start backtrace code line for ntex-error

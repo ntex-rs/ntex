@@ -20,6 +20,8 @@ pub struct Builder {
     ping_interval: usize,
     /// Thread pool config
     pool_limit: usize,
+    /// Thread pool boundness
+    pool_bounded: bool,
     pool_recv_timeout: time::Duration,
     /// testing flag
     testing: bool,
@@ -34,6 +36,7 @@ impl Builder {
             ping_interval: 1000,
             testing: false,
             pool_limit: 256,
+            pool_bounded: true,
             pool_recv_timeout: time::Duration::from_secs(60),
         }
     }
@@ -83,6 +86,13 @@ impl Builder {
     }
 
     #[must_use]
+    /// Configures the thread pool to be unbounded.
+    pub fn thread_pool_unbounded(mut self) -> Self {
+        self.pool_bounded = false;
+        self
+    }
+
+    #[must_use]
     /// Mark system as testing
     pub fn testing(mut self) -> Self {
         self.testing = true;
@@ -111,6 +121,7 @@ impl Builder {
             stop_on_panic: self.stop_on_panic,
             ping_interval: self.ping_interval,
             pool_limit: self.pool_limit,
+            pool_bounded: self.pool_bounded,
             pool_recv_timeout: self.pool_recv_timeout,
             runner: Arc::new(runner),
         };
