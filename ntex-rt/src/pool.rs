@@ -3,7 +3,7 @@ use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::task::{Context, Poll};
 use std::{any::Any, fmt, future::Future, panic, pin::Pin, thread, time::Duration};
 
-use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded, unbounded};
 
 /// An error that may be emitted when all worker threads are busy.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -61,9 +61,20 @@ fn worker(
     }
 }
 
-/// A thread pool to perform blocking operations in other threads.
+/// A thread pool for executing blocking operations.
+///
+/// The pool can be configured as either bounded or unbounded, which
+/// determines how tasks are handled when all worker threads are busy.
+///
+/// - In a **bounded** pool, submitting a task will fail if the number of
+///   concurrent operations has reached the thread limit.
+/// - In an **unbounded** pool, tasks are queued and will wait until a
+///   worker thread becomes available.
+///
+/// The number of worker threads scales dynamically with load, but will
+/// never exceed the `thread_limit` parameter.
 #[derive(Debug, Clone)]
-pub(crate) struct ThreadPool {
+pub struct ThreadPool {
     name: String,
     sender: Sender<BoxedDispatchable>,
     receiver: Receiver<BoxedDispatchable>,
@@ -73,10 +84,15 @@ pub(crate) struct ThreadPool {
 }
 
 impl ThreadPool {
-    /// Create [`ThreadPool`] with thread number limit and channel receive
-    /// timeout.
-    pub(crate) fn new(name: &str, thread_limit: usize, recv_timeout: Duration) -> Self {
-        let (sender, receiver) = bounded(0);
+    /// Creates a [`ThreadPool`] with a maximum number of worker threads
+    /// and a timeout for receiving tasks from the task channel.
+    pub fn new(
+        name: &str,
+        thread_limit: usize,
+        recv_timeout: Duration,
+        bound: bool,
+    ) -> Self {
+        let (sender, receiver) = if bound { bounded(0) } else { unbounded() };
         Self {
             sender,
             receiver,
@@ -87,19 +103,22 @@ impl ThreadPool {
         }
     }
 
-    /// Send a dispatchable, usually a closure, to another thread. Usually the
-    /// user should not use it. When all threads are busy and thread number
-    /// limit has been reached, it will return an error with the original
-    /// dispatchable.
-    pub(crate) fn dispatch<F, R>(&self, f: F) -> BlockingResult<R>
+    /// Send a dispatchable, usually a closure, to another thread for execution.
+    ///
+    /// When all threads are busy and thread number limit has been reached,
+    /// it will return an error with the original dispatchable.
+    pub fn dispatch<F, R>(&self, f: F) -> BlockingResult<R>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
         let (tx, rx) = oneshot::async_channel();
         let f = Box::new(move || {
-            let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
-            let _ = tx.send(result);
+            // do not execute operation if recevier is dropped
+            if !tx.is_closed() {
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
+                let _ = tx.send(result);
+            }
         });
 
         match self.sender.try_send(f) {
