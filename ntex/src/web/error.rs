@@ -678,7 +678,7 @@ mod tests {
     use std::io;
 
     use super::*;
-    use crate::client::error::{ConnectError, SendRequestError};
+    use crate::client::error::{ClientError, ConnectError};
     use crate::{http, web::test::TestRequest};
 
     #[test]
@@ -716,19 +716,19 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let resp = WebResponseError::<DefaultError>::error_response(
-            &SendRequestError::Connect(ConnectError::Timeout),
+            &ClientError::Connect(ConnectError::Timeout),
             &req,
         );
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
         let resp = WebResponseError::<DefaultError>::error_response(
-            &SendRequestError::Connect(ConnectError::SslIsNotSupported),
+            &ClientError::Connect(ConnectError::SslIsNotSupported),
             &req,
         );
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let resp = WebResponseError::<DefaultError>::error_response(
-            &SendRequestError::TunnelNotSupported,
+            &ClientError::TunnelNotSupported,
             &req,
         );
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -770,15 +770,14 @@ mod tests {
     fn test_either_error() {
         let req = TestRequest::default().to_http_request();
 
-        let err: Either<SendRequestError, PayloadError> =
-            Either::Left(SendRequestError::TunnelNotSupported);
+        let err: Either<ClientError, PayloadError> =
+            Either::Left(ClientError::TunnelNotSupported);
         let code = WebResponseError::<DefaultError>::status_code(&err);
         assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
         let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-        let err: Either<SendRequestError, PayloadError> =
-            Either::Right(PayloadError::Decoding);
+        let err: Either<ClientError, PayloadError> = Either::Right(PayloadError::Decoding);
         let code = WebResponseError::<DefaultError>::status_code(&err);
         assert_eq!(code, StatusCode::BAD_REQUEST);
         let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
