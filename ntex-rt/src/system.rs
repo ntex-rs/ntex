@@ -45,7 +45,6 @@ pub struct SystemConfig {
     pub(super) stop_on_panic: bool,
     pub(super) ping_interval: usize,
     pub(super) pool_limit: usize,
-    pub(super) pool_bounded: bool,
     pub(super) pool_recv_timeout: Duration,
     pub(super) testing: bool,
     pub(super) runner: Arc<dyn Runner>,
@@ -78,8 +77,7 @@ impl System {
         let pool = ThreadPool::new(
             &config.name,
             config.pool_limit,
-            config.pool_recv_timeout,
-            config.pool_bounded,
+            config.pool_recv_timeout
         );
 
         System {

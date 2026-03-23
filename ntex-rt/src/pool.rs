@@ -3,7 +3,7 @@ use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::task::{Context, Poll};
 use std::{any::Any, fmt, future::Future, panic, pin::Pin, thread, time::Duration};
 
-use crossbeam_channel::{Receiver, Sender, TrySendError, bounded, unbounded};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 
 /// An error that may be emitted when all worker threads are busy.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -49,13 +49,18 @@ fn worker(
     receiver: Receiver<BoxedDispatchable>,
     counter: Arc<AtomicUsize>,
     timeout: Duration,
+    available: async_channel::Sender<()>,
 ) -> impl FnOnce() {
     move || {
         counter.fetch_add(1, Ordering::AcqRel);
         let _guard = CounterGuard(counter);
         while let Ok(f) = receiver.recv_timeout(timeout) {
             f.run();
-        }
+            let _ = available.try_send(());
+        }        
+        // If thread said it was available to callers, and a caller consumed this but never sent work, we want 
+        // to send another notification to ensure that callers don't get stuck waiting for a thread that has already exited.
+        let _ = available.try_send(());
     }
 }
 
@@ -79,6 +84,8 @@ pub struct ThreadPool {
     counter: Arc<AtomicUsize>,
     thread_limit: usize,
     recv_timeout: Duration,
+    available_tx: async_channel::Sender<()>,
+    available_rx: async_channel::Receiver<()>,
 }
 
 impl ThreadPool {
@@ -88,9 +95,9 @@ impl ThreadPool {
         name: &str,
         thread_limit: usize,
         recv_timeout: Duration,
-        bound: bool,
     ) -> Self {
-        let (sender, receiver) = if bound { bounded(0) } else { unbounded() };
+        let (sender, receiver) = bounded(0);
+        let (available_tx, available_rx) = async_channel::bounded(1);
         Self {
             sender,
             receiver,
@@ -98,6 +105,8 @@ impl ThreadPool {
             recv_timeout,
             name: format!("{name}:pool-wrk"),
             counter: Arc::new(AtomicUsize::new(0)),
+            available_rx,
+            available_tx,
         }
     }
 
@@ -106,11 +115,9 @@ impl ThreadPool {
     ///
     /// The task will be executed by an available worker thread.
     /// If no threads are available and the pool has reached its maximum size,
-    /// the behavior depends on the `boundedness` configuration:
-    ///
-    /// - For a bounded pool, the function returns an error.
-    /// - For an unbounded pool, the task is queued and executed when a worker
-    ///   becomes available.
+    /// the function returns an error.
+    /// 
+    /// If you want to wait for a thread to become available instead of returning an error, use [`ThreadPool::dispatch`] instead.
     pub fn execute<F, R>(&self, f: F) -> BlockingResult<R>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -118,7 +125,7 @@ impl ThreadPool {
     {
         let (tx, rx) = oneshot::async_channel();
         let f = Box::new(move || {
-            // do not execute operation if recevier is dropped
+            // do not execute operation if receiver is dropped
             if !tx.is_closed() {
                 let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
                 let _ = tx.send(result);
@@ -139,6 +146,7 @@ impl ThreadPool {
                                 self.receiver.clone(),
                                 self.counter.clone(),
                                 self.recv_timeout,
+                                self.available_tx.clone(),
                             ))
                             .expect("Cannot construct new thread");
                         self.sender.send(f).expect("the channel should not be full");
@@ -149,6 +157,61 @@ impl ThreadPool {
                     unreachable!("receiver should not all disconnected")
                 }
             },
+        }
+    }
+
+    #[allow(clippy::missing_panics_doc)]
+    /// Submits a task (closure) to the thread pool.
+    ///
+    /// The task will be executed by an available worker thread.
+    /// If no threads are available and the pool has reached its maximum size,
+    /// the function will wait until an available worker is ready.
+    /// 
+    /// If you want to error when the pool is exhausted, use [`ThreadPool::execute`] instead.
+    pub async fn dispatch<F, R>(&self, f: F) -> Result<R, BlockingError>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = oneshot::async_channel();
+        let mut f: Box<dyn Dispatchable + Send> = Box::new(move || {
+            // do not execute operation if receiver is dropped
+            if !tx.is_closed() {
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
+                let _ = tx.send(result);
+            }
+        });
+
+        loop {
+            match self.sender.try_send(f) {
+                Ok(()) => break rx.await.map_err(|_| BlockingError)
+                        .and_then(|res| res.map_err(|_| BlockingError)),
+                Err(e) => match e {
+                    TrySendError::Full(f_uncalled) => {
+                        let cnt = self.counter.load(Ordering::Acquire);
+                        if cnt >= self.thread_limit {
+                            let _ = self.available_rx.recv().await;
+                            f = f_uncalled;
+                        } else {
+                            thread::Builder::new()
+                                .name(format!("{}:{}", self.name, cnt))
+                                .spawn(worker(
+                                    self.receiver.clone(),
+                                    self.counter.clone(),
+                                    self.recv_timeout,
+                                    self.available_tx.clone(),
+                                ))
+                                .expect("Cannot construct new thread");
+                            self.sender.send(f_uncalled).expect("the channel should not be full");
+                            break rx.await.map_err(|_| BlockingError)
+                                    .and_then(|res| res.map_err(|_| BlockingError));
+                        }
+                    }
+                    TrySendError::Disconnected(_) => {
+                        unreachable!("receiver should not all disconnected")
+                    }
+                },
+            }
         }
     }
 }
