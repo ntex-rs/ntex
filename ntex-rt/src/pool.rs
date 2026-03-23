@@ -70,7 +70,7 @@ fn worker(
                     }
                 }
                 _ => unreachable!(),
-            };
+            }
         }
     }
 }
