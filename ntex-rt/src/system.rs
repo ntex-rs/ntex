@@ -74,11 +74,8 @@ impl System {
         let id = SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = unbounded();
 
-        let pool = ThreadPool::new(
-            &config.name,
-            config.pool_limit,
-            config.pool_recv_timeout
-        );
+        let pool =
+            ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
 
         System {
             id,

@@ -57,8 +57,8 @@ fn worker(
         while let Ok(f) = receiver.recv_timeout(timeout) {
             f.run();
             let _ = available.try_send(());
-        }        
-        // If thread said it was available to callers, and a caller consumed this but never sent work, we want 
+        }
+        // If thread said it was available to callers, and a caller consumed this but never sent work, we want
         // to send another notification to ensure that callers don't get stuck waiting for a thread that has already exited.
         let _ = available.try_send(());
     }
@@ -91,11 +91,7 @@ pub struct ThreadPool {
 impl ThreadPool {
     /// Creates a [`ThreadPool`] with a maximum number of worker threads
     /// and a timeout for receiving tasks from the task channel.
-    pub fn new(
-        name: &str,
-        thread_limit: usize,
-        recv_timeout: Duration,
-    ) -> Self {
+    pub fn new(name: &str, thread_limit: usize, recv_timeout: Duration) -> Self {
         let (sender, receiver) = bounded(0);
         let (available_tx, available_rx) = async_channel::bounded(1);
         Self {
@@ -116,7 +112,7 @@ impl ThreadPool {
     /// The task will be executed by an available worker thread.
     /// If no threads are available and the pool has reached its maximum size,
     /// the function returns an error.
-    /// 
+    ///
     /// If you want to wait for a thread to become available instead of returning an error, use [`ThreadPool::dispatch`] instead.
     pub fn execute<F, R>(&self, f: F) -> BlockingResult<R>
     where
@@ -166,7 +162,7 @@ impl ThreadPool {
     /// The task will be executed by an available worker thread.
     /// If no threads are available and the pool has reached its maximum size,
     /// the function will wait until an available worker is ready.
-    /// 
+    ///
     /// If you want to error when the pool is exhausted, use [`ThreadPool::execute`] instead.
     pub async fn dispatch<F, R>(&self, f: F) -> Result<R, BlockingError>
     where
@@ -184,8 +180,12 @@ impl ThreadPool {
 
         loop {
             match self.sender.try_send(f) {
-                Ok(()) => break rx.await.map_err(|_| BlockingError)
-                        .and_then(|res| res.map_err(|_| BlockingError)),
+                Ok(()) => {
+                    break rx
+                        .await
+                        .map_err(|_| BlockingError)
+                        .and_then(|res| res.map_err(|_| BlockingError));
+                }
                 Err(e) => match e {
                     TrySendError::Full(f_uncalled) => {
                         let cnt = self.counter.load(Ordering::Acquire);
@@ -202,9 +202,13 @@ impl ThreadPool {
                                     self.available_tx.clone(),
                                 ))
                                 .expect("Cannot construct new thread");
-                            self.sender.send(f_uncalled).expect("the channel should not be full");
-                            break rx.await.map_err(|_| BlockingError)
-                                    .and_then(|res| res.map_err(|_| BlockingError));
+                            self.sender
+                                .send(f_uncalled)
+                                .expect("the channel should not be full");
+                            break rx
+                                .await
+                                .map_err(|_| BlockingError)
+                                .and_then(|res| res.map_err(|_| BlockingError));
                         }
                     }
                     TrySendError::Disconnected(_) => {
