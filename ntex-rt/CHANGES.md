@@ -1,5 +1,9 @@
 # Changes
 
+## [3.12.0] - 2026-03-21
+
+* Changes `ThreadPool::execute` behavior to not err on an exhausted threadpool
+
 ## [3.11.0] - 2026-03-21
 
 * Expose `ThreadPool` type as part of the public api
