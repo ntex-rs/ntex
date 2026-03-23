@@ -241,15 +241,9 @@ mod tests {
         assert_eq!(TestKind::Connect.to_string(), "Connect");
         assert_eq!(TestError::Connect("").kind().category(), "Client-Connect");
         assert_eq!(TestKind::Disconnect.to_string(), "Disconnect");
-        assert_eq!(
-            TestError::Disconnect.kind().category(),
-            "Client-Disconnect"
-        );
+        assert_eq!(TestError::Disconnect.kind().category(), "Client-Disconnect");
         assert_eq!(TestKind::ServiceError.to_string(), "ServiceError");
-        assert_eq!(
-            TestError::Service("").kind().category(),
-            "Service-Internal"
-        );
+        assert_eq!(TestError::Service("").kind().category(), "Service-Internal");
 
         let err = err.into_error().chain();
         assert_eq!(err.kind(), TestKind::ServiceError);
