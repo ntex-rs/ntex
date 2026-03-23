@@ -67,7 +67,7 @@ where
 
     writeln!(f, "err: {e}")?;
     writeln!(f, "type: {}", tp.as_str())?;
-    writeln!(f, "category: {}", k.category())?;
+    writeln!(f, "signature: {}", k.signature())?;
 
     if let Some(svc) = e.service() {
         writeln!(f, "service: {svc}")?;

@@ -59,16 +59,16 @@ pub trait ResultKind: fmt::Debug + 'static {
     /// Defines type of the error
     fn tp(&self) -> ResultType;
 
-    /// Error category
-    fn category(&self) -> &'static str;
+    /// Error signature
+    fn signature(&self) -> &'static str;
 }
 
 pub trait ErrorKind: fmt::Debug + 'static {
     /// Defines type of the error
     fn tp(&self) -> ResultType;
 
-    /// Error category
-    fn category(&self) -> &'static str;
+    /// Error signature
+    fn signature(&self) -> &'static str;
 }
 
 impl ResultKind for ResultType {
@@ -76,7 +76,7 @@ impl ResultKind for ResultType {
         *self
     }
 
-    fn category(&self) -> &'static str {
+    fn signature(&self) -> &'static str {
         self.as_str()
     }
 }
@@ -141,7 +141,7 @@ mod tests {
             }
         }
 
-        fn category(&self) -> &'static str {
+        fn signature(&self) -> &'static str {
             match self {
                 TestKind::Connect => "Client-Connect",
                 TestKind::Disconnect => "Client-Disconnect",
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!((*err).kind(), TestKind::ServiceError);
         assert_eq!(err.to_string(), "InternalServiceError");
         assert_eq!(err.service(), Some("test"));
-        assert_eq!(err.kind().category(), "Service-Internal");
+        assert_eq!(err.kind().signature(), "Service-Internal");
         assert_eq!(
             err,
             Into::<Error<TestError>>::into(TestError::Service("409 Error"))
@@ -239,11 +239,17 @@ mod tests {
         assert_eq!(format!("{}", ResultType::ClientError), "ClientError");
 
         assert_eq!(TestKind::Connect.to_string(), "Connect");
-        assert_eq!(TestError::Connect("").kind().category(), "Client-Connect");
+        assert_eq!(TestError::Connect("").kind().signature(), "Client-Connect");
         assert_eq!(TestKind::Disconnect.to_string(), "Disconnect");
-        assert_eq!(TestError::Disconnect.kind().category(), "Client-Disconnect");
+        assert_eq!(
+            TestError::Disconnect.kind().signature(),
+            "Client-Disconnect"
+        );
         assert_eq!(TestKind::ServiceError.to_string(), "ServiceError");
-        assert_eq!(TestError::Service("").kind().category(), "Service-Internal");
+        assert_eq!(
+            TestError::Service("").kind().signature(),
+            "Service-Internal"
+        );
 
         let err = err.into_error().chain();
         assert_eq!(err.kind(), TestKind::ServiceError);
@@ -273,7 +279,7 @@ mod tests {
         assert_eq!(err.kind(), TestKind::ServiceError);
         assert_eq!(err.kind(), TestError::Service("404 Error").kind());
         assert_eq!(err.service(), Some("test"));
-        assert_eq!(err.kind().category(), "Service-Internal");
+        assert_eq!(err.kind().signature(), "Service-Internal");
         assert_eq!(err.to_string(), "InternalServiceError");
         assert!(err.backtrace().is_some());
         assert!(format!("{err:?}").contains("Service(\"404 Error\")"));
@@ -282,7 +288,7 @@ mod tests {
         assert_eq!(8, mem::size_of::<Error<TestError>>());
 
         assert_eq!(TestError2.service(), None);
-        assert_eq!(TestError2.kind().category(), "ClientError");
+        assert_eq!(TestError2.kind().signature(), "ClientError");
 
         // ErrorInformation
         let err: Error<TestError> = TestError::Service("409 Error").into();
@@ -294,7 +300,7 @@ mod tests {
         let err: ErrorInfo = err.set_service("SVC").into();
         assert_eq!(err.tp(), ResultType::ServiceError);
         assert_eq!(err.service(), Some("SVC"));
-        assert_eq!(err.category(), "Service-Internal");
+        assert_eq!(err.signature(), "Service-Internal");
         assert!(err.backtrace().is_some());
 
         let res = Err(TestError::Service("409 Error"));
@@ -327,7 +333,7 @@ mod tests {
             .try_map(|_| Err::<(), _>(TestError2))
             .err()
             .unwrap();
-        assert_eq!(err3.kind().category(), "ClientError");
+        assert_eq!(err3.kind().signature(), "ClientError");
         assert_eq!(err3.get_item::<&str>(), Some(&"Test"));
 
         let res = err.clone().try_map(|_| Ok::<_, TestError2>(()));
