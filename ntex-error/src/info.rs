@@ -7,7 +7,7 @@ trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
 
     fn service(&self) -> Option<&'static str>;
 
-    fn category(&self) -> &'static str;
+    fn signature(&self) -> &'static str;
 
     fn backtrace(&self) -> Option<&Backtrace>;
 
@@ -28,8 +28,8 @@ where
         ErrorDiagnostic::service(self)
     }
 
-    fn category(&self) -> &'static str {
-        self.kind().category()
+    fn signature(&self) -> &'static str {
+        self.kind().signature()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {
@@ -59,8 +59,8 @@ impl ErrorInfo {
         self.inner.service()
     }
 
-    pub fn category(&self) -> &'static str {
-        self.inner.category()
+    pub fn signature(&self) -> &'static str {
+        self.inner.signature()
     }
 
     pub fn backtrace(&self) -> Option<&Backtrace> {
@@ -120,7 +120,7 @@ impl ResultKind for ErrorInfoType {
         self.0
     }
 
-    fn category(&self) -> &'static str {
+    fn signature(&self) -> &'static str {
         self.1
     }
 }
@@ -129,7 +129,7 @@ impl ErrorDiagnostic for ErrorInfo {
     type Kind = ErrorInfoType;
 
     fn kind(&self) -> ErrorInfoType {
-        ErrorInfoType(self.tp(), self.inner.category())
+        ErrorInfoType(self.tp(), self.inner.signature())
     }
 
     fn service(&self) -> Option<&'static str> {
