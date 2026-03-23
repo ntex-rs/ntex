@@ -1,5 +1,9 @@
 # Changes
 
+## [1.6.0] - 2026-03-23
+
+* Rename ResultKind::signature() to ResultKind::category()
+
 ## [1.5.2] - 2026-03-20
 
 * Add utility for module path generation
