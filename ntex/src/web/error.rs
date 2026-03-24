@@ -1,8 +1,6 @@
 //! Web error
 use std::{cell::RefCell, fmt, io::Write, marker::PhantomData};
 
-use thiserror::Error;
-
 pub use ntex_http::error::Error as HttpError;
 pub use serde_json::error::Error as JsonError;
 #[cfg(feature = "url")]
@@ -78,14 +76,14 @@ where
 }
 
 /// Errors which can occur when attempting to work with `State` extractor
-#[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StateExtractorError {
     #[error("App state is not configured, to configure use App::state()")]
     NotConfigured,
 }
 
 /// Errors which can occur when attempting to generate resource uri.
-#[derive(Error, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UrlGenerationError {
     /// Resource not found
     #[error("Resource not found")]
@@ -100,7 +98,7 @@ pub enum UrlGenerationError {
 }
 
 /// A set of errors that can occur during parsing urlencoded payloads
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum UrlencodedError {
     /// Cannot decode chunked transfer encoding
     #[error("Cannot decode chunked transfer encoding")]
@@ -125,7 +123,7 @@ pub enum UrlencodedError {
 }
 
 /// A set of errors that can occur during parsing json payloads
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum JsonPayloadError {
     /// Payload size is bigger than allowed. (default: 32kB)
     #[error("Json payload size is bigger than allowed")]
@@ -142,7 +140,7 @@ pub enum JsonPayloadError {
 }
 
 /// A set of errors that can occur during parsing request paths
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PathError {
     /// Deserialize error
     #[error("Path deserialize error: {0}")]
@@ -150,14 +148,14 @@ pub enum PathError {
 }
 
 /// A set of errors that can occur during parsing query strings
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum QueryPayloadError {
     /// Deserialize error
     #[error("Query deserialize error: {0}")]
     Deserialize(#[from] serde::de::value::Error),
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PayloadError {
     /// Http error.
     #[error("{0:?}")]
@@ -678,7 +676,7 @@ mod tests {
     use std::io;
 
     use super::*;
-    use crate::client::error::{ConnectError, SendRequestError};
+    use crate::client::error::{ClientError, ConnectError};
     use crate::{http, web::test::TestRequest};
 
     #[test]
@@ -716,19 +714,19 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let resp = WebResponseError::<DefaultError>::error_response(
-            &SendRequestError::Connect(ConnectError::Timeout),
+            &ClientError::Connect(ConnectError::Timeout),
             &req,
         );
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
 
         let resp = WebResponseError::<DefaultError>::error_response(
-            &SendRequestError::Connect(ConnectError::SslIsNotSupported),
+            &ClientError::Connect(ConnectError::SslIsNotSupported),
             &req,
         );
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let resp = WebResponseError::<DefaultError>::error_response(
-            &SendRequestError::TunnelNotSupported,
+            &ClientError::TunnelNotSupported,
             &req,
         );
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -770,15 +768,14 @@ mod tests {
     fn test_either_error() {
         let req = TestRequest::default().to_http_request();
 
-        let err: Either<SendRequestError, PayloadError> =
-            Either::Left(SendRequestError::TunnelNotSupported);
+        let err: Either<ClientError, PayloadError> =
+            Either::Left(ClientError::TunnelNotSupported);
         let code = WebResponseError::<DefaultError>::status_code(&err);
         assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
         let resp = WebResponseError::<DefaultError>::error_response(&err, &req);
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-        let err: Either<SendRequestError, PayloadError> =
-            Either::Right(PayloadError::Decoding);
+        let err: Either<ClientError, PayloadError> = Either::Right(PayloadError::Decoding);
         let code = WebResponseError::<DefaultError>::status_code(&err);
         assert_eq!(code, StatusCode::BAD_REQUEST);
         let resp = WebResponseError::<DefaultError>::error_response(&err, &req);

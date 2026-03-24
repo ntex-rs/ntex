@@ -8,7 +8,7 @@ use crate::http::encoding::Decoder;
 use crate::http::body::MessageBody;
 
 use super::connector::ConnectorService;
-use super::error::SendRequestError;
+use super::error::ClientError;
 use super::{ClientConfig, ClientRawRequest, Connect, ServiceRequest, ServiceResponse};
 
 #[derive(Debug)]
@@ -26,7 +26,7 @@ impl Sender {
 #[allow(unused_variables)]
 impl Service<ServiceRequest> for Sender {
     type Response = ServiceResponse;
-    type Error = SendRequestError;
+    type Error = ClientError;
 
     crate::forward_ready!(connector);
     crate::forward_poll!(connector);

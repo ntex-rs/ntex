@@ -5,7 +5,7 @@ use coo_kie::Cookie;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
 use rand::Rng;
 
-use ntex::client::{Client, Connector, error::SendRequestError};
+use ntex::client::{Client, Connector, error::ClientError};
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpMessage, HttpService, header};
 use ntex::io::IoConfig;
@@ -117,7 +117,7 @@ async fn test_timeout() {
 
     let request = client.get(srv.url("/")).send().await;
     match request {
-        Err(SendRequestError::Timeout) => (),
+        Err(ClientError::Timeout) => (),
         _ => panic!(),
     }
 }
@@ -139,7 +139,7 @@ async fn test_timeout_override() {
         .unwrap();
     let request = client.get(srv.url("/")).timeout(Seconds(1)).send();
     match request.await {
-        Err(SendRequestError::Timeout) => (),
+        Err(ClientError::Timeout) => (),
         _ => panic!(),
     }
 }

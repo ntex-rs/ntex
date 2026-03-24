@@ -1,8 +1,6 @@
 //! WebSocket protocol related errors.
 use std::io;
 
-use thiserror::Error;
-
 use crate::http::error::{DecodeError, EncodeError, HttpError, ResponseError};
 use crate::http::{Response, StatusCode, header::ALLOW, header::HeaderValue};
 use crate::{connect::ConnectError, util::Either, util::clone_io_error};
@@ -10,7 +8,7 @@ use crate::{connect::ConnectError, util::Either, util::clone_io_error};
 use super::OpCode;
 
 /// Websocket service errors
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum WsError<E> {
     #[error("Service error")]
     Service(E),
@@ -29,7 +27,7 @@ pub enum WsError<E> {
 }
 
 /// Websocket protocol errors
-#[derive(Error, Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, thiserror::Error)]
 pub enum ProtocolError {
     /// Received an unmasked frame from client
     #[error("Received an unmasked frame from client")]
@@ -61,7 +59,7 @@ pub enum ProtocolError {
 }
 
 /// Websocket client error
-#[derive(Error, Clone, Debug)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum WsClientBuilderError<E> {
     #[error("Cannot create connector {0}")]
     Connector(E),
@@ -76,7 +74,7 @@ pub enum WsClientBuilderError<E> {
 }
 
 /// Websocket client error
-#[derive(Error, Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum WsClientError {
     /// Invalid request
     #[error("Invalid request")]
@@ -168,7 +166,7 @@ impl Clone for WsClientError {
 }
 
 /// Websocket handshake errors
-#[derive(Error, Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum HandshakeError {
     /// Only get method is allowed
     #[error("Method not allowed")]

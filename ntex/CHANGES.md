@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.0] - 2026-03-xx
+
+* Rename client::error::SendRequestError to ClientError
+
 ## [3.6.2] - 2026-03-19
 
 * Fix UnsupportedVersion http error
