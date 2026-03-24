@@ -5,7 +5,6 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::{GzEncoder, ZlibDecoder, ZlibEncoder};
 use rand::{Rng, distr::Alphanumeric};
-use thiserror::Error;
 
 use ntex::http::header::{
     ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, ContentEncoding,
@@ -801,11 +800,11 @@ async fn test_slow_request() {
 
 #[ntex::test]
 async fn test_custom_error() {
-    #[derive(Error, Debug)]
+    #[derive(Debug, thiserror::Error)]
     #[error("TestError")]
     struct TestError;
 
-    #[derive(Error, Debug)]
+    #[derive(Debug, thiserror::Error)]
     #[error("JsonContainer({0})")]
     struct JsonContainer(Box<dyn WebResponseError<JsonRenderer>>);
 

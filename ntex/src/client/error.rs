@@ -269,7 +269,7 @@ pub enum ClientError {
 impl Clone for ClientError {
     fn clone(&self) -> ClientError {
         match self {
-            ClientError::Url(err) => ClientError::Url(err.clone()),
+            ClientError::Url(err) => ClientError::Url(*err),
             ClientError::Connect(err) => ClientError::Connect(err.clone()),
             ClientError::Request(err) => ClientError::Request(err.clone()),
             ClientError::Response(err) => ClientError::Response(*err),
