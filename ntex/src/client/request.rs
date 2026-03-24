@@ -11,7 +11,7 @@ use crate::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, Method, Uri, Version};
 use crate::{Pipeline, time::Millis, util::Bytes, util::Stream};
 
-use super::error::{InvalidUrl, SendRequestError};
+use super::error::{ClientError, InvalidUrl};
 use super::{BoxedSender, ClientResponse, ServiceRequest};
 
 /// An HTTP Client request builder
@@ -383,7 +383,7 @@ impl ClientRequest {
 
 impl ClientRequest {
     /// Complete request construction and send body.
-    pub async fn send_body<B>(mut self, body: B) -> Result<ClientResponse, SendRequestError>
+    pub async fn send_body<B>(mut self, body: B) -> Result<ClientResponse, ClientError>
     where
         B: Into<Body>,
     {
@@ -396,7 +396,7 @@ impl ClientRequest {
     pub async fn send_json<T: Serialize>(
         mut self,
         value: &T,
-    ) -> Result<ClientResponse, SendRequestError> {
+    ) -> Result<ClientResponse, ClientError> {
         self.prep_for_sending()?;
         self.request.set_json(value)?;
         self.svc.call(self.request).await.map(Into::into)
@@ -408,7 +408,7 @@ impl ClientRequest {
     pub async fn send_form<T: Serialize>(
         mut self,
         value: &T,
-    ) -> Result<ClientResponse, SendRequestError> {
+    ) -> Result<ClientResponse, ClientError> {
         self.prep_for_sending()?;
         self.request.set_form(value)?;
         self.svc.call(self.request).await.map(Into::into)
@@ -418,7 +418,7 @@ impl ClientRequest {
     pub async fn send_stream<T, E>(
         mut self,
         stream: T,
-    ) -> Result<ClientResponse, SendRequestError>
+    ) -> Result<ClientResponse, ClientError>
     where
         T: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
         E: Error + 'static,
@@ -429,13 +429,13 @@ impl ClientRequest {
     }
 
     /// Set an empty body and generate `ClientRequest`.
-    pub async fn send(mut self) -> Result<ClientResponse, SendRequestError> {
+    pub async fn send(mut self) -> Result<ClientResponse, ClientError> {
         self.prep_for_sending()?;
         self.svc.call(self.request).await.map(Into::into)
     }
 
     #[allow(unused_mut)]
-    fn prep_for_sending(&mut self) -> Result<(), SendRequestError> {
+    fn prep_for_sending(&mut self) -> Result<(), ClientError> {
         if let Some(e) = self.err.take() {
             return Err(e.into());
         }

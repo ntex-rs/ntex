@@ -40,10 +40,6 @@ pub enum ResultType {
     Service,
 }
 
-#[deprecated]
-#[doc(hidden)]
-pub type ErrorType = ResultType;
-
 impl ResultType {
     #[allow(deprecated)]
     pub const fn as_str(&self) -> &'static str {

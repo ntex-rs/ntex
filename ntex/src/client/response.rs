@@ -378,7 +378,9 @@ where
         if let Some(len) = self.length.take() {
             let limit = self.fut.as_ref().unwrap().limit;
             if limit > 0 && len > limit {
-                return Poll::Ready(Err(JsonPayloadError::Payload(PayloadError::Overflow)));
+                return Poll::Ready(Err(JsonPayloadError::Payload(
+                    PayloadError::Overflow.into(),
+                )));
             }
         }
 
@@ -446,10 +448,11 @@ impl Future for ReadBody {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde::{Deserialize, Serialize};
 
-    use crate::{client::test::TestResponse, http::header};
+    use super::*;
+    use crate::client::{error::ClientPayloadError, test::TestResponse};
+    use crate::http::header;
 
     #[crate::rt_test]
     async fn test_body() {
@@ -486,8 +489,11 @@ mod tests {
 
     fn json_eq(err: &JsonPayloadError, other: &JsonPayloadError) -> bool {
         match err {
-            JsonPayloadError::Payload(PayloadError::Overflow) => {
-                matches!(other, JsonPayloadError::Payload(PayloadError::Overflow))
+            JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow)) => {
+                matches!(
+                    other,
+                    JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow))
+                )
             }
             JsonPayloadError::ContentType => matches!(other, JsonPayloadError::ContentType),
             _ => false,
@@ -529,7 +535,7 @@ mod tests {
         let json = JsonBody::<MyObject>::new(&req).limit(100).await;
         assert!(json_eq(
             &json.err().unwrap(),
-            &JsonPayloadError::Payload(PayloadError::Overflow)
+            &JsonPayloadError::Payload(ClientPayloadError(PayloadError::Overflow))
         ));
 
         let req = TestResponse::default()
