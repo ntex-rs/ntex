@@ -47,7 +47,7 @@ impl ResultType {
 }
 
 /// Describes how a domain-specific error maps into a unified result model.
-pub trait ResultKind: fmt::Debug + 'static {
+pub trait ResultKind: 'static {
     /// Returns the classification of the result (e.g. success, client error, service error).
     fn tp(&self) -> ResultType;
 
