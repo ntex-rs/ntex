@@ -2,6 +2,20 @@ use std::{any::Any, any::TypeId, error, fmt, sync::Arc};
 
 use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, ResultType, repr::ErrorRepr};
 
+/// Helper type holding a result type and classification signature.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ErrorInfoType(ResultType, &'static str);
+
+impl ResultKind for ErrorInfoType {
+    fn tp(&self) -> ResultType {
+        self.0
+    }
+
+    fn signature(&self) -> &'static str {
+        self.1
+    }
+}
+
 trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
     fn tp(&self) -> ResultType;
 
@@ -45,28 +59,36 @@ where
     }
 }
 
+/// Type-erased container holding error information.
+///
+/// This allows storing and passing error metadata without exposing the concrete type.
 #[derive(Clone)]
 pub struct ErrorInfo {
     inner: Arc<dyn ErrorInformation>,
 }
 
 impl ErrorInfo {
+    /// Returns the classification of the result (e.g. success, client error, service error).
     pub fn tp(&self) -> ResultType {
         self.inner.tp()
     }
 
+    /// Returns the name of the responsible service, if applicable.
     pub fn service(&self) -> Option<&'static str> {
         self.inner.service()
     }
 
+    /// Returns a stable identifier for the specific error classification.
     pub fn signature(&self) -> &'static str {
         self.inner.signature()
     }
 
+    /// Returns a backtrace for debugging purposes, if available.
     pub fn backtrace(&self) -> Option<&Backtrace> {
         self.inner.backtrace()
     }
 
+    /// Returns a reference to a previously stored value of type `T` from this error.
     pub fn get_item<T: 'static>(&self) -> Option<&T> {
         self.inner
             .get_item(&TypeId::of::<T>())
@@ -109,19 +131,6 @@ impl fmt::Debug for ErrorInfo {
 impl fmt::Display for ErrorInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.inner, f)
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct ErrorInfoType(ResultType, &'static str);
-
-impl ResultKind for ErrorInfoType {
-    fn tp(&self) -> ResultType {
-        self.0
-    }
-
-    fn signature(&self) -> &'static str {
-        self.1
     }
 }
 

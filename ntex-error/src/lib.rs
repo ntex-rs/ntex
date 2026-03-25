@@ -27,43 +27,33 @@ pub use crate::utils::{Success, with_service};
 #[doc(hidden)]
 pub use crate::bt::{set_backtrace_start, set_backtrace_start_alt};
 
+/// The type of the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResultType {
     Success,
     ClientError,
     ServiceError,
-    #[doc(hidden)]
-    #[deprecated]
-    Client,
-    #[doc(hidden)]
-    #[deprecated]
-    Service,
 }
 
 impl ResultType {
-    #[allow(deprecated)]
+    /// Returns a str representation of the result type.
     pub const fn as_str(&self) -> &'static str {
         match self {
             ResultType::Success => "Success",
-            ResultType::ClientError | ResultType::Client => "ClientError",
-            ResultType::ServiceError | ResultType::Service => "ServiceError",
+            ResultType::ClientError => "ClientError",
+            ResultType::ServiceError => "ServiceError",
         }
     }
 }
 
+/// Describes how a domain-specific error maps into a unified result model.
 pub trait ResultKind: fmt::Debug + 'static {
-    /// Defines type of the error
+    /// Returns the classification of the result (e.g. success, client error, service error).
     fn tp(&self) -> ResultType;
 
-    /// Error signature
-    fn signature(&self) -> &'static str;
-}
-
-pub trait ErrorKind: fmt::Debug + 'static {
-    /// Defines type of the error
-    fn tp(&self) -> ResultType;
-
-    /// Error signature
+    /// Returns a stable identifier for the specific error classification.
+    ///
+    /// It is used for logging, metrics, and diagnostics.
     fn signature(&self) -> &'static str;
 }
 
@@ -77,18 +67,23 @@ impl ResultKind for ResultType {
     }
 }
 
+/// Provides diagnostic information for errors.
+///
+/// It enables classification, service attribution, and debugging context.
 pub trait ErrorDiagnostic: StdError + 'static {
     type Kind: ResultKind;
 
-    /// Provides specific kind of the error
+    /// Returns the classification kind of this error.
     fn kind(&self) -> Self::Kind;
 
-    /// Provides a string to identify responsible service
+    /// Returns the name of the responsible service, if applicable.
+    ///
+    /// Used to identify upstream or internal service ownership for diagnostics.
     fn service(&self) -> Option<&'static str> {
         None
     }
 
-    /// Provides error call location
+    /// Returns a backtrace for debugging purposes, if available.
     fn backtrace(&self) -> Option<&Backtrace> {
         None
     }
@@ -102,7 +97,9 @@ pub trait ErrorDiagnostic: StdError + 'static {
     }
 }
 
+/// Helper trait for converting a value into a unified error-aware result type.
 pub trait ErrorMapping<T, E, U> {
+    /// Converts the value into a `Result`, wrapping it in a structured error type if needed.
     fn into_error(self) -> Result<T, Error<U>>;
 }
 
@@ -112,7 +109,6 @@ impl fmt::Display for ResultType {
     }
 }
 
-#[allow(dead_code)]
 #[cfg(test)]
 mod tests {
     use std::{error::Error as StdError, io, mem};

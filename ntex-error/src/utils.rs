@@ -52,9 +52,9 @@ impl fmt::Display for Success {
     }
 }
 
-/// Execute future and set error service.
+/// Executes a future and ensures an error service is set.
 ///
-/// Sets service if it not set
+/// If the error does not already have a service, the provided service is assigned.
 pub async fn with_service<F, T, E>(svc: &'static str, fut: F) -> F::Output
 where
     F: Future<Output = Result<T, Error<E>>>,
@@ -69,17 +69,17 @@ where
     })
 }
 
-/// Generate module path for the file path
+/// Generates a module path from the given file path.
 pub fn module_path(file_path: &str) -> ByteString {
     module_path_ext("", "", "::", "", file_path)
 }
 
-/// Generate module path with prefix for the file path
+/// Generates a module path with a prefix from the given file path.
 pub fn module_path_prefix(prefix: &'static str, file_path: &str) -> ByteString {
     module_path_ext(prefix, "", "::", "", file_path)
 }
 
-/// Generate module path for the file path
+/// Generates a module path from a file path.
 pub fn module_path_fs(file_path: &str) -> ByteString {
     module_path_ext("", "/src", "/", ".rs", file_path)
 }
@@ -142,7 +142,6 @@ fn normalize_file_path(file_path: &str) -> String {
     }
 }
 
-/// Derives a module root (usually `<crate>/src`) from a file path.
 fn module_root_from_file(mod_sep: &str, file_path: &str) -> (String, PathBuf) {
     let normalized = file_path.replace('\\', "/");
     if let Some((root, _)) = normalized.rsplit_once("/src/") {
@@ -171,7 +170,6 @@ fn module_root_from_file(mod_sep: &str, file_path: &str) -> (String, PathBuf) {
     (format!("{m}{mod_sep}"), path)
 }
 
-/// Converts a file path into a pseudo-Rust module path.
 fn module_path_from_file(sep: &str, file_path: &str) -> String {
     let normalized = file_path.replace('\\', "/");
     let relative = normalized
@@ -197,7 +195,6 @@ fn module_path_from_file(sep: &str, file_path: &str) -> String {
     }
 }
 
-/// Converts a file path into a pseudo-Rust module path using a known module root.
 fn module_path_from_file_with_root(
     prefix: &str,
     sep: &str,
