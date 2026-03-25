@@ -2,13 +2,16 @@ use std::{error, fmt, ops, panic::Location, sync::Arc};
 
 use crate::{Backtrace, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
 
+/// An error container.
 pub struct Error<E> {
     pub(crate) inner: Arc<ErrorRepr<E>>,
 }
 
 impl<E> Error<E> {
+    /// Creates a new error wrapper.
+    ///
+    /// Captures the caller location and associates the error with a service.
     #[track_caller]
-    /// Create new error wrapper.
     pub fn new<T>(error: T, service: &'static str) -> Self
     where
         E: From<T>,
@@ -22,9 +25,9 @@ impl<E> Error<E> {
         }
     }
 
-    /// Map inner error to new error.
+    /// Transforms the inner error into another error type.
     ///
-    /// Keep same `service` and `location`
+    /// Preserves `service`, backtrace, and extension data.
     pub fn forward<U, F>(self, f: F) -> Error<U>
     where
         F: FnOnce(Error<E>) -> U,
@@ -38,7 +41,9 @@ impl<E> Error<E> {
         }
     }
 
-    /// Print error debug information.
+    /// Returns a debug view of the error.
+    ///
+    /// Intended for debugging purposes.
     pub fn debug(&self) -> impl fmt::Debug
     where
         E: fmt::Debug,
@@ -48,15 +53,19 @@ impl<E> Error<E> {
         }
     }
 
-    /// Get a reference to a type previously inserted on this `Error`.
+    /// Returns a reference to a previously stored value of type `T` from this error.
+    ///
+    /// This can be used to access additional contextual data attached to the error.
     pub fn get_item<T: 'static>(&self) -> Option<&T> {
         self.inner.ext.get::<T>()
     }
 }
 
 impl<E: Clone> Error<E> {
+    /// Sets the service responsible for this error.
+    ///
+    /// Returns the updated error.
     #[must_use]
-    /// Set error's responsible service.
     pub fn set_service(mut self, name: &'static str) -> Self {
         if let Some(inner) = Arc::get_mut(&mut self.inner) {
             inner.service = Some(name);
@@ -73,9 +82,9 @@ impl<E: Clone> Error<E> {
         }
     }
 
-    /// Map inner error to new error.
+    /// Maps the inner error into a new error type.
     ///
-    /// Keep same `service` and `location`
+    /// Preserves `service`, backtrace, and extension data.
     pub fn map<U, F>(self, f: F) -> Error<U>
     where
         F: FnOnce(E) -> U,
@@ -97,7 +106,7 @@ impl<E: Clone> Error<E> {
 
     /// Try to map inner error to new error.
     ///
-    /// Keep same `service` and `location`
+    /// Preserves `service`, backtrace, and extension data.
     pub fn try_map<T, U, F>(self, f: F) -> Result<T, Error<U>>
     where
         F: FnOnce(E) -> Result<T, U>,
@@ -117,8 +126,10 @@ impl<E: Clone> Error<E> {
         })
     }
 
+    /// Attaches a typed value to this `Error`.
+    ///
+    /// This value can be retrieved later using `get_item::<T>()`.
     #[must_use]
-    /// Insert a type into this `Error`.
     pub fn insert_item<T: Sync + Send + 'static>(mut self, val: T) -> Self {
         if let Some(inner) = Arc::get_mut(&mut self.inner) {
             inner.ext.insert(val);
@@ -139,7 +150,7 @@ impl<E: Clone> Error<E> {
 }
 
 impl<E: Clone> Error<E> {
-    /// Get inner error value
+    /// Consumes this error and returns the inner error value.
     pub fn into_error(self) -> E {
         Arc::try_unwrap(self.inner)
             .map_or_else(|inner| inner.error.clone(), |inner| inner.error)

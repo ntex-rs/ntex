@@ -2,7 +2,10 @@ use std::{error, fmt, panic::Location, sync::Arc};
 
 use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, repr::ErrorRepr};
 
-#[derive(Debug, Clone)]
+/// A type-erased container representing an error within a diagnostic chain.
+///
+/// This allows errors to be stored and propagated without exposing concrete types.
+#[derive(Clone)]
 pub struct ErrorChain<K: ResultKind> {
     error: Arc<dyn ErrorDiagnostic<Kind = K>>,
 }
@@ -35,6 +38,15 @@ where
 {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.error.source()
+    }
+}
+
+impl<K> fmt::Debug for ErrorChain<K>
+where
+    K: ResultKind,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.error, f)
     }
 }
 

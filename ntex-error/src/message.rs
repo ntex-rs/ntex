@@ -52,12 +52,17 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
     Ok(())
 }
 
+/// Formats a full diagnostic view of an error for logging and tracing.
 pub fn fmt_diag_string<K: ResultKind>(e: &dyn ErrorDiagnostic<Kind = K>) -> String {
     let mut buf = String::new();
     _ = fmt_diag(&mut buf, e);
     buf
 }
 
+/// Formats a full diagnostic view of an error for logging and tracing.
+///
+/// For `ServiceError` types, this includes debug representations of all nested errors,
+/// and a backtrace when available.
 pub fn fmt_diag<K>(f: &mut dyn fmt::Write, e: &dyn ErrorDiagnostic<Kind = K>) -> fmt::Result
 where
     K: ResultKind,
@@ -131,7 +136,7 @@ impl ErrorMessageChained {
 }
 
 impl ErrorMessage {
-    /// Construct new empty `ErrorMessage`
+    /// Construct a new empty `ErrorMessage`
     pub const fn empty() -> Self {
         Self(ByteString::from_static(""))
     }
