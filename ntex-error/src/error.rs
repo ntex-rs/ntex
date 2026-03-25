@@ -3,12 +3,16 @@ use std::{error, fmt, ops, panic::Location, sync::Arc};
 use crate::{Backtrace, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
 
 /// An error container.
+///
+/// `Error<E>` is a lightweight handle to an error that can be cheaply cloned
+/// and safely shared across threads. It preserves the original error along with
+/// associated context such as where it occurred.
 pub struct Error<E> {
     pub(crate) inner: Arc<ErrorRepr<E>>,
 }
 
 impl<E> Error<E> {
-    /// Creates a new error wrapper.
+    /// Creates a new error container.
     ///
     /// Captures the caller location and associates the error with a service.
     #[track_caller]
