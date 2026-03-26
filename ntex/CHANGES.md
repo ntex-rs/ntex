@@ -1,6 +1,6 @@
 # Changes
 
-## [3.7.0] - 2026-03-xx
+## [3.7.0] - 2026-03-26
 
 * Rename client::error::SendRequestError to ClientError
 
