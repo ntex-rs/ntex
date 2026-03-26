@@ -74,6 +74,13 @@ where
     writeln!(f, "type: {}", tp.as_str())?;
     writeln!(f, "signature: {}", k.signature())?;
 
+    if let Some(tag) = e.tag() {
+        if let Ok(s) = ByteString::try_from(tag) {
+            writeln!(f, "tag: {s}")?;
+        } else {
+            writeln!(f, "tag: {tag:?}")?;
+        }
+    }
     if let Some(svc) = e.service() {
         writeln!(f, "service: {svc}")?;
     }
@@ -248,6 +255,7 @@ impl fmt::Display for ErrorMessageChained {
 #[cfg(test)]
 #[allow(dead_code)]
 mod tests {
+    use ntex_bytes::Bytes;
     use std::io;
 
     use super::*;
@@ -364,5 +372,9 @@ mod tests {
             "{:?}",
             err.source().unwrap()
         );
+
+        let err = err.set_tag(Bytes::from("test-tag"));
+        let msg = fmt_diag_string(&err);
+        println!("{msg}");
     }
 }

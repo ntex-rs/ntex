@@ -7,6 +7,8 @@
 )]
 use std::{error::Error as StdError, fmt};
 
+use ntex_bytes::Bytes;
+
 mod bt;
 mod chain;
 mod error;
@@ -75,6 +77,14 @@ pub trait ErrorDiagnostic: StdError + 'static {
 
     /// Returns the classification kind of this error.
     fn kind(&self) -> Self::Kind;
+
+    /// Returns an optional tag associated with this error.
+    ///
+    /// The tag is user-defined and can be used for additional classification
+    /// or correlation.
+    fn tag(&self) -> Option<&Bytes> {
+        None
+    }
 
     /// Returns the name of the responsible service, if applicable.
     ///
@@ -202,11 +212,15 @@ mod tests {
 
         let err = err.set_service("SVC");
         assert_eq!(err.service(), Some("SVC"));
+        let err = err.set_tag("TAG");
+        assert_eq!(err.tag().unwrap(), &b"TAG"[..]);
 
         let err2: Error<TestError> = Error::new(TestError::Service("409 Error"), "TEST");
         assert!(err != err2);
         assert_eq!(err, TestError::Service("409 Error"));
 
+        let err2 = err2.set_tag("TAG");
+        assert_eq!(err.tag().unwrap(), &b"TAG"[..]);
         let err2 = err2.set_service("SVC");
         assert_eq!(err, err2);
         let err2 = err2.map(|_| TestError::Disconnect);
@@ -255,16 +269,19 @@ mod tests {
         );
 
         let err: Error<TestError> = TestError::Service("404 Error").into();
-        if let Some(bt) = err.backtrace() {
-            bt.resolver().resolve();
-            assert!(
-                format!("{bt}").contains("ntex_error::tests::test_error"),
-                "{bt}",
-            );
-            assert!(
-                bt.repr().unwrap().contains("ntex_error::tests::test_error"),
-                "{bt}"
-            );
+        #[cfg(unix)]
+        {
+            if let Some(bt) = err.backtrace() {
+                bt.resolver().resolve();
+                assert!(
+                    format!("{bt}").contains("ntex_error::tests::test_error"),
+                    "{bt}",
+                );
+                assert!(
+                    bt.repr().unwrap().contains("ntex_error::tests::test_error"),
+                    "{bt}"
+                );
+            }
         }
 
         let err: ErrorChain<TestKind> = err.into();
