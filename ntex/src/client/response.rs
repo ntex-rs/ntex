@@ -1,5 +1,6 @@
 use std::cell::{Cell, Ref, RefMut};
-use std::{fmt, future::Future, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::task::{Context, Poll, ready};
+use std::{fmt, future::Future, marker::PhantomData, pin::Pin};
 
 use serde::de::DeserializeOwned;
 
@@ -161,13 +162,16 @@ impl ClientResponse {
 }
 
 impl Stream for ClientResponse {
-    type Item = Result<Bytes, PayloadError>;
+    type Item = Result<Bytes, Error<ClientPayloadError>>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(mut pl) = self.payload.take() {
             let result = Pin::new(&mut pl).poll_next(cx);
             self.payload.set(Some(pl));
-            result
+            Poll::Ready(
+                ready!(result)
+                    .map(|item| item.map_err(|e| Error::from(ClientPayloadError(e)))),
+            )
         } else {
             Poll::Ready(None)
         }

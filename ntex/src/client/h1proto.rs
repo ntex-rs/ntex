@@ -75,20 +75,22 @@ async fn send_request_inner(
 
     // read response and init read body
     let fut = async {
-        if let Some(result) = io.recv(&codec).await? {
+        if let Some(result) = io.recv(&codec).await.into_error()? {
             log::trace!(
                 "http1 response is received, type: {:?}, response: {result:#?}",
                 codec.message_type()
             );
             Ok(result)
         } else {
-            Err(ClientError::from(ConnectError::Disconnected(None)))
+            Err(Error::from(ClientError::from(ConnectError::Disconnected(
+                None,
+            ))))
         }
     };
 
     let head = timeout_checked(timeout, fut)
         .await
-        .map_err(|()| ClientError::Timeout)
+        .map_err(|()| Error::from(ClientError::Timeout))
         .and_then(|res| res)?;
 
     if codec.message_type() == h1::MessageType::None {
