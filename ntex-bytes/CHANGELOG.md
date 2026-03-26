@@ -1,5 +1,9 @@
 # Changes
 
+## [1.5.3] (2026-03-26)
+
+* Add impl From<ByteString> for Bytes
+
 ## [1.5.2] (2026-03-01)
 
 * Add io::Write impl to BytesMut

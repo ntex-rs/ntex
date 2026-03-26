@@ -11,7 +11,7 @@ use super::OpCode;
 #[derive(Debug, thiserror::Error)]
 pub enum WsError<E> {
     #[error("Service error")]
-    Service(E),
+    Service(#[source] E),
     /// Keep-alive error
     #[error("Keep-alive error")]
     KeepAlive,
@@ -20,10 +20,10 @@ pub enum WsError<E> {
     ReadTimeout,
     /// Ws protocol level error
     #[error("Ws protocol level error")]
-    Protocol(ProtocolError),
+    Protocol(#[source] ProtocolError),
     /// Peer has been disconnected
     #[error("Peer has been disconnected: {0:?}")]
-    Disconnected(Option<io::Error>),
+    Disconnected(#[source] Option<io::Error>),
 }
 
 /// Websocket protocol errors
@@ -62,7 +62,7 @@ pub enum ProtocolError {
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum WsClientBuilderError<E> {
     #[error("Cannot create connector {0}")]
-    Connector(E),
+    Connector(#[source] E),
     #[error("Missing url scheme")]
     MissingScheme,
     #[error("Unknown url scheme")]
@@ -70,7 +70,11 @@ pub enum WsClientBuilderError<E> {
     #[error("Missing host name")]
     MissingHost,
     #[error("Url parse error: {0}")]
-    Http(#[from] HttpError),
+    Http(
+        #[from]
+        #[source]
+        HttpError,
+    ),
 }
 
 /// Websocket client error
@@ -78,10 +82,18 @@ pub enum WsClientBuilderError<E> {
 pub enum WsClientError {
     /// Invalid request
     #[error("Invalid request")]
-    InvalidRequest(#[from] EncodeError),
+    InvalidRequest(
+        #[from]
+        #[source]
+        EncodeError,
+    ),
     /// Invalid response
     #[error("Invalid response")]
-    InvalidResponse(#[from] DecodeError),
+    InvalidResponse(
+        #[from]
+        #[source]
+        DecodeError,
+    ),
     /// Invalid response status
     #[error("Invalid response status")]
     InvalidResponseStatus(StatusCode),
@@ -102,16 +114,24 @@ pub enum WsClientError {
     InvalidChallengeResponse(String, HeaderValue),
     /// Protocol error
     #[error("{0}")]
-    Protocol(#[from] ProtocolError),
+    Protocol(
+        #[from]
+        #[source]
+        ProtocolError,
+    ),
     /// Response took too long
     #[error("Timeout out while waiting for response")]
     Timeout,
     /// Failed to connect to host
     #[error("Failed to connect to host: {0}")]
-    Connect(#[from] ConnectError),
+    Connect(
+        #[from]
+        #[source]
+        ConnectError,
+    ),
     /// Connector has been disconnected
     #[error("Connector has been disconnected: {0:?}")]
-    Disconnected(Option<io::Error>),
+    Disconnected(#[source] Option<io::Error>),
 }
 
 impl From<Either<DecodeError, io::Error>> for WsClientError {

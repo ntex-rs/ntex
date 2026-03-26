@@ -2,23 +2,34 @@ use std::{future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
-use crate::error::Error;
-use crate::http::ResponseHead;
+use crate::error::{Error, ErrorMapping, with_service};
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
-use crate::http::{Method, Payload, Version, h2::Payload as H2Payload};
+use crate::http::{Method, Payload, ResponseHead, Version, h2::Payload as H2Payload};
 use crate::time::{Millis, timeout_checked};
 use crate::util::{ByteString, Bytes, Either, select};
 
-use super::ClientRawRequest;
-use super::error::{ClientError, ConnectError};
+use super::{ClientRawRequest, error::ClientError, error::ConnectError};
 
 pub(super) async fn send_request(
     client: H2Client,
     req: ClientRawRequest,
     body: Body,
     timeout: Millis,
-) -> Result<(ResponseHead, Payload), ClientError> {
+) -> Result<(ResponseHead, Payload), Error<ClientError>> {
+    with_service(
+        client.service(),
+        send_request_inner(client, req, body, timeout),
+    )
+    .await
+}
+
+async fn send_request_inner(
+    client: H2Client,
+    req: ClientRawRequest,
+    body: Body,
+    timeout: Millis,
+) -> Result<(ResponseHead, Payload), Error<ClientError>> {
     log::trace!(
         "{}: Sending client request: {req:?} {:?}",
         client.client.tag(),
@@ -71,7 +82,7 @@ pub(super) async fn send_request(
         .client
         .send(req.head.method.clone(), path, hdrs, eof)
         .await
-        .map_err(Error::into_error)?;
+        .into_error()?;
 
     // send body
     if !eof {
@@ -87,13 +98,13 @@ pub(super) async fn send_request(
 
     timeout_checked(timeout, get_response(rcv_stream))
         .await
-        .map_err(|()| ClientError::Timeout)
+        .map_err(|()| Error::from(ClientError::Timeout))
         .and_then(|res| res)
 }
 
 async fn get_response(
     rcv_stream: RecvStream,
-) -> Result<(ResponseHead, Payload), ClientError> {
+) -> Result<(ResponseHead, Payload), Error<ClientError>> {
     let h2::Message { stream, kind } = rcv_stream
         .recv()
         .await
@@ -200,22 +211,24 @@ async fn get_response(
                     };
                     Ok((head, payload))
                 }
-                None => Err(ClientError::H2(h2::OperationError::Connection(
-                    h2::ConnectionError::MissingPseudo("Status"),
+                None => Err(Error::from(ClientError::H2(
+                    h2::OperationError::Connection(h2::ConnectionError::MissingPseudo(
+                        "Status",
+                    )),
                 ))),
             }
         }
-        _ => Err(ClientError::Error(Rc::new(io::Error::new(
+        _ => Err(Error::from(ClientError::Error(Rc::new(io::Error::new(
             io::ErrorKind::Unsupported,
             "unexpected h2 message",
-        )))),
+        ))))),
     }
 }
 
 async fn send_body(
     mut body: Body,
     stream: &h2::client::SendStream,
-) -> Result<(), ClientError> {
+) -> Result<(), Error<ClientError>> {
     loop {
         match poll_fn(|cx| body.poll_next_chunk(cx)).await {
             Some(Ok(b)) => {
@@ -225,19 +238,12 @@ async fn send_body(
                     stream.id(),
                     b.len()
                 );
-                stream
-                    .send_payload(b, false)
-                    .await
-                    .map_err(Error::into_error)?;
+                stream.send_payload(b, false).await.into_error()?;
             }
-            Some(Err(e)) => return Err(e.into()),
+            Some(Err(e)) => return Err(Error::from(ClientError::from(e))),
             None => {
                 log::trace!("{}: {:?} eof of send stream ", stream.tag(), stream.id());
-                stream
-                    .send_payload(Bytes::new(), true)
-                    .await
-                    .map_err(Error::into_error)?;
-                return Ok(());
+                return stream.send_payload(Bytes::new(), true).await.into_error();
             }
         }
     }
@@ -255,6 +261,10 @@ impl H2Client {
 
     pub(super) fn tag(&self) -> &'static str {
         self.client.tag()
+    }
+
+    pub(super) fn service(&self) -> &'static str {
+        self.client.service()
     }
 
     pub(super) fn close(&self) {

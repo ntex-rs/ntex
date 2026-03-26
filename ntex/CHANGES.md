@@ -1,5 +1,7 @@
 # Changes
 
+* Use ntex_error::Error for http client
+
 ## [3.7.0] - 2026-03-26
 
 * Rename client::error::SendRequestError to ClientError

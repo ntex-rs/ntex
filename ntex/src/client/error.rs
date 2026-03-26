@@ -1,5 +1,5 @@
 //! Http client errors
-use std::{error::Error, io, ops::Deref, rc::Rc};
+use std::{error::Error as StdError, io, ops::Deref, rc::Rc};
 
 use serde_json::error::Error as JsonError;
 
@@ -21,7 +21,11 @@ pub enum JsonPayloadError {
     Deserialize(#[source] Option<JsonError>),
     /// Payload error
     #[error("Error that occur during reading payload: {0}")]
-    Payload(#[from] ClientPayloadError),
+    Payload(
+        #[source]
+        #[from]
+        ClientPayloadError,
+    ),
 }
 
 impl Clone for JsonPayloadError {
@@ -56,7 +60,7 @@ impl ErrorDiagnostic for JsonPayloadError {
 
 #[derive(thiserror::Error, Clone, Debug)]
 #[error("{0}")]
-pub struct ClientPayloadError(#[from] pub(crate) PayloadError);
+pub struct ClientPayloadError(#[source] pub(crate) PayloadError);
 
 impl Deref for ClientPayloadError {
     type Target = PayloadError;
@@ -92,12 +96,12 @@ pub enum ConnectError {
     /// SSL error
     #[cfg(feature = "openssl")]
     #[error("{0}")]
-    SslError(#[source] Rc<SslError>),
+    SslError(#[source] Rc<dyn StdError>),
 
     /// SSL Handshake error
     #[cfg(feature = "openssl")]
     #[error("{0}")]
-    SslHandshakeError(String),
+    SslHandshakeError(#[source] Rc<dyn StdError>),
 
     /// Failed to resolve the hostname
     #[error("Failed resolving hostname: {0}")]
@@ -177,9 +181,9 @@ impl From<crate::connect::ConnectError> for ConnectError {
 }
 
 #[cfg(feature = "openssl")]
-impl<T: std::fmt::Debug> From<HandshakeError<T>> for ConnectError {
+impl<T: StdError + 'static> From<HandshakeError<T>> for ConnectError {
     fn from(err: HandshakeError<T>) -> ConnectError {
-        ConnectError::SslHandshakeError(format!("{err:?}"))
+        ConnectError::SslHandshakeError(Rc::new(err))
     }
 }
 
@@ -192,12 +196,12 @@ pub enum InvalidUrl {
     #[error("Missing host name")]
     MissingHost,
     #[error("Url parse error: {0}")]
-    Http(#[from] HttpError),
+    Http(
+        #[from]
+        #[source]
+        HttpError,
+    ),
 }
-
-#[doc(hidden)]
-#[deprecated(since = "3.2.0", note = "ClientError")]
-pub type SendRequestError = ClientError;
 
 /// A set of errors that can occur during request sending and response reading
 #[derive(Debug, thiserror::Error)]
@@ -262,7 +266,7 @@ pub enum ClientError {
     Error(
         #[from]
         #[source]
-        Rc<dyn Error>,
+        Rc<dyn StdError>,
     ),
 }
 
@@ -324,3 +328,7 @@ impl From<ClientBuilderError> for io::Error {
         io::Error::other(err)
     }
 }
+
+#[doc(hidden)]
+#[deprecated(since = "3.7.0", note = "Use ntex::client::error::ClientError instead")]
+pub type SendRequestError = ClientError;
