@@ -72,21 +72,11 @@ impl<E: Clone> Error<E> {
     ///
     /// Returns the updated error.
     #[must_use]
-    pub fn set_tag<T: Into<Bytes>>(mut self, tag: T) -> Self {
-        let tag = tag.into();
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
-            inner.tag = Some(tag);
-            self
-        } else {
-            Error {
-                inner: Arc::new(ErrorRepr::new2(
-                    self.inner.error.clone(),
-                    Some(tag),
-                    self.inner.service,
-                    self.inner.backtrace.clone(),
-                    self.inner.ext.clone(),
-                )),
-            }
+    pub fn set_tag<T: Into<Bytes>>(self, tag: T) -> Self {
+        Error {
+            inner: ErrorRepr::with_mut(self.inner, move |inner| {
+                inner.tag = Some(tag.into());
+            }),
         }
     }
 
@@ -94,20 +84,11 @@ impl<E: Clone> Error<E> {
     ///
     /// Returns the updated error.
     #[must_use]
-    pub fn set_service(mut self, name: &'static str) -> Self {
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
-            inner.service = Some(name);
-            self
-        } else {
-            Error {
-                inner: Arc::new(ErrorRepr::new2(
-                    self.inner.error.clone(),
-                    self.inner.tag.clone(),
-                    Some(name),
-                    self.inner.backtrace.clone(),
-                    self.inner.ext.clone(),
-                )),
-            }
+    pub fn set_service(self, name: &'static str) -> Self {
+        Error {
+            inner: ErrorRepr::with_mut(self.inner, move |inner| {
+                inner.service = Some(name);
+            }),
         }
     }
 
@@ -143,22 +124,11 @@ impl<E: Clone> Error<E> {
     ///
     /// This value can be retrieved later using `get_item::<T>()`.
     #[must_use]
-    pub fn insert_item<T: Sync + Send + 'static>(mut self, val: T) -> Self {
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
-            inner.ext.insert(val);
-            self
-        } else {
-            let mut ext = self.inner.ext.clone();
-            ext.insert(val);
-            Error {
-                inner: Arc::new(ErrorRepr::new2(
-                    self.inner.error.clone(),
-                    self.inner.tag.clone(),
-                    self.inner.service,
-                    self.inner.backtrace.clone(),
-                    ext,
-                )),
-            }
+    pub fn insert_item<T: Sync + Send + 'static>(self, val: T) -> Self {
+        Error {
+            inner: ErrorRepr::with_mut(self.inner, move |inner| {
+                inner.ext.insert(val);
+            }),
         }
     }
 }

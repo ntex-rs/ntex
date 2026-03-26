@@ -269,16 +269,19 @@ mod tests {
         );
 
         let err: Error<TestError> = TestError::Service("404 Error").into();
-        if let Some(bt) = err.backtrace() {
-            bt.resolver().resolve();
-            assert!(
-                format!("{bt}").contains("ntex_error::tests::test_error"),
-                "{bt}",
-            );
-            assert!(
-                bt.repr().unwrap().contains("ntex_error::tests::test_error"),
-                "{bt}"
-            );
+        #[cfg(unix)]
+        {
+            if let Some(bt) = err.backtrace() {
+                bt.resolver().resolve();
+                assert!(
+                    format!("{bt}").contains("ntex_error::tests::test_error"),
+                    "{bt}",
+                );
+                assert!(
+                    bt.repr().unwrap().contains("ntex_error::tests::test_error"),
+                    "{bt}"
+                );
+            }
         }
 
         let err: ErrorChain<TestKind> = err.into();

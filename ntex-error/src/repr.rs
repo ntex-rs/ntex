@@ -64,6 +64,26 @@ impl<E: Clone> ErrorRepr<E> {
             ),
         }
     }
+
+    pub(crate) fn with_mut<F>(mut slf: Arc<ErrorRepr<E>>, f: F) -> Arc<ErrorRepr<E>>
+    where
+        F: FnOnce(&mut ErrorRepr<E>),
+    {
+        if let Some(inner) = Arc::get_mut(&mut slf) {
+            f(inner);
+            slf
+        } else {
+            let mut inner = ErrorRepr::new2(
+                slf.error.clone(),
+                slf.tag.clone(),
+                slf.service,
+                slf.backtrace.clone(),
+                slf.ext.clone(),
+            );
+            f(&mut inner);
+            Arc::new(inner)
+        }
+    }
 }
 
 impl<E> ErrorRepr<E> {
