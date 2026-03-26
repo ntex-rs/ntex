@@ -1,5 +1,9 @@
 # Changes
 
+## [1.7.0] - 2026-03-26
+
+* Add support for a user-defined tag to the `ErrorDiagnostic` trait
+
 ## [1.6.0] - 2026-03-23
 
 * Rename ResultKind::signature() to ResultKind::category()

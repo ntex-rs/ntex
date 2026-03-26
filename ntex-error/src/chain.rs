@@ -1,6 +1,6 @@
 use std::{error, fmt, panic::Location, sync::Arc};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, repr::ErrorRepr};
+use crate::{Backtrace, Bytes, Error, ErrorDiagnostic, ResultKind, repr::ErrorRepr};
 
 /// A type-erased container representing an error within a diagnostic chain.
 ///
@@ -67,6 +67,10 @@ where
 
     fn kind(&self) -> Self::Kind {
         self.error.kind()
+    }
+
+    fn tag(&self) -> Option<&Bytes> {
+        self.error.tag()
     }
 
     fn service(&self) -> Option<&'static str> {

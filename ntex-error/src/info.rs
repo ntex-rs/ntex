@@ -19,6 +19,8 @@ impl ResultKind for ErrorInfoType {
 trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
     fn tp(&self) -> ResultType;
 
+    fn tag(&self) -> Option<&crate::Bytes>;
+
     fn service(&self) -> Option<&'static str>;
 
     fn signature(&self) -> &'static str;
@@ -35,7 +37,11 @@ where
     E: ErrorDiagnostic,
 {
     fn tp(&self) -> ResultType {
-        self.kind().tp()
+        self.error.kind().tp()
+    }
+
+    fn tag(&self) -> Option<&crate::Bytes> {
+        ErrorDiagnostic::tag(self)
     }
 
     fn service(&self) -> Option<&'static str> {
@@ -43,7 +49,7 @@ where
     }
 
     fn signature(&self) -> &'static str {
-        self.kind().signature()
+        self.error.kind().signature()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {
@@ -71,6 +77,11 @@ impl ErrorInfo {
     /// Returns the classification of the result (e.g. success, client error, service error).
     pub fn tp(&self) -> ResultType {
         self.inner.tp()
+    }
+
+    /// Returns an optional tag associated with this error.
+    pub fn tag(&self) -> Option<&crate::Bytes> {
+        self.inner.tag()
     }
 
     /// Returns the name of the responsible service, if applicable.

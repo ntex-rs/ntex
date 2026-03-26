@@ -1,6 +1,6 @@
 use std::{error, fmt, ops, panic::Location, sync::Arc};
 
-use crate::{Backtrace, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
+use crate::{Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
 
 /// An error container.
 ///
@@ -23,6 +23,7 @@ impl<E> Error<E> {
         Self {
             inner: Arc::new(ErrorRepr::new3(
                 E::from(error),
+                None,
                 Some(service),
                 Location::caller(),
             )),
@@ -37,11 +38,12 @@ impl<E> Error<E> {
         F: FnOnce(Error<E>) -> U,
     {
         let svc = self.inner.service;
+        let tag = self.inner.tag.clone();
         let bt = self.inner.backtrace.clone();
         let ext = self.inner.ext.clone();
 
         Error {
-            inner: Arc::new(ErrorRepr::new2(f(self), svc, bt, ext)),
+            inner: Arc::new(ErrorRepr::new2(f(self), tag, svc, bt, ext)),
         }
     }
 
@@ -66,6 +68,28 @@ impl<E> Error<E> {
 }
 
 impl<E: Clone> Error<E> {
+    /// Sets a user-defined tag on this error.
+    ///
+    /// Returns the updated error.
+    #[must_use]
+    pub fn set_tag<T: Into<Bytes>>(mut self, tag: T) -> Self {
+        let tag = tag.into();
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.tag = Some(tag);
+            self
+        } else {
+            Error {
+                inner: Arc::new(ErrorRepr::new2(
+                    self.inner.error.clone(),
+                    Some(tag),
+                    self.inner.service,
+                    self.inner.backtrace.clone(),
+                    self.inner.ext.clone(),
+                )),
+            }
+        }
+    }
+
     /// Sets the service responsible for this error.
     ///
     /// Returns the updated error.
@@ -78,6 +102,7 @@ impl<E: Clone> Error<E> {
             Error {
                 inner: Arc::new(ErrorRepr::new2(
                     self.inner.error.clone(),
+                    self.inner.tag.clone(),
                     Some(name),
                     self.inner.backtrace.clone(),
                     self.inner.ext.clone(),
@@ -93,18 +118,10 @@ impl<E: Clone> Error<E> {
     where
         F: FnOnce(E) -> U,
     {
-        let (err, svc, bt, ext) = match Arc::try_unwrap(self.inner) {
-            Ok(inner) => (inner.error, inner.service, inner.backtrace, inner.ext),
-            Err(inner) => (
-                inner.error.clone(),
-                inner.service,
-                inner.backtrace.clone(),
-                inner.ext.clone(),
-            ),
-        };
+        let (err, tag, svc, bt, ext) = ErrorRepr::unpack(self.inner);
 
         Error {
-            inner: Arc::new(ErrorRepr::new2(f(err), svc, bt, ext)),
+            inner: Arc::new(ErrorRepr::new2(f(err), tag, svc, bt, ext)),
         }
     }
 
@@ -115,18 +132,10 @@ impl<E: Clone> Error<E> {
     where
         F: FnOnce(E) -> Result<T, U>,
     {
-        let (err, svc, bt, ext) = match Arc::try_unwrap(self.inner) {
-            Ok(inner) => (inner.error, inner.service, inner.backtrace, inner.ext),
-            Err(inner) => (
-                inner.error.clone(),
-                inner.service,
-                inner.backtrace.clone(),
-                inner.ext.clone(),
-            ),
-        };
+        let (err, tag, svc, bt, ext) = ErrorRepr::unpack(self.inner);
 
         f(err).map_err(move |err| Error {
-            inner: Arc::new(ErrorRepr::new2(err, svc, bt, ext)),
+            inner: Arc::new(ErrorRepr::new2(err, tag, svc, bt, ext)),
         })
     }
 
@@ -144,6 +153,7 @@ impl<E: Clone> Error<E> {
             Error {
                 inner: Arc::new(ErrorRepr::new2(
                     self.inner.error.clone(),
+                    self.inner.tag.clone(),
                     self.inner.service,
                     self.inner.backtrace.clone(),
                     ext,
@@ -173,7 +183,7 @@ impl<E> From<E> for Error<E> {
     #[track_caller]
     fn from(error: E) -> Self {
         Self {
-            inner: Arc::new(ErrorRepr::new3(error, None, Location::caller())),
+            inner: Arc::new(ErrorRepr::new3(error, None, None, Location::caller())),
         }
     }
 }
@@ -219,6 +229,10 @@ impl<E: ErrorDiagnostic> ErrorDiagnostic for Error<E> {
         self.inner.kind()
     }
 
+    fn tag(&self) -> Option<&Bytes> {
+        self.inner.tag()
+    }
+
     fn service(&self) -> Option<&'static str> {
         self.inner.service()
     }
@@ -236,7 +250,12 @@ where
         match self {
             Ok(val) => Ok(val),
             Err(err) => Err(Error {
-                inner: Arc::new(ErrorRepr::new3(U::from(err), None, Location::caller())),
+                inner: Arc::new(ErrorRepr::new3(
+                    U::from(err),
+                    None,
+                    None,
+                    Location::caller(),
+                )),
             }),
         }
     }
