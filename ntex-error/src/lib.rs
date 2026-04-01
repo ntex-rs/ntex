@@ -119,6 +119,26 @@ impl fmt::Display for ResultType {
     }
 }
 
+impl<T, E> ResultKind for Result<T, E>
+where
+    T: 'static,
+    E: ErrorDiagnostic + 'static,
+{
+    fn tp(&self) -> ResultType {
+        match self {
+            Ok(_) => ResultType::Success,
+            Err(e) => e.kind().tp(),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        match self {
+            Ok(_) => ResultType::Success.as_str(),
+            Err(e) => e.kind().signature(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{error::Error as StdError, io, mem};
@@ -359,5 +379,12 @@ mod tests {
             ErrorDiagnostic::kind(&io::Error::new(io::ErrorKind::InvalidData, "")),
             ResultType::ClientError
         );
+
+        let res = Ok::<_, TestError>(());
+        assert_eq!(res.tp(), ResultType::Success);
+
+        let res = Err::<(), _>(TestError::Service("409 Error"));
+        assert_eq!(res.tp(), ResultType::ServiceError);
+        assert_eq!(res.signature(), "Service-Internal");
     }
 }
