@@ -1,5 +1,9 @@
 # Changes
 
+## [1.7.1] - 2026-04-01
+
+* Add ResultType impl for Result<T, E> where E: ErrorDiagnostic
+
 ## [1.7.0] - 2026-03-26
 
 * Add support for a user-defined tag to the `ErrorDiagnostic` trait
