@@ -7,38 +7,50 @@ use ntex_bytes::ByteString;
 
 use crate::{Error, ErrorDiagnostic, ResultType};
 
+/// The retry policy of the error.
+pub trait Retryable {
+    fn is_retryable(&self) -> bool;
+}
+
+impl<T, E> Retryable for Result<T, E>
+where
+    E: Retryable,
+{
+    fn is_retryable(&self) -> bool {
+        match self {
+            Ok(_) => false,
+            Err(err) => err.is_retryable(),
+        }
+    }
+}
+
 /// Helper type holding a result type and classification signature.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct ResultInfo(ResultType, &'static str);
+pub struct ResultSignature(pub &'static str);
 
-impl ResultInfo {
+impl ResultSignature {
     /// Construct new `ResultInfo`
-    pub fn new(typ: ResultType, sig: &'static str) -> Self {
-        Self(typ, sig)
-    }
-
-    /// Returns the classification of the result (e.g. success, client error, service error).
-    pub fn typ(&self) -> ResultType {
-        self.0
+    pub fn new(sig: &'static str) -> Self {
+        Self(sig)
     }
 
     /// Returns a stable identifier for the result classification.
-    pub fn signature(&self) -> &'static str {
-        self.1
+    pub fn signature(self) -> &'static str {
+        self.0
     }
 }
 
-impl<'a, E: ErrorDiagnostic> From<&'a E> for ResultInfo {
+impl<'a, E: ErrorDiagnostic> From<&'a E> for ResultSignature {
     fn from(err: &'a E) -> Self {
-        ResultInfo::new(err.typ(), err.signature())
+        ResultSignature::new(err.signature())
     }
 }
 
-impl<'a, T, E: ErrorDiagnostic> From<&'a Result<T, E>> for ResultInfo {
+impl<'a, T, E: ErrorDiagnostic> From<&'a Result<T, E>> for ResultSignature {
     fn from(result: &'a Result<T, E>) -> Self {
         match result {
-            Ok(_) => ResultInfo(ResultType::Success, ResultType::Success.as_str()),
-            Err(err) => ResultInfo(err.typ(), err.signature()),
+            Ok(_) => ResultSignature(ResultType::Success.as_str()),
+            Err(err) => ResultSignature(err.signature()),
         }
     }
 }

@@ -1,5 +1,9 @@
 # Changes
 
+## [2.1.0] - 2026-04-xx
+
+* Simplify ErrorDiagnostic trait, remove explicit ResultType category
+
 ## [2.0.0] - 2026-04-02
 
 * Remove ResultKind trait
