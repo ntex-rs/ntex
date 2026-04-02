@@ -218,9 +218,9 @@ mod tests {
         assert!(err.source().is_none());
         assert!(format!("{err:?}").contains("Service(\"409 Error\")"));
 
-        let err: Error<TestError> = TestError::Service("404 Error").into();
         #[cfg(unix)]
         {
+            let err: Error<TestError> = TestError::Service("404 Error").into();
             if let Some(bt) = err.backtrace() {
                 bt.resolver().resolve();
                 assert!(
