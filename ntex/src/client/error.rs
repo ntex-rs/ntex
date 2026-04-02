@@ -20,8 +20,12 @@ pub enum JsonPayloadError {
     #[error("Json deserialize error")]
     Deserialize(#[source] Option<JsonError>),
     /// Payload error
-    #[error("Error that occur during reading payload: {0}")]
-    Payload(#[from] ClientPayloadError),
+    #[error("Error that occur during reading payload")]
+    Payload(
+        #[from]
+        #[source]
+        ClientPayloadError,
+    ),
 }
 
 impl Clone for JsonPayloadError {
@@ -47,16 +51,22 @@ impl From<PayloadError> for JsonPayloadError {
 }
 
 impl ErrorDiagnostic for JsonPayloadError {
-    type Kind = ResultType;
-
-    fn kind(&self) -> ResultType {
-        ResultType::ServiceError
+    fn signature(&self) -> &'static str {
+        match self {
+            JsonPayloadError::ContentType => "ntex-client-JsonContentType",
+            JsonPayloadError::Deserialize(_) => "ntex-client-JsonDeserialize",
+            JsonPayloadError::Payload(_) => "ntex-client-JsonPayload",
+        }
     }
 }
 
 #[derive(thiserror::Error, Clone, Debug)]
 #[error("{0}")]
-pub struct ClientPayloadError(#[from] pub(crate) PayloadError);
+pub struct ClientPayloadError(
+    #[from]
+    #[source]
+    pub(crate) PayloadError,
+);
 
 impl Deref for ClientPayloadError {
     type Target = PayloadError;
@@ -67,10 +77,8 @@ impl Deref for ClientPayloadError {
 }
 
 impl ErrorDiagnostic for ClientPayloadError {
-    type Kind = ResultType;
-
-    fn kind(&self) -> ResultType {
-        ResultType::ServiceError
+    fn signature(&self) -> &'static str {
+        "ntex-client-Payload"
     }
 }
 
@@ -125,10 +133,19 @@ pub enum ConnectError {
 }
 
 impl ErrorDiagnostic for ConnectError {
-    type Kind = ResultType;
-
-    fn kind(&self) -> ResultType {
-        ResultType::ServiceError
+    fn signature(&self) -> &'static str {
+        match self {
+            ConnectError::SslIsNotSupported => "ntex-client-connect-SslIsNotSupported",
+            #[cfg(feature = "openssl")]
+            ConnectError::SslError(_) => "ntex-client-connect-SslError",
+            #[cfg(feature = "openssl")]
+            ConnectError::SslHandshakeError(_) => "ntex-client-connect-SslHandshakeError",
+            ConnectError::Resolver(..) => "ntex-client-connect-Resolver",
+            ConnectError::NoRecords => "ntex-client-connect-NoRecords",
+            ConnectError::Timeout => "ntex-client-connect-Timeout",
+            ConnectError::Disconnected(_) => "ntex-client-connect-Disconnected",
+            ConnectError::Unresolved => "ntex-client-connect-Unresolved",
+        }
     }
 }
 
@@ -302,19 +319,32 @@ impl From<Either<DecodeError, io::Error>> for ClientError {
 }
 
 impl ErrorDiagnostic for ClientError {
-    type Kind = ResultType;
-
-    fn kind(&self) -> ResultType {
+    fn typ(&self) -> ResultType {
         match self {
             ClientError::Url(_) | ClientError::Http(_) => ResultType::ClientError,
-            ClientError::Connect(err) => err.kind(),
+            ClientError::Connect(err) => err.typ(),
             ClientError::Send(_)
             | ClientError::Request(_)
             | ClientError::Response(_)
-            | ClientError::H2(_)
             | ClientError::Timeout
             | ClientError::TunnelNotSupported
             | ClientError::Error(_) => ResultType::ServiceError,
+            ClientError::H2(err) => err.typ(),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        match self {
+            ClientError::Url(_) => "ntex-client-Url",
+            ClientError::Http(_) => "ntex-client-Http",
+            ClientError::Connect(err) => err.signature(),
+            ClientError::Send(err) => err.signature(),
+            ClientError::Request(_) => "ntex-client-Request",
+            ClientError::Response(_) => "ntex-client-Response",
+            ClientError::Timeout => "ntex-client-Timeout",
+            ClientError::TunnelNotSupported => "ntex-client-TunnelNotSupported",
+            ClientError::Error(_) => "ntex-client-SendBody",
+            ClientError::H2(err) => err.signature(),
         }
     }
 }

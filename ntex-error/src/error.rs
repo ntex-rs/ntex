@@ -1,6 +1,6 @@
 use std::{error, fmt, ops, panic::Location, sync::Arc};
 
-use crate::{Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
+use crate::{Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, ResultType, repr::ErrorRepr};
 
 /// An error container.
 ///
@@ -149,7 +149,7 @@ impl<E> Clone for Error<E> {
     }
 }
 
-impl<E> From<E> for Error<E> {
+impl<E: error::Error> From<E> for Error<E> {
     #[track_caller]
     fn from(error: E) -> Self {
         Self {
@@ -193,10 +193,12 @@ impl<E: error::Error + 'static> error::Error for Error<E> {
 }
 
 impl<E: ErrorDiagnostic> ErrorDiagnostic for Error<E> {
-    type Kind = E::Kind;
+    fn typ(&self) -> ResultType {
+        self.inner.typ()
+    }
 
-    fn kind(&self) -> Self::Kind {
-        self.inner.kind()
+    fn signature(&self) -> &'static str {
+        self.inner.signature()
     }
 
     fn tag(&self) -> Option<&Bytes> {
