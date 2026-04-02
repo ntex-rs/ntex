@@ -13,22 +13,12 @@ use super::default::DefaultControlService;
 use super::dispatcher::Dispatcher;
 
 /// `ServiceFactory` implementation for HTTP1 transport
+#[derive(derive_more::Debug)]
+#[debug("H1Service")]
 pub struct H1Service<F, S, B, C> {
     srv: S,
     ctl: C,
     _t: marker::PhantomData<(F, B)>,
-}
-
-impl<F, S, B, C> fmt::Debug for H1Service<F, S, B, C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "H1Service")
-    }
-}
-
-impl<F, S, B, C> fmt::Debug for H1ServiceHandler<F, S, B, C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "H1ServiceHandler")
-    }
 }
 
 impl<F, S, B> H1Service<F, S, B, DefaultControlService>
@@ -208,6 +198,8 @@ where
 }
 
 /// `Service` implementation for HTTP1 transport
+#[derive(derive_more::Debug)]
+#[debug("H1ServiceHandler")]
 pub struct H1ServiceHandler<F, S, B, C> {
     config: Rc<DispatcherConfig<S, C>>,
     inflight: RefCell<HashSet<IoRef>>,

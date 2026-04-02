@@ -1,4 +1,4 @@
-use std::{fmt, rc::Rc};
+use std::rc::Rc;
 
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::cfg::{Cfg, SharedCfg};
@@ -101,6 +101,8 @@ impl AppState {
 }
 
 /// Application service configuration
+#[derive(derive_more::Debug)]
+#[debug("WebServiceConfig")]
 pub struct WebServiceConfig<Err: ErrorRenderer> {
     state: AppState,
     root: bool,
@@ -111,12 +113,6 @@ pub struct WebServiceConfig<Err: ErrorRenderer> {
         Option<Guards>,
         Option<Rc<ResourceMap>>,
     )>,
-}
-
-impl<Err: ErrorRenderer> fmt::Debug for WebServiceConfig<Err> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "WebServiceConfig")
-    }
 }
 
 impl<Err: ErrorRenderer> WebServiceConfig<Err> {

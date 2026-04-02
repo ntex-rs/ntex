@@ -46,7 +46,6 @@ use super::{Method, Request, Uri, Version};
 ///     TestRequest::default().finish());
 /// assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 /// ```
-#[derive(Debug)]
 pub struct TestRequest(Option<Inner>);
 
 #[derive(Debug)]

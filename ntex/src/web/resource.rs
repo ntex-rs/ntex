@@ -45,6 +45,8 @@ type ResourcePipeline<F, Err> =
 ///
 /// If no matching route could be found, *405* response code get returned.
 /// Default behavior could be overriden with `default_resource()` method.
+#[derive(derive_more::Debug)]
+#[debug("Resource({rdef:?})")]
 pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
     filter: ServiceChainFactory<T, WebRequest<Err>, SharedCfg>,
@@ -54,12 +56,6 @@ pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     state: Option<Extensions>,
     guards: Vec<Box<dyn Guard>>,
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
-}
-
-impl<Err: ErrorRenderer, M, T> fmt::Debug for Resource<Err, M, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Resource({:?})", self.rdef)
-    }
 }
 
 impl<Err: ErrorRenderer> Resource<Err> {
@@ -430,16 +426,12 @@ where
 }
 
 /// Resource service
+#[derive(derive_more::Debug)]
+#[debug("ResourceServiceFactory")]
 pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
     middleware: M,
     filter: F,
     routing: ResourceRouterFactory<Err>,
-}
-
-impl<Err: ErrorRenderer, M, F> fmt::Debug for ResourceServiceFactory<Err, M, F> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ResourceServiceFactory")
-    }
 }
 
 impl<Err, M, F> ServiceFactory<WebRequest<Err>, SharedCfg>
@@ -496,16 +488,12 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
     }
 }
 
+#[derive(derive_more::Debug)]
+#[debug("ResourceRouter")]
 pub struct ResourceRouter<Err: ErrorRenderer> {
     state: Option<AppState>,
     routes: Vec<RouteService<Err>>,
     default: Option<HttpService<Err>>,
-}
-
-impl<Err: ErrorRenderer> fmt::Debug for ResourceRouter<Err> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ResourceRouter")
-    }
 }
 
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {

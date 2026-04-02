@@ -24,6 +24,8 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 
 /// Application builder - structure that follows the builder pattern
 /// for building application instances.
+#[derive(derive_more::Debug)]
+#[debug("App")]
 pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     middleware: M,
     filter: ServiceChainFactory<F, WebRequest<Err>, SharedCfg>,
@@ -34,18 +36,6 @@ pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     state_factories: Vec<FnStateFactory>,
     error_renderer: Err,
     case_insensitive: bool,
-}
-
-impl<M, F, Err: ErrorRenderer> fmt::Debug for App<M, F, Err> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "App")
-    }
-}
-
-impl<Err: ErrorRenderer> fmt::Debug for Filter<Err> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Filter")
-    }
 }
 
 impl Default for App<Identity, Filter<DefaultError>, DefaultError> {
@@ -544,6 +534,8 @@ where
     }
 }
 
+#[derive(derive_more::Debug)]
+#[debug("Filter")]
 pub struct Filter<Err>(PhantomData<Err>);
 
 impl<Err: ErrorRenderer> Filter<Err> {

@@ -12,6 +12,8 @@ use super::response::Response;
 use super::{h1, h2};
 
 /// `ServiceFactory` HTTP1.1/HTTP2 transport implementation
+#[derive(derive_more::Debug)]
+#[debug("HttpService")]
 pub struct HttpService<
     F,
     S,
@@ -23,18 +25,6 @@ pub struct HttpService<
     h1_control: C1,
     h2_control: Rc<C2>,
     _t: marker::PhantomData<(F, B)>,
-}
-
-impl<F, S, B, C1, C2> fmt::Debug for HttpService<F, S, B, C1, C2> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HttpService")
-    }
-}
-
-impl<F, S, B, C1, C2> fmt::Debug for HttpServiceHandler<F, S, B, C1, C2> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HttpServiceHandler")
-    }
 }
 
 impl<F, S, B> HttpService<F, S, B>
@@ -285,6 +275,8 @@ where
 }
 
 /// `Service` implementation for http transport
+#[derive(derive_more::Debug)]
+#[debug("HttpServiceHandler")]
 pub struct HttpServiceHandler<F, S, B, C1, C2> {
     cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, C1>>,

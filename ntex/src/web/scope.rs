@@ -56,6 +56,8 @@ type HttpNewService<Err: ErrorRenderer> =
 ///  * `/{project_id}/path2` - `GET` requests
 ///  * `/{project_id}/path3` - `HEAD` requests
 ///
+#[derive(derive_more::Debug)]
+#[debug("Scope({rdef:?})")]
 pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
     filter: ServiceChainFactory<T, WebRequest<Err>, SharedCfg>,
@@ -66,12 +68,6 @@ pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
     external: Vec<ResourceDef>,
     case_insensitive: bool,
-}
-
-impl<Err: ErrorRenderer, M, T> fmt::Debug for Scope<Err, M, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Scope({:?})", self.rdef)
-    }
 }
 
 impl<Err: ErrorRenderer> Scope<Err> {
@@ -509,15 +505,11 @@ where
     }
 }
 
+#[derive(derive_more::Debug)]
+#[debug("ScopeService")]
 pub struct ScopeService<F, Err: ErrorRenderer> {
     filter: F,
     routing: ScopeRouter<Err>,
-}
-
-impl<F, Err: ErrorRenderer> fmt::Debug for ScopeService<F, Err> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ScopeService")
-    }
 }
 
 impl<F, Err> Service<WebRequest<Err>> for ScopeService<F, Err>

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, marker, rc::Rc, task::Context};
+use std::{cell::RefCell, marker, rc::Rc, task::Context};
 
 use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
@@ -25,6 +25,8 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes state factories.
+#[derive(derive_more::Debug)]
+#[debug("AppFactory")]
 pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
@@ -44,21 +46,6 @@ where
     pub(super) default: Option<Rc<HttpNewService<Err>>>,
     pub(super) external: RefCell<Vec<ResourceDef>>,
     pub(super) case_insensitive: bool,
-}
-
-impl<T, F, Err: ErrorRenderer> fmt::Debug for AppFactory<T, F, Err>
-where
-    F: ServiceFactory<
-        WebRequest<Err>,
-        SharedCfg,
-        Response = WebRequest<Err>,
-        Error = Err::Container,
-        InitError = (),
-    >,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "AppFactory")
-    }
 }
 
 impl<T, F, Err> ServiceFactory<Request, SharedCfg> for AppFactory<T, F, Err>
@@ -175,6 +162,8 @@ where
 }
 
 /// Service to convert `Request` to a `WebRequest<Err>`
+#[derive(derive_more::Debug)]
+#[debug("AppFactoryService")]
 pub struct AppFactoryService<T, Err>
 where
     T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
@@ -184,16 +173,6 @@ where
     rmap: Rc<ResourceMap>,
     state: AppState,
     _t: marker::PhantomData<Err>,
-}
-
-impl<T, Err> fmt::Debug for AppFactoryService<T, Err>
-where
-    T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
-    Err: ErrorRenderer,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "AppFactoryService")
-    }
 }
 
 impl<T, Err> Service<Request> for AppFactoryService<T, Err>
@@ -282,15 +261,11 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
 }
 
 /// Web app service
+#[derive(derive_more::Debug)]
+#[debug("AppService")]
 pub struct AppService<F, Err: ErrorRenderer> {
     filter: F,
     routing: AppRouting<Err>,
-}
-
-impl<F, Err: ErrorRenderer> fmt::Debug for AppService<F, Err> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "AppService")
-    }
 }
 
 impl<F, Err> Service<WebRequest<Err>> for AppService<F, Err>

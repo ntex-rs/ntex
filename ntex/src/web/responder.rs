@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomData};
+use std::marker::PhantomData;
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
@@ -169,21 +169,14 @@ impl<Err: ErrorRenderer> Responder<Err> for BytesMut {
 }
 
 /// Allows to override status code and headers for a responder.
+#[derive(derive_more::Debug)]
+#[debug("CustomResponder")]
 pub struct CustomResponder<T: Responder<Err>, Err> {
     responder: T,
     status: Option<StatusCode>,
     headers: Option<HeaderMap>,
     error: Option<HttpError>,
     _t: PhantomData<Err>,
-}
-
-impl<T, Err> fmt::Debug for CustomResponder<T, Err>
-where
-    T: Responder<Err>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CustomResponder")
-    }
 }
 
 impl<T: Responder<Err>, Err> CustomResponder<T, Err> {

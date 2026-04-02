@@ -22,25 +22,12 @@ use crate::util::{Bytes, BytesMut, HashMap, HashSet};
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
 /// `ServiceFactory` implementation for HTTP2 transport
+#[derive(derive_more::Debug)]
+#[debug("H2Service")]
 pub struct H2Service<F, S, B, C> {
     srv: S,
     ctl: Rc<C>,
     _t: marker::PhantomData<(F, B)>,
-}
-
-impl<F, S, B, C> fmt::Debug for H2ServiceHandler<F, S, B, C>
-where
-    S: Service<Request>,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "H2ServiceHandler")
-    }
-}
-
-impl<F, S, B, C> fmt::Debug for H2Service<F, S, B, C> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "H2Service")
-    }
 }
 
 impl<F, S, B> H2Service<F, S, B, DefaultControlService>
@@ -213,6 +200,8 @@ where
 }
 
 /// `Service` implementation for http/2 transport
+#[derive(derive_more::Debug)]
+#[debug("H2ServiceHandler")]
 pub struct H2ServiceHandler<F, S: Service<Request>, B, C> {
     cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, ()>>,
