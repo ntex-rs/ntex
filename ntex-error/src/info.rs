@@ -1,10 +1,8 @@
 use std::{any::Any, any::TypeId, error, fmt, sync::Arc};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, ResultType, repr::ErrorRepr};
+use crate::{Backtrace, Error, ErrorDiagnostic, repr::ErrorRepr};
 
 trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
-    fn typ(&self) -> ResultType;
-
     fn tag(&self) -> Option<&crate::Bytes>;
 
     fn service(&self) -> Option<&'static str>;
@@ -22,10 +20,6 @@ impl<E> ErrorInformation for ErrorRepr<E>
 where
     E: ErrorDiagnostic + error::Error,
 {
-    fn typ(&self) -> ResultType {
-        self.error.typ()
-    }
-
     fn tag(&self) -> Option<&crate::Bytes> {
         ErrorDiagnostic::tag(self)
     }
@@ -60,11 +54,6 @@ pub struct ErrorInfo {
 }
 
 impl ErrorInfo {
-    /// Returns the classification of the result (e.g. success, client error, service error).
-    pub fn typ(&self) -> ResultType {
-        self.inner.typ()
-    }
-
     /// Returns an optional tag associated with this error.
     pub fn tag(&self) -> Option<&crate::Bytes> {
         self.inner.tag()
@@ -132,10 +121,6 @@ impl fmt::Display for ErrorInfo {
 }
 
 impl ErrorDiagnostic for ErrorInfo {
-    fn typ(&self) -> ResultType {
-        self.inner.typ()
-    }
-
     fn signature(&self) -> &'static str {
         self.inner.signature()
     }

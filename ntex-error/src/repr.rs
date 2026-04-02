@@ -1,6 +1,6 @@
 use std::{error, fmt, panic::Location, sync::Arc};
 
-use crate::{Backtrace, Bytes, ErrorDiagnostic, ResultType, ext::Extensions};
+use crate::{Backtrace, Bytes, ErrorDiagnostic, ext::Extensions};
 
 pub(crate) struct ErrorRepr<E> {
     pub(crate) error: E,
@@ -96,10 +96,6 @@ impl<E> ErrorDiagnostic for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
 {
-    fn typ(&self) -> ResultType {
-        self.error.typ()
-    }
-
     fn signature(&self) -> &'static str {
         self.error.signature()
     }

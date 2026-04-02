@@ -1,8 +1,8 @@
-use std::{error, fmt, fmt::Write, rc::Rc};
+use std::{error, error::Error, fmt, fmt::Write, rc::Rc};
 
 use ntex_bytes::ByteString;
 
-use crate::{ErrorDiagnostic, ResultType};
+use crate::{AsErrorDiagnostic, ErrorDiagnostic, ResultType};
 
 struct Wrt<'a> {
     written: usize,
@@ -53,7 +53,10 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn error::Error) -> fmt::Result {
 }
 
 /// Formats a full diagnostic view of an error for logging and tracing.
-pub fn fmt_diag_string(e: &dyn ErrorDiagnostic) -> String {
+pub fn fmt_diag_string<'a, T: AsErrorDiagnostic>(e: &'a T) -> String
+where
+    ResultType: From<&'a T::Target>,
+{
     let mut buf = String::new();
     _ = fmt_diag(&mut buf, e);
     buf
@@ -63,9 +66,16 @@ pub fn fmt_diag_string(e: &dyn ErrorDiagnostic) -> String {
 ///
 /// For `ServiceError` types, this includes debug representations of all nested errors,
 /// and a backtrace when available.
-pub fn fmt_diag(f: &mut dyn fmt::Write, e: &dyn ErrorDiagnostic) -> fmt::Result {
+pub fn fmt_diag<'a, T>(f: &mut dyn fmt::Write, container: &'a T) -> fmt::Result
+where
+    T: AsErrorDiagnostic,
+    ResultType: From<&'a T::Target>,
+{
+    let e = container.as_diag();
+    let tp = ResultType::from(e);
+
     writeln!(f, "err: {e}")?;
-    writeln!(f, "type: {}", e.typ())?;
+    writeln!(f, "type: {}", tp.as_str())?;
     writeln!(f, "signature: {}", e.signature())?;
 
     if let Some(tag) = e.tag() {
@@ -95,7 +105,7 @@ pub fn fmt_diag(f: &mut dyn fmt::Write, e: &dyn ErrorDiagnostic) -> fmt::Result 
         current = err.source();
     }
 
-    if e.typ() == ResultType::ServiceError
+    if tp == ResultType::ServiceError
         && let Some(bt) = e.backtrace()
         && let Some(repr) = bt.repr()
     {
@@ -336,15 +346,20 @@ mod tests {
     }
 
     impl ErrorDiagnostic for TestError {
-        fn typ(&self) -> ResultType {
+        fn signature(&self) -> &'static str {
             match self {
+                TestError::Service(_) => ResultType::ServiceError.as_str(),
+                TestError::Disconnect(_) => ResultType::ClientError.as_str(),
+            }
+        }
+    }
+
+    impl From<&TestError> for ResultType {
+        fn from(err: &TestError) -> ResultType {
+            match err {
                 TestError::Service(_) => ResultType::ServiceError,
                 TestError::Disconnect(_) => ResultType::ClientError,
             }
-        }
-
-        fn signature(&self) -> &'static str {
-            self.typ().as_str()
         }
     }
 

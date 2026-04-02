@@ -6,7 +6,7 @@ use serde_json::error::Error as JsonError;
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::{Error as SslError, HandshakeError};
 
-use crate::error::{ErrorDiagnostic, ResultType};
+use crate::error::ErrorDiagnostic;
 use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::util::{Either, clone_io_error};
 
@@ -319,20 +319,6 @@ impl From<Either<DecodeError, io::Error>> for ClientError {
 }
 
 impl ErrorDiagnostic for ClientError {
-    fn typ(&self) -> ResultType {
-        match self {
-            ClientError::Url(_) | ClientError::Http(_) => ResultType::ClientError,
-            ClientError::Connect(err) => err.typ(),
-            ClientError::Send(_)
-            | ClientError::Request(_)
-            | ClientError::Response(_)
-            | ClientError::Timeout
-            | ClientError::TunnelNotSupported
-            | ClientError::Error(_) => ResultType::ServiceError,
-            ClientError::H2(err) => err.typ(),
-        }
-    }
-
     fn signature(&self) -> &'static str {
         match self {
             ClientError::Url(_) => "ntex-client-Url",
