@@ -1,23 +1,9 @@
 use std::{any::Any, any::TypeId, error, fmt, sync::Arc};
 
-use crate::{Backtrace, Error, ErrorDiagnostic, ResultKind, ResultType, repr::ErrorRepr};
-
-/// Helper type holding a result type and classification signature.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct ErrorInfoType(ResultType, &'static str);
-
-impl ResultKind for ErrorInfoType {
-    fn tp(&self) -> ResultType {
-        self.0
-    }
-
-    fn signature(&self) -> &'static str {
-        self.1
-    }
-}
+use crate::{Backtrace, Error, ErrorDiagnostic, ResultType, repr::ErrorRepr};
 
 trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
-    fn tp(&self) -> ResultType;
+    fn typ(&self) -> ResultType;
 
     fn tag(&self) -> Option<&crate::Bytes>;
 
@@ -34,10 +20,10 @@ trait ErrorInformation: fmt::Display + fmt::Debug + 'static {
 
 impl<E> ErrorInformation for ErrorRepr<E>
 where
-    E: ErrorDiagnostic,
+    E: ErrorDiagnostic + error::Error,
 {
-    fn tp(&self) -> ResultType {
-        self.error.kind().tp()
+    fn typ(&self) -> ResultType {
+        self.error.typ()
     }
 
     fn tag(&self) -> Option<&crate::Bytes> {
@@ -49,7 +35,7 @@ where
     }
 
     fn signature(&self) -> &'static str {
-        self.error.kind().signature()
+        self.error.signature()
     }
 
     fn backtrace(&self) -> Option<&Backtrace> {
@@ -75,8 +61,8 @@ pub struct ErrorInfo {
 
 impl ErrorInfo {
     /// Returns the classification of the result (e.g. success, client error, service error).
-    pub fn tp(&self) -> ResultType {
-        self.inner.tp()
+    pub fn typ(&self) -> ResultType {
+        self.inner.typ()
     }
 
     /// Returns an optional tag associated with this error.
@@ -109,7 +95,7 @@ impl ErrorInfo {
 
 impl<E> From<Error<E>> for ErrorInfo
 where
-    E: ErrorDiagnostic,
+    E: ErrorDiagnostic + error::Error,
 {
     fn from(err: Error<E>) -> Self {
         Self { inner: err.inner }
@@ -118,7 +104,7 @@ where
 
 impl<E> From<&Error<E>> for ErrorInfo
 where
-    E: ErrorDiagnostic,
+    E: ErrorDiagnostic + error::Error,
 {
     fn from(err: &Error<E>) -> Self {
         Self {
@@ -146,10 +132,12 @@ impl fmt::Display for ErrorInfo {
 }
 
 impl ErrorDiagnostic for ErrorInfo {
-    type Kind = ErrorInfoType;
+    fn typ(&self) -> ResultType {
+        self.inner.typ()
+    }
 
-    fn kind(&self) -> ErrorInfoType {
-        ErrorInfoType(self.tp(), self.inner.signature())
+    fn signature(&self) -> &'static str {
+        self.inner.signature()
     }
 
     fn service(&self) -> Option<&'static str> {

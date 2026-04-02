@@ -7,18 +7,50 @@ use ntex_bytes::ByteString;
 
 use crate::{Error, ErrorDiagnostic, ResultType};
 
-impl ErrorDiagnostic for Infallible {
-    type Kind = ResultType;
+/// Helper type holding a result type and classification signature.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ResultInfo(ResultType, &'static str);
 
-    fn kind(&self) -> Self::Kind {
+impl ResultInfo {
+    /// Construct new `ResultInfo`
+    pub fn new(typ: ResultType, sig: &'static str) -> Self {
+        Self(typ, sig)
+    }
+
+    /// Returns the classification of the result (e.g. success, client error, service error).
+    pub fn typ(&self) -> ResultType {
+        self.0
+    }
+
+    /// Returns a stable identifier for the result classification.
+    pub fn signature(&self) -> &'static str {
+        self.1
+    }
+}
+
+impl<'a, E: ErrorDiagnostic> From<&'a E> for ResultInfo {
+    fn from(err: &'a E) -> Self {
+        ResultInfo::new(err.typ(), err.signature())
+    }
+}
+
+impl<'a, T, E: ErrorDiagnostic> From<&'a Result<T, E>> for ResultInfo {
+    fn from(result: &'a Result<T, E>) -> Self {
+        match result {
+            Ok(_) => ResultInfo(ResultType::Success, ResultType::Success.as_str()),
+            Err(err) => ResultInfo(err.typ(), err.signature()),
+        }
+    }
+}
+
+impl ErrorDiagnostic for Infallible {
+    fn signature(&self) -> &'static str {
         unreachable!()
     }
 }
 
 impl ErrorDiagnostic for io::Error {
-    type Kind = ResultType;
-
-    fn kind(&self) -> Self::Kind {
+    fn typ(&self) -> ResultType {
         match self.kind() {
             io::ErrorKind::InvalidData
             | io::ErrorKind::Unsupported
@@ -31,6 +63,20 @@ impl ErrorDiagnostic for io::Error {
             _ => ResultType::ServiceError,
         }
     }
+
+    fn signature(&self) -> &'static str {
+        match self.kind() {
+            io::ErrorKind::InvalidData => "io-InvalidData",
+            io::ErrorKind::Unsupported => "io-Unsupported",
+            io::ErrorKind::UnexpectedEof => "io-UnexpectedEof",
+            io::ErrorKind::BrokenPipe => "io-BrokenPipe",
+            io::ErrorKind::ConnectionReset => "io-ConnectionReset",
+            io::ErrorKind::ConnectionAborted => "io-ConnectionAborted",
+            io::ErrorKind::NotConnected => "io-NotConnected",
+            io::ErrorKind::TimedOut => "io-TimedOut",
+            _ => "io-Error",
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -39,10 +85,12 @@ pub struct Success;
 impl StdError for Success {}
 
 impl ErrorDiagnostic for Success {
-    type Kind = ResultType;
-
-    fn kind(&self) -> Self::Kind {
+    fn typ(&self) -> ResultType {
         ResultType::Success
+    }
+
+    fn signature(&self) -> &'static str {
+        ResultType::Success.as_str()
     }
 }
 
