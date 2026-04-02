@@ -6,7 +6,6 @@ use std::{
 use ntex_h2::{self as h2, frame::StreamId, server};
 
 use crate::channel::oneshot;
-use crate::error::Error;
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
@@ -364,6 +363,7 @@ where
     type Response = ();
     type Error = H2Error;
 
+    #[allow(clippy::redundant_closure_for_method_calls)]
     async fn call(
         &self,
         msg: h2::Message,
@@ -491,11 +491,11 @@ where
         if size.is_eof() || is_head_req {
             stream
                 .send_response(head.status, hdrs, true)
-                .map_err(Error::into_error)?;
+                .map_err(|e| e.into_error())?;
         } else {
             stream
                 .send_response(head.status, hdrs, false)
-                .map_err(Error::into_error)?;
+                .map_err(|e| e.into_error())?;
 
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
@@ -508,7 +508,7 @@ where
                         stream
                             .send_payload(Bytes::new(), true)
                             .await
-                            .map_err(Error::into_error)?;
+                            .map_err(|e| e.into_error())?;
                         break;
                     }
                     Some(Ok(chunk)) => {
@@ -522,7 +522,7 @@ where
                             stream
                                 .send_payload(chunk, false)
                                 .await
-                                .map_err(Error::into_error)?;
+                                .map_err(|e| e.into_error())?;
                         }
                     }
                     Some(Err(e)) => {

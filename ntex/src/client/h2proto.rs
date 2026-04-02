@@ -2,7 +2,6 @@ use std::{future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
-use crate::error::Error;
 use crate::http::ResponseHead;
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
@@ -13,6 +12,7 @@ use crate::util::{ByteString, Bytes, Either, select};
 use super::ClientRawRequest;
 use super::error::{ClientError, ConnectError};
 
+#[allow(clippy::redundant_closure_for_method_calls)]
 pub(super) async fn send_request(
     client: H2Client,
     req: ClientRawRequest,
@@ -71,7 +71,7 @@ pub(super) async fn send_request(
         .client
         .send(req.head.method.clone(), path, hdrs, eof)
         .await
-        .map_err(Error::into_error)?;
+        .map_err(|e| e.into_error())?;
 
     // send body
     if !eof {
@@ -212,6 +212,7 @@ async fn get_response(
     }
 }
 
+#[allow(clippy::redundant_closure_for_method_calls)]
 async fn send_body(
     mut body: Body,
     stream: &h2::client::SendStream,
@@ -228,7 +229,7 @@ async fn send_body(
                 stream
                     .send_payload(b, false)
                     .await
-                    .map_err(Error::into_error)?;
+                    .map_err(|e| e.into_error())?;
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
@@ -236,7 +237,7 @@ async fn send_body(
                 stream
                     .send_payload(Bytes::new(), true)
                     .await
-                    .map_err(Error::into_error)?;
+                    .map_err(|e| e.into_error())?;
                 return Ok(());
             }
         }
