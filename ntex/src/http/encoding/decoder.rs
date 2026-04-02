@@ -1,4 +1,4 @@
-use std::{future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
+use std::{fmt, future::Future, io, io::Write, pin::Pin, task::Context, task::Poll};
 
 use flate2::write::{GzDecoder, ZlibDecoder};
 
@@ -15,6 +15,15 @@ pub struct Decoder<S> {
     stream: S,
     eof: bool,
     fut: Option<BlockingResult<Result<(Option<Bytes>, ContentDecoder), io::Error>>>,
+}
+
+impl<S: fmt::Debug> fmt::Debug for Decoder<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Decoder")
+            .field("stream", &self.stream)
+            .field("eof", &self.eof)
+            .finish()
+    }
 }
 
 impl<S> Decoder<S>

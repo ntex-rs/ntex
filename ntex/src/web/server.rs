@@ -49,6 +49,21 @@ where
     _t: PhantomData<(S, B)>,
 }
 
+impl<F, I, S, B> fmt::Debug for HttpServer<F, I, S, B>
+where
+    F: AsyncFn() -> I + Send + Clone + 'static,
+    I: IntoServiceFactory<S, Request, SharedCfg>,
+    S: ServiceFactory<Request, SharedCfg>,
+    S::Error: ResponseError,
+    S::InitError: fmt::Debug,
+    S::Response: Into<Response<B>>,
+    B: MessageBody,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HttpServer")
+    }
+}
+
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,

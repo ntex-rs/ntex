@@ -25,6 +25,18 @@ pub struct HttpService<
     _t: marker::PhantomData<(F, B)>,
 }
 
+impl<F, S, B, C1, C2> fmt::Debug for HttpService<F, S, B, C1, C2> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HttpService")
+    }
+}
+
+impl<F, S, B, C1, C2> fmt::Debug for HttpServiceHandler<F, S, B, C1, C2> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HttpServiceHandler")
+    }
+}
+
 impl<F, S, B> HttpService<F, S, B>
 where
     F: Filter,

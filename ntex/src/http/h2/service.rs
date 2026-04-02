@@ -28,6 +28,21 @@ pub struct H2Service<F, S, B, C> {
     _t: marker::PhantomData<(F, B)>,
 }
 
+impl<F, S, B, C> fmt::Debug for H2ServiceHandler<F, S, B, C>
+where
+    S: Service<Request>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "H2ServiceHandler")
+    }
+}
+
+impl<F, S, B, C> fmt::Debug for H2Service<F, S, B, C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "H2Service")
+    }
+}
+
 impl<F, S, B> H2Service<F, S, B, DefaultControlService>
 where
     S: ServiceFactory<Request, SharedCfg>,

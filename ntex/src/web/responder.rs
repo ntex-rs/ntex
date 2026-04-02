@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{fmt, marker::PhantomData};
 
 use crate::http::error::HttpError;
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
@@ -175,6 +175,15 @@ pub struct CustomResponder<T: Responder<Err>, Err> {
     headers: Option<HeaderMap>,
     error: Option<HttpError>,
     _t: PhantomData<Err>,
+}
+
+impl<T, Err> fmt::Debug for CustomResponder<T, Err>
+where
+    T: Responder<Err>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CustomResponder")
+    }
 }
 
 impl<T: Responder<Err>, Err> CustomResponder<T, Err> {

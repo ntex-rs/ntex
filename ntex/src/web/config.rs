@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, net::SocketAddr, rc::Rc};
+use std::{cell::UnsafeCell, fmt, net::SocketAddr, rc::Rc};
 
 use crate::service::cfg::{CfgContext, Configuration};
 use crate::{router::ResourceDef, util::ByteString, util::Extensions};
@@ -156,6 +156,12 @@ pub struct ServiceConfig<Err = DefaultError> {
     pub(super) services: Vec<Box<dyn AppServiceFactory<Err>>>,
     pub(super) state: Extensions,
     pub(super) external: Vec<ResourceDef>,
+}
+
+impl<Err: ErrorRenderer> fmt::Debug for ServiceConfig<Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ServiceConfig")
+    }
 }
 
 impl<Err: ErrorRenderer> ServiceConfig<Err> {

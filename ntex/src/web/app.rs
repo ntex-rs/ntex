@@ -36,6 +36,18 @@ pub struct App<M, F, Err: ErrorRenderer = DefaultError> {
     case_insensitive: bool,
 }
 
+impl<M, F, Err: ErrorRenderer> fmt::Debug for App<M, F, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "App")
+    }
+}
+
+impl<Err: ErrorRenderer> fmt::Debug for Filter<Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Filter")
+    }
+}
+
 impl Default for App<Identity, Filter<DefaultError>, DefaultError> {
     fn default() -> Self {
         Self::new()

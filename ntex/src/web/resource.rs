@@ -56,6 +56,12 @@ pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     default: Rc<RefCell<Option<Rc<HttpNewService<Err>>>>>,
 }
 
+impl<Err: ErrorRenderer, M, T> fmt::Debug for Resource<Err, M, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Resource({:?})", self.rdef)
+    }
+}
+
 impl<Err: ErrorRenderer> Resource<Err> {
     #[allow(clippy::needless_pass_by_value)]
     pub fn new<T: IntoPattern>(path: T) -> Resource<Err> {
@@ -430,6 +436,12 @@ pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
     routing: ResourceRouterFactory<Err>,
 }
 
+impl<Err: ErrorRenderer, M, F> fmt::Debug for ResourceServiceFactory<Err, M, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ResourceServiceFactory")
+    }
+}
+
 impl<Err, M, F> ServiceFactory<WebRequest<Err>, SharedCfg>
     for ResourceServiceFactory<Err, M, F>
 where
@@ -488,6 +500,12 @@ pub struct ResourceRouter<Err: ErrorRenderer> {
     state: Option<AppState>,
     routes: Vec<RouteService<Err>>,
     default: Option<HttpService<Err>>,
+}
+
+impl<Err: ErrorRenderer> fmt::Debug for ResourceRouter<Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ResourceRouter")
+    }
 }
 
 impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ResourceRouter<Err> {

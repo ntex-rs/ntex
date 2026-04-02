@@ -68,6 +68,12 @@ pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     case_insensitive: bool,
 }
 
+impl<Err: ErrorRenderer, M, T> fmt::Debug for Scope<Err, M, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Scope({:?})", self.rdef)
+    }
+}
+
 impl<Err: ErrorRenderer> Scope<Err> {
     #[allow(clippy::needless_pass_by_value)]
     /// Create a new scope
@@ -506,6 +512,12 @@ where
 pub struct ScopeService<F, Err: ErrorRenderer> {
     filter: F,
     routing: ScopeRouter<Err>,
+}
+
+impl<F, Err: ErrorRenderer> fmt::Debug for ScopeService<F, Err> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ScopeService")
+    }
 }
 
 impl<F, Err> Service<WebRequest<Err>> for ScopeService<F, Err>

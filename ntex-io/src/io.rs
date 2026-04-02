@@ -22,6 +22,12 @@ pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 #[derive(Clone)]
 pub struct IoRef(pub(super) Rc<IoState>);
 
+impl fmt::Debug for IoRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("IoRef").field(&*self.0).finish()
+    }
+}
+
 pub(crate) struct IoState {
     filter: FilterPtr,
     pub(super) cfg: Cfg<IoConfig>,

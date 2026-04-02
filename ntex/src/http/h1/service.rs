@@ -19,6 +19,18 @@ pub struct H1Service<F, S, B, C> {
     _t: marker::PhantomData<(F, B)>,
 }
 
+impl<F, S, B, C> fmt::Debug for H1Service<F, S, B, C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "H1Service")
+    }
+}
+
+impl<F, S, B, C> fmt::Debug for H1ServiceHandler<F, S, B, C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "H1ServiceHandler")
+    }
+}
+
 impl<F, S, B> H1Service<F, S, B, DefaultControlService>
 where
     S: ServiceFactory<Request, SharedCfg> + 'static,
