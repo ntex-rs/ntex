@@ -89,6 +89,12 @@ pub struct Route {
     method: MethodType,
 }
 
+impl std::fmt::Debug for Route {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Route({:?})", self.name)
+    }
+}
+
 impl Route {
     pub fn new(
         args: TokenStream,

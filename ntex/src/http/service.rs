@@ -12,6 +12,8 @@ use super::response::Response;
 use super::{h1, h2};
 
 /// `ServiceFactory` HTTP1.1/HTTP2 transport implementation
+#[derive(derive_more::Debug)]
+#[debug("HttpService")]
 pub struct HttpService<
     F,
     S,
@@ -273,6 +275,8 @@ where
 }
 
 /// `Service` implementation for http transport
+#[derive(derive_more::Debug)]
+#[debug("HttpServiceHandler")]
 pub struct HttpServiceHandler<F, S, B, C1, C2> {
     cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, C1>>,

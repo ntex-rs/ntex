@@ -32,6 +32,8 @@ struct Config {
 ///         .await
 /// }
 /// ```
+#[derive(derive_more::Debug)]
+#[debug("HttpServer")]
 pub struct HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,

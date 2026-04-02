@@ -25,6 +25,8 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
 /// It also executes state factories.
+#[derive(derive_more::Debug)]
+#[debug("AppFactory")]
 pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
@@ -160,6 +162,8 @@ where
 }
 
 /// Service to convert `Request` to a `WebRequest<Err>`
+#[derive(derive_more::Debug)]
+#[debug("AppFactoryService")]
 pub struct AppFactoryService<T, Err>
 where
     T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
@@ -257,6 +261,8 @@ impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
 }
 
 /// Web app service
+#[derive(derive_more::Debug)]
+#[debug("AppService")]
 pub struct AppService<F, Err: ErrorRenderer> {
     filter: F,
     routing: AppRouting<Err>,
