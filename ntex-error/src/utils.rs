@@ -53,6 +53,7 @@ impl ErrorDiagnostic for io::Error {
     fn typ(&self) -> ResultType {
         match self.kind() {
             io::ErrorKind::InvalidData
+            | io::ErrorKind::InvalidInput
             | io::ErrorKind::Unsupported
             | io::ErrorKind::UnexpectedEof
             | io::ErrorKind::BrokenPipe
@@ -67,6 +68,7 @@ impl ErrorDiagnostic for io::Error {
     fn signature(&self) -> &'static str {
         match self.kind() {
             io::ErrorKind::InvalidData => "io-InvalidData",
+            io::ErrorKind::InvalidInput => "io-InvalidInput",
             io::ErrorKind::Unsupported => "io-Unsupported",
             io::ErrorKind::UnexpectedEof => "io-UnexpectedEof",
             io::ErrorKind::BrokenPipe => "io-BrokenPipe",

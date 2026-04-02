@@ -110,10 +110,10 @@ mod tests {
 
         let err = ConnectError::Io(io::Error::new(io::ErrorKind::InvalidInput, "test"));
         assert_eq!(err.typ(), ResultType::ClientError);
-        assert_eq!(err.signature(), "ntex-connect-");
+        assert_eq!(err.signature(), "io-InvalidInput");
 
         let err = ConnectError::Io(io::Error::other("test"));
         assert_eq!(err.typ(), ResultType::ServiceError);
-        assert_eq!(err.signature(), "ntex-connect-r");
+        assert_eq!(err.signature(), "io-Error");
     }
 }
