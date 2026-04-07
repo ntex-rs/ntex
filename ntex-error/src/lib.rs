@@ -10,7 +10,6 @@ use std::{error::Error as StdError, fmt};
 use ntex_bytes::Bytes;
 
 mod bt;
-mod chain;
 mod error;
 mod ext;
 mod info;
@@ -19,18 +18,17 @@ mod repr;
 pub mod utils;
 
 pub use crate::bt::{Backtrace, BacktraceResolver};
-pub use crate::chain::ErrorChain;
 pub use crate::error::Error;
 pub use crate::info::ErrorInfo;
 pub use crate::message::{ErrorMessage, ErrorMessageChained};
 pub use crate::message::{fmt_diag, fmt_diag_string, fmt_err, fmt_err_string};
-pub use crate::utils::{Success, with_service};
+pub use crate::utils::{ResultSignature, Retryable, Success, with_service};
 
 #[doc(hidden)]
 pub use crate::bt::{set_backtrace_start, set_backtrace_start_alt};
 
 /// The type of the result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
 pub enum ResultType {
     Success,
     ClientError,
@@ -48,35 +46,27 @@ impl ResultType {
     }
 }
 
-/// Describes how a domain-specific error maps into a unified result model.
-pub trait ResultKind: 'static {
-    /// Returns the classification of the result (e.g. success, client error, service error).
-    fn tp(&self) -> ResultType;
+pub trait AsError {
+    type Target: ErrorDiagnostic;
 
-    /// Returns a stable identifier for the specific error classification.
-    ///
-    /// It is used for logging, metrics, and diagnostics.
-    fn signature(&self) -> &'static str;
-}
-
-impl ResultKind for ResultType {
-    fn tp(&self) -> ResultType {
-        *self
-    }
-
-    fn signature(&self) -> &'static str {
-        self.as_str()
-    }
+    fn as_diag(&self) -> &Self::Target;
 }
 
 /// Provides diagnostic information for errors.
 ///
 /// It enables classification, service attribution, and debugging context.
 pub trait ErrorDiagnostic: StdError + 'static {
-    type Kind: ResultKind;
+    #[doc(hidden)]
+    #[deprecated(since = "2.1.0")]
+    /// Returns the classification of the result (e.g. success, client error, service error).
+    fn typ(&self) -> ResultType {
+        ResultType::ServiceError
+    }
 
-    /// Returns the classification kind of this error.
-    fn kind(&self) -> Self::Kind;
+    /// Returns a stable identifier for the specific error classification.
+    ///
+    /// It is used for logging, metrics, and diagnostics.
+    fn signature(&self) -> &'static str;
 
     /// Returns an optional tag associated with this error.
     ///
@@ -97,14 +87,6 @@ pub trait ErrorDiagnostic: StdError + 'static {
     fn backtrace(&self) -> Option<&Backtrace> {
         None
     }
-
-    #[track_caller]
-    fn chain(self) -> ErrorChain<Self::Kind>
-    where
-        Self: Sized,
-    {
-        ErrorChain::new(self)
-    }
 }
 
 /// Helper trait for converting a value into a unified error-aware result type.
@@ -119,58 +101,21 @@ impl fmt::Display for ResultType {
     }
 }
 
-impl<T, E> ResultKind for Result<T, E>
-where
-    T: 'static,
-    E: ErrorDiagnostic + 'static,
-{
-    fn tp(&self) -> ResultType {
-        match self {
-            Ok(_) => ResultType::Success,
-            Err(e) => e.kind().tp(),
-        }
+impl ErrorDiagnostic for ResultType {
+    fn typ(&self) -> ResultType {
+        *self
     }
 
     fn signature(&self) -> &'static str {
-        match self {
-            Ok(_) => ResultType::Success.as_str(),
-            Err(e) => e.kind().signature(),
-        }
+        self.as_str()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error as StdError, io, mem};
+    use std::{error::Error as StdError, mem};
 
     use super::*;
-
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, thiserror::Error)]
-    enum TestKind {
-        #[error("Connect")]
-        Connect,
-        #[error("Disconnect")]
-        Disconnect,
-        #[error("ServiceError")]
-        ServiceError,
-    }
-
-    impl ResultKind for TestKind {
-        fn tp(&self) -> ResultType {
-            match self {
-                TestKind::Connect | TestKind::Disconnect => ResultType::ClientError,
-                TestKind::ServiceError => ResultType::ServiceError,
-            }
-        }
-
-        fn signature(&self) -> &'static str {
-            match self {
-                TestKind::Connect => "Client-Connect",
-                TestKind::Disconnect => "Client-Disconnect",
-                TestKind::ServiceError => "Service-Internal",
-            }
-        }
-    }
 
     #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
     enum TestError {
@@ -183,13 +128,11 @@ mod tests {
     }
 
     impl ErrorDiagnostic for TestError {
-        type Kind = TestKind;
-
-        fn kind(&self) -> Self::Kind {
+        fn signature(&self) -> &'static str {
             match self {
-                TestError::Connect(_) => TestKind::Connect,
-                TestError::Disconnect => TestKind::Disconnect,
-                TestError::Service(_) => TestKind::ServiceError,
+                TestError::Connect(_) => "Client-Connect",
+                TestError::Disconnect => "Client-Disconnect",
+                TestError::Service(_) => "Service-Internal",
             }
         }
 
@@ -198,14 +141,25 @@ mod tests {
         }
     }
 
+    impl From<&TestError> for ResultType {
+        fn from(err: &TestError) -> ResultType {
+            match err {
+                TestError::Connect(_) | TestError::Disconnect => ResultType::ClientError,
+                TestError::Service(_) => ResultType::ServiceError,
+            }
+        }
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
     #[error("TestError2")]
     struct TestError2;
     impl ErrorDiagnostic for TestError2 {
-        type Kind = ResultType;
-
-        fn kind(&self) -> Self::Kind {
+        fn typ(&self) -> ResultType {
             ResultType::ClientError
+        }
+
+        fn signature(&self) -> &'static str {
+            "TestError2"
         }
     }
 
@@ -219,11 +173,9 @@ mod tests {
     async fn test_error() {
         let err: Error<TestError> = TestError::Service("409 Error").into();
         let err = err.clone();
-        assert_eq!(err.kind(), TestKind::ServiceError);
-        assert_eq!((*err).kind(), TestKind::ServiceError);
         assert_eq!(err.to_string(), "InternalServiceError");
         assert_eq!(err.service(), Some("test"));
-        assert_eq!(err.kind().signature(), "Service-Internal");
+        assert_eq!(err.signature(), "Service-Internal");
         assert_eq!(
             err,
             Into::<Error<TestError>>::into(TestError::Service("409 Error"))
@@ -248,9 +200,6 @@ mod tests {
         let err2 = err2.forward(|_| TestError::Disconnect);
         assert!(err != err2);
 
-        assert_eq!(TestError::Connect("").kind().tp(), ResultType::ClientError);
-        assert_eq!(TestError::Disconnect.kind().tp(), ResultType::ClientError);
-        assert_eq!(TestError::Service("").kind().tp(), ResultType::ServiceError);
         assert_eq!(TestError::Connect("").to_string(), "Connect err: ");
         assert_eq!(TestError::Disconnect.to_string(), "Disconnect");
         assert_eq!(TestError::Disconnect.service(), Some("test"));
@@ -258,39 +207,22 @@ mod tests {
 
         assert_eq!(ResultType::ClientError.as_str(), "ClientError");
         assert_eq!(ResultType::ServiceError.as_str(), "ServiceError");
-        assert_eq!(ResultType::ClientError.tp(), ResultType::ClientError);
-        assert_eq!(ResultType::ServiceError.tp(), ResultType::ServiceError);
         assert_eq!(ResultType::ClientError.to_string(), "ClientError");
         assert_eq!(ResultType::ServiceError.to_string(), "ServiceError");
         assert_eq!(format!("{}", ResultType::ClientError), "ClientError");
 
-        assert_eq!(TestKind::Connect.to_string(), "Connect");
-        assert_eq!(TestError::Connect("").kind().signature(), "Client-Connect");
-        assert_eq!(TestKind::Disconnect.to_string(), "Disconnect");
-        assert_eq!(
-            TestError::Disconnect.kind().signature(),
-            "Client-Disconnect"
-        );
-        assert_eq!(TestKind::ServiceError.to_string(), "ServiceError");
-        assert_eq!(
-            TestError::Service("").kind().signature(),
-            "Service-Internal"
-        );
+        assert_eq!(TestError::Connect("").signature(), "Client-Connect");
+        assert_eq!(TestError::Disconnect.signature(), "Client-Disconnect");
+        assert_eq!(TestError::Service("").signature(), "Service-Internal");
 
-        let err = err.into_error().chain();
-        assert_eq!(err.kind(), TestKind::ServiceError);
-        assert_eq!(err.kind(), TestError::Service("409 Error").kind());
+        let err = err.into_error();
         assert_eq!(err.to_string(), "InternalServiceError");
+        assert!(err.source().is_none());
         assert!(format!("{err:?}").contains("Service(\"409 Error\")"));
-        assert!(
-            format!("{:?}", err.source()).contains("Service(\"409 Error\")"),
-            "{:?}",
-            err.source().unwrap()
-        );
 
-        let err: Error<TestError> = TestError::Service("404 Error").into();
         #[cfg(unix)]
         {
+            let err: Error<TestError> = TestError::Service("404 Error").into();
             if let Some(bt) = err.backtrace() {
                 bt.resolver().resolve();
                 assert!(
@@ -304,20 +236,11 @@ mod tests {
             }
         }
 
-        let err: ErrorChain<TestKind> = err.into();
-        assert_eq!(err.kind(), TestKind::ServiceError);
-        assert_eq!(err.kind(), TestError::Service("404 Error").kind());
-        assert_eq!(err.service(), Some("test"));
-        assert_eq!(err.kind().signature(), "Service-Internal");
-        assert_eq!(err.to_string(), "InternalServiceError");
-        assert!(err.backtrace().is_some());
-        assert!(format!("{err:?}").contains("Service(\"404 Error\")"));
-
         assert_eq!(24, mem::size_of::<TestError>());
         assert_eq!(8, mem::size_of::<Error<TestError>>());
 
         assert_eq!(TestError2.service(), None);
-        assert_eq!(TestError2.kind().signature(), "ClientError");
+        assert_eq!(TestError2.signature(), "TestError2");
 
         // ErrorInformation
         let err: Error<TestError> = TestError::Service("409 Error").into();
@@ -327,7 +250,6 @@ mod tests {
         assert!(msg.contains("err: InternalServiceError"));
 
         let err: ErrorInfo = err.set_service("SVC").into();
-        assert_eq!(err.tp(), ResultType::ServiceError);
         assert_eq!(err.service(), Some("SVC"));
         assert_eq!(err.signature(), "Service-Internal");
         assert!(err.backtrace().is_some());
@@ -338,8 +260,6 @@ mod tests {
 
         let msg = fmt_err_string(&err);
         assert_eq!(msg, "InternalServiceError\n");
-        let msg = fmt_diag_string(&err);
-        assert!(msg.contains("err: InternalServiceError"));
 
         // Error extensions
         let err: Error<TestError> = TestError::Service("409 Error").into();
@@ -362,29 +282,19 @@ mod tests {
             .try_map(|_| Err::<(), _>(TestError2))
             .err()
             .unwrap();
-        assert_eq!(err3.kind().signature(), "ClientError");
+        assert_eq!(err3.signature(), "TestError2");
         assert_eq!(err3.get_item::<&str>(), Some(&"Test"));
 
         let res = err.clone().try_map(|_| Ok::<_, TestError2>(()));
         assert_eq!(res, Ok(()));
-
-        assert_eq!(Success.kind(), ResultType::Success);
         assert_eq!(format!("{Success}"), "Success");
 
-        assert_eq!(
-            ErrorDiagnostic::kind(&io::Error::other("")),
-            ResultType::ServiceError
-        );
-        assert_eq!(
-            ErrorDiagnostic::kind(&io::Error::new(io::ErrorKind::InvalidData, "")),
-            ResultType::ClientError
-        );
-
         let res = Ok::<_, TestError>(());
-        assert_eq!(res.tp(), ResultType::Success);
+        let info = ResultSignature::from(&res);
+        assert_eq!(info.signature(), "Success");
 
         let res = Err::<(), _>(TestError::Service("409 Error"));
-        assert_eq!(res.tp(), ResultType::ServiceError);
-        assert_eq!(res.signature(), "Service-Internal");
+        let info = ResultSignature::from(&res);
+        assert_eq!(info.signature(), "Service-Internal");
     }
 }

@@ -1,6 +1,6 @@
 use std::{error, fmt, ops, panic::Location, sync::Arc};
 
-use crate::{Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
+use crate::{AsError, Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
 
 /// An error container.
 ///
@@ -149,7 +149,7 @@ impl<E> Clone for Error<E> {
     }
 }
 
-impl<E> From<E> for Error<E> {
+impl<E: error::Error> From<E> for Error<E> {
     #[track_caller]
     fn from(error: E) -> Self {
         Self {
@@ -192,11 +192,17 @@ impl<E: error::Error + 'static> error::Error for Error<E> {
     }
 }
 
-impl<E: ErrorDiagnostic> ErrorDiagnostic for Error<E> {
-    type Kind = E::Kind;
+impl<E: ErrorDiagnostic> AsError for Error<E> {
+    type Target = E;
 
-    fn kind(&self) -> Self::Kind {
-        self.inner.kind()
+    fn as_diag(&self) -> &E {
+        self
+    }
+}
+
+impl<E: ErrorDiagnostic> ErrorDiagnostic for Error<E> {
+    fn signature(&self) -> &'static str {
+        self.inner.signature()
     }
 
     fn tag(&self) -> Option<&Bytes> {
@@ -265,6 +271,7 @@ impl<E: fmt::Debug> fmt::Debug for ErrorDebug<'_, E> {
         f.debug_struct("Error")
             .field("error", &self.inner.error)
             .field("service", &self.inner.service)
+            .field("tag", &self.inner.tag)
             .field("backtrace", &self.inner.backtrace)
             .finish()
     }

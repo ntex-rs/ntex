@@ -1,5 +1,9 @@
 # Changes
 
+## [3.12.1] - 2026-04-02
+
+* Update to ntex-error 2.0
+
 ## [3.12.0] - 2026-03-21
 
 * Changes `ThreadPool::execute` behavior to not err on an exhausted threadpool

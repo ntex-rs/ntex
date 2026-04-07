@@ -53,22 +53,22 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
-ntex = "3.6.2"
+ntex = "3.7.1"
 ntex-bytes = "1.5.2"
 ntex-codec = "1.1.0"
-ntex-error = "1.7.0"
-ntex-h2 = "=3.8.2"
+ntex-error = "2.1.0"
+ntex-h2 = "3.9.0"
 ntex-http = "1.1.0"
 ntex-dispatcher = "3.1.0"
-ntex-io = "3.9.1"
+ntex-io = "3.9.2"
 ntex-macros = "3.2.0"
-ntex-net = "3.9.0"
+ntex-net = "3.9.1"
 ntex-router = "1.0.0"
 ntex-rt = "3.12.0"
 ntex-server = "3.9.0"
 ntex-service = "4.6.0"
 ntex-tls = "3.4.0"
-ntex-util = "3.5.0"
+ntex-util = "3.5.1"
 
 ntex-polling = "3.10.0"
 ntex-io-uring = "0.7.120"

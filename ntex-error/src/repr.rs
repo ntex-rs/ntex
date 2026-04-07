@@ -10,33 +10,6 @@ pub(crate) struct ErrorRepr<E> {
     pub(crate) ext: Extensions,
 }
 
-impl<E: ErrorDiagnostic> ErrorRepr<E> {
-    pub(crate) fn new(
-        error: E,
-        service: Option<&'static str>,
-        loc: &'static Location<'static>,
-    ) -> Self {
-        let service = if service.is_none() {
-            error.service()
-        } else {
-            service
-        };
-        let backtrace = if let Some(bt) = error.backtrace() {
-            bt.clone()
-        } else {
-            Backtrace::new(loc)
-        };
-
-        Self {
-            error,
-            service,
-            backtrace,
-            tag: None,
-            ext: Extensions::default(),
-        }
-    }
-}
-
 impl<E: Clone> ErrorRepr<E> {
     pub(crate) fn unpack(
         slf: Arc<ErrorRepr<E>>,
@@ -123,10 +96,8 @@ impl<E> ErrorDiagnostic for ErrorRepr<E>
 where
     E: ErrorDiagnostic,
 {
-    type Kind = E::Kind;
-
-    fn kind(&self) -> Self::Kind {
-        self.error.kind()
+    fn signature(&self) -> &'static str {
+        self.error.signature()
     }
 
     fn tag(&self) -> Option<&Bytes> {
@@ -152,7 +123,7 @@ where
 
 impl<E> error::Error for ErrorRepr<E>
 where
-    E: ErrorDiagnostic,
+    E: ErrorDiagnostic + error::Error,
 {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         Some(&self.error)
@@ -161,7 +132,7 @@ where
 
 impl<E> fmt::Debug for ErrorRepr<E>
 where
-    E: ErrorDiagnostic,
+    E: ErrorDiagnostic + error::Error,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&self.error, f)
@@ -170,7 +141,7 @@ where
 
 impl<E> fmt::Display for ErrorRepr<E>
 where
-    E: ErrorDiagnostic,
+    E: ErrorDiagnostic + error::Error,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.error, f)

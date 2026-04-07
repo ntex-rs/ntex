@@ -7,20 +7,65 @@ use ntex_bytes::ByteString;
 
 use crate::{Error, ErrorDiagnostic, ResultType};
 
-impl ErrorDiagnostic for Infallible {
-    type Kind = ResultType;
+/// The retry policy of the error.
+pub trait Retryable {
+    fn is_retryable(&self) -> bool;
+}
 
-    fn kind(&self) -> Self::Kind {
+impl<T, E> Retryable for Result<T, E>
+where
+    E: Retryable,
+{
+    fn is_retryable(&self) -> bool {
+        match self {
+            Ok(_) => false,
+            Err(err) => err.is_retryable(),
+        }
+    }
+}
+
+/// Helper type holding a result type and classification signature.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ResultSignature(pub &'static str);
+
+impl ResultSignature {
+    /// Construct new `ResultInfo`
+    pub fn new(sig: &'static str) -> Self {
+        Self(sig)
+    }
+
+    /// Returns a stable identifier for the result classification.
+    pub fn signature(self) -> &'static str {
+        self.0
+    }
+}
+
+impl<'a, E: ErrorDiagnostic> From<&'a E> for ResultSignature {
+    fn from(err: &'a E) -> Self {
+        ResultSignature::new(err.signature())
+    }
+}
+
+impl<'a, T, E: ErrorDiagnostic> From<&'a Result<T, E>> for ResultSignature {
+    fn from(result: &'a Result<T, E>) -> Self {
+        match result {
+            Ok(_) => ResultSignature(ResultType::Success.as_str()),
+            Err(err) => ResultSignature(err.signature()),
+        }
+    }
+}
+
+impl ErrorDiagnostic for Infallible {
+    fn signature(&self) -> &'static str {
         unreachable!()
     }
 }
 
 impl ErrorDiagnostic for io::Error {
-    type Kind = ResultType;
-
-    fn kind(&self) -> Self::Kind {
+    fn typ(&self) -> ResultType {
         match self.kind() {
             io::ErrorKind::InvalidData
+            | io::ErrorKind::InvalidInput
             | io::ErrorKind::Unsupported
             | io::ErrorKind::UnexpectedEof
             | io::ErrorKind::BrokenPipe
@@ -31,6 +76,21 @@ impl ErrorDiagnostic for io::Error {
             _ => ResultType::ServiceError,
         }
     }
+
+    fn signature(&self) -> &'static str {
+        match self.kind() {
+            io::ErrorKind::InvalidData => "io-InvalidData",
+            io::ErrorKind::InvalidInput => "io-InvalidInput",
+            io::ErrorKind::Unsupported => "io-Unsupported",
+            io::ErrorKind::UnexpectedEof => "io-UnexpectedEof",
+            io::ErrorKind::BrokenPipe => "io-BrokenPipe",
+            io::ErrorKind::ConnectionReset => "io-ConnectionReset",
+            io::ErrorKind::ConnectionAborted => "io-ConnectionAborted",
+            io::ErrorKind::NotConnected => "io-NotConnected",
+            io::ErrorKind::TimedOut => "io-TimedOut",
+            _ => "io-Error",
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -39,10 +99,12 @@ pub struct Success;
 impl StdError for Success {}
 
 impl ErrorDiagnostic for Success {
-    type Kind = ResultType;
-
-    fn kind(&self) -> Self::Kind {
+    fn typ(&self) -> ResultType {
         ResultType::Success
+    }
+
+    fn signature(&self) -> &'static str {
+        ResultType::Success.as_str()
     }
 }
 

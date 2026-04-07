@@ -1,6 +1,6 @@
-use std::io::{self, ErrorKind};
+use std::io;
 
-use ntex_error::{ErrorDiagnostic, ResultType};
+use ntex_error::ErrorDiagnostic;
 
 #[derive(thiserror::Error, Debug, Copy, Clone)]
 pub enum ConnectServiceError {
@@ -55,26 +55,13 @@ impl From<ConnectServiceError> for io::Error {
 }
 
 impl ErrorDiagnostic for ConnectError {
-    type Kind = ResultType;
-
-    fn kind(&self) -> Self::Kind {
+    fn signature(&self) -> &'static str {
         match self {
-            ConnectError::InvalidInput => ResultType::ClientError,
-            ConnectError::Resolver(_)
-            | ConnectError::NoRecords
-            | ConnectError::Unresolved => ResultType::ServiceError,
-            ConnectError::Io(err) => {
-                if matches!(
-                    err.kind(),
-                    ErrorKind::InvalidInput
-                        | ErrorKind::AddrNotAvailable
-                        | ErrorKind::Unsupported
-                ) {
-                    ResultType::ClientError
-                } else {
-                    ResultType::ServiceError
-                }
-            }
+            ConnectError::InvalidInput => "ntex-connect-InvalidInput",
+            ConnectError::Resolver(_) => "ntex-connect-Resolver",
+            ConnectError::NoRecords => "ntex-connect-NoRecords",
+            ConnectError::Unresolved => "ntex-connect-Unresolved",
+            ConnectError::Io(err) => err.signature(),
         }
     }
 }
@@ -95,18 +82,22 @@ mod tests {
 
     #[test]
     fn error_diagnostic() {
-        assert_eq!(ConnectError::InvalidInput.kind(), ResultType::ClientError);
-        assert_eq!(
-            ConnectError::Resolver(io::Error::other("test")).kind(),
-            ResultType::ServiceError
-        );
-        assert_eq!(
-            ConnectError::Io(io::Error::new(ErrorKind::InvalidInput, "test")).kind(),
-            ResultType::ClientError
-        );
-        assert_eq!(
-            ConnectError::Io(io::Error::other("test")).kind(),
-            ResultType::ServiceError
-        );
+        let err = ConnectError::InvalidInput;
+        assert_eq!(err.signature(), "ntex-connect-InvalidInput");
+
+        let err = ConnectError::Resolver(io::Error::other("test"));
+        assert_eq!(err.signature(), "ntex-connect-Resolver");
+
+        let err = ConnectError::NoRecords;
+        assert_eq!(err.signature(), "ntex-connect-NoRecords");
+
+        let err = ConnectError::Unresolved;
+        assert_eq!(err.signature(), "ntex-connect-Unresolved");
+
+        let err = ConnectError::Io(io::Error::new(io::ErrorKind::InvalidInput, "test"));
+        assert_eq!(err.signature(), "io-InvalidInput");
+
+        let err = ConnectError::Io(io::Error::other("test"));
+        assert_eq!(err.signature(), "io-Error");
     }
 }

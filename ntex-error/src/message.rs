@@ -1,8 +1,8 @@
-use std::{error::Error as StdError, fmt, fmt::Write, rc::Rc};
+use std::{error, fmt, fmt::Write, rc::Rc};
 
 use ntex_bytes::ByteString;
 
-use crate::{ErrorDiagnostic, ResultKind, ResultType};
+use crate::{AsError, ErrorDiagnostic, ResultType};
 
 struct Wrt<'a> {
     written: usize,
@@ -33,13 +33,13 @@ impl fmt::Write for Wrt<'_> {
     }
 }
 
-pub fn fmt_err_string(e: &dyn StdError) -> String {
+pub fn fmt_err_string(e: &dyn error::Error) -> String {
     let mut buf = String::new();
     _ = fmt_err(&mut buf, e);
     buf
 }
 
-pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
+pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn error::Error) -> fmt::Result {
     let mut wrt = Wrt::new(f);
     let mut current = Some(e);
     while let Some(std_err) = current {
@@ -53,7 +53,11 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn StdError) -> fmt::Result {
 }
 
 /// Formats a full diagnostic view of an error for logging and tracing.
-pub fn fmt_diag_string<K: ResultKind>(e: &dyn ErrorDiagnostic<Kind = K>) -> String {
+pub fn fmt_diag_string<'a, T>(e: &'a T) -> String
+where
+    T: ErrorDiagnostic + AsError,
+    ResultType: From<&'a T::Target>,
+{
     let mut buf = String::new();
     _ = fmt_diag(&mut buf, e);
     buf
@@ -63,25 +67,26 @@ pub fn fmt_diag_string<K: ResultKind>(e: &dyn ErrorDiagnostic<Kind = K>) -> Stri
 ///
 /// For `ServiceError` types, this includes debug representations of all nested errors,
 /// and a backtrace when available.
-pub fn fmt_diag<K>(f: &mut dyn fmt::Write, e: &dyn ErrorDiagnostic<Kind = K>) -> fmt::Result
+pub fn fmt_diag<'a, T>(f: &mut dyn fmt::Write, container: &'a T) -> fmt::Result
 where
-    K: ResultKind,
+    T: ErrorDiagnostic + AsError,
+    ResultType: From<&'a T::Target>,
 {
-    let k = e.kind();
-    let tp = k.tp();
+    let e = container.as_diag();
+    let tp = ResultType::from(e);
 
     writeln!(f, "err: {e}")?;
     writeln!(f, "type: {}", tp.as_str())?;
-    writeln!(f, "signature: {}", k.signature())?;
+    writeln!(f, "signature: {}", container.signature())?;
 
-    if let Some(tag) = e.tag() {
+    if let Some(tag) = container.tag() {
         if let Ok(s) = ByteString::try_from(tag) {
             writeln!(f, "tag: {s}")?;
         } else {
             writeln!(f, "tag: {tag:?}")?;
         }
     }
-    if let Some(svc) = e.service() {
+    if let Some(svc) = container.service() {
         writeln!(f, "service: {svc}")?;
     }
     writeln!(f)?;
@@ -92,7 +97,7 @@ where
         writeln!(wrt.fmt)?;
     }
 
-    let mut current = e.source();
+    let mut current = container.source();
     while let Some(err) = current {
         write!(&mut wrt, "{err:?}")?;
         if wrt.wrote() {
@@ -102,7 +107,7 @@ where
     }
 
     if tp == ResultType::ServiceError
-        && let Some(bt) = e.backtrace()
+        && let Some(bt) = container.backtrace()
         && let Some(repr) = bt.repr()
     {
         writeln!(wrt.fmt, "{repr}")?;
@@ -117,14 +122,14 @@ pub struct ErrorMessage(ByteString);
 #[derive(Clone)]
 pub struct ErrorMessageChained {
     msg: ByteString,
-    source: Option<Rc<dyn StdError>>,
+    source: Option<Rc<dyn error::Error>>,
 }
 
 impl ErrorMessageChained {
     pub fn new<M, E>(ctx: M, source: E) -> Self
     where
         M: Into<ErrorMessage>,
-        E: StdError + 'static,
+        E: error::Error + 'static,
     {
         ErrorMessageChained {
             msg: ctx.into().into_string(),
@@ -174,7 +179,7 @@ impl ErrorMessage {
         self.0
     }
 
-    pub fn with_source<E: StdError + 'static>(self, source: E) -> ErrorMessageChained {
+    pub fn with_source<E: error::Error + 'static>(self, source: E) -> ErrorMessageChained {
         ErrorMessageChained::new(self, source)
     }
 }
@@ -230,8 +235,8 @@ impl<M: Into<ErrorMessage>> From<M> for ErrorMessageChained {
     }
 }
 
-impl StdError for ErrorMessageChained {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+impl error::Error for ErrorMessageChained {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.source.as_ref().map(AsRef::as_ref)
     }
 }
@@ -256,7 +261,7 @@ impl fmt::Display for ErrorMessageChained {
 #[allow(dead_code)]
 mod tests {
     use ntex_bytes::Bytes;
-    use std::io;
+    use std::{error::Error, io};
 
     use super::*;
 
@@ -342,10 +347,17 @@ mod tests {
     }
 
     impl ErrorDiagnostic for TestError {
-        type Kind = ResultType;
-
-        fn kind(&self) -> Self::Kind {
+        fn signature(&self) -> &'static str {
             match self {
+                TestError::Service(_) => ResultType::ServiceError.as_str(),
+                TestError::Disconnect(_) => ResultType::ClientError.as_str(),
+            }
+        }
+    }
+
+    impl From<&TestError> for ResultType {
+        fn from(err: &TestError) -> ResultType {
+            match err {
                 TestError::Service(_) => ResultType::ServiceError,
                 TestError::Disconnect(_) => ResultType::ClientError,
             }
@@ -365,7 +377,7 @@ mod tests {
             bt.resolver().resolve();
         }
         let msg = fmt_diag_string(&err);
-        assert!(msg.contains("Test io error"));
+        assert!(msg.contains("Test io error"), "{msg}");
 
         assert!(
             format!("{:?}", err.source()).contains("Test io erro"),
@@ -375,6 +387,6 @@ mod tests {
 
         let err = err.set_tag(Bytes::from("test-tag"));
         let msg = fmt_diag_string(&err);
-        println!("{msg}");
+        assert!(msg.contains("test-tag"), "{msg}");
     }
 }

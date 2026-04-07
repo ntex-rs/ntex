@@ -1,5 +1,15 @@
 # Changes
 
+## [2.1.0] - 2026-04-xx
+
+* Simplify ErrorDiagnostic trait, remove explicit ResultType category
+
+## [2.0.0] - 2026-04-02
+
+* Remove ResultKind trait
+
+* Move .tp() and .signature() to ErrorDiagnostic
+
 ## [1.7.1] - 2026-04-01
 
 * Add ResultType impl for Result<T, E> where E: ErrorDiagnostic

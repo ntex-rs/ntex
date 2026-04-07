@@ -635,11 +635,12 @@ where
     thread::spawn(move || {
         let sys = System::with_config(&name, sys);
 
-        let cfg = cfg.clone();
         let factory = factory.clone();
         let ctimeout = cfg.client_timeout;
         let port = cfg.port;
-        let tcp = net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
+        let tcp = cfg
+            .listener
+            .unwrap_or(net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap());
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
@@ -764,13 +765,14 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 /// Test server configuration
 pub struct TestServerConfig {
     tp: HttpVer,
     stream: StreamType,
     client_timeout: Seconds,
     port: u16,
+    listener: Option<net::TcpListener>,
 }
 
 #[derive(Clone, Debug)]
@@ -823,6 +825,7 @@ impl TestServerConfig {
             stream: StreamType::Tcp,
             client_timeout: Seconds(5),
             port: 0,
+            listener: None,
         }
     }
 
@@ -867,6 +870,12 @@ impl TestServerConfig {
     /// Set server port. By default, test server binds to a random port assigned by OS.
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
+        self
+    }
+
+    #[must_use]
+    pub fn listener(mut self, listener: net::TcpListener) -> Self {
+        self.listener = Some(listener);
         self
     }
 }

@@ -1,5 +1,5 @@
 use std::task::{Context, Poll, ready};
-use std::{any, cell::RefCell, cmp, future::poll_fn, io, pin::Pin, rc::Rc, rc::Weak};
+use std::{any, cell::Cell, cmp, future::poll_fn, io, pin::Pin, rc::Rc, rc::Weak};
 
 use ntex_bytes::{BufMut, BytesMut};
 use ntex_io::{
@@ -11,8 +11,9 @@ use tok_io::net::TcpStream;
 
 impl IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
-        let io = Rc::new(RefCell::new(self.0));
-        tok_io::task::spawn_local(run(io.clone(), ctx));
+        let io = Rc::new(Cell::new(Some(self.0)));
+        tok_io::task::spawn_local(run_rd(io.clone(), ctx.clone()));
+        tok_io::task::spawn_local(run_wrt(io.clone(), ctx));
         Some(Box::new(HandleWrapper(io)))
     }
 }
@@ -20,18 +21,22 @@ impl IoStream for super::TcpStream {
 #[cfg(unix)]
 impl IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
-        let io = Rc::new(RefCell::new(self.0));
-        tok_io::task::spawn_local(run(io.clone(), ctx));
+        let io = Rc::new(Cell::new(Some(self.0)));
+        tok_io::task::spawn_local(run_rd(io.clone(), ctx.clone()));
+        tok_io::task::spawn_local(run_wrt(io, ctx));
         None
     }
 }
 
-struct HandleWrapper(Rc<RefCell<TcpStream>>);
+struct HandleWrapper(Rc<Cell<Option<TcpStream>>>);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            if let Ok(addr) = self.0.borrow().peer_addr() {
+            let inner = self.0.take().unwrap();
+            let result = inner.peer_addr();
+            self.0.set(Some(inner));
+            if let Ok(addr) = result {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
         } else if id == any::TypeId::of::<SocketOptions>() {
@@ -47,56 +52,67 @@ enum Status {
     Terminate,
 }
 
-async fn run<T>(io: Rc<RefCell<T>>, ctx: IoContext)
+async fn run_rd<T>(io: Rc<Cell<Option<T>>>, ctx: IoContext)
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    let st = poll_fn(|cx| turn(&mut *io.borrow_mut(), &ctx, cx)).await;
+    let st = poll_fn(|cx| {
+        let mut inner = io.take().unwrap();
+        let result = match ctx.poll_read_ready(cx) {
+            Poll::Ready(Readiness::Ready) => read(&mut inner, &ctx, cx),
+            Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
+            Poll::Pending => Poll::Pending,
+        };
+        io.set(Some(inner));
+        result
+    })
+    .await;
+}
+
+async fn run_wrt<T>(io: Rc<Cell<Option<T>>>, ctx: IoContext)
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    let st = poll_fn(|cx| {
+        let mut inner = io.take().unwrap();
+        let result = match ctx.poll_write_ready(cx) {
+            Poll::Ready(Readiness::Ready) => write(&mut inner, &ctx, cx),
+            Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
+            Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
+            Poll::Pending => Poll::Pending,
+        };
+        io.set(Some(inner));
+        result
+    })
+    .await;
 
     log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
-            if write(&mut *io.borrow_mut(), &ctx, cx) == Poll::Ready(Status::Terminate) {
+            let mut inner = io.take().unwrap();
+            let result = if write(&mut inner, &ctx, cx) == Poll::Ready(Status::Terminate) {
                 Poll::Ready(())
             } else {
                 ctx.shutdown(flush, cx)
-            }
+            };
+            io.set(Some(inner));
+            result
         })
         .await;
     }
 
-    let result = poll_fn(|cx| Pin::new(&mut *io.borrow_mut()).poll_shutdown(cx)).await;
+    let result = poll_fn(|cx| {
+        let mut inner = io.take().unwrap();
+        let result = Pin::new(&mut inner).poll_shutdown(cx);
+        io.set(Some(inner));
+        result
+    })
+    .await;
 
     log::trace!("{}: Shutdown complete, result {result:?}", ctx.tag());
     if !ctx.is_stopped() {
         ctx.stop(None);
-    }
-}
-
-fn turn<T>(io: &mut T, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    let read = match ctx.poll_read_ready(cx) {
-        Poll::Ready(Readiness::Ready) => read(io, ctx, cx),
-        Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
-        Poll::Pending => Poll::Pending,
-    };
-
-    let write = match ctx.poll_write_ready(cx) {
-        Poll::Ready(Readiness::Ready) => write(io, ctx, cx),
-        Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
-        Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
-        Poll::Pending => Poll::Pending,
-    };
-
-    if read.is_pending() && write.is_pending() {
-        Poll::Pending
-    } else if write.is_ready() {
-        write
-    } else {
-        Poll::Ready(Status::Terminate)
     }
 }
 
@@ -284,21 +300,30 @@ impl AsyncWrite for TokioIoBoxed {
 
 #[derive(Debug)]
 /// Query TCP Io connections for a handle to set socket options
-pub struct SocketOptions(Weak<RefCell<TcpStream>>);
+pub struct SocketOptions(Weak<Cell<Option<TcpStream>>>);
 
 impl SocketOptions {
     #[deprecated = "`SO_LINGER` causes the socket to block the thread on drop"]
     pub fn set_linger(&self, dur: Option<Millis>) -> io::Result<()> {
         #[allow(deprecated)]
-        self.try_self()
-            .and_then(|s| s.borrow().set_linger(dur.map(Into::into)))
+        {
+            let inner = self.try_self()?;
+            let io = inner.take().unwrap();
+            io.set_linger(dur.map(Into::into))?;
+            inner.set(Some(io));
+            Ok(())
+        }
     }
 
     pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
-        self.try_self().and_then(|s| s.borrow().set_ttl(ttl))
+        let inner = self.try_self()?;
+        let io = inner.take().unwrap();
+        io.set_ttl(ttl)?;
+        inner.set(Some(io));
+        Ok(())
     }
 
-    fn try_self(&self) -> io::Result<Rc<RefCell<TcpStream>>> {
+    fn try_self(&self) -> io::Result<Rc<Cell<Option<TcpStream>>>> {
         self.0
             .upgrade()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket is gone"))

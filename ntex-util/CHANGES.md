@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.1] - 2026-04-02
+
+* Update to ntex-error 2.0
+
 ## [3.5.0] - 2026-03-14
 
 * Move ErrorMessage to ntex-error
