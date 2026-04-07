@@ -142,6 +142,7 @@ impl IoState {
             );
             self.insert_flags(Flags::IO_STOPPING_FILTERS);
             self.read_task.wake();
+            self.write_task.wake();
         }
     }
 
