@@ -2,7 +2,7 @@ use std::{error, fmt, fmt::Write, rc::Rc};
 
 use ntex_bytes::ByteString;
 
-use crate::{ErrorDiagnostic, ResultType};
+use crate::{AsError, ErrorDiagnostic, ResultType};
 
 struct Wrt<'a> {
     written: usize,
@@ -53,7 +53,11 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn error::Error) -> fmt::Result {
 }
 
 /// Formats a full diagnostic view of an error for logging and tracing.
-pub fn fmt_diag_string(e: &dyn ErrorDiagnostic) -> String {
+pub fn fmt_diag_string<'a, T>(e: &'a T) -> String
+where
+    T: ErrorDiagnostic + AsError,
+    ResultType: From<&'a T::Target>,
+{
     let mut buf = String::new();
     _ = fmt_diag(&mut buf, e);
     buf
@@ -63,19 +67,26 @@ pub fn fmt_diag_string(e: &dyn ErrorDiagnostic) -> String {
 ///
 /// For `ServiceError` types, this includes debug representations of all nested errors,
 /// and a backtrace when available.
-pub fn fmt_diag(f: &mut dyn fmt::Write, e: &dyn ErrorDiagnostic) -> fmt::Result {
-    writeln!(f, "err: {e}")?;
-    writeln!(f, "type: {}", e.typ())?;
-    writeln!(f, "signature: {}", e.signature())?;
+pub fn fmt_diag<'a, T>(f: &mut dyn fmt::Write, container: &'a T) -> fmt::Result
+where
+    T: ErrorDiagnostic + AsError,
+    ResultType: From<&'a T::Target>,
+{
+    let e = container.as_diag();
+    let tp = ResultType::from(e);
 
-    if let Some(tag) = e.tag() {
+    writeln!(f, "err: {e}")?;
+    writeln!(f, "type: {}", tp.as_str())?;
+    writeln!(f, "signature: {}", container.signature())?;
+
+    if let Some(tag) = container.tag() {
         if let Ok(s) = ByteString::try_from(tag) {
             writeln!(f, "tag: {s}")?;
         } else {
             writeln!(f, "tag: {tag:?}")?;
         }
     }
-    if let Some(svc) = e.service() {
+    if let Some(svc) = container.service() {
         writeln!(f, "service: {svc}")?;
     }
     writeln!(f)?;
@@ -86,7 +97,7 @@ pub fn fmt_diag(f: &mut dyn fmt::Write, e: &dyn ErrorDiagnostic) -> fmt::Result 
         writeln!(wrt.fmt)?;
     }
 
-    let mut current = e.source();
+    let mut current = container.source();
     while let Some(err) = current {
         write!(&mut wrt, "{err:?}")?;
         if wrt.wrote() {
@@ -95,8 +106,8 @@ pub fn fmt_diag(f: &mut dyn fmt::Write, e: &dyn ErrorDiagnostic) -> fmt::Result 
         current = err.source();
     }
 
-    if e.typ() == ResultType::ServiceError
-        && let Some(bt) = e.backtrace()
+    if tp == ResultType::ServiceError
+        && let Some(bt) = container.backtrace()
         && let Some(repr) = bt.repr()
     {
         writeln!(wrt.fmt, "{repr}")?;
@@ -336,15 +347,20 @@ mod tests {
     }
 
     impl ErrorDiagnostic for TestError {
-        fn typ(&self) -> ResultType {
+        fn signature(&self) -> &'static str {
             match self {
+                TestError::Service(_) => ResultType::ServiceError.as_str(),
+                TestError::Disconnect(_) => ResultType::ClientError.as_str(),
+            }
+        }
+    }
+
+    impl From<&TestError> for ResultType {
+        fn from(err: &TestError) -> ResultType {
+            match err {
                 TestError::Service(_) => ResultType::ServiceError,
                 TestError::Disconnect(_) => ResultType::ClientError,
             }
-        }
-
-        fn signature(&self) -> &'static str {
-            self.typ().as_str()
         }
     }
 

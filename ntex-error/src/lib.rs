@@ -22,7 +22,7 @@ pub use crate::error::Error;
 pub use crate::info::ErrorInfo;
 pub use crate::message::{ErrorMessage, ErrorMessageChained};
 pub use crate::message::{fmt_diag, fmt_diag_string, fmt_err, fmt_err_string};
-pub use crate::utils::{ResultInfo, Success, with_service};
+pub use crate::utils::{ResultSignature, Retryable, Success, with_service};
 
 #[doc(hidden)]
 pub use crate::bt::{set_backtrace_start, set_backtrace_start_alt};
@@ -46,10 +46,18 @@ impl ResultType {
     }
 }
 
+pub trait AsError {
+    type Target: ErrorDiagnostic;
+
+    fn as_diag(&self) -> &Self::Target;
+}
+
 /// Provides diagnostic information for errors.
 ///
 /// It enables classification, service attribution, and debugging context.
 pub trait ErrorDiagnostic: StdError + 'static {
+    #[doc(hidden)]
+    #[deprecated(since = "2.1.0")]
     /// Returns the classification of the result (e.g. success, client error, service error).
     fn typ(&self) -> ResultType {
         ResultType::ServiceError
@@ -105,7 +113,7 @@ impl ErrorDiagnostic for ResultType {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error as StdError, io, mem};
+    use std::{error::Error as StdError, mem};
 
     use super::*;
 
@@ -120,13 +128,6 @@ mod tests {
     }
 
     impl ErrorDiagnostic for TestError {
-        fn typ(&self) -> ResultType {
-            match self {
-                TestError::Connect(_) | TestError::Disconnect => ResultType::ClientError,
-                TestError::Service(_) => ResultType::ServiceError,
-            }
-        }
-
         fn signature(&self) -> &'static str {
             match self {
                 TestError::Connect(_) => "Client-Connect",
@@ -137,6 +138,15 @@ mod tests {
 
         fn service(&self) -> Option<&'static str> {
             Some("test")
+        }
+    }
+
+    impl From<&TestError> for ResultType {
+        fn from(err: &TestError) -> ResultType {
+            match err {
+                TestError::Connect(_) | TestError::Disconnect => ResultType::ClientError,
+                TestError::Service(_) => ResultType::ServiceError,
+            }
         }
     }
 
@@ -163,8 +173,6 @@ mod tests {
     async fn test_error() {
         let err: Error<TestError> = TestError::Service("409 Error").into();
         let err = err.clone();
-        assert_eq!(err.typ(), ResultType::ServiceError);
-        assert_eq!((*err).typ(), ResultType::ServiceError);
         assert_eq!(err.to_string(), "InternalServiceError");
         assert_eq!(err.service(), Some("test"));
         assert_eq!(err.signature(), "Service-Internal");
@@ -192,9 +200,6 @@ mod tests {
         let err2 = err2.forward(|_| TestError::Disconnect);
         assert!(err != err2);
 
-        assert_eq!(TestError::Connect("").typ(), ResultType::ClientError);
-        assert_eq!(TestError::Disconnect.typ(), ResultType::ClientError);
-        assert_eq!(TestError::Service("").typ(), ResultType::ServiceError);
         assert_eq!(TestError::Connect("").to_string(), "Connect err: ");
         assert_eq!(TestError::Disconnect.to_string(), "Disconnect");
         assert_eq!(TestError::Disconnect.service(), Some("test"));
@@ -202,8 +207,6 @@ mod tests {
 
         assert_eq!(ResultType::ClientError.as_str(), "ClientError");
         assert_eq!(ResultType::ServiceError.as_str(), "ServiceError");
-        assert_eq!(ResultType::ClientError.typ(), ResultType::ClientError);
-        assert_eq!(ResultType::ServiceError.typ(), ResultType::ServiceError);
         assert_eq!(ResultType::ClientError.to_string(), "ClientError");
         assert_eq!(ResultType::ServiceError.to_string(), "ServiceError");
         assert_eq!(format!("{}", ResultType::ClientError), "ClientError");
@@ -213,7 +216,6 @@ mod tests {
         assert_eq!(TestError::Service("").signature(), "Service-Internal");
 
         let err = err.into_error();
-        assert_eq!(err.typ(), ResultType::ServiceError);
         assert_eq!(err.to_string(), "InternalServiceError");
         assert!(err.source().is_none());
         assert!(format!("{err:?}").contains("Service(\"409 Error\")"));
@@ -248,7 +250,6 @@ mod tests {
         assert!(msg.contains("err: InternalServiceError"));
 
         let err: ErrorInfo = err.set_service("SVC").into();
-        assert_eq!(err.typ(), ResultType::ServiceError);
         assert_eq!(err.service(), Some("SVC"));
         assert_eq!(err.signature(), "Service-Internal");
         assert!(err.backtrace().is_some());
@@ -259,8 +260,6 @@ mod tests {
 
         let msg = fmt_err_string(&err);
         assert_eq!(msg, "InternalServiceError\n");
-        let msg = fmt_diag_string(&err);
-        assert!(msg.contains("err: InternalServiceError"));
 
         // Error extensions
         let err: Error<TestError> = TestError::Service("409 Error").into();
@@ -288,24 +287,14 @@ mod tests {
 
         let res = err.clone().try_map(|_| Ok::<_, TestError2>(()));
         assert_eq!(res, Ok(()));
-
-        assert_eq!(Success.typ(), ResultType::Success);
         assert_eq!(format!("{Success}"), "Success");
 
-        assert_eq!(io::Error::other("").typ(), ResultType::ServiceError);
-        assert_eq!(
-            io::Error::new(io::ErrorKind::InvalidData, "").typ(),
-            ResultType::ClientError
-        );
-
         let res = Ok::<_, TestError>(());
-        let info = ResultInfo::from(&res);
-        assert_eq!(info.typ(), ResultType::Success);
+        let info = ResultSignature::from(&res);
         assert_eq!(info.signature(), "Success");
 
         let res = Err::<(), _>(TestError::Service("409 Error"));
-        let info = ResultInfo::from(&res);
-        assert_eq!(info.typ(), ResultType::ServiceError);
+        let info = ResultSignature::from(&res);
         assert_eq!(info.signature(), "Service-Internal");
     }
 }
