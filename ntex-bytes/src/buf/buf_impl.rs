@@ -256,10 +256,7 @@ pub trait Buf {
     /// This function panics if there is no more remaining data in `self`.
     #[inline]
     fn get_i8(&mut self) -> i8 {
-        assert!(self.remaining() >= 1);
-        let ret = self.chunk()[0] as i8;
-        self.advance(1);
-        ret
+        self.get_u8() as i8
     }
 
     /// Gets an unsigned 16 bit integer from `self` in big-endian byte order.
@@ -838,6 +835,13 @@ impl Buf for &[u8] {
     fn advance(&mut self, cnt: usize) {
         *self = &self[cnt..];
     }
+
+    #[inline]
+    fn get_u8(&mut self) -> u8 {
+        let ret = self[0];
+        self.advance(1);
+        ret
+    }
 }
 
 impl Buf for &str {
@@ -854,6 +858,13 @@ impl Buf for &str {
     #[inline]
     fn advance(&mut self, cnt: usize) {
         *self = &self[cnt..];
+    }
+
+    #[inline]
+    fn get_u8(&mut self) -> u8 {
+        let ret = self.as_bytes()[0];
+        self.advance(1);
+        ret
     }
 }
 

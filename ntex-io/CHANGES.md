@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.2] - 2026-04-07
+
+* Fix shutdown handling, could dead lock in edge cases
+
 ## [3.9.1] - 2026-03-08
 
 * Resize buffer in blocks

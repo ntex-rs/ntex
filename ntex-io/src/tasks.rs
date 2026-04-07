@@ -69,7 +69,7 @@ impl IoContext {
         let flags = self.0.flags();
 
         if flush && !flags.contains(Flags::IO_STOPPED) {
-            if flags.intersects(Flags::WR_PAUSED | Flags::IO_STOPPED) {
+            if flags.contains(Flags::WR_PAUSED) {
                 return Poll::Ready(());
             }
             st.insert_flags(Flags::WR_TASK_WAIT);
@@ -322,6 +322,7 @@ impl IoContext {
         {
             match io.filter().shutdown(FilterCtx::new(io, &st.buffer)) {
                 Ok(Poll::Ready(())) => {
+                    st.write_task.wake();
                     st.dispatch_task.wake();
                     st.insert_flags(Flags::IO_STOPPING);
                 }
@@ -332,6 +333,7 @@ impl IoContext {
                     if flags.contains(Flags::RD_PAUSED)
                         || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
                     {
+                        st.write_task.wake();
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
                     } else {
@@ -341,6 +343,7 @@ impl IoContext {
                             .take()
                             .unwrap_or_else(|| sleep(io.cfg().disconnect_timeout()));
                         if timeout.poll_elapsed(cx).is_ready() {
+                            st.write_task.wake();
                             st.dispatch_task.wake();
                             st.insert_flags(Flags::IO_STOPPING);
                         } else {

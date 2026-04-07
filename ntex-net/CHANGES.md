@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.1] - 2026-04-07
+
+* Update tokio compat impl
+
 ## [3.9.0] - 2026-04-02
 
 * Update to ntex-error 2.0
