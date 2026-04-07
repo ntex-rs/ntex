@@ -46,7 +46,7 @@ impl ResultType {
     }
 }
 
-pub trait AsErrorDiagnostic {
+pub trait AsError {
     type Target: ErrorDiagnostic;
 
     fn as_diag(&self) -> &Self::Target;

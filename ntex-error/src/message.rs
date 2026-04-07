@@ -1,8 +1,8 @@
-use std::{error, error::Error, fmt, fmt::Write, rc::Rc};
+use std::{error, fmt, fmt::Write, rc::Rc};
 
 use ntex_bytes::ByteString;
 
-use crate::{AsErrorDiagnostic, ErrorDiagnostic, ResultType};
+use crate::{AsError, ErrorDiagnostic, ResultType};
 
 struct Wrt<'a> {
     written: usize,
@@ -53,8 +53,9 @@ pub fn fmt_err(f: &mut dyn fmt::Write, e: &dyn error::Error) -> fmt::Result {
 }
 
 /// Formats a full diagnostic view of an error for logging and tracing.
-pub fn fmt_diag_string<'a, T: AsErrorDiagnostic>(e: &'a T) -> String
+pub fn fmt_diag_string<'a, T>(e: &'a T) -> String
 where
+    T: ErrorDiagnostic + AsError,
     ResultType: From<&'a T::Target>,
 {
     let mut buf = String::new();
@@ -68,7 +69,7 @@ where
 /// and a backtrace when available.
 pub fn fmt_diag<'a, T>(f: &mut dyn fmt::Write, container: &'a T) -> fmt::Result
 where
-    T: AsErrorDiagnostic,
+    T: ErrorDiagnostic + AsError,
     ResultType: From<&'a T::Target>,
 {
     let e = container.as_diag();
@@ -76,16 +77,16 @@ where
 
     writeln!(f, "err: {e}")?;
     writeln!(f, "type: {}", tp.as_str())?;
-    writeln!(f, "signature: {}", e.signature())?;
+    writeln!(f, "signature: {}", container.signature())?;
 
-    if let Some(tag) = e.tag() {
+    if let Some(tag) = container.tag() {
         if let Ok(s) = ByteString::try_from(tag) {
             writeln!(f, "tag: {s}")?;
         } else {
             writeln!(f, "tag: {tag:?}")?;
         }
     }
-    if let Some(svc) = e.service() {
+    if let Some(svc) = container.service() {
         writeln!(f, "service: {svc}")?;
     }
     writeln!(f)?;
@@ -96,7 +97,7 @@ where
         writeln!(wrt.fmt)?;
     }
 
-    let mut current = e.source();
+    let mut current = container.source();
     while let Some(err) = current {
         write!(&mut wrt, "{err:?}")?;
         if wrt.wrote() {
@@ -106,7 +107,7 @@ where
     }
 
     if tp == ResultType::ServiceError
-        && let Some(bt) = e.backtrace()
+        && let Some(bt) = container.backtrace()
         && let Some(repr) = bt.repr()
     {
         writeln!(wrt.fmt, "{repr}")?;

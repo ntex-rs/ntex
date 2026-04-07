@@ -1,8 +1,6 @@
 use std::{error, fmt, ops, panic::Location, sync::Arc};
 
-use crate::{
-    AsErrorDiagnostic, Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr,
-};
+use crate::{AsError, Backtrace, Bytes, ErrorDiagnostic, ErrorMapping, repr::ErrorRepr};
 
 /// An error container.
 ///
@@ -194,7 +192,7 @@ impl<E: error::Error + 'static> error::Error for Error<E> {
     }
 }
 
-impl<E: ErrorDiagnostic> AsErrorDiagnostic for Error<E> {
+impl<E: ErrorDiagnostic> AsError for Error<E> {
     type Target = E;
 
     fn as_diag(&self) -> &E {
@@ -273,6 +271,7 @@ impl<E: fmt::Debug> fmt::Debug for ErrorDebug<'_, E> {
         f.debug_struct("Error")
             .field("error", &self.inner.error)
             .field("service", &self.inner.service)
+            .field("tag", &self.inner.tag)
             .field("backtrace", &self.inner.backtrace)
             .finish()
     }
