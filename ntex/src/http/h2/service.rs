@@ -363,7 +363,6 @@ where
     type Response = ();
     type Error = H2Error;
 
-    #[allow(clippy::redundant_closure_for_method_calls)]
     async fn call(
         &self,
         msg: h2::Message,

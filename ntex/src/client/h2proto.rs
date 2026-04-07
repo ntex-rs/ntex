@@ -12,7 +12,6 @@ use crate::util::{ByteString, Bytes, Either, select};
 use super::ClientRawRequest;
 use super::error::{ClientError, ConnectError};
 
-#[allow(clippy::redundant_closure_for_method_calls)]
 pub(super) async fn send_request(
     client: H2Client,
     req: ClientRawRequest,
@@ -212,7 +211,6 @@ async fn get_response(
     }
 }
 
-#[allow(clippy::redundant_closure_for_method_calls)]
 async fn send_body(
     mut body: Body,
     stream: &h2::client::SendStream,

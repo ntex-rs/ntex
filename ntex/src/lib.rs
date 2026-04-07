@@ -15,6 +15,7 @@
     clippy::missing_fields_in_debug,
     clippy::missing_panics_doc,
     clippy::must_use_candidate,
+    clippy::redundant_closure_for_method_calls,
     clippy::too_many_lines,
     clippy::type_complexity
 )]
