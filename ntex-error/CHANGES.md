@@ -1,6 +1,10 @@
 # Changes
 
-## [2.1.0] - 2026-04-xx
+## [2.2.0] - 2026-04-08
+
+* Add fmt_diag_typ helper
+
+## [2.1.0] - 2026-04-05
 
 * Simplify ErrorDiagnostic trait, remove explicit ResultType category
 
