@@ -527,56 +527,65 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
         bytes.extend_from_slice(&buf);
     } else {
         bytes.extend_from_slice(b"\r\ncontent-length: ");
-        unsafe { convert_usize(n, bytes) };
+        convert_usize(n, bytes, true);
     }
 }
 
-unsafe fn convert_usize(mut n: u64, bytes: &mut BytesMut) {
-    let mut curr: isize = 39;
-    #[allow(invalid_value, clippy::uninit_assumed_init)]
-    let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
-    buf[39] = b'\r';
-    buf[40] = b'\n';
-    let buf_ptr = buf.as_mut_ptr();
-    let lut_ptr = DEC_DIGITS_LUT.as_ptr();
+pub(crate) fn convert_usize(mut n: u64, bytes: &mut BytesMut, eol: bool) {
+    unsafe {
+        let mut curr: isize = 39;
+        #[allow(invalid_value, clippy::uninit_assumed_init)]
+        let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
+        buf[39] = b'\r';
+        buf[40] = b'\n';
+        let buf_ptr = buf.as_mut_ptr();
+        let lut_ptr = DEC_DIGITS_LUT.as_ptr();
 
-    // eagerly decode 4 characters at a time
-    while n >= 10_000 {
-        let rem = (n % 10_000) as isize;
-        n /= 10_000;
+        // eagerly decode 4 characters at a time
+        while n >= 10_000 {
+            let rem = (n % 10_000) as isize;
+            n /= 10_000;
 
-        let d1 = (rem / 100) << 1;
-        let d2 = (rem % 100) << 1;
-        curr -= 4;
-        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-        ptr::copy_nonoverlapping(lut_ptr.offset(d2), buf_ptr.offset(curr + 2), 2);
+            let d1 = (rem / 100) << 1;
+            let d2 = (rem % 100) << 1;
+            curr -= 4;
+            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
+            ptr::copy_nonoverlapping(lut_ptr.offset(d2), buf_ptr.offset(curr + 2), 2);
+        }
+
+        // if we reach here numbers are <= 9999, so at most 4 chars long
+        let mut n = n as isize; // possibly reduce 64bit math
+
+        // decode 2 more chars, if > 2 chars
+        if n >= 100 {
+            let d1 = (n % 100) << 1;
+            n /= 100;
+            curr -= 2;
+            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
+        }
+
+        // decode last 1 or 2 chars
+        if n < 10 {
+            curr -= 1;
+            *buf_ptr.offset(curr) = (n as u8) + b'0';
+        } else {
+            let d1 = n << 1;
+            curr -= 2;
+            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
+        }
+
+        if eol {
+            bytes.extend_from_slice(slice::from_raw_parts(
+                buf_ptr.offset(curr),
+                41 - curr as usize,
+            ));
+        } else {
+            bytes.extend_from_slice(slice::from_raw_parts(
+                buf_ptr.offset(curr),
+                39 - curr as usize,
+            ));
+        }
     }
-
-    // if we reach here numbers are <= 9999, so at most 4 chars long
-    let mut n = n as isize; // possibly reduce 64bit math
-
-    // decode 2 more chars, if > 2 chars
-    if n >= 100 {
-        let d1 = (n % 100) << 1;
-        n /= 100;
-        curr -= 2;
-        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-    }
-
-    // decode last 1 or 2 chars
-    if n < 10 {
-        curr -= 1;
-        *buf_ptr.offset(curr) = (n as u8) + b'0';
-    } else {
-        let d1 = n << 1;
-        curr -= 2;
-        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-    }
-
-    bytes.extend_from_slice(slice::from_raw_parts(
-        buf_ptr.offset(curr),
-        41 - curr as usize,
-    ));
 }
 
 #[cfg(test)]

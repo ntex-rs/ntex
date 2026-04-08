@@ -563,9 +563,11 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
             .headers
             .insert(header::CONTENT_LENGTH, ZERO_CONTENT_LENGTH),
         BodySize::Sized(len) => {
+            let mut buf = BytesMut::new();
+            crate::http::h1::encoder::convert_usize(*len, &mut buf, false);
             head.headers.insert(
                 header::CONTENT_LENGTH,
-                HeaderValue::try_from(format!("{len}")).unwrap(),
+                HeaderValue::from_shared(buf.freeze()).unwrap(),
             );
         }
     }

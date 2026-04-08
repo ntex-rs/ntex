@@ -1,4 +1,4 @@
-use std::{future::poll_fn, io, rc::Rc};
+use std::{fmt::Write, future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
@@ -8,7 +8,7 @@ use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::{Method, Payload, Version, h2::Payload as H2Payload};
 use crate::time::{Millis, timeout_checked};
-use crate::util::{ByteString, Bytes, Either, select};
+use crate::util::{ByteString, Bytes, BytesMut, Either, select};
 
 use super::ClientRawRequest;
 use super::error::{ClientError, ConnectError};
@@ -55,17 +55,26 @@ pub(super) async fn send_request(
         BodySize::Empty => {
             hdrs.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
         }
-        BodySize::Sized(len) => hdrs.insert(
-            header::CONTENT_LENGTH,
-            HeaderValue::try_from(format!("{len}")).unwrap(),
-        ),
+        BodySize::Sized(len) => {
+            let mut buf = BytesMut::new();
+            crate::http::h1::encoder::convert_usize(len, &mut buf, false);
+
+            hdrs.insert(
+                header::CONTENT_LENGTH,
+                HeaderValue::from_shared(buf.freeze()).unwrap(),
+            )
+        }
     }
 
     // send request
     let uri = &req.head.uri;
     let path = uri.path_and_query().map_or_else(
         || ByteString::from(uri.path()),
-        |p| ByteString::from(format!("{p}")),
+        |p| {
+            let mut buf = BytesMut::new();
+            write!(&mut buf, "{p}").unwrap();
+            ByteString::try_from(buf).unwrap()
+        },
     );
     let (snd_stream, rcv_stream) = client
         .client
