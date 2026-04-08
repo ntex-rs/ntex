@@ -540,6 +540,11 @@ impl Buf for Bytes {
     fn advance(&mut self, cnt: usize) {
         self.advance_to(cnt);
     }
+
+    #[inline]
+    fn get_u8(&mut self) -> u8 {
+        self.storage.get_u8()
+    }
 }
 
 impl bytes::buf::Buf for Bytes {
@@ -556,6 +561,11 @@ impl bytes::buf::Buf for Bytes {
     #[inline]
     fn advance(&mut self, cnt: usize) {
         self.advance_to(cnt);
+    }
+
+    #[inline]
+    fn get_u8(&mut self) -> u8 {
+        self.storage.get_u8()
     }
 }
 

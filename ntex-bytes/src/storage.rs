@@ -264,6 +264,20 @@ impl Storage {
         }
     }
 
+    pub(crate) fn get_u8(&mut self) -> u8 {
+        unsafe {
+            let ret = if self.kind() == KIND_INLINE {
+                assert!(self.inline_len() >= 1);
+                *self.inline_ptr_ro()
+            } else {
+                assert!(self.len >= 1);
+                *self.ptr
+            };
+            self.set_start(1);
+            ret
+        }
+    }
+
     /// Pointer to the start of the inline buffer
     #[inline]
     unsafe fn inline_ptr(&mut self) -> *mut u8 {
