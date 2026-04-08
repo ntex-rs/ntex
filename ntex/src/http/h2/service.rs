@@ -22,6 +22,8 @@ use crate::util::{Bytes, BytesMut, HashMap, HashSet};
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
 /// `ServiceFactory` implementation for HTTP2 transport
+#[derive(derive_more::Debug)]
+#[debug("H2Service")]
 pub struct H2Service<F, S, B, C> {
     srv: S,
     ctl: Rc<C>,
@@ -198,6 +200,8 @@ where
 }
 
 /// `Service` implementation for http/2 transport
+#[derive(derive_more::Debug)]
+#[debug("H2ServiceHandler")]
 pub struct H2ServiceHandler<F, S: Service<Request>, B, C> {
     cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, ()>>,
