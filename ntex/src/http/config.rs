@@ -333,7 +333,6 @@ impl DateService {
 
     pub(super) fn set_date<F: FnMut(&[u8])>(mut f: F) {
         DateService::check_date();
-
         DATE.with(|date| {
             let date = date.current_date.get();
             f(&date[6..35]);
@@ -343,38 +342,16 @@ impl DateService {
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
-
         DATE.with(|date| {
-            // SAFETY: reserves exact size
-            let len = dst.len();
-            dst.reserve(DATE_VALUE_LENGTH_HDR);
-            unsafe {
-                copy_nonoverlapping(
-                    date.current_date.as_ptr().cast(),
-                    dst.as_mut_ptr().add(len),
-                    DATE_VALUE_LENGTH_HDR,
-                );
-                dst.set_len(len + DATE_VALUE_LENGTH_HDR);
-            }
+            dst.extend_from_slice(unsafe { *date.current_date.as_ptr().cast() });
         });
     }
 
     #[doc(hidden)]
     pub fn bset_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
-
         DATE.with(|date| {
-            // SAFETY: reserves exact size
-            let len = dst.len();
-            dst.reserve(DATE_VALUE_LENGTH_HDR);
-            unsafe {
-                copy_nonoverlapping(
-                    date.current_date.as_ptr().cast(),
-                    dst.as_mut_ptr().add(len),
-                    DATE_VALUE_LENGTH_HDR,
-                );
-                dst.set_len(len + DATE_VALUE_LENGTH_HDR);
-            }
+            dst.extend_from_slice(unsafe { *date.current_date.as_ptr().cast() })
         });
     }
 }

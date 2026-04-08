@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.2] - 2026-04-08
+
+* Configure web test server listener #831
+
 ## [3.7.1] - 2026-04-02
 
 * Update to ntex-error 2.0
