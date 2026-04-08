@@ -343,7 +343,7 @@ impl DateService {
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
         DATE.with(|date| {
-            dst.extend_from_slice(unsafe { *date.current_date.as_ptr().cast() });
+            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
         });
     }
 
@@ -351,7 +351,7 @@ impl DateService {
     pub fn bset_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
         DATE.with(|date| {
-            dst.extend_from_slice(unsafe { *date.current_date.as_ptr().cast() });
+            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
         });
     }
 }
