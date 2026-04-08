@@ -2,6 +2,7 @@ use std::{future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
+use crate::error::Error;
 use crate::http::ResponseHead;
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
@@ -70,7 +71,7 @@ pub(super) async fn send_request(
         .client
         .send(req.head.method.clone(), path, hdrs, eof)
         .await
-        .map_err(ntex_error::Error::into_error)?;
+        .map_err(Error::into_error)?;
 
     // send body
     if !eof {
@@ -227,7 +228,7 @@ async fn send_body(
                 stream
                     .send_payload(b, false)
                     .await
-                    .map_err(ntex_error::Error::into_error)?;
+                    .map_err(Error::into_error)?;
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
@@ -235,7 +236,7 @@ async fn send_body(
                 stream
                     .send_payload(Bytes::new(), true)
                     .await
-                    .map_err(ntex_error::Error::into_error)?;
+                    .map_err(Error::into_error)?;
                 return Ok(());
             }
         }
