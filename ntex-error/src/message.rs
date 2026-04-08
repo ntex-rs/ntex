@@ -72,19 +72,25 @@ where
     T: ErrorDiagnostic + AsError,
     ResultType: From<&'a T::Target>,
 {
-    fmt_diag_typ(f, ResultType::from(container.as_diag()), container)
+    fmt_diag_typ(f, Some(ResultType::from(container.as_diag())), container)
 }
 
 /// Formats a full diagnostic view of an error for logging and tracing.
 ///
 /// For `ServiceError` types, this includes debug representations of all nested errors,
 /// and a backtrace when available.
-pub fn fmt_diag_typ<T>(f: &mut dyn fmt::Write, typ: ResultType, e: &T) -> fmt::Result
+pub fn fmt_diag_typ<T>(
+    f: &mut dyn fmt::Write,
+    typ: Option<ResultType>,
+    e: &T,
+) -> fmt::Result
 where
     T: ErrorDiagnostic,
 {
     writeln!(f, "err: {e}")?;
-    writeln!(f, "type: {}", typ.as_str())?;
+    if let Some(ref tp) = typ {
+        writeln!(f, "type: {}", tp.as_str())?;
+    }
     writeln!(f, "signature: {}", e.signature())?;
 
     if let Some(tag) = e.tag() {
@@ -114,7 +120,7 @@ where
         current = err.source();
     }
 
-    if typ == ResultType::ServiceError
+    if typ == Some(ResultType::ServiceError)
         && let Some(bt) = e.backtrace()
         && let Some(repr) = bt.repr()
     {
