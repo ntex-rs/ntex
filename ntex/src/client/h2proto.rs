@@ -62,7 +62,7 @@ pub(super) async fn send_request(
             hdrs.insert(
                 header::CONTENT_LENGTH,
                 HeaderValue::from_shared(buf.freeze()).unwrap(),
-            )
+            );
         }
     }
 
