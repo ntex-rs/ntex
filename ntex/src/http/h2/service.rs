@@ -379,11 +379,11 @@ where
                 let pl = if eof {
                     None
                 } else {
-                    log::debug!(
-                        "{}: Creating local payload stream for {:?}",
-                        self.io.tag(),
-                        stream.id()
-                    );
+                    // log::debug!(
+                    //     "{}: Creating local payload stream for {:?}",
+                    //     self.io.tag(),
+                    //     stream.id()
+                    // );
                     let (sender, payload) = Payload::create(stream.empty_capacity());
                     self.streams.borrow_mut().insert(stream.id(), sender);
                     Some(payload)
@@ -391,12 +391,12 @@ where
                 (self.io.clone(), pseudo, headers, eof, pl)
             }
             h2::MessageKind::Data(data, cap) => {
-                log::debug!(
-                    "{}: Got data chunk for {:?}: {:?}",
-                    self.io.tag(),
-                    stream.id(),
-                    data.len()
-                );
+                // log::debug!(
+                //     "{}: Got data chunk for {:?}: {:?}",
+                //     self.io.tag(),
+                //     stream.id(),
+                //     data.len()
+                // );
                 if let Some(sender) = self.streams.borrow_mut().get_mut(&stream.id()) {
                     sender.feed_data(data, cap);
                 } else {
@@ -563,9 +563,11 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
             .headers
             .insert(header::CONTENT_LENGTH, ZERO_CONTENT_LENGTH),
         BodySize::Sized(len) => {
+            let mut buf = BytesMut::new();
+            crate::http::h1::encoder::convert_usize(*len, &mut buf, false);
             head.headers.insert(
                 header::CONTENT_LENGTH,
-                HeaderValue::try_from(format!("{len}")).unwrap(),
+                HeaderValue::from_shared(buf.freeze()).unwrap(),
             );
         }
     }
