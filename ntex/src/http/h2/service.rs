@@ -490,11 +490,11 @@ where
         if size.is_eof() || is_head_req {
             stream
                 .send_response(head.status, hdrs, true)
-                .map_err(ntex_error::Error::into_error)?;
+                .map_err(crate::error::Error::into_error)?;
         } else {
             stream
                 .send_response(head.status, hdrs, false)
-                .map_err(ntex_error::Error::into_error)?;
+                .map_err(crate::error::Error::into_error)?;
 
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
@@ -507,7 +507,7 @@ where
                         stream
                             .send_payload(Bytes::new(), true)
                             .await
-                            .map_err(ntex_error::Error::into_error)?;
+                            .map_err(crate::error::Error::into_error)?;
                         break;
                     }
                     Some(Ok(chunk)) => {
@@ -521,7 +521,7 @@ where
                             stream
                                 .send_payload(chunk, false)
                                 .await
-                                .map_err(ntex_error::Error::into_error)?;
+                                .map_err(crate::error::Error::into_error)?;
                         }
                     }
                     Some(Err(e)) => {

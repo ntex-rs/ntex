@@ -70,7 +70,7 @@ pub(super) async fn send_request(
         .client
         .send(req.head.method.clone(), path, hdrs, eof)
         .await
-        .map_err(ntex_error::Error::into_error)?;
+        .map_err(crate::error::Error::into_error)?;
 
     // send body
     if !eof {
@@ -227,7 +227,7 @@ async fn send_body(
                 stream
                     .send_payload(b, false)
                     .await
-                    .map_err(ntex_error::Error::into_error)?;
+                    .map_err(crate::error::Error::into_error)?;
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
@@ -235,7 +235,7 @@ async fn send_body(
                 stream
                     .send_payload(Bytes::new(), true)
                     .await
-                    .map_err(ntex_error::Error::into_error)?;
+                    .map_err(crate::error::Error::into_error)?;
                 return Ok(());
             }
         }
