@@ -485,17 +485,11 @@ fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesMut) {
 /// NOTE: bytes object has to contain enough space
 fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
     if n < 10 {
-        let mut buf: [u8; 21] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
-            b'g', b't', b'h', b':', b' ', b'0', b'\r', b'\n',
-        ];
+        let mut buf: [u8; 21] = *b"\r\ncontent-length: 0\r\n";
         buf[18] = (n as u8) + b'0';
         bytes.extend_from_slice(&buf);
     } else if n < 100 {
-        let mut buf: [u8; 22] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
-            b'g', b't', b'h', b':', b' ', b'0', b'0', b'\r', b'\n',
-        ];
+        let mut buf: [u8; 22] = *b"\r\ncontent-length: 00\r\n";
         let d1 = n << 1;
         unsafe {
             ptr::copy_nonoverlapping(
@@ -506,10 +500,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
         }
         bytes.extend_from_slice(&buf);
     } else if n < 1000 {
-        let mut buf: [u8; 23] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
-            b'g', b't', b'h', b':', b' ', b'0', b'0', b'0', b'\r', b'\n',
-        ];
+        let mut buf: [u8; 23] = *b"\r\ncontent-length: 000\r\n";
         // decode 2 more chars, if > 2 chars
         let d1 = (n % 100) << 1;
         n /= 100;

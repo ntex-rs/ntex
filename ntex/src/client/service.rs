@@ -92,10 +92,9 @@ impl ServiceRequest {
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         if !self.head.headers.contains_key(&key) {
-            match HeaderValue::try_from(value) {
-                Ok(value) => self.head.headers.insert(key, value),
-                Err(e) => return Err(e.into()),
-            }
+            self.head
+                .headers
+                .insert(key, HeaderValue::try_from(value).map_err(Into::into)?);
         }
 
         Ok(())

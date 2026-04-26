@@ -1,5 +1,9 @@
 # Changes
 
+## [1.6.0] (2026-04-26)
+
+* Add new type BytesPages and Page
+
 ## [1.5.3] (2026-03-07)
 
 * Update Buf impls for &[u8]

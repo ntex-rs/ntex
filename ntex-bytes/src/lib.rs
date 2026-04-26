@@ -66,12 +66,14 @@ mod bvec;
 mod bytes;
 mod debug;
 mod hex;
+mod pages;
 mod serde;
 mod storage;
 mod string;
 
 pub use crate::bvec::BytesMut;
 pub use crate::bytes::Bytes;
+pub use crate::pages::{BytesPages, Page};
 pub use crate::string::ByteString;
 
 #[doc(hidden)]
@@ -96,5 +98,45 @@ pub mod info {
         Inline,
         Static,
         Vec,
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PageSize {
+    Size8 = 0,
+    Size16 = 1,
+    Size24 = 2,
+    Size32 = 3,
+    Size48 = 4,
+    Size64 = 5,
+    Unset = 6,
+}
+
+impl PageSize {
+    const fn capacity(self) -> usize {
+        match self {
+            PageSize::Size8 => 8 * 1024,
+            PageSize::Size16 => 16 * 1024,
+            PageSize::Size24 => 24 * 1024,
+            PageSize::Size32 => 32 * 1024,
+            PageSize::Size48 => 48 * 1024,
+            PageSize::Size64 | PageSize::Unset => 64 * 1024,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_size() {
+        assert_eq!(PageSize::Size8.capacity(), 8 * 1024);
+        assert_eq!(PageSize::Size16.capacity(), 16 * 1024);
+        assert_eq!(PageSize::Size24.capacity(), 24 * 1024);
+        assert_eq!(PageSize::Size32.capacity(), 32 * 1024);
+        assert_eq!(PageSize::Size48.capacity(), 48 * 1024);
+        assert_eq!(PageSize::Size64.capacity(), 64 * 1024);
+        assert_eq!(PageSize::Unset.capacity(), 64 * 1024);
     }
 }
