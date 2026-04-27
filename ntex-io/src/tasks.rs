@@ -223,7 +223,7 @@ impl IoContext {
             .0
             .buffer
             .get_write_destination()
-            .and_then(|buf| if buf.is_empty() { None } else { Some(buf) })
+            .filter(|buf| !buf.is_empty())
     }
 
     /// Set write buffer

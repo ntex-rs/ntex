@@ -197,7 +197,7 @@ impl IoTest {
         write.waker.wake();
     }
 
-    /// Read any available data
+    /// Set remote buffer capacity
     pub fn remote_buffer_cap(&self, cap: usize) {
         // change cap
         self.local.lock().unwrap().borrow_mut().buf_cap = cap;

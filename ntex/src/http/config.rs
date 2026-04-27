@@ -274,11 +274,8 @@ impl<S, C> DispatcherConfig<S, C> {
 }
 
 const DATE_VALUE_LENGTH_HDR: usize = 39;
-const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] = [
-    b'd', b'a', b't', b'e', b':', b' ', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0',
-    b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0',
-    b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'\r', b'\n', b'\r', b'\n',
-];
+const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] =
+    *b"date: 00000000000000000000000000000\r\n\r\n";
 
 #[derive(Debug, Copy, Clone)]
 pub struct DateService;

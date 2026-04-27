@@ -89,7 +89,7 @@ impl Handler for ConnectOpsHandler {
 
         match result {
             Ok(_) => {
-                if sock.domain().map(|d| d == Domain::UNIX).unwrap_or(false) {
+                if sock.domain().is_ok_and(|d| d == Domain::UNIX) {
                     let _ = tx.send(Ok(Io::new(
                         UnixStream(sock, self.inner.streams.clone()),
                         cfg,
