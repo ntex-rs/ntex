@@ -281,6 +281,13 @@ mod tests {
         assert_eq!(pgs.num_pages(), 1);
         assert_eq!(pgs.current.len(), 0);
 
+        pgs.put_u8(b'a');
+        assert_eq!(pgs.num_pages(), 2);
+
+        pgs.append(Bytes::copy_from_slice("a".repeat(8 * 1024).as_bytes()));
+        assert_eq!(pgs.num_pages(), 3);
+        assert_eq!(pgs.current.len(), 0);
+
         // page
         let p = pages.take().unwrap();
         assert_eq!(p.len(), 8192);
@@ -300,6 +307,7 @@ mod tests {
         // debug
         let mut pages = BytesPages::new(PageSize::Size8);
         pages.extend_from_slice(b"b");
+        assert_eq!(format!("{pages:?}"), "Pages(b\"b\")");
         let p = pages.take().unwrap();
         assert_eq!(p.as_ref(), b"b");
 

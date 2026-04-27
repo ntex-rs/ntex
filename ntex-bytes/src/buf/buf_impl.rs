@@ -924,6 +924,8 @@ mod tests {
         assert_eq!(6, buf.remaining());
         buf.advance(1);
         assert_eq!(Buf::chunk(&buf), &b"world"[..]);
+        assert_eq!(buf.get_u8(), b'w');
+        assert_eq!(Buf::chunk(&buf), &b"orld"[..]);
 
         let mut buf = &b"hello world"[..];
         buf.advance(5);
@@ -1026,5 +1028,9 @@ mod tests {
 
         let bytes = "hello world".to_bytes();
         assert_eq!(&bytes[..], &b"hello world"[..]);
+
+        let mut s = "hello world";
+        assert_eq!(s.get_u8(), b'h');
+        assert_eq!(Buf::chunk(&s), b"ello world");
     }
 }
