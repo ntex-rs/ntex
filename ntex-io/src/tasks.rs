@@ -1,9 +1,9 @@
 use std::{cell::Cell, fmt, io, ptr, task::Context, task::Poll};
 
-use ntex_bytes::BytesMut;
+use ntex_bytes::BytePages;
 use ntex_util::time::{Sleep, sleep};
 
-use crate::{FilterCtx, Flags, IoRef, IoTaskStatus, Readiness};
+use crate::{Buffer, Flags, IoRef, IoTaskStatus, Readiness};
 
 /// Context for io read task
 pub struct IoContext(IoRef, Cell<Option<Sleep>>);
@@ -84,56 +84,48 @@ impl IoContext {
     }
 
     /// Get read buffer
-    pub fn get_read_buf(&self) -> BytesMut {
+    pub fn get_read_buf(&self) -> Buffer {
         let inner = &self.0.0;
 
-        if inner.flags.get().is_read_buf_ready() {
+        let buf = if inner.flags.get().is_read_buf_ready() {
             // read buffer is still not read by dispatcher
             // we cannot touch it
             inner.read_buf().get()
         } else {
             inner
                 .buffer
-                .get_read_source()
+                .get_read_buf()
                 .unwrap_or_else(|| inner.read_buf().get())
-        }
+        };
+
+        Buffer::new(buf)
     }
 
     /// Resize read buffer
-    pub fn resize_read_buf(&self, buf: &mut BytesMut) {
-        self.0.0.read_buf().resize(buf);
+    pub fn resize_read_buf(&self, buf: &mut Buffer) {
+        self.0.0.read_buf().resize(&mut buf.buf);
     }
 
     /// Set read buffer
     pub fn release_read_buf(
         &self,
-        nbytes: usize,
-        buf: BytesMut,
+        buffer: Buffer,
         result: Poll<Result<(), Option<io::Error>>>,
     ) -> IoTaskStatus {
         let inner = &self.0.0;
         let hw = self.0.cfg().read_buf().high;
-
-        if let Some(mut first_buf) = inner.buffer.get_read_source() {
-            first_buf.extend_from_slice(&buf);
-            inner.buffer.set_read_source(&self.0, first_buf);
-        } else {
-            inner.buffer.set_read_source(&self.0, buf);
-        }
+        let nbytes = buffer.has_newbytes();
+        let read_buf = inner.buffer.read_destination_size();
 
         let mut full = false;
 
-        // handle buffer changes
-        let st_res = if nbytes > 0 {
-            match self
-                .0
-                .filter()
-                .process_read_buf(FilterCtx::new(&self.0, &inner.buffer), nbytes)
-            {
-                Ok(status) => {
+        let st_res = if nbytes {
+            // handle buffer changes
+            match inner.buffer.process_read_buf(&self.0, buffer.buf) {
+                Ok(()) => {
                     let buffer_size = inner.buffer.read_destination_size();
 
-                    if status.nbytes > 0 {
+                    if buffer_size > read_buf {
                         // dest buffer has new data, wake up dispatcher
                         if buffer_size >= hw {
                             log::trace!(
@@ -171,10 +163,11 @@ impl IoContext {
                     // while reading, filter wrote some data
                     // in that case filters need to process write buffers
                     // and potentialy wake write task
-                    if status.need_write {
-                        self.0
-                            .filter()
-                            .process_write_buf(FilterCtx::new(&self.0, &inner.buffer))
+                    if self.0.flags().is_want_to_write() {
+                        inner.remove_flags(Flags::IO_WANT_WRITE);
+                        inner.buffer.with_filter(&self.0, |ctx| {
+                            self.0.filter().process_write_buf(ctx)
+                        })
                     } else {
                         Ok(())
                     }
@@ -182,6 +175,7 @@ impl IoContext {
                 Err(err) => Err(err),
             }
         } else {
+            inner.buffer.set_read_buf(&self.0, buffer.buf);
             Ok(())
         };
 
@@ -190,7 +184,7 @@ impl IoContext {
                 if let Err(e) = st_res {
                     inner.io_stopped(Some(e));
                     IoTaskStatus::Stop
-                } else if nbytes == 0 {
+                } else if !nbytes {
                     inner.io_stopped(None);
                     IoTaskStatus::Stop
                 } else if full {
@@ -218,67 +212,40 @@ impl IoContext {
 
     #[inline]
     /// Get write buffer
-    pub fn get_write_buf(&self) -> Option<BytesMut> {
-        self.0
-            .0
-            .buffer
-            .get_write_destination()
-            .filter(|buf| !buf.is_empty())
+    pub fn with_write_buf<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytePages) -> R,
+    {
+        self.0.0.buffer.with_write_destination(|buffer| f(buffer))
     }
 
     /// Set write buffer
-    pub fn release_write_buf(
-        &self,
-        mut buf: BytesMut,
-        result: Poll<io::Result<usize>>,
-    ) -> IoTaskStatus {
-        let result = match result {
-            Poll::Ready(Ok(0)) => {
-                log::trace!("{}: Disconnected during flush", self.tag());
-                Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "failed to write frame to transport",
-                ))
-            }
-            Poll::Ready(Ok(n)) => {
-                if n == buf.len() {
-                    buf.clear();
-                    Ok(0)
-                } else {
-                    buf.advance_to(n);
-                    Ok(buf.len())
-                }
-            }
-            Poll::Ready(Err(e)) => Err(e),
-            Poll::Pending => Ok(buf.len()),
-        };
-
+    pub fn update_write_buf(&self, result: Poll<io::Result<usize>>) -> IoTaskStatus {
         let inner = &self.0.0;
 
-        // set buffer back
-        let result = match result {
-            Ok(0) => {
-                self.0.cfg().write_buf().release(buf);
-                Ok(inner.buffer.write_destination_size())
-            }
-            Ok(_) => {
-                if let Some(b) = inner.buffer.get_write_destination() {
-                    buf.extend_from_slice(&b);
-                    self.0.cfg().write_buf().release(b);
-                }
-                let l = buf.len();
-                inner.buffer.set_write_destination(buf);
-                Ok(l)
-            }
-            Err(e) => Err(e),
-        };
-
         match result {
-            Ok(0) => {
-                let mut flags = inner.flags.get();
+            Poll::Pending => {
+                let len = inner.buffer.write_destination_size();
 
-                // all data has been written
-                flags.insert(Flags::WR_PAUSED);
+                // check write backpressure
+                if inner.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
+                    && len < inner.write_buf().half
+                {
+                    inner.remove_flags(Flags::BUF_W_BACKPRESSURE);
+                    inner.dispatch_task.wake();
+                }
+                IoTaskStatus::Pause
+            }
+            Poll::Ready(Ok(_)) => {
+                let mut flags = inner.flags.get();
+                let len = inner.buffer.write_destination_size();
+
+                // check write backpressure
+                if flags.contains(Flags::BUF_W_BACKPRESSURE) && len < inner.write_buf().half
+                {
+                    flags.remove(Flags::BUF_W_BACKPRESSURE);
+                    inner.dispatch_task.wake();
+                }
 
                 if flags.is_task_waiting_for_write() {
                     flags.task_waiting_for_write_is_done();
@@ -289,24 +256,22 @@ impl IoContext {
                     flags.waiting_for_write_is_done();
                     inner.dispatch_task.wake();
                 }
-                inner.flags.set(flags);
-                if self.is_stopped() {
+
+                let result = if self.is_stopped() {
                     IoTaskStatus::Stop
-                } else {
+                } else if len == 0 {
+                    // all data has been written
+                    flags.insert(Flags::WR_PAUSED);
+
                     IoTaskStatus::Pause
-                }
+                } else {
+                    IoTaskStatus::Io
+                };
+
+                inner.flags.set(flags);
+                result
             }
-            Ok(len) => {
-                // if write buffer is smaller than high watermark value, turn off back-pressure
-                if inner.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
-                    && len < inner.write_buf().half
-                {
-                    inner.remove_flags(Flags::BUF_W_BACKPRESSURE);
-                    inner.dispatch_task.wake();
-                }
-                IoTaskStatus::Io
-            }
-            Err(e) => {
+            Poll::Ready(Err(e)) => {
                 inner.io_stopped(Some(e));
                 IoTaskStatus::Stop
             }
@@ -320,7 +285,7 @@ impl IoContext {
         if flags.contains(Flags::IO_STOPPING_FILTERS)
             && !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
         {
-            match io.filter().shutdown(FilterCtx::new(io, &st.buffer)) {
+            match st.buffer.with_filter(io, |ctx| io.filter().shutdown(ctx)) {
                 Ok(Poll::Ready(())) => {
                     st.write_task.wake();
                     st.dispatch_task.wake();
@@ -355,9 +320,9 @@ impl IoContext {
                     st.io_stopped(Some(err));
                 }
             }
-            if let Err(err) = io
-                .filter()
-                .process_write_buf(FilterCtx::new(io, &st.buffer))
+            if let Err(err) = st
+                .buffer
+                .with_filter(&self.0, |ctx| io.filter().process_write_buf(ctx))
             {
                 st.io_stopped(Some(err));
             }

@@ -189,7 +189,7 @@ async fn test_h2_headers() {
 
     let srv = test_server(async move || {
         let data = data.clone();
-        HttpService::h2(move |_| {
+        HttpService::h2(async move |_| {
             let mut builder = Response::Ok();
             for idx in 0..90 {
                 builder.header(
@@ -209,7 +209,7 @@ async fn test_h2_headers() {
                         TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST TEST ",
                 );
             }
-            Ready::Ok::<_, io::Error>(builder.body(data.clone()))
+            Ok::<_, io::Error>(builder.body(data.clone()))
         })
             .openssl(ssl_acceptor())
                     .map_err(|_| ())

@@ -133,9 +133,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{
-        Base, Handle, Io, IoContext, IoStream, ReadBuf, WriteBuf, testing::IoTest,
-    };
+    use crate::{Base, FilterBuf, Handle, Io, IoContext, IoStream, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -152,20 +150,19 @@ mod tests {
     }
 
     impl FilterLayer for DropFilter {
-        fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
-            if let Some(src) = buf.take_src() {
-                let len = src.len();
-                buf.set_dst(Some(src));
-                Ok(len)
-            } else {
-                Ok(0)
-            }
+        fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
+            buf.with_buffers(|_, src, dst, _, _| {
+                if let Some(src) = src.take() {
+                    *dst = Some(src);
+                }
+                Ok(())
+            })
         }
-        fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
-            if let Some(src) = buf.take_src() {
-                buf.set_dst(Some(src));
-            }
-            Ok(())
+        fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(|_, src, dst| {
+                src.move_to(dst);
+                Ok(())
+            })
         }
     }
 

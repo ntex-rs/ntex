@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use ntex_bytes::{BytesMut, buf::BufMut};
+use ntex_bytes::{BytePageSize, BytesMut, buf::BufMut};
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
 
@@ -24,6 +24,7 @@ pub struct IoConfig {
     // io read/write cache and params
     read_buf: BufConfig,
     write_buf: BufConfig,
+    write_page_size: BytePageSize,
 
     // shared config
     pub(crate) config: CfgContext,
@@ -97,6 +98,7 @@ impl IoConfig {
                 first: false,
                 cache_size: DEFAULT_CACHE_SIZE,
             },
+            write_page_size: BytePageSize::Size16,
         }
     }
 
@@ -140,6 +142,12 @@ impl IoConfig {
     /// Get write buffer parameters
     pub fn write_buf(&self) -> &BufConfig {
         &self.write_buf
+    }
+
+    #[inline]
+    /// Get write page size
+    pub fn write_page_size(&self) -> BytePageSize {
+        self.write_page_size
     }
 
     /// Set connect timeout in seconds.
@@ -214,6 +222,15 @@ impl IoConfig {
         self.read_buf.high = high_watermark;
         self.read_buf.low = low_watermark;
         self.read_buf.half = high_watermark >> 1;
+        self
+    }
+
+    /// Set write buffer page size.
+    ///
+    /// By default page size is set to 16kb.
+    #[must_use]
+    pub fn set_write_page_size(mut self, size: BytePageSize) -> Self {
+        self.write_page_size = size;
         self
     }
 

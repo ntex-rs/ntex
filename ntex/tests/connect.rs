@@ -39,16 +39,7 @@ async fn test_openssl_string() {
     let mut tcp = Some(tcp);
     let srv = build_test_server(async move |srv| {
         srv.listen("test", tcp.take().unwrap(), async |_| {
-            chain_factory(
-                fn_service(|io: Io<_>| async move {
-                    let res = io.read_ready().await;
-                    assert!(res.is_ok());
-                    Ok(io)
-                })
-                .map_init_err(|_| ()),
-            )
-            .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
-            .and_then(
+            chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
                 fn_service(|io: Io<_>| async move {
                     io.send(Bytes::from_static(b"test"), &BytesCodec)
                         .await
@@ -69,7 +60,7 @@ async fn test_openssl_string() {
 
     // ssl connector
     let conn = ntex::connect::openssl::SslConnector::new(connector.clone())
-        .pipeline(SharedCfg::default())
+        .pipeline(SharedCfg::new("CLIENT").into())
         .await
         .unwrap();
     let addr = format!("127.0.0.1:{}", srv.addr().port());
@@ -90,7 +81,7 @@ async fn test_openssl_string() {
 
     // ssl connector 2
     let conn = ntex::connect::openssl::SslConnector2::new(connector)
-        .pipeline(SharedCfg::default())
+        .pipeline(SharedCfg::new("CLIENT").into())
         .await
         .unwrap();
     let addr = format!("127.0.0.1:{}", srv.addr().port());
@@ -132,15 +123,7 @@ async fn test_openssl_read_before_error() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let srv = test_server(async || {
-        chain_factory(
-            fn_service(async move |io: Io<_>| {
-                let _ = io.read_ready().await;
-                Ok(io)
-            })
-            .map_init_err(|_| ()),
-        )
-        .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
-        .and_then(
+        chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
             fn_service(|io: Io<_>| async move {
                 io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
                     .await
@@ -354,7 +337,6 @@ async fn test_create() {
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
-#[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_uri() {
     let srv = test_server(async || {

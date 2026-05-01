@@ -393,20 +393,34 @@ impl StreamItem {
     }
 
     fn write(&mut self) -> IoTaskStatus {
-        if let Some(buf) = self.ctx.get_write_buf() {
-            let fd = self.fd();
-            log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), buf.len());
-            let res = syscall!(break libc::write(fd, buf[..].as_ptr().cast(), buf.len()));
-            return self.ctx.release_write_buf(buf, res);
+        let res = self.ctx.with_write_buf(|buf| {
+            if let Some(mut page) = buf.take() {
+                let fd = self.fd();
+                log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), page.len());
+                let res = syscall!(break libc::write(fd, page.as_ptr().cast(), page.len()));
+                println!("{}: {res:?}", self.ctx.tag());
+                if let Poll::Ready(Ok(n)) = res
+                    && page.len() != n
+                {
+                    page.advance_to(n);
+                    buf.prepend(page);
+                }
+                Some(res)
+            } else {
+                None
+            }
+        });
+        if let Some(res) = res {
+            self.ctx.update_write_buf(res)
+        } else {
+            IoTaskStatus::Pause
         }
-        IoTaskStatus::Pause
     }
 
     fn read(&mut self) -> IoTaskStatus {
         let mut buf = self.ctx.get_read_buf();
 
         let fd = self.fd();
-        let mut total = 0;
         loop {
             self.ctx.resize_read_buf(&mut buf);
 
@@ -416,7 +430,6 @@ impl StreamItem {
 
             let res = match syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len)) {
                 Poll::Ready(Ok(size)) => {
-                    total += size;
                     if size > 0 {
                         unsafe { buf.advance_mut(size) };
                         continue;
@@ -426,8 +439,12 @@ impl StreamItem {
                 Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
                 Poll::Pending => Poll::Pending,
             };
-            log::trace!("{}: {fd:?}-Rdt sz({total:?}) = {res:?}", self.tag());
-            return self.ctx.release_read_buf(total, buf, res);
+            log::trace!(
+                "{}: {fd:?}-Rdt sz({:?}) = {res:?}",
+                self.tag(),
+                buf.newbytes()
+            );
+            return self.ctx.release_read_buf(buf, res);
         }
     }
 }

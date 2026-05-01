@@ -31,26 +31,16 @@ impl NullFilter {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct FilterReadStatus {
-    pub nbytes: usize,
-    pub need_write: bool,
-}
-
 pub trait Filter: 'static {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>>;
 
-    fn process_read_buf(
-        &self,
-        ctx: FilterCtx<'_>,
-        nbytes: usize,
-    ) -> io::Result<FilterReadStatus>;
+    fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()>;
 
     /// Process write buffer
-    fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()>;
+    fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()>;
 
     /// Gracefully shutdown filter
-    fn shutdown(&self, ctx: FilterCtx<'_>) -> io::Result<Poll<()>>;
+    fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>>;
 
     /// Check readiness for read operations
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
@@ -109,40 +99,33 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn process_read_buf(
-        &self,
-        _: FilterCtx<'_>,
-        nbytes: usize,
-    ) -> io::Result<FilterReadStatus> {
-        Ok(FilterReadStatus {
-            nbytes,
-            need_write: false,
-        })
-    }
-
-    #[inline]
-    fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
-        ctx.stack.with_write_destination(ctx.io, |buf| {
-            if let Some(buf) = buf {
-                let len = buf.len();
-                let flags = self.0.flags();
-                if len > 0 && flags.contains(Flags::WR_PAUSED) {
-                    self.0.0.remove_flags(Flags::WR_PAUSED);
-                    self.0.0.write_task.wake();
-                }
-                if len >= self.0.cfg().write_buf().high
-                    && !flags.contains(Flags::BUF_W_BACKPRESSURE)
-                {
-                    self.0.0.insert_flags(Flags::BUF_W_BACKPRESSURE);
-                    self.0.0.dispatch_task.wake();
-                }
-            }
-        });
+    fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
+        if let Some(buf) = ctx.read_buffer.take() {
+            ctx.set_base_read_buf(buf);
+        }
         Ok(())
     }
 
     #[inline]
-    fn shutdown(&self, _: FilterCtx<'_>) -> io::Result<Poll<()>> {
+    fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
+        let buf = ctx.write_destination();
+        let len = buf.len();
+        let flags = self.0.flags();
+        if len > 0 && flags.contains(Flags::WR_PAUSED) {
+            self.0.0.remove_flags(Flags::WR_PAUSED);
+            self.0.0.write_task.wake();
+        }
+        if len >= self.0.cfg().write_buf().high
+            && !flags.contains(Flags::BUF_W_BACKPRESSURE)
+        {
+            self.0.0.insert_flags(Flags::BUF_W_BACKPRESSURE);
+            self.0.0.dispatch_task.wake();
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn shutdown(&self, _: &mut FilterCtx<'_>) -> io::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }
@@ -158,10 +141,10 @@ where
     }
 
     #[inline]
-    fn shutdown(&self, ctx: FilterCtx<'_>) -> io::Result<Poll<()>> {
-        let result1 = ctx.write_buf(|buf| self.0.shutdown(buf))?;
+    fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>> {
+        let result1 = ctx.with_buffer(|buf| self.0.shutdown(buf))?;
         self.process_write_buf(ctx)?;
-        let result2 = self.1.shutdown(ctx.next())?;
+        let result2 = ctx.with_next(|ctx| self.1.shutdown(ctx))?;
 
         if result1.is_pending() || result2.is_pending() {
             Ok(Poll::Pending)
@@ -171,24 +154,15 @@ where
     }
 
     #[inline]
-    fn process_read_buf(
-        &self,
-        ctx: FilterCtx<'_>,
-        nbytes: usize,
-    ) -> io::Result<FilterReadStatus> {
-        let status = self.1.process_read_buf(ctx.next(), nbytes)?;
-        ctx.read_buf(status.nbytes, |buf| {
-            self.0.process_read_buf(buf).map(|nbytes| FilterReadStatus {
-                nbytes,
-                need_write: status.need_write || buf.need_write.get(),
-            })
-        })
+    fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
+        ctx.with_next(|ctx| self.1.process_read_buf(ctx))?;
+        ctx.with_buffer(|buf| self.0.process_read_buf(buf))
     }
 
     #[inline]
-    fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
-        ctx.write_buf(|buf| self.0.process_write_buf(buf))?;
-        self.1.process_write_buf(ctx.next())
+    fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
+        ctx.with_buffer(|buf| self.0.process_write_buf(buf))?;
+        ctx.with_next(|ctx| self.1.process_write_buf(ctx))
     }
 
     #[inline]
@@ -219,17 +193,17 @@ impl Filter for NullFilter {
     }
 
     #[inline]
-    fn process_read_buf(&self, _: FilterCtx<'_>, _: usize) -> io::Result<FilterReadStatus> {
-        Ok(FilterReadStatus::default())
-    }
-
-    #[inline]
-    fn process_write_buf(&self, _: FilterCtx<'_>) -> io::Result<()> {
+    fn process_read_buf(&self, _: &mut FilterCtx<'_>) -> io::Result<()> {
         Ok(())
     }
 
     #[inline]
-    fn shutdown(&self, _: FilterCtx<'_>) -> io::Result<Poll<()>> {
+    fn process_write_buf(&self, _: &mut FilterCtx<'_>) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[inline]
+    fn shutdown(&self, _: &mut FilterCtx<'_>) -> io::Result<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }

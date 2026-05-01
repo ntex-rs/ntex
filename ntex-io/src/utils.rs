@@ -34,12 +34,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use ntex_bytes::Bytes;
+    use ntex_bytes::{BytePageSize, Bytes};
     use ntex_codec::BytesCodec;
     use ntex_service::cfg::SharedCfg;
 
     use super::*;
-    use crate::{FilterCtx, buf::Stack, filter::NullFilter, testing::IoTest};
+    use crate::{buf::Stack, filter::NullFilter, testing::IoTest};
 
     #[ntex::test]
     async fn test_utils() {
@@ -69,11 +69,11 @@ mod tests {
         let (_, server) = IoTest::create();
         let io = Io::new(server, SharedCfg::default());
         let ioref = io.get_ref();
-        let stack = Stack::new();
+        let stack = Stack::new(BytePageSize::Size16);
         assert!(NullFilter.query(std::any::TypeId::of::<()>()).is_none());
         assert!(
-            NullFilter
-                .shutdown(FilterCtx::new(&ioref, &stack))
+            stack
+                .with_filter(&ioref, |ctx| NullFilter.shutdown(ctx))
                 .unwrap()
                 .is_ready()
         );
@@ -86,15 +86,13 @@ mod tests {
             crate::Readiness::Terminate
         );
         assert!(
-            NullFilter
-                .process_write_buf(FilterCtx::new(&ioref, &stack))
+            stack
+                .with_filter(&ioref, |ctx| NullFilter.process_write_buf(ctx))
                 .is_ok()
         );
         assert_eq!(
-            NullFilter
-                .process_read_buf(FilterCtx::new(&ioref, &stack), 0)
-                .unwrap(),
-            crate::FilterReadStatus::default()
+            stack.with_filter(&ioref, |ctx| NullFilter.process_read_buf(ctx).unwrap()),
+            ()
         );
     }
 }
