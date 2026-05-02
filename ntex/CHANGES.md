@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.4] - 2026-05-02
+
+* Fix ntex-codec compatibility
+
 ## [3.7.2] - 2026-04-08
 
 * Configure web test server listener #831

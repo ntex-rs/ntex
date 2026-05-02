@@ -8,6 +8,7 @@
 //! * `cookie` - enables cookie support in http and web modules
 #![deny(clippy::pedantic)]
 #![allow(
+    deprecated,
     type_alias_bounds,
     missing_debug_implementations,
     clippy::cast_possible_truncation,
