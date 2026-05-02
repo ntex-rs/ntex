@@ -2,7 +2,7 @@ use std::{cell::Cell, fmt, io};
 
 use ntex_bytes::{BufMut, BytePageSize, BytePages, BytesMut, buf::UninitSlice};
 
-use crate::{IoRef, cfg::BufConfig};
+use crate::IoRef;
 
 #[derive(Debug)]
 pub struct Buffer {
@@ -201,19 +201,19 @@ pub struct FilterCtx<'a> {
 
 impl FilterCtx<'_> {
     #[inline]
-    /// Get io
+    /// Get io object.
     pub fn io(&self) -> &IoRef {
         self.io
     }
 
     #[inline]
-    /// Get io tag
+    /// Get io tag.
     pub fn tag(&self) -> &'static str {
         self.io.tag()
     }
 
     #[inline]
-    /// Get filter ctx for next filter in chain
+    /// Returns the filter context for the next filter in the chain.
     pub fn with_next<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -225,7 +225,7 @@ impl FilterCtx<'_> {
     }
 
     #[inline]
-    /// Get current read buffer
+    /// Returns the filter buffer.
     pub fn with_buffer<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -270,27 +270,24 @@ pub struct FilterBuf<'a> {
 
 impl FilterBuf<'_> {
     #[inline]
-    /// Get io tag
+    /// Get io tag.
     pub fn tag(&self) -> &'static str {
         self.io.tag()
     }
 
     #[inline]
-    /// Get buffer params
-    pub fn cfg(&self) -> &BufConfig {
-        self.io.cfg().read_buf()
-    }
-
+    /// Returns a reference to the source read buffer.
     pub fn read_src(&mut self) -> &mut Option<BytesMut> {
         &mut self.next.read
     }
 
+    #[inline]
+    /// Returns a reference to the destination read buffer.
     pub fn read_dst(&mut self) -> &mut Option<BytesMut> {
         &mut self.curr.read
     }
 
-    #[inline]
-    /// Get reference to source and dest buffers
+    /// Returns references to the source and destination buffers.
     pub fn with_buffers<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(
@@ -330,8 +327,7 @@ impl FilterBuf<'_> {
         result
     }
 
-    #[inline]
-    /// Get reference to source and dest read buffers
+    /// Returns references to the source and destination read buffers.
     pub fn with_read_buffers<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&IoRef, &mut Option<BytesMut>, &mut BytesMut) -> R,
@@ -362,7 +358,7 @@ impl FilterBuf<'_> {
     }
 
     #[inline]
-    /// Get reference to source and destination write buffers
+    /// Returns references to the source and destination write buffers.
     pub fn with_write_buffers<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&IoRef, &mut BytePages, &mut BytePages) -> R,
@@ -372,7 +368,7 @@ impl FilterBuf<'_> {
 }
 
 impl Buffer {
-    /// Create new buffer
+    /// Creates a new buffer.
     pub fn new(buf: BytesMut) -> Self {
         Self {
             len: buf.len(),
@@ -380,12 +376,12 @@ impl Buffer {
         }
     }
 
-    /// Get number of new bytes added
+    /// Returns the number of newly added bytes.
     pub fn newbytes(&self) -> usize {
         self.buf.len() - self.len
     }
 
-    /// Check if buffer has new bytes
+    /// Returns true if the buffer contains new bytes.
     pub fn has_newbytes(&self) -> bool {
         self.len < self.buf.len()
     }
@@ -417,16 +413,5 @@ impl BufMut for Buffer {
     #[inline]
     fn put_slice(&mut self, src: &[u8]) {
         self.buf.put_slice(src);
-    }
-
-    #[inline]
-    fn put_u8(&mut self, n: u8) {
-        self.buf.put_u8(n);
-    }
-
-    #[inline]
-    #[allow(clippy::cast_sign_loss)]
-    fn put_i8(&mut self, n: i8) {
-        self.buf.put_u8(n as u8);
     }
 }

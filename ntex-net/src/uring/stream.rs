@@ -256,7 +256,6 @@ impl Handler for StreamOpsHandler {
                 Operation::Send { id, buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         if cqueue::notif(flags) {
-                            item.ctx.with_write_buf(move |pages| pages.prepend(buf));
                             if item.ctx.update_write_buf(Poll::Ready(result.unwrap())).ready() {
                                 st.send(id, &self.inner.api);
                             }
