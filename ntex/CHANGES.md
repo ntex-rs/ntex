@@ -2,6 +2,8 @@
 
 ## [3.8.0] - 2026-05-03
 
+* Enable vectored writes for tokio runtime
+
 * Update http and ws codec, use BytePages buffer
 
 * Upgrade WsTransport

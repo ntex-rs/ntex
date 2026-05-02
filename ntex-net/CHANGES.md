@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.0] - 2026-05-03
+
+* Enable vectored writes for tokio runtime
+
 ## [3.9.1] - 2026-04-07
 
 * Update tokio compat impl
