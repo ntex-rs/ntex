@@ -7,10 +7,8 @@ use crate::http::body::BodySize;
 use crate::http::config::DateService;
 use crate::http::error::{DecodeError, EncodeError};
 use crate::http::message::ConnectionType;
-use crate::http::request::Request;
-use crate::http::response::Response;
-use crate::http::{Method, Version};
-use crate::{Cfg, io::IoConfig, util::BytesMut};
+use crate::http::{Method, Version, request::Request, response::Response};
+use crate::{Cfg, io::IoConfig, util::BytePages, util::BytesMut};
 
 use super::{Message, decoder, decoder::PayloadType, encoder};
 
@@ -154,7 +152,7 @@ impl Encoder for Codec {
     type Item = Message<(Response<()>, BodySize)>;
     type Error = EncodeError;
 
-    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encodev(&self, item: Self::Item, dst: &mut BytePages) -> Result<(), Self::Error> {
         match item {
             Message::Item((mut res, length)) => {
                 // set response version
@@ -177,12 +175,10 @@ impl Encoder for Codec {
                     length,
                     self.ctype.get(),
                     None,
-                    &self.cfg,
                 )?;
-                // self.headers_size = (dst.len() - len) as u32;
             }
             Message::Chunk(Some(bytes)) => {
-                self.encoder.encode_chunk(bytes.as_ref(), dst, &self.cfg)?;
+                self.encoder.encode_chunk(bytes, dst)?;
             }
             Message::Chunk(None) => {
                 self.encoder.encode_eof(dst)?;

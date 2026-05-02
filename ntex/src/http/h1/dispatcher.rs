@@ -797,7 +797,7 @@ mod tests {
     use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{DefaultControlService, control::Reason};
     use crate::http::{ResponseHead, StatusCode, body};
-    use crate::io::{self as nio, Base, IoConfig};
+    use crate::io::{self as nio, Base};
     use crate::service::{IntoService, cfg::SharedCfg, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
@@ -938,7 +938,7 @@ mod tests {
     async fn test_pipeline() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true, SharedCfg::default().get::<IoConfig>());
+        let mut decoder = ClientCodec::new(true);
         spawn_h1(server, |_| async {
             Ok::<_, io::Error>(Response::Ok().finish())
         });
@@ -966,7 +966,7 @@ mod tests {
     async fn test_pipeline_with_payload() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true, SharedCfg::default().get::<IoConfig>());
+        let mut decoder = ClientCodec::new(true);
 
         spawn_h1(server, |mut req: Request| async move {
             let mut p = req.take_payload();
@@ -997,7 +997,7 @@ mod tests {
     async fn test_pipeline_with_delay() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true, SharedCfg::default().get::<IoConfig>());
+        let mut decoder = ClientCodec::new(true);
         spawn_h1(server, |_| async {
             sleep(Millis(100)).await;
             Ok::<_, io::Error>(Response::Ok().finish())
@@ -1073,7 +1073,7 @@ mod tests {
             ),
         );
 
-        let mut decoder = ClientCodec::new(true, h1.inner.io.shared().get());
+        let mut decoder = ClientCodec::new(true);
 
         // generate large http message
         let data = rand::rng()
@@ -1229,7 +1229,7 @@ mod tests {
         // http message must be consumed
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
-        let mut decoder = ClientCodec::new(true, h1.inner.io.shared().get());
+        let mut decoder = ClientCodec::new(true);
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
