@@ -1,11 +1,8 @@
 //! Traits and structures to aid consuming and writing HTTP payloads.
-use std::{
-    error::Error, fmt, marker::PhantomData, mem, pin::Pin, rc::Rc, task::Context,
-    task::Poll,
-};
+use std::{error::Error, fmt, marker, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use futures_core::Stream;
-use ntex_bytes::{Bytes, BytesMut};
+use ntex_bytes::{BytePages, Bytes, BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 /// Body size hint
@@ -155,6 +152,8 @@ pub enum Body {
     Empty,
     /// Specific response body.
     Bytes(Bytes),
+    /// Multiple bytes buffers.
+    Pages(BytePages),
     /// Generic message body.
     Message(Box<dyn MessageBody>),
 }
@@ -178,6 +177,7 @@ impl MessageBody for Body {
             Body::None => BodySize::None,
             Body::Empty => BodySize::Empty,
             Body::Bytes(bin) => BodySize::Sized(bin.len() as u64),
+            Body::Pages(bin) => BodySize::Sized(bin.len() as u64),
             Body::Message(body) => body.size(),
         }
     }
@@ -196,6 +196,7 @@ impl MessageBody for Body {
                     Poll::Ready(Some(Ok(mem::take(bin))))
                 }
             }
+            Body::Pages(pages) => Poll::Ready(pages.take().map(|val| Ok(val.freeze()))),
             Body::Message(body) => body.poll_next_chunk(cx),
         }
     }
@@ -217,6 +218,7 @@ impl fmt::Debug for Body {
             Body::None => write!(f, "Body::None"),
             Body::Empty => write!(f, "Body::Empty"),
             Body::Bytes(ref b) => write!(f, "Body::Bytes({b:?})"),
+            Body::Pages(ref b) => write!(f, "Body::Pages({b:?})"),
             Body::Message(_) => write!(f, "Body::Message(_)"),
         }
     }
@@ -261,6 +263,12 @@ impl From<Bytes> for Body {
 impl From<BytesMut> for Body {
     fn from(s: BytesMut) -> Body {
         Body::Bytes(s.freeze())
+    }
+}
+
+impl From<BytePages> for Body {
+    fn from(pages: BytePages) -> Body {
+        Body::Pages(pages)
     }
 }
 
@@ -399,7 +407,7 @@ impl MessageBody for String {
 /// Response does not contain `content-length` header and appropriate transfer encoding is used.
 pub struct BodyStream<S, E> {
     stream: S,
-    _t: PhantomData<E>,
+    _t: marker::PhantomData<E>,
 }
 
 impl<S, E> BodyStream<S, E>
@@ -410,7 +418,7 @@ where
     pub fn new(stream: S) -> Self {
         BodyStream {
             stream,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -575,6 +583,13 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn test_size() {
+        assert_eq!(48, std::mem::size_of::<Body>());
+        assert_eq!(48, std::mem::size_of::<ResponseBody<Bytes>>());
+        assert_eq!(56, std::mem::size_of::<ResponseBody<Body>>());
+    }
+
+    #[ntex::test]
     async fn test_static_str() {
         assert_eq!(Body::from("").size(), BodySize::Sized(0));
         assert_eq!(Body::from("test").size(), BodySize::Sized(4));
@@ -590,6 +605,22 @@ mod tests {
             Some(Bytes::from("test"))
         );
         assert!(poll_fn(|cx| "".poll_next_chunk(cx)).await.is_none());
+    }
+
+    #[ntex::test]
+    async fn test_pages() {
+        let mut pages = BytePages::default();
+        pages.append(Bytes::from("1111"));
+        pages.append(Bytes::from("2222"));
+        pages.append(Bytes::from("3333"));
+
+        let mut body = Body::from(pages);
+        assert_eq!(body.size(), BodySize::Sized(12));
+        assert_eq!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("111122223333"))
+        );
+        assert!(poll_fn(|cx| body.poll_next_chunk(cx)).await.is_none());
     }
 
     #[ntex::test]

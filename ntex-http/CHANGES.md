@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.0] - 2026-05-02
+
+* Add BytePages support to Body
+
 ## [1.1.0] - 2026-03-18
 
 * Move types from ntex::http
