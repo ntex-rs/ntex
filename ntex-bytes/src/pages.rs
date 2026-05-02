@@ -1,60 +1,73 @@
-use std::{cmp, collections::VecDeque, fmt, mem, ptr};
+use std::{borrow::Borrow, cmp, collections::VecDeque, fmt, io, mem, ops, ptr};
 
-use crate::{BufMut, Bytes, PageSize, buf::UninitSlice, storage::StorageVec};
+use crate::{BufMut, BytePageSize, ByteString, Bytes, BytesMut};
+use crate::{buf::UninitSlice, storage::StorageVec};
 
-pub struct BytesPages {
-    size: PageSize,
-    pages: VecDeque<Page>,
+pub struct BytePages {
+    size: BytePageSize,
+    pages: VecDeque<BytePage>,
     current: StorageVec,
 }
 
-impl BytesPages {
-    /// Creates a new `BytesPages` with the specified page size.
+impl BytePages {
+    /// Creates a new `BytePages` with the specified page size.
     ///
-    /// The returned `BytesPages` will be hold one page with
+    /// The returned `BytePages` will be hold one page with
     /// specified capacity.
-    pub fn new(size: PageSize) -> Self {
-        debug_assert!(size != PageSize::Unset, "Page cannot be Unset");
+    pub fn new(size: BytePageSize) -> Self {
+        debug_assert!(size != BytePageSize::Unset, "Page cannot be Unset");
 
-        BytesPages {
+        BytePages {
             size,
             pages: VecDeque::with_capacity(8),
             current: StorageVec::sized(size),
         }
     }
 
-    #[inline]
-    pub fn append(&mut self, buf: Bytes) {
-        let remaining = self.current.remaining();
+    pub fn page_size(&self) -> BytePageSize {
+        self.size
+    }
 
-        if buf.len() <= remaining {
-            self.put_slice(buf.as_ref());
+    pub fn set_page_size(&mut self, size: BytePageSize) {
+        self.size = size;
+    }
+
+    pub fn prepend<T>(&mut self, buf: T) -> bool
+    where
+        BytePage: From<T>,
+    {
+        let p = BytePage::from(buf);
+        if p.is_empty() {
+            false
         } else {
-            if self.current.len() != 0 {
-                // push current storage to stack
-                self.pages.push_back(Page::from(mem::replace(
-                    &mut self.current,
-                    StorageVec::sized(self.size),
-                )));
-            }
-
-            // add buffer to stack
-            self.pages.push_back(Page::from(buf));
+            self.pages.push_front(p);
+            true
         }
     }
 
-    #[inline]
-    pub fn append_page(&mut self, page: Page) {
-        if self.current.len() != 0 {
-            // push current page to stack
-            self.pages.push_back(Page::from(mem::replace(
-                &mut self.current,
-                StorageVec::sized(self.size),
-            )));
-        }
+    pub fn append<T>(&mut self, buf: T)
+    where
+        BytePage: From<T>,
+    {
+        let p = BytePage::from(buf);
+        let remaining = self.current.remaining();
 
-        // add page to stack
-        self.pages.push_back(page);
+        if p.len() <= remaining {
+            self.put_slice(p.as_ref());
+        } else {
+            if self.current.len() != 0 {
+                // push current storage to stack
+                self.pages.push_back(BytePage {
+                    inner: StorageType::Storage(mem::replace(
+                        &mut self.current,
+                        StorageVec::sized(self.size),
+                    )),
+                });
+            }
+
+            // add buffer to stack
+            self.pages.push_back(p);
+        }
     }
 
     #[inline]
@@ -89,24 +102,29 @@ impl BytesPages {
         }
     }
 
-    #[inline]
-    pub fn take(&mut self) -> Option<Page> {
+    pub fn take(&mut self) -> Option<BytePage> {
         if let Some(page) = self.pages.pop_front() {
             Some(page)
         } else if self.current.len() == 0 {
             None
         } else {
-            Some(Page::from(mem::replace(
+            Some(BytePage::from(mem::replace(
                 &mut self.current,
                 StorageVec::sized(self.size),
             )))
         }
     }
+
+    pub fn move_to(&mut self, pages: &mut BytePages) {
+        while let Some(page) = self.take() {
+            pages.append(page);
+        }
+    }
 }
 
-impl fmt::Debug for BytesPages {
+impl fmt::Debug for BytePages {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut f = fmt.debug_tuple("Pages");
+        let mut f = fmt.debug_tuple("BytePages");
         for p in &self.pages {
             f.field(p);
         }
@@ -117,7 +135,13 @@ impl fmt::Debug for BytesPages {
     }
 }
 
-impl BufMut for BytesPages {
+impl Default for BytePages {
+    fn default() -> Self {
+        BytePages::new(BytePageSize::Size16)
+    }
+}
+
+impl BufMut for BytePages {
     #[inline]
     fn remaining_mut(&self) -> usize {
         self.current.remaining()
@@ -156,7 +180,7 @@ impl BufMut for BytesPages {
 
             // add new page
             if self.current.is_full() {
-                self.pages.push_back(Page::from(mem::replace(
+                self.pages.push_back(BytePage::from(mem::replace(
                     &mut self.current,
                     StorageVec::sized(self.size),
                 )));
@@ -168,7 +192,7 @@ impl BufMut for BytesPages {
     fn put_u8(&mut self, n: u8) {
         self.current.put_u8(n);
         if self.current.is_full() {
-            self.pages.push_back(Page::from(mem::replace(
+            self.pages.push_back(BytePage::from(mem::replace(
                 &mut self.current,
                 StorageVec::sized(self.size),
             )));
@@ -181,7 +205,23 @@ impl BufMut for BytesPages {
     }
 }
 
-pub struct Page {
+impl From<BytePages> for Bytes {
+    fn from(pages: BytePages) -> Bytes {
+        BytesMut::from(pages).freeze()
+    }
+}
+
+impl From<BytePages> for BytesMut {
+    fn from(mut pages: BytePages) -> BytesMut {
+        let mut buf = BytesMut::with_capacity(pages.len());
+        while let Some(p) = pages.take() {
+            buf.extend_from_slice(&p);
+        }
+        buf
+    }
+}
+
+pub struct BytePage {
     inner: StorageType,
 }
 
@@ -190,7 +230,7 @@ enum StorageType {
     Storage(StorageVec),
 }
 
-impl Page {
+impl BytePage {
     #[inline]
     pub fn len(&self) -> usize {
         match &self.inner {
@@ -216,9 +256,37 @@ impl Page {
             }
         }
     }
+
+    /// Advance the internal cursor.
+    ///
+    /// Afterwards `self` contains elements `[cnt, len)`.
+    /// This is an `O(1)` operation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cnt > len`.
+    #[inline]
+    pub fn advance_to(&mut self, cnt: usize) {
+        match &mut self.inner {
+            StorageType::Bytes(b) => b.advance_to(cnt),
+            StorageType::Storage(b) => unsafe { b.set_start(cnt as u32) },
+        }
+    }
+
+    /// Converts `self` into an immutable `Bytes`.
+    #[inline]
+    #[must_use]
+    pub fn freeze(self) -> Bytes {
+        match self.inner {
+            StorageType::Bytes(b) => b,
+            StorageType::Storage(st) => Bytes {
+                storage: st.freeze(),
+            },
+        }
+    }
 }
 
-impl AsRef<[u8]> for Page {
+impl AsRef<[u8]> for BytePage {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         match &self.inner {
@@ -228,23 +296,73 @@ impl AsRef<[u8]> for Page {
     }
 }
 
-impl From<Bytes> for Page {
+impl Borrow<[u8]> for BytePage {
+    #[inline]
+    fn borrow(&self) -> &[u8] {
+        self.as_ref()
+    }
+}
+
+impl From<Bytes> for BytePage {
     fn from(buf: Bytes) -> Self {
-        Page {
+        BytePage {
             inner: StorageType::Bytes(buf),
         }
     }
 }
 
-impl From<StorageVec> for Page {
+impl From<BytesMut> for BytePage {
+    fn from(buf: BytesMut) -> Self {
+        BytePage {
+            inner: StorageType::Storage(buf.storage),
+        }
+    }
+}
+
+impl From<ByteString> for BytePage {
+    fn from(s: ByteString) -> Self {
+        s.into_bytes().into()
+    }
+}
+
+impl From<StorageVec> for BytePage {
     fn from(buf: StorageVec) -> Self {
-        Page {
+        BytePage {
             inner: StorageType::Storage(buf),
         }
     }
 }
 
-impl fmt::Debug for Page {
+impl From<BytePage> for BytesMut {
+    fn from(page: BytePage) -> Self {
+        match page.inner {
+            StorageType::Bytes(b) => b.into(),
+            StorageType::Storage(storage) => BytesMut { storage },
+        }
+    }
+}
+
+impl io::Read for BytePage {
+    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        let len = cmp::min(self.len(), dst.len());
+        if len > 0 {
+            dst[..len].copy_from_slice(&self[..len]);
+            self.advance_to(len);
+        }
+        Ok(len)
+    }
+}
+
+impl ops::Deref for BytePage {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        self.as_ref()
+    }
+}
+
+impl fmt::Debug for BytePage {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&crate::debug::BsDebug(self.as_ref()), fmt)
     }
@@ -257,7 +375,7 @@ mod tests {
     #[test]
     fn pages() {
         // pages
-        let mut pages = BytesPages::new(PageSize::Size8);
+        let mut pages = BytePages::new(BytePageSize::Size8);
         assert!(pages.is_empty());
         assert_eq!(pages.len(), 0);
         assert_eq!(pages.num_pages(), 0);
@@ -269,7 +387,7 @@ mod tests {
         assert_eq!(pages.num_pages(), 2);
         assert!(!pages.is_empty());
 
-        let mut pgs = BytesPages::new(PageSize::Size8);
+        let mut pgs = BytePages::new(BytePageSize::Size8);
         pgs.put_i8(b'a' as i8);
         let p = pgs.take().unwrap();
         assert_eq!(p.len(), 1);
@@ -298,23 +416,35 @@ mod tests {
         assert_eq!(p.as_ref(), "a".repeat(1025).as_bytes());
         assert!(pages.take().is_none());
 
-        let p = Page::from(Bytes::copy_from_slice(b"123"));
+        let p = BytePage::from(Bytes::copy_from_slice(b"123"));
         assert_eq!(p.len(), 3);
         assert!(!p.is_empty());
         assert_eq!(p.as_ref(), b"123");
         assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
 
         // debug
-        let mut pages = BytesPages::new(PageSize::Size8);
+        let mut pages = BytePages::new(BytePageSize::Size8);
         pages.extend_from_slice(b"b");
-        assert_eq!(format!("{pages:?}"), "Pages(b\"b\")");
+        assert_eq!(format!("{pages:?}"), "BytePages(b\"b\")");
         let p = pages.take().unwrap();
         assert_eq!(p.as_ref(), b"b");
 
-        let mut pages = BytesPages::new(PageSize::Size8);
+        let mut pages = BytePages::new(BytePageSize::Size8);
         pages.extend_from_slice(b"a");
         pages.append(Bytes::copy_from_slice(b"123"));
-        pages.append_page(p);
-        assert_eq!(format!("{pages:?}"), "Pages(b\"a123\", b\"b\")");
+        pages.pages.push_back(p);
+        assert_eq!(format!("{pages:?}"), "BytePages(b\"b\", b\"a123\")");
+    }
+
+    #[test]
+    fn page_read() {
+        use std::io::Read;
+
+        let mut page = BytePage::from(Bytes::copy_from_slice(b"123"));
+
+        let mut buf = [0; 10];
+        assert_eq!(page.read(&mut buf).unwrap(), 3);
+        assert_eq!(page.len(), 0);
+        assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
 }

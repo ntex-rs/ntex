@@ -1,4 +1,4 @@
-use std::{borrow, cmp, fmt, hash, mem, ops};
+use std::{borrow, cmp, fmt, hash, io, mem, ops};
 
 use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
 
@@ -673,6 +673,17 @@ impl Default for Bytes {
     }
 }
 
+impl io::Read for Bytes {
+    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        let len = cmp::min(self.len(), dst.len());
+        if len > 0 {
+            dst[..len].copy_from_slice(&self[..len]);
+            self.advance_to(len);
+        }
+        Ok(len)
+    }
+}
+
 impl fmt::Debug for Bytes {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&debug::BsDebug(self.storage.as_ref()), fmt)
@@ -1008,5 +1019,17 @@ mod tests {
         assert_eq!(b, *b"12");
         assert_eq!(bytes::buf::Buf::get_u8(&mut b), 49);
         assert_eq!(b.len(), 1);
+    }
+
+    #[test]
+    fn bytes_read() {
+        use std::io::Read;
+
+        let mut b = Bytes::copy_from_slice(b"123");
+
+        let mut buf = [0; 10];
+        assert_eq!(b.read(&mut buf).unwrap(), 3);
+        assert_eq!(b.len(), 0);
+        assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
 }

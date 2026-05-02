@@ -121,6 +121,7 @@ pub mod util {
     use std::{error::Error, io, rc::Rc};
 
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
+    pub use ntex_bytes::{BytePage, BytePageSize, BytePages};
     pub use ntex_util::{HashMap, HashSet, future::*, services::*};
 
     #[doc(hidden)]
