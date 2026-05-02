@@ -152,8 +152,6 @@ pub enum Body {
     Empty,
     /// Specific response body.
     Bytes(Bytes),
-    /// Multiple bytes buffers.
-    Pages(BytePages),
     /// Generic message body.
     Message(Box<dyn MessageBody>),
 }
@@ -177,7 +175,6 @@ impl MessageBody for Body {
             Body::None => BodySize::None,
             Body::Empty => BodySize::Empty,
             Body::Bytes(bin) => BodySize::Sized(bin.len() as u64),
-            Body::Pages(bin) => BodySize::Sized(bin.len() as u64),
             Body::Message(body) => body.size(),
         }
     }
@@ -196,7 +193,6 @@ impl MessageBody for Body {
                     Poll::Ready(Some(Ok(mem::take(bin))))
                 }
             }
-            Body::Pages(pages) => Poll::Ready(pages.take().map(|val| Ok(val.freeze()))),
             Body::Message(body) => body.poll_next_chunk(cx),
         }
     }
@@ -218,7 +214,6 @@ impl fmt::Debug for Body {
             Body::None => write!(f, "Body::None"),
             Body::Empty => write!(f, "Body::Empty"),
             Body::Bytes(ref b) => write!(f, "Body::Bytes({b:?})"),
-            Body::Pages(ref b) => write!(f, "Body::Pages({b:?})"),
             Body::Message(_) => write!(f, "Body::Message(_)"),
         }
     }
@@ -268,7 +263,7 @@ impl From<BytesMut> for Body {
 
 impl From<BytePages> for Body {
     fn from(pages: BytePages) -> Body {
-        Body::Pages(pages)
+        Body::from_message(pages)
     }
 }
 
@@ -330,6 +325,23 @@ impl MessageBody for BytesMut {
             Poll::Ready(None)
         } else {
             Poll::Ready(Some(Ok(mem::take(self).freeze())))
+        }
+    }
+}
+
+impl MessageBody for BytePages {
+    fn size(&self) -> BodySize {
+        BodySize::Sized(self.len() as u64)
+    }
+
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
+        if let Some(page) = self.take() {
+            Poll::Ready(Some(Ok(page.freeze())))
+        } else {
+            Poll::Ready(None)
         }
     }
 }
@@ -584,9 +596,9 @@ mod tests {
 
     #[ntex::test]
     async fn test_size() {
-        assert_eq!(48, std::mem::size_of::<Body>());
-        assert_eq!(48, std::mem::size_of::<ResponseBody<Bytes>>());
-        assert_eq!(56, std::mem::size_of::<ResponseBody<Body>>());
+        assert_eq!(32, std::mem::size_of::<Body>());
+        assert_eq!(32, std::mem::size_of::<ResponseBody<Bytes>>());
+        assert_eq!(40, std::mem::size_of::<ResponseBody<Body>>());
     }
 
     #[ntex::test]
