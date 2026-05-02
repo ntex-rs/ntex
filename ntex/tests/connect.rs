@@ -376,6 +376,7 @@ async fn test_rustls_uri() {
             Ok::<_, io::Error>(())
         })
     });
+    time::sleep(time::Millis(50)).await;
 
     let conn = Pipeline::new(ntex::connect::ConnectorService::default());
     let addr =

@@ -2,7 +2,7 @@ use std::{cell::Cell, time};
 
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
+use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytePages, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -338,6 +338,14 @@ impl DateService {
 
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
+        DateService::check_date();
+        DATE.with(|date| {
+            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
+        });
+    }
+
+    #[doc(hidden)]
+    pub fn set_date_header2(&self, dst: &mut BytePages) {
         DateService::check_date();
         DATE.with(|date| {
             dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });

@@ -123,9 +123,8 @@ async fn get_response(
 
             match pseudo.status {
                 Some(status) => {
-                    let mut head = ResponseHead::new(status);
+                    let mut head = ResponseHead::new(status, Version::HTTP_2);
                     head.headers = headers;
-                    head.version = Version::HTTP_2;
 
                     let payload = if eof {
                         Payload::None

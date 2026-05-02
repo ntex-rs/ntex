@@ -205,6 +205,17 @@ impl BufMut for BytePages {
     }
 }
 
+impl io::Write for BytePages {
+    fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
+        self.put_slice(src);
+        Ok(src.len())
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
+}
+
 impl From<BytePages> for Bytes {
     fn from(pages: BytePages) -> Bytes {
         BytesMut::from(pages).freeze()
@@ -232,6 +243,7 @@ enum StorageType {
 
 impl BytePage {
     #[inline]
+    /// Returns the number of bytes contained in this `BytePage`.
     pub fn len(&self) -> usize {
         match &self.inner {
             StorageType::Bytes(b) => b.len(),
@@ -240,6 +252,7 @@ impl BytePage {
     }
 
     #[inline]
+    /// Returns true if the `BytePage` has a length of 0.
     pub fn is_empty(&self) -> bool {
         match &self.inner {
             StorageType::Bytes(b) => b.is_empty(),
@@ -247,7 +260,7 @@ impl BytePage {
         }
     }
 
-    /// Return a raw pointer to data
+    /// Return a raw pointer to data.
     pub fn as_ptr(&self) -> *const u8 {
         unsafe {
             match &self.inner {

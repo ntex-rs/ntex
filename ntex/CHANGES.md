@@ -1,5 +1,11 @@
 # Changes
 
+## [3.8.0] - 2026-05-03
+
+* Update http and ws codec, use BytePages buffer
+
+* Upgrade WsTransport
+
 ## [3.7.2] - 2026-04-08
 
 * Configure web test server listener #831

@@ -628,7 +628,7 @@ mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
     use std::{cell::RefCell, io};
 
-    use ntex_bytes::{Bytes, BytesMut};
+    use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{ServiceCtx, cfg::SharedCfg};
@@ -660,8 +660,8 @@ mod tests {
         type Item = Bytes;
         type Error = io::Error;
 
-        fn encode(&self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-            dst.extend_from_slice(&item[..]);
+        fn encodev(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
+            dst.append(item);
             Ok(())
         }
     }

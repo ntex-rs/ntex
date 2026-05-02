@@ -1,14 +1,11 @@
-#![allow(clippy::borrow_interior_mutable_const)]
 use std::{cell::Cell, fmt, marker::PhantomData, mem, task::Poll};
 
 use ntex_http::header::{HeaderName, HeaderValue};
 use ntex_http::{Method, StatusCode, Uri, Version, header};
 
 use crate::codec::Decoder;
-use crate::http::error::DecodeError;
-use crate::http::header::HeaderMap;
 use crate::http::message::{ConnectionType, ResponseHead};
-use crate::http::request::Request;
+use crate::http::{error::DecodeError, header::HeaderMap, request::Request};
 use crate::util::{Bytes, BytesMut};
 
 const MAX_HEADERS: usize = 96;
@@ -65,6 +62,7 @@ impl PayloadLength {
         matches!(self, Self::None)
     }
 
+    #[allow(clippy::borrow_interior_mutable_const)]
     /// Returns true if variant is represents zero-length (not none) payload.
     fn is_zero(&self) -> bool {
         self == &ZERO
@@ -93,94 +91,90 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
         let mut seen_te = false;
         let mut content_length = None;
 
-        {
-            let headers = self.headers_mut();
+        let headers = self.headers_mut();
 
-            for idx in raw_headers {
-                let name = HeaderName::from_bytes(&slice[idx.name.0..idx.name.1]).unwrap();
+        for idx in raw_headers {
+            let name = HeaderName::from_bytes(&slice[idx.name.0..idx.name.1]).unwrap();
 
-                // Unsafe: httparse check header value for valid utf-8
-                let value = unsafe {
-                    HeaderValue::from_shared_unchecked(
-                        slice.slice(idx.value.0..idx.value.1),
-                    )
-                };
-                match name {
-                    header::CONTENT_LENGTH if content_length.is_some() || chunked => {
-                        log::trace!("multiple Content-Length not allowed");
+            // Unsafe: httparse checks header value for valid utf-8
+            let value = unsafe {
+                HeaderValue::from_shared_unchecked(slice.slice(idx.value.0..idx.value.1))
+            };
+            match name {
+                header::CONTENT_LENGTH if content_length.is_some() || chunked => {
+                    log::trace!("multiple Content-Length not allowed");
+                    return Err(DecodeError::Header);
+                }
+                header::CONTENT_LENGTH => match value.to_str() {
+                    Ok(s) if s.trim_start().starts_with('+') => {
+                        log::trace!("illegal Content-Length: {s:?}");
                         return Err(DecodeError::Header);
                     }
-                    header::CONTENT_LENGTH => match value.to_str() {
-                        Ok(s) if s.trim_start().starts_with('+') => {
+                    Ok(s) => {
+                        if let Ok(len) = s.parse::<u64>() {
+                            // accept 0 lengths here and remove them in `decode` after all
+                            // headers have been processed to prevent request smuggling issues
+                            content_length = Some(len);
+                        } else {
                             log::trace!("illegal Content-Length: {s:?}");
                             return Err(DecodeError::Header);
                         }
-                        Ok(s) => {
-                            if let Ok(len) = s.parse::<u64>() {
-                                // accept 0 lengths here and remove them in `decode` after all
-                                // headers have been processed to prevent request smuggling issues
-                                content_length = Some(len);
-                            } else {
-                                log::trace!("illegal Content-Length: {s:?}");
-                                return Err(DecodeError::Header);
-                            }
-                        }
-                        Err(_) => {
-                            log::trace!("illegal Content-Length: {value:?}");
-                            return Err(DecodeError::Header);
-                        }
-                    },
-                    // transfer-encoding
-                    header::TRANSFER_ENCODING if seen_te => {
-                        log::trace!("Transfer-Encoding header usage is not allowed");
+                    }
+                    Err(_) => {
+                        log::trace!("illegal Content-Length: {value:?}");
                         return Err(DecodeError::Header);
                     }
-                    header::TRANSFER_ENCODING if version == Version::HTTP_11 => {
-                        seen_te = true;
-                        if let Ok(s) = value.to_str().map(str::trim) {
-                            if s.eq_ignore_ascii_case("chunked") && content_length.is_none()
-                            {
-                                chunked = true;
-                            } else if s.eq_ignore_ascii_case("identity") {
-                                // allow silently since multiple TE headers are already checked
-                            } else {
-                                log::trace!("illegal Transfer-Encoding: {s:?}");
-                                return Err(DecodeError::Header);
-                            }
+                },
+                // transfer-encoding
+                header::TRANSFER_ENCODING if seen_te => {
+                    log::trace!("Transfer-Encoding header usage is not allowed");
+                    return Err(DecodeError::Header);
+                }
+                header::TRANSFER_ENCODING if version == Version::HTTP_11 => {
+                    seen_te = true;
+                    if let Ok(s) = value.to_str().map(str::trim) {
+                        if s.eq_ignore_ascii_case("chunked") && content_length.is_none() {
+                            chunked = true;
+                        } else if s.eq_ignore_ascii_case("identity") {
+                            // allow silently since multiple TE headers are already checked
                         } else {
+                            log::trace!("illegal Transfer-Encoding: {s:?}");
                             return Err(DecodeError::Header);
                         }
+                    } else {
+                        return Err(DecodeError::Header);
                     }
-                    // connection keep-alive state
-                    header::CONNECTION => {
-                        ka = if let Ok(val) = value.to_str() {
-                            connection_type(val)
-                        } else {
-                            None
-                        };
-                    }
-                    header::UPGRADE => {
-                        has_upgrade = true;
-                        // check content-length, some clients (dart)
-                        // sends "content-length: 0" with websocket upgrade
-                        if let Ok(val) = value.to_str().map(str::trim)
-                            && val.eq_ignore_ascii_case("websocket")
-                        {
-                            content_length = None;
-                        }
-                    }
-                    header::EXPECT => {
-                        let bytes = value.as_bytes();
-                        if bytes.len() >= 4 && &bytes[0..4] == b"100-" {
-                            expect = true;
-                        }
-                    }
-                    _ => (),
                 }
-
-                headers.append(name, value);
+                // connection keep-alive state
+                header::CONNECTION => {
+                    ka = if let Ok(val) = value.to_str() {
+                        connection_type(val)
+                    } else {
+                        None
+                    };
+                }
+                header::UPGRADE => {
+                    has_upgrade = true;
+                    // check content-length, some clients (dart)
+                    // sends "content-length: 0" with websocket upgrade
+                    if let Ok(val) = value.to_str().map(str::trim)
+                        && val.eq_ignore_ascii_case("websocket")
+                    {
+                        content_length = None;
+                    }
+                }
+                header::EXPECT => {
+                    let bytes = value.as_bytes();
+                    if bytes.len() >= 4 && &bytes[0..4] == b"100-" {
+                        expect = true;
+                    }
+                }
+                _ => (),
             }
+
+            headers.append(name, value);
         }
+
         self.set_connection_type(ka);
         if expect {
             self.set_expect();
@@ -357,8 +351,7 @@ impl MessageType for ResponseHead {
             }
         };
 
-        let mut msg = ResponseHead::new(status);
-        msg.version = ver;
+        let mut msg = ResponseHead::new(status, ver);
 
         // convert headers
         let mut length = msg.set_headers(&src.split_to(len), ver, headers)?;
