@@ -398,14 +398,17 @@ impl StreamItem {
                 let fd = self.fd();
                 log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), page.len());
                 let res = syscall!(break libc::write(fd, page.as_ptr().cast(), page.len()));
-                println!("{}: {res:?}", self.ctx.tag());
-                if let Poll::Ready(Ok(n)) = res
-                    && page.len() != n
-                {
-                    page.advance_to(n);
-                    buf.prepend(page);
+                match res {
+                    Poll::Ready(Ok(n)) => {
+                        if page.len() != n {
+                            page.advance_to(n);
+                            buf.prepend(page);
+                        }
+                        Some(Poll::Ready(Ok(())))
+                    }
+                    Poll::Ready(Err(e)) => Some(Poll::Ready(Err(e))),
+                    Poll::Pending => Some(Poll::Pending),
                 }
-                Some(res)
             } else {
                 None
             }

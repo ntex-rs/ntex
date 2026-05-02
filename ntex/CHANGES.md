@@ -4,6 +4,8 @@
 
 * Enable vectored writes for tokio runtime
 
+* Enable vectored writes for compio runtime
+
 * Update http and ws codec, use BytePages buffer
 
 * Upgrade WsTransport

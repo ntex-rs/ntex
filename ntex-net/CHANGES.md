@@ -4,6 +4,8 @@
 
 * Enable vectored writes for tokio runtime
 
+* Enable vectored writes for compio runtime
+
 ## [3.9.1] - 2026-04-07
 
 * Update tokio compat impl
