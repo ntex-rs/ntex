@@ -1,5 +1,5 @@
 use std::task::{Context, Poll, ready};
-use std::{any, cell::Cell, cmp, future::poll_fn, io, pin::Pin, rc::Rc, rc::Weak};
+use std::{any, cell::Cell, cmp, future::poll_fn, io, mem, pin::Pin, rc::Rc, rc::Weak};
 
 use ntex_bytes::{BufMut, BytePage};
 use ntex_io::{
@@ -117,15 +117,74 @@ where
     }
 }
 
+const MAX_WRITE_SIZE: usize = 64 * 1024;
+const MAX_WRITE_ITEMS: usize = 16;
+
 fn write<T>(io: &mut T, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     loop {
-        let result = ctx.with_write_buf(|buf| {
-            if let Some(mut page) = buf.take() {
-                let result = write_io(io, &mut page, cx);
-                buf.prepend(page);
+        let result = ctx.with_write_buf(|dst| {
+            let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
+                None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None, None, None,
+            ];
+            let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
+                [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
+
+            let mut num = 0;
+            let mut size = 0;
+            while let Some(page) = dst.take() {
+                size += page.len();
+
+                // SAFETY: Page is stored in `pages` for lifetime of `bufs`
+                bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
+                    mem::transmute::<&[u8], &[u8]>(page.as_ref())
+                }));
+                pages[num] = Some(page);
+
+                num += 1;
+                if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+                    break;
+                }
+            }
+
+            if num > 0 {
+                // SAFETY: initialize in previous block
+                let result = unsafe {
+                    write_io(
+                        io,
+                        cx,
+                        &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]),
+                    )
+                };
+                // release pages
+                for item in bufs.iter_mut().take(num) {
+                    unsafe {
+                        item.assume_init_drop();
+                    }
+                }
+                let mut written = if let Poll::Ready(Ok(n)) = result { n } else { 0 };
+
+                // remove written bytes
+                if written > 0 {
+                    for page in pages[..num].iter_mut().flatten() {
+                        let len = cmp::min(page.len(), written);
+                        page.advance_to(len);
+                        written -= len;
+                        if written == 0 {
+                            break;
+                        }
+                    }
+                }
+                // return unwritten data back to buffer
+                for p in pages[..num].iter_mut().rev() {
+                    if let Some(page) = p.take() {
+                        dst.prepend(page);
+                    }
+                }
+
                 Some(result)
             } else {
                 None
@@ -141,6 +200,34 @@ where
         } else {
             Poll::Pending
         };
+    }
+}
+
+/// Flush write buffer to underlying I/O stream.
+fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
+    io: &mut T,
+    cx: &mut Context<'_>,
+    bufs: &[io::IoSlice<'_>],
+) -> Poll<io::Result<usize>> {
+    let n = if bufs.len() == 1 {
+        ready!(Pin::new(&mut *io).poll_write(cx, &bufs[0]))?
+    } else {
+        ready!(Pin::new(&mut *io).poll_write_vectored(cx, bufs))?
+    };
+    if n == 0 {
+        return Poll::Ready(Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "failed to write frame to transport",
+        )));
+    }
+    // log::trace!("flushed {n} bytes");
+
+    // flush
+    if n > 0 {
+        let _ = Pin::new(&mut *io).poll_flush(cx)?;
+        Poll::Ready(Ok(n))
+    } else {
+        Poll::Pending
     }
 }
 
@@ -194,46 +281,6 @@ fn read_buf<T: AsyncRead>(
     }
 
     Poll::Ready(Ok(n))
-}
-
-/// Flush write buffer to underlying I/O stream.
-fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
-    io: &mut T,
-    buf: &mut BytePage,
-    cx: &mut Context<'_>,
-) -> Poll<io::Result<usize>> {
-    let len = buf.len();
-
-    if len != 0 {
-        // log::trace!("Flushing framed transport: {len:?}");
-
-        let mut written = 0;
-        while let Poll::Ready(n) = Pin::new(&mut *io).poll_write(cx, &buf[written..])? {
-            if n == 0 {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "failed to write frame to transport",
-                )));
-            }
-            written += n;
-            if written == len {
-                break;
-            }
-        }
-        buf.advance_to(written);
-
-        // log::trace!("flushed {written} bytes");
-
-        // flush
-        if written > 0 {
-            let _ = Pin::new(&mut *io).poll_flush(cx)?;
-            Poll::Ready(Ok(written))
-        } else {
-            Poll::Pending
-        }
-    } else {
-        Poll::Pending
-    }
 }
 
 #[derive(Debug)]
