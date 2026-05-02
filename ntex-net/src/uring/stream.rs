@@ -256,7 +256,7 @@ impl Handler for StreamOpsHandler {
                 Operation::Send { id, buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         if cqueue::notif(flags) {
-                            if item.ctx.update_write_buf(Poll::Ready(result.unwrap())).ready() {
+                            if item.ctx.update_write_buf(Poll::Ready(result.unwrap().map(|_| ()))).ready() {
                                 st.send(id, &self.inner.api);
                             }
                         } else if cqueue::more(flags) {
@@ -275,7 +275,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            if item.ctx.update_write_buf(Poll::Ready(res)).ready() {
+                            if item.ctx.update_write_buf(Poll::Ready(res.map(|_| ()))).ready() {
                                 st.send(id, &self.inner.api);
                             }
                         }

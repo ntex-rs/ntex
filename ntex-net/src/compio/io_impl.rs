@@ -1,4 +1,4 @@
-use std::{any, future::poll_fn, io, mem, task::Poll};
+use std::{any, cmp, future::poll_fn, io, mem, task::Poll};
 
 use compio_buf::{BufResult, IoBuf, IoBufMut, SetLen};
 use compio_io::{AsyncRead, AsyncWrite};
@@ -7,6 +7,9 @@ use ntex_io::{Buffer, Handle, IoContext, IoStream, IoTaskStatus, Readiness, type
 use ntex_util::future::{Either, select};
 
 use super::{TcpStream, UnixStream};
+
+const MAX_WRITE_SIZE: usize = 64 * 1024;
+const MAX_WRITE_ITEMS: usize = 16;
 
 impl IoStream for TcpStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
@@ -154,15 +157,15 @@ where
     loop {
         match poll_fn(|cx| ctx.poll_write_ready(cx)).await {
             Readiness::Ready => {
-                let page = ctx.with_write_buf(BytePages::take);
-                if write_buf(&mut io, ctx, page).await == IoTaskStatus::Stop {
+                let bufs = ctx.with_write_buf(build_bufs);
+                if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
                     let _ = io.shutdown().await;
                     break;
                 }
             }
             Readiness::Shutdown => {
-                let page = ctx.with_write_buf(BytePages::take);
-                write_buf(&mut io, ctx, page).await;
+                let bufs = ctx.with_write_buf(build_bufs);
+                write_buf(&mut io, ctx, bufs).await;
                 let _ = io.shutdown().await;
                 break;
             }
@@ -171,36 +174,71 @@ where
     }
 }
 
-async fn write_buf<T>(io: &mut T, ctx: &IoContext, buf: Option<BytePage>) -> IoTaskStatus
+fn build_bufs(buf: &mut BytePages) -> Vec<CompioPage> {
+    let mut bufs = Vec::new();
+
+    let mut num = 0;
+    let mut size = 0;
+    while let Some(page) = buf.take() {
+        num += 1;
+        size += page.len();
+
+        bufs.push(CompioPage(page));
+        if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+            break;
+        }
+    }
+
+    bufs
+}
+
+async fn write_buf<T>(
+    io: &mut T,
+    ctx: &IoContext,
+    mut bufs: Vec<CompioPage>,
+) -> IoTaskStatus
 where
     T: AsyncRead + AsyncWrite,
 {
-    if let Some(b) = buf {
-        let len = b.len();
-        let mut buf = CompioPage(b);
+    while !bufs.is_empty() {
+        let result = if bufs.len() == 1 {
+            let BufResult(result, buf) = io.write(bufs.pop().unwrap()).await;
+            bufs.push(buf);
+            result
+        } else {
+            let BufResult(result, bufs1) = io.write_vectored(bufs).await;
+            bufs = bufs1;
+            result
+        };
 
-        loop {
-            let BufResult(result, buf1) = io.write(buf).await;
-            buf = buf1;
-
-            let result = match result {
-                Ok(0) => Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "failed to write frame to transport",
-                )),
-                Ok(size) => {
-                    buf.0.advance_to(size);
-                    if buf.0.is_empty() {
-                        Ok(len)
-                    } else {
-                        continue;
+        let result = match result {
+            Ok(0) => Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "failed to write frame to transport",
+            )),
+            Ok(mut written) => {
+                // remove written pages
+                while !bufs.is_empty() {
+                    let page = &mut bufs[0];
+                    let len = cmp::min(page.0.len(), written);
+                    if page.0.len() != len {
+                        page.0.advance_to(len);
+                        break;
+                    }
+                    bufs.remove(0);
+                    written -= len;
+                    if written == 0 {
+                        break;
                     }
                 }
-                Err(e) => Err(e),
-            };
-            return ctx.update_write_buf(Poll::Ready(result));
+                Ok(())
+            }
+            Err(e) => Err(e),
+        };
+        let res = ctx.update_write_buf(Poll::Ready(result));
+        if res == IoTaskStatus::Stop {
+            return IoTaskStatus::Stop;
         }
-    } else {
-        IoTaskStatus::Io
     }
+    IoTaskStatus::Io
 }

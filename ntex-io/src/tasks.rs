@@ -220,7 +220,7 @@ impl IoContext {
     }
 
     /// Set write buffer
-    pub fn update_write_buf(&self, result: Poll<io::Result<usize>>) -> IoTaskStatus {
+    pub fn update_write_buf(&self, result: Poll<io::Result<()>>) -> IoTaskStatus {
         let inner = &self.0.0;
 
         match result {
@@ -236,7 +236,7 @@ impl IoContext {
                 }
                 IoTaskStatus::Pause
             }
-            Poll::Ready(Ok(_)) => {
+            Poll::Ready(Ok(())) => {
                 let mut flags = inner.flags.get();
                 let len = inner.buffer.write_destination_size();
 

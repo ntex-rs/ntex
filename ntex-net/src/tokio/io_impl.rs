@@ -192,7 +192,7 @@ where
         });
 
         break if let Some(result) = result {
-            match ctx.update_write_buf(result) {
+            match ctx.update_write_buf(result.map(|r| r.map(|_| ()))) {
                 IoTaskStatus::Stop => Poll::Ready(Status::Terminate),
                 IoTaskStatus::Pause => Poll::Pending,
                 IoTaskStatus::Io => continue,

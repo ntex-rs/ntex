@@ -485,7 +485,7 @@ pub(super) fn write_io(
     buf: &mut BytePages,
     cx: &mut Context<'_>,
     tag: &'static str,
-) -> Poll<io::Result<usize>> {
+) -> Poll<io::Result<()>> {
     let mut written = 0;
 
     while let Some(mut page) = buf.take() {
@@ -514,7 +514,7 @@ pub(super) fn write_io(
 
     log::debug!("{tag}: flushed {written} bytes, remaining: {}", buf.len());
     if written > 0 {
-        Poll::Ready(Ok(written))
+        Poll::Ready(Ok(()))
     } else {
         Poll::Pending
     }
