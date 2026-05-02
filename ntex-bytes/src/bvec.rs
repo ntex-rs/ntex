@@ -979,7 +979,6 @@ impl From<&Bytes> for BytesMut {
 }
 
 #[cfg(test)]
-#[allow(unused_must_use)]
 mod tests {
     use super::*;
 
@@ -990,7 +989,7 @@ mod tests {
         let mut b = BytesMut::copy_from_slice(b"123");
 
         let mut buf = [0; 10];
-        b.read(&mut buf).unwrap();
+        assert_eq!(b.read(&mut buf).unwrap(), 3);
         assert_eq!(b.len(), 0);
         assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }

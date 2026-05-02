@@ -443,7 +443,7 @@ mod tests {
         let mut page = BytePage::from(Bytes::copy_from_slice(b"123"));
 
         let mut buf = [0; 10];
-        page.read(&mut buf).unwrap();
+        assert_eq!(page.read(&mut buf).unwrap(), 3);
         assert_eq!(page.len(), 0);
         assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
