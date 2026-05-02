@@ -2,7 +2,9 @@
 
 ## [1.6.0] (2026-04-26)
 
-* Add new type BytesPages and Page
+* Add new type BytesPages and BytePage
+
+* Add io::Read impl for Bytes, BytesMut, BytePage
 
 ## [1.5.3] (2026-03-07)
 

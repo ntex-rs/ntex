@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, borrow::BorrowMut, fmt, io, ops::Deref, ops::DerefMut, ptr};
+use std::{borrow, cmp, fmt, io, ops::Deref, ops::DerefMut, ptr};
 
 use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, storage::StorageVec};
 
@@ -705,14 +705,14 @@ impl Default for BytesMut {
     }
 }
 
-impl Borrow<[u8]> for BytesMut {
+impl borrow::Borrow<[u8]> for BytesMut {
     #[inline]
     fn borrow(&self) -> &[u8] {
         self.as_ref()
     }
 }
 
-impl BorrowMut<[u8]> for BytesMut {
+impl borrow::BorrowMut<[u8]> for BytesMut {
     #[inline]
     fn borrow_mut(&mut self) -> &mut [u8] {
         self.as_mut()
@@ -722,6 +722,17 @@ impl BorrowMut<[u8]> for BytesMut {
 impl PartialEq<Bytes> for BytesMut {
     fn eq(&self, other: &Bytes) -> bool {
         other[..] == self[..]
+    }
+}
+
+impl io::Read for BytesMut {
+    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        let len = cmp::min(self.len(), dst.len());
+        if len > 0 {
+            dst[..len].copy_from_slice(&self[..len]);
+            self.advance_to(len);
+        }
+        Ok(len)
     }
 }
 
@@ -964,5 +975,23 @@ impl From<&Bytes> for BytesMut {
     #[inline]
     fn from(src: &Bytes) -> BytesMut {
         BytesMut::copy_from_slice(&src[..])
+    }
+}
+
+#[cfg(test)]
+#[allow(unused_must_use)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bvec_read() {
+        use std::io::Read;
+
+        let mut b = BytesMut::copy_from_slice(b"123");
+
+        let mut buf = [0; 10];
+        b.read(&mut buf).unwrap();
+        assert_eq!(b.len(), 0);
+        assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
 }

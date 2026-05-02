@@ -99,7 +99,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
 use std::{cell::Cell, cmp, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
-use crate::{PageSize, info::Info, info::Kind};
+use crate::{BytePageSize, info::Info, info::Kind};
 
 #[cfg(target_endian = "little")]
 #[repr(C)]
@@ -125,7 +125,7 @@ struct SharedVec {
     capacity: u32,
     remaining: u32,
     ref_count: AtomicU32,
-    size: PageSize,
+    size: BytePageSize,
 }
 
 pub(crate) struct StorageVec(NonNull<SharedVec>);
@@ -208,7 +208,7 @@ impl Storage {
     #[inline]
     fn from_slice_with_capacity(cap: usize, src: &[u8]) -> Storage {
         unsafe {
-            let shared = SharedVec::create(PageSize::Unset, cap, src);
+            let shared = SharedVec::create(BytePageSize::Unset, cap, src);
             Storage {
                 len: src.len(),
                 ptr: shared.as_ptr().add(1).cast::<u8>(),
@@ -617,11 +617,11 @@ impl Drop for Storage {
 impl StorageVec {
     /// Create new empty storage with specified capacity
     pub(crate) fn with_capacity(capacity: usize) -> StorageVec {
-        StorageVec(SharedVec::create(PageSize::Unset, capacity, &[]))
+        StorageVec(SharedVec::create(BytePageSize::Unset, capacity, &[]))
     }
 
     /// Create new empty storage with specified size category
-    pub(crate) fn sized(size: PageSize) -> StorageVec {
+    pub(crate) fn sized(size: BytePageSize) -> StorageVec {
         CACHE.with(|c| {
             let mut cache = c.take().unwrap();
             let item = cache[size as usize].pop();
@@ -642,12 +642,12 @@ impl StorageVec {
     ///
     /// Caller must guarantee cap is larger or equal to src length
     pub(crate) fn from_slice(capacity: usize, src: &[u8]) -> StorageVec {
-        StorageVec(SharedVec::create(PageSize::Unset, capacity, src))
+        StorageVec(SharedVec::create(BytePageSize::Unset, capacity, src))
     }
 
     #[allow(dead_code)]
     /// Returns the page size type
-    pub(crate) fn page_size(&self) -> PageSize {
+    pub(crate) fn page_size(&self) -> BytePageSize {
         unsafe { (*self.0.as_ptr()).size }
     }
 
@@ -792,7 +792,11 @@ impl StorageVec {
     /// Copy data for new storage
     #[inline]
     pub(crate) fn reserve_capacity(&mut self, capacity: usize) {
-        *self = StorageVec(SharedVec::create(PageSize::Unset, capacity, self.as_ref()));
+        *self = StorageVec(SharedVec::create(
+            BytePageSize::Unset,
+            capacity,
+            self.as_ref(),
+        ));
     }
 
     #[inline]
@@ -835,7 +839,11 @@ impl StorageVec {
                 }
             }
             // Create a new storage
-            *self = StorageVec(SharedVec::create(PageSize::Unset, new_cap, self.as_ref()));
+            *self = StorageVec(SharedVec::create(
+                BytePageSize::Unset,
+                new_cap,
+                self.as_ref(),
+            ));
         }
     }
 
@@ -893,7 +901,7 @@ thread_local! {
 const CACHE_SIZE: usize = 128;
 
 impl SharedVec {
-    fn create(size: PageSize, cap: usize, src: &[u8]) -> NonNull<SharedVec> {
+    fn create(size: BytePageSize, cap: usize, src: &[u8]) -> NonNull<SharedVec> {
         let ptr = Self::alloc_with_capacity(size, cap, src.len() as u32);
 
         // copy slice
@@ -906,7 +914,7 @@ impl SharedVec {
         }
     }
 
-    fn alloc_with_capacity(size: PageSize, cap: usize, len: u32) -> *mut u8 {
+    fn alloc_with_capacity(size: BytePageSize, cap: usize, len: u32) -> *mut u8 {
         let layout = shared_vec_layout(cap).unwrap();
 
         // Alloc memory and store data
@@ -973,7 +981,7 @@ fn release_shared_vec(ptr: *mut SharedVec) {
 
         // Try to put to cache
         let size = (*ptr).size;
-        if size != PageSize::Unset {
+        if size != BytePageSize::Unset {
             let cached = CACHE.with(|c| {
                 let mut cache = c.take().unwrap();
                 let res = if cache[size as usize].len() < CACHE_SIZE {
@@ -983,7 +991,7 @@ fn release_shared_vec(ptr: *mut SharedVec) {
                     (*ptr).capacity = capacity;
                     (*ptr).remaining = capacity;
                     (*ptr).ref_count = AtomicU32::new(1);
-                    (*ptr).size = PageSize::Unset;
+                    (*ptr).size = BytePageSize::Unset;
                     cache[size as usize].push(StorageVec(NonNull::new_unchecked(ptr)));
                     true
                 } else {
@@ -1141,14 +1149,14 @@ mod tests {
     fn cached() {
         super::CACHE.with(|cache| cache.set(Some(Box::default())));
 
-        let mut st = StorageVec::sized(PageSize::Size8);
-        assert_eq!(st.page_size(), PageSize::Size8);
+        let mut st = StorageVec::sized(BytePageSize::Size8);
+        assert_eq!(st.page_size(), BytePageSize::Size8);
 
         st.put_u8(b'h');
         let addr = st.0;
         drop(st);
 
-        let st = StorageVec::sized(PageSize::Size8);
+        let st = StorageVec::sized(BytePageSize::Size8);
         assert_eq!(addr, st.0);
     }
 }
