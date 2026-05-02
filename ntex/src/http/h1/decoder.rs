@@ -99,7 +99,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
             for idx in raw_headers {
                 let name = HeaderName::from_bytes(&slice[idx.name.0..idx.name.1]).unwrap();
 
-                // Unsafe: httparse check header value for valid utf-8
+                // Unsafe: httparse checks header value for valid utf-8
                 let value = unsafe {
                     HeaderValue::from_shared_unchecked(
                         slice.slice(idx.value.0..idx.value.1),
