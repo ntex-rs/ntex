@@ -1,5 +1,5 @@
 #![allow(clippy::borrow_interior_mutable_const)]
-use std::{cell::Cell, marker::PhantomData, mem, task::Poll};
+use std::{cell::Cell, fmt, marker::PhantomData, mem, task::Poll};
 
 use ntex_http::header::{HeaderName, HeaderValue};
 use ntex_http::{Method, StatusCode, Uri, Version, header};
@@ -71,7 +71,7 @@ impl PayloadLength {
     }
 }
 
-pub(crate) trait MessageType: Sized {
+pub(crate) trait MessageType: fmt::Debug + Sized {
     fn set_connection_type(&mut self, ctype: Option<ConnectionType>);
 
     fn set_expect(&mut self);

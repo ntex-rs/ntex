@@ -38,13 +38,17 @@ pub(super) async fn send_request(
         }
     }
 
-    log::trace!("sending http1 request {req:?} body size: {:?}", body.size());
+    log::trace!(
+        "{}: sending http1 request {req:?} body size: {:?}",
+        io.tag(),
+        body.size()
+    );
 
     // send request
     let codec = ClientCodec::new(true, io.shared().get());
     io.send(req.into(), &codec).await?;
 
-    log::trace!("http1 request has been sent");
+    log::trace!("{}: http1 request has been sent", io.tag());
 
     // send request body
     match body.size() {
@@ -54,13 +58,14 @@ pub(super) async fn send_request(
         }
     }
 
-    log::trace!("reading http1 response");
+    log::trace!("{}: reading http1 response", io.tag());
 
     // read response and init read body
     let fut = async {
         if let Some(result) = io.recv(&codec).await? {
             log::trace!(
-                "http1 response is received, type: {:?}, response: {result:#?}",
+                "{}: http1 response is received, type: {:?}, response: {result:#?}",
+                io.tag(),
                 codec.message_type()
             );
             Ok(result)
@@ -97,14 +102,19 @@ pub(super) async fn send_body(
 ) -> Result<(), ClientError> {
     loop {
         if let Some(result) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
-            io.encode(h1::Message::Chunk(Some(result?)), codec)?;
+            let chunk = result?;
+            #[cfg(feature = "trace")]
+            log::trace!("{}: sending chunk, {} bytes", io.tag(), chunk.len());
+            io.encode(h1::Message::Chunk(Some(chunk)), codec)?;
             io.flush(false).await?;
+            #[cfg(feature = "trace")]
+            log::trace!("{}: flushed", io.tag());
         } else {
             io.encode(h1::Message::Chunk(None), codec)?;
+            io.flush(true).await?;
             break;
         }
     }
-    io.flush(true).await?;
 
     Ok(())
 }

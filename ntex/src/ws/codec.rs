@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use crate::codec::{Decoder, Encoder};
-use crate::util::{ByteString, Bytes, BytesMut};
+use crate::util::{BytePage, BytePages, ByteString, Bytes, BytesMut};
 
 use super::error::ProtocolError;
 use super::frame::Parser;
@@ -111,6 +111,17 @@ impl Codec {
         flags.remove(f);
         self.flags.set(flags);
     }
+
+    /// Encode binary message
+    pub fn encode_page(&self, page: BytePage, dst: &mut BytePages) {
+        Parser::write_message(
+            dst,
+            page,
+            OpCode::Binary,
+            true,
+            !self.flags.get().contains(Flags::SERVER),
+        );
+    }
 }
 
 impl Default for Codec {
@@ -123,11 +134,11 @@ impl Encoder for Codec {
     type Item = Message;
     type Error = ProtocolError;
 
-    fn encode(&self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encodev(&self, item: Message, dst: &mut BytePages) -> Result<(), Self::Error> {
         match item {
             Message::Text(txt) => Parser::write_message(
                 dst,
-                txt.as_ref(),
+                txt,
                 OpCode::Text,
                 true,
                 !self.flags.get().contains(Flags::SERVER),
@@ -165,7 +176,7 @@ impl Encoder for Codec {
                     self.insert_flags(Flags::W_CONTINUATION);
                     Parser::write_message(
                         dst,
-                        &data[..],
+                        data,
                         OpCode::Text,
                         false,
                         !self.flags.get().contains(Flags::SERVER),
@@ -178,7 +189,7 @@ impl Encoder for Codec {
                     self.insert_flags(Flags::W_CONTINUATION);
                     Parser::write_message(
                         dst,
-                        &data[..],
+                        data,
                         OpCode::Binary,
                         false,
                         !self.flags.get().contains(Flags::SERVER),
@@ -188,7 +199,7 @@ impl Encoder for Codec {
                     if self.flags.get().contains(Flags::W_CONTINUATION) {
                         Parser::write_message(
                             dst,
-                            &data[..],
+                            data,
                             OpCode::Continue,
                             false,
                             !self.flags.get().contains(Flags::SERVER),
@@ -202,7 +213,7 @@ impl Encoder for Codec {
                         self.remove_flags(Flags::W_CONTINUATION);
                         Parser::write_message(
                             dst,
-                            &data[..],
+                            data,
                             OpCode::Continue,
                             true,
                             !self.flags.get().contains(Flags::SERVER),
