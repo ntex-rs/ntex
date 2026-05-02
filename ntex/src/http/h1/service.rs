@@ -283,7 +283,8 @@ where
         let ioref = io.get_ref();
 
         log::trace!(
-            "New http1 connection {id}, peer address {:?}, inflight: {}",
+            "{}: New http1 connection {id}, peer address {:?}, inflight: {}",
+            io.tag(),
             io.query::<types::PeerAddr>().get(),
             inflight
         );

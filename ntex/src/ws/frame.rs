@@ -2,7 +2,7 @@ use nanorand::{Rng, WyRand};
 
 use super::proto::{CloseCode, CloseReason, OpCode};
 use super::{error::ProtocolError, mask::apply_mask};
-use crate::util::{BufMut, Bytes, BytesMut};
+use crate::util::{BufMut, BytePage, BytePages, Bytes, BytesMut};
 
 /// WebSocket frame parser.
 #[derive(Debug)]
@@ -149,61 +149,54 @@ impl Parser {
     }
 
     /// Generate binary representation
-    pub fn write_message<B: AsRef<[u8]>>(
-        dst: &mut BytesMut,
-        pl: B,
-        op: OpCode,
-        fin: bool,
-        mask: bool,
-    ) {
-        let payload = pl.as_ref();
+    pub fn write_message<B>(dst: &mut BytePages, pl: B, op: OpCode, fin: bool, mask: bool)
+    where
+        BytePage: From<B>,
+    {
+        let payload = BytePage::from(pl);
         let one: u8 = if fin {
             0x80 | Into::<u8>::into(op)
         } else {
             op.into()
         };
         let payload_len = payload.len();
-        let (two, p_len) = if mask {
-            (0x80, payload_len + 4)
-        } else {
-            (0, payload_len)
-        };
+        let two = if mask { 0x80 } else { 0 };
 
         if payload_len < 126 {
-            dst.reserve(p_len + 2);
             dst.extend_from_slice(&[one, two | payload_len as u8]);
         } else if payload_len <= 65_535 {
-            dst.reserve(p_len + 4);
             dst.extend_from_slice(&[one, two | 0x007e]);
             dst.put_u16(payload_len as u16);
         } else {
-            dst.reserve(p_len + 10);
             dst.extend_from_slice(&[one, two | 127]);
             dst.put_u64(payload_len as u64);
         }
 
         if mask {
             let mask: u32 = WyRand::new().generate();
+            let mut buf = BytesMut::from(payload);
+            apply_mask(&mut buf, mask);
             dst.put_u32_le(mask);
-            dst.extend_from_slice(payload);
-            let pos = dst.len() - payload_len;
-            apply_mask(&mut dst[pos..], mask);
+            dst.append::<BytesMut>(buf);
         } else {
-            dst.extend_from_slice(payload);
+            dst.append::<BytePage>(payload);
         }
     }
 
     /// Create a new Close control frame.
     #[inline]
-    pub fn write_close(dst: &mut BytesMut, reason: Option<CloseReason>, mask: bool) {
+    pub fn write_close(dst: &mut BytePages, reason: Option<CloseReason>, mask: bool) {
         let payload = match reason {
-            None => Vec::new(),
+            None => Bytes::new(),
             Some(reason) => {
-                let mut payload = Into::<u16>::into(reason.code).to_be_bytes().to_vec();
+                let mut payload = BytesMut::with_capacity(
+                    reason.description.as_ref().map_or(0, String::len) + 2,
+                );
+                payload.put_u16(u16::from(reason.code));
                 if let Some(description) = reason.description {
-                    payload.extend(description.as_bytes());
+                    payload.extend_from_slice(description.as_bytes());
                 }
-                payload
+                payload.freeze()
             }
         };
 
@@ -331,39 +324,39 @@ mod tests {
 
     #[test]
     fn test_ping_frame() {
-        let mut buf = BytesMut::new();
-        Parser::write_message(&mut buf, Vec::from("data"), OpCode::Ping, true, false);
+        let mut buf = BytePages::default();
+        Parser::write_message(&mut buf, Bytes::from("data"), OpCode::Ping, true, false);
 
         let mut v = vec![137u8, 4u8];
         v.extend(b"data");
-        assert_eq!(&buf[..], &v[..]);
+        assert_eq!(&Bytes::from(buf)[..], &v[..]);
     }
 
     #[test]
     fn test_pong_frame() {
-        let mut buf = BytesMut::new();
-        Parser::write_message(&mut buf, Vec::from("data"), OpCode::Pong, true, false);
+        let mut buf = BytePages::default();
+        Parser::write_message(&mut buf, Bytes::from("data"), OpCode::Pong, true, false);
 
         let mut v = vec![138u8, 4u8];
         v.extend(b"data");
-        assert_eq!(&buf[..], &v[..]);
+        assert_eq!(&Bytes::from(buf)[..], &v[..]);
     }
 
     #[test]
     fn test_close_frame() {
-        let mut buf = BytesMut::new();
+        let mut buf = BytePages::default();
         let reason = (CloseCode::Normal, "data");
         Parser::write_close(&mut buf, Some(reason.into()), false);
 
         let mut v = vec![136u8, 6u8, 3u8, 232u8];
         v.extend(b"data");
-        assert_eq!(&buf[..], &v[..]);
+        assert_eq!(&Bytes::from(buf)[..], &v[..]);
     }
 
     #[test]
     fn test_empty_close_frame() {
-        let mut buf = BytesMut::new();
+        let mut buf = BytePages::default();
         Parser::write_close(&mut buf, None, false);
-        assert_eq!(&buf[..], &vec![0x88, 0x00][..]);
+        assert_eq!(&Bytes::from(buf)[..], &[0x88, 0x00]);
     }
 }

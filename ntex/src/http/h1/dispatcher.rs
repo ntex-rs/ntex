@@ -823,9 +823,10 @@ mod tests {
                     .set_client_timeout(Seconds(1)),
             )
             .into();
+
         Dispatcher::new(
             0,
-            nio::Io::new(stream, SharedCfg::default()),
+            nio::Io::new(stream, config.clone()),
             Rc::new(DispatcherConfig::new(
                 config.get(),
                 service.into_service(),
@@ -842,9 +843,17 @@ mod tests {
         S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
+        let config: SharedCfg = SharedCfg::new("DBG")
+            .add(
+                HttpServiceConfig::new()
+                    .set_keepalive(Seconds(5))
+                    .set_client_timeout(Seconds(1)),
+            )
+            .into();
+
         crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
             0,
-            nio::Io::new(stream, SharedCfg::default()),
+            nio::Io::new(stream, config),
             Rc::new(DispatcherConfig::new(
                 SharedCfg::default().get(),
                 service.into_service(),
@@ -1173,7 +1182,7 @@ mod tests {
 
         client.remote_buffer_cap(65536);
         sleep(Millis(50)).await;
-        assert_eq!(state.with_write_buf(|buf| buf.len()).unwrap(), 93);
+        assert_eq!(state.with_write_buf(|buf| { buf.len() }).unwrap(), 93);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);

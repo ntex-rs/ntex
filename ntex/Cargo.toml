@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.7.3"
+version = "3.8.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -68,6 +68,8 @@ ws = ["dep:sha1"]
 
 # disable [ntex::test] logging configuration
 no-test-logging = []
+
+trace = []
 
 [dependencies]
 ntex-bytes = { workspace = true }

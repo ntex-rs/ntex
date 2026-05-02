@@ -384,7 +384,8 @@ where
             };
 
             log::trace!(
-                "New http2 connection {id}, peer address {:?}, in-flight: {inflight}",
+                "{}: New http2 connection {id}, peer address {:?}, in-flight: {inflight}",
+                io.tag(),
                 io.query::<types::PeerAddr>().get(),
             );
 
@@ -397,7 +398,8 @@ where
             };
 
             log::trace!(
-                "New http1 connection {id}, peer address {:?}, in-flight: {inflight}",
+                "{}: New http1 connection {id}, peer address {:?}, in-flight: {inflight}",
+                io.tag(),
                 io.query::<types::PeerAddr>().get(),
             );
             h1::handle_io(id, io, self.config.clone()).await

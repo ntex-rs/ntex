@@ -379,11 +379,12 @@ where
                 let pl = if eof {
                     None
                 } else {
-                    // log::debug!(
-                    //     "{}: Creating local payload stream for {:?}",
-                    //     self.io.tag(),
-                    //     stream.id()
-                    // );
+                    #[cfg(feature = "trace")]
+                    log::debug!(
+                        "{}: Creating local payload stream for {:?}",
+                        self.io.tag(),
+                        stream.id()
+                    );
                     let (sender, payload) = Payload::create(stream.empty_capacity());
                     self.streams.borrow_mut().insert(stream.id(), sender);
                     Some(payload)
@@ -391,12 +392,13 @@ where
                 (self.io.clone(), pseudo, headers, eof, pl)
             }
             h2::MessageKind::Data(data, cap) => {
-                // log::debug!(
-                //     "{}: Got data chunk for {:?}: {:?}",
-                //     self.io.tag(),
-                //     stream.id(),
-                //     data.len()
-                // );
+                #[cfg(feature = "trace")]
+                log::debug!(
+                    "{}: Got data chunk for {:?}: {:?}",
+                    self.io.tag(),
+                    stream.id(),
+                    data.len()
+                );
                 if let Some(sender) = self.streams.borrow_mut().get_mut(&stream.id()) {
                     sender.feed_data(data, cap);
                 } else {
@@ -482,6 +484,7 @@ where
         let mut size = body.size();
         prepare_response(head, &mut size);
 
+        #[cfg(feature = "trace")]
         log::debug!(
             "{}: Received service response: {head:?} payload: {size:?}",
             self.io.tag()
@@ -500,6 +503,7 @@ where
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                     None => {
+                        #[cfg(feature = "trace")]
                         log::debug!(
                             "{}: {:?} closing payload stream",
                             self.io.tag(),
@@ -512,6 +516,7 @@ where
                         break;
                     }
                     Some(Ok(chunk)) => {
+                        #[cfg(feature = "trace")]
                         log::debug!(
                             "{}: {:?} sending data chunk {:?} bytes",
                             self.io.tag(),
@@ -526,6 +531,7 @@ where
                         }
                     }
                     Some(Err(e)) => {
+                        #[cfg(feature = "trace")]
                         log::error!(
                             "{}: Response payload stream error: {e:?}",
                             self.io.tag()

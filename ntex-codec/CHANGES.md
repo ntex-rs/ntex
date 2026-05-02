@@ -1,5 +1,9 @@
 # Changes
 
+## [1.2.0] - 2026-05-03
+
+* Add Encoder::encodev() method with BytePages as buffer
+
 ## [1.1.0] - 2026-01-17
 
 * Simplify api
