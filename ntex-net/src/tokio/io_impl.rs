@@ -1,9 +1,10 @@
 use std::task::{Context, Poll, ready};
 use std::{any, cell::Cell, cmp, future::poll_fn, io, pin::Pin, rc::Rc, rc::Weak};
 
-use ntex_bytes::{BufMut, BytesMut};
+use ntex_bytes::{BufMut, BytePage};
 use ntex_io::{
-    Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types,
+    Buffer, Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness,
+    types,
 };
 use ntex_util::time::Millis;
 use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -120,15 +121,26 @@ fn write<T>(io: &mut T, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    if let Some(mut buf) = ctx.get_write_buf() {
-        let result = write_io(io, &mut buf, cx);
-        if ctx.release_write_buf(buf, result) == IoTaskStatus::Stop {
-            Poll::Ready(Status::Terminate)
+    loop {
+        let result = ctx.with_write_buf(|buf| {
+            if let Some(mut page) = buf.take() {
+                let result = write_io(io, &mut page, cx);
+                buf.prepend(page);
+                Some(result)
+            } else {
+                None
+            }
+        });
+
+        break if let Some(result) = result {
+            match ctx.update_write_buf(result) {
+                IoTaskStatus::Stop => Poll::Ready(Status::Terminate),
+                IoTaskStatus::Pause => Poll::Pending,
+                IoTaskStatus::Io => continue,
+            }
         } else {
             Poll::Pending
-        }
-    } else {
-        Poll::Pending
+        };
     }
 }
 
@@ -140,26 +152,16 @@ fn read<T: AsyncRead + Unpin>(
     let mut buf = ctx.get_read_buf();
 
     // read data from socket
-    let mut n = 0;
     loop {
         ctx.resize_read_buf(&mut buf);
         let result = match read_buf(Pin::new(&mut *io), cx, &mut buf) {
-            Poll::Pending => {
-                if n > 0 {
-                    Poll::Ready(Ok(()))
-                } else {
-                    Poll::Pending
-                }
-            }
+            Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(0)) => Poll::Ready(Err(None)),
-            Poll::Ready(Ok(size)) => {
-                n += size;
-                continue;
-            }
+            Poll::Ready(Ok(_)) => continue,
             Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
         };
 
-        return if matches!(ctx.release_read_buf(n, buf, result), IoTaskStatus::Stop) {
+        return if matches!(ctx.release_read_buf(buf, result), IoTaskStatus::Stop) {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -170,7 +172,7 @@ fn read<T: AsyncRead + Unpin>(
 fn read_buf<T: AsyncRead>(
     io: Pin<&mut T>,
     cx: &mut Context<'_>,
-    buf: &mut BytesMut,
+    buf: &mut Buffer,
 ) -> Poll<io::Result<usize>> {
     let n = {
         let dst = buf.chunk_mut().as_mut();
@@ -197,7 +199,7 @@ fn read_buf<T: AsyncRead>(
 /// Flush write buffer to underlying I/O stream.
 fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
     io: &mut T,
-    buf: &mut BytesMut,
+    buf: &mut BytePage,
     cx: &mut Context<'_>,
 ) -> Poll<io::Result<usize>> {
     let len = buf.len();
@@ -218,6 +220,8 @@ fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
                 break;
             }
         }
+        buf.advance_to(written);
+
         // log::trace!("flushed {written} bytes");
 
         // flush

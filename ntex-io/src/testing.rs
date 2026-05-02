@@ -4,10 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::{any, cell::RefCell, cmp, fmt, future::poll_fn, io, mem, net, rc::Rc};
 
-use ntex_bytes::{BufMut, Bytes, BytesMut};
+use ntex_bytes::{BufMut, BytePages, Bytes, BytesMut};
 use ntex_util::time::{Millis, sleep};
 
-use crate::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
+use crate::{Buffer, Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 
 #[derive(Default)]
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
@@ -244,7 +244,7 @@ impl IoTest {
     pub fn poll_read_buf(
         &self,
         cx: &mut Context<'_>,
-        buf: &mut BytesMut,
+        buf: &mut Buffer,
     ) -> Poll<io::Result<usize>> {
         let guard = self.local.lock().unwrap();
         let mut ch = guard.borrow_mut();
@@ -252,6 +252,7 @@ impl IoTest {
 
         if !ch.buf.is_empty() {
             let size = std::cmp::min(ch.buf.len(), buf.remaining_mut());
+            assert!(size > 0, "Supplied buffer is zero sized");
             let b = ch.buf.split_to(size);
             buf.put_slice(&b);
             return Poll::Ready(Ok(size));
@@ -432,13 +433,9 @@ fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
 }
 
 fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
-    if let Some(mut buf) = ctx.get_write_buf() {
-        let result = write_io(io, &mut buf, cx, ctx.tag());
-        if ctx.release_write_buf(buf, result) == IoTaskStatus::Stop {
-            Poll::Ready(Status::Terminate)
-        } else {
-            Poll::Pending
-        }
+    let result = ctx.with_write_buf(|buf| write_io(io, buf, cx, ctx.tag()));
+    if ctx.update_write_buf(result) == IoTaskStatus::Stop {
+        Poll::Ready(Status::Terminate)
     } else {
         Poll::Pending
     }
@@ -474,7 +471,7 @@ fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
             Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
         };
 
-        return if matches!(ctx.release_read_buf(n, buf, result), IoTaskStatus::Stop) {
+        return if matches!(ctx.release_read_buf(buf, result), IoTaskStatus::Stop) {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -485,35 +482,39 @@ fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
 /// Flush write buffer to underlying I/O stream.
 pub(super) fn write_io(
     io: &IoTest,
-    buf: &mut BytesMut,
+    buf: &mut BytePages,
     cx: &mut Context<'_>,
     tag: &'static str,
 ) -> Poll<io::Result<usize>> {
-    let len = buf.len();
+    let mut written = 0;
 
-    if len != 0 {
-        log::debug!("{tag}: flushing framed transport: {len}");
+    while let Some(mut page) = buf.take() {
+        log::debug!("{tag}: flushing framed transport: {}", page.len());
 
-        let mut written = 0;
-        while let Poll::Ready(n) = io.poll_write_buf(cx, &buf[written..])? {
-            if n == 0 {
+        let result = io.poll_write_buf(cx, &page)?;
+        match result {
+            Poll::Ready(0) => {
                 log::trace!("{tag}: disconnected during flush, written {written}");
                 return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::WriteZero,
                     "failed to write frame to transport",
                 )));
             }
-            written += n;
-            if written == len {
+            Poll::Ready(n) => {
+                written += n;
+                page.advance_to(n);
+                buf.prepend(page);
+            }
+            Poll::Pending => {
+                buf.prepend(page);
                 break;
             }
         }
-        log::debug!("{tag}: flushed {written} bytes");
-        if written > 0 {
-            Poll::Ready(Ok(written))
-        } else {
-            Poll::Pending
-        }
+    }
+
+    log::debug!("{tag}: flushed {written} bytes, remaining: {}", buf.len());
+    if written > 0 {
+        Poll::Ready(Ok(written))
     } else {
         Poll::Pending
     }
@@ -536,7 +537,7 @@ mod tests {
         assert!(format!("{:?}", AtomicWaker::default()).contains("AtomicWaker"));
 
         server.read_pending();
-        let mut buf = BytesMut::new();
+        let mut buf = Buffer::new(BytesMut::new());
         let res = lazy(|cx| client.poll_read_buf(cx, &mut buf)).await;
         assert!(res.is_pending());
 

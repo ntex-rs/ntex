@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.0] - 2026-05-xx
+
+* Add support for vectored writes
+
 ## [3.9.2] - 2026-04-07
 
 * Fix shutdown handling, could dead lock in edge cases

@@ -1,13 +1,12 @@
 use std::{any, fmt, hash, io};
 
-use ntex_bytes::BytesMut;
+use ntex_bytes::{BytePages, BytesMut};
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::{
-    Decoded, Filter, FilterCtx, Flags, IoConfig, IoRef, OnDisconnect, WriteBuf, timer,
-    types,
+    Decoded, Filter, FilterBuf, Flags, IoConfig, IoRef, OnDisconnect, timer, types,
 };
 
 impl IoRef {
@@ -106,6 +105,12 @@ impl IoRef {
     }
 
     #[inline]
+    /// Ask io to process write buffer
+    pub fn want_write(&self) {
+        self.0.insert_flags(Flags::IO_WANT_WRITE);
+    }
+
+    #[inline]
     /// Query filter specific data
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
         if let Some(item) = self.filter().query(any::TypeId::of::<T>()) {
@@ -126,11 +131,8 @@ impl IoRef {
             Ok(())
         } else {
             self.with_write_buf(|buf| {
-                // make sure we've got room
-                self.cfg().write_buf().resize(buf);
-
                 // encode item and wake write task
-                codec.encode(item, buf)
+                codec.encodev(item, buf)
             })
             // .with_write_buf() could return io::Error<Result<(), U::Error>>,
             // in that case mark io as failed
@@ -189,27 +191,28 @@ impl IoRef {
     /// Get access to write buffer
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
-        F: FnOnce(&WriteBuf<'_>) -> R,
+        F: FnOnce(&mut FilterBuf<'_>) -> R,
     {
-        let ctx = FilterCtx::new(self, &self.0.buffer);
-        let result = ctx.write_buf(f);
-        self.0.filter().process_write_buf(ctx)?;
-        Ok(result)
+        self.0.buffer.with_filter(self, |ctx| {
+            let result = ctx.with_buffer(f);
+            self.0.filter().process_write_buf(ctx)?;
+            Ok(result)
+        })
     }
 
     #[inline]
     /// Get mut access to source write buffer
     pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
-        F: FnOnce(&mut BytesMut) -> R,
+        F: FnOnce(&mut BytePages) -> R,
     {
         if self.0.flags.get().contains(Flags::IO_STOPPED) {
             Err(self.0.error_or_disconnected())
         } else {
-            let result = self.0.buffer.with_write_source(self, f);
+            let result = self.0.buffer.with_write_source(f);
             self.0
-                .filter()
-                .process_write_buf(FilterCtx::new(self, &self.0.buffer))?;
+                .buffer
+                .with_filter(self, |ctx| self.0.filter().process_write_buf(ctx))?;
             Ok(result)
         }
     }
@@ -219,9 +222,21 @@ impl IoRef {
     /// Get mut access to destination write buffer
     pub fn with_write_dest_buf<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(Option<&mut BytesMut>) -> R,
+        F: FnOnce(&mut BytePages) -> R,
     {
-        self.0.buffer.with_write_destination(self, f)
+        self.0.buffer.with_write_destination(f)
+    }
+
+    #[inline]
+    /// Get buffer for read operations
+    pub fn get_read_buf(&self) -> BytesMut {
+        self.0.cfg.read_buf().get()
+    }
+
+    #[inline]
+    /// Make sure buffer has enough free space
+    pub fn resize_read_buf(&self, buf: &mut BytesMut) {
+        self.0.cfg.read_buf().resize(buf);
     }
 
     #[inline]
@@ -327,11 +342,10 @@ mod tests {
 
     use ntex_bytes::Bytes;
     use ntex_codec::BytesCodec;
-    use ntex_util::future::lazy;
-    use ntex_util::time::{Millis, sleep};
+    use ntex_util::{future::lazy, time::Millis, time::sleep};
 
     use super::*;
-    use crate::{FilterCtx, FilterReadStatus, Io, testing::IoTest};
+    use crate::{FilterCtx, Io, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -484,24 +498,24 @@ mod tests {
     }
 
     impl<F: Filter> Filter for Counter<F> {
-        fn process_read_buf(
-            &self,
-            ctx: FilterCtx<'_>,
-            nbytes: usize,
-        ) -> io::Result<FilterReadStatus> {
+        fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
             self.read_order.borrow_mut().push(self.idx);
-            self.in_bytes.set(self.in_bytes.get() + nbytes);
-            self.layer.process_read_buf(ctx, nbytes)
+            let nbytes =
+                ctx.with_buffer(|b| b.read_dst().as_ref().map_or(0, BytesMut::len));
+            let result = self.layer.process_read_buf(ctx);
+            let nbytes2 =
+                ctx.with_buffer(|b| b.read_dst().as_ref().map_or(0, BytesMut::len));
+            self.in_bytes.set(self.in_bytes.get() + nbytes2 - nbytes);
+            result
         }
 
-        fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
+        fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
             self.write_order.borrow_mut().push(self.idx);
-            self.out_bytes.set(
-                self.out_bytes.get()
-                    + ctx.write_buf(|buf| {
-                        buf.with_src(|b| b.as_ref().map(BytesMut::len).unwrap_or_default())
-                    }),
-            );
+            ctx.with_buffer(|buf| {
+                buf.with_write_buffers(|_, src, _| {
+                    self.out_bytes.set(self.out_bytes.get() + src.len());
+                });
+            });
             self.layer.process_write_buf(ctx)
         }
 
@@ -538,7 +552,11 @@ mod tests {
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
-        assert_eq!(in_bytes.get(), BIN.len());
+        client.write(TEXT);
+        let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
+        assert_eq!(msg, Bytes::from_static(BIN));
+
+        assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 4);
     }
 
@@ -583,7 +601,7 @@ mod tests {
 
         assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 8);
-        assert_eq!(state.with_write_dest_buf(|b| b.map_or(0, |b| b.len())), 0);
+        assert_eq!(state.with_write_dest_buf(|b| b.len()), 0);
 
         // refs
         assert_eq!(Rc::strong_count(&in_bytes), 3);

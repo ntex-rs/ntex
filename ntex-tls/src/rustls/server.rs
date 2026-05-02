@@ -1,7 +1,7 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::{any, cell::RefCell, io, sync::Arc};
 
-use ntex_io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf};
+use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use ntex_util::{time, time::Millis};
 use tls_rustls::{ServerConfig, ServerConnection};
 
@@ -29,11 +29,11 @@ impl FilterLayer for TlsServerFilter {
         }
     }
 
-    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
+    fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
         Stream::new(&mut *self.session.borrow_mut()).process_read_buf(buf)
     }
 
-    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
         Stream::new(&mut *self.session.borrow_mut()).process_write_buf(buf)
     }
 }

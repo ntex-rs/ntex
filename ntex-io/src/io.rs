@@ -3,6 +3,7 @@ use std::future::{Future, poll_fn};
 use std::task::{Context, Poll};
 use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 
+use ntex_bytes::BytePageSize;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_util::{future::Either, task::LocalWaker};
@@ -194,15 +195,18 @@ impl Io {
     #[inline]
     /// Create `Io` instance
     pub fn new<I: IoStream, T: Into<SharedCfg>>(io: I, cfg: T) -> Self {
+        let cfg = cfg.into().get::<IoConfig>();
+        let size = cfg.write_page_size();
+
         let inner = Rc::new(IoState {
-            cfg: cfg.into().get::<IoConfig>(),
+            cfg,
             filter: FilterPtr::null(),
             flags: Cell::new(Flags::WR_PAUSED),
             error: Cell::new(None),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            buffer: Stack::new(),
+            buffer: Stack::new(size),
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             on_disconnect: Cell::new(None),
@@ -247,7 +251,7 @@ impl<F> Io<F> {
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
             write_task: LocalWaker::new(),
-            buffer: Stack::new(),
+            buffer: Stack::new(BytePageSize::Size16),
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             on_disconnect: Cell::new(None),
@@ -280,7 +284,9 @@ impl<F> Io<F> {
     /// Set shared io config
     pub fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
         unsafe {
-            self.st().cfg.replace(cfg.into().get::<IoConfig>());
+            let cfg = cfg.into().get::<IoConfig>();
+            self.st().buffer.set_page_size(cfg.write_page_size());
+            self.st().cfg.replace(cfg);
         }
     }
 }
@@ -816,7 +822,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
 
-        let server = Io::from(server);
+        let server = Io::new(server, SharedCfg::new("SRV"));
 
         server.st().notify_timeout();
         let err = server.recv(&BytesCodec).await.err().unwrap();

@@ -1,7 +1,7 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use ntex_bytes::{Buf, BufMut, BytesMut};
-use ntex_io::IoContext;
+use ntex_bytes::{BufMut, BytePage, BytePages};
+use ntex_io::{Buffer, IoContext};
 use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_rt::Arbiter;
 use ntex_util::channel::pool;
@@ -58,11 +58,11 @@ struct StreamItem {
 enum Operation {
     Recv {
         id: usize,
-        buf: BytesMut,
+        buf: Buffer,
     },
     Send {
         id: usize,
-        buf: BytesMut,
+        buf: BytePage,
         result: Option<io::Result<usize>>,
     },
     Poll {
@@ -188,7 +188,7 @@ impl Handler for StreamOpsHandler {
                         log::trace!("{}: Recv canceled {:?}", item.tag(), item.fd());
                         item.rd_op.take();
                         item.flags.remove(Flags::RD_CANCELING);
-                        item.ctx.release_read_buf(0, buf, Poll::Pending);
+                        item.ctx.release_read_buf(buf, Poll::Pending);
                         if item.flags.contains(Flags::RD_REISSUE) {
                             item.flags.remove(Flags::RD_REISSUE);
                             st.recv(id, false, &self.inner.api);
@@ -198,9 +198,10 @@ impl Handler for StreamOpsHandler {
                 Operation::Send { id, buf, .. } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
+                        item.ctx.with_write_buf(|pages| pages.prepend(buf));
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
-                        item.ctx.release_write_buf(buf, Poll::Pending);
+                        item.ctx.update_write_buf(Poll::Pending);
                         if item.flags.contains(Flags::WR_REISSUE) {
                             item.flags.remove(Flags::WR_REISSUE);
                             st.send(id, &self.inner.api);
@@ -245,7 +246,7 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.release_read_buf(total, buf, res).ready() {
+                                if item.ctx.release_read_buf(buf, res).ready() {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
                                 }
                             }
@@ -255,7 +256,7 @@ impl Handler for StreamOpsHandler {
                 Operation::Send { id, buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         if cqueue::notif(flags) {
-                            if item.ctx.release_write_buf(buf, Poll::Ready(result.unwrap())).ready() {
+                            if item.ctx.update_write_buf(Poll::Ready(result.unwrap())).ready() {
                                 st.send(id, &self.inner.api);
                             }
                         } else if cqueue::more(flags) {
@@ -274,7 +275,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            if item.ctx.release_write_buf(buf, Poll::Ready(res)).ready() {
+                            if item.ctx.update_write_buf(Poll::Ready(res)).ready() {
                                 st.send(id, &self.inner.api);
                             }
                         }
@@ -350,7 +351,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &DriverApi) {
+    fn recv_more(&mut self, id: usize, mut buf: Buffer, api: &DriverApi) {
         if let Some(item) = self.streams.get_mut(id) {
             item.ctx.resize_read_buf(&mut buf);
 
@@ -369,10 +370,10 @@ impl StreamOpsStorage {
     fn send(&mut self, id: usize, api: &DriverApi) {
         if let Some(item) = self.streams.get_mut(id) {
             if item.wr_op.is_none() {
-                if let Some(buf) = item.ctx.get_write_buf() {
-                    let slice = buf.chunk();
-                    let buf_ptr = slice.as_ptr();
-                    let buf_len = slice.len() as u32;
+                let page = item.ctx.with_write_buf(BytePages::take);
+                if let Some(buf) = page {
+                    let buf_ptr = buf.as_ptr();
+                    let buf_len = buf.len() as u32;
                     let op_id = self.ops.insert(Some(Operation::Send {
                         id,
                         buf,

@@ -2,8 +2,8 @@ use std::{any, future::poll_fn, io, mem, task::Poll};
 
 use compio_buf::{BufResult, IoBuf, IoBufMut, SetLen};
 use compio_io::{AsyncRead, AsyncWrite};
-use ntex_bytes::{BufMut, BytesMut};
-use ntex_io::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
+use ntex_bytes::{BufMut, BytePage, BytePages};
+use ntex_io::{Buffer, Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use ntex_util::future::{Either, select};
 
 use super::{TcpStream, UnixStream};
@@ -35,12 +35,12 @@ impl Handle for HandleWrapper {
     }
 }
 
-struct CompioBuf(BytesMut);
+struct CompioBuf(Buffer);
 
 impl IoBuf for CompioBuf {
     #[inline]
     fn as_init(&self) -> &[u8] {
-        &self.0
+        self.0.as_ref()
     }
 }
 
@@ -53,8 +53,17 @@ impl IoBufMut for CompioBuf {
 impl SetLen for CompioBuf {
     unsafe fn set_len(&mut self, len: usize) {
         unsafe {
-            self.0.set_len(len + self.0.len());
+            self.0.advance_mut(len);
         }
+    }
+}
+
+struct CompioPage(BytePage);
+
+impl IoBuf for CompioPage {
+    #[inline]
+    fn as_init(&self) -> &[u8] {
+        &self.0
     }
 }
 
@@ -79,7 +88,6 @@ where
     T: AsyncRead + AsyncWrite + Clone + Unpin,
 {
     let mut buf = ctx.get_read_buf();
-    let mut total = buf.len();
     ctx.resize_read_buf(&mut buf);
     let mut read_fut = Some(Box::pin(read_buf(&io, buf)));
 
@@ -90,9 +98,7 @@ where
 
         match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
-                let nbytes = cbuf.0.len() - total;
                 let result = ctx.release_read_buf(
-                    nbytes,
                     cbuf.0,
                     Poll::Ready(result.map(|_| ()).map_err(Some)),
                 );
@@ -100,7 +106,6 @@ where
                     break;
                 }
                 let mut buf = ctx.get_read_buf();
-                total = buf.len();
                 ctx.resize_read_buf(&mut buf);
                 read_fut = Some(Box::pin(read_buf(&io, buf)));
             }
@@ -117,7 +122,7 @@ where
     }
 }
 
-async fn read_buf<T>(io: &T, buf: BytesMut) -> BufResult<usize, CompioBuf>
+async fn read_buf<T>(io: &T, buf: Buffer) -> BufResult<usize, CompioBuf>
 where
     T: AsyncRead + AsyncWrite + Clone,
 {
@@ -149,14 +154,15 @@ where
     loop {
         match poll_fn(|cx| ctx.poll_write_ready(cx)).await {
             Readiness::Ready => {
-                if write_buf(&mut io, ctx, ctx.get_write_buf()).await == IoTaskStatus::Stop
-                {
+                let page = ctx.with_write_buf(BytePages::take);
+                if write_buf(&mut io, ctx, page).await == IoTaskStatus::Stop {
                     let _ = io.shutdown().await;
                     break;
                 }
             }
             Readiness::Shutdown => {
-                write_buf(&mut io, ctx, ctx.get_write_buf()).await;
+                let page = ctx.with_write_buf(BytePages::take);
+                write_buf(&mut io, ctx, page).await;
                 let _ = io.shutdown().await;
                 break;
             }
@@ -165,13 +171,13 @@ where
     }
 }
 
-async fn write_buf<T>(io: &mut T, ctx: &IoContext, buf: Option<BytesMut>) -> IoTaskStatus
+async fn write_buf<T>(io: &mut T, ctx: &IoContext, buf: Option<BytePage>) -> IoTaskStatus
 where
     T: AsyncRead + AsyncWrite,
 {
     if let Some(b) = buf {
         let len = b.len();
-        let mut buf = CompioBuf(b);
+        let mut buf = CompioPage(b);
 
         loop {
             let BufResult(result, buf1) = io.write(buf).await;
@@ -192,9 +198,7 @@ where
                 }
                 Err(e) => Err(e),
             };
-            buf.0.clear();
-            unsafe { buf.0.set_len(len) };
-            return ctx.release_write_buf(buf.0, Poll::Ready(result));
+            return ctx.update_write_buf(Poll::Ready(result));
         }
     } else {
         IoTaskStatus::Io

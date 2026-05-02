@@ -36,7 +36,7 @@ macro_rules! forward_shutdown {
         #[inline]
         fn shutdown(
             &self,
-            ctx: $crate::FilterCtx<'_>,
+            ctx: &mut $crate::FilterCtx<'_>,
         ) -> std::io::Result<std::task::Poll<()>> {
             self.$field.shutdown(ctx)
         }

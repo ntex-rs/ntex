@@ -1,8 +1,8 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
 use std::{any, borrow::ToOwned, cell::RefCell, cmp, error::Error, io, task::Poll};
 
-use ntex_bytes::{BufMut, BytesMut};
-use ntex_io::{Filter, FilterLayer, Io, Layer, ReadBuf, WriteBuf, types};
+use ntex_bytes::{BufMut, BytePages, BytesMut};
+use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer, types};
 use tls_openssl::ssl::{self, NameType, SslStream};
 use tls_openssl::x509::X509;
 
@@ -33,7 +33,7 @@ pub struct SslFilter {
 #[derive(Debug)]
 struct IoInner {
     source: Option<BytesMut>,
-    destination: Option<BytesMut>,
+    destination: BytePages,
     stopped: bool,
 }
 
@@ -56,7 +56,7 @@ impl io::Read for IoInner {
 
 impl io::Write for IoInner {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.destination.as_mut().unwrap().extend_from_slice(src);
+        self.destination.extend_from_slice(src);
         Ok(src.len())
     }
 
@@ -66,15 +66,17 @@ impl io::Write for IoInner {
 }
 
 impl SslFilter {
-    fn with_buffers<F, R>(&self, buf: &WriteBuf<'_>, f: F) -> R
+    fn with_buffers<F, R>(&self, buf: &mut FilterBuf<'_>, f: F) -> R
     where
-        F: FnOnce() -> R,
+        F: FnOnce(&mut FilterBuf<'_>) -> R,
     {
-        self.inner.borrow_mut().get_mut().destination = Some(buf.take_dst());
-        self.inner.borrow_mut().get_mut().source = buf.with_read_buf(ReadBuf::take_src);
-        let result = f();
-        buf.set_dst(self.inner.borrow_mut().get_mut().destination.take());
-        buf.with_read_buf(|b| b.set_src(self.inner.borrow_mut().get_mut().source.take()));
+        self.inner.borrow_mut().get_mut().source = buf.read_src().take();
+        let result = f(buf);
+        if let Some(src) = self.inner.borrow_mut().get_mut().source.take()
+            && !src.is_empty()
+        {
+            *buf.read_src() = Some(src);
+        }
         result
     }
 }
@@ -127,11 +129,11 @@ impl FilterLayer for SslFilter {
         }
     }
 
-    fn shutdown(&self, buf: &WriteBuf<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, buf: &mut FilterBuf<'_>) -> io::Result<Poll<()>> {
         if self.inner.borrow().get_ref().stopped {
             return Ok(Poll::Ready(()));
         }
-        let ssl_result = self.with_buffers(buf, || self.inner.borrow_mut().shutdown());
+        let ssl_result = self.with_buffers(buf, |_| self.inner.borrow_mut().shutdown());
 
         match ssl_result {
             Ok(ssl::ShutdownResult::Sent) => Ok(Poll::Pending),
@@ -147,72 +149,65 @@ impl FilterLayer for SslFilter {
         }
     }
 
-    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
-        buf.with_write_buf(|b| {
-            self.with_buffers(b, || {
-                buf.with_dst(|dst| {
-                    let mut new_bytes = 0;
-                    loop {
-                        buf.resize_buf(dst);
+    fn process_read_buf(&self, rb: &mut FilterBuf<'_>) -> io::Result<()> {
+        self.with_buffers(rb, |buf| {
+            buf.with_read_buffers(|io, _, dst| {
+                loop {
+                    io.resize_read_buf(dst);
 
-                        let chunk: &mut [u8] =
-                            unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
-                        let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
-                        let result = match ssl_result {
-                            Ok(v) => {
-                                unsafe { dst.advance_mut(v) };
-                                new_bytes += v;
-                                continue;
-                            }
-                            Err(ref e)
-                                if e.code() == ssl::ErrorCode::WANT_READ
-                                    || e.code() == ssl::ErrorCode::WANT_WRITE =>
-                            {
-                                Ok(new_bytes)
-                            }
-                            Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                                self.inner.borrow_mut().get_mut().stopped = true;
-                                buf.want_shutdown();
-                                Ok(new_bytes)
-                            }
-                            Err(e) => {
-                                log::trace!("{}: SSL Error: {:?}", buf.tag(), e);
-                                Err(map_to_ioerr(e))
-                            }
-                        };
-                        return result;
-                    }
-                })
+                    let chunk: &mut [u8] =
+                        unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
+                    let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
+                    let result = match ssl_result {
+                        Ok(v) => {
+                            unsafe { dst.advance_mut(v) };
+                            continue;
+                        }
+                        Err(ref e)
+                            if e.code() == ssl::ErrorCode::WANT_READ
+                                || e.code() == ssl::ErrorCode::WANT_WRITE =>
+                        {
+                            Ok(())
+                        }
+                        Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
+                            self.inner.borrow_mut().get_mut().stopped = true;
+                            io.want_shutdown();
+                            Ok(())
+                        }
+                        Err(e) => {
+                            log::trace!("{}: SSL Error: {:?}", io.tag(), e);
+                            Err(map_to_ioerr(e))
+                        }
+                    };
+                    return result;
+                }
             })
         })
     }
 
-    fn process_write_buf(&self, wb: &WriteBuf<'_>) -> io::Result<()> {
-        wb.with_src(|b| {
-            if let Some(src) = b {
-                self.with_buffers(wb, || {
-                    loop {
-                        if src.is_empty() {
-                            return Ok(());
+    fn process_write_buf(&self, wb: &mut FilterBuf<'_>) -> io::Result<()> {
+        self.with_buffers(wb, |buf| {
+            buf.with_buffers(|_, _, _, w_src, w_dst| {
+                let mut inner = self.inner.borrow_mut();
+                while let Some(mut page) = w_src.take() {
+                    match inner.ssl_write(&page) {
+                        Ok(v) => {
+                            page.advance_to(v);
+                            w_src.prepend(page);
                         }
-                        let ssl_result = self.inner.borrow_mut().ssl_write(src);
-                        match ssl_result {
-                            Ok(v) => {
-                                src.advance_to(v);
-                            }
-                            Err(e) => {
-                                return match e.code() {
-                                    ssl::ErrorCode::WANT_READ
-                                    | ssl::ErrorCode::WANT_WRITE => Ok(()),
-                                    _ => Err(map_to_ioerr(e)),
-                                };
-                            }
+                        Err(e) => {
+                            return match e.code() {
+                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => {
+                                    Ok(())
+                                }
+                                _ => Err(map_to_ioerr(e)),
+                            };
                         }
                     }
-                })
-            } else {
+                }
+                inner.get_mut().destination.move_to(w_dst);
                 Ok(())
-            }
+            })
         })
     }
 }
@@ -224,7 +219,7 @@ pub async fn connect<F: Filter>(
 ) -> Result<Io<Layer<SslFilter, F>>, io::Error> {
     let inner = IoInner {
         source: None,
-        destination: None,
+        destination: BytePages::new(io.cfg().write_page_size()),
         stopped: false,
     };
     let filter = SslFilter {
@@ -235,7 +230,7 @@ pub async fn connect<F: Filter>(
     loop {
         let result = io.with_buf(|buf| {
             let filter = io.filter();
-            filter.with_buffers(buf, || filter.inner.borrow_mut().connect())
+            filter.with_buffers(buf, |_| filter.inner.borrow_mut().connect())
         })?;
         if handle_result(&io, result).await?.is_some() {
             break;
@@ -252,15 +247,10 @@ async fn handle_result<F>(
     match result {
         Ok(v) => Ok(Some(v)),
         Err(e) => match e.code() {
-            ssl::ErrorCode::WANT_READ => {
-                let res = io.read_notify().await;
-                match res? {
-                    None => {
-                        Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
-                    }
-                    _ => Ok(None),
-                }
-            }
+            ssl::ErrorCode::WANT_READ => match io.read_notify().await? {
+                None => Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected")),
+                _ => Ok(None),
+            },
             ssl::ErrorCode::WANT_WRITE => Ok(None),
             _ => Err(io::Error::other(e)),
         },

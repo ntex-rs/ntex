@@ -28,9 +28,9 @@ mod utils;
 
 use ntex_codec::Decoder;
 
-pub use self::buf::{FilterCtx, ReadBuf, WriteBuf};
+pub use self::buf::{Buffer, FilterBuf, FilterCtx};
 pub use self::cfg::IoConfig;
-pub use self::filter::{Base, Filter, FilterReadStatus, Layer};
+pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
@@ -85,13 +85,10 @@ pub trait FilterLayer: fmt::Debug + 'static {
     }
 
     /// Process read buffer
-    ///
-    /// Inner filter must process buffer before current.
-    /// Returns number of new bytes.
-    fn process_read_buf(&self, buf: &ReadBuf<'_>) -> IoResult<usize>;
+    fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
 
     /// Process write buffer
-    fn process_write_buf(&self, buf: &WriteBuf<'_>) -> IoResult<()>;
+    fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
 
     #[inline]
     /// Query internal filter data
@@ -101,7 +98,7 @@ pub trait FilterLayer: fmt::Debug + 'static {
 
     #[inline]
     /// Gracefully shutdown filter
-    fn shutdown(&self, buf: &WriteBuf<'_>) -> IoResult<Poll<()>> {
+    fn shutdown(&self, buf: &mut FilterBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }
