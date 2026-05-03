@@ -1,4 +1,4 @@
-use std::{any, fmt, hash, io};
+use std::{any, fmt, hash, io, ptr};
 
 use ntex_bytes::{BytePage, BytePages, BytesMut};
 use ntex_codec::{Decoder, Encoder};
@@ -6,7 +6,8 @@ use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::{
-    Decoded, Filter, FilterBuf, Flags, IoConfig, IoRef, OnDisconnect, timer, types,
+    Decoded, Filter, FilterBuf, Flags, IoConfig, IoContext, IoRef, OnDisconnect, timer,
+    types,
 };
 
 impl IoRef {
@@ -206,13 +207,27 @@ impl IoRef {
         if self.0.flags.get().contains(Flags::IO_STOPPED) {
             Err(self.0.error_or_disconnected())
         } else {
-            self.0.buffer.with_write_source(|pages| {
+            let (wrt, res) = self.0.buffer.with_write_source(|pages| {
                 let result = f(pages);
 
                 // wake write task if needsed
+                let mut wrt = false;
                 let len = pages.len();
                 let flags = self.0.flags.get();
                 if len > 0 && flags.contains(Flags::WR_PAUSED) {
+                    // The app encodes data in response to incoming data,
+                    // continuing to fill the write buffer until all data
+                    // has been processed. Only then can the runtime wake
+                    // the write task to send the buffered data.
+                    //
+                    // By that time, the buffer may have accumulated a large
+                    // amount of data, causing it to be sent in large bursts,
+                    // which introduces latency. To prevent this behavior and
+                    // flatten data delivery to the peer, IoRef can initiate
+                    // out-of-order writes based on a configured threshold.
+                    if flags.contains(Flags::HANDLE) && len > self.0.cfg.write_buf_limit() {
+                        wrt = true
+                    }
                     self.0.remove_flags(Flags::WR_PAUSED);
                     self.0.write_task.wake();
                 }
@@ -224,8 +239,15 @@ impl IoRef {
                     self.0.dispatch_task.wake();
                 }
 
-                Ok(result)
-            })
+                (wrt, Ok(result))
+            });
+
+            if wrt && let Some(hnd) = self.0.handle.take() {
+                let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
+                hnd.write(ctx);
+                self.0.handle.set(Some(hnd));
+            }
+            res
         }
     }
 

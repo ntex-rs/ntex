@@ -115,7 +115,7 @@ pub enum BytePageSize {
 }
 
 impl BytePageSize {
-    const fn capacity(self) -> usize {
+    pub const fn capacity(self) -> usize {
         match self {
             BytePageSize::Size4 => 4 * 1024,
             BytePageSize::Size8 => 8 * 1024,
@@ -124,6 +124,19 @@ impl BytePageSize {
             BytePageSize::Size32 => 32 * 1024,
             BytePageSize::Size48 => 48 * 1024,
             BytePageSize::Size64 | BytePageSize::Unset => 64 * 1024,
+        }
+    }
+
+    pub const fn half_capacity(self) -> usize {
+        match self {
+            BytePageSize::Size4 => 2 * 1024,
+            BytePageSize::Size8 => 4 * 1024,
+            BytePageSize::Size16 => 8 * 1024,
+            BytePageSize::Size24 => 12 * 1024,
+            BytePageSize::Size32
+            | BytePageSize::Size48
+            | BytePageSize::Size64
+            | BytePageSize::Unset => 16 * 1024,
         }
     }
 }
@@ -142,5 +155,13 @@ mod tests {
         assert_eq!(BytePageSize::Size48.capacity(), 48 * 1024);
         assert_eq!(BytePageSize::Size64.capacity(), 64 * 1024);
         assert_eq!(BytePageSize::Unset.capacity(), 64 * 1024);
+        assert_eq!(BytePageSize::Size4.half_capacity(), 2 * 1024);
+        assert_eq!(BytePageSize::Size8.half_capacity(), 4 * 1024);
+        assert_eq!(BytePageSize::Size16.half_capacity(), 8 * 1024);
+        assert_eq!(BytePageSize::Size24.half_capacity(), 12 * 1024);
+        assert_eq!(BytePageSize::Size32.half_capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Size48.half_capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Size64.half_capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Unset.half_capacity(), 16 * 1024);
     }
 }

@@ -10,12 +10,13 @@ use ntex_util::{future::Either, task::LocalWaker, time::Sleep};
 
 use crate::buf::Stack;
 use crate::cfg::{BufConfig, IoConfig};
+use crate::ctx::IoContext;
 use crate::filter::{Base, Filter, Layer};
 use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
 use crate::seal::{IoBoxed, Sealed};
 use crate::timer::TimerHandle;
-use crate::{Decoded, FilterLayer, Handle, IoContext, IoStatusUpdate, IoStream, RecvError};
+use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 /// Interface object to underlying io stream
 pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
@@ -220,7 +221,10 @@ impl Io {
         let io_ref = IoRef(inner);
 
         // start io tasks
-        let hnd = io.start(IoContext::new(&io_ref));
+        let hnd = io.start(IoContext::new(io_ref.clone()));
+        if hnd.is_some() {
+            io_ref.0.insert_flags(Flags::HANDLE);
+        }
         io_ref.0.handle.set(hnd);
 
         Io(UnsafeCell::new(io_ref), marker::PhantomData)
