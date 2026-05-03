@@ -6,7 +6,7 @@ use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 use ntex_bytes::BytePageSize;
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_util::{future::Either, task::LocalWaker};
+use ntex_util::{future::Either, task::LocalWaker, time::Sleep};
 
 use crate::buf::Stack;
 use crate::cfg::{BufConfig, IoConfig};
@@ -34,6 +34,7 @@ pub(crate) struct IoState {
     pub(super) buffer: Stack,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) timeout: Cell<TimerHandle>,
+    pub(super) shutdown_timeout: Cell<Option<Sleep>>,
     #[allow(clippy::box_collection)]
     pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
 }
@@ -211,6 +212,7 @@ impl Io {
             buffer: Stack::new(size),
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
+            shutdown_timeout: Cell::new(None),
             on_disconnect: Cell::new(None),
         });
         inner.filter.set(Base::new(IoRef(inner.clone())));
@@ -256,6 +258,7 @@ impl<F> Io<F> {
             buffer: Stack::new(BytePageSize::Size16),
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
+            shutdown_timeout: Cell::new(None),
             on_disconnect: Cell::new(None),
         });
         unsafe { mem::replace(&mut *self.0.get(), IoRef(inner)) }

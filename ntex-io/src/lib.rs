@@ -14,6 +14,7 @@ pub mod testing;
 pub mod types;
 
 mod buf;
+mod ctx;
 mod filter;
 mod filterptr;
 mod flags;
@@ -22,7 +23,6 @@ mod io;
 mod ioref;
 mod macros;
 mod seal;
-mod tasks;
 mod timer;
 mod utils;
 
@@ -30,11 +30,11 @@ use ntex_codec::Decoder;
 
 pub use self::buf::{Buffer, FilterBuf, FilterCtx};
 pub use self::cfg::IoConfig;
+pub use self::ctx::IoContext;
 pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::tasks::IoContext;
 pub use self::timer::TimerHandle;
 pub use self::utils::{Decoded, seal};
 
