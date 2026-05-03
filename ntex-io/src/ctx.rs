@@ -343,6 +343,6 @@ mod tests {
         let ctx = IoContext::new(&state.get_ref());
         let _ = ctx.flags();
         assert!(ctx.id() != 0);
-        assert!(format!("{:?}", ctx).contains("IoContext"));
+        assert!(format!("{ctx:?}").contains("IoContext"));
     }
 }
