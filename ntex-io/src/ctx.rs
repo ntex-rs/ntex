@@ -1,12 +1,12 @@
-use std::{cell::Cell, fmt, io, ptr, task::Context, task::Poll};
+use std::{fmt, io, ptr, task::Context, task::Poll};
 
 use ntex_bytes::BytePages;
-use ntex_util::time::{Sleep, sleep};
+use ntex_util::time::sleep;
 
 use crate::{Buffer, Flags, IoRef, IoTaskStatus, Readiness};
 
 /// Context for io read task
-pub struct IoContext(IoRef, Cell<Option<Sleep>>);
+pub struct IoContext(IoRef);
 
 impl fmt::Debug for IoContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -16,7 +16,7 @@ impl fmt::Debug for IoContext {
 
 impl IoContext {
     pub(crate) fn new(io: &IoRef) -> Self {
-        Self(io.clone(), Cell::new(None))
+        Self(io.clone())
     }
 
     #[doc(hidden)]
@@ -302,14 +302,14 @@ impl IoContext {
                         st.io_stopping();
                     } else {
                         // filter shutdown timeout
-                        let timeout = self
-                            .1
+                        let timeout = st
+                            .shutdown_timeout
                             .take()
                             .unwrap_or_else(|| sleep(io.cfg().disconnect_timeout()));
                         if timeout.poll_elapsed(cx).is_ready() {
                             st.io_stopping();
                         } else {
-                            self.1.set(Some(timeout));
+                            st.shutdown_timeout.set(Some(timeout));
                         }
                     }
                     if let Err(err) = st.buffer.process_write_buf(&self.0) {
@@ -326,6 +326,23 @@ impl IoContext {
 
 impl Clone for IoContext {
     fn clone(&self) -> Self {
-        Self(self.0.clone(), Cell::new(None))
+        Self(self.0.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Io, testing::IoTest};
+
+    #[ntex::test]
+    async fn ctx_basics() {
+        let (_, server) = IoTest::create();
+
+        let state = Io::from(server);
+        let ctx = IoContext::new(&state.get_ref());
+        let _ = ctx.flags();
+        assert!(ctx.id() != 0);
+        assert!(format!("{:?}", ctx).contains("IoContext"));
     }
 }
