@@ -24,8 +24,8 @@ impl IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(Cell::new(Some(self.0)));
         tok_io::task::spawn_local(run_rd(io.clone(), ctx.clone()));
-        tok_io::task::spawn_local(run_wrt(io, ctx));
-        None
+        tok_io::task::spawn_local(run_wrt(io.clone(), ctx));
+        Some(Box::new(HandleWrapperUnix(io)))
     }
 }
 
@@ -70,6 +70,22 @@ impl Handle for HandleWrapper {
         } else if id == any::TypeId::of::<SocketOptions>() {
             return Some(Box::new(SocketOptions(Rc::downgrade(&self.0))));
         }
+        None
+    }
+
+    fn write(&self, ctx: &IoContext) {
+        let mut inner = self.0.take().unwrap();
+        let _ = write(&mut inner, ctx, None);
+        self.0.set(Some(inner));
+    }
+}
+
+#[cfg(unix)]
+struct HandleWrapperUnix(Rc<Cell<Option<tok_io::net::UnixStream>>>);
+
+#[cfg(unix)]
+impl Handle for HandleWrapperUnix {
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         None
     }
 
