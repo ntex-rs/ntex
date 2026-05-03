@@ -398,6 +398,7 @@ impl StreamItem {
                 let fd = self.fd();
                 log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), page.len());
                 let res = syscall!(break libc::write(fd, page.as_ptr().cast(), page.len()));
+<<<<<<< Updated upstream
                 match res {
                     Poll::Ready(Ok(n)) => {
                         if page.len() != n {
@@ -408,6 +409,13 @@ impl StreamItem {
                     }
                     Poll::Ready(Err(e)) => Some(Poll::Ready(Err(e))),
                     Poll::Pending => Some(Poll::Pending),
+=======
+                if let Poll::Ready(Ok(n)) = res
+                    && page.len() != n
+                {
+                    page.advance_to(n);
+                    buf.prepend(page);
+>>>>>>> Stashed changes
                 }
             } else {
                 None
