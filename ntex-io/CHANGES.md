@@ -4,6 +4,8 @@
 
 * Add support for vectored writes
 
+* Add support for out-of-order writes during data encoding.
+
 * Delay processing of write buffer until write task pick work
 
 ## [3.9.2] - 2026-04-07

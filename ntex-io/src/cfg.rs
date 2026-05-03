@@ -25,6 +25,7 @@ pub struct IoConfig {
     read_buf: BufConfig,
     write_buf: BufConfig,
     write_page_size: BytePageSize,
+    write_buf_limit: usize,
 
     // shared config
     pub(crate) config: CfgContext,
@@ -99,6 +100,7 @@ impl IoConfig {
                 cache_size: DEFAULT_CACHE_SIZE,
             },
             write_page_size: BytePageSize::Size16,
+            write_buf_limit: BytePageSize::Size16.half_capacity(),
         }
     }
 
@@ -148,6 +150,12 @@ impl IoConfig {
     /// Get write page size
     pub fn write_page_size(&self) -> BytePageSize {
         self.write_page_size
+    }
+
+    #[inline]
+    /// The write buffer limit.
+    pub fn write_buf_limit(&self) -> usize {
+        self.write_buf_limit
     }
 
     /// Set connect timeout in seconds.
@@ -231,6 +239,24 @@ impl IoConfig {
     #[must_use]
     pub fn set_write_page_size(mut self, size: BytePageSize) -> Self {
         self.write_page_size = size;
+        self
+    }
+
+    /// Sets the write buffer limit.
+    ///
+    /// The app encodes data in response to incoming data,
+    /// continuing to fill the write buffer until all data
+    /// has been processed. Only then can the runtime wake
+    /// the write task to send the buffered data.
+    ///
+    /// By that time, the buffer may have accumulated a large
+    /// amount of data, causing it to be sent in large bursts,
+    /// which introduces latency. To prevent this behavior and
+    /// flatten data delivery to the peer, ntex's io can initiate
+    /// out-of-order writes based on a configured threshold.
+    #[must_use]
+    pub fn set_write_buf_limit(mut self, size: usize) -> Self {
+        self.write_buf_limit = size;
         self
     }
 

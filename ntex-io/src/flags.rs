@@ -32,6 +32,9 @@ bitflags::bitflags! {
 
         /// timeout occurred
         const DSP_TIMEOUT         = 0b0010_0000_0000_0000;
+
+        /// handle is set
+        const HANDLE              = 0b0100_0000_0000_0000;
     }
 }
 

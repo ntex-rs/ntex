@@ -15,8 +15,8 @@ impl fmt::Debug for IoContext {
 }
 
 impl IoContext {
-    pub(crate) fn new(io: &IoRef) -> Self {
-        Self(io.clone())
+    pub(crate) fn new(io: IoRef) -> Self {
+        Self(io)
     }
 
     #[doc(hidden)]
@@ -340,7 +340,7 @@ mod tests {
         let (_, server) = IoTest::create();
 
         let state = Io::from(server);
-        let ctx = IoContext::new(&state.get_ref());
+        let ctx = IoContext::new(state.get_ref());
         let _ = ctx.flags();
         assert!(ctx.id() != 0);
         assert!(format!("{ctx:?}").contains("IoContext"));

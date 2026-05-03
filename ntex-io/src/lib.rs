@@ -109,6 +109,10 @@ pub trait IoStream {
 
 pub trait Handle {
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
+
+    #[inline]
+    /// Initiate io write operation
+    fn write(&self, _: &IoContext) {}
 }
 
 /// Status for read task

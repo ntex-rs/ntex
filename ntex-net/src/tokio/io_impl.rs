@@ -24,8 +24,35 @@ impl IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
         let io = Rc::new(Cell::new(Some(self.0)));
         tok_io::task::spawn_local(run_rd(io.clone(), ctx.clone()));
-        tok_io::task::spawn_local(run_wrt(io, ctx));
-        None
+        tok_io::task::spawn_local(run_wrt(io.clone(), ctx));
+        Some(Box::new(HandleWrapperUnix(io)))
+    }
+}
+
+trait Stream: AsyncRead + AsyncWrite + Unpin {
+    fn try_write(&self, buf: &[u8]) -> io::Result<usize>;
+
+    fn try_write_vectored(&self, buf: &[io::IoSlice<'_>]) -> io::Result<usize>;
+}
+
+impl Stream for TcpStream {
+    fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
+        TcpStream::try_write(self, buf)
+    }
+
+    fn try_write_vectored(&self, buf: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        TcpStream::try_write_vectored(self, buf)
+    }
+}
+
+#[cfg(unix)]
+impl Stream for tok_io::net::UnixStream {
+    fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
+        tok_io::net::UnixStream::try_write(self, buf)
+    }
+
+    fn try_write_vectored(&self, buf: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        tok_io::net::UnixStream::try_write_vectored(self, buf)
     }
 }
 
@@ -44,6 +71,28 @@ impl Handle for HandleWrapper {
             return Some(Box::new(SocketOptions(Rc::downgrade(&self.0))));
         }
         None
+    }
+
+    fn write(&self, ctx: &IoContext) {
+        let mut inner = self.0.take().unwrap();
+        let _ = write(&mut inner, ctx, None);
+        self.0.set(Some(inner));
+    }
+}
+
+#[cfg(unix)]
+struct HandleWrapperUnix(Rc<Cell<Option<tok_io::net::UnixStream>>>);
+
+#[cfg(unix)]
+impl Handle for HandleWrapperUnix {
+    fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
+        None
+    }
+
+    fn write(&self, ctx: &IoContext) {
+        let mut inner = self.0.take().unwrap();
+        let _ = write(&mut inner, ctx, None);
+        self.0.set(Some(inner));
     }
 }
 
@@ -72,12 +121,12 @@ where
 
 async fn run_wrt<T>(io: Rc<Cell<Option<T>>>, ctx: IoContext)
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: Stream,
 {
     let st = poll_fn(|cx| {
         let mut inner = io.take().unwrap();
         let result = match ctx.poll_write_ready(cx) {
-            Poll::Ready(Readiness::Ready) => write(&mut inner, &ctx, cx),
+            Poll::Ready(Readiness::Ready) => write(&mut inner, &ctx, Some(cx)),
             Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
             Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
             Poll::Pending => Poll::Pending,
@@ -92,11 +141,12 @@ where
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
             let mut inner = io.take().unwrap();
-            let result = if write(&mut inner, &ctx, cx) == Poll::Ready(Status::Terminate) {
-                Poll::Ready(())
-            } else {
-                ctx.shutdown(flush, cx)
-            };
+            let result =
+                if write(&mut inner, &ctx, Some(cx)) == Poll::Ready(Status::Terminate) {
+                    Poll::Ready(())
+                } else {
+                    ctx.shutdown(flush, cx)
+                };
             io.set(Some(inner));
             result
         })
@@ -120,12 +170,12 @@ where
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
 
-fn write<T>(io: &mut T, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status>
+fn write<T>(io: &mut T, ctx: &IoContext, mut cx: Option<&mut Context<'_>>) -> Poll<Status>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: Stream,
 {
     loop {
-        let result = ctx.with_write_buf(|dst| {
+        let (cx2, result) = ctx.with_write_buf(|dst| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None,
                 None, None, None, None,
@@ -152,12 +202,14 @@ where
 
             if num > 0 {
                 // SAFETY: initialize in previous block
-                let result = unsafe {
-                    write_io(
-                        io,
-                        cx,
-                        &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]),
-                    )
+                let bufs =
+                    unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
+
+                let (cx, result) = if let Some(cx) = cx {
+                    let result = write_io(ctx, io, cx, bufs);
+                    (Some(cx), result)
+                } else {
+                    (None, write_io2(ctx, io, bufs))
                 };
                 let mut written = if let Poll::Ready(Ok(n)) = result { n } else { 0 };
 
@@ -179,11 +231,13 @@ where
                     }
                 }
 
-                Some(result.map(|res| res.map(|_| ())))
+                (cx, Some(result.map(|res| res.map(|_| ()))))
             } else {
-                None
+                (cx, None)
             }
         });
+
+        cx = cx2;
 
         break if let Some(result) = result {
             match ctx.update_write_buf(result) {
@@ -198,7 +252,8 @@ where
 }
 
 /// Flush write buffer to underlying I/O stream.
-fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
+fn write_io<T: Stream>(
+    ctx: &IoContext,
     io: &mut T,
     cx: &mut Context<'_>,
     bufs: &[io::IoSlice<'_>],
@@ -209,20 +264,46 @@ fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
         ready!(Pin::new(&mut *io).poll_write_vectored(cx, bufs))?
     };
     if n == 0 {
-        return Poll::Ready(Err(io::Error::new(
+        Poll::Ready(Err(io::Error::new(
             io::ErrorKind::WriteZero,
             "failed to write frame to transport",
-        )));
-    }
-    #[cfg(feature = "trace")]
-    log::trace!("flushed {n} bytes from {} pages", n, bufs.len());
+        )))
+    } else {
+        #[cfg(feature = "trace")]
+        log::trace!("{}: Flushed {n} bytes from {} pages", ctx.tag(), bufs.len());
 
-    // flush
-    if n > 0 {
         let _ = Pin::new(&mut *io).poll_flush(cx)?;
         Poll::Ready(Ok(n))
+    }
+}
+
+/// Flush write buffer to underlying I/O stream.
+fn write_io2<T: Stream>(
+    ctx: &IoContext,
+    io: &mut T,
+    bufs: &[io::IoSlice<'_>],
+) -> Poll<io::Result<usize>> {
+    let result = if bufs.len() == 1 {
+        io.try_write(&bufs[0])
     } else {
-        Poll::Pending
+        io.try_write_vectored(bufs)
+    };
+    match result {
+        Ok(0) => Poll::Ready(Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "failed to write frame to transport",
+        ))),
+        Ok(n) => {
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: Flushed early {n} bytes from {} pages",
+                ctx.tag(),
+                bufs.len()
+            );
+            Poll::Ready(Ok(n))
+        }
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
+        Err(e) => Poll::Ready(Err(e)),
     }
 }
 
