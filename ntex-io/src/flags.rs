@@ -40,6 +40,10 @@ impl Flags {
         self.contains(Flags::IO_STOPPED)
     }
 
+    pub(crate) fn is_stopping(self) -> bool {
+        self.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
+    }
+
     pub(crate) fn is_task_waiting_for_write(self) -> bool {
         self.contains(Flags::WR_TASK_WAIT)
     }

@@ -84,12 +84,7 @@ impl IoRef {
 
     /// Gracefully shutdown io stream
     pub fn want_shutdown(&self) {
-        if !self
-            .0
-            .flags
-            .get()
-            .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
-        {
+        if !self.0.flags.get().is_stopping() {
             log::trace!(
                 "{}: Initiate io shutdown {:?}",
                 self.tag(),

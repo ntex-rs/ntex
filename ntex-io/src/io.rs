@@ -131,11 +131,7 @@ impl IoState {
 
     /// Gracefully shutdown read and write io tasks
     pub(super) fn init_shutdown(&self) {
-        if !self
-            .flags
-            .get()
-            .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
-        {
+        if !self.flags.get().is_stopping() {
             log::trace!(
                 "{}: Initiate io shutdown {:?}",
                 self.cfg.tag(),

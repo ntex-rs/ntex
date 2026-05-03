@@ -290,6 +290,7 @@ impl IoContext {
         if st.flags.get().is_shutting_down_filters() {
             match st.buffer.process_shutdown(io) {
                 Ok(Poll::Ready(())) => {
+                    st.write_task.wake();
                     st.dispatch_task.wake();
                     st.insert_flags(Flags::IO_STOPPING);
                 }
@@ -300,6 +301,7 @@ impl IoContext {
                     if flags.contains(Flags::RD_PAUSED)
                         || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
                     {
+                        st.write_task.wake();
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
                     } else {
