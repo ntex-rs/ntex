@@ -262,7 +262,7 @@ fn write_io<T: Stream>(
 }
 
 /// Flush write buffer to underlying I/O stream.
-fn write_io2<'a, 'b, T: Stream>(
+fn write_io2<T: Stream>(
     ctx: &IoContext,
     io: &mut T,
     bufs: &[io::IoSlice<'_>],
@@ -273,7 +273,7 @@ fn write_io2<'a, 'b, T: Stream>(
         io.try_write_vectored(bufs)
     };
     match result {
-        Ok(n) if n == 0 => Poll::Ready(Err(io::Error::new(
+        Ok(0) => Poll::Ready(Err(io::Error::new(
             io::ErrorKind::WriteZero,
             "failed to write frame to transport",
         ))),
