@@ -1,12 +1,16 @@
-use std::{cell::Cell, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
+#![allow(clippy::cast_possible_wrap)]
+use std::{cell::Cell, cmp, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use ntex_bytes::BufMut;
+use ntex_bytes::{BufMut, BytePage};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::{Arbiter, syscall};
 use slab::Slab;
 use socket2::Socket;
 
 use super::{Driver, DriverApi, Event, Handler};
+
+const MAX_WRITE_SIZE: usize = 64 * 1024;
+const MAX_WRITE_ITEMS: usize = 16;
 
 pub(crate) struct StreamCtl {
     id: u32,
@@ -119,6 +123,7 @@ impl Handler for StreamOpsHandler {
             }
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false).with_interrupt();
+            #[cfg(feature = "trace")]
             log::trace!(
                 "{}: {:?}-Evt rd({:?}) wr({:?}) {:?}",
                 io.tag(),
@@ -153,6 +158,7 @@ impl Handler for StreamOpsHandler {
             if ev.is_interrupt() {
                 io.ctx.stop(None);
             } else {
+                #[cfg(feature = "trace")]
                 log::trace!(
                     "{}: {:?}-Renew rd({:?}) wr({:?})",
                     io.tag(),
@@ -307,6 +313,7 @@ impl StreamCtl {
         self.inner.with(|streams| {
             let io = &mut streams[self.id as usize];
             let mut event = Event::new(0, false, false).with_interrupt();
+            #[cfg(feature = "trace")]
             log::trace!(
                 "{}: {:?}-Mod rd({rd:?}) wr({wr:?}) {:?}",
                 io.tag(),
@@ -349,6 +356,7 @@ impl StreamCtl {
             }
 
             if want_update_read || want_update_write {
+                #[cfg(feature = "trace")]
                 log::trace!(
                     "{}: {:?}-Upd rd({:?}) wr({:?})",
                     io.tag(),
@@ -393,20 +401,71 @@ impl StreamItem {
     }
 
     fn write(&mut self) -> IoTaskStatus {
-        let res = self.ctx.with_write_buf(|buf| {
-            if let Some(mut page) = buf.take() {
+        let res = self.ctx.with_write_buf(|wrt| {
+            let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
+                None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None, None, None,
+            ];
+            let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
+                [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
+
+            let mut num = 0;
+            let mut size = 0;
+            while let Some(page) = wrt.take() {
+                size += page.len();
+
+                // SAFETY: Page is stored in `pages` for lifetime of `bufs`
+                bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
+                    mem::transmute::<&[u8], &[u8]>(page.as_ref())
+                }));
+                pages[num] = Some(page);
+
+                num += 1;
+                if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+                    break;
+                }
+            }
+
+            if num > 0 {
                 let fd = self.fd();
-                log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), page.len());
-                let res = syscall!(break libc::write(fd, page.as_ptr().cast(), page.len()))
-                    .map(|item| {
-                        item.map(|n| {
-                            if page.len() != n {
-                                page.advance_to(n);
-                                buf.prepend(page);
+                #[cfg(feature = "trace")]
+                log::trace!(
+                    "{}: {fd:?}-Wrt buf({}) size({:?})",
+                    self.ctx.tag(),
+                    num,
+                    size
+                );
+
+                let res = if num == 1 {
+                    let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
+                    syscall!(break libc::write(fd, io.cast(), size))
+                } else {
+                    syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
+                };
+                match res {
+                    Poll::Ready(Ok(mut written)) => {
+                        // remove written bytes
+                        if written > 0 {
+                            for page in pages[..num].iter_mut().flatten() {
+                                let len = cmp::min(page.len(), written);
+                                page.advance_to(len);
+                                written -= len;
+                                if written == 0 {
+                                    break;
+                                }
                             }
-                        })
-                    });
-                Some(res)
+                        }
+                        // return unwritten data back to buffer
+                        for p in pages[..num].iter_mut().rev() {
+                            if let Some(page) = p.take() {
+                                wrt.prepend(page);
+                            }
+                        }
+                        Some(Poll::Ready(Ok(())))
+                    }
+                    Poll::Ready(Err(e)) => Some(Poll::Ready(Err(e))),
+                    Poll::Pending => Some(Poll::Pending),
+                }
             } else {
                 None
             }
@@ -440,6 +499,7 @@ impl StreamItem {
                 Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
                 Poll::Pending => Poll::Pending,
             };
+            #[cfg(feature = "trace")]
             log::trace!(
                 "{}: {fd:?}-Rdt sz({:?}) = {res:?}",
                 self.tag(),

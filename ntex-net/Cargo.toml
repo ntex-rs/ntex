@@ -37,6 +37,8 @@ neon-uring = []
 # polling only
 neon-polling = []
 
+trace = []
+
 [dependencies]
 ntex-service = { workspace = true }
 ntex-bytes = { workspace = true }

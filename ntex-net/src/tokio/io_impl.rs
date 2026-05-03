@@ -159,12 +159,6 @@ where
                         &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]),
                     )
                 };
-                // release pages
-                for item in bufs.iter_mut().take(num) {
-                    unsafe {
-                        item.assume_init_drop();
-                    }
-                }
                 let mut written = if let Poll::Ready(Ok(n)) = result { n } else { 0 };
 
                 // remove written bytes
@@ -220,7 +214,8 @@ fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
             "failed to write frame to transport",
         )));
     }
-    // log::trace!("flushed {n} bytes");
+    #[cfg(feature = "trace")]
+    log::trace!("flushed {n} bytes from {} pages", n, bufs.len());
 
     // flush
     if n > 0 {
