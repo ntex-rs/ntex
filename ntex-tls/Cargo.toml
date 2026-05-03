@@ -45,6 +45,8 @@ tls_openssl = { workspace = true, optional = true }
 # rustls
 tls_rustls = { workspace = true, optional = true }
 
+backtrace = { workspace = true }
+
 [dev-dependencies]
 ntex = { workspace = true, features = ["openssl", "rustls"] }
 env_logger = { workspace = true }

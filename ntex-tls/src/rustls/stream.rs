@@ -79,7 +79,7 @@ where
                     let new_b = state.plaintext_bytes_to_read();
                     if new_b > 0 {
                         if r_dst.is_none() {
-                            *r_dst = Some(io.get_read_buf());
+                            *r_dst = Some(io.cfg().read_buf().get());
                         }
                         if let Some(dst) = r_dst {
                             dst.reserve(new_b);

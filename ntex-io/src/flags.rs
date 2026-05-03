@@ -40,6 +40,10 @@ impl Flags {
         self.contains(Flags::IO_STOPPED)
     }
 
+    pub(crate) fn is_stopping(self) -> bool {
+        self.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
+    }
+
     pub(crate) fn is_task_waiting_for_write(self) -> bool {
         self.contains(Flags::WR_TASK_WAIT)
     }
@@ -50,6 +54,11 @@ impl Flags {
 
     pub(crate) fn is_want_to_write(self) -> bool {
         self.contains(Flags::IO_WANT_WRITE)
+    }
+
+    pub(crate) fn is_shutting_down_filters(self) -> bool {
+        self.contains(Flags::IO_STOPPING_FILTERS)
+            && !self.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
     }
 
     pub(crate) fn waiting_for_write_is_done(&mut self) {

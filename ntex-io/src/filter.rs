@@ -1,4 +1,4 @@
-use std::{any, io, task::Context, task::Poll};
+use std::{any, cell::Cell, io, task::Context, task::Poll};
 
 use crate::{FilterCtx, FilterLayer, Flags, IoRef, Readiness};
 
@@ -13,11 +13,11 @@ impl Base {
 }
 
 #[derive(Debug)]
-pub struct Layer<F, L = Base>(pub(crate) F, L);
+pub struct Layer<F, L = Base>(pub(crate) F, L, Cell<bool>);
 
 impl<F: FilterLayer, L: Filter> Layer<F, L> {
     pub(crate) fn new(f: F, l: L) -> Self {
-        Self(f, l)
+        Self(f, l, Cell::new(false))
     }
 }
 
@@ -142,26 +142,32 @@ where
 
     #[inline]
     fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>> {
-        let result1 = ctx.with_buffer(|buf| self.0.shutdown(buf))?;
-        self.process_write_buf(ctx)?;
-        let result2 = ctx.with_next(|ctx| self.1.shutdown(ctx))?;
-
-        if result1.is_pending() || result2.is_pending() {
-            Ok(Poll::Pending)
-        } else {
-            Ok(Poll::Ready(()))
+        if !self.2.get() {
+            if ctx.with_buffer(|buf| self.0.shutdown(buf))?.is_ready() {
+                self.2.set(true);
+                self.process_write_buf(ctx)?;
+            } else {
+                return Ok(Poll::Pending);
+            }
         }
+        ctx.with_next(|ctx| self.1.shutdown(ctx))
     }
 
     #[inline]
     fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
         ctx.with_next(|ctx| self.1.process_read_buf(ctx))?;
-        ctx.with_buffer(|buf| self.0.process_read_buf(buf))
+        if self.2.get() {
+            Ok(())
+        } else {
+            ctx.with_buffer(|buf| self.0.process_read_buf(buf))
+        }
     }
 
     #[inline]
     fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
-        ctx.with_buffer(|buf| self.0.process_write_buf(buf))?;
+        if !self.2.get() {
+            ctx.with_buffer(|buf| self.0.process_write_buf(buf))?;
+        }
         ctx.with_next(|ctx| self.1.process_write_buf(ctx))
     }
 

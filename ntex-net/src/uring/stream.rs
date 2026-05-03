@@ -1,7 +1,7 @@
 use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
 
 use ntex_bytes::{BufMut, BytePage, BytePages};
-use ntex_io::{Buffer, IoContext};
+use ntex_io::{Buffer, IoContext, IoTaskStatus};
 use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_rt::Arbiter;
 use ntex_util::channel::pool;
@@ -63,7 +63,7 @@ enum Operation {
     Send {
         id: usize,
         buf: BytePage,
-        result: Option<io::Result<usize>>,
+        result: Option<io::Result<()>>,
     },
     Poll {
         id: usize,
@@ -246,7 +246,7 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.release_read_buf(buf, res).ready() {
+                                if item.ctx.release_read_buf(buf, res) == IoTaskStatus::Io {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
                                 }
                             }
@@ -256,7 +256,8 @@ impl Handler for StreamOpsHandler {
                 Operation::Send { id, buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         if cqueue::notif(flags) {
-                            if item.ctx.update_write_buf(Poll::Ready(result.unwrap().map(|_| ()))).ready() {
+                            let res = result.unwrap_or(Ok(()));
+                            if item.ctx.update_write_buf(Poll::Ready(res)) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
                         } else if cqueue::more(flags) {
@@ -268,14 +269,17 @@ impl Handler for StreamOpsHandler {
                                 st.send(id, &self.inner.api);
                             }
                             // insert op back for "notify" handling
-                            st.ops[user_data] = Some(Operation::Send { id, buf, result: Some(res) });
+                            st.ops[user_data] = Some(Operation::Send {
+                                id,
+                                buf,
+                                result: Some(res.map(|_| ())) });
                             return
                         } else {
                             // reset op reference
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            if item.ctx.update_write_buf(Poll::Ready(res.map(|_| ()))).ready() {
+                            if item.ctx.update_write_buf(Poll::Ready(res.map(|_| ()))) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
                         }

@@ -159,12 +159,6 @@ where
                         &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]),
                     )
                 };
-                // release pages
-                for item in bufs.iter_mut().take(num) {
-                    unsafe {
-                        item.assume_init_drop();
-                    }
-                }
                 let mut written = if let Poll::Ready(Ok(n)) = result { n } else { 0 };
 
                 // remove written bytes
@@ -185,14 +179,14 @@ where
                     }
                 }
 
-                Some(result)
+                Some(result.map(|res| res.map(|_| ())))
             } else {
                 None
             }
         });
 
         break if let Some(result) = result {
-            match ctx.update_write_buf(result.map(|r| r.map(|_| ()))) {
+            match ctx.update_write_buf(result) {
                 IoTaskStatus::Stop => Poll::Ready(Status::Terminate),
                 IoTaskStatus::Pause => Poll::Pending,
                 IoTaskStatus::Io => continue,
@@ -220,7 +214,8 @@ fn write_io<T: AsyncRead + AsyncWrite + Unpin>(
             "failed to write frame to transport",
         )));
     }
-    // log::trace!("flushed {n} bytes");
+    #[cfg(feature = "trace")]
+    log::trace!("flushed {n} bytes from {} pages", n, bufs.len());
 
     // flush
     if n > 0 {
@@ -337,7 +332,8 @@ impl AsyncWrite for TokioIoBoxed {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.0.write(buf).map(|()| buf.len()))
+        self.0.encode_slice(buf)?;
+        Poll::Ready(Ok(buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

@@ -95,6 +95,12 @@ impl IoState {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Disconnected"))
     }
 
+    pub(super) fn io_stopping(&self) {
+        self.write_task.wake();
+        self.dispatch_task.wake();
+        self.insert_flags(Flags::IO_STOPPING);
+    }
+
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
         if !self.flags.get().is_stopped() {
             log::trace!(
@@ -131,11 +137,7 @@ impl IoState {
 
     /// Gracefully shutdown read and write io tasks
     pub(super) fn init_shutdown(&self) {
-        if !self
-            .flags
-            .get()
-            .intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
-        {
+        if !self.flags.get().is_stopping() {
             log::trace!(
                 "{}: Initiate io shutdown {:?}",
                 self.cfg.tag(),
@@ -321,6 +323,12 @@ impl<F: Filter> Io<F> {
     where
         U: FilterLayer,
     {
+        // write buffer processing could be delayed,
+        // need to call filter chain for processing
+        if let Err(e) = self.st().buffer.process_write_buf(&self) {
+            self.st().io_stopped(Some(e));
+        }
+
         let state = self.take_io_ref();
 
         // add buffers layer
@@ -343,6 +351,12 @@ impl<F: Filter> Io<F> {
         U: FnOnce(F) -> R,
         R: Filter,
     {
+        // write buffer processing could be delayed,
+        // need to call filter chain for processing
+        if let Err(e) = self.st().buffer.process_write_buf(&self) {
+            self.st().io_stopped(Some(e));
+        }
+
         let state = self.take_io_ref();
         state.0.filter.map_filter::<F, U, R>(f);
 
@@ -351,7 +365,6 @@ impl<F: Filter> Io<F> {
 }
 
 impl<F> Io<F> {
-    #[inline]
     /// Read incoming io stream and decode codec item.
     pub async fn recv<U>(
         &self,
@@ -377,6 +390,24 @@ impl<F> Io<F> {
                 Err(RecvError::PeerGone(Some(err))) => Err(Either::Right(err)),
                 Err(RecvError::PeerGone(None)) => Ok(None),
             };
+        }
+    }
+
+    /// Pull some bytes from this source into the specified buffer.
+    pub async fn read(&self, dst: &mut [u8]) -> io::Result<()> {
+        loop {
+            let completed = self.with_read_buf(|buf| {
+                if buf.len() >= dst.len() {
+                    let _ = io::Read::read(buf, dst).expect("Cannot fail");
+                    true
+                } else {
+                    false
+                }
+            });
+            if completed {
+                return Ok(());
+            }
+            self.read_ready().await?;
         }
     }
 

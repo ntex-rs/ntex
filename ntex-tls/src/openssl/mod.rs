@@ -34,7 +34,6 @@ pub struct SslFilter {
 struct IoInner {
     source: Option<BytesMut>,
     destination: BytePages,
-    stopped: bool,
 }
 
 impl io::Read for IoInner {
@@ -130,11 +129,7 @@ impl FilterLayer for SslFilter {
     }
 
     fn shutdown(&self, buf: &mut FilterBuf<'_>) -> io::Result<Poll<()>> {
-        if self.inner.borrow().get_ref().stopped {
-            return Ok(Poll::Ready(()));
-        }
         let ssl_result = self.with_buffers(buf, |_| self.inner.borrow_mut().shutdown());
-
         match ssl_result {
             Ok(ssl::ShutdownResult::Sent) => Ok(Poll::Pending),
             Ok(ssl::ShutdownResult::Received) => Ok(Poll::Ready(())),
@@ -157,20 +152,17 @@ impl FilterLayer for SslFilter {
 
                     let chunk: &mut [u8] =
                         unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
-                    let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
-                    let result = match ssl_result {
+                    let result = match self.inner.borrow_mut().ssl_read(chunk) {
                         Ok(v) => {
                             unsafe { dst.advance_mut(v) };
                             continue;
                         }
-                        Err(ref e)
-                            if e.code() == ssl::ErrorCode::WANT_READ
-                                || e.code() == ssl::ErrorCode::WANT_WRITE =>
-                        {
+                        Err(ref e) if e.code() == ssl::ErrorCode::WANT_READ => Ok(()),
+                        Err(ref e) if e.code() == ssl::ErrorCode::WANT_WRITE => {
+                            io.want_write();
                             Ok(())
                         }
                         Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                            self.inner.borrow_mut().get_mut().stopped = true;
                             io.want_shutdown();
                             Ok(())
                         }
@@ -195,14 +187,15 @@ impl FilterLayer for SslFilter {
                             page.advance_to(v);
                             w_src.prepend(page);
                         }
-                        Err(e) => {
-                            return match e.code() {
-                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE => {
-                                    Ok(())
-                                }
-                                _ => Err(map_to_ioerr(e)),
-                            };
+                        Err(e)
+                            if matches!(
+                                e.code(),
+                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
+                            ) =>
+                        {
+                            break;
                         }
+                        Err(e) => return Err(map_to_ioerr(e)),
                     }
                 }
                 inner.get_mut().destination.move_to(w_dst);
@@ -220,7 +213,6 @@ pub async fn connect<F: Filter>(
     let inner = IoInner {
         source: None,
         destination: BytePages::new(io.cfg().write_page_size()),
-        stopped: false,
     };
     let filter = SslFilter {
         inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),

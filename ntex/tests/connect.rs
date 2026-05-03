@@ -347,7 +347,7 @@ async fn test_uri() {
             Ok::<_, io::Error>(())
         })
     });
-    time::sleep(time::Millis(50)).await;
+    time::sleep(time::Millis(100)).await;
 
     let conn = Pipeline::new(ntex::connect::ConnectorService::default());
     let addr =

@@ -2,9 +2,7 @@
 
 ## [3.10.0] - 2026-05-03
 
-* Enable vectored writes for tokio runtime
-
-* Enable vectored writes for compio runtime
+* Enable vectored writes for tokio,compio,neon runtime
 
 ## [3.9.1] - 2026-04-07
 

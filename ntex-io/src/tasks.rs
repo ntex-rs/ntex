@@ -123,15 +123,15 @@ impl IoContext {
             // handle buffer changes
             match inner.buffer.process_read_buf(&self.0, buffer.buf) {
                 Ok(()) => {
-                    let buffer_size = inner.buffer.read_destination_size();
+                    let buf_size = inner.buffer.read_destination_size();
 
-                    if buffer_size > read_buf {
+                    if buf_size > read_buf {
                         // dest buffer has new data, wake up dispatcher
-                        if buffer_size >= hw {
+                        if buf_size >= hw {
                             log::trace!(
                                 "{}: Io read buffer is too large {}, enable read back-pressure",
                                 self.tag(),
-                                buffer_size
+                                buf_size
                             );
                             full = true;
                             inner.insert_flags(Flags::BUF_R_READY | Flags::BUF_R_FULL);
@@ -141,11 +141,11 @@ impl IoContext {
                         log::trace!(
                             "{}: New {} bytes available, wakeup dispatcher",
                             self.tag(),
-                            buffer_size
+                            buf_size
                         );
                         inner.dispatch_task.wake();
                     } else {
-                        if buffer_size >= hw {
+                        if buf_size >= hw {
                             // read task is paused because of read back-pressure
                             // but there is no new data in top most read buffer
                             // so we need to wake up read task to read more data
@@ -165,9 +165,7 @@ impl IoContext {
                     // and potentialy wake write task
                     if self.0.flags().is_want_to_write() {
                         inner.remove_flags(Flags::IO_WANT_WRITE);
-                        inner.buffer.with_filter(&self.0, |ctx| {
-                            self.0.filter().process_write_buf(ctx)
-                        })
+                        inner.buffer.process_write_buf(&self.0)
                     } else {
                         Ok(())
                     }
@@ -216,6 +214,13 @@ impl IoContext {
     where
         F: FnOnce(&mut BytePages) -> R,
     {
+        // write buffer processing could be delayed,
+        // need to call filter chain for processing
+        if let Err(e) = self.0.0.buffer.process_write_buf(&self.0) {
+            self.0.0.io_stopped(Some(e));
+        }
+
+        // access to output write buffer
         self.0.0.buffer.with_write_destination(|buffer| f(buffer))
     }
 
@@ -259,7 +264,7 @@ impl IoContext {
 
                 let result = if self.is_stopped() {
                     IoTaskStatus::Stop
-                } else if len == 0 {
+                } else if len == 0 && inner.buffer.write_source_size() == 0 {
                     // all data has been written
                     flags.insert(Flags::WR_PAUSED);
 
@@ -281,15 +286,11 @@ impl IoContext {
     fn shutdown_filters(&self, cx: &mut Context<'_>) {
         let io = &self.0;
         let st = &self.0.0;
-        let flags = st.flags.get();
-        if flags.contains(Flags::IO_STOPPING_FILTERS)
-            && !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
-        {
-            match st.buffer.with_filter(io, |ctx| io.filter().shutdown(ctx)) {
+
+        if st.flags.get().is_shutting_down_filters() {
+            match st.buffer.process_shutdown(io) {
                 Ok(Poll::Ready(())) => {
-                    st.write_task.wake();
-                    st.dispatch_task.wake();
-                    st.insert_flags(Flags::IO_STOPPING);
+                    st.io_stopping();
                 }
                 Ok(Poll::Pending) => {
                     // check read buffer, if buffer is not consumed it is unlikely
@@ -298,9 +299,7 @@ impl IoContext {
                     if flags.contains(Flags::RD_PAUSED)
                         || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
                     {
-                        st.write_task.wake();
-                        st.dispatch_task.wake();
-                        st.insert_flags(Flags::IO_STOPPING);
+                        st.io_stopping();
                     } else {
                         // filter shutdown timeout
                         let timeout = self
@@ -308,23 +307,18 @@ impl IoContext {
                             .take()
                             .unwrap_or_else(|| sleep(io.cfg().disconnect_timeout()));
                         if timeout.poll_elapsed(cx).is_ready() {
-                            st.write_task.wake();
-                            st.dispatch_task.wake();
-                            st.insert_flags(Flags::IO_STOPPING);
+                            st.io_stopping();
                         } else {
                             self.1.set(Some(timeout));
                         }
+                    }
+                    if let Err(err) = st.buffer.process_write_buf(&self.0) {
+                        st.io_stopped(Some(err));
                     }
                 }
                 Err(err) => {
                     st.io_stopped(Some(err));
                 }
-            }
-            if let Err(err) = st
-                .buffer
-                .with_filter(&self.0, |ctx| io.filter().process_write_buf(ctx))
-            {
-                st.io_stopped(Some(err));
             }
         }
     }

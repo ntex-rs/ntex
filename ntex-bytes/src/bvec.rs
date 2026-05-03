@@ -736,6 +736,17 @@ impl io::Read for BytesMut {
     }
 }
 
+impl io::Write for BytesMut {
+    fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
+        self.extend_from_slice(src);
+        Ok(src.len())
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
+}
+
 impl fmt::Debug for BytesMut {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&crate::debug::BsDebug(self.storage.as_ref()), fmt)
@@ -746,17 +757,6 @@ impl fmt::Write for BytesMut {
     #[inline]
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.extend_from_slice(s.as_bytes());
-        Ok(())
-    }
-}
-
-impl io::Write for BytesMut {
-    fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
-        self.extend_from_slice(src);
-        Ok(src.len())
-    }
-
-    fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
     }
 }
