@@ -152,8 +152,7 @@ impl FilterLayer for SslFilter {
 
                     let chunk: &mut [u8] =
                         unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
-                    let ssl_result = self.inner.borrow_mut().ssl_read(chunk);
-                    let result = match ssl_result {
+                    let result = match self.inner.borrow_mut().ssl_read(chunk) {
                         Ok(v) => {
                             unsafe { dst.advance_mut(v) };
                             continue;

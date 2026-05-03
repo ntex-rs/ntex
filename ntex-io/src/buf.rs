@@ -140,6 +140,10 @@ impl Stack {
         self.with_first_level(|buf| buf.read.as_ref().map_or(0, BytesMut::len))
     }
 
+    pub(crate) fn write_source_size(&self) -> usize {
+        self.with_first_level(|buf| buf.write.len())
+    }
+
     pub(crate) fn write_destination_size(&self) -> usize {
         self.with_last_level(|buf| buf.write.len())
     }
@@ -188,9 +192,9 @@ impl Stack {
         })
     }
 
-    pub(crate) fn process_write_buf(&self, io: &IoRef, force: bool) -> io::Result<()> {
+    pub(crate) fn process_write_buf(&self, io: &IoRef) -> io::Result<()> {
         self.with_buffers(move |buffers| {
-            if !force && buffers[0].write.is_empty() {
+            if buffers[0].write.is_empty() {
                 Ok(())
             } else {
                 let mut ctx = FilterCtx {
@@ -205,7 +209,7 @@ impl Stack {
     }
 
     pub(crate) fn process_shutdown(&self, io: &IoRef) -> io::Result<Poll<()>> {
-        self.process_write_buf(io, true)?;
+        self.process_write_buf(io)?;
         self.with_filter(io, |ctx| io.filter().shutdown(ctx))
     }
 }

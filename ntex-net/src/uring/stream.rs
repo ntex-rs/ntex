@@ -63,7 +63,7 @@ enum Operation {
     Send {
         id: usize,
         buf: BytePage,
-        result: Option<io::Result<usize>>,
+        result: Option<io::Result<()>>,
     },
     Poll {
         id: usize,
@@ -256,7 +256,8 @@ impl Handler for StreamOpsHandler {
                 Operation::Send { id, buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
                         if cqueue::notif(flags) {
-                            if item.ctx.update_write_buf(Poll::Ready(result.unwrap().map(|_| ()))) == IoTaskStatus::Io {
+                            let res = result.unwrap_or(Ok(()));
+                            if item.ctx.update_write_buf(Poll::Ready(res)) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
                         } else if cqueue::more(flags) {
@@ -268,7 +269,10 @@ impl Handler for StreamOpsHandler {
                                 st.send(id, &self.inner.api);
                             }
                             // insert op back for "notify" handling
-                            st.ops[user_data] = Some(Operation::Send { id, buf, result: Some(res) });
+                            st.ops[user_data] = Some(Operation::Send {
+                                id,
+                                buf,
+                                result: Some(res.map(|_| ())) });
                             return
                         } else {
                             // reset op reference

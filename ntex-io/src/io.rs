@@ -323,7 +323,7 @@ impl<F: Filter> Io<F> {
     {
         // write buffer processing could be delayed,
         // need to call filter chain for processing
-        if let Err(e) = self.st().buffer.process_write_buf(&self, false) {
+        if let Err(e) = self.st().buffer.process_write_buf(&self) {
             self.st().io_stopped(Some(e));
         }
 
@@ -351,7 +351,7 @@ impl<F: Filter> Io<F> {
     {
         // write buffer processing could be delayed,
         // need to call filter chain for processing
-        if let Err(e) = self.st().buffer.process_write_buf(&self, false) {
+        if let Err(e) = self.st().buffer.process_write_buf(&self) {
             self.st().io_stopped(Some(e));
         }
 
