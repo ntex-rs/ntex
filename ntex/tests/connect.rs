@@ -325,6 +325,7 @@ async fn test_create() {
             Ok::<_, io::Error>(())
         })
     });
+    time::sleep(time::Millis(100)).await;
 
     let factory = ntex::connect::Connector::new();
     let conn = factory.pipeline(SharedCfg::default()).await.unwrap();
