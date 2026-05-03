@@ -290,9 +290,7 @@ impl IoContext {
         if st.flags.get().is_shutting_down_filters() {
             match st.buffer.process_shutdown(io) {
                 Ok(Poll::Ready(())) => {
-                    st.write_task.wake();
-                    st.dispatch_task.wake();
-                    st.insert_flags(Flags::IO_STOPPING);
+                    st.io_stopping();
                 }
                 Ok(Poll::Pending) => {
                     // check read buffer, if buffer is not consumed it is unlikely
@@ -301,9 +299,7 @@ impl IoContext {
                     if flags.contains(Flags::RD_PAUSED)
                         || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
                     {
-                        st.write_task.wake();
-                        st.dispatch_task.wake();
-                        st.insert_flags(Flags::IO_STOPPING);
+                        st.io_stopping();
                     } else {
                         // filter shutdown timeout
                         let timeout = self
@@ -311,8 +307,7 @@ impl IoContext {
                             .take()
                             .unwrap_or_else(|| sleep(io.cfg().disconnect_timeout()));
                         if timeout.poll_elapsed(cx).is_ready() {
-                            st.dispatch_task.wake();
-                            st.insert_flags(Flags::IO_STOPPING);
+                            st.io_stopping();
                         } else {
                             self.1.set(Some(timeout));
                         }

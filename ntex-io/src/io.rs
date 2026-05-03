@@ -95,6 +95,12 @@ impl IoState {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Disconnected"))
     }
 
+    pub(super) fn io_stopping(&self) {
+        self.write_task.wake();
+        self.dispatch_task.wake();
+        self.insert_flags(Flags::IO_STOPPING);
+    }
+
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
         if !self.flags.get().is_stopped() {
             log::trace!(
