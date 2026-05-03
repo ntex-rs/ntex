@@ -52,6 +52,11 @@ impl Flags {
         self.contains(Flags::IO_WANT_WRITE)
     }
 
+    pub(crate) fn is_shutting_down_filters(self) -> bool {
+        self.contains(Flags::IO_STOPPING_FILTERS)
+            && !self.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
+    }
+
     pub(crate) fn waiting_for_write_is_done(&mut self) {
         self.remove(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
     }

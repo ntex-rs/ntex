@@ -129,7 +129,7 @@ impl Handler for StreamOpsHandler {
             );
 
             if ev.readable {
-                if io.read().ready() {
+                if io.read() == IoTaskStatus::Io {
                     renew.readable = true;
                     io.flags.insert(Flags::RD);
                 } else {
@@ -140,7 +140,7 @@ impl Handler for StreamOpsHandler {
             }
 
             if ev.writable {
-                if io.write().ready() {
+                if io.write() == IoTaskStatus::Io {
                     renew.writable = true;
                     io.flags.insert(Flags::WR);
                 } else {
@@ -319,7 +319,7 @@ impl StreamCtl {
                 if io.flags.contains(Flags::RD) {
                     event.readable = true;
                     want_update_read = false;
-                } else if io.read().ready() {
+                } else if io.read() == IoTaskStatus::Io {
                     event.readable = true;
                     io.flags.insert(Flags::RD);
                 } else {
@@ -336,7 +336,7 @@ impl StreamCtl {
                 if io.flags.contains(Flags::WR) {
                     event.writable = true;
                     want_update_write = false;
-                } else if io.write().ready() {
+                } else if io.write() == IoTaskStatus::Io {
                     event.writable = true;
                     io.flags.insert(Flags::WR);
                 } else {
@@ -397,26 +397,16 @@ impl StreamItem {
             if let Some(mut page) = buf.take() {
                 let fd = self.fd();
                 log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), page.len());
-                let res = syscall!(break libc::write(fd, page.as_ptr().cast(), page.len()));
-<<<<<<< Updated upstream
-                match res {
-                    Poll::Ready(Ok(n)) => {
-                        if page.len() != n {
-                            page.advance_to(n);
-                            buf.prepend(page);
-                        }
-                        Some(Poll::Ready(Ok(())))
-                    }
-                    Poll::Ready(Err(e)) => Some(Poll::Ready(Err(e))),
-                    Poll::Pending => Some(Poll::Pending),
-=======
-                if let Poll::Ready(Ok(n)) = res
-                    && page.len() != n
-                {
-                    page.advance_to(n);
-                    buf.prepend(page);
->>>>>>> Stashed changes
-                }
+                let res = syscall!(break libc::write(fd, page.as_ptr().cast(), page.len()))
+                    .map(|item| {
+                        item.map(|n| {
+                            if page.len() != n {
+                                page.advance_to(n);
+                                buf.prepend(page);
+                            }
+                        })
+                    });
+                Some(res)
             } else {
                 None
             }

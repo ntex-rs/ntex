@@ -87,7 +87,6 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
             let inner = super::IoInner {
                 source: None,
                 destination: BytePages::new(io.cfg().write_page_size()),
-                stopped: false,
             };
             let filter = SslFilter {
                 inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),

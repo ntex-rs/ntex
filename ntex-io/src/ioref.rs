@@ -1,6 +1,6 @@
 use std::{any, fmt, hash, io};
 
-use ntex_bytes::{BytePages, BytesMut};
+use ntex_bytes::{BytePage, BytePages, BytesMut};
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
@@ -16,7 +16,6 @@ impl IoRef {
         self.0.cfg.tag()
     }
 
-    #[inline]
     #[doc(hidden)]
     /// Get current state flags
     pub fn flags(&self) -> Flags {
@@ -62,7 +61,6 @@ impl IoRef {
         self.0.dispatch_task.wake();
     }
 
-    #[inline]
     /// Gracefully close connection
     ///
     /// Initiate io stream shutdown process.
@@ -70,7 +68,6 @@ impl IoRef {
         self.0.init_shutdown();
     }
 
-    #[inline]
     /// Force close connection
     ///
     /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
@@ -85,7 +82,6 @@ impl IoRef {
         self.0.dispatch_task.wake();
     }
 
-    #[inline]
     /// Gracefully shutdown io stream
     pub fn want_shutdown(&self) {
         if !self
@@ -104,13 +100,11 @@ impl IoRef {
         }
     }
 
-    #[inline]
     /// Ask io to process write buffer
     pub fn want_write(&self) {
         self.0.insert_flags(Flags::IO_WANT_WRITE);
     }
 
-    #[inline]
     /// Query filter specific data
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
         if let Some(item) = self.filter().query(any::TypeId::of::<T>()) {
@@ -120,7 +114,6 @@ impl IoRef {
         }
     }
 
-    #[inline]
     /// Encode and write item to a buffer and wake up write task
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
@@ -130,25 +123,35 @@ impl IoRef {
             log::trace!("{}: Io is closed/closing, skip frame encoding", self.tag());
             Ok(())
         } else {
-            self.with_write_buf(|buf| {
-                // encode item and wake write task
-                codec.encodev(item, buf)
-            })
-            // .with_write_buf() could return io::Error<Result<(), U::Error>>,
-            // in that case mark io as failed
-            .unwrap_or_else(|err| {
-                log::trace!(
-                    "{}: Got io error while encoding, error: {:?}",
-                    self.tag(),
-                    err
-                );
-                self.0.io_stopped(Some(err));
-                Ok(())
-            })
+            // encode item and wake write task
+            self.with_write_buf(|buf| codec.encodev(item, buf))
+                // .with_write_buf() could return io::Error<Result<(), U::Error>>,
+                // in that case mark io as failed
+                .unwrap_or_else(|err| {
+                    log::trace!(
+                        "{}: Got io error while encoding, error: {:?}",
+                        self.tag(),
+                        err
+                    );
+                    self.0.io_stopped(Some(err));
+                    Ok(())
+                })
         }
     }
 
-    #[inline]
+    /// Encode slice to a buffer and wake up write task
+    pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
+        self.with_write_buf(|buf| buf.extend_from_slice(src))
+    }
+
+    /// Write bytes to a buffer and wake up write task
+    pub fn encode_bytes<B>(&self, src: B) -> io::Result<()>
+    where
+        BytePage: From<B>,
+    {
+        self.with_write_buf(|buf| buf.append(src))
+    }
+
     /// Attempts to decode a frame from the read buffer
     pub fn decode<U>(
         &self,
@@ -162,7 +165,6 @@ impl IoRef {
             .with_read_destination(self, |buf| codec.decode(buf))
     }
 
-    #[inline]
     /// Attempts to decode a frame from the read buffer
     pub fn decode_item<U>(
         &self,
@@ -181,14 +183,7 @@ impl IoRef {
         })
     }
 
-    #[inline]
-    /// Write bytes to a buffer and wake up write task
-    pub fn write(&self, src: &[u8]) -> io::Result<()> {
-        self.with_write_buf(|buf| buf.extend_from_slice(src))
-    }
-
-    #[inline]
-    /// Get access to write buffer
+    /// Get access to filter buffer
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
@@ -200,7 +195,14 @@ impl IoRef {
         })
     }
 
-    #[inline]
+    /// Get mut access to read buffer
+    pub fn with_read_buf<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytesMut) -> R,
+    {
+        self.0.buffer.with_read_destination(self, f)
+    }
+
     /// Get mut access to source write buffer
     pub fn with_write_buf<F, R>(&self, f: F) -> io::Result<R>
     where
@@ -209,65 +211,50 @@ impl IoRef {
         if self.0.flags.get().contains(Flags::IO_STOPPED) {
             Err(self.0.error_or_disconnected())
         } else {
-            let result = self.0.buffer.with_write_source(f);
-            self.0
-                .buffer
-                .with_filter(self, |ctx| self.0.filter().process_write_buf(ctx))?;
-            Ok(result)
+            self.0.buffer.with_write_source(|pages| {
+                let result = f(pages);
+
+                // wake write task if needsed
+                let len = pages.len();
+                let flags = self.0.flags.get();
+                if len > 0 && flags.contains(Flags::WR_PAUSED) {
+                    self.0.remove_flags(Flags::WR_PAUSED);
+                    self.0.write_task.wake();
+                }
+                // enable backpressure
+                if len >= self.0.cfg.write_buf().high
+                    && !flags.contains(Flags::BUF_W_BACKPRESSURE)
+                {
+                    self.0.insert_flags(Flags::BUF_W_BACKPRESSURE);
+                    self.0.dispatch_task.wake();
+                }
+
+                Ok(result)
+            })
         }
     }
 
-    #[doc(hidden)]
-    #[inline]
-    /// Get mut access to destination write buffer
-    pub fn with_write_dest_buf<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut BytePages) -> R,
-    {
-        self.0.buffer.with_write_destination(f)
-    }
-
-    #[inline]
-    /// Get buffer for read operations
-    pub fn get_read_buf(&self) -> BytesMut {
-        self.0.cfg.read_buf().get()
-    }
-
-    #[inline]
     /// Make sure buffer has enough free space
     pub fn resize_read_buf(&self, buf: &mut BytesMut) {
         self.0.cfg.read_buf().resize(buf);
     }
 
-    #[inline]
-    /// Get mut access to source read buffer
-    pub fn with_read_buf<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut BytesMut) -> R,
-    {
-        self.0.buffer.with_read_destination(self, f)
-    }
-
-    #[inline]
     /// Wakeup dispatcher
     pub fn notify_dispatcher(&self) {
         self.0.dispatch_task.wake();
         log::trace!("{}: Timer, notify dispatcher", self.tag());
     }
 
-    #[inline]
     /// Wakeup dispatcher and send keep-alive error
     pub fn notify_timeout(&self) {
         self.0.notify_timeout();
     }
 
-    #[inline]
     /// current timer handle
     pub fn timer_handle(&self) -> timer::TimerHandle {
         self.0.timeout.get()
     }
 
-    #[inline]
     /// Start timer
     pub fn start_timer(&self, timeout: Seconds) -> timer::TimerHandle {
         let cur_hnd = self.0.timeout.get();
@@ -293,7 +280,6 @@ impl IoRef {
         }
     }
 
-    #[inline]
     /// Stop timer
     pub fn stop_timer(&self) {
         let hnd = self.0.timeout.get();
@@ -304,7 +290,6 @@ impl IoRef {
         }
     }
 
-    #[inline]
     /// Notify when io stream get disconnected
     pub fn on_disconnect(&self) -> OnDisconnect {
         OnDisconnect::new(self.0.clone())
@@ -393,7 +378,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
-        state.write(b"test").unwrap();
+        state.encode_slice(b"test").unwrap();
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
@@ -479,7 +464,7 @@ mod tests {
         client.close().await;
 
         assert!(state.is_closed());
-        assert!(state.write(TEXT.as_bytes()).is_err());
+        assert!(state.encode_slice(TEXT.as_bytes()).is_err());
         assert!(
             state
                 .with_write_buf(|buf| buf.extend_from_slice(BIN))
@@ -601,7 +586,7 @@ mod tests {
 
         assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 8);
-        assert_eq!(state.with_write_dest_buf(|b| b.len()), 0);
+        assert_eq!(state.0.buffer.with_write_destination(|b| b.len()), 0);
 
         // refs
         assert_eq!(Rc::strong_count(&in_bytes), 3);

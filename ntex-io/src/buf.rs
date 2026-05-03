@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt, io};
+use std::{cell::Cell, fmt, io, task::Poll};
 
 use ntex_bytes::{BufMut, BytePageSize, BytePages, BytesMut, buf::UninitSlice};
 
@@ -60,13 +60,11 @@ impl Stack {
 
     pub(crate) fn add_layer(&self) {
         let mut buffers = self.buffers.take().unwrap().into_vec();
-        buffers.insert(
-            buffers.len() - 2,
-            StackBuffer {
-                read: None,
-                write: BytePages::new(buffers[0].write.page_size()),
-            },
-        );
+        let buf = StackBuffer {
+            read: buffers[0].read.take(),
+            write: BytePages::new(buffers[0].write.page_size()),
+        };
+        buffers.insert(0, buf);
         self.buffers.set(Some(buffers.into_boxed_slice()));
     }
 
@@ -188,6 +186,27 @@ impl Stack {
             };
             io.filter().process_read_buf(&mut ctx)
         })
+    }
+
+    pub(crate) fn process_write_buf(&self, io: &IoRef, force: bool) -> io::Result<()> {
+        self.with_buffers(move |buffers| {
+            if !force && buffers[0].write.is_empty() {
+                Ok(())
+            } else {
+                let mut ctx = FilterCtx {
+                    io,
+                    buffers,
+                    idx: 0,
+                    read_buffer: None,
+                };
+                io.filter().process_write_buf(&mut ctx)
+            }
+        })
+    }
+
+    pub(crate) fn process_shutdown(&self, io: &IoRef) -> io::Result<Poll<()>> {
+        self.process_write_buf(io, true)?;
+        self.with_filter(io, |ctx| io.filter().shutdown(ctx))
     }
 }
 
@@ -337,7 +356,7 @@ impl FilterBuf<'_> {
             .curr
             .read
             .take()
-            .unwrap_or_else(|| self.io.get_read_buf());
+            .unwrap_or_else(|| self.io.cfg().read_buf().get());
 
         let result = f(self.io, &mut read_src, &mut read_dst);
 

@@ -4,6 +4,8 @@
 
 * Add support for vectored writes
 
+* Delay processing of write buffer until write task pick work
+
 ## [3.9.2] - 2026-04-07
 
 * Fix shutdown handling, could dead lock in edge cases

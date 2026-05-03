@@ -185,14 +185,14 @@ where
                     }
                 }
 
-                Some(result)
+                Some(result.map(|res| res.map(|_| ())))
             } else {
                 None
             }
         });
 
         break if let Some(result) = result {
-            match ctx.update_write_buf(result.map(|r| r.map(|_| ()))) {
+            match ctx.update_write_buf(result) {
                 IoTaskStatus::Stop => Poll::Ready(Status::Terminate),
                 IoTaskStatus::Pause => Poll::Pending,
                 IoTaskStatus::Io => continue,
@@ -337,7 +337,8 @@ impl AsyncWrite for TokioIoBoxed {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.0.write(buf).map(|()| buf.len()))
+        self.0.encode_slice(buf)?;
+        Poll::Ready(Ok(buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

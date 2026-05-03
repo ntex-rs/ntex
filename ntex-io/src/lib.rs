@@ -2,10 +2,10 @@
 #![deny(clippy::pedantic)]
 #![allow(
     clippy::missing_fields_in_debug,
-    clippy::must_use_candidate,
-    clippy::missing_errors_doc
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::must_use_candidate
 )]
-
 use std::io::{Error as IoError, Result as IoResult};
 use std::{any::Any, any::TypeId, fmt, task::Context, task::Poll};
 
@@ -120,14 +120,6 @@ pub enum IoTaskStatus {
     Pause,
     /// Stop io task
     Stop,
-}
-
-impl IoTaskStatus {
-    #[inline]
-    /// Ready for more io ops
-    pub fn ready(self) -> bool {
-        self == IoTaskStatus::Io
-    }
 }
 
 /// Io status

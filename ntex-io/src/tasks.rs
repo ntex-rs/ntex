@@ -165,9 +165,7 @@ impl IoContext {
                     // and potentialy wake write task
                     if self.0.flags().is_want_to_write() {
                         inner.remove_flags(Flags::IO_WANT_WRITE);
-                        inner.buffer.with_filter(&self.0, |ctx| {
-                            self.0.filter().process_write_buf(ctx)
-                        })
+                        inner.buffer.process_write_buf(&self.0, true)
                     } else {
                         Ok(())
                     }
@@ -216,6 +214,13 @@ impl IoContext {
     where
         F: FnOnce(&mut BytePages) -> R,
     {
+        // write buffer processing could be delayed,
+        // need to call filter chain for processing
+        if let Err(e) = self.0.0.buffer.process_write_buf(&self.0, false) {
+            self.0.0.io_stopped(Some(e));
+        }
+
+        // access to output write buffer
         self.0.0.buffer.with_write_destination(|buffer| f(buffer))
     }
 
@@ -281,13 +286,10 @@ impl IoContext {
     fn shutdown_filters(&self, cx: &mut Context<'_>) {
         let io = &self.0;
         let st = &self.0.0;
-        let flags = st.flags.get();
-        if flags.contains(Flags::IO_STOPPING_FILTERS)
-            && !flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
-        {
-            match st.buffer.with_filter(io, |ctx| io.filter().shutdown(ctx)) {
+
+        if st.flags.get().is_shutting_down_filters() {
+            match st.buffer.process_shutdown(io) {
                 Ok(Poll::Ready(())) => {
-                    st.write_task.wake();
                     st.dispatch_task.wake();
                     st.insert_flags(Flags::IO_STOPPING);
                 }
@@ -298,7 +300,6 @@ impl IoContext {
                     if flags.contains(Flags::RD_PAUSED)
                         || flags.contains(Flags::BUF_R_FULL | Flags::BUF_R_READY)
                     {
-                        st.write_task.wake();
                         st.dispatch_task.wake();
                         st.insert_flags(Flags::IO_STOPPING);
                     } else {
@@ -308,23 +309,19 @@ impl IoContext {
                             .take()
                             .unwrap_or_else(|| sleep(io.cfg().disconnect_timeout()));
                         if timeout.poll_elapsed(cx).is_ready() {
-                            st.write_task.wake();
                             st.dispatch_task.wake();
                             st.insert_flags(Flags::IO_STOPPING);
                         } else {
                             self.1.set(Some(timeout));
                         }
                     }
+                    if let Err(err) = st.buffer.process_write_buf(&self.0, true) {
+                        st.io_stopped(Some(err));
+                    }
                 }
                 Err(err) => {
                     st.io_stopped(Some(err));
                 }
-            }
-            if let Err(err) = st
-                .buffer
-                .with_filter(&self.0, |ctx| io.filter().process_write_buf(ctx))
-            {
-                st.io_stopped(Some(err));
             }
         }
     }

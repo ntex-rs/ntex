@@ -168,9 +168,8 @@ where
                             inner.send_response(res, body.into())
                         }
                         ControlResult::Continue(req) => {
-                            let result = inner.io.with_write_buf(|buf| {
-                                buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                            });
+                            let result =
+                                inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                             if let Err(err) = result {
                                 *this.st = inner.ctl_peer_gone(Some(err));
                                 continue;

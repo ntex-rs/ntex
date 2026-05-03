@@ -236,7 +236,7 @@ async fn idle_disconnect_polling() {
     use std::sync::Mutex;
 
     use ntex::connect::Connect;
-    use ntex::{SharedCfg, io::Io, io::IoConfig, time::Millis, time::sleep};
+    use ntex::{SharedCfg, io::Io, io::IoConfig, time::Millis, time::sleep, util::Bytes};
 
     const DATA: &[u8] = b"Hello World Hello World Hello World Hello World Hello World \
                           Hello World Hello World Hello World Hello World Hello World \
@@ -269,7 +269,7 @@ async fn idle_disconnect_polling() {
             tx.lock().unwrap().take().unwrap().send(()).unwrap();
 
             async move {
-                io.write(DATA).unwrap();
+                io.encode_bytes(Bytes::from_static(DATA)).unwrap();
                 sleep(Millis(250)).await;
                 io.close();
                 Ok::<_, ()>(())
@@ -293,9 +293,8 @@ async fn idle_disconnect_polling() {
 async fn idle_disconnect_uring() {
     use std::sync::Mutex;
 
-    use ntex::{
-        SharedCfg, connect::Connect, io::Io, io::IoConfig, time::Millis, time::sleep,
-    };
+    use ntex::io::{Io, IoConfig};
+    use ntex::{SharedCfg, connect::Connect, time::Millis, time::sleep, util::Bytes};
 
     const DATA: &[u8] = b"Hello World Hello World Hello World Hello World Hello World \
                           Hello World Hello World Hello World Hello World Hello World \
@@ -328,9 +327,9 @@ async fn idle_disconnect_uring() {
             tx.lock().unwrap().take().unwrap().send(()).unwrap();
 
             async move {
-                io.write(DATA).unwrap();
+                io.encode_slice(DATA).unwrap();
                 sleep(Millis(250)).await;
-                io.write(DATA).unwrap();
+                io.encode_bytes(Bytes::from_static(DATA)).unwrap();
                 sleep(Millis(250)).await;
                 io.close();
                 Ok::<_, ()>(())

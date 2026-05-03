@@ -81,7 +81,7 @@ impl FilterLayer for WsTransport {
     fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
         buf.with_buffers(|io, r_src, r_dst, _, w_dst| {
             if let Some(src) = r_src {
-                let mut dst = r_dst.take().unwrap_or_else(|| io.get_read_buf());
+                let mut dst = r_dst.take().unwrap_or_else(|| io.cfg().read_buf().get());
 
                 loop {
                     let Some(frame) = self.codec.decode(src).map_err(|e| {
