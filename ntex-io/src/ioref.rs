@@ -226,7 +226,7 @@ impl IoRef {
                     // flatten data delivery to the peer, IoRef can initiate
                     // out-of-order writes based on a configured threshold.
                     if flags.contains(Flags::HANDLE) && len > self.0.cfg.write_buf_limit() {
-                        wrt = true
+                        wrt = true;
                     }
                     self.0.remove_flags(Flags::WR_PAUSED);
                     self.0.write_task.wake();
