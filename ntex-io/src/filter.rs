@@ -90,7 +90,7 @@ impl Filter for Base {
 
             if flags.contains(Flags::IO_STOPPING) {
                 Poll::Ready(Readiness::Shutdown)
-            } else if flags.contains(Flags::WR_PAUSED) {
+            } else if flags.write_paused() {
                 Poll::Pending
             } else {
                 Poll::Ready(Readiness::Ready)
@@ -111,7 +111,7 @@ impl Filter for Base {
         let buf = ctx.write_destination();
         let len = buf.len();
         let flags = self.0.flags();
-        if len > 0 && flags.contains(Flags::WR_PAUSED) {
+        if len > 0 && flags.write_paused() {
             self.0.0.remove_flags(Flags::WR_PAUSED);
             self.0.0.write_task.wake();
         }

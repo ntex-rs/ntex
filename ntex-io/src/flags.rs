@@ -35,6 +35,8 @@ bitflags::bitflags! {
 
         /// handle is set
         const HANDLE              = 0b0100_0000_0000_0000;
+        /// early write
+        const UPFRONT_WRITE       = 0b1000_0000_0000_0000;
     }
 }
 
@@ -62,6 +64,14 @@ impl Flags {
     pub(crate) fn is_shutting_down_filters(self) -> bool {
         self.contains(Flags::IO_STOPPING_FILTERS)
             && !self.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
+    }
+
+    pub(crate) fn can_write_upfront(self) -> bool {
+        self.contains(Flags::HANDLE | Flags::UPFRONT_WRITE)
+    }
+
+    pub(crate) fn write_paused(self) -> bool {
+        self.contains(Flags::WR_PAUSED)
     }
 
     pub(crate) fn waiting_for_write_is_done(&mut self) {
