@@ -208,6 +208,18 @@ impl Stack {
         })
     }
 
+    pub(crate) fn process_write_buf_force(&self, io: &IoRef) -> io::Result<()> {
+        self.with_buffers(move |buffers| {
+            let mut ctx = FilterCtx {
+                io,
+                buffers,
+                idx: 0,
+                read_buffer: None,
+            };
+            io.filter().process_write_buf(&mut ctx)
+        })
+    }
+
     pub(crate) fn process_shutdown(&self, io: &IoRef) -> io::Result<Poll<()>> {
         self.process_write_buf(io)?;
         self.with_filter(io, |ctx| io.filter().shutdown(ctx))
@@ -258,11 +270,11 @@ impl FilterCtx<'_> {
             io: self.io,
             curr: &mut left[self.idx],
             next: &mut right[0],
-            need_write: Cell::new(false),
+            needs_write: Cell::new(false),
         };
         let result = f(&mut buf);
-        if buf.need_write.get() {
-            self.io.want_write();
+        if buf.needs_write.get() {
+            self.io.wants_write();
         }
         result
     }
@@ -288,7 +300,7 @@ pub struct FilterBuf<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) curr: &'a mut StackBuffer,
     pub(crate) next: &'a mut StackBuffer,
-    pub(crate) need_write: Cell<bool>,
+    pub(crate) needs_write: Cell<bool>,
 }
 
 impl FilterBuf<'_> {

@@ -1,21 +1,19 @@
-use std::io;
+use std::{io, sync::Arc};
 
-use ntex::io::types::PeerAddr;
-use ntex::{
-    Pipeline, ServiceFactory, SharedCfg, codec, connect, util::Bytes, util::Either,
-};
+use ntex::util::{Bytes, Either};
+use ntex::{Pipeline, ServiceFactory, SharedCfg, codec, connect, io::types::PeerAddr};
 use ntex_tls::TlsConfig;
-use tls_rustls::{ClientConfig, RootCertStore};
+use tls_rustls::ClientConfig;
+use tls_rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
 #[ntex::main]
 async fn main() -> io::Result<()> {
     env_logger::init();
 
     // rustls config
-    let cert_store =
-        RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = ClientConfig::builder()
-        .with_root_certificates(cert_store)
+    let config = ClientConfig::builder_with_protocol_versions(tls_rustls::ALL_VERSIONS)
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoCertificateVerification {}))
         .with_no_client_auth();
 
     // rustls connector
@@ -46,4 +44,57 @@ async fn main() -> io::Result<()> {
 
     println!("disconnecting");
     io.shutdown().await
+}
+
+#[derive(Debug)]
+pub(crate) struct NoCertificateVerification {}
+
+impl tls_rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _certs: &[CertificateDer<'_>],
+        _hostname: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<tls_rustls::client::danger::ServerCertVerified, tls_rustls::Error> {
+        Ok(tls_rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &tls_rustls::DigitallySignedStruct,
+    ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error>
+    {
+        Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &tls_rustls::DigitallySignedStruct,
+    ) -> Result<tls_rustls::client::danger::HandshakeSignatureValid, tls_rustls::Error>
+    {
+        Ok(tls_rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<tls_rustls::SignatureScheme> {
+        vec![
+            tls_rustls::SignatureScheme::ECDSA_SHA1_Legacy,
+            tls_rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            tls_rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            tls_rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            tls_rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            tls_rustls::SignatureScheme::RSA_PKCS1_SHA512,
+            tls_rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+            tls_rustls::SignatureScheme::RSA_PSS_SHA256,
+            tls_rustls::SignatureScheme::RSA_PSS_SHA384,
+            tls_rustls::SignatureScheme::RSA_PSS_SHA512,
+            tls_rustls::SignatureScheme::ED25519,
+            tls_rustls::SignatureScheme::ED448,
+        ]
+    }
 }

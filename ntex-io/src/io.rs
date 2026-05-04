@@ -612,8 +612,9 @@ impl<F> Io<F> {
     /// buffer max size.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         let st = self.st();
-        let flags = self.flags();
+        st.buffer.process_write_buf_force(self)?;
 
+        let flags = self.flags();
         let len = st.buffer.write_destination_size();
         if len > 0 {
             if full {

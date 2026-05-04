@@ -174,24 +174,16 @@ async fn test_openssl_read_before_error() {
 }
 
 #[cfg(feature = "rustls")]
-#[ignore]
 #[ntex::test]
 async fn test_rustls_string() {
     use std::{fs::File, io::BufReader};
 
     use ntex::{io::types::HttpProtocol, server::rustls};
+    use ntex_tls::rustls::{TlsConnector, TlsConnector2};
     use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain};
 
     let srv = test_server(async || {
         chain_factory(
-            fn_service(|io: Io<_>| async move {
-                let res = io.read_ready().await;
-                assert!(res.is_ok());
-                Ok(io)
-            })
-            .map_init_err(|_| ()),
-        )
-        .and_then(
             rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
                 e
@@ -205,7 +197,7 @@ async fn test_rustls_string() {
                     .await
                     .unwrap();
                 assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
-                Ok::<_, std::io::Error>(())
+                Ok::<_, io::Error>(())
             })
             .map_init_err(|_| ()),
         )
@@ -213,18 +205,20 @@ async fn test_rustls_string() {
 
     // tls connector
     let conn = Pipeline::new(
-        ntex::connect::rustls::TlsConnector::new(rustls_utils::tls_connector())
-            .create(SharedCfg::default())
+        TlsConnector::new(rustls_utils::tls_connector())
+            .create(SharedCfg::new("CLIENT").into())
             .await
             .unwrap(),
     );
     let addr = format!("localhost:{}", srv.addr().port());
+
     let io = conn.call(addr.into()).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
     assert_eq!(
         io.query::<HttpProtocol>().get().unwrap(),
         HttpProtocol::Http1
     );
+
     let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
     let cert_chain = rustls_pemfile::certs(cert_file)
         .collect::<Result<Vec<_>, _>>()
@@ -237,6 +231,7 @@ async fn test_rustls_string() {
         io.query::<PeerCertChain<'_>>().as_ref().unwrap().0,
         cert_chain
     );
+
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 
@@ -247,7 +242,7 @@ async fn test_rustls_string() {
 
     // tls connector 2
     let conn = Pipeline::new(
-        ntex::connect::rustls::TlsConnector2::new(rustls_utils::tls_connector())
+        TlsConnector2::new(rustls_utils::tls_connector())
             .create(SharedCfg::default())
             .await
             .unwrap(),
@@ -369,13 +364,21 @@ async fn test_uri() {
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_uri() {
+    use ntex::server::rustls;
+
     let srv = test_server(async || {
-        fn_service(|io: Io| async move {
+        chain_factory(
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+                log::error!("tls negotiation is failed: {e:?}");
+                e
+            }),
+        )
+        .and_then(fn_service(|io: Io<_>| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
-        })
+        }))
     });
     time::sleep(time::Millis(50)).await;
 

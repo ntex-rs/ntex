@@ -4,7 +4,7 @@ use std::{any, cell::RefCell, io, sync::Arc};
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use tls_rustls::{ClientConfig, ClientConnection, pki_types::ServerName};
 
-use super::Stream;
+use super::stream::{self, Stream};
 
 #[derive(Debug)]
 /// An implementation of SSL streams
@@ -36,7 +36,8 @@ impl TlsClientFilter {
         let io = io.add_filter(TlsClientFilter {
             session: RefCell::new(session),
         });
-        super::stream::handshake(&io.filter().session, &io).await?;
+
+        stream::handshake(&io.filter().session, &io).await?;
         Ok(io)
     }
 }

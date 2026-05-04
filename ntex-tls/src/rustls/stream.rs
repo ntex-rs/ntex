@@ -1,6 +1,6 @@
 use std::cell::RefCell;
-use std::io::{self, Read, Write};
-use std::{any, cmp, future::poll_fn, ops::Deref, ops::DerefMut, task::Poll, task::ready};
+use std::io::{self, Write};
+use std::{any, future::poll_fn, ops::Deref, ops::DerefMut, task::Poll, task::ready};
 
 use ntex_bytes::{BufMut, BytePages, BytesMut};
 use ntex_io::{FilterBuf, Io, types};
@@ -86,7 +86,7 @@ where
 
                             let chunk: &mut [u8] =
                                 unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
-                            let v = self.session.reader().read(chunk)?;
+                            let v = io::Read::read(&mut self.session.reader(), chunk)?;
                             unsafe { dst.advance_mut(v) };
                         }
                     } else if src.is_empty() {
@@ -102,34 +102,29 @@ where
 
     pub(crate) fn process_write_buf(&mut self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
         buf.with_buffers(|_, r_src, _, w_src, w_dst| {
-            loop {
+            'outer: loop {
                 // write to tls stream
                 while let Some(mut page) = w_src.take() {
                     page.advance_to(self.session.writer().write(&page)?);
-                    if !w_src.prepend(page) {
-                        // whole buffer is consumed, write next one
-                        continue;
+                    if w_src.prepend(page) {
+                        // buffer partially consumed, need to write_tls
+                        break;
                     }
-                    break;
                 }
 
                 // write tls records to output buffer
                 if self.session.wants_write() {
-                    let mut io = Wrapper { r_src, w_dst };
+                    let mut wrp = Wrapper { r_src, w_dst };
                     loop {
-                        match self.session.write_tls(&mut io) {
-                            Ok(n) => {
-                                if n == 0 {
-                                    break;
-                                }
-                            }
+                        match self.session.write_tls(&mut wrp) {
+                            Ok(0) => continue 'outer,
+                            Ok(_) => {}
                             Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                                break;
+                                continue 'outer;
                             }
                             Err(err) => return Err(err),
                         }
                     }
-                    continue;
                 }
                 return Ok(());
             }
@@ -146,47 +141,25 @@ where
     SD: SideData,
 {
     loop {
-        let handshaking = io.with_buf(|buf| {
-            let mut session = session.borrow_mut();
-            buf.with_buffers(|_, r_src, _, _, w_dst| {
-                let mut io = Wrapper { r_src, w_dst };
+        let (wants_write, handshaking) = {
+            let s = session.borrow_mut();
+            (s.wants_write(), s.is_handshaking())
+        };
 
-                while session.wants_read() {
-                    let has_data = io.r_src.as_ref().is_some_and(|b| !b.is_empty());
-
-                    if has_data {
-                        if session.read_tls(&mut io)? == 0 {
-                            return Err(io::Error::new(
-                                io::ErrorKind::NotConnected,
-                                "disconnected",
-                            ));
-                        }
-                        session.process_new_packets().map_err(|err| {
-                            // In case we have an alert to send describing this error,
-                            // try a last-gasp write -- but don't predate the primary
-                            // error.
-                            let _ = session.write_tls(&mut io);
-                            io::Error::new(io::ErrorKind::InvalidData, err)
-                        })?;
-                    } else {
-                        break;
-                    }
-                }
-
-                while session.wants_write() {
-                    session.write_tls(&mut io).map(|_| ())?;
-                }
-                Ok(session.is_handshaking())
-            })
-        })??;
+        if wants_write {
+            io.flush(false).await?;
+        }
 
         if handshaking {
             poll_fn(|cx| {
-                Poll::Ready(if ready!(io.poll_read_notify(cx))?.is_none() {
-                    Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
+                if ready!(io.poll_read_notify(cx))?.is_none() {
+                    Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        "disconnected",
+                    )))
                 } else {
-                    Ok(())
-                })
+                    Poll::Ready(Ok(()))
+                }
             })
             .await?;
         } else {
@@ -203,14 +176,10 @@ pub(crate) struct Wrapper<'a> {
 impl io::Read for Wrapper<'_> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         if let Some(buf) = self.r_src {
-            let len = cmp::min(buf.len(), dst.len());
-            if len > 0 {
-                dst[..len].copy_from_slice(&buf[..len]);
-                buf.advance_to(len);
-                return Ok(len);
-            }
+            io::Read::read(buf, dst)
+        } else {
+            Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
         }
-        Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
     }
 }
 

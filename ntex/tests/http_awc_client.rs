@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{cell::RefCell, collections::HashMap, io::Read, io::Write, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell, collections::HashMap, io, io::Read, io::Write, rc::Rc, sync::Arc,
+};
 
 use coo_kie::Cookie;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
@@ -7,9 +9,9 @@ use rand::Rng;
 
 use ntex::client::{Client, Connector, error::ClientError};
 use ntex::http::test::server as test_server;
-use ntex::http::{HttpMessage, HttpService, header};
+use ntex::http::{HttpMessage, HttpService, Method, Response, header};
 use ntex::io::IoConfig;
-use ntex::service::{cfg::SharedCfg, chain_factory, fn_layer};
+use ntex::service::{ServiceFactory, cfg::SharedCfg, chain_factory, fn_layer};
 use ntex::web::middleware::Compress;
 use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
 use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
@@ -179,6 +181,23 @@ async fn test_connection_reuse() {
 
     // one connection
     assert_eq!(num.load(Ordering::Relaxed), 1);
+}
+
+#[ntex::test]
+async fn test_connection_close() {
+    let srv = test_server(async move || {
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
+            .map(|_| ())
+    })
+    .await;
+
+    let response = srv
+        .request(Method::GET, "/")
+        .force_close()
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
 }
 
 #[ntex::test]
@@ -369,6 +388,10 @@ async fn test_with_query_parameter() {
 
     let res = srv.get("/?qp=5").send().await.unwrap();
     assert!(res.status().is_success());
+
+    let request = srv.request(Method::GET, srv.url("/?qp=5"));
+    let response = request.send().await.unwrap();
+    assert!(response.status().is_success());
 }
 
 #[ntex::test]
@@ -638,6 +661,29 @@ async fn test_client_cookie_handling() {
 }
 
 #[ntex::test]
+async fn test_client_timeout() {
+    let srv = test_server(async move || {
+        HttpService::new(|_| async {
+            sleep(Seconds(10)).await;
+            Ok::<_, io::Error>(Response::Ok().body(STR))
+        })
+        .map(|_| ())
+    })
+    .await
+    .set_client_timeout(Seconds(1), Millis(30_000))
+    .await;
+
+    let err = srv
+        .request(Method::GET, "/")
+        .force_close()
+        .send()
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, ClientError::Timeout));
+}
+
+#[ntex::test]
 async fn client_read_until_eof() {
     let addr = ntex::server::TestServer::unused_addr();
 
@@ -777,4 +823,30 @@ async fn middleware() {
         &data.borrow()[..],
         &[format!("1 -- {}", host), format!("2 -- {}", host)]
     );
+}
+
+#[ntex::test]
+async fn test_h1_v2() {
+    let srv = test_server(async move || {
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
+    })
+    .await;
+
+    let response = srv.request(Method::GET, "/").send().await.unwrap();
+    assert!(response.status().is_success());
+
+    let request = srv.request(Method::GET, "/").header("x-test", "111").send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    let response = srv.request(Method::POST, "/").send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }

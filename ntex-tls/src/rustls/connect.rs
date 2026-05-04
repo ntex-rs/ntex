@@ -3,8 +3,7 @@ use std::{fmt, io, sync::Arc};
 use ntex_error::Error;
 use ntex_io::{Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector, Connector2};
-use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx, ServiceFactory, cfg::Cfg, cfg::SharedCfg};
 use ntex_util::time::timeout_checked;
 use tls_rustls::{ClientConfig, pki_types::ServerName};
 
