@@ -251,7 +251,6 @@ enum StorageType {
     Bytes(Bytes),
     Storage(StorageVec),
     Vec(Vec<u8>),
-    TokioBytes(::bytes::Bytes),
 }
 
 impl BytePage {
@@ -262,7 +261,6 @@ impl BytePage {
             StorageType::Bytes(b) => b.len(),
             StorageType::Storage(b) => b.len(),
             StorageType::Vec(b) => b.len(),
-            StorageType::TokioBytes(b) => b.len(),
         }
     }
 
@@ -273,7 +271,6 @@ impl BytePage {
             StorageType::Bytes(b) => b.is_empty(),
             StorageType::Storage(b) => b.len() == 0,
             StorageType::Vec(b) => b.is_empty(),
-            StorageType::TokioBytes(b) => b.is_empty(),
         }
     }
 
@@ -284,7 +281,6 @@ impl BytePage {
                 StorageType::Bytes(b) => b.storage.as_ptr(),
                 StorageType::Storage(b) => b.as_ptr(),
                 StorageType::Vec(b) => b.as_ptr(),
-                StorageType::TokioBytes(b) => b.as_ptr(),
             }
         }
     }
@@ -305,10 +301,6 @@ impl BytePage {
             StorageType::Vec(b) => {
                 self.inner = StorageType::Bytes(Bytes::copy_from_slice(&b[cnt..]));
             }
-            StorageType::TokioBytes(b) => {
-                use bytes::Buf;
-                b.advance(cnt);
-            }
         }
     }
 
@@ -322,7 +314,6 @@ impl BytePage {
                 storage: st.freeze(),
             },
             StorageType::Vec(v) => Bytes::from(v),
-            StorageType::TokioBytes(b) => Bytes::copy_from_slice(&b),
         }
     }
 }
@@ -334,7 +325,6 @@ impl AsRef<[u8]> for BytePage {
             StorageType::Bytes(b) => b.as_ref(),
             StorageType::Storage(b) => b.as_ref(),
             StorageType::Vec(b) => b.as_ref(),
-            StorageType::TokioBytes(b) => b.as_ref(),
         }
     }
 }
@@ -384,14 +374,6 @@ impl From<Vec<u8>> for BytePage {
     }
 }
 
-impl From<::bytes::Bytes> for BytePage {
-    fn from(buf: ::bytes::Bytes) -> Self {
-        BytePage {
-            inner: StorageType::TokioBytes(buf),
-        }
-    }
-}
-
 impl From<&'static str> for BytePage {
     fn from(buf: &'static str) -> Self {
         BytePage::from(Bytes::from_static(buf.as_bytes()))
@@ -416,7 +398,6 @@ impl From<BytePage> for BytesMut {
             StorageType::Bytes(b) => b.into(),
             StorageType::Storage(storage) => BytesMut { storage },
             StorageType::Vec(v) => BytesMut::copy_from_slice(&v),
-            StorageType::TokioBytes(b) => BytesMut::copy_from_slice(&b),
         }
     }
 }
@@ -532,13 +513,6 @@ mod tests {
         assert_eq!(p.len(), 2);
         assert!(!p.is_empty());
         assert_eq!(p.as_ref(), b"23");
-
-        let p = BytePage::from(bytes::Bytes::copy_from_slice(b"123"));
-        assert_eq!(p.len(), 3);
-        assert!(!p.is_empty());
-        assert_eq!(p.as_ref(), b"123");
-        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
-        assert_eq!(p.freeze(), b"123");
 
         // debug
         let mut pages = BytePages::new(BytePageSize::Size8);
