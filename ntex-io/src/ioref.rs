@@ -20,7 +20,7 @@ impl IoRef {
     #[doc(hidden)]
     /// Get current state flags
     pub fn flags(&self) -> Flags {
-        self.0.flags.get()
+        self.0.flags.clone()
     }
 
     #[inline]
@@ -44,16 +44,13 @@ impl IoRef {
     #[inline]
     /// Check if io stream is closed
     pub fn is_closed(&self) -> bool {
-        self.0
-            .flags
-            .get()
-            .intersects(Flags::IO_STOPPING | Flags::IO_STOPPED)
+        self.0.flags.is_closed()
     }
 
     #[inline]
     /// Check if write back-pressure is enabled
     pub fn is_wr_backpressure(&self) -> bool {
-        self.0.flags.get().contains(Flags::BUF_W_BACKPRESSURE)
+        self.0.flags.is_wr_backpressure()
     }
 
     #[inline]
@@ -75,9 +72,7 @@ impl IoRef {
     /// without any graceful period.
     pub fn force_close(&self) {
         log::trace!("{}: Force close io stream object", self.tag());
-        self.0.insert_flags(
-            Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
-        );
+        self.0.flags.set_force_closed();
         self.0.read_task.wake();
         self.0.write_task.wake();
         self.0.dispatch_task.wake();
@@ -85,18 +80,14 @@ impl IoRef {
 
     /// Ask io to process write buffer
     pub fn wants_write(&self) {
-        self.0.insert_flags(Flags::IO_WANT_WRITE);
+        self.0.flags.set_wants_write();
     }
 
     /// Gracefully shutdown io stream
     pub fn wants_shutdown(&self) {
-        if !self.0.flags.get().is_stopping() {
-            log::trace!(
-                "{}: Initiate io shutdown {:?}",
-                self.tag(),
-                self.0.flags.get()
-            );
-            self.0.insert_flags(Flags::IO_STOPPING_FILTERS);
+        if !self.0.flags.is_stopping_any() {
+            log::trace!("{}: Initiate io shutdown {:?}", self.tag(), self.0.flags);
+            self.0.flags.set_filter_stopping();
             self.0.read_task.wake();
         }
     }
@@ -179,6 +170,32 @@ impl IoRef {
         })
     }
 
+    /// Write current write buffer to io
+    pub fn write(&self) -> io::Result<()> {
+        if self.0.flags.is_write_upfront_enabled()
+            && let Some(hnd) = self.0.handle.take()
+        {
+            self.0.flags.unset_write_paused();
+
+            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
+            hnd.write(ctx);
+            self.0.handle.set(Some(hnd));
+
+            // write task is not paused, io write is pending
+            // need to wake write task for io completeion
+            if !self.0.flags.is_write_paused() {
+                self.0.write_task.wake();
+            }
+
+            if self.0.flags.is_stopping_any()
+                && let Some(err) = self.0.error.take()
+            {
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
     /// Get access to filter buffer
     pub fn with_buf<F, R>(&self, f: F) -> io::Result<R>
     where
@@ -204,17 +221,18 @@ impl IoRef {
     where
         F: FnOnce(&mut BytePages) -> R,
     {
-        if self.0.flags.get().contains(Flags::IO_STOPPED) {
-            Err(self.0.error_or_disconnected())
+        let st = &self.0;
+
+        if st.flags.is_stopped() {
+            Err(st.error_or_disconnected())
         } else {
-            let (wrt, res) = self.0.buffer.with_write_source(|pages| {
+            let (wrt, res) = st.buffer.with_write_source(|pages| {
                 let result = f(pages);
 
                 // wake write task if needsed
                 let mut wrt = false;
                 let len = pages.len();
-                let flags = self.0.flags.get();
-                if len > 0 && flags.write_paused() {
+                if len > 0 && st.flags.is_write_paused() {
                     // The app encodes data in response to incoming data,
                     // continuing to fill the write buffer until all data
                     // has been processed. Only then can the runtime wake
@@ -225,30 +243,29 @@ impl IoRef {
                     // which introduces latency. To prevent this behavior and
                     // flatten data delivery to the peer, IoRef can initiate
                     // out-of-order writes based on a configured threshold.
-                    if flags.can_write_upfront() && len > self.0.cfg.write_buf_limit() {
+                    if st.flags.is_write_upfront_enabled() && len > st.cfg.write_buf_limit()
+                    {
                         wrt = true;
                     } else {
-                        self.0.write_task.wake();
+                        st.write_task.wake();
                     }
-                    self.0.remove_flags(Flags::WR_PAUSED);
+                    st.flags.unset_write_paused();
                 }
                 // enable backpressure
-                if len >= self.0.cfg.write_buf().high
-                    && !flags.contains(Flags::BUF_W_BACKPRESSURE)
-                {
-                    self.0.insert_flags(Flags::BUF_W_BACKPRESSURE);
-                    self.0.dispatch_task.wake();
+                if len >= st.write_buf().high && !st.flags.is_wr_backpressure() {
+                    st.flags.set_wr_backpressure();
+                    st.dispatch_task.wake();
                 }
 
                 (wrt, Ok(result))
             });
 
-            if wrt && let Some(hnd) = self.0.handle.take() {
+            if wrt && let Some(hnd) = st.handle.take() {
                 let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
                 hnd.write(ctx);
-                self.0.handle.set(Some(hnd));
-                if !self.0.flags.get().write_paused() {
-                    self.0.write_task.wake();
+                st.handle.set(Some(hnd));
+                if !st.flags.is_write_paused() {
+                    st.write_task.wake();
                 }
             }
             res
@@ -383,7 +400,7 @@ mod tests {
         client.read_error(io::Error::other("err"));
         let msg = state.recv(&BytesCodec).await;
         assert!(msg.is_err());
-        assert!(state.flags().contains(Flags::IO_STOPPED));
+        assert!(state.flags().is_stopped());
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -393,7 +410,7 @@ mod tests {
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert!(msg.is_err());
-            assert!(state.flags().contains(Flags::IO_STOPPED));
+            assert!(state.flags().is_stopped());
         }
 
         let (client, server) = IoTest::create();
@@ -411,14 +428,14 @@ mod tests {
         client.write_error(io::Error::other("err"));
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
-        assert!(state.flags().contains(Flags::IO_STOPPED));
+        assert!(state.flags().is_stopped());
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
         state.force_close();
-        assert!(state.flags().contains(Flags::IO_STOPPED));
-        assert!(state.flags().contains(Flags::IO_STOPPING));
+        assert!(state.flags().is_stopped());
+        assert!(state.flags().is_stopping());
     }
 
     #[ntex::test]

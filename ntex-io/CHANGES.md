@@ -1,10 +1,10 @@
 # Changes
 
-## [3.10.0] - 2026-05-xx
+## [3.10.0] - 2026-05-04
 
 * Add support for vectored writes
 
-* Add support for out-of-order writes during data encoding.
+* Add support for out-of-order writes during data encoding
 
 * Delay processing of write buffer until write task pick work
 

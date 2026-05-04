@@ -1060,7 +1060,7 @@ mod tests {
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
-        assert!(flags.contains(Flags::IO_STOPPING));
+        assert!(flags.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1110,7 +1110,7 @@ mod tests {
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
-        assert!(flags.contains(Flags::IO_STOPPING));
+        assert!(flags.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1220,15 +1220,15 @@ mod tests {
 
         client.write("1");
         sleep(Millis(1000)).await;
-        assert!(!state.flags().contains(Flags::IO_STOPPING));
+        assert!(!state.flags().is_stopping());
         client.write("23");
         sleep(Millis(1000)).await;
-        assert!(!state.flags().contains(Flags::IO_STOPPING));
+        assert!(!state.flags().is_stopping());
         client.write("4");
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        assert!(state.flags().contains(Flags::IO_STOPPING));
+        assert!(state.flags().is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1281,7 +1281,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"1"));
 
         sleep(Millis(1000)).await;
-        assert!(state.flags().contains(Flags::IO_STOPPING));
+        assert!(state.flags().is_stopping());
         assert!(client.is_closed());
     }
 
