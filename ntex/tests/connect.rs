@@ -235,9 +235,8 @@ async fn test_rustls_string() {
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
 
-    io.send(Bytes::from_static(b"test"), &BytesCodec)
-        .await
-        .unwrap();
+    io.encode(Bytes::from_static(b"test"), &BytesCodec).unwrap();
+    io.write().unwrap();
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 
     // tls connector 2
