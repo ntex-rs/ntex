@@ -24,14 +24,17 @@ impl BytePages {
         }
     }
 
+    /// Get size of the page.
     pub fn page_size(&self) -> BytePageSize {
         self.size
     }
 
+    /// Sets the page size for new pages.
     pub fn set_page_size(&mut self, size: BytePageSize) {
         self.size = size;
     }
 
+    /// Insert a page to the front of the collection.
     pub fn prepend<T>(&mut self, buf: T) -> bool
     where
         BytePage: From<T>,
@@ -45,6 +48,7 @@ impl BytePages {
         }
     }
 
+    /// Appends a new page to the back of the collection.
     pub fn append<T>(&mut self, buf: T)
     where
         BytePage: From<T>,
@@ -89,6 +93,7 @@ impl BytePages {
     }
 
     #[inline]
+    /// Gets the total number of pages.
     pub fn len(&self) -> usize {
         self.pages
             .iter()
@@ -96,6 +101,7 @@ impl BytePages {
     }
 
     #[inline]
+    /// Checks if the `BytePages` instance is empty.
     pub fn is_empty(&self) -> bool {
         for p in &self.pages {
             if !p.is_empty() {
@@ -115,6 +121,7 @@ impl BytePages {
         }
     }
 
+    /// Returns the first page from the collection.
     pub fn take(&mut self) -> Option<BytePage> {
         if let Some(page) = self.pages.pop_front() {
             Some(page)
@@ -129,6 +136,7 @@ impl BytePages {
     }
 
     #[inline]
+    /// Moves all pages to another `BytePages` instance.
     pub fn move_to(&mut self, pages: &mut BytePages) {
         while let Some(page) = self.take() {
             pages.append(page);
@@ -140,6 +148,17 @@ impl BytePages {
         if self.pages.is_empty() && self.current.len() == 0 && pages.current.len() != 0 {
             self.current = mem::replace(&mut pages.current, StorageVec::sized(self.size));
         }
+    }
+
+    /// Converts `self` into an immutable `Bytes`.
+    #[inline]
+    #[must_use]
+    pub fn freeze(&mut self) -> Bytes {
+        let mut buf = BytesMut::with_capacity(self.len());
+        while let Some(p) = self.take() {
+            buf.extend_from_slice(&p);
+        }
+        buf.freeze()
     }
 }
 
@@ -413,6 +432,16 @@ impl From<&'static [u8]> for BytePage {
 impl<const N: usize> From<&'static [u8; N]> for BytePage {
     fn from(src: &'static [u8; N]) -> Self {
         BytePage::from(Bytes::from_static(src))
+    }
+}
+
+impl From<BytePage> for Bytes {
+    fn from(page: BytePage) -> Self {
+        match page.inner {
+            StorageType::Bytes(b) => b,
+            StorageType::Storage(storage) => BytesMut { storage }.freeze(),
+            StorageType::Vec(v) => Bytes::copy_from_slice(&v),
+        }
     }
 }
 
