@@ -4,7 +4,7 @@
 
 * Add Vec<u8> support to BytePage
 
-* Add helper BytePages::take_current()
+* Add helper BytePages::try_get_current_from()
 
 ## [1.6.0] (2026-05-02)
 

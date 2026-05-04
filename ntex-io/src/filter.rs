@@ -1,6 +1,6 @@
 use std::{any, cell::Cell, io, task::Context, task::Poll};
 
-use crate::{FilterCtx, FilterLayer, Flags, IoRef, Readiness};
+use crate::{FilterCtx, FilterLayer, IoRef, Readiness};
 
 #[derive(Debug)]
 /// Default `Io` filter
@@ -62,16 +62,16 @@ impl Filter for Base {
 
     #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        let flags = self.0.flags();
+        let st = &self.0.0;
 
-        if flags.intersects(Flags::IO_STOPPING | Flags::IO_STOPPED) {
+        if st.flags.is_closed() {
             Poll::Ready(Readiness::Terminate)
         } else {
-            self.0.0.read_task.register(cx.waker());
+            st.read_task.register(cx.waker());
 
-            if flags.intersects(Flags::IO_STOPPING_FILTERS) {
+            if st.flags.is_stopping_filters() {
                 Poll::Ready(Readiness::Ready)
-            } else if flags.cannot_read() {
+            } else if st.flags.is_read_paused_or_buf_full() {
                 Poll::Pending
             } else {
                 Poll::Ready(Readiness::Ready)
@@ -81,16 +81,14 @@ impl Filter for Base {
 
     #[inline]
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        let flags = self.0.flags();
-
-        if flags.is_stopped() {
+        if self.0.0.flags.is_stopped() {
             Poll::Ready(Readiness::Terminate)
         } else {
             self.0.0.write_task.register(cx.waker());
 
-            if flags.contains(Flags::IO_STOPPING) {
+            if self.0.0.flags.is_stopping() {
                 Poll::Ready(Readiness::Shutdown)
-            } else if flags.write_paused() {
+            } else if self.0.0.flags.is_write_paused() {
                 Poll::Pending
             } else {
                 Poll::Ready(Readiness::Ready)
@@ -108,18 +106,17 @@ impl Filter for Base {
 
     #[inline]
     fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
+        let st = &self.0.0;
+
         let buf = ctx.write_destination();
         let len = buf.len();
-        let flags = self.0.flags();
-        if len > 0 && flags.write_paused() {
-            self.0.0.remove_flags(Flags::WR_PAUSED);
-            self.0.0.write_task.wake();
+        if len > 0 && st.flags.is_write_paused() {
+            st.flags.unset_write_paused();
+            st.write_task.wake();
         }
-        if len >= self.0.cfg().write_buf().high
-            && !flags.contains(Flags::BUF_W_BACKPRESSURE)
-        {
-            self.0.0.insert_flags(Flags::BUF_W_BACKPRESSURE);
-            self.0.0.dispatch_task.wake();
+        if len >= st.write_buf().high && !st.flags.is_wr_backpressure() {
+            st.flags.set_wr_backpressure();
+            st.dispatch_task.wake();
         }
         Ok(())
     }

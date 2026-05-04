@@ -1,6 +1,11 @@
+use std::cell::Cell;
+
+#[derive(Debug)]
+pub struct Flags(Cell<FlagsKind>);
+
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-    pub struct Flags: u16 {
+    pub struct FlagsKind: u16 {
         /// io is closed
         const IO_STOPPED          = 0b0000_0000_0000_0001;
         /// shutdown io tasks
@@ -8,7 +13,7 @@ bitflags::bitflags! {
         /// shutting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
         /// need to write buffer
-        const IO_WANT_WRITE       = 0b0000_0000_0000_1000;
+        const IO_WANTS_WRITE      = 0b0000_0000_0000_1000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
@@ -40,61 +45,245 @@ bitflags::bitflags! {
     }
 }
 
+impl Clone for Flags {
+    fn clone(&self) -> Self {
+        Self(Cell::new(self.0.get()))
+    }
+}
+
 impl Flags {
-    pub(crate) fn is_stopped(self) -> bool {
-        self.contains(Flags::IO_STOPPED)
+    pub(crate) fn new() -> Self {
+        Self(Cell::new(FlagsKind::WR_PAUSED))
     }
 
-    pub(crate) fn is_stopping(self) -> bool {
-        self.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS)
+    pub(crate) fn new_with_upfront_write() -> Self {
+        Self(Cell::new(FlagsKind::WR_PAUSED | FlagsKind::UPFRONT_WRITE))
     }
 
-    pub(crate) fn is_task_waiting_for_write(self) -> bool {
-        self.contains(Flags::WR_TASK_WAIT)
+    pub(crate) fn new_stopped() -> Self {
+        Self(Cell::new(
+            FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPING_FILTERS,
+        ))
     }
 
-    pub(crate) fn is_waiting_for_write(self) -> bool {
-        self.intersects(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE)
+    fn get(&self) -> FlagsKind {
+        self.0.get()
     }
 
-    pub(crate) fn is_want_to_write(self) -> bool {
-        self.contains(Flags::IO_WANT_WRITE)
+    fn contains(&self, f: FlagsKind) -> bool {
+        self.0.get().contains(f)
     }
 
-    pub(crate) fn is_shutting_down_filters(self) -> bool {
-        self.contains(Flags::IO_STOPPING_FILTERS)
-            && !self.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING)
+    fn intersects(&self, f: FlagsKind) -> bool {
+        self.0.get().intersects(f)
     }
 
-    pub(crate) fn can_write_upfront(self) -> bool {
-        self.contains(Flags::HANDLE | Flags::UPFRONT_WRITE)
+    fn insert(&self, f: FlagsKind) {
+        let mut flags = self.0.get();
+        flags.insert(f);
+        self.0.set(flags);
     }
 
-    pub(crate) fn write_paused(self) -> bool {
-        self.contains(Flags::WR_PAUSED)
+    fn remove(&self, f: FlagsKind) {
+        let mut flags = self.0.get();
+        flags.remove(f);
+        self.0.set(flags);
     }
 
-    pub(crate) fn waiting_for_write_is_done(&mut self) {
-        self.remove(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
+    pub(crate) fn is_closed(&self) -> bool {
+        self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPED)
     }
 
-    pub(crate) fn task_waiting_for_write_is_done(&mut self) {
-        self.remove(Flags::WR_TASK_WAIT);
+    pub(crate) fn is_stopped(&self) -> bool {
+        self.contains(FlagsKind::IO_STOPPED)
     }
 
-    pub(crate) fn is_read_buf_ready(self) -> bool {
-        self.contains(Flags::BUF_R_READY)
+    pub fn is_stopping(&self) -> bool {
+        self.contains(FlagsKind::IO_STOPPING)
     }
 
-    pub(crate) fn is_waiting_for_read(self) -> bool {
-        self.contains(Flags::RD_NOTIFY)
+    pub(crate) fn is_stopping_any(&self) -> bool {
+        self.intersects(
+            FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPING_FILTERS,
+        )
     }
 
-    pub(crate) fn cannot_read(self) -> bool {
-        self.intersects(Flags::RD_PAUSED | Flags::BUF_R_FULL)
+    pub(crate) fn is_stopping_filters(&self) -> bool {
+        self.contains(FlagsKind::IO_STOPPING_FILTERS)
     }
 
-    pub(crate) fn cleanup_read_flags(&mut self) {
-        self.remove(Flags::BUF_R_READY | Flags::BUF_R_FULL | Flags::RD_PAUSED);
+    pub(crate) fn is_task_waiting_for_write(&self) -> bool {
+        self.contains(FlagsKind::WR_TASK_WAIT)
+    }
+
+    pub(crate) fn is_waiting_for_write(&self) -> bool {
+        self.intersects(FlagsKind::BUF_W_MUST_FLUSH | FlagsKind::BUF_W_BACKPRESSURE)
+    }
+
+    pub(crate) fn is_wants_write(&self) -> bool {
+        self.contains(FlagsKind::IO_WANTS_WRITE)
+    }
+
+    pub(crate) fn is_shutting_down_filters(&self) -> bool {
+        let f = self.get();
+        f.contains(FlagsKind::IO_STOPPING_FILTERS)
+            && !f.intersects(FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING)
+    }
+
+    pub(crate) fn is_write_upfront_enabled(&self) -> bool {
+        self.contains(FlagsKind::HANDLE | FlagsKind::UPFRONT_WRITE | FlagsKind::WR_PAUSED)
+    }
+
+    pub(crate) fn is_read_paused(&self) -> bool {
+        self.contains(FlagsKind::RD_PAUSED)
+    }
+
+    pub(crate) fn is_write_paused(&self) -> bool {
+        self.contains(FlagsKind::WR_PAUSED)
+    }
+
+    pub(crate) fn is_read_buf_ready(&self) -> bool {
+        self.contains(FlagsKind::BUF_R_READY)
+    }
+
+    pub(crate) fn is_read_buf_ready_and_full(&self) -> bool {
+        self.contains(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL)
+    }
+
+    pub(crate) fn is_waiting_for_read(&self) -> bool {
+        self.contains(FlagsKind::RD_NOTIFY)
+    }
+
+    pub(crate) fn is_wr_backpressure(&self) -> bool {
+        self.contains(FlagsKind::BUF_W_BACKPRESSURE)
+    }
+
+    pub(crate) fn is_read_paused_or_buf_full(&self) -> bool {
+        self.intersects(FlagsKind::RD_PAUSED | FlagsKind::BUF_R_FULL)
+    }
+
+    pub(crate) fn set_read_paused(&self) {
+        self.insert(FlagsKind::RD_PAUSED);
+    }
+
+    pub(crate) fn set_write_paused(&self) {
+        self.insert(FlagsKind::WR_PAUSED);
+    }
+
+    pub(crate) fn set_io_handle_enabled(&self) {
+        self.insert(FlagsKind::HANDLE);
+    }
+
+    pub(crate) fn set_task_waiting_for_write(&self) {
+        self.insert(FlagsKind::WR_TASK_WAIT);
+    }
+
+    pub(crate) fn set_task_waiting_for_write_is_done(&self) {
+        self.remove(FlagsKind::WR_TASK_WAIT);
+    }
+
+    pub(crate) fn set_wr_backpressure(&self) {
+        self.insert(FlagsKind::BUF_W_BACKPRESSURE);
+    }
+
+    pub(crate) fn set_filter_stopping(&self) {
+        self.insert(FlagsKind::IO_STOPPING_FILTERS);
+    }
+
+    pub(crate) fn set_force_closed(&self) {
+        self.insert(
+            FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPING_FILTERS,
+        );
+    }
+
+    pub(crate) fn set_wants_flush(&self) {
+        self.insert(FlagsKind::BUF_W_MUST_FLUSH);
+    }
+
+    pub(crate) fn set_read_notify(&self) {
+        self.insert(FlagsKind::RD_NOTIFY);
+    }
+
+    pub(crate) fn set_wants_write(&self) {
+        self.insert(FlagsKind::IO_WANTS_WRITE);
+    }
+
+    pub(crate) fn set_rd_buf_ready(&self) {
+        self.insert(FlagsKind::BUF_R_READY);
+    }
+
+    pub(crate) fn set_rd_buf_ready_and_full(&self) {
+        self.insert(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL);
+    }
+
+    pub(crate) fn set_stopping(&self) {
+        self.insert(FlagsKind::IO_STOPPING);
+    }
+
+    pub(crate) fn unset_write_paused(&self) {
+        self.remove(FlagsKind::WR_PAUSED);
+    }
+
+    pub(crate) fn unset_wants_write(&self) {
+        self.remove(FlagsKind::IO_WANTS_WRITE);
+    }
+
+    pub(crate) fn unset_wr_backpressure(&self) {
+        self.remove(FlagsKind::BUF_W_BACKPRESSURE);
+    }
+
+    pub(crate) fn unset_flush_and_backpressure(&self) {
+        self.remove(FlagsKind::BUF_W_MUST_FLUSH | FlagsKind::BUF_W_BACKPRESSURE);
+    }
+
+    pub(crate) fn unset_read_flags(&self) {
+        self.remove(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL | FlagsKind::RD_PAUSED);
+    }
+
+    pub(crate) fn unset_read_buf_ready(&self) {
+        self.remove(FlagsKind::BUF_R_READY);
+    }
+
+    /// Checks `RD_NOTIFY` and unsets
+    pub(crate) fn check_read_notify(&self) -> bool {
+        if self.contains(FlagsKind::RD_NOTIFY) {
+            self.remove(FlagsKind::RD_NOTIFY);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Checks `DSP_TIMEOUT` and unsets
+    pub(crate) fn check_dispatcher_timeout(&self) -> bool {
+        if self.contains(FlagsKind::DSP_TIMEOUT) {
+            self.remove(FlagsKind::DSP_TIMEOUT);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Checks `DSP_TIMEOUT` and sets
+    pub(crate) fn check_dispatcher_timeout_unset(&self) -> bool {
+        if self.contains(FlagsKind::DSP_TIMEOUT) {
+            false
+        } else {
+            self.insert(FlagsKind::DSP_TIMEOUT);
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flags() {
+        assert!(format!("{:?}", Flags::new_stopped()).contains("IO_STOPPED"));
+        assert!(format!("{:?}", FlagsKind::IO_STOPPED).contains("IO_STOPPED"));
+        assert!(FlagsKind::IO_STOPPED == FlagsKind::IO_STOPPED);
+        assert!(FlagsKind::IO_STOPPED != FlagsKind::IO_STOPPING);
     }
 }

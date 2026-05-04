@@ -27,7 +27,7 @@ pub struct IoRef(pub(super) Rc<IoState>);
 pub(crate) struct IoState {
     filter: FilterPtr,
     pub(super) cfg: Cfg<IoConfig>,
-    pub(super) flags: Cell<Flags>,
+    pub(super) flags: Flags,
     pub(super) error: Cell<Option<io::Error>>,
     pub(super) read_task: LocalWaker,
     pub(super) write_task: LocalWaker,
@@ -45,28 +45,8 @@ impl IoState {
         self.filter.get()
     }
 
-    pub(super) fn insert_flags(&self, f: Flags) {
-        let mut flags = self.flags.get();
-        flags.insert(f);
-        self.flags.set(flags);
-    }
-
-    pub(super) fn remove_flags(&self, f: Flags) -> bool {
-        let mut flags = self.flags.get();
-        if flags.intersects(f) {
-            flags.remove(f);
-            self.flags.set(flags);
-            true
-        } else {
-            false
-        }
-    }
-
     pub(super) fn notify_timeout(&self) {
-        let mut flags = self.flags.get();
-        if !flags.contains(Flags::DSP_TIMEOUT) {
-            flags.insert(Flags::DSP_TIMEOUT);
-            self.flags.set(flags);
+        if self.flags.check_dispatcher_timeout_unset() {
             self.dispatch_task.wake();
             log::trace!("{}: Timer, notify dispatcher", self.cfg.tag());
         }
@@ -100,17 +80,17 @@ impl IoState {
     pub(super) fn io_stopping(&self) {
         self.write_task.wake();
         self.dispatch_task.wake();
-        self.insert_flags(Flags::IO_STOPPING);
+        self.flags.set_stopping();
     }
 
     pub(super) fn io_stopped(&self, err: Option<io::Error>) {
-        if !self.flags.get().is_stopped() {
+        if !self.flags.is_stopped() {
             log::trace!(
                 "{}: {:?} Io error {:?} flags: {:?}",
                 self.cfg.tag(),
                 ptr::from_ref(self),
                 err,
-                self.flags.get()
+                self.flags
             );
 
             if err.is_some() {
@@ -120,18 +100,14 @@ impl IoState {
             self.write_task.wake();
             self.notify_disconnect();
             self.handle.take();
-            self.insert_flags(
-                Flags::IO_STOPPED
-                    | Flags::IO_STOPPING
-                    | Flags::IO_STOPPING_FILTERS
-                    | Flags::BUF_R_READY,
-            );
+            self.flags.set_force_closed();
+            self.flags.set_rd_buf_ready();
             if !self.dispatch_task.wake_checked() {
                 log::trace!(
                     "{}: {:?} Dispatcher is not registered, flags: {:?}",
                     self.cfg.tag(),
                     ptr::from_ref(self),
-                    self.flags.get()
+                    self.flags
                 );
             }
         }
@@ -139,13 +115,9 @@ impl IoState {
 
     /// Gracefully shutdown read and write io tasks
     pub(super) fn init_shutdown(&self) {
-        if !self.flags.get().is_stopping() {
-            log::trace!(
-                "{}: Initiate io shutdown {:?}",
-                self.cfg.tag(),
-                self.flags.get()
-            );
-            self.insert_flags(Flags::IO_STOPPING_FILTERS);
+        if !self.flags.is_stopping_any() {
+            log::trace!("{}: Initiate io shutdown {:?}", self.cfg.tag(), self.flags);
+            self.flags.set_filter_stopping();
             self.read_task.wake();
             self.write_task.wake();
         }
@@ -203,9 +175,9 @@ impl Io {
         let size = cfg.write_page_size();
 
         let flags = if cfg.write_buf_limit() > 0 {
-            Cell::new(Flags::WR_PAUSED | Flags::UPFRONT_WRITE)
+            Flags::new_with_upfront_write()
         } else {
-            Cell::new(Flags::WR_PAUSED)
+            Flags::new()
         };
 
         let inner = Rc::new(IoState {
@@ -229,7 +201,7 @@ impl Io {
         // start io tasks
         let hnd = io.start(IoContext::new(io_ref.clone()));
         if hnd.is_some() {
-            io_ref.0.insert_flags(Flags::HANDLE);
+            io_ref.0.flags.set_io_handle_enabled();
         }
         io_ref.0.handle.set(hnd);
 
@@ -258,9 +230,7 @@ impl<F> Io<F> {
         let inner = Rc::new(IoState {
             cfg: SharedCfg::default().get::<IoConfig>(),
             filter: FilterPtr::null(),
-            flags: Cell::new(
-                Flags::IO_STOPPED | Flags::IO_STOPPING | Flags::IO_STOPPING_FILTERS,
-            ),
+            flags: Flags::new_stopped(),
             error: Cell::new(None),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),
@@ -272,13 +242,6 @@ impl<F> Io<F> {
             on_disconnect: Cell::new(None),
         });
         unsafe { mem::replace(&mut *self.0.get(), IoRef(inner)) }
-    }
-
-    #[inline]
-    #[doc(hidden)]
-    /// Get current state flags
-    pub fn flags(&self) -> Flags {
-        self.st().flags.get()
     }
 
     #[inline]
@@ -440,9 +403,9 @@ impl<F> Io<F> {
     /// Pause read task
     pub fn pause(&self) {
         let st = self.st();
-        if !st.flags.get().contains(Flags::RD_PAUSED) {
+        if !st.flags.is_read_paused() {
             st.read_task.wake();
-            st.insert_flags(Flags::RD_PAUSED);
+            st.flags.set_read_paused();
         }
     }
 
@@ -495,26 +458,23 @@ impl<F> Io<F> {
     /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
-        let mut flags = st.flags.get();
 
-        if flags.is_stopped() {
+        if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
             st.dispatch_task.register(cx.waker());
 
-            let ready = flags.is_read_buf_ready();
-            if flags.cannot_read() {
-                flags.cleanup_read_flags();
+            let ready = st.flags.is_read_buf_ready();
+            if st.flags.is_read_paused_or_buf_full() {
+                st.flags.unset_read_flags();
                 st.read_task.wake();
-                st.flags.set(flags);
                 if ready {
                     Poll::Ready(Ok(Some(())))
                 } else {
                     Poll::Pending
                 }
             } else if ready {
-                flags.remove(Flags::BUF_R_READY);
-                st.flags.set(flags);
+                st.flags.unset_read_buf_ready();
                 Poll::Ready(Ok(Some(())))
             } else {
                 Poll::Pending
@@ -529,10 +489,10 @@ impl<F> Io<F> {
 
         if ready.is_pending() {
             let st = self.st();
-            if st.remove_flags(Flags::RD_NOTIFY) {
+            if st.flags.check_read_notify() {
                 Poll::Ready(Ok(Some(())))
             } else {
-                st.insert_flags(Flags::RD_NOTIFY);
+                st.flags.set_read_notify();
                 Poll::Pending
             }
         } else {
@@ -584,13 +544,11 @@ impl<F> Io<F> {
             Ok(decoded)
         } else {
             let st = self.st();
-            let flags = st.flags.get();
-            if flags.is_stopped() {
+            if st.flags.is_stopped() {
                 Err(RecvError::PeerGone(st.error()))
-            } else if flags.contains(Flags::DSP_TIMEOUT) {
-                st.remove_flags(Flags::DSP_TIMEOUT);
+            } else if st.flags.check_dispatcher_timeout() {
                 Err(RecvError::KeepAlive)
-            } else if flags.contains(Flags::BUF_W_BACKPRESSURE) {
+            } else if st.flags.is_wr_backpressure() {
                 Err(RecvError::WriteBackpressure)
             } else {
                 match self.poll_read_ready(cx) {
@@ -620,31 +578,30 @@ impl<F> Io<F> {
         let st = self.st();
         st.buffer.process_write_buf_force(self)?;
 
-        let flags = self.flags();
         let len = st.buffer.write_destination_size();
         if len > 0 {
             if full {
-                st.insert_flags(Flags::BUF_W_MUST_FLUSH);
                 st.dispatch_task.register(cx.waker());
-                return if flags.is_stopped() {
+                return if st.flags.is_stopped() {
                     Poll::Ready(Err(st.error_or_disconnected()))
                 } else {
+                    st.flags.set_wants_flush();
                     Poll::Pending
                 };
             } else if len >= st.write_buf().half {
-                st.insert_flags(Flags::BUF_W_BACKPRESSURE);
+                st.flags.set_wr_backpressure();
                 st.dispatch_task.register(cx.waker());
-                return if flags.is_stopped() {
+                return if st.flags.is_stopped() {
                     Poll::Ready(Err(st.error_or_disconnected()))
                 } else {
                     Poll::Pending
                 };
             }
         }
-        if flags.is_stopped() {
+        if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            st.remove_flags(Flags::BUF_W_MUST_FLUSH | Flags::BUF_W_BACKPRESSURE);
+            st.flags.unset_flush_and_backpressure();
             Poll::Ready(Ok(()))
         }
     }
@@ -653,16 +610,15 @@ impl<F> Io<F> {
     /// Gracefully shutdown io stream
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let st = self.st();
-        let flags = st.flags.get();
 
-        if flags.is_stopped() {
+        if st.flags.is_stopped() {
             if let Some(err) = st.error() {
                 Poll::Ready(Err(err))
             } else {
                 Poll::Ready(Ok(()))
             }
         } else {
-            if !flags.contains(Flags::IO_STOPPING_FILTERS) {
+            if !st.flags.is_stopping_filters() {
                 st.init_shutdown();
             }
 
@@ -690,13 +646,11 @@ impl<F> Io<F> {
     /// Wait for status updates
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let st = self.st();
-        let flags = st.flags.get();
-        if flags.intersects(Flags::IO_STOPPED | Flags::IO_STOPPING) {
+        if st.flags.is_closed() {
             Poll::Ready(IoStatusUpdate::PeerGone(st.error()))
-        } else if flags.contains(Flags::DSP_TIMEOUT) {
-            st.remove_flags(Flags::DSP_TIMEOUT);
+        } else if st.flags.check_dispatcher_timeout() {
             Poll::Ready(IoStatusUpdate::KeepAlive)
-        } else if flags.contains(Flags::BUF_W_BACKPRESSURE) {
+        } else if st.flags.is_wr_backpressure() {
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
             st.dispatch_task.register(cx.waker());
@@ -757,11 +711,11 @@ impl<F> Drop for Io<F> {
         if st.filter.is_set() {
             // filter is unsafe and must be dropped explicitly,
             // and won't be dropped without special attention
-            if !st.flags.get().is_stopped() {
+            if !st.flags.is_stopped() {
                 log::trace!(
                     "{}: Io is dropped, force stopping io streams {:?}",
                     st.cfg.tag(),
-                    st.flags.get()
+                    st.flags
                 );
             }
 
@@ -781,7 +735,7 @@ pub struct OnDisconnect {
 
 impl OnDisconnect {
     pub(super) fn new(inner: Rc<IoState>) -> Self {
-        Self::new_inner(inner.flags.get().is_stopped(), inner)
+        Self::new_inner(inner.flags.is_stopped(), inner)
     }
 
     fn new_inner(disconnected: bool, inner: Rc<IoState>) -> Self {
@@ -806,7 +760,7 @@ impl OnDisconnect {
     #[inline]
     /// Check if connection is disconnected
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.token == usize::MAX || self.inner.flags.get().is_stopped() {
+        if self.token == usize::MAX || self.inner.flags.is_stopped() {
             Poll::Ready(())
         } else if let Some(on_disconnect) = self.inner.on_disconnect.take() {
             on_disconnect[self.token].register(cx.waker());
@@ -856,10 +810,6 @@ mod tests {
         let server = Io::from(server);
         assert!(server.eq(&server));
         assert!(server.io_ref().eq(server.io_ref()));
-
-        assert!(format!("{:?}", Flags::IO_STOPPED).contains("IO_STOPPED"));
-        assert!(Flags::IO_STOPPED == Flags::IO_STOPPED);
-        assert!(Flags::IO_STOPPED != Flags::IO_STOPPING);
     }
 
     #[ntex::test]
@@ -874,7 +824,7 @@ mod tests {
         assert!(format!("{err:?}").contains("Timeout"));
 
         client.write(TEXT);
-        server.st().insert_flags(Flags::BUF_W_BACKPRESSURE);
+        server.st().flags.set_wr_backpressure();
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
     }
