@@ -47,7 +47,8 @@ impl TlsServerFilter {
         log::trace!("{}: Initiate server connection", io.tag());
 
         time::timeout(timeout, async {
-            let session = ServerConnection::new(cfg).map_err(io::Error::other)?;
+            let mut session = ServerConnection::new(cfg).map_err(io::Error::other)?;
+            session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
             let io = io.add_filter(TlsServerFilter {
                 session: RefCell::new(session),
             });
