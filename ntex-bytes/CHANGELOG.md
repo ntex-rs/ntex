@@ -1,5 +1,9 @@
 # Changes
 
+## [1.6.3] (2026-05-05)
+
+* Add helper methods for BytePages type
+
 ## [1.6.2] (2026-05-04)
 
 * Add Vec<u8> support to BytePage

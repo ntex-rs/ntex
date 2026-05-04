@@ -141,6 +141,17 @@ impl BytePages {
             self.current = mem::replace(&mut pages.current, StorageVec::sized(self.size));
         }
     }
+
+    /// Converts `self` into an immutable `Bytes`.
+    #[inline]
+    #[must_use]
+    pub fn freeze(self) -> Bytes {
+        let mut buf = BytesMut::with_capacity(self.len());
+        while let Some(p) = self.take() {
+            buf.extend_from_slice(p);
+        }
+        buf.freeze()
+    }
 }
 
 impl fmt::Debug for BytePages {
@@ -413,6 +424,16 @@ impl From<&'static [u8]> for BytePage {
 impl<const N: usize> From<&'static [u8; N]> for BytePage {
     fn from(src: &'static [u8; N]) -> Self {
         BytePage::from(Bytes::from_static(src))
+    }
+}
+
+impl From<BytePage> for Bytes {
+    fn from(page: BytePage) -> Self {
+        match page.inner {
+            StorageType::Bytes(b) => b,
+            StorageType::Storage(storage) => BytesMut { storage }.freeze(),
+            StorageType::Vec(v) => Bytes::copy_from_slice(&v),
+        }
     }
 }
 
