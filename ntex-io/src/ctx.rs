@@ -165,7 +165,7 @@ impl IoContext {
                     // and potentialy wake write task
                     if self.0.flags().is_want_to_write() {
                         inner.remove_flags(Flags::IO_WANT_WRITE);
-                        inner.buffer.process_write_buf(&self.0)
+                        inner.buffer.process_write_buf_force(&self.0)
                     } else {
                         Ok(())
                     }

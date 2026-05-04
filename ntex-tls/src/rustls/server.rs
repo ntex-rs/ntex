@@ -53,6 +53,8 @@ impl TlsServerFilter {
             });
 
             super::stream::handshake(&io.filter().session, &io).await?;
+            log::trace!("{}: TLS Handshake successed", io.tag());
+
             Ok(io)
         })
         .await

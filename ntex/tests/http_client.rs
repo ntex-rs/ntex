@@ -1,9 +1,20 @@
-use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    cell::RefCell, collections::HashMap, io, io::Read, io::Write, rc::Rc, sync::Arc,
+};
 
+use coo_kie::Cookie;
+use flate2::{Compression, read::GzDecoder, write::GzEncoder, write::ZlibEncoder};
+use rand::Rng;
+
+use ntex::client::{Client, Connector, error::ClientError};
 use ntex::http::test::server as test_server;
-use ntex::http::{HttpService, Method, Request, Response};
-use ntex::service::ServiceFactory;
-use ntex::{client::error::ClientError, time, util::Bytes, util::Ready};
+use ntex::http::{HttpMessage, HttpService, Method, Response, header};
+use ntex::io::IoConfig;
+use ntex::service::{ServiceFactory, cfg::SharedCfg, chain_factory, fn_layer};
+use ntex::web::middleware::Compress;
+use ntex::web::{self, App, BodyEncoding, Error, HttpRequest, HttpResponse, test};
+use ntex::{client, time::Millis, time::Seconds, time::sleep, util::Bytes, util::Ready};
 
 const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
@@ -26,6 +37,793 @@ const STR: &str = "Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World \
                    Hello World Hello World Hello World Hello World Hello World";
+
+#[ntex::test]
+async fn test_simple() {
+    let srv = test::server(async || {
+        App::new().service(
+            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+        )
+    })
+    .await;
+
+    let request = srv.get("/").header("x-test", "111").send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    let response = srv.post("/").timeout(Seconds(30)).send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+}
+
+#[ntex::test]
+async fn test_json() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(
+            |_: web::types::Json<String>| async { HttpResponse::Ok() },
+        )))
+    })
+    .await;
+
+    let response = srv
+        .get("/")
+        .header("x-test", "111")
+        .send_json(&"TEST".to_string())
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+}
+
+#[ntex::test]
+async fn test_form() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(
+            |_: web::types::Form<HashMap<String, String>>| async { HttpResponse::Ok() },
+        )))
+    })
+    .await;
+
+    let mut data = HashMap::new();
+    let _ = data.insert("key".to_string(), "TEST".to_string());
+
+    let request = srv.get("/").header("x-test", "111").send_form(&data);
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+}
+
+#[ntex::test]
+async fn test_timeout() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(|| async {
+            sleep(Millis(5000)).await;
+            HttpResponse::Ok().body(STR)
+        })))
+    })
+    .await;
+
+    let connector = Connector::default().connector(ntex::connect::Connector::new());
+
+    let client = Client::builder()
+        .connector::<&str>(connector)
+        .response_timeout(Seconds(3))
+        .build(SharedCfg::new("SVC").add(IoConfig::new().set_connect_timeout(2500)))
+        .await
+        .unwrap();
+
+    let request = client.get(srv.url("/")).send().await;
+    match request {
+        Err(ClientError::Timeout) => (),
+        _ => panic!(),
+    }
+}
+
+#[ntex::test]
+async fn test_timeout_override() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(|| async {
+            sleep(Millis(2000)).await;
+            HttpResponse::Ok().body(STR)
+        })))
+    })
+    .await;
+
+    let client = Client::builder()
+        .response_timeout(Seconds(50))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+    let request = client.get(srv.url("/")).timeout(Seconds(1)).send();
+    match request.await {
+        Err(ClientError::Timeout) => (),
+        _ => panic!(),
+    }
+}
+
+#[ntex::test]
+async fn test_connection_reuse() {
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let srv = test_server(async move || {
+        let num2 = num2.clone();
+        chain_factory(move |io| {
+            num2.fetch_add(1, Ordering::Relaxed);
+            Ready::Ok(io)
+        })
+        .and_then(HttpService::new(App::new().service(
+            web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
+        )))
+    })
+    .await;
+
+    let client = Client::builder()
+        .response_timeout(Seconds(30))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+
+    // req 1
+    let request = client.get(srv.url("/")).send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // req 2
+    let req = client.post(srv.url("/"));
+    let response = req.send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // one connection
+    assert_eq!(num.load(Ordering::Relaxed), 1);
+}
+
+#[ntex::test]
+async fn test_connection_close() {
+    let srv = test_server(async move || {
+        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
+            .map(|_| ())
+    })
+    .await;
+
+    let response = srv
+        .request(Method::GET, "/")
+        .force_close()
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+}
+
+#[ntex::test]
+async fn test_connection_force_close() {
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let srv = test_server(async move || {
+        let num2 = num2.clone();
+        chain_factory(move |io| {
+            num2.fetch_add(1, Ordering::Relaxed);
+            Ready::Ok(io)
+        })
+        .and_then(HttpService::new(App::new().service(
+            web::resource("/").route(web::to(|| async { HttpResponse::Ok() })),
+        )))
+    })
+    .await;
+
+    let client = Client::builder()
+        .response_timeout(Seconds(30))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+
+    // req 1
+    let request = client.get(srv.url("/")).force_close().send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // req 2
+    let client = Client::builder()
+        .response_timeout(Seconds(30))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+    let req = client.post(srv.url("/")).force_close();
+    let response = req.send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // two connection
+    assert_eq!(num.load(Ordering::Relaxed), 2);
+}
+
+#[ntex::test]
+async fn test_connection_server_close() {
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let srv = test_server(async move || {
+        let num2 = num2.clone();
+        chain_factory(move |io| {
+            num2.fetch_add(1, Ordering::Relaxed);
+            Ready::Ok(io)
+        })
+        .and_then(HttpService::new(App::new().service(
+            web::resource("/").route(web::to(|| async {
+                HttpResponse::Ok().force_close().finish()
+            })),
+        )))
+    })
+    .await;
+
+    let client = Client::builder()
+        .response_timeout(Seconds(30))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+
+    // req 1
+    let request = client.get(srv.url("/")).send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // req 2
+    let req = client.post(srv.url("/"));
+    let response = req.send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // two connection
+    assert_eq!(num.load(Ordering::Relaxed), 2);
+}
+
+#[ntex::test]
+async fn test_connection_wait_queue() {
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let srv = test_server(async move || {
+        let num2 = num2.clone();
+        chain_factory(move |io| {
+            num2.fetch_add(1, Ordering::Relaxed);
+            Ready::Ok(io)
+        })
+        .and_then(HttpService::new(App::new().service(
+            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+        )))
+    })
+    .await;
+
+    let client = Client::builder()
+        .response_timeout(Seconds(30))
+        .connector::<&str>(Connector::default().limit(1))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+
+    // req 1
+    let request = client.get(srv.url("/")).send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // req 2
+    let req2 = client.post(srv.url("/"));
+    let req2_fut = req2.send();
+
+    // read response 1
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    // req 2
+    let response = req2_fut.await.unwrap();
+    assert!(response.status().is_success());
+
+    // two connection
+    assert_eq!(num.load(Ordering::Relaxed), 1);
+}
+
+#[ntex::test]
+async fn test_connection_wait_queue_force_close() {
+    let num = Arc::new(AtomicUsize::new(0));
+    let num2 = num.clone();
+
+    let srv = test_server(async move || {
+        let num2 = num2.clone();
+        chain_factory(move |io| {
+            num2.fetch_add(1, Ordering::Relaxed);
+            Ready::Ok(io)
+        })
+        .and_then(HttpService::new(App::new().service(
+            web::resource("/").route(web::to(|| async {
+                HttpResponse::Ok().force_close().body(STR)
+            })),
+        )))
+    })
+    .await;
+
+    let client = Client::builder()
+        .response_timeout(Seconds(30))
+        .connector::<&str>(Connector::default().limit(1))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+
+    // req 1
+    let request = client.get(srv.url("/")).send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // req 2
+    let req2 = client.post(srv.url("/"));
+    let req2_fut = req2.send();
+
+    // read response 1
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    // req 2
+    let response = req2_fut.await.unwrap();
+    assert!(response.status().is_success());
+
+    // two connection
+    assert_eq!(num.load(Ordering::Relaxed), 2);
+}
+
+#[ntex::test]
+async fn test_with_query_parameter() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").to(|req: HttpRequest| async move {
+            if req.query_string().contains("qp") {
+                HttpResponse::Ok()
+            } else {
+                HttpResponse::BadRequest()
+            }
+        }))
+    })
+    .await;
+
+    let res = srv.get("/?qp=5").send().await.unwrap();
+    assert!(res.status().is_success());
+
+    let request = srv.request(Method::GET, srv.url("/?qp=5"));
+    let response = request.send().await.unwrap();
+    assert!(response.status().is_success());
+}
+
+#[ntex::test]
+async fn test_no_decompress() {
+    let srv = test::server(async || {
+        App::new()
+            .middleware(Compress::default())
+            .service(web::resource("/").route(web::to(|| async {
+                let mut res = HttpResponse::Ok().body(STR);
+                res.encoding(header::ContentEncoding::Gzip);
+                res
+            })))
+    })
+    .await;
+
+    let client = Client::builder()
+        .response_timeout(Seconds(30))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+
+    let res = client
+        .get(srv.url("/"))
+        .no_decompress()
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+
+    // read response
+    let bytes = res.body().await.unwrap();
+
+    let mut e = GzDecoder::new(&bytes[..]);
+    let mut dec = Vec::new();
+    e.read_to_end(&mut dec).unwrap();
+    assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
+
+    // POST
+    let res = client
+        .post(srv.url("/"))
+        .no_decompress()
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+
+    let bytes = res.body().await.unwrap();
+    let mut e = GzDecoder::new(&bytes[..]);
+    let mut dec = Vec::new();
+    e.read_to_end(&mut dec).unwrap();
+    assert_eq!(Bytes::from(dec), Bytes::from_static(STR.as_ref()));
+}
+
+#[ntex::test]
+async fn test_client_gzip_encoding() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(|| async {
+            let mut e = GzEncoder::new(Vec::new(), Compression::default());
+            e.write_all(STR.as_ref()).unwrap();
+            let data = e.finish().unwrap();
+
+            HttpResponse::Ok()
+                .header("content-encoding", "gzip")
+                .body(data)
+        })))
+    })
+    .await;
+
+    // client request
+    let response = srv.post("/").send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+}
+
+#[ntex::test]
+async fn test_client_gzip_encoding_large() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(|| async {
+            let mut e = GzEncoder::new(Vec::new(), Compression::default());
+            e.write_all(STR.repeat(10).as_ref()).unwrap();
+            let data = e.finish().unwrap();
+
+            HttpResponse::Ok()
+                .header("content-encoding", "gzip")
+                .body(data)
+        })))
+    })
+    .await;
+
+    // client request
+    let response = srv.post("/").send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from(STR.repeat(10)));
+}
+
+#[ntex::test]
+async fn test_client_gzip_encoding_large_random() {
+    let data = rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
+        .take(1_048_500)
+        .map(char::from)
+        .collect::<String>();
+
+    let srv = test::server(async || {
+        App::new()
+            .state(web::types::PayloadConfig::default().limit(1_048_576))
+            .service(web::resource("/").route(web::to(|data: Bytes| async move {
+                let mut e = GzEncoder::new(Vec::new(), Compression::default());
+                e.write_all(&data).unwrap();
+                let data = e.finish().unwrap();
+                HttpResponse::Ok()
+                    .header("content-encoding", "gzip")
+                    .body(data)
+            })))
+    })
+    .await;
+
+    // client request
+    let response = srv.post("/").send_body(data.clone()).await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().limit(1_048_576).await.unwrap();
+    assert_eq!(bytes, Bytes::from(data));
+}
+
+#[ntex::test]
+async fn test_client_deflate_encoding() {
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
+            let mut e = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(&data).unwrap();
+            let data = e.finish().unwrap();
+
+            HttpResponse::Ok()
+                .header("content-encoding", "deflate")
+                .body(data)
+        })))
+    })
+    .await;
+
+    // client request
+    let response = srv.post("/").send_body(STR).await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+}
+
+#[ntex::test]
+async fn test_client_deflate_encoding_large_random() {
+    let data = rand::rng()
+        .sample_iter(&rand::distr::Alphanumeric)
+        .take(70_000)
+        .map(char::from)
+        .collect::<String>();
+
+    let srv = test::server(async || {
+        App::new().service(web::resource("/").route(web::to(|data: Bytes| async move {
+            let mut e = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            e.write_all(&data).unwrap();
+            let data = e.finish().unwrap();
+
+            HttpResponse::Ok()
+                .header("content-encoding", "deflate")
+                .body(data)
+        })))
+    })
+    .await;
+
+    // client request
+    let response = srv.post("/").send_body(data.clone()).await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from(data));
+}
+
+// #[ntex::test]
+// async fn test_body_streaming_implicit() {
+//     let srv = test::TestServer::start(|app| {
+//         app.handler(|_| {
+//             let body = once(Ok(Bytes::from_static(STR.as_ref())));
+//             HttpResponse::Ok()
+//                 .content_encoding(http::ContentEncoding::Gzip)
+//                 .body(Body::Streaming(Box::new(body)))
+//         })
+//     });
+
+//     let request = srv.get("/").finish().unwrap();
+//     let response = srv.execute(request.send()).unwrap();
+//     assert!(response.status().is_success());
+
+//     // read response
+//     let bytes = srv.execute(response.body()).unwrap();
+//     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+// }
+
+#[ntex::test]
+async fn test_client_cookie_handling() {
+    use std::io::{Error as IoError, ErrorKind};
+
+    let cookie1 = Cookie::build(("cookie1", "value1"));
+    let cookie2 = Cookie::build(("cookie2", "value2"))
+        .domain("www.example.org")
+        .path("/")
+        .secure(true)
+        .http_only(true);
+    // Q: are all these clones really necessary? A: Yes, possibly
+    let cookie1b = cookie1.clone();
+    let cookie2b = cookie2.clone();
+
+    let srv =
+        test::server(async move || {
+            let cookie1 = cookie1b.clone();
+            let cookie2 = cookie2b.clone();
+
+            App::new().route(
+                "/",
+                web::to(web::dev::__assert_handler1(move |req: HttpRequest| {
+                    let cookie1 = cookie1.clone();
+                    let cookie2 = cookie2.clone();
+
+                    async move {
+                        // Check cookies were sent correctly
+                        let res: Result<(), Error> =
+                            req.cookie("cookie1")
+                                .ok_or(())
+                                .and_then(|c1| {
+                                    if c1.value() == "value1" { Ok(()) } else { Err(()) }
+                                })
+                                .and_then(|()| req.cookie("cookie2").ok_or(()))
+                                .and_then(|c2| {
+                                    if c2.value() == "value2" { Ok(()) } else { Err(()) }
+                                })
+                                .map_err(|_| {
+                                    Error::new(IoError::from(ErrorKind::NotFound))
+                                });
+
+                        res?;
+
+                        // Send some cookies back
+                        Ok::<_, Error>(
+                            HttpResponse::Ok().cookie(cookie1).cookie(cookie2).finish(),
+                        )
+                    }
+                })),
+            )
+        })
+        .await;
+
+    let request = srv.get("/").cookie(cookie1.clone()).cookie(cookie2.clone());
+    let response = request.send().await.unwrap();
+    assert!(response.status().is_success());
+    let c1 = response.cookie("cookie1").expect("Missing cookie1");
+    assert_eq!(c1, cookie1);
+    let c2 = response.cookie("cookie2").expect("Missing cookie2");
+    assert_eq!(c2, cookie2);
+}
+
+#[ntex::test]
+async fn test_client_timeout() {
+    let srv = test_server(async move || {
+        HttpService::new(|_| async {
+            sleep(Seconds(10)).await;
+            Ok::<_, io::Error>(Response::Ok().body(STR))
+        })
+        .map(|_| ())
+    })
+    .await
+    .set_client_timeout(Seconds(1), Millis(30_000))
+    .await;
+
+    let err = srv
+        .request(Method::GET, "/")
+        .force_close()
+        .send()
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(err, ClientError::Timeout));
+}
+
+#[ntex::test]
+async fn client_read_until_eof() {
+    let addr = ntex::server::TestServer::unused_addr();
+
+    std::thread::spawn(move || {
+        let lst = std::net::TcpListener::bind(addr).unwrap();
+
+        for stream in lst.incoming() {
+            if let Ok(mut stream) = stream {
+                let mut b = [0; 1000];
+                log::debug!("Reading request");
+                let res = stream.read(&mut b).unwrap();
+                log::debug!("Read {res:?}");
+                let res = stream
+                    .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
+                log::debug!("Sent {res:?}");
+            } else {
+                break;
+            }
+        }
+    });
+    sleep(Millis(500)).await;
+
+    // client request
+    let req = Client::builder()
+        .response_timeout(Seconds(30))
+        .build(SharedCfg::default())
+        .await
+        .unwrap()
+        .get(format!("http://{addr}/").as_str());
+    let response = req.send().await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(b"welcome!"));
+}
+
+#[ntex::test]
+async fn client_basic_auth() {
+    let srv = test::server(async || {
+        App::new().route(
+            "/",
+            web::to(|req: HttpRequest| async move {
+                if req
+                    .headers()
+                    .get(header::AUTHORIZATION)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    == "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
+                {
+                    HttpResponse::Ok()
+                } else {
+                    HttpResponse::BadRequest()
+                }
+            }),
+        )
+    })
+    .await;
+
+    // set authorization header to Basic <base64 encoded username:password>
+    let request = srv.get("/").basic_auth("username", Some("password"));
+    let response = request.send().await.unwrap();
+    assert!(response.status().is_success());
+}
+
+#[ntex::test]
+async fn client_bearer_auth() {
+    let srv = test::server(async || {
+        App::new().route(
+            "/",
+            web::to(|req: HttpRequest| async move {
+                if req
+                    .headers()
+                    .get(header::AUTHORIZATION)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    == "Bearer someS3cr3tAutht0k3n"
+                {
+                    HttpResponse::Ok()
+                } else {
+                    HttpResponse::BadRequest()
+                }
+            }),
+        )
+    })
+    .await;
+
+    // set authorization header to Bearer <token>
+    let request = srv.get("/").bearer_auth("someS3cr3tAutht0k3n");
+    let response = request.send().await.unwrap();
+    assert!(response.status().is_success());
+}
+
+#[ntex::test]
+async fn middleware() {
+    let srv = test::server(async || {
+        App::new().service(
+            web::resource("/").route(web::to(|| async { HttpResponse::Ok().body(STR) })),
+        )
+    })
+    .await;
+
+    let data = Rc::new(RefCell::new(Vec::new()));
+    let data2 = data.clone();
+
+    // client request
+    let client = Client::builder()
+        .middleware(fn_layer(
+            async move |mut req: client::ServiceRequest, svc| {
+                assert!(req.headers().is_empty());
+                assert!(req.address().is_none());
+                let s = format!("{:?}", req.head().uri);
+                data2.borrow_mut().push(format!("1 -- {}", s));
+                let result = svc.call(req).await;
+                data2.borrow_mut().push(format!("2 -- {}", s));
+                result
+            },
+        ))
+        .build(SharedCfg::default())
+        .await
+        .unwrap();
+
+    assert!(client.ready().await.is_ok());
+
+    let request = client.get(srv.url("/")).header("x-test", "111").send();
+    let response = request.await.unwrap();
+    assert!(response.status().is_success());
+
+    // read response
+    let bytes = response.body().await.unwrap();
+    assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
+
+    let host = srv.url("/");
+    assert_eq!(
+        &data.borrow()[..],
+        &[format!("1 -- {}", host), format!("2 -- {}", host)]
+    );
+}
 
 #[ntex::test]
 async fn test_h1_v2() {
@@ -51,63 +849,4 @@ async fn test_h1_v2() {
     // read response
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
-}
-
-#[ntex::test]
-async fn test_connection_close() {
-    let srv = test_server(async move || {
-        HttpService::new(|_| Ready::Ok::<_, io::Error>(Response::Ok().body(STR)))
-            .map(|_| ())
-    })
-    .await;
-
-    let response = srv
-        .request(Method::GET, "/")
-        .force_close()
-        .send()
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-}
-
-#[ntex::test]
-async fn test_with_query_parameter() {
-    let srv = test_server(async move || {
-        HttpService::new(|req: Request| {
-            if req.uri().query().unwrap().contains("qp=") {
-                Ready::Ok::<_, io::Error>(Response::Ok().finish())
-            } else {
-                Ready::Ok::<_, io::Error>(Response::BadRequest().finish())
-            }
-        })
-        .map(|_| ())
-    })
-    .await;
-
-    let request = srv.request(Method::GET, srv.url("/?qp=5"));
-    let response = request.send().await.unwrap();
-    assert!(response.status().is_success());
-}
-
-#[ntex::test]
-async fn test_client_timeout() {
-    let srv = test_server(async move || {
-        HttpService::new(|_| async {
-            time::sleep(time::Seconds(10)).await;
-            Ok::<_, io::Error>(Response::Ok().body(STR))
-        })
-        .map(|_| ())
-    })
-    .await
-    .set_client_timeout(time::Seconds(1), time::Millis(30_000))
-    .await;
-
-    let err = srv
-        .request(Method::GET, "/")
-        .force_close()
-        .send()
-        .await
-        .err()
-        .unwrap();
-    assert!(matches!(err, ClientError::Timeout));
 }

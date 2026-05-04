@@ -159,11 +159,11 @@ impl FilterLayer for SslFilter {
                         }
                         Err(ref e) if e.code() == ssl::ErrorCode::WANT_READ => Ok(()),
                         Err(ref e) if e.code() == ssl::ErrorCode::WANT_WRITE => {
-                            io.want_write();
+                            io.wants_write();
                             Ok(())
                         }
                         Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                            io.want_shutdown();
+                            io.wants_shutdown();
                             Ok(())
                         }
                         Err(e) => {

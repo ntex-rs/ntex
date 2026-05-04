@@ -131,7 +131,7 @@ impl FilterLayer for WsTransport {
                         }
                         Frame::Pong(_) => (),
                         Frame::Close(_) => {
-                            io.want_shutdown();
+                            io.wants_shutdown();
                             break;
                         }
                     }
