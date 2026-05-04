@@ -55,7 +55,17 @@ impl BytePages {
         if p.len() <= remaining {
             self.put_slice(p.as_ref());
         } else {
-            if self.current.len() != 0 {
+            if self.current.len() == 0 {
+                match p.into_storage() {
+                    Ok(st) => {
+                        self.current = st;
+                    }
+                    Err(page) => {
+                        // add buffer to stack
+                        self.pages.push_back(page);
+                    }
+                }
+            } else {
                 // push current storage to stack
                 self.pages.push_back(BytePage {
                     inner: StorageType::Storage(mem::replace(
@@ -63,10 +73,10 @@ impl BytePages {
                         StorageVec::sized(self.size),
                     )),
                 });
-            }
 
-            // add buffer to stack
-            self.pages.push_back(p);
+                // add buffer to stack
+                self.pages.push_back(p);
+            }
         }
     }
 
@@ -314,6 +324,20 @@ impl BytePage {
                 storage: st.freeze(),
             },
             StorageType::Vec(v) => Bytes::from(v),
+        }
+    }
+
+    fn into_storage(self) -> Result<StorageVec, Self> {
+        if let StorageType::Storage(st) = self.inner {
+            if st.remaining() > 0 {
+                Ok(st)
+            } else {
+                Err(Self {
+                    inner: StorageType::Storage(st),
+                })
+            }
+        } else {
+            Err(self)
         }
     }
 }
