@@ -145,10 +145,10 @@ impl BytePages {
     /// Converts `self` into an immutable `Bytes`.
     #[inline]
     #[must_use]
-    pub fn freeze(self) -> Bytes {
+    pub fn freeze(&mut self) -> Bytes {
         let mut buf = BytesMut::with_capacity(self.len());
         while let Some(p) = self.take() {
-            buf.extend_from_slice(p);
+            buf.extend_from_slice(&p);
         }
         buf.freeze()
     }
