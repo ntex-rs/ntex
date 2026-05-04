@@ -203,8 +203,8 @@ impl FilterLayer for SslFilter {
                             Err(e) => return Err(map_to_ioerr(e)),
                         }
                     }
-                    inner.get_mut().destination.move_to(w_dst);
                 }
+                self.inner.borrow_mut().get_mut().destination.move_to(w_dst);
                 Ok(())
             })
         })
