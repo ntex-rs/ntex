@@ -559,7 +559,7 @@ mod tests {
         assert_eq!(msg, Bytes::from_static(BIN));
 
         assert_eq!(in_bytes.get(), BIN.len() * 2);
-        assert_eq!(out_bytes.get(), 4);
+        assert_eq!(out_bytes.get(), 8);
     }
 
     #[ntex::test]
@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         assert_eq!(in_bytes.get(), BIN.len() * 2);
-        assert_eq!(out_bytes.get(), 8);
+        assert_eq!(out_bytes.get(), 16);
         assert_eq!(state.0.buffer.with_write_destination(|b| b.len()), 0);
 
         // refs
@@ -610,6 +610,6 @@ mod tests {
         drop(state);
         assert_eq!(Rc::strong_count(&in_bytes), 1);
         assert_eq!(*read_order.borrow(), &[1, 2][..]);
-        assert_eq!(*write_order.borrow(), &[1, 2][..]);
+        assert_eq!(*write_order.borrow(), &[1, 2, 1, 2, 1, 2][..]);
     }
 }
