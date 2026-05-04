@@ -1,5 +1,11 @@
 # Changes
 
+## [1.6.2] (2026-05-04)
+
+* Add Vec<u8> support to BytePage
+
+* Add helper BytePages::take_current()
+
 ## [1.6.0] (2026-05-02)
 
 * Add new type BytesPages and BytePage

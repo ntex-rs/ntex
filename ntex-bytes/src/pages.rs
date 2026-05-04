@@ -115,6 +115,17 @@ impl BytePages {
         }
     }
 
+    pub fn take_current(&mut self) -> Option<BytePage> {
+        if self.current.len() == 0 {
+            None
+        } else {
+            Some(BytePage::from(mem::replace(
+                &mut self.current,
+                StorageVec::sized(self.size),
+            )))
+        }
+    }
+
     pub fn move_to(&mut self, pages: &mut BytePages) {
         while let Some(page) = self.take() {
             pages.append(page);
@@ -239,6 +250,8 @@ pub struct BytePage {
 enum StorageType {
     Bytes(Bytes),
     Storage(StorageVec),
+    Vec(Vec<u8>),
+    TokioBytes(::bytes::Bytes),
 }
 
 impl BytePage {
@@ -248,6 +261,8 @@ impl BytePage {
         match &self.inner {
             StorageType::Bytes(b) => b.len(),
             StorageType::Storage(b) => b.len(),
+            StorageType::Vec(b) => b.len(),
+            StorageType::TokioBytes(b) => b.len(),
         }
     }
 
@@ -257,6 +272,8 @@ impl BytePage {
         match &self.inner {
             StorageType::Bytes(b) => b.is_empty(),
             StorageType::Storage(b) => b.len() == 0,
+            StorageType::Vec(b) => b.is_empty(),
+            StorageType::TokioBytes(b) => b.is_empty(),
         }
     }
 
@@ -266,6 +283,8 @@ impl BytePage {
             match &self.inner {
                 StorageType::Bytes(b) => b.storage.as_ptr(),
                 StorageType::Storage(b) => b.as_ptr(),
+                StorageType::Vec(b) => b.as_ptr(),
+                StorageType::TokioBytes(b) => b.as_ptr(),
             }
         }
     }
@@ -283,6 +302,13 @@ impl BytePage {
         match &mut self.inner {
             StorageType::Bytes(b) => b.advance_to(cnt),
             StorageType::Storage(b) => unsafe { b.set_start(cnt as u32) },
+            StorageType::Vec(b) => {
+                self.inner = StorageType::Bytes(Bytes::copy_from_slice(&b[cnt..]));
+            }
+            StorageType::TokioBytes(b) => {
+                use bytes::Buf;
+                b.advance(cnt);
+            }
         }
     }
 
@@ -295,6 +321,8 @@ impl BytePage {
             StorageType::Storage(st) => Bytes {
                 storage: st.freeze(),
             },
+            StorageType::Vec(v) => Bytes::from(v),
+            StorageType::TokioBytes(b) => Bytes::copy_from_slice(&b),
         }
     }
 }
@@ -305,6 +333,8 @@ impl AsRef<[u8]> for BytePage {
         match &self.inner {
             StorageType::Bytes(b) => b.as_ref(),
             StorageType::Storage(b) => b.as_ref(),
+            StorageType::Vec(b) => b.as_ref(),
+            StorageType::TokioBytes(b) => b.as_ref(),
         }
     }
 }
@@ -346,11 +376,47 @@ impl From<StorageVec> for BytePage {
     }
 }
 
+impl From<Vec<u8>> for BytePage {
+    fn from(buf: Vec<u8>) -> Self {
+        BytePage {
+            inner: StorageType::Vec(buf),
+        }
+    }
+}
+
+impl From<::bytes::Bytes> for BytePage {
+    fn from(buf: ::bytes::Bytes) -> Self {
+        BytePage {
+            inner: StorageType::TokioBytes(buf),
+        }
+    }
+}
+
+impl From<&'static str> for BytePage {
+    fn from(buf: &'static str) -> Self {
+        BytePage::from(Bytes::from_static(buf.as_bytes()))
+    }
+}
+
+impl From<&'static [u8]> for BytePage {
+    fn from(buf: &'static [u8]) -> Self {
+        BytePage::from(Bytes::from_static(buf))
+    }
+}
+
+impl<const N: usize> From<&'static [u8; N]> for BytePage {
+    fn from(src: &'static [u8; N]) -> Self {
+        BytePage::from(Bytes::from_static(src))
+    }
+}
+
 impl From<BytePage> for BytesMut {
     fn from(page: BytePage) -> Self {
         match page.inner {
             StorageType::Bytes(b) => b.into(),
             StorageType::Storage(storage) => BytesMut { storage },
+            StorageType::Vec(v) => BytesMut::copy_from_slice(&v),
+            StorageType::TokioBytes(b) => BytesMut::copy_from_slice(&b),
         }
     }
 }
@@ -434,6 +500,45 @@ mod tests {
         assert!(!p.is_empty());
         assert_eq!(p.as_ref(), b"123");
         assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+
+        let p = BytePage::from(&b"123"[..]);
+        assert_eq!(p.len(), 3);
+        assert!(!p.is_empty());
+        assert_eq!(p.as_ref(), b"123");
+        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+
+        let p = BytePage::from(b"123");
+        assert_eq!(p.len(), 3);
+        assert!(!p.is_empty());
+        assert_eq!(p.as_ref(), b"123");
+        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+
+        let p = BytePage::from("123");
+        assert_eq!(p.len(), 3);
+        assert!(!p.is_empty());
+        assert_eq!(p.as_ref(), b"123");
+        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+        assert_eq!(p.freeze(), b"123");
+
+        let p = BytePage::from(vec![b'1', b'2', b'3']);
+        assert_eq!(p.len(), 3);
+        assert!(!p.is_empty());
+        assert_eq!(p.as_ref(), b"123");
+        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+        assert_eq!(p.freeze(), b"123");
+
+        let mut p = BytePage::from(vec![b'1', b'2', b'3']);
+        p.advance_to(1);
+        assert_eq!(p.len(), 2);
+        assert!(!p.is_empty());
+        assert_eq!(p.as_ref(), b"23");
+
+        let p = BytePage::from(bytes::Bytes::copy_from_slice(b"123"));
+        assert_eq!(p.len(), 3);
+        assert!(!p.is_empty());
+        assert_eq!(p.as_ref(), b"123");
+        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+        assert_eq!(p.freeze(), b"123");
 
         // debug
         let mut pages = BytePages::new(BytePageSize::Size8);
