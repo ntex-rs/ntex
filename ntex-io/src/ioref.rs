@@ -170,8 +170,11 @@ impl IoRef {
         })
     }
 
-    /// Write current write buffer to io
-    pub fn write(&self) -> io::Result<()> {
+    /// Sends the write buffer to the I/O layer.
+    ///
+    /// Requires the underlying runtime to implement `.write()`;
+    /// otherwise, no action is taken.
+    pub fn send_buf(&self) -> io::Result<()> {
         if self.0.flags.is_write_upfront_enabled()
             && let Some(hnd) = self.0.handle.take()
         {

@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.1] - 2026-05-05
+
+* Rename IoRef::write() to IoRef::send_buf()
+
 ## [3.10.0] - 2026-05-04
 
 * Add support for vectored writes
