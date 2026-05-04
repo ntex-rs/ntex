@@ -278,6 +278,10 @@ mod tests {
         let _: TlsConnector<Connector<&'static str>> =
             TlsConnector::new(config.clone()).clone();
         let factory = TlsConnector::from(Arc::new(config)).clone();
+        assert!(
+            format!("{factory:?}").contains("TlsConnector"),
+            "{factory:?}"
+        );
 
         let srv = factory.pipeline(SharedCfg::default()).await.unwrap().bind();
         // always ready
@@ -305,6 +309,10 @@ mod tests {
         let _: TlsConnector2<Connector2<&'static str>> =
             TlsConnector2::new(config.clone()).clone();
         let factory = TlsConnector2::from(Arc::new(config)).clone();
+        assert!(
+            format!("{factory:?}").contains("TlsConnector"),
+            "{factory:?}"
+        );
 
         let srv = factory.pipeline(SharedCfg::default()).await.unwrap().bind();
         // always ready
