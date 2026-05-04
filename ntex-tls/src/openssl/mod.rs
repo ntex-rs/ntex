@@ -180,25 +180,31 @@ impl FilterLayer for SslFilter {
     fn process_write_buf(&self, wb: &mut FilterBuf<'_>) -> io::Result<()> {
         self.with_buffers(wb, |buf| {
             buf.with_buffers(|_, _, _, w_src, w_dst| {
-                let mut inner = self.inner.borrow_mut();
-                while let Some(mut page) = w_src.take() {
-                    match inner.ssl_write(&page) {
-                        Ok(v) => {
-                            page.advance_to(v);
-                            w_src.prepend(page);
+                if !w_src.is_empty() {
+                    let mut inner = self.inner.borrow_mut();
+
+                    // get current page from destination buffer (optimization)
+                    inner.get_mut().destination.try_get_current_from(w_dst);
+
+                    while let Some(mut page) = w_src.take() {
+                        match inner.ssl_write(&page) {
+                            Ok(v) => {
+                                page.advance_to(v);
+                                w_src.prepend(page);
+                            }
+                            Err(e)
+                                if matches!(
+                                    e.code(),
+                                    ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
+                                ) =>
+                            {
+                                break;
+                            }
+                            Err(e) => return Err(map_to_ioerr(e)),
                         }
-                        Err(e)
-                            if matches!(
-                                e.code(),
-                                ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
-                            ) =>
-                        {
-                            break;
-                        }
-                        Err(e) => return Err(map_to_ioerr(e)),
                     }
+                    inner.get_mut().destination.move_to(w_dst);
                 }
-                inner.get_mut().destination.move_to(w_dst);
                 Ok(())
             })
         })

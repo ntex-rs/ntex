@@ -54,29 +54,27 @@ impl BytePages {
 
         if p.len() <= remaining {
             self.put_slice(p.as_ref());
-        } else {
-            if self.current.len() == 0 {
-                match p.into_storage() {
-                    Ok(st) => {
-                        self.current = st;
-                    }
-                    Err(page) => {
-                        // add buffer to stack
-                        self.pages.push_back(page);
-                    }
+        } else if self.current.len() == 0 {
+            match p.into_storage() {
+                Ok(st) => {
+                    self.current = st;
                 }
-            } else {
-                // push current storage to stack
-                self.pages.push_back(BytePage {
-                    inner: StorageType::Storage(mem::replace(
-                        &mut self.current,
-                        StorageVec::sized(self.size),
-                    )),
-                });
-
-                // add buffer to stack
-                self.pages.push_back(p);
+                Err(page) => {
+                    // add buffer to stack
+                    self.pages.push_back(page);
+                }
             }
+        } else {
+            // push current storage to stack
+            self.pages.push_back(BytePage {
+                inner: StorageType::Storage(mem::replace(
+                    &mut self.current,
+                    StorageVec::sized(self.size),
+                )),
+            });
+
+            // add buffer to stack
+            self.pages.push_back(p);
         }
     }
 
@@ -99,7 +97,12 @@ impl BytePages {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        for p in &self.pages {
+            if !p.is_empty() {
+                return false;
+            }
+        }
+        self.current.len() == 0
     }
 
     #[inline]
@@ -125,20 +128,17 @@ impl BytePages {
         }
     }
 
-    pub fn take_current(&mut self) -> Option<BytePage> {
-        if self.current.len() == 0 {
-            None
-        } else {
-            Some(BytePage::from(mem::replace(
-                &mut self.current,
-                StorageVec::sized(self.size),
-            )))
-        }
-    }
-
+    #[inline]
     pub fn move_to(&mut self, pages: &mut BytePages) {
         while let Some(page) = self.take() {
             pages.append(page);
+        }
+    }
+
+    #[inline]
+    pub fn try_get_current_from(&mut self, pages: &mut BytePages) {
+        if self.pages.is_empty() && self.current.len() == 0 && pages.current.len() != 0 {
+            self.current = mem::replace(&mut pages.current, StorageVec::sized(self.size));
         }
     }
 }
