@@ -202,10 +202,16 @@ impl Io {
         let cfg = cfg.into().get::<IoConfig>();
         let size = cfg.write_page_size();
 
+        let flags = if cfg.write_buf_limit() > 0 {
+            Cell::new(Flags::WR_PAUSED | Flags::UPFRONT_WRITE)
+        } else {
+            Cell::new(Flags::WR_PAUSED)
+        };
+
         let inner = Rc::new(IoState {
             cfg,
+            flags,
             filter: FilterPtr::null(),
-            flags: Cell::new(Flags::WR_PAUSED),
             error: Cell::new(None),
             dispatch_task: LocalWaker::new(),
             read_task: LocalWaker::new(),

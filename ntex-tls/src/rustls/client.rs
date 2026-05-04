@@ -7,7 +7,7 @@ use tls_rustls::{ClientConfig, ClientConnection, pki_types::ServerName};
 use super::stream::{self, Stream};
 
 #[derive(Debug)]
-/// An implementation of SSL streams
+/// An implementation of TLS streams
 pub struct TlsClientFilter {
     session: RefCell<ClientConnection>,
 }
@@ -32,7 +32,8 @@ impl TlsClientFilter {
         cfg: Arc<ClientConfig>,
         domain: ServerName<'static>,
     ) -> Result<Io<Layer<TlsClientFilter, F>>, io::Error> {
-        let session = ClientConnection::new(cfg, domain).map_err(io::Error::other)?;
+        let mut session = ClientConnection::new(cfg, domain).map_err(io::Error::other)?;
+        session.set_buffer_limit(Some(io.cfg().write_page_size().capacity()));
         let io = io.add_filter(TlsClientFilter {
             session: RefCell::new(session),
         });

@@ -2,7 +2,7 @@
 use std::{borrow::Borrow, borrow::BorrowMut};
 
 use ntex_bytes::info::Kind;
-use ntex_bytes::{Buf, BufMut, BytePages, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytePage, BytePages, Bytes, BytesMut};
 
 const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &[u8] = b"hello world";
@@ -23,6 +23,7 @@ fn test_size() {
     assert_eq!(24, ntex_bytes::METADATA_SIZE);
     assert_eq!(8, std::mem::size_of::<BytesMut>());
     assert_eq!(48, std::mem::size_of::<BytePages>());
+    assert_eq!(32, std::mem::size_of::<BytePage>());
 
     let mut t = BytesMut::new();
     t.extend_from_slice(&b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"[..]);

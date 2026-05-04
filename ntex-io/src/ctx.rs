@@ -69,7 +69,7 @@ impl IoContext {
         let flags = self.0.flags();
 
         if flush && !flags.contains(Flags::IO_STOPPED) {
-            if flags.contains(Flags::WR_PAUSED) {
+            if flags.write_paused() {
                 return Poll::Ready(());
             }
             st.insert_flags(Flags::WR_TASK_WAIT);

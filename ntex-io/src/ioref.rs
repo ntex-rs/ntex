@@ -214,7 +214,7 @@ impl IoRef {
                 let mut wrt = false;
                 let len = pages.len();
                 let flags = self.0.flags.get();
-                if len > 0 && flags.contains(Flags::WR_PAUSED) {
+                if len > 0 && flags.write_paused() {
                     // The app encodes data in response to incoming data,
                     // continuing to fill the write buffer until all data
                     // has been processed. Only then can the runtime wake
@@ -225,11 +225,12 @@ impl IoRef {
                     // which introduces latency. To prevent this behavior and
                     // flatten data delivery to the peer, IoRef can initiate
                     // out-of-order writes based on a configured threshold.
-                    if flags.contains(Flags::HANDLE) && len > self.0.cfg.write_buf_limit() {
+                    if flags.can_write_upfront() && len > self.0.cfg.write_buf_limit() {
                         wrt = true;
+                    } else {
+                        self.0.write_task.wake();
                     }
                     self.0.remove_flags(Flags::WR_PAUSED);
-                    self.0.write_task.wake();
                 }
                 // enable backpressure
                 if len >= self.0.cfg.write_buf().high
@@ -246,6 +247,9 @@ impl IoRef {
                 let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
                 hnd.write(ctx);
                 self.0.handle.set(Some(hnd));
+                if !self.0.flags.get().write_paused() {
+                    self.0.write_task.wake();
+                }
             }
             res
         }

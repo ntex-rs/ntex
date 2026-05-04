@@ -60,15 +60,12 @@ where
     }
 
     pub(crate) fn process_read_buf(&mut self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
-        // get processed buffer
         buf.with_buffers(|io, r_src, r_dst, _, _| {
             if let Some(src) = r_src {
                 loop {
                     match self.session.read_tls(src) {
                         Ok(_) => {}
-                        Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                            break;
-                        }
+                        Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
                         Err(err) => return Err(err),
                     }
                     let state = self
