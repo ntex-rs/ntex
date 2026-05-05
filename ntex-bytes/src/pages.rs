@@ -148,7 +148,7 @@ impl BytePages {
         if self.current.len() != 0 {
             pages.append(BytePage::from(Bytes::copy_from_slice(
                 self.current.as_ref(),
-            )))
+            )));
         }
     }
 
@@ -182,12 +182,12 @@ impl BytePages {
             at -= len;
         }
 
-        if at > 0 {
-            if let Some(mut page) = self.take() {
-                let len = cmp::min(page.len(), at);
-                pages.append(page.split_to(len));
-                self.append(page);
-            }
+        if at > 0
+            && let Some(mut page) = self.take()
+        {
+            let len = cmp::min(page.len(), at);
+            pages.append(page.split_to(len));
+            self.append(page);
         }
         pages
     }
@@ -459,7 +459,7 @@ impl Clone for BytePage {
                 // for modification. `st` is marked as non-unique after clone
                 StorageType::Storage(unsafe { st.clone() })
             }
-            StorageType::Vec(b) => StorageType::Bytes(Bytes::copy_from_slice(&b)),
+            StorageType::Vec(b) => StorageType::Bytes(Bytes::copy_from_slice(b)),
         };
 
         Self { inner }
