@@ -168,16 +168,27 @@ impl BytePages {
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
     #[must_use]
-    pub fn split_to(&mut self, mut at: usize) -> BytePages {
+    pub fn split_to(&mut self, at: usize) -> BytePages {
         let mut pages = BytePages::new(self.size);
+        self.split_into(at, &mut pages);
+        pages
+    }
 
+    /// Splits the buffer, adding the resulting items to the supplied pages object.
+    ///
+    /// Afterwards, `self` contains elements `[at, len)`, and the supplied `BytePage`
+    /// contains elements `[0, at)`.
+    ///
+    /// Depending on the underlying storage, this operation might be `O(1)` or could
+    /// involve a memory copy.
+    pub fn split_into(&mut self, mut at: usize, to: &mut BytePages) {
         while let Some(mut page) = self.pages.pop_front() {
             let len = cmp::min(page.len(), at);
-            pages.append(page.split_to(len));
+            to.append(page.split_to(len));
 
             if !page.is_empty() {
                 self.pages.push_front(page);
-                return pages;
+                return;
             }
             at -= len;
         }
@@ -186,10 +197,9 @@ impl BytePages {
             && let Some(mut page) = self.take()
         {
             let len = cmp::min(page.len(), at);
-            pages.append(page.split_to(len));
+            to.append(page.split_to(len));
             self.append(page);
         }
-        pages
     }
 
     /// Converts `self` into an immutable `Bytes`.
@@ -208,6 +218,21 @@ impl BytePages {
         if self.pages.is_empty() && self.current.len() == 0 && pages.current.len() != 0 {
             self.current = mem::replace(&mut pages.current, StorageVec::sized(self.size));
         }
+    }
+
+    /// Access current page as `BytesMut` object
+    pub fn with_bytes_mut<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut BytesMut) -> R,
+    {
+        let mut buf = BytesMut {
+            storage: StorageVec(self.current.0),
+        };
+        buf.storage.unsize();
+
+        let res = f(&mut buf);
+        mem::forget(buf);
+        res
     }
 }
 
@@ -761,7 +786,8 @@ mod tests {
     }
 
     #[test]
-    fn pages_split_to() {
+    fn pages_methods() {
+        // .split_to()
         let mut pages = BytePages::default();
         pages.put_slice(b"456");
         pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
@@ -779,6 +805,23 @@ mod tests {
         assert_eq!(p, b"56");
         let p2 = pages2.freeze();
         assert_eq!(p2, b"1234");
+
+        // .split_into()
+        let mut pages = BytePages::default();
+        pages.put_slice(b"456");
+        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        let mut pages2 = BytePages::default();
+        pages.split_into(1, &mut pages2);
+        let p = pages.freeze();
+        assert_eq!(p, b"23456");
+        let p2 = pages2.freeze();
+        assert_eq!(p2, b"1");
+
+        // with_bytes_vec()
+        let mut pages = BytePages::default();
+        pages.with_bytes_mut(|buf| buf.extend_from_slice(b"123"));
+        let p = pages.freeze();
+        assert_eq!(p, b"123");
     }
 
     #[test]

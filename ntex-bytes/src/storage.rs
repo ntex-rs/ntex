@@ -119,7 +119,7 @@ pub(crate) struct Storage {
 
 #[derive(Debug)]
 /// Thread-safe reference-counted container for the shared storage.
-struct SharedVec {
+pub(crate) struct SharedVec {
     offset: u32,
     len: u32,
     capacity: u32,
@@ -128,7 +128,7 @@ struct SharedVec {
     size: BytePageSize,
 }
 
-pub(crate) struct StorageVec(NonNull<SharedVec>);
+pub(crate) struct StorageVec(pub(crate) NonNull<SharedVec>);
 
 // Buffer storage strategy flags.
 const KIND_VEC: usize = 0b01;
@@ -643,6 +643,10 @@ impl StorageVec {
     /// Caller must guarantee cap is larger or equal to src length
     pub(crate) fn from_slice(capacity: usize, src: &[u8]) -> StorageVec {
         StorageVec(SharedVec::create(BytePageSize::Unset, capacity, src))
+    }
+
+    pub(crate) fn unsize(&mut self) {
+        unsafe { (*self.0.as_ptr()).size = BytePageSize::Unset }
     }
 
     #[allow(dead_code)]

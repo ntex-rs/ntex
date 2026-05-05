@@ -20,11 +20,8 @@ pub trait Encoder {
 
     /// Encodes a frame into the buffer provided.
     fn encodev(&self, item: Self::Item, dst: &mut BytePages) -> Result<(), Self::Error> {
-        let mut buf = BytesMut::new();
         #[allow(deprecated)]
-        self.encode(item, &mut buf)?;
-        dst.append(buf.freeze());
-        Ok(())
+        dst.with_bytes_mut(|buf| self.encode(item, buf))
     }
 }
 
