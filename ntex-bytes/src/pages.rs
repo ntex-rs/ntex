@@ -294,6 +294,14 @@ impl BufMut for BytePages {
     }
 }
 
+impl Clone for BytePages {
+    fn clone(&self) -> Self {
+        let mut pages = BytePages::new(self.size);
+        self.copy_to(&mut pages);
+        pages
+    }
+}
+
 impl io::Write for BytePages {
     fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
         self.put_slice(src);
@@ -738,6 +746,16 @@ mod tests {
         pages.put_u8(b'7');
         let p = pages.freeze();
         assert_eq!(p, b"1234567");
+        let p2 = pages2.freeze();
+        assert_eq!(p2, b"123456");
+
+        let mut pages = BytePages::default();
+        pages.put_slice(b"456");
+        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        let mut pages2 = pages.clone();
+        pages.put_u8(b'7');
+        let p = pages.freeze();
+        assert_eq!(p, b"123456");
         let p2 = pages2.freeze();
         assert_eq!(p2, b"123456");
     }
