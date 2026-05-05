@@ -2,7 +2,7 @@
 
 ## [1.6.5] (2026-05-06)
 
-* Add bytePages::split_into() method
+* Add BytePages::split_into() and BytePages::with_bytes_mut() methods
 
 ## [1.6.4] (2026-05-05)
 

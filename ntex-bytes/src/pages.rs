@@ -219,6 +219,21 @@ impl BytePages {
             self.current = mem::replace(&mut pages.current, StorageVec::sized(self.size));
         }
     }
+
+    /// Access current page as BytesMut object
+    pub fn with_bytes_mut<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut BytesMut) -> R,
+    {
+        let mut buf = BytesMut {
+            storage: StorageVec(self.current.0),
+        };
+        buf.storage.unsize();
+
+        let res = f(&mut buf);
+        mem::forget(buf);
+        res
+    }
 }
 
 impl fmt::Debug for BytePages {
