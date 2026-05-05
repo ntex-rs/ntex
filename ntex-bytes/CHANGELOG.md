@@ -1,5 +1,13 @@
 # Changes
 
+## [1.6.4] (2026-05-05)
+
+* Add BytePages::copy_to() and BytePages::split_to() methods
+
+* Add Clone impl for BytePage
+
+* Add BytePage::split_to() method
+
 ## [1.6.3] (2026-05-05)
 
 * Add helper methods for BytePages type
