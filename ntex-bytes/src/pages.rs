@@ -168,16 +168,27 @@ impl BytePages {
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
     #[must_use]
-    pub fn split_to(&mut self, mut at: usize) -> BytePages {
+    pub fn split_to(&mut self, at: usize) -> BytePages {
         let mut pages = BytePages::new(self.size);
+        self.split_into(at, &mut pages);
+        pages
+    }
 
+    /// Splits the buffer, adding the resulting items to the supplied pages object.
+    ///
+    /// Afterwards, `self` contains elements `[at, len)`, and the supplied `BytePage`
+    /// contains elements `[0, at)`.
+    ///
+    /// Depending on the underlying storage, this operation might be `O(1)` or could
+    /// involve a memory copy.
+    pub fn split_into(&mut self, mut at: usize, to: &mut BytePages) {
         while let Some(mut page) = self.pages.pop_front() {
             let len = cmp::min(page.len(), at);
-            pages.append(page.split_to(len));
+            to.append(page.split_to(len));
 
             if !page.is_empty() {
                 self.pages.push_front(page);
-                return pages;
+                return;
             }
             at -= len;
         }
@@ -186,10 +197,9 @@ impl BytePages {
             && let Some(mut page) = self.take()
         {
             let len = cmp::min(page.len(), at);
-            pages.append(page.split_to(len));
+            to.append(page.split_to(len));
             self.append(page);
         }
-        pages
     }
 
     /// Converts `self` into an immutable `Bytes`.

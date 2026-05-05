@@ -1,5 +1,9 @@
 # Changes
 
+## [1.6.5] (2026-05-06)
+
+* Add bytePages::split_into() method
+
 ## [1.6.4] (2026-05-05)
 
 * Add BytePages::copy_to() and BytePages::split_to() methods
