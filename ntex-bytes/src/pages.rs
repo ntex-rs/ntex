@@ -220,7 +220,7 @@ impl BytePages {
         }
     }
 
-    /// Access current page as BytesMut object
+    /// Access current page as `BytesMut` object
     pub fn with_bytes_mut<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
