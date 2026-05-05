@@ -786,7 +786,8 @@ mod tests {
     }
 
     #[test]
-    fn pages_split_to() {
+    fn pages_methods() {
+        // .split_to()
         let mut pages = BytePages::default();
         pages.put_slice(b"456");
         pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
@@ -804,6 +805,23 @@ mod tests {
         assert_eq!(p, b"56");
         let p2 = pages2.freeze();
         assert_eq!(p2, b"1234");
+
+        // .split_into()
+        let mut pages = BytePages::default();
+        pages.put_slice(b"456");
+        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        let mut pages2 = BytePages::default();
+        pages.split_into(1, &mut pages2);
+        let p = pages.freeze();
+        assert_eq!(p, b"23456");
+        let p2 = pages2.freeze();
+        assert_eq!(p2, b"1");
+
+        // with_bytes_vec()
+        let mut pages = BytePages::default();
+        pages.with_bytes_mut(|buf| buf.extend_from_slice(b"123"));
+        let p = pages.freeze();
+        assert_eq!(p, b"123");
     }
 
     #[test]
