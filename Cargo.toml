@@ -54,7 +54,7 @@ ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
 ntex = "3.8.0"
-ntex-bytes = "1.6.3"
+ntex-bytes = "1.6.5"
 ntex-codec = "1.2.0"
 ntex-error = "2.2.0"
 ntex-h2 = "3.10.0"
