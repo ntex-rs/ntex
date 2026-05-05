@@ -755,7 +755,7 @@ mod tests {
         let mut pages2 = pages.clone();
         pages.put_u8(b'7');
         let p = pages.freeze();
-        assert_eq!(p, b"123456");
+        assert_eq!(p, b"1234567");
         let p2 = pages2.freeze();
         assert_eq!(p2, b"123456");
     }
