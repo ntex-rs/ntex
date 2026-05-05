@@ -703,6 +703,20 @@ impl StorageVec {
         unsafe { (*self.0.as_ptr()).remaining == 0 }
     }
 
+    pub(crate) fn is_unique(&mut self) -> bool {
+        unsafe { (*self.0.as_ptr()).ref_count.load(Relaxed) == 1 }
+    }
+
+    /// The caller must guarantee that `StorageVec` is not being used for
+    /// memory modification.
+    pub(crate) unsafe fn clone(&self) -> StorageVec {
+        let ref_cnt = self.0.as_ref().ref_count.fetch_add(1, Relaxed);
+        if ref_cnt == u32::MAX {
+            abort();
+        }
+        StorageVec(self.0)
+    }
+
     pub(crate) fn freeze(self) -> Storage {
         unsafe {
             if self.len() <= INLINE_CAP {

@@ -136,6 +136,23 @@ impl BytePages {
     }
 
     #[inline]
+    /// Copies all pages into another `BytePages` instance.
+    ///
+    /// Depending on the underlying storage, this operation might be `O(1)` or could
+    /// involve a memory copy.
+    pub fn copy_to(&self, pages: &mut BytePages) {
+        for p in &self.pages {
+            pages.append(p.clone());
+        }
+
+        if self.current.len() != 0 {
+            pages.append(BytePage::from(Bytes::copy_from_slice(
+                self.current.as_ref(),
+            )));
+        }
+    }
+
+    #[inline]
     /// Moves all pages to another `BytePages` instance.
     pub fn move_to(&mut self, pages: &mut BytePages) {
         while let Some(page) = self.take() {
@@ -143,11 +160,36 @@ impl BytePages {
         }
     }
 
-    #[inline]
-    pub fn try_get_current_from(&mut self, pages: &mut BytePages) {
-        if self.pages.is_empty() && self.current.len() == 0 && pages.current.len() != 0 {
-            self.current = mem::replace(&mut pages.current, StorageVec::sized(self.size));
+    /// Splits the buffer into two at the given index.
+    ///
+    /// Afterwards, `self` contains elements `[at, len)`, and the returned `BytePage`
+    /// contains elements `[0, at)`.
+    ///
+    /// Depending on the underlying storage, this operation might be `O(1)` or could
+    /// involve a memory copy.
+    #[must_use]
+    pub fn split_to(&mut self, mut at: usize) -> BytePages {
+        let mut pages = BytePages::new(self.size);
+
+        while let Some(mut page) = self.pages.pop_front() {
+            let len = cmp::min(page.len(), at);
+            pages.append(page.split_to(len));
+
+            if !page.is_empty() {
+                self.pages.push_front(page);
+                return pages;
+            }
+            at -= len;
         }
+
+        if at > 0
+            && let Some(mut page) = self.take()
+        {
+            let len = cmp::min(page.len(), at);
+            pages.append(page.split_to(len));
+            self.append(page);
+        }
+        pages
     }
 
     /// Converts `self` into an immutable `Bytes`.
@@ -159,6 +201,13 @@ impl BytePages {
             buf.extend_from_slice(&p);
         }
         buf.freeze()
+    }
+
+    #[inline]
+    pub fn try_get_current_from(&mut self, pages: &mut BytePages) {
+        if self.pages.is_empty() && self.current.len() == 0 && pages.current.len() != 0 {
+            self.current = mem::replace(&mut pages.current, StorageVec::sized(self.size));
+        }
     }
 }
 
@@ -245,6 +294,14 @@ impl BufMut for BytePages {
     }
 }
 
+impl Clone for BytePages {
+    fn clone(&self) -> Self {
+        let mut pages = BytePages::new(self.size);
+        self.copy_to(&mut pages);
+        pages
+    }
+}
+
 impl io::Write for BytePages {
     fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
         self.put_slice(src);
@@ -314,6 +371,45 @@ impl BytePage {
         }
     }
 
+    /// Splits the buffer into two at the given index.
+    ///
+    /// Afterwards, `self` contains elements `[at, len)`, and the returned `BytePage`
+    /// contains elements `[0, at)`.
+    ///
+    /// Depending on the underlying storage, this operation might be `O(1)` or could
+    /// involve a memory copy.
+    #[must_use]
+    pub fn split_to(&mut self, at: usize) -> BytePage {
+        match &mut self.inner {
+            StorageType::Bytes(b) => {
+                let buf = b.split_to(cmp::min(at, b.len()));
+                BytePage {
+                    inner: StorageType::Bytes(buf),
+                }
+            }
+            StorageType::Storage(_) => {
+                let inner = mem::replace(&mut self.inner, StorageType::Bytes(Bytes::new()));
+                if let StorageType::Storage(st) = inner {
+                    self.inner = StorageType::Bytes(Bytes {
+                        storage: st.freeze(),
+                    });
+                    self.split_to(at)
+                } else {
+                    unreachable!()
+                }
+            }
+            StorageType::Vec(_) => {
+                let inner = mem::replace(&mut self.inner, StorageType::Bytes(Bytes::new()));
+                if let StorageType::Vec(b) = inner {
+                    self.inner = StorageType::Bytes(Bytes::copy_from_slice(&b));
+                    self.split_to(at)
+                } else {
+                    unreachable!()
+                }
+            }
+        }
+    }
+
     /// Advance the internal cursor.
     ///
     /// Afterwards `self` contains elements `[cnt, len)`.
@@ -347,8 +443,9 @@ impl BytePage {
     }
 
     fn into_storage(self) -> Result<StorageVec, Self> {
-        if let StorageType::Storage(st) = self.inner {
-            if st.remaining() > 0 {
+        if let StorageType::Storage(mut st) = self.inner {
+            // SAFETY: Converting back to `StorageVec` requires uniqueness.
+            if !st.is_full() && st.is_unique() {
                 Ok(st)
             } else {
                 Err(Self {
@@ -358,6 +455,22 @@ impl BytePage {
         } else {
             Err(self)
         }
+    }
+}
+
+impl Clone for BytePage {
+    fn clone(&self) -> Self {
+        let inner = match &self.inner {
+            StorageType::Bytes(b) => StorageType::Bytes(b.clone()),
+            StorageType::Storage(st) => {
+                // SAFETY: We garantee that `st` is not being used
+                // for modification. `st` is marked as non-unique after clone
+                StorageType::Storage(unsafe { st.clone() })
+            }
+            StorageType::Vec(b) => StorageType::Bytes(Bytes::copy_from_slice(b)),
+        };
+
+        Self { inner }
     }
 }
 
@@ -387,6 +500,14 @@ impl From<Bytes> for BytePage {
     }
 }
 
+impl<'a> From<&'a Bytes> for BytePage {
+    fn from(buf: &'a Bytes) -> Self {
+        BytePage {
+            inner: StorageType::Bytes(buf.clone()),
+        }
+    }
+}
+
 impl From<BytesMut> for BytePage {
     fn from(buf: BytesMut) -> Self {
         BytePage {
@@ -398,6 +519,12 @@ impl From<BytesMut> for BytePage {
 impl From<ByteString> for BytePage {
     fn from(s: ByteString) -> Self {
         s.into_bytes().into()
+    }
+}
+
+impl<'a> From<&'a ByteString> for BytePage {
+    fn from(s: &'a ByteString) -> Self {
+        s.clone().into_bytes().into()
     }
 }
 
@@ -452,6 +579,24 @@ impl From<BytePage> for BytesMut {
             StorageType::Storage(storage) => BytesMut { storage },
             StorageType::Vec(v) => BytesMut::copy_from_slice(&v),
         }
+    }
+}
+
+impl PartialEq for BytePage {
+    fn eq(&self, other: &BytePage) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl<'a> PartialEq<&'a [u8]> for BytePage {
+    fn eq(&self, other: &&'a [u8]) -> bool {
+        self.as_ref() == *other
+    }
+}
+
+impl<'a, const N: usize> PartialEq<&'a [u8; N]> for BytePage {
+    fn eq(&self, other: &&'a [u8; N]) -> bool {
+        self.as_ref() == other.as_ref()
     }
 }
 
@@ -579,6 +724,114 @@ mod tests {
         pages.append(Bytes::copy_from_slice(b"123"));
         pages.pages.push_back(p);
         assert_eq!(format!("{pages:?}"), "BytePages(b\"b\", b\"a123\")");
+    }
+
+    #[test]
+    fn pages_copy_to() {
+        let mut pages = BytePages::default();
+        let mut pages2 = BytePages::default();
+        pages.put_slice(b"456");
+        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        pages.copy_to(&mut pages2);
+        let p = pages.freeze();
+        assert_eq!(p, b"123456");
+        let p2 = pages2.freeze();
+        assert_eq!(p2, b"123456");
+
+        let mut pages = BytePages::default();
+        let mut pages2 = BytePages::default();
+        pages.put_slice(b"456");
+        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        pages.copy_to(&mut pages2);
+        pages.put_u8(b'7');
+        let p = pages.freeze();
+        assert_eq!(p, b"1234567");
+        let p2 = pages2.freeze();
+        assert_eq!(p2, b"123456");
+
+        let mut pages = BytePages::default();
+        pages.put_slice(b"456");
+        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        let mut pages2 = pages.clone();
+        pages.put_u8(b'7');
+        let p = pages.freeze();
+        assert_eq!(p, b"1234567");
+        let p2 = pages2.freeze();
+        assert_eq!(p2, b"123456");
+    }
+
+    #[test]
+    fn pages_split_to() {
+        let mut pages = BytePages::default();
+        pages.put_slice(b"456");
+        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        let mut pages2 = pages.split_to(1);
+        let p = pages.freeze();
+        assert_eq!(p, b"23456");
+        let p2 = pages2.freeze();
+        assert_eq!(p2, b"1");
+
+        let mut pages = BytePages::default();
+        pages.put_slice(b"456");
+        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        let mut pages2 = pages.split_to(4);
+        let p = pages.freeze();
+        assert_eq!(p, b"56");
+        let p2 = pages2.freeze();
+        assert_eq!(p2, b"1234");
+    }
+
+    #[test]
+    fn page_clone() {
+        // Bytes storage
+        let p = BytePage::from(Bytes::copy_from_slice(b"123"));
+        let p2 = p.clone();
+        assert_eq!(p, p2);
+
+        // StorageVec
+        let mut p = BytePage::from(BytesMut::copy_from_slice(b"123"));
+        if let StorageType::Storage(ref mut st) = p.inner {
+            assert!(st.is_unique());
+        } else {
+            panic!()
+        }
+        let p2 = p.clone();
+        assert_eq!(p, p2);
+        if let StorageType::Storage(mut st) = p.inner {
+            assert!(!st.is_unique());
+        } else {
+            panic!()
+        }
+
+        // Vec<u8> storage
+        let p = BytePage::from(vec![b'1', b'2', b'3']);
+        let p2 = p.clone();
+        assert_eq!(p, p2);
+        if let StorageType::Bytes(_) = p2.inner {
+        } else {
+            panic!()
+        }
+    }
+
+    #[test]
+    fn page_split_to() {
+        // Bytes storage
+        let mut p = BytePage::from(Bytes::copy_from_slice(b"123"));
+        let p2 = p.split_to(1);
+        assert_eq!(p, b"23");
+        assert_eq!(p2, b"1");
+
+        // StorageVec
+        let mut p = BytePage::from(BytesMut::copy_from_slice(b"123"));
+        let p2 = p.split_to(1);
+        assert_eq!(p, b"23");
+        assert_eq!(p2, b"1");
+
+        // Vec<u8> storage
+        let mut p = BytePage::from(vec![b'1', b'2', b'3']);
+        let p2 = p.split_to(1);
+        assert_eq!(p, b"23");
+        assert_eq!(p2, b"1");
     }
 
     #[test]
