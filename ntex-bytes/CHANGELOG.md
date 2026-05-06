@@ -1,5 +1,9 @@
 # Changes
 
+## [1.6.6] (2026-05-06)
+
+* Optimize BytePages::freeze()
+
 ## [1.6.5] (2026-05-06)
 
 * Add BytePages::split_into() and BytePages::with_bytes_mut() methods
