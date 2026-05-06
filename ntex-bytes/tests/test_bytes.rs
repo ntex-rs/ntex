@@ -22,7 +22,7 @@ fn test_size() {
     assert_eq!(24, std::mem::size_of::<Option<Bytes>>());
     assert_eq!(24, ntex_bytes::METADATA_SIZE);
     assert_eq!(8, std::mem::size_of::<BytesMut>());
-    assert_eq!(48, std::mem::size_of::<BytePages>());
+    assert_eq!(16, std::mem::size_of::<BytePages>());
     assert_eq!(32, std::mem::size_of::<BytePage>());
 
     let mut t = BytesMut::new();

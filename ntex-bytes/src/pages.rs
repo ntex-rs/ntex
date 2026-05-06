@@ -1,13 +1,23 @@
-use std::{borrow::Borrow, cmp, collections::VecDeque, fmt, io, mem, ops, ptr};
+#![allow(clippy::missing_panics_doc, clippy::box_collection)]
+use std::{borrow::Borrow, cell::Cell, cmp, collections::VecDeque, fmt, io, mem, ops, ptr};
 
 use crate::{BufMut, BytePageSize, ByteString, Bytes, BytesMut};
 use crate::{buf::UninitSlice, storage::StorageVec};
 
 pub struct BytePages {
-    size: BytePageSize,
-    pages: VecDeque<BytePage>,
+    st: Option<Box<Inner>>,
     current: StorageVec,
 }
+
+struct Inner {
+    size: BytePageSize,
+    pages: VecDeque<BytePage>,
+}
+
+thread_local! {
+    static CACHE: Cell<Option<Box<Vec<Box<Inner>>>>> = Cell::new(Some(Box::default()));
+}
+const CACHE_SIZE: usize = 128;
 
 impl BytePages {
     /// Creates a new `BytePages` with the specified page size.
@@ -17,21 +27,44 @@ impl BytePages {
     pub fn new(size: BytePageSize) -> Self {
         debug_assert!(size != BytePageSize::Unset, "Page cannot be Unset");
 
+        let st = CACHE.with(move |c| {
+            let mut cache = c.take().unwrap();
+
+            let item = if let Some(mut item) = cache.pop() {
+                item.size = size;
+                item
+            } else {
+                Box::new(Inner {
+                    size,
+                    pages: VecDeque::with_capacity(8),
+                })
+            };
+            c.set(Some(cache));
+            item
+        });
+
         BytePages {
-            size,
-            pages: VecDeque::with_capacity(8),
+            st: Some(st),
             current: StorageVec::sized(size),
         }
     }
 
+    fn pages(&self) -> &VecDeque<BytePage> {
+        &self.st.as_ref().unwrap().pages
+    }
+
+    fn pages_mut(&mut self) -> &mut VecDeque<BytePage> {
+        &mut self.st.as_mut().unwrap().pages
+    }
+
     /// Get size of the page.
     pub fn page_size(&self) -> BytePageSize {
-        self.size
+        self.st.as_ref().unwrap().size
     }
 
     /// Sets the page size for new pages.
     pub fn set_page_size(&mut self, size: BytePageSize) {
-        self.size = size;
+        self.st.as_mut().unwrap().size = size;
     }
 
     /// Insert a page to the front of the collection.
@@ -43,7 +76,7 @@ impl BytePages {
         if p.is_empty() {
             false
         } else {
-            self.pages.push_front(p);
+            self.pages_mut().push_front(p);
             true
         }
     }
@@ -65,20 +98,17 @@ impl BytePages {
                 }
                 Err(page) => {
                     // add buffer to stack
-                    self.pages.push_back(page);
+                    self.pages_mut().push_back(page);
                 }
             }
         } else {
             // push current storage to stack
-            self.pages.push_back(BytePage {
-                inner: StorageType::Storage(mem::replace(
-                    &mut self.current,
-                    StorageVec::sized(self.size),
-                )),
-            });
-
+            let storage = StorageVec::sized(self.page_size());
+            let page: BytePage = From::from(mem::replace(&mut self.current, storage));
+            let pages = self.pages_mut();
+            pages.push_back(page);
             // add buffer to stack
-            self.pages.push_back(p);
+            pages.push_back(p);
         }
     }
 
@@ -95,7 +125,7 @@ impl BytePages {
     #[inline]
     /// Gets the total number of pages.
     pub fn len(&self) -> usize {
-        self.pages
+        self.pages()
             .iter()
             .fold(self.current.len(), |c, page| c + page.len())
     }
@@ -103,7 +133,7 @@ impl BytePages {
     #[inline]
     /// Checks if the `BytePages` instance is empty.
     pub fn is_empty(&self) -> bool {
-        for p in &self.pages {
+        for p in self.pages() {
             if !p.is_empty() {
                 return false;
             }
@@ -115,23 +145,21 @@ impl BytePages {
     /// Returns the total number of pages contained in this object.
     pub fn num_pages(&self) -> usize {
         if self.current.len() == 0 {
-            self.pages.len()
+            self.pages().len()
         } else {
-            self.pages.len() + 1
+            self.pages().len() + 1
         }
     }
 
     /// Returns the first page from the collection.
     pub fn take(&mut self) -> Option<BytePage> {
-        if let Some(page) = self.pages.pop_front() {
+        if let Some(page) = self.pages_mut().pop_front() {
             Some(page)
         } else if self.current.len() == 0 {
             None
         } else {
-            Some(BytePage::from(mem::replace(
-                &mut self.current,
-                StorageVec::sized(self.size),
-            )))
+            let storage = StorageVec::sized(self.page_size());
+            Some(BytePage::from(mem::replace(&mut self.current, storage)))
         }
     }
 
@@ -141,7 +169,7 @@ impl BytePages {
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
     pub fn copy_to(&self, pages: &mut BytePages) {
-        for p in &self.pages {
+        for p in self.pages() {
             pages.append(p.clone());
         }
 
@@ -169,7 +197,7 @@ impl BytePages {
     /// involve a memory copy.
     #[must_use]
     pub fn split_to(&mut self, at: usize) -> BytePages {
-        let mut pages = BytePages::new(self.size);
+        let mut pages = BytePages::new(self.page_size());
         self.split_into(at, &mut pages);
         pages
     }
@@ -182,17 +210,20 @@ impl BytePages {
     /// Depending on the underlying storage, this operation might be `O(1)` or could
     /// involve a memory copy.
     pub fn split_into(&mut self, mut at: usize, to: &mut BytePages) {
-        while let Some(mut page) = self.pages.pop_front() {
-            let len = cmp::min(page.len(), at);
-            to.append(page.split_to(len));
+        {
+            let pages = self.pages_mut();
 
-            if !page.is_empty() {
-                self.pages.push_front(page);
-                return;
+            while let Some(mut page) = pages.pop_front() {
+                let len = cmp::min(page.len(), at);
+                to.append(page.split_to(len));
+
+                if !page.is_empty() {
+                    pages.push_front(page);
+                    return;
+                }
+                at -= len;
             }
-            at -= len;
         }
-
         if at > 0
             && let Some(mut page) = self.take()
         {
@@ -206,17 +237,25 @@ impl BytePages {
     #[inline]
     #[must_use]
     pub fn freeze(&mut self) -> Bytes {
-        let mut buf = BytesMut::with_capacity(self.len());
-        while let Some(p) = self.take() {
-            buf.extend_from_slice(&p);
+        let pages = self.num_pages();
+        if pages == 0 || self.is_empty() {
+            Bytes::new()
+        } else if pages == 1 {
+            self.take().unwrap().freeze()
+        } else {
+            let mut buf = BytesMut::with_capacity(self.len());
+            while let Some(p) = self.take() {
+                buf.extend_from_slice(&p);
+            }
+            buf.freeze()
         }
-        buf.freeze()
     }
 
     #[inline]
     pub fn try_get_current_from(&mut self, pages: &mut BytePages) {
-        if self.pages.is_empty() && self.current.len() == 0 && pages.current.len() != 0 {
-            self.current = mem::replace(&mut pages.current, StorageVec::sized(self.size));
+        if self.pages().is_empty() && self.current.len() == 0 && pages.current.len() != 0 {
+            self.current =
+                mem::replace(&mut pages.current, StorageVec::sized(self.page_size()));
         }
     }
 
@@ -236,10 +275,24 @@ impl BytePages {
     }
 }
 
+impl Drop for BytePages {
+    fn drop(&mut self) {
+        CACHE.with(move |c| {
+            let mut cache = c.take().unwrap();
+            if cache.len() < CACHE_SIZE {
+                let mut st = self.st.take().unwrap();
+                st.pages.clear();
+                cache.push(st);
+            }
+            c.set(Some(cache));
+        });
+    }
+}
+
 impl fmt::Debug for BytePages {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = fmt.debug_tuple("BytePages");
-        for p in &self.pages {
+        for p in self.pages() {
             f.field(p);
         }
         if self.current.len() != 0 {
@@ -294,10 +347,9 @@ impl BufMut for BytePages {
 
             // add new page
             if self.current.is_full() {
-                self.pages.push_back(BytePage::from(mem::replace(
-                    &mut self.current,
-                    StorageVec::sized(self.size),
-                )));
+                let storage = StorageVec::sized(self.page_size());
+                let page = BytePage::from(mem::replace(&mut self.current, storage));
+                self.pages_mut().push_back(page);
             }
         }
     }
@@ -306,10 +358,9 @@ impl BufMut for BytePages {
     fn put_u8(&mut self, n: u8) {
         self.current.put_u8(n);
         if self.current.is_full() {
-            self.pages.push_back(BytePage::from(mem::replace(
-                &mut self.current,
-                StorageVec::sized(self.size),
-            )));
+            let storage = StorageVec::sized(self.page_size());
+            let page: BytePage = From::from(mem::replace(&mut self.current, storage));
+            self.pages_mut().push_back(page);
         }
     }
 
@@ -321,7 +372,8 @@ impl BufMut for BytePages {
 
 impl Clone for BytePages {
     fn clone(&self) -> Self {
-        let mut pages = BytePages::new(self.size);
+        let size = self.page_size();
+        let mut pages = BytePages::new(size);
         self.copy_to(&mut pages);
         pages
     }
@@ -747,7 +799,7 @@ mod tests {
         let mut pages = BytePages::new(BytePageSize::Size8);
         pages.extend_from_slice(b"a");
         pages.append(Bytes::copy_from_slice(b"123"));
-        pages.pages.push_back(p);
+        pages.pages_mut().push_back(p);
         assert_eq!(format!("{pages:?}"), "BytePages(b\"b\", b\"a123\")");
     }
 
