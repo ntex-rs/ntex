@@ -462,14 +462,20 @@ impl<F> Io<F> {
         if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
+            let ready = st.flags.is_read_ready();
+
             // If the dispatcher requests more data but no read occurs,
             // restart the read task.
             if st.flags.is_read_full_or_paused() {
                 st.flags.unset_all_read_flags();
                 st.read_task.wake();
-                st.dispatch_task.register(cx.waker());
-                Poll::Pending
-            } else if st.flags.is_read_ready() {
+                if ready {
+                    Poll::Ready(Ok(Some(())))
+                } else {
+                    st.dispatch_task.register(cx.waker());
+                    Poll::Pending
+                }
+            } else if ready {
                 Poll::Ready(Ok(Some(())))
             } else {
                 st.read_task.wake();
@@ -600,7 +606,7 @@ impl<F> Io<F> {
         if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            st.flags.unset_wr_backpressure1();
+            st.flags.unset_wr_backpressure();
             Poll::Ready(Ok(()))
         }
     }
@@ -788,14 +794,16 @@ impl Future for OnDisconnect {
 
 #[cfg(test)]
 mod tests {
-    use ntex_bytes::Bytes;
+    use ntex_bytes::{Bytes, BytesMut};
     use ntex_codec::BytesCodec;
+    use ntex_util::{future::lazy, time::Millis, time::sleep};
 
     use super::*;
     use crate::testing::IoTest;
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
+    const BIN2: &[u8] = b"12345678901234561234567890123456";
 
     #[ntex::test]
     async fn test_basics() {
@@ -839,5 +847,56 @@ mod tests {
             .unwrap();
         let item = client.read_any();
         assert_eq!(item, TEXT);
+    }
+
+    #[ntex::test]
+    async fn read_readiness() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let io = Io::from(server);
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+
+        client.write(TEXT);
+        assert_eq!(io.read_ready().await.unwrap(), Some(()));
+        assert!(matches!(
+            lazy(|cx| io.poll_read_ready(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
+
+        let item = io.with_read_buf(BytesMut::take);
+        assert_eq!(item, Bytes::from_static(BIN));
+
+        client.write(TEXT);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
+    }
+
+    #[ntex::test]
+    async fn read_backpressure() {
+        let (client, server) = IoTest::create();
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+        );
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+
+        client.write(BIN2);
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_ready());
+        assert!(io.flags().is_rd_backpressure());
+        let _item = io.recv(&BytesCodec).await.ok().unwrap().unwrap();
+        assert!(!io.flags().is_read_ready());
+        assert!(!io.flags().is_rd_backpressure());
+
+        client.write(BIN2);
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_ready());
+        assert!(io.flags().is_rd_backpressure());
+        assert_eq!(io.read_ready().await.unwrap(), Some(()));
     }
 }

@@ -149,6 +149,10 @@ impl Flags {
         self.contains(FlagsKind::RD_NOTIFY)
     }
 
+    pub(crate) fn is_rd_backpressure(&self) -> bool {
+        self.contains(FlagsKind::BUF_R_FULL)
+    }
+
     pub(crate) fn is_wr_backpressure(&self) -> bool {
         self.contains(FlagsKind::DSP_W_BACKPRESSURE)
     }
@@ -227,7 +231,7 @@ impl Flags {
         self.remove(FlagsKind::IO_WANTS_WRITE);
     }
 
-    pub(crate) fn unset_wr_backpressure1(&self) {
+    pub(crate) fn unset_wr_backpressure(&self) {
         self.remove(FlagsKind::DSP_W_BACKPRESSURE);
     }
 
