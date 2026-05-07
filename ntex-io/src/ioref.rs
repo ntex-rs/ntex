@@ -451,7 +451,10 @@ mod tests {
 
         client.write(TEXT);
         assert_eq!(io.read_ready().await.unwrap(), Some(()));
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+        assert!(matches!(
+            lazy(|cx| io.poll_read_ready(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
 
         let item = io.with_read_buf(BytesMut::take);
         assert_eq!(item, Bytes::from_static(BIN));
@@ -459,7 +462,7 @@ mod tests {
         client.write(TEXT);
         sleep(Millis(50)).await;
         assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
     }
 
     #[ntex::test]

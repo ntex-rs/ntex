@@ -462,21 +462,18 @@ impl<F> Io<F> {
         if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            st.dispatch_task.register(cx.waker());
-
-            let ready = st.flags.is_read_buf_ready();
-            if st.flags.is_read_paused_or_buf_full() {
-                st.flags.unset_read_flags();
+            // If the dispatcher requests more data but no read occurs,
+            // restart the read task.
+            if st.flags.is_read_full_or_paused() {
+                st.flags.unset_all_read_flags();
                 st.read_task.wake();
-                if ready {
-                    Poll::Ready(Ok(Some(())))
-                } else {
-                    Poll::Pending
-                }
-            } else if ready {
-                st.flags.unset_read_buf_ready();
+                st.dispatch_task.register(cx.waker());
+                Poll::Pending
+            } else if st.flags.is_read_ready() {
                 Poll::Ready(Ok(Some(())))
             } else {
+                st.read_task.wake();
+                st.dispatch_task.register(cx.waker());
                 Poll::Pending
             }
         }
@@ -536,6 +533,8 @@ impl<F> Io<F> {
     where
         U: Decoder,
     {
+        self.st().flags.unset_read_ready();
+
         let decoded = self
             .decode_item(codec)
             .map_err(|err| RecvError::Decoder(err))?;
@@ -581,19 +580,19 @@ impl<F> Io<F> {
         let len = st.buffer.write_destination_size();
         if len > 0 {
             if full {
-                st.dispatch_task.register(cx.waker());
                 return if st.flags.is_stopped() {
                     Poll::Ready(Err(st.error_or_disconnected()))
                 } else {
-                    st.flags.set_wants_flush();
+                    st.dispatch_task.register(cx.waker());
+                    st.flags.set_wants_write_flush();
                     Poll::Pending
                 };
             } else if len >= st.write_buf().half {
-                st.flags.set_wr_backpressure();
-                st.dispatch_task.register(cx.waker());
                 return if st.flags.is_stopped() {
                     Poll::Ready(Err(st.error_or_disconnected()))
                 } else {
+                    st.flags.set_wr_backpressure();
+                    st.dispatch_task.register(cx.waker());
                     Poll::Pending
                 };
             }
@@ -601,7 +600,7 @@ impl<F> Io<F> {
         if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            st.flags.unset_flush_and_backpressure();
+            st.flags.unset_wr_backpressure1();
             Poll::Ready(Ok(()))
         }
     }
