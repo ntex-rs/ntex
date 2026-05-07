@@ -147,9 +147,11 @@ impl IoRef {
     where
         U: Decoder,
     {
-        self.0
-            .buffer
-            .with_read_destination(self, |buf| codec.decode(buf))
+        self.0.buffer.with_read_destination(self, |buf| {
+            let res = codec.decode(buf);
+            self.update_read_destination(buf);
+            res
+        })
     }
 
     /// Attempts to decode a frame from the read buffer
@@ -162,11 +164,13 @@ impl IoRef {
     {
         self.0.buffer.with_read_destination(self, |buf| {
             let len = buf.len();
-            codec.decode(buf).map(|item| Decoded {
+            let res = codec.decode(buf).map(|item| Decoded {
                 item,
                 remains: buf.len(),
                 consumed: len - buf.len(),
-            })
+            });
+            self.update_read_destination(buf);
+            res
         })
     }
 
@@ -216,7 +220,11 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.0.buffer.with_read_destination(self, f)
+        self.0.buffer.with_read_destination(self, |buf| {
+            let res = f(buf);
+            self.update_read_destination(buf);
+            res
+        })
     }
 
     /// Get mut access to source write buffer
@@ -272,6 +280,17 @@ impl IoRef {
                 }
             }
             res
+        }
+    }
+
+    fn update_read_destination(&self, buf: &mut BytesMut) {
+        let st = &self.0;
+        let half = self.cfg().read_buf().half;
+
+        if st.flags.is_rd_backpressure() && buf.len() <= half {
+            st.flags.unset_all_read_flags();
+        } else {
+            st.flags.unset_read_ready();
         }
     }
 
@@ -439,27 +458,6 @@ mod tests {
         state.force_close();
         assert!(state.flags().is_stopped());
         assert!(state.flags().is_stopping());
-    }
-
-    #[ntex::test]
-    async fn read_readiness() {
-        let (client, server) = IoTest::create();
-        client.remote_buffer_cap(1024);
-
-        let io = Io::from(server);
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
-
-        client.write(TEXT);
-        assert_eq!(io.read_ready().await.unwrap(), Some(()));
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
-
-        let item = io.with_read_buf(BytesMut::take);
-        assert_eq!(item, Bytes::from_static(BIN));
-
-        client.write(TEXT);
-        sleep(Millis(50)).await;
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
     }
 
     #[ntex::test]

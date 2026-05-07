@@ -1,5 +1,9 @@
 # Changes
 
+## [3.8.x] - 2026-05-xx
+
+* Allow to configure MAX_HEADERS/MAX_BUFFER_SIZE #611
+
 ## [3.8.0] - 2026-05-03
 
 * Enable vectored writes for tokio runtime

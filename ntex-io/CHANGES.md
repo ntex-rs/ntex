@@ -1,5 +1,11 @@
 # Changes
 
+## [3.10.2] - 2026-05-07
+
+* Cleanup read readiness process
+
+* Fix .poll_status_update() registration
+
 ## [3.10.1] - 2026-05-05
 
 * Rename IoRef::write() to IoRef::send_buf()

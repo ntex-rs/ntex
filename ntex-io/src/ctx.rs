@@ -71,7 +71,7 @@ impl IoContext {
             if st.flags.is_write_paused() {
                 return Poll::Ready(());
             }
-            st.flags.set_task_waiting_for_write();
+            st.flags.set_write_notify();
             st.write_task.register(cx.waker());
             Poll::Pending
         } else if !st.flags.is_closed() {
@@ -86,7 +86,7 @@ impl IoContext {
     pub fn get_read_buf(&self) -> Buffer {
         let st = &self.0.0;
 
-        let buf = if st.flags.is_read_buf_ready() {
+        let buf = if st.flags.is_read_ready() {
             // read buffer is still not read by dispatcher
             // we cannot touch it
             st.read_buf().get()
@@ -111,7 +111,6 @@ impl IoContext {
         result: Poll<Result<(), Option<io::Error>>>,
     ) -> IoTaskStatus {
         let st = &self.0.0;
-        let hw = self.0.cfg().read_buf().high;
         let nbytes = buffer.has_newbytes();
         let read_buf = st.buffer.read_destination_size();
 
@@ -121,6 +120,7 @@ impl IoContext {
             // handle buffer changes
             match st.buffer.process_read_buf(&self.0, buffer.buf) {
                 Ok(()) => {
+                    let hw = self.0.cfg().read_buf().high;
                     let buf_size = st.buffer.read_destination_size();
 
                     if buf_size > read_buf {
@@ -149,9 +149,9 @@ impl IoContext {
                             // so we need to wake up read task to read more data
                             // otherwise read task would sleep forever
                             full = true;
-                            st.flags.unset_read_buf_ready();
+                            st.flags.unset_read_ready();
                         }
-                        if st.flags.is_waiting_for_read() {
+                        if st.flags.is_read_notify() {
                             // in case of "notify" we must wake up dispatch task
                             // if we read any data from source
                             st.dispatch_task.wake();
@@ -228,37 +228,36 @@ impl IoContext {
 
         match result {
             Poll::Pending => {
-                let len = st.buffer.write_destination_size();
+                let len = st.buffer.write_buffer_size();
 
-                // check write backpressure
+                // write backpressure is enabled and write buf smaller than half
                 if st.flags.is_wr_backpressure() && len < st.write_buf().half {
-                    st.flags.unset_wr_backpressure();
                     st.dispatch_task.wake();
                 }
                 IoTaskStatus::Pause
             }
             Poll::Ready(Ok(())) => {
-                let len = st.buffer.write_destination_size();
+                let len = st.buffer.write_buffer_size();
 
-                // check write backpressure
-                if st.flags.is_wr_backpressure() && len < st.write_buf().half {
-                    st.flags.unset_wr_backpressure();
+                // write backpressure is enabled and write buf smaller than half
+                let can_disable_wr_backpressure =
+                    st.flags.is_wr_backpressure() && len < st.write_buf().half;
+                // write flush is enabled, and write buffer is fully written
+                let can_disable_flush = st.flags.is_write_flush() && len == 0;
+
+                if can_disable_wr_backpressure || can_disable_flush {
                     st.dispatch_task.wake();
                 }
 
-                if st.flags.is_task_waiting_for_write() {
-                    st.flags.set_task_waiting_for_write_is_done();
+                // write task
+                if st.flags.is_write_notify() {
+                    st.flags.unset_write_notify();
                     st.write_task.wake();
-                }
-
-                if st.flags.is_waiting_for_write() {
-                    st.flags.unset_flush_and_backpressure();
-                    st.dispatch_task.wake();
                 }
 
                 if self.is_stopped() {
                     IoTaskStatus::Stop
-                } else if len == 0 && st.buffer.write_source_size() == 0 {
+                } else if len == 0 {
                     // all data has been written
                     st.flags.set_write_paused();
                     IoTaskStatus::Pause
@@ -285,7 +284,7 @@ impl IoContext {
                 Ok(Poll::Pending) => {
                     // check read buffer, if buffer is not consumed it is unlikely
                     // that filter will properly complete shutdown
-                    if st.flags.is_read_paused() || st.flags.is_read_buf_ready_and_full() {
+                    if st.flags.is_read_paused() || st.flags.is_read_full_and_ready() {
                         st.io_stopping();
                     } else {
                         // filter shutdown timeout

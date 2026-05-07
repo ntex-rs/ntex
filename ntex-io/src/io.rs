@@ -462,21 +462,24 @@ impl<F> Io<F> {
         if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            st.dispatch_task.register(cx.waker());
+            let ready = st.flags.is_read_ready();
 
-            let ready = st.flags.is_read_buf_ready();
-            if st.flags.is_read_paused_or_buf_full() {
-                st.flags.unset_read_flags();
+            // If the dispatcher requests more data but no read occurs,
+            // restart the read task.
+            if st.flags.is_read_full_or_paused() {
+                st.flags.unset_all_read_flags();
                 st.read_task.wake();
                 if ready {
                     Poll::Ready(Ok(Some(())))
                 } else {
+                    st.dispatch_task.register(cx.waker());
                     Poll::Pending
                 }
             } else if ready {
-                st.flags.unset_read_buf_ready();
                 Poll::Ready(Ok(Some(())))
             } else {
+                st.read_task.wake();
+                st.dispatch_task.register(cx.waker());
                 Poll::Pending
             }
         }
@@ -536,6 +539,8 @@ impl<F> Io<F> {
     where
         U: Decoder,
     {
+        self.st().flags.unset_read_ready();
+
         let decoded = self
             .decode_item(codec)
             .map_err(|err| RecvError::Decoder(err))?;
@@ -578,22 +583,22 @@ impl<F> Io<F> {
         let st = self.st();
         st.buffer.process_write_buf_force(self)?;
 
-        let len = st.buffer.write_destination_size();
+        let len = st.buffer.write_buffer_size();
         if len > 0 {
             if full {
-                st.dispatch_task.register(cx.waker());
                 return if st.flags.is_stopped() {
                     Poll::Ready(Err(st.error_or_disconnected()))
                 } else {
-                    st.flags.set_wants_flush();
+                    st.dispatch_task.register(cx.waker());
+                    st.flags.set_wants_write_flush();
                     Poll::Pending
                 };
             } else if len >= st.write_buf().half {
-                st.flags.set_wr_backpressure();
-                st.dispatch_task.register(cx.waker());
                 return if st.flags.is_stopped() {
                     Poll::Ready(Err(st.error_or_disconnected()))
                 } else {
+                    st.flags.set_wr_backpressure();
+                    st.dispatch_task.register(cx.waker());
                     Poll::Pending
                 };
             }
@@ -601,7 +606,7 @@ impl<F> Io<F> {
         if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            st.flags.unset_flush_and_backpressure();
+            st.flags.unset_wr_backpressure();
             Poll::Ready(Ok(()))
         }
     }
@@ -635,25 +640,25 @@ impl<F> Io<F> {
     /// Returns status updates
     pub fn poll_read_pause(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         self.pause();
-        let result = self.poll_status_update(cx);
-        if !result.is_pending() {
-            self.st().dispatch_task.register(cx.waker());
-        }
-        result
+        self.poll_status_update(cx)
     }
 
     #[inline]
     /// Wait for status updates
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let st = self.st();
+        st.dispatch_task.register(cx.waker());
         if st.flags.is_closed() {
             Poll::Ready(IoStatusUpdate::PeerGone(st.error()))
         } else if st.flags.check_dispatcher_timeout() {
             Poll::Ready(IoStatusUpdate::KeepAlive)
         } else if st.flags.is_wr_backpressure() {
+            // write backpressure is enabled and write buf smaller than half
+            if st.buffer.write_buffer_size() < st.write_buf().half {
+                st.flags.unset_wr_backpressure();
+            }
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
-            st.dispatch_task.register(cx.waker());
             Poll::Pending
         }
     }
@@ -793,14 +798,16 @@ impl Future for OnDisconnect {
 
 #[cfg(test)]
 mod tests {
-    use ntex_bytes::Bytes;
+    use ntex_bytes::{Bytes, BytesMut};
     use ntex_codec::BytesCodec;
+    use ntex_util::{future::lazy, time::Millis, time::sleep};
 
     use super::*;
     use crate::testing::IoTest;
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
+    const BIN2: &[u8] = b"12345678901234561234567890123456";
 
     #[ntex::test]
     async fn test_basics() {
@@ -844,5 +851,89 @@ mod tests {
             .unwrap();
         let item = client.read_any();
         assert_eq!(item, TEXT);
+    }
+
+    #[ntex::test]
+    async fn read_readiness() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let io = Io::from(server);
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+
+        client.write(TEXT);
+        assert_eq!(io.read_ready().await.unwrap(), Some(()));
+        assert!(matches!(
+            lazy(|cx| io.poll_read_ready(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
+
+        let item = io.with_read_buf(BytesMut::take);
+        assert_eq!(item, Bytes::from_static(BIN));
+
+        client.write(TEXT);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
+    }
+
+    #[ntex::test]
+    async fn read_backpressure() {
+        let (client, server) = IoTest::create();
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+        );
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+
+        client.write(BIN2);
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_ready());
+        assert!(io.flags().is_rd_backpressure());
+        let _item = io.recv(&BytesCodec).await.ok().unwrap().unwrap();
+        assert!(!io.flags().is_read_ready());
+        assert!(!io.flags().is_rd_backpressure());
+
+        client.write(BIN2);
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_ready());
+        assert!(io.flags().is_rd_backpressure());
+        assert_eq!(io.read_ready().await.unwrap(), Some(()));
+    }
+
+    #[ntex::test]
+    async fn write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16, 8, 12)),
+        );
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+        assert!(io.flags().is_write_paused());
+        assert!(!io.flags().is_wr_backpressure());
+
+        io.encode_slice(BIN2).unwrap();
+        assert!(!io.flags().is_write_paused());
+        assert!(io.flags().is_wr_backpressure());
+
+        client.remote_buffer_cap(1024);
+        let item = client.read().await.unwrap();
+        assert_eq!(item, BIN2);
+        assert!(io.flags().is_wr_backpressure());
+        assert!(matches!(
+            lazy(|cx| io.poll_status_update(cx)).await,
+            Poll::Ready(IoStatusUpdate::WriteBackpressure)
+        ));
+        assert!(!io.flags().is_wr_backpressure());
+        assert!(matches!(
+            lazy(|cx| io.poll_flush(cx, false)).await,
+            Poll::Ready(Ok(()))
+        ));
+        assert!(!io.flags().is_wr_backpressure());
     }
 }

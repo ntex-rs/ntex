@@ -25,23 +25,22 @@ bitflags::bitflags! {
         /// read buffer is full
         const BUF_R_FULL          = 0b0000_0000_1000_0000;
 
-        /// wait while write task flushes buf
-        const BUF_W_MUST_FLUSH    = 0b0000_0001_0000_0000;
-        /// write buffer is full
-        const BUF_W_BACKPRESSURE  = 0b0000_0010_0000_0000;
-
+        /// flush write buf
+        const WR_FLUSH            = 0b0000_0001_0000_0000;
         /// write task paused
-        const WR_PAUSED           = 0b0000_0100_0000_0000;
-        /// wait for write completion task
-        const WR_TASK_WAIT        = 0b0000_1000_0000_0000;
+        const WR_PAUSED           = 0b0000_0010_0000_0000;
+        /// write any data and notify dispatcher
+        const WR_NOTIFY           = 0b0000_0100_0000_0000;
 
         /// timeout occurred
-        const DSP_TIMEOUT         = 0b0010_0000_0000_0000;
+        const DSP_TIMEOUT         = 0b0000_1000_0000_0000;
+        /// write buffer is full
+        const DSP_W_BACKPRESSURE  = 0b0001_0000_0000_0000;
 
         /// handle is set
-        const HANDLE              = 0b0100_0000_0000_0000;
+        const HANDLE              = 0b0010_0000_0000_0000;
         /// early write
-        const UPFRONT_WRITE       = 0b1000_0000_0000_0000;
+        const UPFRONT_WRITE       = 0b0100_0000_0000_0000;
     }
 }
 
@@ -112,12 +111,12 @@ impl Flags {
         self.contains(FlagsKind::IO_STOPPING_FILTERS)
     }
 
-    pub(crate) fn is_task_waiting_for_write(&self) -> bool {
-        self.contains(FlagsKind::WR_TASK_WAIT)
+    pub(crate) fn is_write_notify(&self) -> bool {
+        self.contains(FlagsKind::WR_NOTIFY)
     }
 
-    pub(crate) fn is_waiting_for_write(&self) -> bool {
-        self.intersects(FlagsKind::BUF_W_MUST_FLUSH | FlagsKind::BUF_W_BACKPRESSURE)
+    pub(crate) fn is_write_flush(&self) -> bool {
+        self.intersects(FlagsKind::WR_FLUSH)
     }
 
     pub(crate) fn is_wants_write(&self) -> bool {
@@ -142,24 +141,28 @@ impl Flags {
         self.contains(FlagsKind::WR_PAUSED)
     }
 
-    pub(crate) fn is_read_buf_ready(&self) -> bool {
+    pub(crate) fn is_read_ready(&self) -> bool {
         self.contains(FlagsKind::BUF_R_READY)
     }
 
-    pub(crate) fn is_read_buf_ready_and_full(&self) -> bool {
-        self.contains(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL)
-    }
-
-    pub(crate) fn is_waiting_for_read(&self) -> bool {
+    pub(crate) fn is_read_notify(&self) -> bool {
         self.contains(FlagsKind::RD_NOTIFY)
     }
 
-    pub(crate) fn is_wr_backpressure(&self) -> bool {
-        self.contains(FlagsKind::BUF_W_BACKPRESSURE)
+    pub(crate) fn is_rd_backpressure(&self) -> bool {
+        self.contains(FlagsKind::BUF_R_FULL)
     }
 
-    pub(crate) fn is_read_paused_or_buf_full(&self) -> bool {
+    pub(crate) fn is_wr_backpressure(&self) -> bool {
+        self.contains(FlagsKind::DSP_W_BACKPRESSURE)
+    }
+
+    pub(crate) fn is_read_full_or_paused(&self) -> bool {
         self.intersects(FlagsKind::RD_PAUSED | FlagsKind::BUF_R_FULL)
+    }
+
+    pub(crate) fn is_read_full_and_ready(&self) -> bool {
+        self.contains(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL)
     }
 
     pub(crate) fn set_read_paused(&self) {
@@ -174,16 +177,12 @@ impl Flags {
         self.insert(FlagsKind::HANDLE);
     }
 
-    pub(crate) fn set_task_waiting_for_write(&self) {
-        self.insert(FlagsKind::WR_TASK_WAIT);
-    }
-
-    pub(crate) fn set_task_waiting_for_write_is_done(&self) {
-        self.remove(FlagsKind::WR_TASK_WAIT);
+    pub(crate) fn set_write_notify(&self) {
+        self.insert(FlagsKind::WR_NOTIFY);
     }
 
     pub(crate) fn set_wr_backpressure(&self) {
-        self.insert(FlagsKind::BUF_W_BACKPRESSURE);
+        self.insert(FlagsKind::DSP_W_BACKPRESSURE);
     }
 
     pub(crate) fn set_filter_stopping(&self) {
@@ -196,16 +195,16 @@ impl Flags {
         );
     }
 
-    pub(crate) fn set_wants_flush(&self) {
-        self.insert(FlagsKind::BUF_W_MUST_FLUSH);
-    }
-
     pub(crate) fn set_read_notify(&self) {
         self.insert(FlagsKind::RD_NOTIFY);
     }
 
     pub(crate) fn set_wants_write(&self) {
         self.insert(FlagsKind::IO_WANTS_WRITE);
+    }
+
+    pub(crate) fn set_wants_write_flush(&self) {
+        self.insert(FlagsKind::WR_FLUSH);
     }
 
     pub(crate) fn set_rd_buf_ready(&self) {
@@ -224,23 +223,23 @@ impl Flags {
         self.remove(FlagsKind::WR_PAUSED);
     }
 
+    pub(crate) fn unset_write_notify(&self) {
+        self.remove(FlagsKind::WR_NOTIFY);
+    }
+
     pub(crate) fn unset_wants_write(&self) {
         self.remove(FlagsKind::IO_WANTS_WRITE);
     }
 
     pub(crate) fn unset_wr_backpressure(&self) {
-        self.remove(FlagsKind::BUF_W_BACKPRESSURE);
+        self.remove(FlagsKind::DSP_W_BACKPRESSURE);
     }
 
-    pub(crate) fn unset_flush_and_backpressure(&self) {
-        self.remove(FlagsKind::BUF_W_MUST_FLUSH | FlagsKind::BUF_W_BACKPRESSURE);
-    }
-
-    pub(crate) fn unset_read_flags(&self) {
+    pub(crate) fn unset_all_read_flags(&self) {
         self.remove(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL | FlagsKind::RD_PAUSED);
     }
 
-    pub(crate) fn unset_read_buf_ready(&self) {
+    pub(crate) fn unset_read_ready(&self) {
         self.remove(FlagsKind::BUF_R_READY);
     }
 

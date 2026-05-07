@@ -71,7 +71,8 @@ impl Filter for Base {
 
             if st.flags.is_stopping_filters() {
                 Poll::Ready(Readiness::Ready)
-            } else if st.flags.is_read_paused_or_buf_full() {
+            } else if st.flags.is_read_full_or_paused() {
+                // read buffer is fulled of is not processed by dispatcher yet
                 Poll::Pending
             } else {
                 Poll::Ready(Readiness::Ready)
