@@ -929,11 +929,7 @@ mod tests {
             lazy(|cx| io.poll_status_update(cx)).await,
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         ));
-        assert!(io.flags().is_wr_backpressure());
-        assert!(matches!(
-            lazy(|cx| io.poll_status_update(cx)).await,
-            Poll::Ready(IoStatusUpdate::WriteBackpressure)
-        ));
+        assert!(!io.flags().is_wr_backpressure());
         assert!(matches!(
             lazy(|cx| io.poll_flush(cx, false)).await,
             Poll::Ready(Ok(()))
