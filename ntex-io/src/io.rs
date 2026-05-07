@@ -583,7 +583,7 @@ impl<F> Io<F> {
         let st = self.st();
         st.buffer.process_write_buf_force(self)?;
 
-        let len = st.buffer.write_destination_size();
+        let len = st.buffer.write_buffer_size();
         if len > 0 {
             if full {
                 return if st.flags.is_stopped() {
@@ -653,6 +653,10 @@ impl<F> Io<F> {
         } else if st.flags.check_dispatcher_timeout() {
             Poll::Ready(IoStatusUpdate::KeepAlive)
         } else if st.flags.is_wr_backpressure() {
+            // write backpressure is enabled and write buf smaller than half
+            if st.buffer.write_buffer_size() < st.write_buf().half {
+                st.flags.unset_wr_backpressure();
+            }
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
             Poll::Pending
@@ -898,5 +902,42 @@ mod tests {
         assert!(io.flags().is_read_ready());
         assert!(io.flags().is_rd_backpressure());
         assert_eq!(io.read_ready().await.unwrap(), Some(()));
+    }
+
+    #[ntex::test]
+    async fn write_backpressure() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(16, 8, 12)),
+        );
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+        assert!(io.flags().is_write_paused());
+        assert!(!io.flags().is_wr_backpressure());
+
+        io.encode_slice(BIN2).unwrap();
+        assert!(!io.flags().is_write_paused());
+        assert!(io.flags().is_wr_backpressure());
+
+        client.remote_buffer_cap(1024);
+        let item = client.read().await.unwrap();
+        assert_eq!(item, BIN2);
+        assert!(io.flags().is_wr_backpressure());
+        assert!(matches!(
+            lazy(|cx| io.poll_status_update(cx)).await,
+            Poll::Ready(IoStatusUpdate::WriteBackpressure)
+        ));
+        assert!(io.flags().is_wr_backpressure());
+        assert!(matches!(
+            lazy(|cx| io.poll_status_update(cx)).await,
+            Poll::Ready(IoStatusUpdate::WriteBackpressure)
+        ));
+        assert!(matches!(
+            lazy(|cx| io.poll_flush(cx, false)).await,
+            Poll::Ready(Ok(()))
+        ));
+        assert!(!io.flags().is_wr_backpressure());
     }
 }

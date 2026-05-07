@@ -228,7 +228,7 @@ impl IoContext {
 
         match result {
             Poll::Pending => {
-                let len = st.buffer.write_destination_size();
+                let len = st.buffer.write_buffer_size();
 
                 // write backpressure is enabled and write buf smaller than half
                 if st.flags.is_wr_backpressure() && len < st.write_buf().half {
@@ -237,7 +237,7 @@ impl IoContext {
                 IoTaskStatus::Pause
             }
             Poll::Ready(Ok(())) => {
-                let len = st.buffer.write_destination_size();
+                let len = st.buffer.write_buffer_size();
 
                 // write backpressure is enabled and write buf smaller than half
                 let can_disable_wr_backpressure =
@@ -257,7 +257,7 @@ impl IoContext {
 
                 if self.is_stopped() {
                     IoTaskStatus::Stop
-                } else if len == 0 && st.buffer.write_source_size() == 0 {
+                } else if len == 0 {
                     // all data has been written
                     st.flags.set_write_paused();
                     IoTaskStatus::Pause

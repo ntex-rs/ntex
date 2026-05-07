@@ -122,6 +122,17 @@ impl Stack {
         })
     }
 
+    pub(crate) fn write_buffer_size(&self) -> usize {
+        self.with_buffers(|buffers| {
+            // check size for first level because delayed filter processing
+            if buffers.len() == 2 {
+                buffers[0].write.len()
+            } else {
+                buffers[0].write.len() + buffers[buffers.len() - 2].write.len()
+            }
+        })
+    }
+
     pub(crate) fn with_write_source<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -138,14 +149,6 @@ impl Stack {
 
     pub(crate) fn read_destination_size(&self) -> usize {
         self.with_first_level(|buf| buf.read.as_ref().map_or(0, BytesMut::len))
-    }
-
-    pub(crate) fn write_source_size(&self) -> usize {
-        self.with_first_level(|buf| buf.write.len())
-    }
-
-    pub(crate) fn write_destination_size(&self) -> usize {
-        self.with_last_level(|buf| buf.write.len())
     }
 
     pub(crate) fn with_filter<F, R>(&self, io: &IoRef, f: F) -> R
