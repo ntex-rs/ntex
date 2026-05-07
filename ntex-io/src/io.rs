@@ -173,12 +173,7 @@ impl Io {
     pub fn new<I: IoStream, T: Into<SharedCfg>>(io: I, cfg: T) -> Self {
         let cfg = cfg.into().get::<IoConfig>();
         let size = cfg.write_page_size();
-
-        let flags = if cfg.write_buf_limit() > 0 {
-            Flags::new_with_upfront_write()
-        } else {
-            Flags::new()
-        };
+        let flags = Flags::new(cfg.write_buf_limit() > 0);
 
         let inner = Rc::new(IoState {
             cfg,
@@ -916,6 +911,7 @@ mod tests {
         assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
         assert!(io.flags().is_write_paused());
         assert!(!io.flags().is_wr_backpressure());
+        assert!(!io.is_wr_backpressure());
 
         io.encode_slice(BIN2).unwrap();
         assert!(!io.flags().is_write_paused());

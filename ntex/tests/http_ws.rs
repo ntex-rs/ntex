@@ -89,6 +89,7 @@ async fn test_simple() {
                 HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::NotFound()))
                     .control(move |req: h1::Control<_, _>| {
                         let ack = if let h1::Control::Upgrade(upg) = req {
+                            assert!(format!("{upg:?}").contains("Upgrade"));
                             let ws_service = ws_service.clone();
                             upg.handle(|req, io, codec| async move {
                                 ws_service.call((req, io, codec)).await
