@@ -1,6 +1,6 @@
 # Changes
 
-## [3.8.x] - 2026-05-xx
+## [3.9.0] - 2026-05-07
 
 * Allow to configure MAX_HEADERS/MAX_BUFFER_SIZE #611
 

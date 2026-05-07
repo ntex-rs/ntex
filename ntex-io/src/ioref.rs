@@ -458,6 +458,10 @@ mod tests {
         state.force_close();
         assert!(state.flags().is_stopped());
         assert!(state.flags().is_stopping());
+
+        assert!(!state.flags().is_wants_write());
+        state.wants_write();
+        assert!(state.flags().is_wants_write());
     }
 
     #[ntex::test]
@@ -504,6 +508,7 @@ mod tests {
 
         assert!(state.is_closed());
         assert!(state.encode_slice(TEXT.as_bytes()).is_err());
+        assert!(state.encode_bytes(Bytes::from_static(BIN)).is_err());
         assert!(
             state
                 .with_write_buf(|buf| buf.extend_from_slice(BIN))
@@ -556,14 +561,16 @@ mod tests {
         let write_order = Rc::new(RefCell::new(Vec::new()));
 
         let (client, server) = IoTest::create();
-        let io = Io::from(server).map_filter(|layer| Counter {
-            layer,
-            idx: 1,
-            in_bytes: in_bytes.clone(),
-            out_bytes: out_bytes.clone(),
-            read_order: read_order.clone(),
-            write_order: write_order.clone(),
-        });
+        let io = Io::from(server)
+            .map_filter(|layer| Counter {
+                layer,
+                idx: 1,
+                in_bytes: in_bytes.clone(),
+                out_bytes: out_bytes.clone(),
+                read_order: read_order.clone(),
+                write_order: write_order.clone(),
+            })
+            .seal();
 
         client.remote_buffer_cap(1024);
         client.write(TEXT);

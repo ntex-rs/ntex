@@ -51,12 +51,12 @@ impl Clone for Flags {
 }
 
 impl Flags {
-    pub(crate) fn new() -> Self {
-        Self(Cell::new(FlagsKind::WR_PAUSED))
-    }
-
-    pub(crate) fn new_with_upfront_write() -> Self {
-        Self(Cell::new(FlagsKind::WR_PAUSED | FlagsKind::UPFRONT_WRITE))
+    pub(crate) fn new(upfront_write: bool) -> Self {
+        if upfront_write {
+            Self(Cell::new(FlagsKind::WR_PAUSED | FlagsKind::UPFRONT_WRITE))
+        } else {
+            Self(Cell::new(FlagsKind::WR_PAUSED))
+        }
     }
 
     pub(crate) fn new_stopped() -> Self {
