@@ -56,7 +56,7 @@ impl ClientCodec {
         };
         ClientCodec {
             inner: ClientCodecInner {
-                decoder: decoder::MessageDecoder::default(),
+                decoder: decoder::MessageDecoder::new(96, 64 * 1024),
                 payload: RefCell::new(None),
                 version: Cell::new(Version::HTTP_11),
                 ctype: Cell::new(ConnectionType::Close),

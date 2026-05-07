@@ -42,6 +42,8 @@ impl From<Option<usize>> for KeepAlive {
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
+    pub(super) max_headers: usize,
+    pub(super) max_buf_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
 
@@ -89,9 +91,35 @@ impl HttpServiceConfig {
                 timeout: client_timeout,
                 max_timeout: client_timeout + Seconds(15),
             }),
+            max_headers: 96,
+            max_buf_size: 64 * 1024,
             payload_read_rate: None,
             config: CfgContext::default(),
         }
+    }
+
+    #[must_use]
+    /// Set the maximum number of headers.
+    ///
+    /// When a request is received, the parser will reserve a buffer
+    /// to store headers for optimal performance.
+    ///
+    /// If server receives more headers than the buffer size, it responds
+    /// to the client with “431 Request Header Fields Too Large”.
+    ///
+    /// Default is set to 96
+    pub fn set_max_headers(mut self, val: usize) -> Self {
+        self.max_headers = val;
+        self
+    }
+
+    #[must_use]
+    /// Set the maximum buffer size for parsing http message.
+    ///
+    /// Default is 64kb
+    pub fn set_max_buf_size(mut self, val: usize) -> Self {
+        self.max_buf_size = val;
+        self
     }
 
     #[must_use]
@@ -204,8 +232,6 @@ impl HttpServiceConfig {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
-        /// Keep-alive enabled
-        const KA_ENABLED = 0b0000_0001;
         /// Shutdown service
         const SHUTDOWN   = 0b0000_0010;
     }
@@ -225,11 +251,7 @@ impl<S, C> DispatcherConfig<S, C> {
             idx: Cell::new(0),
             service: service.into(),
             control: control.into(),
-            flags: Cell::new(if config.ka_enabled {
-                Flags::KA_ENABLED
-            } else {
-                Flags::empty()
-            }),
+            flags: Cell::new(Flags::empty()),
             config,
         }
     }
@@ -248,7 +270,7 @@ impl<S, C> DispatcherConfig<S, C> {
 
     /// Return state of connection keep-alive functionality
     pub(super) fn keep_alive_enabled(&self) -> bool {
-        self.flags.get().contains(Flags::KA_ENABLED)
+        self.config.ka_enabled
     }
 
     pub(super) fn headers_read_rate(&self) -> Option<&FrameReadRate> {

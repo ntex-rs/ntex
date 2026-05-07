@@ -97,6 +97,9 @@ pub enum DecodeError {
     /// An invalid `Header`.
     #[error("Invalid Header provided")]
     Header,
+    /// Maximum number of headers are received.
+    #[error("Maximum number of headers are received")]
+    MaxHeaders,
     /// A message head is too large to be reasonable.
     #[error("Message head is too large")]
     TooLarge(usize),
@@ -126,16 +129,16 @@ impl From<FromUtf8Error> for DecodeError {
     }
 }
 
-impl From<httparse::Error> for DecodeError {
-    fn from(err: httparse::Error) -> DecodeError {
+impl From<ntex_httparse::Error> for DecodeError {
+    fn from(err: ntex_httparse::Error) -> DecodeError {
         match err {
-            httparse::Error::HeaderName
-            | httparse::Error::HeaderValue
-            | httparse::Error::NewLine
-            | httparse::Error::Token => DecodeError::Header,
-            httparse::Error::Status => DecodeError::Status,
-            httparse::Error::TooManyHeaders => DecodeError::TooLarge(0),
-            httparse::Error::Version => DecodeError::Version,
+            ntex_httparse::Error::HeaderName
+            | ntex_httparse::Error::HeaderValue
+            | ntex_httparse::Error::NewLine
+            | ntex_httparse::Error::Token => DecodeError::Header,
+            ntex_httparse::Error::Status => DecodeError::Status,
+            ntex_httparse::Error::TooManyHeaders => DecodeError::TooLarge(0),
+            ntex_httparse::Error::Version => DecodeError::Version,
         }
     }
 }
@@ -331,13 +334,13 @@ mod tests {
 
     #[test]
     fn test_from() {
-        from!(httparse::Error::HeaderName => DecodeError::Header);
-        from!(httparse::Error::HeaderName => DecodeError::Header);
-        from!(httparse::Error::HeaderValue => DecodeError::Header);
-        from!(httparse::Error::NewLine => DecodeError::Header);
-        from!(httparse::Error::Status => DecodeError::Status);
-        from!(httparse::Error::Token => DecodeError::Header);
-        from!(httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
-        from!(httparse::Error::Version => DecodeError::Version);
+        from!(ntex_httparse::Error::HeaderName => DecodeError::Header);
+        from!(ntex_httparse::Error::HeaderName => DecodeError::Header);
+        from!(ntex_httparse::Error::HeaderValue => DecodeError::Header);
+        from!(ntex_httparse::Error::NewLine => DecodeError::Header);
+        from!(ntex_httparse::Error::Status => DecodeError::Status);
+        from!(ntex_httparse::Error::Token => DecodeError::Header);
+        from!(ntex_httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
+        from!(ntex_httparse::Error::Version => DecodeError::Version);
     }
 }

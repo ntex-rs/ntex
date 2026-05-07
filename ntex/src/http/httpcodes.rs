@@ -58,8 +58,17 @@ impl Response {
     STATIC_RESP!(UnsupportedMediaType, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     STATIC_RESP!(RangeNotSatisfiable, StatusCode::RANGE_NOT_SATISFIABLE);
     STATIC_RESP!(ExpectationFailed, StatusCode::EXPECTATION_FAILED);
+    STATIC_RESP!(MisdirectedRequest, StatusCode::MISDIRECTED_REQUEST);
     STATIC_RESP!(UnprocessableEntity, StatusCode::UNPROCESSABLE_ENTITY);
+    STATIC_RESP!(Locaked, StatusCode::LOCKED);
+    STATIC_RESP!(FailedDependency, StatusCode::FAILED_DEPENDENCY);
+    STATIC_RESP!(TooEarly, StatusCode::TOO_EARLY);
+    STATIC_RESP!(UpgradeRequired, StatusCode::UPGRADE_REQUIRED);
     STATIC_RESP!(TooManyRequests, StatusCode::TOO_MANY_REQUESTS);
+    STATIC_RESP!(
+        RequestHeaderFieldsTooLarge,
+        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
+    );
 
     STATIC_RESP!(InternalServerError, StatusCode::INTERNAL_SERVER_ERROR);
     STATIC_RESP!(NotImplemented, StatusCode::NOT_IMPLEMENTED);

@@ -91,7 +91,7 @@ where
         io: Io<F>,
         config: Rc<DispatcherConfig<S, C>>,
     ) -> Self {
-        let codec = Codec::new(id, config.keep_alive_enabled(), io.shared().get());
+        let codec = Codec::new(id, &io.shared().get());
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
