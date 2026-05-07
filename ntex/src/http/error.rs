@@ -143,6 +143,20 @@ impl From<ntex_httparse::Error> for DecodeError {
     }
 }
 
+impl From<httparse::Error> for DecodeError {
+    fn from(err: httparse::Error) -> DecodeError {
+        match err {
+            httparse::Error::HeaderName
+            | httparse::Error::HeaderValue
+            | httparse::Error::NewLine
+            | httparse::Error::Token => DecodeError::Header,
+            httparse::Error::Status => DecodeError::Status,
+            httparse::Error::TooManyHeaders => DecodeError::TooLarge(0),
+            httparse::Error::Version => DecodeError::Version,
+        }
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 /// A set of errors that can occur during payload parsing
 pub enum PayloadError {

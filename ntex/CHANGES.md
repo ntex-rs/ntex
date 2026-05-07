@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.1] - 2026-05-07
+
+* Fix httparse::Error compat
+
 ## [3.9.0] - 2026-05-07
 
 * Allow to configure MAX_HEADERS/MAX_BUFFER_SIZE #611
