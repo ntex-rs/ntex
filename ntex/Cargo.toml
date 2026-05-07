@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.9.0"
+version = "3.9.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -104,6 +104,7 @@ variadics_please = { workspace = true }
 uuid = { workspace = true }
 
 # http/web framework
+httparse = { workspace = true }
 httpdate = { workspace = true }
 encoding_rs = { workspace = true }
 mime = { workspace = true }
