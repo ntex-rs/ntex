@@ -635,17 +635,14 @@ impl<F> Io<F> {
     /// Returns status updates
     pub fn poll_read_pause(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         self.pause();
-        let result = self.poll_status_update(cx);
-        if !result.is_pending() {
-            self.st().dispatch_task.register(cx.waker());
-        }
-        result
+        self.poll_status_update(cx)
     }
 
     #[inline]
     /// Wait for status updates
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let st = self.st();
+        st.dispatch_task.register(cx.waker());
         if st.flags.is_closed() {
             Poll::Ready(IoStatusUpdate::PeerGone(st.error()))
         } else if st.flags.check_dispatcher_timeout() {
@@ -653,7 +650,6 @@ impl<F> Io<F> {
         } else if st.flags.is_wr_backpressure() {
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
         } else {
-            st.dispatch_task.register(cx.waker());
             Poll::Pending
         }
     }

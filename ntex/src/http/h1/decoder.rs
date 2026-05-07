@@ -11,6 +11,7 @@ use crate::util::{Bytes, BytesMut};
 
 /// Incoming message decoder
 pub(crate) struct MessageDecoder<T: MessageType> {
+    hdrs: Cell<bool>,
     inner: Cell<Option<Box<Inner<T>>>>,
 }
 
@@ -38,6 +39,7 @@ impl<T: MessageType> Default for MessageDecoder<T> {
 impl<T: MessageType> MessageDecoder<T> {
     pub(crate) fn new(max_headers: usize, max_buf_size: usize) -> Self {
         MessageDecoder {
+            hdrs: Cell::new(false),
             inner: Cell::new(Some(Box::new(Inner {
                 st: State::default(),
                 val: None,
@@ -46,12 +48,17 @@ impl<T: MessageType> MessageDecoder<T> {
             }))),
         }
     }
+
+    pub(super) fn is_reading_hdrs(&self) -> bool {
+        self.hdrs.get()
+    }
 }
 
 impl<T: MessageType> Clone for MessageDecoder<T> {
     fn clone(&self) -> Self {
         let inner = self.inner.take().unwrap();
         let val = MessageDecoder {
+            hdrs: Cell::new(false),
             inner: Cell::new(Some(Box::new(Inner {
                 st: State::default(),
                 val: None,
@@ -81,18 +88,19 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
                 )? {
                     Poll::Ready(pl) => {
                         inner.st = State::default();
+                        self.hdrs.set(false);
                         Ok(Some((inner.val.take().unwrap(), pl)))
                     }
                     Poll::Pending => Ok(None),
                 };
-            } else {
-                match T::decode(src, inner.max_buf_size)? {
-                    Poll::Ready(val) => {
-                        inner.st.version = val.msg_version();
-                        inner.val = Some(val);
-                    }
-                    Poll::Pending => break Ok(None),
+            }
+            match T::decode(src, inner.max_buf_size)? {
+                Poll::Ready(val) => {
+                    inner.st.version = val.msg_version();
+                    inner.val = Some(val);
+                    self.hdrs.set(true);
                 }
+                Poll::Pending => break Ok(None),
             }
         };
 
@@ -132,13 +140,20 @@ impl PayloadLength {
     }
 }
 
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+    struct Flags: u8 {
+        const HAS_UPGRADE  = 0b0001;
+        const EXPECT       = 0b0010;
+        const CHUNKED      = 0b0100;
+        const SEEN_TE      = 0b1000;
+    }
+}
+
 #[derive(Default, Debug)]
 pub(crate) struct State {
     ka: Option<ConnectionType>,
-    has_upgrade: bool,
-    expect: bool,
-    chunked: bool,
-    seen_te: bool,
+    flags: Flags,
     content_length: Option<u64>,
     version: Version,
 }
@@ -146,13 +161,13 @@ pub(crate) struct State {
 impl State {
     fn payload_length(&self) -> PayloadLength {
         // https://tools.ietf.org/html/rfc7230#section-3.3.3
-        if self.chunked {
+        if self.flags.contains(Flags::CHUNKED) {
             // Chunked encoding
             PayloadLength::Payload(PayloadType::Payload(PayloadDecoder::chunked()))
         } else if let Some(len) = self.content_length {
             // Content-Length
             PayloadLength::Payload(PayloadType::Payload(PayloadDecoder::length(len)))
-        } else if self.has_upgrade {
+        } else if self.flags.contains(Flags::HAS_UPGRADE) {
             PayloadLength::Upgrade
         } else {
             PayloadLength::None
@@ -182,7 +197,9 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
         value: HeaderValue,
     ) -> Result<(), DecodeError> {
         match name {
-            header::CONTENT_LENGTH if st.content_length.is_some() || st.chunked => {
+            header::CONTENT_LENGTH
+                if st.content_length.is_some() || st.flags.contains(Flags::CHUNKED) =>
+            {
                 log::trace!("multiple Content-Length not allowed");
                 return Err(DecodeError::Header);
             }
@@ -207,15 +224,15 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                 }
             },
             // transfer-encoding
-            header::TRANSFER_ENCODING if st.seen_te => {
+            header::TRANSFER_ENCODING if st.flags.contains(Flags::SEEN_TE) => {
                 log::trace!("Transfer-Encoding header usage is not allowed");
                 return Err(DecodeError::Header);
             }
             header::TRANSFER_ENCODING if st.version == Version::HTTP_11 => {
-                st.seen_te = true;
+                st.flags.insert(Flags::SEEN_TE);
                 if let Ok(s) = value.to_str().map(str::trim) {
                     if s.eq_ignore_ascii_case("chunked") && st.content_length.is_none() {
-                        st.chunked = true;
+                        st.flags.insert(Flags::CHUNKED);
                     } else if s.eq_ignore_ascii_case("identity") {
                         // allow silently since multiple TE headers are already checked
                     } else {
@@ -235,7 +252,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                 };
             }
             header::UPGRADE => {
-                st.has_upgrade = true;
+                st.flags.insert(Flags::HAS_UPGRADE);
                 // check content-length, some clients (dart)
                 // sends "content-length: 0" with websocket upgrade
                 if let Ok(val) = value.to_str().map(str::trim)
@@ -247,7 +264,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
             header::EXPECT => {
                 let bytes = value.as_bytes();
                 if bytes.len() >= 4 && &bytes[0..4] == b"100-" {
-                    st.expect = true;
+                    st.flags.insert(Flags::EXPECT);
                 }
             }
             _ => (),
@@ -268,7 +285,7 @@ impl MessageType for Request {
     }
 
     fn decode(src: &mut BytesMut, max_buf_size: usize) -> Poll<Result<Self, DecodeError>> {
-        match httparse::parse_request(&src)? {
+        match httparse::parse_request(src)? {
             Status::Complete((pos, method, path, version)) => {
                 let method = Method::from_bytes(method.as_bytes())
                     .map_err(|_| DecodeError::Method)?;
@@ -354,7 +371,7 @@ impl MessageType for Request {
         if let Some(ctype) = state.ka {
             self.head_mut().set_connection_type(ctype);
         }
-        if state.expect {
+        if state.flags.contains(Flags::EXPECT) {
             self.head_mut().set_expect();
         }
 
@@ -410,12 +427,12 @@ impl MessageType for ResponseHead {
                 Poll::Ready(Ok(ResponseHead::new(status, version)))
             }
             Status::Partial => {
-                return if src.len() >= max_buf_size {
+                if src.len() >= max_buf_size {
                     log::error!("MAX_BUFFER_SIZE unprocessed data reached, closing");
                     Poll::Ready(Err(DecodeError::TooLarge(src.len())))
                 } else {
                     Poll::Pending
-                };
+                }
             }
         }
     }
@@ -901,6 +918,13 @@ mod tests {
             }
             Ok(_) | Err(_) => unreachable!("Error during parsing http request"),
         }
+
+        let mut buf = BytesMut::from("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
+        let reader = MessageDecoder::<Request>::default();
+        let req = reader.decode(&mut buf).unwrap().unwrap().0;
+        assert_eq!(req.version(), Version::HTTP_11);
+        assert_eq!(*req.method(), Method::GET);
+        assert_eq!(req.path(), "/test");
     }
 
     #[test]

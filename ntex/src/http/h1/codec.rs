@@ -81,6 +81,10 @@ impl Codec {
         }
     }
 
+    pub(super) fn is_reading_hdrs(&self) -> bool {
+        self.decoder.is_reading_hdrs()
+    }
+
     #[inline]
     /// Check if request is upgrade
     pub fn upgrade(&self) -> bool {
