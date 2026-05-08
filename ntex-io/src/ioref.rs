@@ -5,9 +5,9 @@ use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
+use crate::ops::{Id, Iops, TimerHandle};
 use crate::{
-    Decoded, Filter, FilterBuf, Flags, Id, IoConfig, IoContext, IoRef, OnDisconnect, timer,
-    types,
+    Decoded, Filter, FilterBuf, Flags, IoConfig, IoContext, IoRef, OnDisconnect, types,
 };
 
 impl IoRef {
@@ -183,7 +183,7 @@ impl IoRef {
             // write task is not paused, io write is pending
             // need to wake write task for io completeion
             if !self.0.flags.is_write_paused() {
-                timer::Iops::register_send(self.id());
+                Iops::register_send(self.id());
             }
 
             if self.0.flags.is_stopping_any()
@@ -273,7 +273,7 @@ impl IoRef {
                     {
                         wrt = true;
                     } else {
-                        timer::Iops::register_send(st.id());
+                        Iops::register_send(st.id());
                     }
                 }
                 // enable backpressure
@@ -292,7 +292,7 @@ impl IoRef {
                 hnd.write(ctx);
                 st.handle.set(Some(hnd));
                 if !st.flags.is_write_paused() {
-                    timer::Iops::register_send(st.id());
+                    Iops::register_send(st.id());
                 }
             }
             res
@@ -334,20 +334,20 @@ impl IoRef {
     }
 
     /// current timer handle
-    pub fn timer_handle(&self) -> timer::TimerHandle {
+    pub fn timer_handle(&self) -> TimerHandle {
         self.0.timeout.get()
     }
 
     /// Start timer
-    pub fn start_timer(&self, timeout: Seconds) -> timer::TimerHandle {
+    pub fn start_timer(&self, timeout: Seconds) -> TimerHandle {
         let cur_hnd = self.0.timeout.get();
 
         if timeout.is_zero() {
             if cur_hnd.is_set() {
-                self.0.timeout.set(timer::TimerHandle::ZERO);
+                self.0.timeout.set(TimerHandle::ZERO);
                 cur_hnd.unregister(self);
             }
-            timer::TimerHandle::ZERO
+            TimerHandle::ZERO
         } else if cur_hnd.is_set() {
             let hnd = cur_hnd.update(timeout, self);
             if hnd != cur_hnd {
@@ -357,7 +357,7 @@ impl IoRef {
             hnd
         } else {
             log::trace!("{}: Start timer {:?}", self.tag(), timeout);
-            let hnd = timer::TimerHandle::register(timeout, self);
+            let hnd = TimerHandle::register(timeout, self);
             self.0.timeout.set(hnd);
             hnd
         }
@@ -368,7 +368,7 @@ impl IoRef {
         let hnd = self.0.timeout.get();
         if hnd.is_set() {
             log::trace!("{}: Stop timer", self.tag());
-            self.0.timeout.set(timer::TimerHandle::ZERO);
+            self.0.timeout.set(TimerHandle::ZERO);
             hnd.unregister(self);
         }
     }

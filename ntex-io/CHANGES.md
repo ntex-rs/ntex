@@ -1,6 +1,8 @@
 # Changes
 
-## [3.10.3] - 2026-05-0x
+## [3.10.3] - 2026-05-08
+
+* Send bytes for all Io in one task
 
 * Refactor timers management
 

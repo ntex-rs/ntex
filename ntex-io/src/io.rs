@@ -14,8 +14,8 @@ use crate::ctx::IoContext;
 use crate::filter::{Base, Filter, Layer};
 use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
+use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
-use crate::timer::{Id, IoManager, TimerHandle};
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 /// Interface object to underlying io stream
@@ -825,7 +825,7 @@ mod tests {
     use ntex_util::{future::lazy, time::Millis, time::sleep};
 
     use super::*;
-    use crate::{testing::IoTest, timer::Iops};
+    use crate::{ops::Iops, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";

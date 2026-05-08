@@ -23,8 +23,8 @@ mod framed;
 mod io;
 mod ioref;
 mod macros;
+mod ops;
 mod seal;
-mod timer;
 mod utils;
 
 use ntex_codec::Decoder;
@@ -35,8 +35,8 @@ pub use self::ctx::IoContext;
 pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
+pub use self::ops::{Id, TimerHandle};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::timer::{Id, TimerHandle};
 pub use self::utils::{Decoded, seal};
 
 #[doc(hidden)]
