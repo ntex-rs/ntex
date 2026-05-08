@@ -1,5 +1,9 @@
 # Changes
 
+## [3.13.0] - 2026-05-08
+
+* Add with_item() helper method
+
 ## [3.12.1] - 2026-04-02
 
 * Update to ntex-error 2.0

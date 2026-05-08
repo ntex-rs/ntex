@@ -433,3 +433,21 @@ pub fn get_item<T: Clone + 'static>() -> Option<T> {
             .cloned()
     })
 }
+
+/// Get a reference to a type or create new if it doesnt exists
+pub fn with_item<T: Default + 'static, F, R>(f: F) -> R
+where
+    F: FnOnce(&T) -> R,
+{
+    STORAGE.with(move |cell| {
+        let mut st = cell.borrow_mut();
+        if let Some(boxed) = st.get(&TypeId::of::<T>()) {
+            f(boxed.downcast_ref().unwrap())
+        } else {
+            let item = T::default();
+            let result = f(&item);
+            st.insert(TypeId::of::<T>(), Box::new(item));
+            result
+        }
+    })
+}
