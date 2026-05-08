@@ -15,7 +15,7 @@ use crate::filter::{Base, Filter, Layer};
 use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
 use crate::seal::{IoBoxed, Sealed};
-use crate::timer::{self, Id, TimerHandle};
+use crate::timer::{Id, IoManager, TimerHandle};
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 /// Interface object to underlying io stream
@@ -210,7 +210,7 @@ impl Io {
         inner.filter.set(Base::new(IoRef(inner.clone())));
 
         let ioref = IoRef(inner);
-        ioref.0.id.set(timer::register_io(&ioref));
+        ioref.0.id.set(IoManager::register(&ioref));
 
         // start io tasks
         let hnd = io.start(IoContext::new(ioref.clone()));
@@ -730,7 +730,7 @@ impl<F> ops::Deref for Io<F> {
 
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
-        timer::unregister_io(self.io_ref());
+        IoManager::unregister(self.io_ref());
 
         let st = self.st();
         self.stop_timer();
@@ -825,7 +825,7 @@ mod tests {
     use ntex_util::{future::lazy, time::Millis, time::sleep};
 
     use super::*;
-    use crate::testing::IoTest;
+    use crate::{testing::IoTest, timer::Iops};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -941,7 +941,7 @@ mod tests {
         assert!(!io.is_wr_backpressure());
 
         io.encode_slice(BIN2).unwrap();
-        assert!(!io.flags().is_write_paused());
+        assert!(Iops::is_registered(&io));
         assert!(io.flags().is_wr_backpressure());
 
         client.remote_buffer_cap(1024);

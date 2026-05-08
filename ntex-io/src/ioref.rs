@@ -183,7 +183,7 @@ impl IoRef {
             // write task is not paused, io write is pending
             // need to wake write task for io completeion
             if !self.0.flags.is_write_paused() {
-                self.0.write_task.wake();
+                timer::Iops::register_send(self.id());
             }
 
             if self.0.flags.is_stopping_any()
@@ -193,6 +193,29 @@ impl IoRef {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn ops_send_buf(&self) {
+        if self.0.flags.is_write_paused()
+            && let Some(hnd) = self.0.handle.take()
+        {
+            let has_bytes = self.0.buffer.write_buffer_has_bytes();
+            if has_bytes {
+                self.0.flags.unset_write_paused();
+
+                let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
+                hnd.write(ctx);
+                self.0.handle.set(Some(hnd));
+
+                // write task is not paused, io write is pending
+                // need to wake write task for io completeion
+                if !self.0.flags.is_write_paused() {
+                    self.0.write_task.wake();
+                }
+                return;
+            }
+        }
+        self.0.write_task.wake();
     }
 
     /// Get access to filter buffer
@@ -250,9 +273,8 @@ impl IoRef {
                     {
                         wrt = true;
                     } else {
-                        st.write_task.wake();
+                        timer::Iops::register_send(st.id());
                     }
-                    st.flags.unset_write_paused();
                 }
                 // enable backpressure
                 if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
@@ -264,11 +286,13 @@ impl IoRef {
             });
 
             if wrt && let Some(hnd) = st.handle.take() {
+                st.flags.unset_write_paused();
+
                 let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
                 hnd.write(ctx);
                 st.handle.set(Some(hnd));
                 if !st.flags.is_write_paused() {
-                    st.write_task.wake();
+                    timer::Iops::register_send(st.id());
                 }
             }
             res

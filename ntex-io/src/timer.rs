@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation)]
 use std::collections::{BTreeMap, VecDeque};
-use std::{cell::Cell, num::NonZeroUsize, ops, time::Duration, time::Instant};
+use std::{cell::Cell, mem, num::NonZeroUsize, ops, time::Duration, time::Instant};
 
 use ntex_rt::with_item;
 use ntex_util::time::{Seconds, now, sleep};
@@ -26,7 +26,7 @@ impl TimerHandle {
     }
 
     pub fn remains(&self) -> Seconds {
-        Manager::with(|mgr| {
+        IoManager::with(|mgr| {
             let cur = mgr.timers.current;
             if self.0 <= cur {
                 Seconds::ZERO
@@ -38,11 +38,11 @@ impl TimerHandle {
     }
 
     pub fn instant(&self) -> Instant {
-        Manager::with(|mgr| mgr.timers.base + Duration::from_secs(u64::from(self.0)))
+        IoManager::with(|mgr| mgr.timers.base + Duration::from_secs(u64::from(self.0)))
     }
 
     pub(crate) fn update(self, timeout: Seconds, io: &IoRef) -> TimerHandle {
-        Manager::with(|mgr| {
+        IoManager::with(|mgr| {
             let new_hnd = mgr.timers.current + u32::from(timeout.0);
             if self.0 == new_hnd || self.0 == new_hnd + 1 {
                 self
@@ -54,11 +54,11 @@ impl TimerHandle {
     }
 
     pub(crate) fn unregister(self, io: &IoRef) {
-        Manager::with(|manager| manager.timers.unregister(self, io));
+        IoManager::with(|manager| manager.timers.unregister(self, io));
     }
 
     pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
-        Manager::with(move |mgr| mgr.timers.register(timeout, io))
+        IoManager::with(move |mgr| mgr.timers.register(timeout, io))
     }
 }
 
@@ -118,15 +118,16 @@ impl TimerStorage {
     }
 
     fn run_timer(&mut self) {
-        if !self.running {
-            self.running = true;
+        if self.running {
+            return;
         }
+        self.running = true;
 
         spawn(async move {
             let guard = TimerGuard;
             loop {
                 sleep(SEC).await;
-                let stop = Manager::with(|mgr| {
+                let stop = IoManager::with(|mgr| {
                     let current = mgr.timers.current;
                     mgr.timers.current = current + 1;
 
@@ -170,32 +171,33 @@ struct TimerGuard;
 
 impl Drop for TimerGuard {
     fn drop(&mut self) {
-        Manager::with(|mgr| {
+        IoManager::with(|mgr| {
             mgr.timers.running = false;
             mgr.timers.notifications.clear();
         });
     }
 }
 
-struct IoManager(Cell<Option<Box<Manager>>>);
+struct IoStorage(Cell<Option<Box<IoManager>>>);
 
-pub(crate) struct Manager {
+pub(crate) struct IoManager {
     storage: Slab<Option<IoRef>>,
     timers: TimerStorage,
+    pub(crate) iops: Iops,
+}
+
+impl Default for IoStorage {
+    fn default() -> IoStorage {
+        IoStorage(Cell::new(Some(Box::new(IoManager::default()))))
+    }
 }
 
 impl Default for IoManager {
     fn default() -> IoManager {
-        IoManager(Cell::new(Some(Box::new(Manager::default()))))
-    }
-}
-
-impl Default for Manager {
-    fn default() -> Manager {
         let mut storage = Slab::new();
         assert_eq!(storage.insert(None), 0);
 
-        Manager {
+        IoManager {
             storage,
             timers: TimerStorage {
                 running: false,
@@ -204,16 +206,20 @@ impl Default for Manager {
                 cache: VecDeque::with_capacity(CAP),
                 notifications: BTreeMap::default(),
             },
+            iops: Iops {
+                running: false,
+                ops: Vec::with_capacity(32),
+            },
         }
     }
 }
 
-impl Manager {
+impl IoManager {
     fn with<F, R>(f: F) -> R
     where
-        F: FnOnce(&mut Manager) -> R,
+        F: FnOnce(&mut IoManager) -> R,
     {
-        with_item::<IoManager, _, _>(|st| {
+        with_item::<IoStorage, _, _>(|st| {
             let mut mgr = st.0.take().unwrap();
             let result = f(&mut mgr);
             st.0.set(Some(mgr));
@@ -228,21 +234,62 @@ impl Manager {
             None
         }
     }
+
+    pub(crate) fn register(io: &IoRef) -> Id {
+        IoManager::with(|manager| {
+            let entry = manager.storage.vacant_entry();
+            let id = Id(NonZeroUsize::new(entry.key()));
+            entry.insert(Some(io.clone()));
+            id
+        })
+    }
+
+    pub(crate) fn unregister(io: &IoRef) {
+        if let Some(id) = io.id().0 {
+            io.0.id.set(Id(None));
+            IoManager::with(|manager| {
+                manager.storage.remove(id.get());
+            });
+        }
+    }
 }
 
-pub(crate) fn register_io(io: &IoRef) -> Id {
-    Manager::with(|manager| {
-        let entry = manager.storage.vacant_entry();
-        let id = Id(NonZeroUsize::new(entry.key()));
-        entry.insert(Some(io.clone()));
-        id
-    })
+pub(crate) struct Iops {
+    running: bool,
+    pub(crate) ops: Vec<Id>,
 }
 
-pub(crate) fn unregister_io(io: &IoRef) {
-    if let Some(id) = io.id().0 {
-        Manager::with(|manager| {
-            manager.storage.remove(id.get());
+impl Iops {
+    pub(crate) fn register_send(id: Id) {
+        IoManager::with(|mgr| {
+            mgr.iops.ops.push(id);
+            mgr.iops.run();
         });
+    }
+
+    fn run(&mut self) {
+        if self.running {
+            return;
+        }
+        self.running = true;
+
+        spawn(async move {
+            IoManager::with(|mgr| {
+                mgr.iops.running = false;
+
+                let mut ops = mem::take(&mut mgr.iops.ops);
+                for id in ops.drain(..) {
+                    if let Some(io) = mgr.get(id) {
+                        io.ops_send_buf();
+                    }
+                }
+                let _ = mem::replace(&mut mgr.iops.ops, ops);
+            });
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_registered(io: &IoRef) -> bool {
+        IoManager::with(|mgr| mgr.iops.ops.contains(&io.id()))
     }
 }

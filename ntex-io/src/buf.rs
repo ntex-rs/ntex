@@ -133,6 +133,18 @@ impl Stack {
         })
     }
 
+    pub(crate) fn write_buffer_has_bytes(&self) -> bool {
+        self.with_buffers(|buffers| {
+            if !buffers[0].write.is_empty() {
+                true
+            } else if buffers.len() == 2 {
+                false
+            } else {
+                !buffers[buffers.len() - 2].write.is_empty()
+            }
+        })
+    }
+
     pub(crate) fn with_write_source<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
