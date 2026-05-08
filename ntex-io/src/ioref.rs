@@ -196,13 +196,12 @@ impl IoRef {
     }
 
     pub(crate) fn ops_send_buf(&self) {
-        if self.0.flags.is_write_paused()
-            && let Some(hnd) = self.0.handle.take()
-        {
-            let has_bytes = self.0.buffer.write_buffer_has_bytes();
-            if has_bytes {
+        if self.0.flags.is_write_paused() {
+            // write buffer has data to process
+            if self.0.buffer.write_buffer_has_bytes() {
                 self.0.flags.unset_write_paused();
 
+                let hnd = self.0.handle.take().unwrap();
                 let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
                 hnd.write(ctx);
                 self.0.handle.set(Some(hnd));

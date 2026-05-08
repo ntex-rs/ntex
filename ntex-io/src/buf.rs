@@ -135,11 +135,14 @@ impl Stack {
 
     pub(crate) fn write_buffer_has_bytes(&self) -> bool {
         self.with_buffers(|buffers| {
+            // input buffer
             if !buffers[0].write.is_empty() {
                 true
             } else if buffers.len() == 2 {
+                // only one filter in chain
                 false
             } else {
+                // output buffer
                 !buffers[buffers.len() - 2].write.is_empty()
             }
         })
