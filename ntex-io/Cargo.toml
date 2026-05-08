@@ -1,6 +1,6 @@
 [package]
 name = "ntex-io"
-version = "3.10.2"
+version = "3.10.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Utilities for abstracting io streams"
 keywords = ["network", "framework", "async", "futures"]
@@ -24,12 +24,12 @@ ntex-codec = { workspace = true }
 ntex-bytes = { workspace = true }
 ntex-util = { workspace = true }
 ntex-service = { workspace = true }
+ntex-rt = { workspace = true }
 
 bitflags = { workspace = true }
 log = { workspace = true }
 pin-project-lite = { workspace = true }
-
-backtrace = { workspace = true }
+slab = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true }

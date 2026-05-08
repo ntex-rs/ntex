@@ -110,7 +110,7 @@ impl Stack {
             // check nested updates
             if buf.read.take().is_some() {
                 log::error!("Nested read io operation is detected");
-                io.force_close();
+                io.terminate();
             }
 
             if rb.is_empty() {
@@ -129,6 +129,21 @@ impl Stack {
                 buffers[0].write.len()
             } else {
                 buffers[0].write.len() + buffers[buffers.len() - 2].write.len()
+            }
+        })
+    }
+
+    pub(crate) fn write_buffer_has_bytes(&self) -> bool {
+        self.with_buffers(|buffers| {
+            // input buffer
+            if !buffers[0].write.is_empty() {
+                true
+            } else if buffers.len() == 2 {
+                // only one filter in chain
+                false
+            } else {
+                // output buffer
+                !buffers[buffers.len() - 2].write.is_empty()
             }
         })
     }

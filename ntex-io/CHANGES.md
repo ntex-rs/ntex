@@ -1,5 +1,11 @@
 # Changes
 
+## [3.10.3] - 2026-05-08
+
+* Send bytes for all Io in one task
+
+* Refactor timers management
+
 ## [3.10.2] - 2026-05-07
 
 * Cleanup read readiness process

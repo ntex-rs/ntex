@@ -115,7 +115,7 @@ impl Filter for Base {
             st.flags.unset_write_paused();
             st.write_task.wake();
         }
-        if len >= st.write_buf().high && !st.flags.is_wr_backpressure() {
+        if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
             st.flags.set_wr_backpressure();
             st.dispatch_task.wake();
         }

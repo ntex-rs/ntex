@@ -1,20 +1,24 @@
-use std::{any, fmt, hash, io, ptr};
+use std::{any, fmt, hash, io};
 
 use ntex_bytes::{BytePage, BytePages, BytesMut};
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
-use crate::{
-    Decoded, Filter, FilterBuf, Flags, IoConfig, IoContext, IoRef, OnDisconnect, timer,
-    types,
-};
+use crate::ops::{Id, Iops, TimerHandle};
+use crate::{Decoded, Filter, FilterBuf, Flags, IoConfig, IoRef, OnDisconnect, types};
 
 impl IoRef {
     #[inline]
+    /// Get id
+    pub fn id(&self) -> Id {
+        self.0.id()
+    }
+
+    #[inline]
     /// Get tag
     pub fn tag(&self) -> &'static str {
-        self.0.cfg.tag()
+        self.0.tag()
     }
 
     #[doc(hidden)]
@@ -53,29 +57,30 @@ impl IoRef {
         self.0.flags.is_wr_backpressure()
     }
 
-    #[inline]
-    /// Wake dispatcher task
-    pub fn wake(&self) {
-        self.0.dispatch_task.wake();
-    }
-
     /// Gracefully close connection
     ///
     /// Initiate io stream shutdown process.
     pub fn close(&self) {
-        self.0.init_shutdown();
+        self.0.start_shutdown();
     }
 
     /// Force close connection
     ///
     /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
     /// without any graceful period.
+    pub fn terminate(&self) {
+        log::trace!("{}: Terminate io stream object", self.tag());
+        self.0.terminate_connection(None);
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "3.10.0", note = "use Io::terminate() instead")]
+    /// Force close connection
+    ///
+    /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
+    /// without any graceful period.
     pub fn force_close(&self) {
-        log::trace!("{}: Force close io stream object", self.tag());
-        self.0.flags.set_force_closed();
-        self.0.read_task.wake();
-        self.0.write_task.wake();
-        self.0.dispatch_task.wake();
+        self.terminate();
     }
 
     /// Ask io to process write buffer
@@ -87,8 +92,9 @@ impl IoRef {
     pub fn wants_shutdown(&self) {
         if !self.0.flags.is_stopping_any() {
             log::trace!("{}: Initiate io shutdown {:?}", self.tag(), self.0.flags);
-            self.0.flags.set_filter_stopping();
             self.0.read_task.wake();
+            self.0.write_task.wake();
+            self.0.flags.set_filter_stopping();
         }
     }
 
@@ -101,37 +107,21 @@ impl IoRef {
         }
     }
 
-    /// Encode and write item to a buffer and wake up write task
+    /// Encode item to the write buffer
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
     {
-        if self.is_closed() {
-            log::trace!("{}: Io is closed/closing, skip frame encoding", self.tag());
-            Ok(())
-        } else {
-            // encode item and wake write task
-            self.with_write_buf(|buf| codec.encodev(item, buf))
-                // .with_write_buf() could return io::Error<Result<(), U::Error>>,
-                // in that case mark io as failed
-                .unwrap_or_else(|err| {
-                    log::trace!(
-                        "{}: Got io error while encoding, error: {:?}",
-                        self.tag(),
-                        err
-                    );
-                    self.0.io_stopped(Some(err));
-                    Ok(())
-                })
-        }
+        self.with_write_buf(|buf| codec.encodev(item, buf))
+            .unwrap_or_else(|_| Ok(()))
     }
 
-    /// Encode slice to a buffer and wake up write task
+    /// Encode slice to the write buffer
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
         self.with_write_buf(|buf| buf.extend_from_slice(src))
     }
 
-    /// Write bytes to a buffer and wake up write task
+    /// Write bytes to the write buffer
     pub fn encode_bytes<B>(&self, src: B) -> io::Result<()>
     where
         BytePage: From<B>,
@@ -179,19 +169,11 @@ impl IoRef {
     /// Requires the underlying runtime to implement `.write()`;
     /// otherwise, no action is taken.
     pub fn send_buf(&self) -> io::Result<()> {
-        if self.0.flags.is_write_upfront_enabled()
-            && let Some(hnd) = self.0.handle.take()
-        {
-            self.0.flags.unset_write_paused();
-
-            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-            hnd.write(ctx);
-            self.0.handle.set(Some(hnd));
-
+        if self.0.flags.is_write_upfront_enabled() {
             // write task is not paused, io write is pending
             // need to wake write task for io completeion
-            if !self.0.flags.is_write_paused() {
-                self.0.write_task.wake();
+            if !self.call_write() {
+                Iops::register_send(self.id());
             }
 
             if self.0.flags.is_stopping_any()
@@ -201,6 +183,21 @@ impl IoRef {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn ops_send_buf(&self) {
+        if self.0.flags.is_write_paused() {
+            // write buffer has data to process
+            if self.0.buffer.write_buffer_has_bytes() {
+                // call handle and get write-paused state
+                // if write task is not paused, io write is pending
+                // need to wake write task for io completeion
+                if self.call_write() {
+                    return;
+                }
+            }
+        }
+        self.0.write_task.wake();
     }
 
     /// Get access to filter buffer
@@ -258,12 +255,11 @@ impl IoRef {
                     {
                         wrt = true;
                     } else {
-                        st.write_task.wake();
+                        Iops::register_send(st.id());
                     }
-                    st.flags.unset_write_paused();
                 }
                 // enable backpressure
-                if len >= st.write_buf().high && !st.flags.is_wr_backpressure() {
+                if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
                     st.flags.set_wr_backpressure();
                     st.dispatch_task.wake();
                 }
@@ -271,13 +267,9 @@ impl IoRef {
                 (wrt, Ok(result))
             });
 
-            if wrt && let Some(hnd) = st.handle.take() {
-                let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-                hnd.write(ctx);
-                st.handle.set(Some(hnd));
-                if !st.flags.is_write_paused() {
-                    st.write_task.wake();
-                }
+            // send data in-place and register if more need to send
+            if wrt && !self.call_write() {
+                Iops::register_send(st.id());
             }
             res
         }
@@ -299,10 +291,17 @@ impl IoRef {
         self.0.cfg.read_buf().resize(buf);
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.10.3", note = "Use .notify_disapatcher()")]
+    /// Wakeup dispatcher
+    pub fn wake(&self) {
+        self.notify_dispatcher();
+    }
+
     /// Wakeup dispatcher
     pub fn notify_dispatcher(&self) {
-        self.0.dispatch_task.wake();
         log::trace!("{}: Timer, notify dispatcher", self.tag());
+        self.0.dispatch_task.wake();
     }
 
     /// Wakeup dispatcher and send keep-alive error
@@ -311,22 +310,22 @@ impl IoRef {
     }
 
     /// current timer handle
-    pub fn timer_handle(&self) -> timer::TimerHandle {
+    pub fn timer_handle(&self) -> TimerHandle {
         self.0.timeout.get()
     }
 
     /// Start timer
-    pub fn start_timer(&self, timeout: Seconds) -> timer::TimerHandle {
+    pub fn start_timer(&self, timeout: Seconds) -> TimerHandle {
         let cur_hnd = self.0.timeout.get();
 
         if timeout.is_zero() {
             if cur_hnd.is_set() {
-                self.0.timeout.set(timer::TimerHandle::ZERO);
-                timer::unregister(cur_hnd, self);
+                self.0.timeout.set(TimerHandle::ZERO);
+                cur_hnd.unregister(self);
             }
-            timer::TimerHandle::ZERO
+            TimerHandle::ZERO
         } else if cur_hnd.is_set() {
-            let hnd = timer::update(cur_hnd, timeout, self);
+            let hnd = cur_hnd.update(timeout, self);
             if hnd != cur_hnd {
                 log::trace!("{}: Update timer {:?}", self.tag(), timeout);
                 self.0.timeout.set(hnd);
@@ -334,7 +333,7 @@ impl IoRef {
             hnd
         } else {
             log::trace!("{}: Start timer {:?}", self.tag(), timeout);
-            let hnd = timer::register(timeout, self);
+            let hnd = TimerHandle::register(timeout, self);
             self.0.timeout.set(hnd);
             hnd
         }
@@ -345,8 +344,8 @@ impl IoRef {
         let hnd = self.0.timeout.get();
         if hnd.is_set() {
             log::trace!("{}: Stop timer", self.tag());
-            self.0.timeout.set(timer::TimerHandle::ZERO);
-            timer::unregister(hnd, self);
+            self.0.timeout.set(TimerHandle::ZERO);
+            hnd.unregister(self);
         }
     }
 
@@ -455,7 +454,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
-        state.force_close();
+        state.terminate();
         assert!(state.flags().is_stopped());
         assert!(state.flags().is_stopping());
 
