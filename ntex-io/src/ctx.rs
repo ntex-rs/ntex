@@ -76,9 +76,11 @@ impl IoContext {
                 return Poll::Ready(());
             }
             st.flags.set_write_notify();
+            st.read_task.register(cx.waker());
             st.write_task.register(cx.waker());
             Poll::Pending
         } else if !st.flags.is_closed() {
+            st.read_task.register(cx.waker());
             st.write_task.register(cx.waker());
             Poll::Pending
         } else {
