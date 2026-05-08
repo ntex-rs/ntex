@@ -189,7 +189,7 @@ where
             self.insert_flags(Flags::IDLE);
         }
         if wake {
-            io.wake();
+            io.notify_dispatcher();
         }
     }
 
