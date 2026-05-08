@@ -1,26 +1,19 @@
-#![allow(clippy::mutable_key_type)]
+#![allow(clippy::cast_possible_truncation)]
 use std::collections::{BTreeMap, VecDeque};
-use std::{cell::Cell, cell::RefCell, ops, rc::Rc, time::Duration, time::Instant};
+use std::{cell::Cell, num::NonZeroUsize, ops, time::Duration, time::Instant};
 
+use ntex_rt::with_item;
 use ntex_util::time::{Seconds, now, sleep};
 use ntex_util::{HashSet, spawn};
+use slab::Slab;
 
-use crate::{IoRef, io::IoState};
+use crate::IoRef;
 
 const CAP: usize = 64;
 const SEC: Duration = Duration::from_secs(1);
 
-thread_local! {
-    static TIMER: Inner = Inner {
-        running: Cell::new(false),
-        base: Cell::new(Instant::now()),
-        current: Cell::new(0),
-        storage: RefCell::new(InnerMut {
-            cache: VecDeque::with_capacity(CAP),
-            notifications: BTreeMap::default(),
-        })
-    }
-}
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct Id(Option<NonZeroUsize>);
 
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct TimerHandle(u32);
@@ -33,8 +26,8 @@ impl TimerHandle {
     }
 
     pub fn remains(&self) -> Seconds {
-        TIMER.with(|timer| {
-            let cur = timer.current.get();
+        Manager::with(|mgr| {
+            let cur = mgr.timers.current;
             if self.0 <= cur {
                 Seconds::ZERO
             } else {
@@ -45,7 +38,27 @@ impl TimerHandle {
     }
 
     pub fn instant(&self) -> Instant {
-        TIMER.with(|timer| timer.base.get() + Duration::from_secs(u64::from(self.0)))
+        Manager::with(|mgr| mgr.timers.base + Duration::from_secs(u64::from(self.0)))
+    }
+
+    pub(crate) fn update(self, timeout: Seconds, io: &IoRef) -> TimerHandle {
+        Manager::with(|mgr| {
+            let new_hnd = mgr.timers.current + u32::from(timeout.0);
+            if self.0 == new_hnd || self.0 == new_hnd + 1 {
+                self
+            } else {
+                mgr.timers.unregister(self, io);
+                mgr.timers.register(timeout, io)
+            }
+        })
+    }
+
+    pub(crate) fn unregister(self, io: &IoRef) {
+        Manager::with(|manager| manager.timers.unregister(self, io));
+    }
+
+    pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
+        Manager::with(move |mgr| mgr.timers.register(timeout, io))
     }
 }
 
@@ -58,130 +71,178 @@ impl ops::Add<Seconds> for TimerHandle {
     }
 }
 
-struct Inner {
-    running: Cell<bool>,
-    base: Cell<Instant>,
-    current: Cell<u32>,
-    storage: RefCell<InnerMut>,
+struct TimerStorage {
+    running: bool,
+    base: Instant,
+    current: u32,
+    cache: VecDeque<HashSet<Id>>,
+    notifications: BTreeMap<u32, HashSet<Id>>,
 }
 
-struct InnerMut {
-    cache: VecDeque<HashSet<Rc<IoState>>>,
-    notifications: BTreeMap<u32, HashSet<Rc<IoState>>>,
-}
-
-impl InnerMut {
+impl TimerStorage {
     fn unregister(&mut self, hnd: TimerHandle, io: &IoRef) {
         if let Some(states) = self.notifications.get_mut(&hnd.0) {
-            states.remove(&io.0);
+            states.remove(&io.id());
         }
     }
-}
 
-pub(crate) fn unregister(hnd: TimerHandle, io: &IoRef) {
-    TIMER.with(|timer| {
-        timer.storage.borrow_mut().unregister(hnd, io);
-    });
-}
-
-pub(crate) fn update(hnd: TimerHandle, timeout: Seconds, io: &IoRef) -> TimerHandle {
-    TIMER.with(|timer| {
-        let new_hnd = timer.current.get() + u32::from(timeout.0);
-        if hnd.0 == new_hnd || hnd.0 == new_hnd + 1 {
-            hnd
-        } else {
-            timer.storage.borrow_mut().unregister(hnd, io);
-            register(timeout, io)
-        }
-    })
-}
-
-pub(crate) fn register(timeout: Seconds, io: &IoRef) -> TimerHandle {
-    TIMER.with(|timer| {
+    fn register(&mut self, timeout: Seconds, io: &IoRef) -> TimerHandle {
         // setup current delta
-        if !timer.running.get() {
-            #[allow(clippy::cast_possible_truncation)]
-            let current = (now() - timer.base.get()).as_secs() as u32;
-            timer.current.set(current);
+        if !self.running {
+            self.current = (now() - self.base).as_secs() as u32;
             log::debug!(
                 "{}: Timer driver does not run, current: {}",
                 io.tag(),
-                current
+                self.current
             );
         }
 
         let hnd = {
-            let hnd = timer.current.get() + u32::from(timeout.0);
-            let mut inner = timer.storage.borrow_mut();
+            let hnd = self.current + u32::from(timeout.0);
 
             // insert key
-            if let Some(item) = inner.notifications.range_mut(hnd..=hnd).next() {
-                item.1.insert(io.0.clone());
+            if let Some(item) = self.notifications.range_mut(hnd..=hnd).next() {
+                item.1.insert(io.id());
                 *item.0
             } else {
-                let mut items = inner.cache.pop_front().unwrap_or_default();
-                items.insert(io.0.clone());
-                inner.notifications.insert(hnd, items);
+                let mut items = self.cache.pop_front().unwrap_or_default();
+                items.insert(io.id());
+                self.notifications.insert(hnd, items);
                 hnd
             }
         };
 
-        if !timer.running.get() {
-            timer.running.set(true);
-
-            spawn(async move {
-                let guard = TimerGuard;
-                loop {
-                    sleep(SEC).await;
-                    let stop = TIMER.with(|timer| {
-                        let current = timer.current.get();
-                        timer.current.set(current + 1);
-
-                        // notify io dispatcher
-                        let mut inner = timer.storage.borrow_mut();
-                        while let Some(key) = inner.notifications.keys().next() {
-                            let key = *key;
-                            if key <= current {
-                                let mut items = inner.notifications.remove(&key).unwrap();
-                                for st in items.drain() {
-                                    st.notify_timeout();
-                                }
-                                if inner.cache.len() <= CAP {
-                                    inner.cache.push_back(items);
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-
-                        // new tick
-                        if inner.notifications.is_empty() {
-                            timer.running.set(false);
-                            true
-                        } else {
-                            false
-                        }
-                    });
-
-                    if stop {
-                        break;
-                    }
-                }
-                drop(guard);
-            });
-        }
+        self.run_timer();
 
         TimerHandle(hnd)
-    })
+    }
+
+    fn run_timer(&mut self) {
+        if !self.running {
+            self.running = true;
+        }
+
+        spawn(async move {
+            let guard = TimerGuard;
+            loop {
+                sleep(SEC).await;
+                let stop = Manager::with(|mgr| {
+                    let current = mgr.timers.current;
+                    mgr.timers.current = current + 1;
+
+                    // notify io dispatcher
+                    while let Some(key) = mgr.timers.notifications.keys().next() {
+                        let key = *key;
+                        if key <= current {
+                            let mut items = mgr.timers.notifications.remove(&key).unwrap();
+                            for id in items.drain() {
+                                if let Some(io) = mgr.get(id) {
+                                    io.notify_timeout();
+                                }
+                            }
+                            if mgr.timers.cache.len() <= CAP {
+                                mgr.timers.cache.push_back(items);
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // new tick
+                    if mgr.timers.notifications.is_empty() {
+                        mgr.timers.running = false;
+                        true
+                    } else {
+                        false
+                    }
+                });
+
+                if stop {
+                    break;
+                }
+            }
+            drop(guard);
+        });
+    }
 }
 
 struct TimerGuard;
 
 impl Drop for TimerGuard {
     fn drop(&mut self) {
-        TIMER.with(|timer| {
-            timer.running.set(false);
-            timer.storage.borrow_mut().notifications.clear();
+        Manager::with(|mgr| {
+            mgr.timers.running = false;
+            mgr.timers.notifications.clear();
+        });
+    }
+}
+
+struct IoManager(Cell<Option<Box<Manager>>>);
+
+pub(crate) struct Manager {
+    storage: Slab<Option<IoRef>>,
+    timers: TimerStorage,
+}
+
+impl Default for IoManager {
+    fn default() -> IoManager {
+        IoManager(Cell::new(Some(Box::new(Manager::default()))))
+    }
+}
+
+impl Default for Manager {
+    fn default() -> Manager {
+        let mut storage = Slab::new();
+        assert_eq!(storage.insert(None), 0);
+
+        Manager {
+            storage,
+            timers: TimerStorage {
+                running: false,
+                base: Instant::now(),
+                current: 0,
+                cache: VecDeque::with_capacity(CAP),
+                notifications: BTreeMap::default(),
+            },
+        }
+    }
+}
+
+impl Manager {
+    fn with<F, R>(f: F) -> R
+    where
+        F: FnOnce(&mut Manager) -> R,
+    {
+        with_item::<IoManager, _, _>(|st| {
+            let mut mgr = st.0.take().unwrap();
+            let result = f(&mut mgr);
+            st.0.set(Some(mgr));
+            result
+        })
+    }
+
+    fn get(&self, id: Id) -> Option<&IoRef> {
+        if let Some(id) = id.0 {
+            self.storage.get(id.get()).and_then(|item| item.as_ref())
+        } else {
+            None
+        }
+    }
+}
+
+pub(crate) fn register_io(io: &IoRef) -> Id {
+    Manager::with(|manager| {
+        let entry = manager.storage.vacant_entry();
+        let id = Id(NonZeroUsize::new(entry.key()));
+        entry.insert(Some(io.clone()));
+        id
+    })
+}
+
+pub(crate) fn unregister_io(io: &IoRef) {
+    if let Some(id) = io.id().0 {
+        Manager::with(|manager| {
+            manager.storage.remove(id.get());
         });
     }
 }

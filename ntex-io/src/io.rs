@@ -15,7 +15,7 @@ use crate::filter::{Base, Filter, Layer};
 use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
 use crate::seal::{IoBoxed, Sealed};
-use crate::timer::TimerHandle;
+use crate::timer::{self, Id, TimerHandle};
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 /// Interface object to underlying io stream
@@ -26,6 +26,7 @@ pub struct IoRef(pub(super) Rc<IoState>);
 
 pub(crate) struct IoState {
     filter: FilterPtr,
+    pub(super) id: Cell<Id>,
     pub(super) cfg: Cfg<IoConfig>,
     pub(super) flags: Flags,
     pub(super) error: Cell<Option<io::Error>>,
@@ -41,6 +42,10 @@ pub(crate) struct IoState {
 }
 
 impl IoState {
+    pub(super) fn id(&self) -> Id {
+        self.id.get()
+    }
+
     pub(super) fn tag(&self) -> &'static str {
         self.cfg.tag()
     }
@@ -166,6 +171,7 @@ impl fmt::Debug for IoState {
         let err = self.error.take();
         let res = f
             .debug_struct("IoState")
+            .field("id", &self.id)
             .field("flags", &self.flags)
             .field("filter", &self.filter.is_set())
             .field("timeout", &self.timeout)
@@ -189,6 +195,7 @@ impl Io {
         let inner = Rc::new(IoState {
             cfg,
             flags,
+            id: Cell::new(Id::default()),
             filter: FilterPtr::null(),
             error: Cell::new(None),
             dispatch_task: LocalWaker::new(),
@@ -202,16 +209,17 @@ impl Io {
         });
         inner.filter.set(Base::new(IoRef(inner.clone())));
 
-        let io_ref = IoRef(inner);
+        let ioref = IoRef(inner);
+        ioref.0.id.set(timer::register_io(&ioref));
 
         // start io tasks
-        let hnd = io.start(IoContext::new(io_ref.clone()));
+        let hnd = io.start(IoContext::new(ioref.clone()));
         if hnd.is_some() {
-            io_ref.0.flags.set_io_handle_enabled();
+            ioref.0.flags.set_io_handle_enabled();
         }
-        io_ref.0.handle.set(hnd);
+        ioref.0.handle.set(hnd);
 
-        Io(UnsafeCell::new(io_ref), marker::PhantomData)
+        Io(UnsafeCell::new(ioref), marker::PhantomData)
     }
 }
 
@@ -219,6 +227,26 @@ impl<I: IoStream> From<I> for Io {
     #[inline]
     fn from(io: I) -> Io {
         Io::new(io, SharedCfg::default())
+    }
+}
+
+impl IoRef {
+    fn create_empty() -> IoRef {
+        IoRef(Rc::new(IoState {
+            id: Cell::new(Id::default()),
+            cfg: SharedCfg::default().get::<IoConfig>(),
+            filter: FilterPtr::null(),
+            flags: Flags::new_stopped(),
+            error: Cell::new(None),
+            dispatch_task: LocalWaker::new(),
+            read_task: LocalWaker::new(),
+            write_task: LocalWaker::new(),
+            buffer: Stack::new(BytePageSize::Size16),
+            handle: Cell::new(None),
+            timeout: Cell::new(TimerHandle::default()),
+            shutdown_timeout: Cell::new(None),
+            on_disconnect: Cell::new(None),
+        }))
     }
 }
 
@@ -239,21 +267,7 @@ impl<F> Io<F> {
     }
 
     fn take_io_ref(&self) -> IoRef {
-        let inner = Rc::new(IoState {
-            cfg: SharedCfg::default().get::<IoConfig>(),
-            filter: FilterPtr::null(),
-            flags: Flags::new_stopped(),
-            error: Cell::new(None),
-            dispatch_task: LocalWaker::new(),
-            read_task: LocalWaker::new(),
-            write_task: LocalWaker::new(),
-            buffer: Stack::new(BytePageSize::Size16),
-            handle: Cell::new(None),
-            timeout: Cell::new(TimerHandle::default()),
-            shutdown_timeout: Cell::new(None),
-            on_disconnect: Cell::new(None),
-        });
-        unsafe { mem::replace(&mut *self.0.get(), IoRef(inner)) }
+        unsafe { mem::replace(&mut *self.0.get(), IoRef::create_empty()) }
     }
 
     fn st(&self) -> &IoState {
@@ -716,6 +730,8 @@ impl<F> ops::Deref for Io<F> {
 
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
+        timer::unregister_io(self.io_ref());
+
         let st = self.st();
         self.stop_timer();
 

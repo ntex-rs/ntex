@@ -6,15 +6,21 @@ use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::{
-    Decoded, Filter, FilterBuf, Flags, IoConfig, IoContext, IoRef, OnDisconnect, timer,
+    Decoded, Filter, FilterBuf, Flags, Id, IoConfig, IoContext, IoRef, OnDisconnect, timer,
     types,
 };
 
 impl IoRef {
     #[inline]
+    /// Get id
+    pub fn id(&self) -> Id {
+        self.0.id()
+    }
+
+    #[inline]
     /// Get tag
     pub fn tag(&self) -> &'static str {
-        self.0.cfg.tag()
+        self.0.tag()
     }
 
     #[doc(hidden)]
@@ -289,7 +295,7 @@ impl IoRef {
     #[deprecated(since = "3.10.3", note = "Use .notify_disapatcher()")]
     /// Wakeup dispatcher
     pub fn wake(&self) {
-        self.notify_dispatcher()
+        self.notify_dispatcher();
     }
 
     /// Wakeup dispatcher
@@ -315,11 +321,11 @@ impl IoRef {
         if timeout.is_zero() {
             if cur_hnd.is_set() {
                 self.0.timeout.set(timer::TimerHandle::ZERO);
-                timer::unregister(cur_hnd, self);
+                cur_hnd.unregister(self);
             }
             timer::TimerHandle::ZERO
         } else if cur_hnd.is_set() {
-            let hnd = timer::update(cur_hnd, timeout, self);
+            let hnd = cur_hnd.update(timeout, self);
             if hnd != cur_hnd {
                 log::trace!("{}: Update timer {:?}", self.tag(), timeout);
                 self.0.timeout.set(hnd);
@@ -327,7 +333,7 @@ impl IoRef {
             hnd
         } else {
             log::trace!("{}: Start timer {:?}", self.tag(), timeout);
-            let hnd = timer::register(timeout, self);
+            let hnd = timer::TimerHandle::register(timeout, self);
             self.0.timeout.set(hnd);
             hnd
         }
@@ -339,7 +345,7 @@ impl IoRef {
         if hnd.is_set() {
             log::trace!("{}: Stop timer", self.tag());
             self.0.timeout.set(timer::TimerHandle::ZERO);
-            timer::unregister(hnd, self);
+            hnd.unregister(self);
         }
     }
 

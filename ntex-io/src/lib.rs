@@ -4,7 +4,8 @@
     clippy::missing_fields_in_debug,
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
-    clippy::must_use_candidate
+    clippy::must_use_candidate,
+    dead_code
 )]
 use std::io::{Error as IoError, Result as IoResult};
 use std::{any::Any, any::TypeId, fmt, task::Context, task::Poll};
@@ -35,7 +36,7 @@ pub use self::filter::{Base, Filter, Layer};
 pub use self::framed::Framed;
 pub use self::io::{Io, IoRef, OnDisconnect};
 pub use self::seal::{IoBoxed, Sealed};
-pub use self::timer::TimerHandle;
+pub use self::timer::{Id, TimerHandle};
 pub use self::utils::{Decoded, seal};
 
 #[doc(hidden)]
