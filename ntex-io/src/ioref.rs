@@ -53,29 +53,30 @@ impl IoRef {
         self.0.flags.is_wr_backpressure()
     }
 
-    #[inline]
-    /// Wake dispatcher task
-    pub fn wake(&self) {
-        self.0.dispatch_task.wake();
-    }
-
     /// Gracefully close connection
     ///
     /// Initiate io stream shutdown process.
     pub fn close(&self) {
-        self.0.init_shutdown();
+        self.0.start_shutdown();
     }
 
     /// Force close connection
     ///
     /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
     /// without any graceful period.
+    pub fn terminate(&self) {
+        log::trace!("{}: Terminate io stream object", self.tag());
+        self.0.terminate_connection(None);
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "3.10.0", note = "use Io::terminate() instead")]
+    /// Force close connection
+    ///
+    /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
+    /// without any graceful period.
     pub fn force_close(&self) {
-        log::trace!("{}: Force close io stream object", self.tag());
-        self.0.flags.set_force_closed();
-        self.0.read_task.wake();
-        self.0.write_task.wake();
-        self.0.dispatch_task.wake();
+        self.terminate();
     }
 
     /// Ask io to process write buffer
@@ -87,8 +88,9 @@ impl IoRef {
     pub fn wants_shutdown(&self) {
         if !self.0.flags.is_stopping_any() {
             log::trace!("{}: Initiate io shutdown {:?}", self.tag(), self.0.flags);
-            self.0.flags.set_filter_stopping();
             self.0.read_task.wake();
+            self.0.write_task.wake();
+            self.0.flags.set_filter_stopping();
         }
     }
 
@@ -101,37 +103,21 @@ impl IoRef {
         }
     }
 
-    /// Encode and write item to a buffer and wake up write task
+    /// Encode item to the write buffer
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
     {
-        if self.is_closed() {
-            log::trace!("{}: Io is closed/closing, skip frame encoding", self.tag());
-            Ok(())
-        } else {
-            // encode item and wake write task
-            self.with_write_buf(|buf| codec.encodev(item, buf))
-                // .with_write_buf() could return io::Error<Result<(), U::Error>>,
-                // in that case mark io as failed
-                .unwrap_or_else(|err| {
-                    log::trace!(
-                        "{}: Got io error while encoding, error: {:?}",
-                        self.tag(),
-                        err
-                    );
-                    self.0.io_stopped(Some(err));
-                    Ok(())
-                })
-        }
+        self.with_write_buf(|buf| codec.encodev(item, buf))
+            .unwrap_or_else(|_| Ok(()))
     }
 
-    /// Encode slice to a buffer and wake up write task
+    /// Encode slice to the write buffer
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
         self.with_write_buf(|buf| buf.extend_from_slice(src))
     }
 
-    /// Write bytes to a buffer and wake up write task
+    /// Write bytes to the write buffer
     pub fn encode_bytes<B>(&self, src: B) -> io::Result<()>
     where
         BytePage: From<B>,
@@ -263,7 +249,7 @@ impl IoRef {
                     st.flags.unset_write_paused();
                 }
                 // enable backpressure
-                if len >= st.write_buf().high && !st.flags.is_wr_backpressure() {
+                if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
                     st.flags.set_wr_backpressure();
                     st.dispatch_task.wake();
                 }
@@ -299,10 +285,17 @@ impl IoRef {
         self.0.cfg.read_buf().resize(buf);
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.10.3", note = "Use .notify_disapatcher()")]
+    /// Wakeup dispatcher
+    pub fn wake(&self) {
+        self.notify_dispatcher()
+    }
+
     /// Wakeup dispatcher
     pub fn notify_dispatcher(&self) {
-        self.0.dispatch_task.wake();
         log::trace!("{}: Timer, notify dispatcher", self.tag());
+        self.0.dispatch_task.wake();
     }
 
     /// Wakeup dispatcher and send keep-alive error
@@ -455,7 +448,7 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
-        state.force_close();
+        state.terminate();
         assert!(state.flags().is_stopped());
         assert!(state.flags().is_stopping());
 

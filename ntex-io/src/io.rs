@@ -3,13 +3,13 @@ use std::future::{Future, poll_fn};
 use std::task::{Context, Poll};
 use std::{fmt, hash, io, marker, mem, ops, pin::Pin, ptr, rc::Rc};
 
-use ntex_bytes::BytePageSize;
+use ntex_bytes::{BytePageSize, BytesMut};
 use ntex_codec::{Decoder, Encoder};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_util::{future::Either, task::LocalWaker, time::Sleep};
 
 use crate::buf::Stack;
-use crate::cfg::{BufConfig, IoConfig};
+use crate::cfg::IoConfig;
 use crate::ctx::IoContext;
 use crate::filter::{Base, Filter, Layer};
 use crate::filterptr::FilterPtr;
@@ -41,6 +41,10 @@ pub(crate) struct IoState {
 }
 
 impl IoState {
+    pub(super) fn tag(&self) -> &'static str {
+        self.cfg.tag()
+    }
+
     pub(super) fn filter(&self) -> &dyn Filter {
         self.filter.get()
     }
@@ -77,13 +81,14 @@ impl IoState {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Disconnected"))
     }
 
-    pub(super) fn io_stopping(&self) {
+    pub(super) fn filters_stopped(&self) {
+        self.read_task.wake();
         self.write_task.wake();
         self.dispatch_task.wake();
-        self.flags.set_stopping();
+        self.flags.set_filters_stopped();
     }
 
-    pub(super) fn io_stopped(&self, err: Option<io::Error>) {
+    pub(super) fn terminate_connection(&self, err: Option<io::Error>) {
         if !self.flags.is_stopped() {
             log::trace!(
                 "{}: {:?} Io error {:?} flags: {:?}",
@@ -101,7 +106,7 @@ impl IoState {
             self.notify_disconnect();
             self.handle.take();
             self.flags.set_force_closed();
-            self.flags.set_rd_buf_ready();
+
             if !self.dispatch_task.wake_checked() {
                 log::trace!(
                     "{}: {:?} Dispatcher is not registered, flags: {:?}",
@@ -114,7 +119,7 @@ impl IoState {
     }
 
     /// Gracefully shutdown read and write io tasks
-    pub(super) fn init_shutdown(&self) {
+    pub(super) fn start_shutdown(&self) {
         if !self.flags.is_stopping_any() {
             log::trace!("{}: Initiate io shutdown {:?}", self.cfg.tag(), self.flags);
             self.flags.set_filter_stopping();
@@ -123,14 +128,20 @@ impl IoState {
         }
     }
 
-    #[inline]
-    pub(super) fn read_buf(&self) -> &BufConfig {
-        self.cfg.read_buf()
+    pub(super) fn get_read_buf(&self) -> BytesMut {
+        self.cfg.read_buf().get()
     }
 
-    #[inline]
-    pub(super) fn write_buf(&self) -> &BufConfig {
-        self.cfg.write_buf()
+    pub(super) fn enable_rd_backpressure(&self, size: usize) -> bool {
+        size >= self.cfg.read_buf().high
+    }
+
+    pub(super) fn enable_wr_backpressure(&self, size: usize) -> bool {
+        size >= self.cfg.write_buf().high
+    }
+
+    pub(super) fn disable_wr_backpressure(&self, size: usize) -> bool {
+        size <= self.cfg.write_buf().half
     }
 }
 
@@ -213,6 +224,12 @@ impl<I: IoStream> From<I> for Io {
 
 impl<F> Io<F> {
     #[inline]
+    /// Get instance of `IoRef`
+    pub fn get_ref(&self) -> IoRef {
+        self.io_ref().clone()
+    }
+
+    #[inline]
     #[must_use]
     /// Clone current io object.
     ///
@@ -237,12 +254,6 @@ impl<F> Io<F> {
             on_disconnect: Cell::new(None),
         });
         unsafe { mem::replace(&mut *self.0.get(), IoRef(inner)) }
-    }
-
-    #[inline]
-    /// Get instance of `IoRef`
-    pub fn get_ref(&self) -> IoRef {
-        self.io_ref().clone()
     }
 
     fn st(&self) -> &IoState {
@@ -297,7 +308,7 @@ impl<F: Filter> Io<F> {
         // write buffer processing could be delayed,
         // need to call filter chain for processing
         if let Err(e) = self.st().buffer.process_write_buf(&self) {
-            self.st().io_stopped(Some(e));
+            self.st().terminate_connection(Some(e));
         }
 
         let state = self.take_io_ref();
@@ -325,7 +336,7 @@ impl<F: Filter> Io<F> {
         // write buffer processing could be delayed,
         // need to call filter chain for processing
         if let Err(e) = self.st().buffer.process_write_buf(&self) {
-            self.st().io_stopped(Some(e));
+            self.st().terminate_connection(Some(e));
         }
 
         let state = self.take_io_ref();
@@ -588,7 +599,7 @@ impl<F> Io<F> {
                     st.flags.set_wants_write_flush();
                     Poll::Pending
                 };
-            } else if len >= st.write_buf().half {
+            } else if st.enable_wr_backpressure(len) {
                 return if st.flags.is_stopped() {
                     Poll::Ready(Err(st.error_or_disconnected()))
                 } else {
@@ -619,7 +630,7 @@ impl<F> Io<F> {
             }
         } else {
             if !st.flags.is_stopping_filters() {
-                st.init_shutdown();
+                st.start_shutdown();
             }
 
             st.read_task.wake();
@@ -649,7 +660,7 @@ impl<F> Io<F> {
             Poll::Ready(IoStatusUpdate::KeepAlive)
         } else if st.flags.is_wr_backpressure() {
             // write backpressure is enabled and write buf smaller than half
-            if st.buffer.write_buffer_size() < st.write_buf().half {
+            if st.disable_wr_backpressure(st.buffer.write_buffer_size()) {
                 st.flags.unset_wr_backpressure();
             }
             Poll::Ready(IoStatusUpdate::WriteBackpressure)
@@ -719,7 +730,7 @@ impl<F> Drop for Io<F> {
                 );
             }
 
-            self.force_close();
+            st.terminate_connection(None);
             st.filter.drop_filter::<F>();
         }
     }

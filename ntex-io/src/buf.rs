@@ -110,7 +110,7 @@ impl Stack {
             // check nested updates
             if buf.read.take().is_some() {
                 log::error!("Nested read io operation is detected");
-                io.force_close();
+                io.terminate();
             }
 
             if rb.is_empty() {

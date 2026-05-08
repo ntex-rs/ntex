@@ -191,12 +191,11 @@ impl Flags {
 
     pub(crate) fn set_force_closed(&self) {
         self.insert(
-            FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPING_FILTERS,
+            FlagsKind::IO_STOPPED
+                | FlagsKind::IO_STOPPING
+                | FlagsKind::IO_STOPPING_FILTERS
+                | FlagsKind::BUF_R_READY,
         );
-    }
-
-    pub(crate) fn set_read_notify(&self) {
-        self.insert(FlagsKind::RD_NOTIFY);
     }
 
     pub(crate) fn set_wants_write(&self) {
@@ -207,15 +206,19 @@ impl Flags {
         self.insert(FlagsKind::WR_FLUSH);
     }
 
-    pub(crate) fn set_rd_buf_ready(&self) {
+    pub(crate) fn set_read_notify(&self) {
+        self.insert(FlagsKind::RD_NOTIFY);
+    }
+
+    pub(crate) fn set_read_ready(&self) {
         self.insert(FlagsKind::BUF_R_READY);
     }
 
-    pub(crate) fn set_rd_buf_ready_and_full(&self) {
+    pub(crate) fn set_read_ready_and_full(&self) {
         self.insert(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL);
     }
 
-    pub(crate) fn set_stopping(&self) {
+    pub(crate) fn set_filters_stopped(&self) {
         self.insert(FlagsKind::IO_STOPPING);
     }
 
