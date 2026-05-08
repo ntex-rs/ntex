@@ -1,4 +1,4 @@
-use std::{any, fmt, hash, io, ptr};
+use std::{any, fmt, hash, io};
 
 use ntex_bytes::{BytePage, BytePages, BytesMut};
 use ntex_codec::{Decoder, Encoder};
@@ -6,9 +6,7 @@ use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::ops::{Id, Iops, TimerHandle};
-use crate::{
-    Decoded, Filter, FilterBuf, Flags, IoConfig, IoContext, IoRef, OnDisconnect, types,
-};
+use crate::{Decoded, Filter, FilterBuf, Flags, IoConfig, IoRef, OnDisconnect, types};
 
 impl IoRef {
     #[inline]
@@ -171,18 +169,10 @@ impl IoRef {
     /// Requires the underlying runtime to implement `.write()`;
     /// otherwise, no action is taken.
     pub fn send_buf(&self) -> io::Result<()> {
-        if self.0.flags.is_write_upfront_enabled()
-            && let Some(hnd) = self.0.handle.take()
-        {
-            self.0.flags.unset_write_paused();
-
-            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-            hnd.write(ctx);
-            self.0.handle.set(Some(hnd));
-
+        if self.0.flags.is_write_upfront_enabled() {
             // write task is not paused, io write is pending
             // need to wake write task for io completeion
-            if !self.0.flags.is_write_paused() {
+            if !self.call_write() {
                 Iops::register_send(self.id());
             }
 
@@ -199,19 +189,12 @@ impl IoRef {
         if self.0.flags.is_write_paused() {
             // write buffer has data to process
             if self.0.buffer.write_buffer_has_bytes() {
-                self.0.flags.unset_write_paused();
-
-                let hnd = self.0.handle.take().unwrap();
-                let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-                hnd.write(ctx);
-                self.0.handle.set(Some(hnd));
-
-                // write task is not paused, io write is pending
+                // call handle and get write-paused state
+                // if write task is not paused, io write is pending
                 // need to wake write task for io completeion
-                if !self.0.flags.is_write_paused() {
-                    self.0.write_task.wake();
+                if self.call_write() {
+                    return;
                 }
-                return;
             }
         }
         self.0.write_task.wake();
@@ -284,15 +267,9 @@ impl IoRef {
                 (wrt, Ok(result))
             });
 
-            if wrt && let Some(hnd) = st.handle.take() {
-                st.flags.unset_write_paused();
-
-                let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-                hnd.write(ctx);
-                st.handle.set(Some(hnd));
-                if !st.flags.is_write_paused() {
-                    Iops::register_send(st.id());
-                }
+            // send data in-place and register if more need to send
+            if wrt && !self.call_write() {
+                Iops::register_send(st.id());
             }
             res
         }

@@ -248,6 +248,17 @@ impl IoRef {
             on_disconnect: Cell::new(None),
         }))
     }
+
+    /// Call handle write method, returns true if
+    /// `write-paused` is still set
+    pub(super) fn call_write(&self) -> bool {
+        self.0.flags.unset_write_paused();
+        let hnd = self.0.handle.take().unwrap();
+        let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
+        hnd.write(ctx);
+        self.0.handle.set(Some(hnd));
+        self.0.flags.is_write_paused()
+    }
 }
 
 impl<F> Io<F> {
