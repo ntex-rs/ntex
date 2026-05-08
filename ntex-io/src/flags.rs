@@ -1,6 +1,5 @@
-use std::cell::Cell;
+use std::{cell::Cell, fmt};
 
-#[derive(Debug)]
 pub struct Flags(Cell<FlagsKind>);
 
 bitflags::bitflags! {
@@ -37,8 +36,6 @@ bitflags::bitflags! {
         /// write buffer is full
         const DSP_W_BACKPRESSURE  = 0b0001_0000_0000_0000;
 
-        /// handle is set
-        const HANDLE              = 0b0010_0000_0000_0000;
         /// early write
         const UPFRONT_WRITE       = 0b0100_0000_0000_0000;
     }
@@ -130,7 +127,7 @@ impl Flags {
     }
 
     pub(crate) fn is_write_upfront_enabled(&self) -> bool {
-        self.contains(FlagsKind::HANDLE | FlagsKind::UPFRONT_WRITE | FlagsKind::WR_PAUSED)
+        self.contains(FlagsKind::UPFRONT_WRITE | FlagsKind::WR_PAUSED)
     }
 
     pub(crate) fn is_read_paused(&self) -> bool {
@@ -171,10 +168,6 @@ impl Flags {
 
     pub(crate) fn set_write_paused(&self) {
         self.insert(FlagsKind::WR_PAUSED);
-    }
-
-    pub(crate) fn set_io_handle_enabled(&self) {
-        self.insert(FlagsKind::HANDLE);
     }
 
     pub(crate) fn set_write_notify(&self) {
@@ -238,12 +231,20 @@ impl Flags {
         self.remove(FlagsKind::DSP_W_BACKPRESSURE);
     }
 
+    pub(crate) fn unset_wr_backpressure_and_flush(&self) {
+        self.remove(FlagsKind::DSP_W_BACKPRESSURE | FlagsKind::WR_FLUSH);
+    }
+
     pub(crate) fn unset_all_read_flags(&self) {
-        self.remove(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL | FlagsKind::RD_PAUSED);
+        self.remove(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL);
     }
 
     pub(crate) fn unset_read_ready(&self) {
         self.remove(FlagsKind::BUF_R_READY);
+    }
+
+    pub(crate) fn unset_read_paused(&self) {
+        self.remove(FlagsKind::RD_PAUSED);
     }
 
     /// Checks `RD_NOTIFY` and unsets
@@ -274,6 +275,12 @@ impl Flags {
             self.insert(FlagsKind::DSP_TIMEOUT);
             true
         }
+    }
+}
+
+impl fmt::Debug for Flags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.get().fmt(f)
     }
 }
 

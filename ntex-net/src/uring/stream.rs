@@ -201,7 +201,7 @@ impl Handler for StreamOpsHandler {
                         item.ctx.with_write_buf(|pages| pages.prepend(buf));
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
-                        item.ctx.update_write_buf(Poll::Pending);
+                        item.ctx.update_write_status(Poll::Pending);
                         if item.flags.contains(Flags::WR_REISSUE) {
                             item.flags.remove(Flags::WR_REISSUE);
                             st.send(id, &self.inner.api);
@@ -257,7 +257,7 @@ impl Handler for StreamOpsHandler {
                     if let Some(item) = st.streams.get_mut(id) {
                         if cqueue::notif(flags) {
                             let res = result.unwrap_or(Ok(()));
-                            if item.ctx.update_write_buf(Poll::Ready(res)) == IoTaskStatus::Io {
+                            if item.ctx.update_write_status(Poll::Ready(res)) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
                         } else if cqueue::more(flags) {
@@ -279,7 +279,7 @@ impl Handler for StreamOpsHandler {
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            if item.ctx.update_write_buf(Poll::Ready(res.map(|_| ()))) == IoTaskStatus::Io {
+                            if item.ctx.update_write_status(Poll::Ready(res.map(|_| ()))) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
                         }

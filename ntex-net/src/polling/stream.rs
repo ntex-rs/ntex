@@ -471,7 +471,7 @@ impl StreamItem {
             }
         });
         if let Some(res) = res {
-            self.ctx.update_write_buf(res)
+            self.ctx.update_write_status(res)
         } else {
             IoTaskStatus::Pause
         }

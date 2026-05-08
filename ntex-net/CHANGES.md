@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.0] - 2026-05-08
+
+* Simplify tokio integration impl
+
 ## [3.10.0] - 2026-05-03
 
 * Enable vectored writes for tokio,compio,neon runtime

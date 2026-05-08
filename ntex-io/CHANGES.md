@@ -1,6 +1,6 @@
 # Changes
 
-## [3.10.3] - 2026-05-08
+## [3.11.0] - 2026-05-08
 
 * Send bytes for all Io in one task
 

@@ -214,10 +214,7 @@ impl Io {
 
         // start io tasks
         let hnd = io.start(IoContext::new(ioref.clone()));
-        if hnd.is_some() {
-            ioref.0.flags.set_io_handle_enabled();
-        }
-        ioref.0.handle.set(hnd);
+        ioref.0.handle.set(Some(hnd));
 
         Io(UnsafeCell::new(ioref), marker::PhantomData)
     }
@@ -499,6 +496,7 @@ impl<F> Io<F> {
             // restart the read task.
             if st.flags.is_read_full_or_paused() {
                 st.flags.unset_all_read_flags();
+                st.flags.unset_read_paused();
                 st.read_task.wake();
                 if ready {
                     Poll::Ready(Ok(Some(())))
@@ -509,7 +507,10 @@ impl<F> Io<F> {
             } else if ready {
                 Poll::Ready(Ok(Some(())))
             } else {
-                st.read_task.wake();
+                if st.flags.is_read_paused() {
+                    st.read_task.wake();
+                    st.flags.unset_read_paused();
+                }
                 st.dispatch_task.register(cx.waker());
                 Poll::Pending
             }
@@ -570,7 +571,8 @@ impl<F> Io<F> {
     where
         U: Decoder,
     {
-        self.st().flags.unset_read_ready();
+        let st = self.st();
+        st.flags.unset_read_ready();
 
         let decoded = self
             .decode_item(codec)
@@ -578,28 +580,22 @@ impl<F> Io<F> {
 
         if decoded.item.is_some() {
             Ok(decoded)
+        } else if st.flags.is_stopped() {
+            Err(RecvError::PeerGone(st.error()))
+        } else if st.flags.check_dispatcher_timeout() {
+            Err(RecvError::KeepAlive)
+        } else if st.flags.is_wr_backpressure() {
+            Err(RecvError::WriteBackpressure)
         } else {
-            let st = self.st();
-            if st.flags.is_stopped() {
-                Err(RecvError::PeerGone(st.error()))
-            } else if st.flags.check_dispatcher_timeout() {
-                Err(RecvError::KeepAlive)
-            } else if st.flags.is_wr_backpressure() {
-                Err(RecvError::WriteBackpressure)
-            } else {
-                match self.poll_read_ready(cx) {
-                    Poll::Pending | Poll::Ready(Ok(Some(()))) => {
-                        if log::log_enabled!(log::Level::Trace) && decoded.remains != 0 {
-                            log::trace!(
-                                "{}: Not enough data to decode next frame",
-                                self.tag()
-                            );
-                        }
-                        Ok(decoded)
+            match self.poll_read_ready(cx) {
+                Poll::Pending | Poll::Ready(Ok(Some(()))) => {
+                    if log::log_enabled!(log::Level::Trace) && decoded.remains != 0 {
+                        log::trace!("{}: Not enough data to decode next frame", self.tag());
                     }
-                    Poll::Ready(Err(e)) => Err(RecvError::PeerGone(Some(e))),
-                    Poll::Ready(Ok(None)) => Err(RecvError::PeerGone(None)),
+                    Ok(decoded)
                 }
+                Poll::Ready(Err(e)) => Err(RecvError::PeerGone(Some(e))),
+                Poll::Ready(Ok(None)) => Err(RecvError::PeerGone(None)),
             }
         }
     }
@@ -637,7 +633,7 @@ impl<F> Io<F> {
         if st.flags.is_stopped() {
             Poll::Ready(Err(st.error_or_disconnected()))
         } else {
-            st.flags.unset_wr_backpressure();
+            st.flags.unset_wr_backpressure_and_flush();
             Poll::Ready(Ok(()))
         }
     }

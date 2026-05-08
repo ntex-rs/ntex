@@ -104,9 +104,18 @@ pub(super) async fn send_body(
         if let Some(result) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
             let chunk = result?;
             #[cfg(feature = "trace")]
-            log::trace!("{}: sending chunk, {} bytes", io.tag(), chunk.len());
+            let chunk_len = chunk.len();
             io.encode(h1::Message::Chunk(Some(chunk)), codec)?;
-            io.flush(false).await?;
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: sending chunk, {} bytes, backpressure: {}",
+                io.tag(),
+                chunk_len,
+                io.is_wr_backpressure()
+            );
+            if io.is_wr_backpressure() {
+                io.flush(false).await?;
+            }
             #[cfg(feature = "trace")]
             log::trace!("{}: flushed", io.tag());
         } else {

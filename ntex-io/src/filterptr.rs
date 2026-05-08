@@ -169,10 +169,14 @@ mod tests {
     struct IoTestWrapper;
 
     impl IoStream for IoTestWrapper {
-        fn start(self, _: IoContext) -> Option<Box<dyn Handle>> {
-            None
+        fn start(self, _: IoContext) -> Box<dyn Handle> {
+            Box::new(TestHandle)
         }
     }
+
+    struct TestHandle;
+
+    impl Handle for TestHandle {}
 
     #[ntex::test]
     async fn drop_filter() {
