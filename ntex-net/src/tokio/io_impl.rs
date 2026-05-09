@@ -269,16 +269,17 @@ where
             }
         });
 
+        let pending = result.is_pending();
         break match ctx.update_write_status(result) {
             IoTaskStatus::Stop => WrtStatus::Terminate,
-            IoTaskStatus::Pause => {
-                if more {
+            IoTaskStatus::Pause => WrtStatus::Pending,
+            IoTaskStatus::Io => {
+                if pending && more {
                     WrtStatus::More
                 } else {
-                    WrtStatus::Pending
+                    continue;
                 }
             }
-            IoTaskStatus::Io => continue,
         };
     }
 }
@@ -301,11 +302,7 @@ fn write_io<T: Stream>(
         ))),
         Ok(n) => {
             #[cfg(feature = "trace")]
-            log::trace!(
-                "{}: Flushed early {n} bytes from {} pages",
-                ctx.tag(),
-                bufs.len()
-            );
+            log::trace!("{}: Flushed {n} bytes from {} pages", ctx.tag(), bufs.len());
             Poll::Ready(Ok(n))
         }
         Err(e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
