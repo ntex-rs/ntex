@@ -168,7 +168,7 @@ where
                         WrtStatus::Terminate => Poll::Ready(Status::Terminate),
                     },
                     Err(err) => {
-                        ctx.update_write_status(Poll::Ready(Err(err)));
+                        ctx.update_write_status(Err(err));
                         Poll::Ready(Status::Terminate)
                     }
                 },
@@ -191,7 +191,7 @@ where
                 }
             }
             Err(err) => {
-                ctx.update_write_status(Poll::Ready(Err(err)));
+                ctx.update_write_status(Err(err));
                 Poll::Ready(())
             }
         })
@@ -212,7 +212,7 @@ where
     T: Stream,
 {
     loop {
-        let (more, result) = ctx.with_write_buf(|dst| {
+        let (more, result, pending) = ctx.with_write_buf(|dst| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None,
                 None, None, None, None,
@@ -263,13 +263,15 @@ where
                     }
                 }
 
-                (!dst.is_empty(), result.map(|res| res.map(|_| ())))
+                match result {
+                    Poll::Ready(val) => (!dst.is_empty(), val, false),
+                    Poll::Pending => (!dst.is_empty(), Ok(0), true),
+                }
             } else {
-                (false, Poll::Ready(Ok(())))
+                (false, Ok(0), false)
             }
         });
 
-        let pending = result.is_pending();
         break match ctx.update_write_status(result) {
             IoTaskStatus::Stop => WrtStatus::Terminate,
             IoTaskStatus::Pause => WrtStatus::Pending,
@@ -314,28 +316,22 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> IoTaskStatus {
     let mut buf = ctx.get_read_buf();
 
     // read data from socket
-    loop {
-        ctx.resize_read_buf(&mut buf);
+    let io_res =
+        io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
 
-        let io_res =
-            io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
+    let result = match io_res {
+        Ok(0) => Ok(None),
+        Ok(n) => {
+            // Safety: This is guaranteed to be the number of initialized
+            // bytes due to the invariants provided by `try_read()`.
+            unsafe { buf.advance_mut(n) }
+            Ok(Some(buf))
+        }
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(Some(buf)),
+        Err(e) => Err(e),
+    };
 
-        let result = match io_res {
-            Ok(0) => Poll::Ready(Err(None)),
-            Ok(n) => {
-                // Safety: This is guaranteed to be the number of initialized
-                // bytes due to the invariants provided by `try_read()`.
-                unsafe {
-                    buf.advance_mut(n);
-                }
-                continue;
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
-            Err(e) => Poll::Ready(Err(Some(e))),
-        };
-
-        return ctx.release_read_buf(buf, result);
-    }
+    ctx.update_read_status(result)
 }
 
 #[derive(Debug)]

@@ -533,11 +533,9 @@ mod tests {
     impl<F: Filter> Filter for Counter<F> {
         fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
             self.read_order.borrow_mut().push(self.idx);
-            let nbytes =
-                ctx.with_buffer(|b| b.read_dst().as_ref().map_or(0, BytesMut::len));
+            let nbytes = ctx.read_destination_size();
             let result = self.layer.process_read_buf(ctx);
-            let nbytes2 =
-                ctx.with_buffer(|b| b.read_dst().as_ref().map_or(0, BytesMut::len));
+            let nbytes2 = ctx.read_destination_size();
             self.in_bytes.set(self.in_bytes.get() + nbytes2 - nbytes);
             result
         }
@@ -642,7 +640,7 @@ mod tests {
         assert_eq!(Rc::strong_count(&in_bytes), 3);
         drop(state);
         assert_eq!(Rc::strong_count(&in_bytes), 1);
-        assert_eq!(*read_order.borrow(), &[1, 2][..]);
+        assert_eq!(*read_order.borrow(), &[1, 2, 1, 2][..]);
         assert_eq!(*write_order.borrow(), &[1, 2, 1, 2, 1, 2][..]);
     }
 }

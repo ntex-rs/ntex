@@ -1,6 +1,6 @@
 use std::{cell::Cell, fmt, io, task::Poll};
 
-use ntex_bytes::{BufMut, BytePageSize, BytePages, BytesMut, buf::UninitSlice};
+use ntex_bytes::{BytePageSize, BytePages, BytesMut};
 
 use crate::IoRef;
 
@@ -311,6 +311,10 @@ impl FilterCtx<'_> {
     pub(crate) fn write_destination(&mut self) -> &mut BytePages {
         &mut self.buffers[self.buffers.len() - 2].write
     }
+
+    pub fn read_destination_size(&self) -> usize {
+        self.buffers[0].read.as_ref().map_or(0, BytesMut::len)
+    }
 }
 
 #[derive(Debug)]
@@ -417,54 +421,5 @@ impl FilterBuf<'_> {
         F: FnOnce(&IoRef, &mut BytePages, &mut BytePages) -> R,
     {
         f(self.io, &mut self.curr.write, &mut self.next.write)
-    }
-}
-
-impl Buffer {
-    /// Creates a new buffer.
-    pub fn new(buf: BytesMut) -> Self {
-        Self {
-            len: buf.len(),
-            buf,
-        }
-    }
-
-    /// Returns the number of newly added bytes.
-    pub fn newbytes(&self) -> usize {
-        self.buf.len() - self.len
-    }
-
-    /// Returns true if the buffer contains new bytes.
-    pub fn has_newbytes(&self) -> bool {
-        self.len < self.buf.len()
-    }
-}
-
-impl AsRef<[u8]> for Buffer {
-    #[inline]
-    fn as_ref(&self) -> &[u8] {
-        self.buf.as_ref()
-    }
-}
-
-impl BufMut for Buffer {
-    #[inline]
-    fn remaining_mut(&self) -> usize {
-        self.buf.remaining_mut()
-    }
-
-    #[inline]
-    unsafe fn advance_mut(&mut self, cnt: usize) {
-        unsafe { self.buf.advance_mut(cnt) }
-    }
-
-    #[inline]
-    fn chunk_mut(&mut self) -> &mut UninitSlice {
-        self.buf.chunk_mut()
-    }
-
-    #[inline]
-    fn put_slice(&mut self, src: &[u8]) {
-        self.buf.put_slice(src);
     }
 }

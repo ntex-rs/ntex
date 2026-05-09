@@ -18,11 +18,11 @@ bitflags::bitflags! {
         const RD_PAUSED           = 0b0000_0000_0001_0000;
         /// read any data and notify dispatcher
         const RD_NOTIFY           = 0b0000_0000_0010_0000;
+        /// read backpressure
+        const RD_BACKPRESSURE     = 0b0000_0000_1000_0000;
 
         /// new data is available in read buffer
         const BUF_R_READY         = 0b0000_0000_0100_0000;
-        /// read buffer is full
-        const BUF_R_FULL          = 0b0000_0000_1000_0000;
 
         /// flush write buf
         const WR_FLUSH            = 0b0000_0001_0000_0000;
@@ -147,19 +147,23 @@ impl Flags {
     }
 
     pub(crate) fn is_rd_backpressure(&self) -> bool {
-        self.contains(FlagsKind::BUF_R_FULL)
+        self.contains(FlagsKind::RD_BACKPRESSURE)
     }
 
     pub(crate) fn is_wr_backpressure(&self) -> bool {
         self.contains(FlagsKind::DSP_W_BACKPRESSURE)
     }
 
-    pub(crate) fn is_read_full_or_paused(&self) -> bool {
-        self.intersects(FlagsKind::RD_PAUSED | FlagsKind::BUF_R_FULL)
+    pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {
+        self.intersects(FlagsKind::RD_PAUSED | FlagsKind::RD_BACKPRESSURE)
     }
 
-    pub(crate) fn is_read_full_and_ready(&self) -> bool {
-        self.contains(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL)
+    pub(crate) fn is_read_full_or_backpressure(&self) -> bool {
+        self.intersects(FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE)
+    }
+
+    pub(crate) fn is_read_ready_and_backpressure(&self) -> bool {
+        self.contains(FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE)
     }
 
     pub(crate) fn set_read_paused(&self) {
@@ -207,8 +211,10 @@ impl Flags {
         self.insert(FlagsKind::BUF_R_READY);
     }
 
-    pub(crate) fn set_read_ready_and_full(&self) {
-        self.insert(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL);
+    pub(crate) fn set_read_ready_and_backpressure(&self) {
+        self.insert(
+            FlagsKind::RD_PAUSED | FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE,
+        );
     }
 
     pub(crate) fn set_filters_stopped(&self) {
@@ -236,7 +242,7 @@ impl Flags {
     }
 
     pub(crate) fn unset_all_read_flags(&self) {
-        self.remove(FlagsKind::BUF_R_READY | FlagsKind::BUF_R_FULL);
+        self.remove(FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE);
     }
 
     pub(crate) fn unset_read_ready(&self) {

@@ -249,11 +249,12 @@ impl IoRef {
     /// Call handle write method, returns true if
     /// `write-paused` is still set
     pub(super) fn call_write(&self) -> bool {
-        self.0.flags.unset_write_paused();
-        let hnd = self.0.handle.take().unwrap();
-        let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
-        hnd.write(ctx);
-        self.0.handle.set(Some(hnd));
+        if let Some(hnd) = self.0.handle.take() {
+            self.0.flags.unset_write_paused();
+            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
+            hnd.write(ctx);
+            self.0.handle.set(Some(hnd));
+        }
         self.0.flags.is_write_paused()
     }
 }
@@ -494,7 +495,7 @@ impl<F> Io<F> {
 
             // If the dispatcher requests more data but no read occurs,
             // restart the read task.
-            if st.flags.is_read_full_or_paused() {
+            if st.flags.is_read_paused_or_backpressure() {
                 st.flags.unset_all_read_flags();
                 st.flags.unset_read_paused();
                 st.read_task.wake();
@@ -557,7 +558,6 @@ impl<F> Io<F> {
         }
     }
 
-    #[doc(hidden)]
     #[inline]
     /// Decode codec item from incoming bytes stream.
     ///
@@ -739,8 +739,6 @@ impl<F> ops::Deref for Io<F> {
 
 impl<F> Drop for Io<F> {
     fn drop(&mut self) {
-        IoManager::unregister(self.io_ref());
-
         let st = self.st();
         self.stop_timer();
 
@@ -758,6 +756,8 @@ impl<F> Drop for Io<F> {
             st.terminate_connection(None);
             st.filter.drop_filter::<F>();
         }
+
+        IoManager::unregister(self.io_ref());
     }
 }
 

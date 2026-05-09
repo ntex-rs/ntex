@@ -2,8 +2,8 @@ use std::{any, cmp, future::poll_fn, io, mem, task::Poll};
 
 use compio_buf::{BufResult, IoBuf, IoBufMut, SetLen};
 use compio_io::{AsyncRead, AsyncWrite};
-use ntex_bytes::{BufMut, BytePage, BytePages};
-use ntex_io::{Buffer, Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
+use ntex_bytes::{BufMut, BytePage, BytePages, BytesMut};
+use ntex_io::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 use ntex_util::future::{Either, select};
 
 use super::{TcpStream, UnixStream};
@@ -47,7 +47,7 @@ impl Handle for HandleUnixWrapper {
     }
 }
 
-struct CompioBuf(Buffer);
+struct CompioBuf(BytesMut);
 
 impl IoBuf for CompioBuf {
     #[inline]
@@ -99,9 +99,7 @@ async fn read<T>(io: T, ctx: &IoContext)
 where
     T: AsyncRead + AsyncWrite + Clone + Unpin,
 {
-    let mut buf = ctx.get_read_buf();
-    ctx.resize_read_buf(&mut buf);
-    let mut read_fut = Some(Box::pin(read_buf(&io, buf)));
+    let mut read_fut = Some(Box::pin(read_buf(&io, ctx.get_read_buf())));
 
     loop {
         if read_ready(ctx).await {
@@ -110,16 +108,15 @@ where
 
         match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
-                let result = ctx.release_read_buf(
-                    cbuf.0,
-                    Poll::Ready(result.map(|_| ()).map_err(Some)),
-                );
-                if result == IoTaskStatus::Stop {
+                let res = match result {
+                    Ok(0) => Ok(None),
+                    Ok(_) => Ok(Some(cbuf.0)),
+                    Err(e) => Err(e),
+                };
+                if ctx.update_read_status(res) == IoTaskStatus::Stop {
                     break;
                 }
-                let mut buf = ctx.get_read_buf();
-                ctx.resize_read_buf(&mut buf);
-                read_fut = Some(Box::pin(read_buf(&io, buf)));
+                read_fut = Some(Box::pin(read_buf(&io, ctx.get_read_buf())));
             }
             Either::Right(true) => break,
             Either::Right(false) => (),
@@ -134,7 +131,7 @@ where
     }
 }
 
-async fn read_buf<T>(io: &T, buf: Buffer) -> BufResult<usize, CompioBuf>
+async fn read_buf<T>(io: &T, buf: BytesMut) -> BufResult<usize, CompioBuf>
 where
     T: AsyncRead + AsyncWrite + Clone,
 {
@@ -226,8 +223,9 @@ where
                 io::ErrorKind::WriteZero,
                 "failed to write frame to transport",
             )),
-            Ok(mut written) => {
+            Ok(n) => {
                 // remove written pages
+                let mut written = n;
                 while !bufs.is_empty() {
                     let page = &mut bufs[0];
                     let len = cmp::min(page.0.len(), written);
@@ -241,11 +239,11 @@ where
                         break;
                     }
                 }
-                Ok(())
+                Ok(n)
             }
             Err(e) => Err(e),
         };
-        if ctx.update_write_status(Poll::Ready(result)) == IoTaskStatus::Stop {
+        if ctx.update_write_status(result) == IoTaskStatus::Stop {
             return IoTaskStatus::Stop;
         }
     }
