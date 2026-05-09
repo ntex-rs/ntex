@@ -30,14 +30,16 @@ bitflags::bitflags! {
         const WR_PAUSED           = 0b0000_0010_0000_0000;
         /// write any data and notify dispatcher
         const WR_NOTIFY           = 0b0000_0100_0000_0000;
+        /// write ops is scheduled
+        const WR_SEND             = 0b0000_1000_0000_0000;
 
         /// timeout occurred
-        const DSP_TIMEOUT         = 0b0000_1000_0000_0000;
+        const DSP_TIMEOUT         = 0b0001_0000_0000_0000;
         /// write buffer is full
-        const DSP_W_BACKPRESSURE  = 0b0001_0000_0000_0000;
+        const DSP_W_BACKPRESSURE  = 0b0010_0000_0000_0000;
 
         /// early write
-        const UPFRONT_WRITE       = 0b0100_0000_0000_0000;
+        const UPFRONT_WRITE       = 0b1000_0000_0000_0000;
     }
 }
 
@@ -154,11 +156,15 @@ impl Flags {
         self.contains(FlagsKind::DSP_W_BACKPRESSURE)
     }
 
+    pub(crate) fn is_wr_send_op(&self) -> bool {
+        self.contains(FlagsKind::WR_SEND)
+    }
+
     pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {
         self.intersects(FlagsKind::RD_PAUSED | FlagsKind::RD_BACKPRESSURE)
     }
 
-    pub(crate) fn is_read_full_or_backpressure(&self) -> bool {
+    pub(crate) fn is_read_ready_or_backpressure(&self) -> bool {
         self.intersects(FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE)
     }
 
@@ -176,6 +182,10 @@ impl Flags {
 
     pub(crate) fn set_write_notify(&self) {
         self.insert(FlagsKind::WR_NOTIFY);
+    }
+
+    pub(crate) fn set_wr_send_op(&self) {
+        self.insert(FlagsKind::WR_SEND);
     }
 
     pub(crate) fn set_wr_backpressure(&self) {
@@ -231,6 +241,10 @@ impl Flags {
 
     pub(crate) fn unset_wants_write(&self) {
         self.remove(FlagsKind::IO_WANTS_WRITE);
+    }
+
+    pub(crate) fn unset_wr_send_op(&self) {
+        self.remove(FlagsKind::WR_SEND);
     }
 
     pub(crate) fn unset_wr_backpressure(&self) {

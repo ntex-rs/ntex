@@ -230,6 +230,6 @@ impl RefUnwindSafe for crate::polling::Driver {}
 #[allow(dead_code)]
 impl Wrapper {
     fn block_on(&self, fut: BlockFutureWrapper, driver: &dyn Driver) {
-        self.0.block_on(fut.0, driver)
+        self.0.block_on(fut.0, driver);
     }
 }

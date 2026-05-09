@@ -63,7 +63,6 @@ impl Filter for Base {
     #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-
         if st.flags.is_closed() {
             Poll::Ready(Readiness::Terminate)
         } else {
@@ -71,7 +70,8 @@ impl Filter for Base {
 
             if st.flags.is_stopping_filters() {
                 Poll::Ready(Readiness::Ready)
-            } else if st.flags.is_read_full_or_backpressure() {
+            //} else if st.flags.is_read_ready_or_backpressure() {
+            } else if st.flags.is_read_paused_or_backpressure() {
                 // read buffer is fulled of is not processed by dispatcher yet
                 Poll::Pending
             } else {
@@ -111,13 +111,13 @@ impl Filter for Base {
 
         let buf = ctx.write_destination();
         let len = buf.len();
-        if len > 0 && st.flags.is_write_paused() {
+        if len > 0 && st.flags.is_write_paused() && !st.flags.is_wr_send_op() {
             st.flags.unset_write_paused();
-            st.write_task.wake();
+            st.wake_write_task();
         }
         if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
             st.flags.set_wr_backpressure();
-            st.dispatch_task.wake();
+            st.wake_dispatch_task();
         }
         Ok(())
     }

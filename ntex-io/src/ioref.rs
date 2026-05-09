@@ -92,8 +92,8 @@ impl IoRef {
     pub fn wants_shutdown(&self) {
         if !self.0.flags.is_stopping_any() {
             log::trace!("{}: Initiate io shutdown {:?}", self.tag(), self.0.flags);
-            self.0.read_task.wake();
-            self.0.write_task.wake();
+            self.0.wake_read_task();
+            self.0.wake_write_task();
             self.0.flags.set_filter_stopping();
         }
     }
@@ -186,18 +186,20 @@ impl IoRef {
     }
 
     pub(crate) fn ops_send_buf(&self) {
+        self.0.flags.unset_wr_send_op();
+
         if self.0.flags.is_write_paused() {
             // write buffer has data to process
             if self.0.buffer.write_buffer_has_bytes() {
                 // call handle and get write-paused state
                 // if write task is not paused, io write is pending
                 // need to wake write task for io completeion
-                if self.call_write() {
-                    return;
+                if !self.call_write() {
+                    self.0.wake_read_task();
+                    self.0.flags.unset_write_paused();
                 }
             }
         }
-        self.0.write_task.wake();
     }
 
     /// Get access to filter buffer
@@ -254,14 +256,15 @@ impl IoRef {
                     if st.flags.is_write_upfront_enabled() && len > st.cfg.write_buf_limit()
                     {
                         wrt = true;
-                    } else {
+                    } else if !st.flags.is_wr_send_op() {
+                        st.flags.set_wr_send_op();
                         Iops::register_send(st.id());
                     }
                 }
                 // enable backpressure
                 if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
                     st.flags.set_wr_backpressure();
-                    st.dispatch_task.wake();
+                    st.wake_dispatch_task();
                 }
 
                 (wrt, Ok(result))
@@ -269,6 +272,7 @@ impl IoRef {
 
             // send data in-place and register if more need to send
             if wrt && !self.call_write() {
+                st.flags.set_wr_send_op();
                 Iops::register_send(st.id());
             }
             res
@@ -286,7 +290,7 @@ impl IoRef {
         }
 
         if st.flags.is_read_paused() {
-            st.read_task.wake();
+            st.wake_read_task();
             st.flags.unset_read_paused();
         }
     }
@@ -306,7 +310,7 @@ impl IoRef {
     /// Wakeup dispatcher
     pub fn notify_dispatcher(&self) {
         log::trace!("{}: Timer, notify dispatcher", self.tag());
-        self.0.dispatch_task.wake();
+        self.0.wake_dispatch_task();
     }
 
     /// Wakeup dispatcher and send keep-alive error

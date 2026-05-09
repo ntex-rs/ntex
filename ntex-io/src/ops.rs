@@ -248,7 +248,9 @@ impl IoManager {
         if let Some(id) = io.id().0 {
             io.0.id.set(Id(None));
             IoManager::with(|manager| {
-                manager.storage.remove(id.get());
+                if manager.storage.contains(id.get()) {
+                    manager.storage.remove(id.get());
+                }
             });
         }
     }
@@ -275,6 +277,7 @@ impl Iops {
 
         spawn(async move {
             IoManager::with(|mgr| {
+                println!("========== RUN-SEND ===========");
                 mgr.iops.running = false;
 
                 let mut ops = mem::take(&mut mgr.iops.ops);
@@ -284,6 +287,7 @@ impl Iops {
                     }
                 }
                 let _ = mem::replace(&mut mgr.iops.ops, ops);
+                println!("========== RUN-SEND - DONE ===========");
             });
         });
     }

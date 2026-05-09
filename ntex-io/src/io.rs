@@ -32,7 +32,7 @@ pub(crate) struct IoState {
     pub(super) error: Cell<Option<io::Error>>,
     pub(super) read_task: LocalWaker,
     pub(super) write_task: LocalWaker,
-    pub(super) dispatch_task: LocalWaker,
+    dispatch_task: LocalWaker,
     pub(super) buffer: Stack,
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) timeout: Cell<TimerHandle>,
@@ -56,7 +56,7 @@ impl IoState {
 
     pub(super) fn notify_timeout(&self) {
         if self.flags.check_dispatcher_timeout_unset() {
-            self.dispatch_task.wake();
+            self.wake_dispatch_task();
             log::trace!("{}: Timer, notify dispatcher", self.cfg.tag());
         }
     }
@@ -87,9 +87,9 @@ impl IoState {
     }
 
     pub(super) fn filters_stopped(&self) {
-        self.read_task.wake();
-        self.write_task.wake();
-        self.dispatch_task.wake();
+        self.wake_read_task();
+        self.wake_write_task();
+        self.wake_dispatch_task();
         self.flags.set_filters_stopped();
     }
 
@@ -106,8 +106,8 @@ impl IoState {
             if err.is_some() {
                 self.error.set(err);
             }
-            self.read_task.wake();
-            self.write_task.wake();
+            self.wake_read_task();
+            self.wake_write_task();
             self.notify_disconnect();
             self.handle.take();
             self.flags.set_force_closed();
@@ -128,8 +128,8 @@ impl IoState {
         if !self.flags.is_stopping_any() {
             log::trace!("{}: Initiate io shutdown {:?}", self.cfg.tag(), self.flags);
             self.flags.set_filter_stopping();
-            self.read_task.wake();
-            self.write_task.wake();
+            self.wake_read_task();
+            self.wake_write_task();
         }
     }
 
@@ -147,6 +147,18 @@ impl IoState {
 
     pub(super) fn disable_wr_backpressure(&self, size: usize) -> bool {
         size <= self.cfg.write_buf().half
+    }
+
+    pub(super) fn wake_read_task(&self) {
+        self.read_task.wake();
+    }
+
+    pub(super) fn wake_write_task(&self) {
+        self.write_task.wake();
+    }
+
+    pub(super) fn wake_dispatch_task(&self) {
+        self.dispatch_task.wake();
     }
 }
 
@@ -255,7 +267,7 @@ impl IoRef {
             hnd.write(ctx);
             self.0.handle.set(Some(hnd));
         }
-        self.0.flags.is_write_paused()
+        self.0.flags.is_write_paused() && !self.0.flags.is_wr_send_op()
     }
 }
 
@@ -433,7 +445,7 @@ impl<F> Io<F> {
     pub fn pause(&self) {
         let st = self.st();
         if !st.flags.is_read_paused() {
-            st.read_task.wake();
+            st.wake_read_task();
             st.flags.set_read_paused();
         }
     }
@@ -498,7 +510,7 @@ impl<F> Io<F> {
             if st.flags.is_read_paused_or_backpressure() {
                 st.flags.unset_all_read_flags();
                 st.flags.unset_read_paused();
-                st.read_task.wake();
+                st.wake_read_task();
                 if ready {
                     Poll::Ready(Ok(Some(())))
                 } else {
@@ -509,7 +521,7 @@ impl<F> Io<F> {
                 Poll::Ready(Ok(Some(())))
             } else {
                 if st.flags.is_read_paused() {
-                    st.read_task.wake();
+                    st.wake_read_task();
                     st.flags.unset_read_paused();
                 }
                 st.dispatch_task.register(cx.waker());
@@ -656,8 +668,8 @@ impl<F> Io<F> {
             st.flags.unset_all_read_flags();
             st.flags.unset_read_paused();
 
-            st.read_task.wake();
-            st.write_task.wake();
+            st.wake_read_task();
+            st.wake_write_task();
             st.dispatch_task.register(cx.waker());
             Poll::Pending
         }

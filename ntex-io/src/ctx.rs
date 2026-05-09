@@ -108,7 +108,7 @@ impl IoContext {
                         st.flags.set_read_ready();
                     }
                     log::trace!("{}: New {size} bytes available, wakeup dispatcher", st.tag());
-                    st.dispatch_task.wake();
+                    st.wake_dispatch_task();
                 } else {
                     if st.flags.is_rd_backpressure() {
                         // The read task is paused due to read back-pressure,
@@ -121,7 +121,7 @@ impl IoContext {
                     if st.flags.is_read_notify() {
                         // In the case of a "notify" flag, we must wake the
                         // dispatch task if any data was read from the source.
-                        st.dispatch_task.wake();
+                        st.wake_dispatch_task();
                     }
                 }
 
@@ -189,14 +189,14 @@ impl IoContext {
                 let can_disable_flush = st.flags.is_write_flush() && len == 0;
 
                 if can_disable_wr_backpressure || can_disable_flush {
-                    st.dispatch_task.wake();
+                    st.wake_dispatch_task();
                 }
 
                 // wake up both tasks
                 if written > 0 && st.flags.is_write_notify() {
                     st.flags.unset_write_notify();
-                    st.read_task.wake();
-                    st.write_task.wake();
+                    st.wake_read_task();
+                    st.wake_write_task();
                 }
 
                 if self.is_stopped() {
