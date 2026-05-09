@@ -249,8 +249,8 @@ impl Handler for StreamOpsHandler {
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
                                 let status = match res {
-                                    Ok(0) => Ok(Some(buf)),
-                                    Ok(_) => Ok(None),
+                                    Ok(0) => Ok(None),
+                                    Ok(_) => Ok(Some(buf)),
                                     Err(e) => Err(e)
                                 };
                                 if item.ctx.update_read_status(status) == IoTaskStatus::Io {
