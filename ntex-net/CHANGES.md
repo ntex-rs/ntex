@@ -4,6 +4,8 @@
 
 * Simplify tokio integration impl
 
+* Optimize neon(polling) impl
+
 ## [3.10.0] - 2026-05-03
 
 * Enable vectored writes for tokio,compio,neon runtime

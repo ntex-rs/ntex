@@ -219,7 +219,7 @@ where
     T: Stream,
 {
     loop {
-        let result = ctx.with_write_buf(|dst| {
+        let (more, result) = ctx.with_write_buf(|dst| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None,
                 None, None, None, None,
@@ -270,26 +270,22 @@ where
                     }
                 }
 
-                Some((!dst.is_empty(), result.map(|res| res.map(|_| ()))))
+                (!dst.is_empty(), result.map(|res| res.map(|_| ())))
             } else {
-                None
+                (false, Poll::Ready(Ok(())))
             }
         });
 
-        break if let Some((more, result)) = result {
-            match ctx.update_write_status(result) {
-                IoTaskStatus::Stop => WrtStatus::Terminate,
-                IoTaskStatus::Pause => {
-                    if more {
-                        WrtStatus::More
-                    } else {
-                        WrtStatus::Pending
-                    }
+        break match ctx.update_write_status(result) {
+            IoTaskStatus::Stop => WrtStatus::Terminate,
+            IoTaskStatus::Pause => {
+                if more {
+                    WrtStatus::More
+                } else {
+                    WrtStatus::Pending
                 }
-                IoTaskStatus::Io => continue,
             }
-        } else {
-            WrtStatus::Pending
+            IoTaskStatus::Io => continue,
         };
     }
 }

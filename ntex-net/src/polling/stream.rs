@@ -12,12 +12,12 @@ use super::{Driver, DriverApi, Event, Handler};
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
 
-pub(crate) struct StreamCtl {
+pub(super) struct StreamCtl {
     id: u32,
     inner: Rc<StreamOpsInner>,
 }
 
-pub(crate) struct WeakStreamCtl {
+pub(super) struct WeakStreamCtl {
     id: u32,
     inner: Rc<StreamOpsInner>,
 }
@@ -38,7 +38,7 @@ enum IdType {
 }
 
 #[derive(Debug)]
-struct StreamItem {
+pub(super) struct StreamItem {
     io: Socket,
     flags: Flags,
     ctx: IoContext,
@@ -377,11 +377,18 @@ impl Drop for StreamCtl {
 }
 
 impl WeakStreamCtl {
-    pub(crate) fn with<F, R>(&self, f: F) -> R
+    pub(super) fn with_socket<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&Socket) -> R,
     {
         self.inner.with(|streams| f(&streams[self.id as usize].io))
+    }
+
+    pub(super) fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut StreamItem) -> R,
+    {
+        self.inner.with(|streams| f(&mut streams[self.id as usize]))
     }
 }
 
@@ -400,7 +407,7 @@ impl StreamItem {
         self.ctx.tag()
     }
 
-    fn write(&mut self) -> IoTaskStatus {
+    pub(super) fn write(&mut self) -> IoTaskStatus {
         let res = self.ctx.with_write_buf(|wrt| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None,
@@ -461,20 +468,16 @@ impl StreamItem {
                                 wrt.prepend(page);
                             }
                         }
-                        Some(Poll::Ready(Ok(())))
+                        Poll::Ready(Ok(()))
                     }
-                    Poll::Ready(Err(e)) => Some(Poll::Ready(Err(e))),
-                    Poll::Pending => Some(Poll::Pending),
+                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                    Poll::Pending => Poll::Pending,
                 }
             } else {
-                None
+                Poll::Ready(Ok(()))
             }
         });
-        if let Some(res) = res {
-            self.ctx.update_write_status(res)
-        } else {
-            IoTaskStatus::Pause
-        }
+        self.ctx.update_write_status(res)
     }
 
     fn read(&mut self) -> IoTaskStatus {
