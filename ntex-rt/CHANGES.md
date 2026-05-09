@@ -1,5 +1,9 @@
 # Changes
 
+## [3.13.1] - 2026-05-09
+
+* Add remove_all_items() helper, removes all arbiter's items
+
 ## [3.13.0] - 2026-05-08
 
 * Add with_item() helper method

@@ -451,3 +451,8 @@ where
         }
     })
 }
+
+/// Remove all items from storage.
+pub fn remove_all_items() {
+    STORAGE.with(move |cell| cell.borrow_mut().clear());
+}
