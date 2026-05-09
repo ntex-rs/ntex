@@ -291,27 +291,11 @@ impl StreamOpsInner {
             }
         }
     }
-}
-
-impl StreamCtl {
-    pub(crate) async fn shutdown(self) -> io::Result<()> {
-        self.inner
-            .with(|streams| {
-                let item = &mut streams[self.id as usize];
-                let fd = item.fd();
-                ntex_rt::spawn_blocking(move || {
-                    syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
-                })
-            })
-            .await
-            .map_err(io::Error::other)
-            .and_then(|res| res.map_err(io::Error::other))
-    }
 
     /// Modify poll interest for the stream
-    pub(crate) fn interest(&self, rd: bool, wr: bool) {
-        self.inner.with(|streams| {
-            let io = &mut streams[self.id as usize];
+    fn interest(&self, id: u32, rd: bool, wr: bool) {
+        self.with(|streams| {
+            let io = &mut streams[id as usize];
             let mut event = Event::new(0, false, false).with_interrupt();
             #[cfg(feature = "trace")]
             log::trace!(
@@ -364,9 +348,30 @@ impl StreamCtl {
                     event.readable,
                     event.writable
                 );
-                self.inner.api.modify(io.fd(), self.id, event);
+                self.api.modify(io.fd(), id, event);
             }
         });
+    }
+}
+
+impl StreamCtl {
+    pub(crate) async fn shutdown(self) -> io::Result<()> {
+        self.inner
+            .with(|streams| {
+                let item = &mut streams[self.id as usize];
+                let fd = item.fd();
+                ntex_rt::spawn_blocking(move || {
+                    syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
+                })
+            })
+            .await
+            .map_err(io::Error::other)
+            .and_then(|res| res.map_err(io::Error::other))
+    }
+
+    /// Modify poll interest for the stream
+    pub(crate) fn interest(&self, rd: bool, wr: bool) {
+        self.inner.interest(self.id, rd, wr);
     }
 }
 
@@ -407,7 +412,11 @@ impl StreamItem {
         self.ctx.tag()
     }
 
-    pub(super) fn write(&mut self) -> IoTaskStatus {
+    pub(super) fn write_direct(&mut self) {
+        self.write();
+    }
+
+    fn write(&mut self) -> IoTaskStatus {
         let res = self.ctx.with_write_buf(|wrt| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None,
@@ -435,44 +444,36 @@ impl StreamItem {
 
             if num > 0 {
                 let fd = self.fd();
-                #[cfg(feature = "trace")]
-                log::trace!(
-                    "{}: {fd:?}-Wrt buf({}) size({:?})",
-                    self.ctx.tag(),
-                    num,
-                    size
-                );
-
                 let res = if num == 1 {
                     let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
                     syscall!(break libc::write(fd, io.cast(), size))
                 } else {
                     syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
                 };
-                match res {
-                    Poll::Ready(Ok(mut written)) => {
-                        // remove written bytes
-                        if written > 0 {
-                            for page in pages[..num].iter_mut().flatten() {
-                                let len = cmp::min(page.len(), written);
-                                page.advance_to(len);
-                                written -= len;
-                                if written == 0 {
-                                    break;
-                                }
-                            }
+                #[cfg(feature = "trace")]
+                log::trace!("{}: {fd:?}-Wrt buf({num}:{size}) ({res:?})", self.ctx.tag());
+
+                let mut written = if let Poll::Ready(Ok(n)) = res { n } else { 0 };
+
+                // remove written bytes
+                if written > 0 {
+                    for page in pages[..num].iter_mut().flatten() {
+                        let len = cmp::min(page.len(), written);
+                        page.advance_to(len);
+                        written -= len;
+                        if written == 0 {
+                            break;
                         }
-                        // return unwritten data back to buffer
-                        for p in pages[..num].iter_mut().rev() {
-                            if let Some(page) = p.take() {
-                                wrt.prepend(page);
-                            }
-                        }
-                        Poll::Ready(Ok(()))
                     }
-                    Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-                    Poll::Pending => Poll::Pending,
                 }
+                // return unwritten data back to buffer
+                for p in pages[..num].iter_mut().rev() {
+                    if let Some(page) = p.take() {
+                        wrt.prepend(page);
+                    }
+                }
+
+                res.map(|res| res.map(|_| ()))
             } else {
                 Poll::Ready(Ok(()))
             }

@@ -3,7 +3,7 @@ use std::{any, future::poll_fn, task::Poll};
 use ntex_io::{Handle, IoContext, Readiness, types};
 use ntex_rt::spawn;
 
-use super::stream::{StreamCtl, WeakStreamCtl};
+use super::stream::{StreamCtl, StreamItem, WeakStreamCtl};
 
 impl ntex_io::IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
@@ -39,9 +39,7 @@ impl Handle for HandleWrapper {
     }
 
     fn write(&self, _: &IoContext) {
-        self.0.with(|item| {
-            item.write();
-        });
+        self.0.with(StreamItem::write_direct);
     }
 }
 

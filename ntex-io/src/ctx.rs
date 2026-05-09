@@ -247,7 +247,13 @@ impl IoContext {
                 if st.flags.is_wr_backpressure() && st.disable_wr_backpressure(len) {
                     st.dispatch_task.wake();
                 }
-                IoTaskStatus::Pause
+
+                if len == 0 {
+                    st.flags.set_write_paused();
+                    IoTaskStatus::Pause
+                } else {
+                    IoTaskStatus::Io
+                }
             }
             Poll::Ready(Ok(())) => {
                 let len = st.buffer.write_buffer_size();
