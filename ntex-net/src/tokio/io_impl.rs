@@ -198,14 +198,7 @@ where
         .await;
     }
 
-    #[allow(invalid_reference_casting)]
-    let result = poll_fn(|cx| {
-        let wrp: &mut T = unsafe { &mut *(ptr::from_ref(io.as_ref()).cast_mut()) };
-        Pin::new(wrp).poll_shutdown(cx)
-    })
-    .await;
-
-    log::trace!("{}: Shutdown complete, result {result:?}", ctx.tag());
+    log::trace!("{}: Shutdown complete", ctx.tag());
     if !ctx.is_stopped() {
         ctx.stop(None);
     }
