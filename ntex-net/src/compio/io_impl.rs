@@ -12,16 +12,16 @@ const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
 
 impl IoStream for TcpStream {
-    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         compio_runtime::spawn(run(self.0.clone(), ctx)).detach();
-        Some(Box::new(HandleWrapper(self.0)))
+        Box::new(HandleWrapper(self.0))
     }
 }
 
 impl IoStream for UnixStream {
-    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         compio_runtime::spawn(run(self.0.clone(), ctx)).detach();
-        None
+        Box::new(HandleUnixWrapper(self.0))
     }
 }
 
@@ -34,6 +34,15 @@ impl Handle for HandleWrapper {
         {
             return Some(Box::new(types::PeerAddr(addr)));
         }
+        None
+    }
+}
+
+#[allow(dead_code)]
+struct HandleUnixWrapper(compio_net::UnixStream);
+
+impl Handle for HandleUnixWrapper {
+    fn query(&self, _: any::TypeId) -> Option<Box<dyn any::Any>> {
         None
     }
 }
@@ -75,11 +84,11 @@ async fn run<T: AsyncRead + AsyncWrite + Clone + Unpin + 'static>(io: T, ctx: Io
     let wr_ctx = ctx.clone();
     let wr_task = compio_runtime::spawn(async move {
         write(wr_io, &wr_ctx).await;
-        log::debug!("{} Write task is stopped", wr_ctx.tag());
+        log::debug!("{}: Write task is stopped", wr_ctx.tag());
     });
 
     read(io, &ctx).await;
-    log::debug!("{} Read task is stopped", ctx.tag());
+    log::debug!("{}: Read task is stopped", ctx.tag());
 
     if !wr_task.is_finished() {
         let _ = wr_task.await;
@@ -166,7 +175,8 @@ where
             Readiness::Shutdown => {
                 let bufs = ctx.with_write_buf(build_bufs);
                 write_buf(&mut io, ctx, bufs).await;
-                let _ = io.shutdown().await;
+                let res = io.shutdown().await;
+                ctx.stop(res.err());
                 break;
             }
             Readiness::Terminate => return,
@@ -235,8 +245,7 @@ where
             }
             Err(e) => Err(e),
         };
-        let res = ctx.update_write_buf(Poll::Ready(result));
-        if res == IoTaskStatus::Stop {
+        if ctx.update_write_status(Poll::Ready(result)) == IoTaskStatus::Stop {
             return IoTaskStatus::Stop;
         }
     }

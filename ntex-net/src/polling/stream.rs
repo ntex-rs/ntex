@@ -12,12 +12,12 @@ use super::{Driver, DriverApi, Event, Handler};
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
 
-pub(crate) struct StreamCtl {
+pub(super) struct StreamCtl {
     id: u32,
     inner: Rc<StreamOpsInner>,
 }
 
-pub(crate) struct WeakStreamCtl {
+pub(super) struct WeakStreamCtl {
     id: u32,
     inner: Rc<StreamOpsInner>,
 }
@@ -38,7 +38,7 @@ enum IdType {
 }
 
 #[derive(Debug)]
-struct StreamItem {
+pub(super) struct StreamItem {
     io: Socket,
     flags: Flags,
     ctx: IoContext,
@@ -291,27 +291,11 @@ impl StreamOpsInner {
             }
         }
     }
-}
-
-impl StreamCtl {
-    pub(crate) async fn shutdown(self) -> io::Result<()> {
-        self.inner
-            .with(|streams| {
-                let item = &mut streams[self.id as usize];
-                let fd = item.fd();
-                ntex_rt::spawn_blocking(move || {
-                    syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
-                })
-            })
-            .await
-            .map_err(io::Error::other)
-            .and_then(|res| res.map_err(io::Error::other))
-    }
 
     /// Modify poll interest for the stream
-    pub(crate) fn interest(&self, rd: bool, wr: bool) {
-        self.inner.with(|streams| {
-            let io = &mut streams[self.id as usize];
+    fn interest(&self, id: u32, rd: bool, wr: bool) {
+        self.with(|streams| {
+            let io = &mut streams[id as usize];
             let mut event = Event::new(0, false, false).with_interrupt();
             #[cfg(feature = "trace")]
             log::trace!(
@@ -364,9 +348,30 @@ impl StreamCtl {
                     event.readable,
                     event.writable
                 );
-                self.inner.api.modify(io.fd(), self.id, event);
+                self.api.modify(io.fd(), id, event);
             }
         });
+    }
+}
+
+impl StreamCtl {
+    pub(crate) async fn shutdown(self) -> io::Result<()> {
+        self.inner
+            .with(|streams| {
+                let item = &mut streams[self.id as usize];
+                let fd = item.fd();
+                ntex_rt::spawn_blocking(move || {
+                    syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
+                })
+            })
+            .await
+            .map_err(io::Error::other)
+            .and_then(|res| res.map_err(io::Error::other))
+    }
+
+    /// Modify poll interest for the stream
+    pub(crate) fn interest(&self, rd: bool, wr: bool) {
+        self.inner.interest(self.id, rd, wr);
     }
 }
 
@@ -377,11 +382,18 @@ impl Drop for StreamCtl {
 }
 
 impl WeakStreamCtl {
-    pub(crate) fn with<F, R>(&self, f: F) -> R
+    pub(super) fn with_socket<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&Socket) -> R,
     {
         self.inner.with(|streams| f(&streams[self.id as usize].io))
+    }
+
+    pub(super) fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut StreamItem) -> R,
+    {
+        self.inner.with(|streams| f(&mut streams[self.id as usize]))
     }
 }
 
@@ -398,6 +410,10 @@ impl StreamItem {
 
     fn tag(&self) -> &'static str {
         self.ctx.tag()
+    }
+
+    pub(super) fn write_direct(&mut self) {
+        self.write();
     }
 
     fn write(&mut self) -> IoTaskStatus {
@@ -428,53 +444,41 @@ impl StreamItem {
 
             if num > 0 {
                 let fd = self.fd();
-                #[cfg(feature = "trace")]
-                log::trace!(
-                    "{}: {fd:?}-Wrt buf({}) size({:?})",
-                    self.ctx.tag(),
-                    num,
-                    size
-                );
-
                 let res = if num == 1 {
                     let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
                     syscall!(break libc::write(fd, io.cast(), size))
                 } else {
                     syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
                 };
-                match res {
-                    Poll::Ready(Ok(mut written)) => {
-                        // remove written bytes
-                        if written > 0 {
-                            for page in pages[..num].iter_mut().flatten() {
-                                let len = cmp::min(page.len(), written);
-                                page.advance_to(len);
-                                written -= len;
-                                if written == 0 {
-                                    break;
-                                }
-                            }
+                #[cfg(feature = "trace")]
+                log::trace!("{}: {fd:?}-Wrt buf({num}:{size}) ({res:?})", self.ctx.tag());
+
+                let mut written = if let Poll::Ready(Ok(n)) = res { n } else { 0 };
+
+                // remove written bytes
+                if written > 0 {
+                    for page in pages[..num].iter_mut().flatten() {
+                        let len = cmp::min(page.len(), written);
+                        page.advance_to(len);
+                        written -= len;
+                        if written == 0 {
+                            break;
                         }
-                        // return unwritten data back to buffer
-                        for p in pages[..num].iter_mut().rev() {
-                            if let Some(page) = p.take() {
-                                wrt.prepend(page);
-                            }
-                        }
-                        Some(Poll::Ready(Ok(())))
                     }
-                    Poll::Ready(Err(e)) => Some(Poll::Ready(Err(e))),
-                    Poll::Pending => Some(Poll::Pending),
                 }
+                // return unwritten data back to buffer
+                for p in pages[..num].iter_mut().rev() {
+                    if let Some(page) = p.take() {
+                        wrt.prepend(page);
+                    }
+                }
+
+                res.map(|res| res.map(|_| ()))
             } else {
-                None
+                Poll::Ready(Ok(()))
             }
         });
-        if let Some(res) = res {
-            self.ctx.update_write_buf(res)
-        } else {
-            IoTaskStatus::Pause
-        }
+        self.ctx.update_write_status(res)
     }
 
     fn read(&mut self) -> IoTaskStatus {

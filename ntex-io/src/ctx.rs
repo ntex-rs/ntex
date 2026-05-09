@@ -188,6 +188,7 @@ impl IoContext {
                     st.terminate_connection(None);
                     IoTaskStatus::Stop
                 } else if full {
+                    st.flags.set_read_paused();
                     IoTaskStatus::Pause
                 } else {
                     IoTaskStatus::Io
@@ -202,6 +203,7 @@ impl IoContext {
                     st.terminate_connection(Some(e));
                     IoTaskStatus::Stop
                 } else if full {
+                    st.flags.set_read_paused();
                     IoTaskStatus::Pause
                 } else {
                     IoTaskStatus::Io
@@ -226,11 +228,18 @@ impl IoContext {
         self.st().buffer.with_write_destination(|buffer| f(buffer))
     }
 
+    #[doc(hidden)]
+    #[deprecated]
     /// Set write buffer
     pub fn update_write_buf(&self, result: Poll<io::Result<()>>) -> IoTaskStatus {
+        self.update_write_status(result)
+    }
+
+    /// Set write buffer
+    pub fn update_write_status(&self, status: Poll<io::Result<()>>) -> IoTaskStatus {
         let st = &self.st();
 
-        match result {
+        match status {
             Poll::Pending => {
                 let len = st.buffer.write_buffer_size();
 
@@ -238,7 +247,13 @@ impl IoContext {
                 if st.flags.is_wr_backpressure() && st.disable_wr_backpressure(len) {
                     st.dispatch_task.wake();
                 }
-                IoTaskStatus::Pause
+
+                if len == 0 {
+                    st.flags.set_write_paused();
+                    IoTaskStatus::Pause
+                } else {
+                    IoTaskStatus::Io
+                }
             }
             Poll::Ready(Ok(())) => {
                 let len = st.buffer.write_buffer_size();

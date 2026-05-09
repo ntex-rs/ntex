@@ -284,6 +284,11 @@ impl IoRef {
         } else {
             st.flags.unset_read_ready();
         }
+
+        if st.flags.is_read_paused() {
+            st.read_task.wake();
+            st.flags.unset_read_paused();
+        }
     }
 
     /// Make sure buffer has enough free space

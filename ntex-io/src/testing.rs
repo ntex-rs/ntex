@@ -355,10 +355,10 @@ impl Drop for IoTest {
 }
 
 impl IoStream for IoTest {
-    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let io = Rc::new(self);
         ntex_util::spawn(run(io.clone(), ctx));
-        Some(Box::new(io))
+        Box::new(io)
     }
 }
 
@@ -434,7 +434,7 @@ fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
 
 fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
     let result = ctx.with_write_buf(|buf| write_io(io, buf, cx, ctx.tag()));
-    if ctx.update_write_buf(result) == IoTaskStatus::Stop {
+    if ctx.update_write_status(result) == IoTaskStatus::Stop {
         Poll::Ready(Status::Terminate)
     } else {
         Poll::Pending

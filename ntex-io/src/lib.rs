@@ -105,11 +105,13 @@ pub trait FilterLayer: fmt::Debug + 'static {
 }
 
 pub trait IoStream {
-    fn start(self, _: IoContext) -> Option<Box<dyn Handle>>;
+    fn start(self, _: IoContext) -> Box<dyn Handle>;
 }
 
 pub trait Handle {
-    fn query(&self, id: TypeId) -> Option<Box<dyn Any>>;
+    fn query(&self, _: TypeId) -> Option<Box<dyn Any>> {
+        None
+    }
 
     #[inline]
     /// Initiate io write operation

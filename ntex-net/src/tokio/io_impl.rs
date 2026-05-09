@@ -1,41 +1,57 @@
 use std::task::{Context, Poll, ready};
-use std::{any, cell::Cell, cmp, future::poll_fn, io, mem, pin::Pin, rc::Rc, rc::Weak};
+use std::{any, cmp, future::poll_fn, io, mem, pin::Pin, ptr, rc::Rc};
 
 use ntex_bytes::{BufMut, BytePage};
 use ntex_io::{
-    Buffer, Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness,
-    types,
+    Filter, Handle, Io, IoBoxed, IoContext, IoStream, IoTaskStatus, Readiness, types,
 };
-use ntex_util::time::Millis;
 use tok_io::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tok_io::net::TcpStream;
 
 impl IoStream for super::TcpStream {
-    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
-        let io = Rc::new(Cell::new(Some(self.0)));
+    fn start(self, ctx: IoContext) -> Box<dyn Handle> {
+        let io = Rc::new(self.0);
         tok_io::task::spawn_local(run_rd(io.clone(), ctx.clone()));
         tok_io::task::spawn_local(run_wrt(io.clone(), ctx));
-        Some(Box::new(HandleWrapper(io)))
+        Box::new(HandleWrapper(io))
     }
 }
 
 #[cfg(unix)]
 impl IoStream for super::UnixStream {
-    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
-        let io = Rc::new(Cell::new(Some(self.0)));
+    fn start(self, ctx: IoContext) -> Box<dyn Handle> {
+        let io = Rc::new(self.0);
         tok_io::task::spawn_local(run_rd(io.clone(), ctx.clone()));
         tok_io::task::spawn_local(run_wrt(io.clone(), ctx));
-        Some(Box::new(HandleWrapperUnix(io)))
+        Box::new(HandleWrapperUnix(io))
     }
 }
 
 trait Stream: AsyncRead + AsyncWrite + Unpin {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
+
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
+
+    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
+
     fn try_write(&self, buf: &[u8]) -> io::Result<usize>;
 
     fn try_write_vectored(&self, buf: &[io::IoSlice<'_>]) -> io::Result<usize>;
 }
 
 impl Stream for TcpStream {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        TcpStream::poll_read_ready(self, cx)
+    }
+
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        TcpStream::poll_write_ready(self, cx)
+    }
+
+    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        TcpStream::try_read(self, buf)
+    }
+
     fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
         TcpStream::try_write(self, buf)
     }
@@ -47,6 +63,18 @@ impl Stream for TcpStream {
 
 #[cfg(unix)]
 impl Stream for tok_io::net::UnixStream {
+    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        tok_io::net::UnixStream::poll_read_ready(self, cx)
+    }
+
+    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        tok_io::net::UnixStream::poll_write_ready(self, cx)
+    }
+
+    fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        tok_io::net::UnixStream::try_read(self, buf)
+    }
+
     fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
         tok_io::net::UnixStream::try_write(self, buf)
     }
@@ -56,32 +84,26 @@ impl Stream for tok_io::net::UnixStream {
     }
 }
 
-struct HandleWrapper(Rc<Cell<Option<TcpStream>>>);
+struct HandleWrapper(Rc<TcpStream>);
 
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            let inner = self.0.take().unwrap();
-            let result = inner.peer_addr();
-            self.0.set(Some(inner));
+            let result = self.0.peer_addr();
             if let Ok(addr) = result {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
-        } else if id == any::TypeId::of::<SocketOptions>() {
-            return Some(Box::new(SocketOptions(Rc::downgrade(&self.0))));
         }
         None
     }
 
     fn write(&self, ctx: &IoContext) {
-        let mut inner = self.0.take().unwrap();
-        let _ = write(&mut inner, ctx, None);
-        self.0.set(Some(inner));
+        let _ = write(self.0.as_ref(), ctx);
     }
 }
 
 #[cfg(unix)]
-struct HandleWrapperUnix(Rc<Cell<Option<tok_io::net::UnixStream>>>);
+struct HandleWrapperUnix(Rc<tok_io::net::UnixStream>);
 
 #[cfg(unix)]
 impl Handle for HandleWrapperUnix {
@@ -90,9 +112,7 @@ impl Handle for HandleWrapperUnix {
     }
 
     fn write(&self, ctx: &IoContext) {
-        let mut inner = self.0.take().unwrap();
-        let _ = write(&mut inner, ctx, None);
-        self.0.set(Some(inner));
+        let _ = write(self.0.as_ref(), ctx);
     }
 }
 
@@ -102,66 +122,83 @@ enum Status {
     Terminate,
 }
 
-async fn run_rd<T>(io: Rc<Cell<Option<T>>>, ctx: IoContext)
+async fn run_rd<T>(io: Rc<T>, ctx: IoContext)
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: Stream + Unpin,
 {
     let st = poll_fn(|cx| {
-        let mut inner = io.take().unwrap();
-        let result = match ctx.poll_read_ready(cx) {
-            Poll::Ready(Readiness::Ready) => read(&mut inner, &ctx, cx),
-            Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
-            Poll::Pending => Poll::Pending,
-        };
-        io.set(Some(inner));
-        result
+        loop {
+            return match ready!(ctx.poll_read_ready(cx)) {
+                Readiness::Ready => match ready!(io.as_ref().poll_read_ready(cx)) {
+                    Ok(()) => match read(io.as_ref(), &ctx) {
+                        IoTaskStatus::Pause => Poll::Pending,
+                        IoTaskStatus::Io => continue,
+                        IoTaskStatus::Stop => Poll::Ready(()),
+                    },
+                    Err(err) => {
+                        ctx.stop(Some(err));
+                        Poll::Ready(())
+                    }
+                },
+                Readiness::Shutdown | Readiness::Terminate => Poll::Ready(()),
+            };
+        }
     })
     .await;
 }
 
-async fn run_wrt<T>(io: Rc<Cell<Option<T>>>, ctx: IoContext)
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum WrtStatus {
+    More,
+    Pending,
+    Terminate,
+}
+
+async fn run_wrt<T>(io: Rc<T>, ctx: IoContext)
 where
     T: Stream,
 {
     let st = poll_fn(|cx| {
-        let mut inner = io.take().unwrap();
-        let result = match ctx.poll_write_ready(cx) {
-            Poll::Ready(Readiness::Ready) => write(&mut inner, &ctx, Some(cx)),
-            Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
-            Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
-            Poll::Pending => Poll::Pending,
-        };
-        io.set(Some(inner));
-        result
+        loop {
+            return match ready!(ctx.poll_write_ready(cx)) {
+                Readiness::Ready => match ready!(io.poll_write_ready(cx)) {
+                    Ok(()) => match write(io.as_ref(), &ctx) {
+                        WrtStatus::Pending => Poll::Pending,
+                        WrtStatus::More => continue,
+                        WrtStatus::Terminate => Poll::Ready(Status::Terminate),
+                    },
+                    Err(err) => {
+                        ctx.update_write_status(Poll::Ready(Err(err)));
+                        Poll::Ready(Status::Terminate)
+                    }
+                },
+                Readiness::Shutdown => Poll::Ready(Status::Shutdown),
+                Readiness::Terminate => Poll::Ready(Status::Terminate),
+            };
+        }
     })
     .await;
 
     log::trace!("{}: Shuting down io {:?}", ctx.tag(), ctx.is_stopped());
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
-        poll_fn(|cx| {
-            let mut inner = io.take().unwrap();
-            let result =
-                if write(&mut inner, &ctx, Some(cx)) == Poll::Ready(Status::Terminate) {
+        poll_fn(|cx| match ready!(io.poll_write_ready(cx)) {
+            Ok(()) => {
+                if write(io.as_ref(), &ctx) == WrtStatus::Terminate {
                     Poll::Ready(())
                 } else {
                     ctx.shutdown(flush, cx)
-                };
-            io.set(Some(inner));
-            result
+                }
+            }
+            Err(err) => {
+                ctx.update_write_status(Poll::Ready(Err(err)));
+                Poll::Ready(())
+            }
         })
         .await;
     }
 
-    let result = poll_fn(|cx| {
-        let mut inner = io.take().unwrap();
-        let result = Pin::new(&mut inner).poll_shutdown(cx);
-        io.set(Some(inner));
-        result
-    })
-    .await;
-
-    log::trace!("{}: Shutdown complete, result {result:?}", ctx.tag());
+    log::trace!("{}: Shutdown complete", ctx.tag());
     if !ctx.is_stopped() {
         ctx.stop(None);
     }
@@ -170,12 +207,12 @@ where
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
 
-fn write<T>(io: &mut T, ctx: &IoContext, mut cx: Option<&mut Context<'_>>) -> Poll<Status>
+fn write<T>(io: &T, ctx: &IoContext) -> WrtStatus
 where
     T: Stream,
 {
     loop {
-        let (cx2, result) = ctx.with_write_buf(|dst| {
+        let (more, result) = ctx.with_write_buf(|dst| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None,
                 None, None, None, None,
@@ -205,12 +242,7 @@ where
                 let bufs =
                     unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
 
-                let (cx, result) = if let Some(cx) = cx {
-                    let result = write_io(ctx, io, cx, bufs);
-                    (Some(cx), result)
-                } else {
-                    (None, write_io2(ctx, io, bufs))
-                };
+                let result = write_io(ctx, io, bufs);
                 let mut written = if let Poll::Ready(Ok(n)) = result { n } else { 0 };
 
                 // remove written bytes
@@ -231,22 +263,23 @@ where
                     }
                 }
 
-                (cx, Some(result.map(|res| res.map(|_| ()))))
+                (!dst.is_empty(), result.map(|res| res.map(|_| ())))
             } else {
-                (cx, None)
+                (false, Poll::Ready(Ok(())))
             }
         });
 
-        cx = cx2;
-
-        break if let Some(result) = result {
-            match ctx.update_write_buf(result) {
-                IoTaskStatus::Stop => Poll::Ready(Status::Terminate),
-                IoTaskStatus::Pause => Poll::Pending,
-                IoTaskStatus::Io => continue,
+        let pending = result.is_pending();
+        break match ctx.update_write_status(result) {
+            IoTaskStatus::Stop => WrtStatus::Terminate,
+            IoTaskStatus::Pause => WrtStatus::Pending,
+            IoTaskStatus::Io => {
+                if pending && more {
+                    WrtStatus::More
+                } else {
+                    continue;
+                }
             }
-        } else {
-            Poll::Pending
         };
     }
 }
@@ -254,33 +287,7 @@ where
 /// Flush write buffer to underlying I/O stream.
 fn write_io<T: Stream>(
     ctx: &IoContext,
-    io: &mut T,
-    cx: &mut Context<'_>,
-    bufs: &[io::IoSlice<'_>],
-) -> Poll<io::Result<usize>> {
-    let n = if bufs.len() == 1 {
-        ready!(Pin::new(&mut *io).poll_write(cx, &bufs[0]))?
-    } else {
-        ready!(Pin::new(&mut *io).poll_write_vectored(cx, bufs))?
-    };
-    if n == 0 {
-        Poll::Ready(Err(io::Error::new(
-            io::ErrorKind::WriteZero,
-            "failed to write frame to transport",
-        )))
-    } else {
-        #[cfg(feature = "trace")]
-        log::trace!("{}: Flushed {n} bytes from {} pages", ctx.tag(), bufs.len());
-
-        let _ = Pin::new(&mut *io).poll_flush(cx)?;
-        Poll::Ready(Ok(n))
-    }
-}
-
-/// Flush write buffer to underlying I/O stream.
-fn write_io2<T: Stream>(
-    ctx: &IoContext,
-    io: &mut T,
+    io: &T,
     bufs: &[io::IoSlice<'_>],
 ) -> Poll<io::Result<usize>> {
     let result = if bufs.len() == 1 {
@@ -295,11 +302,7 @@ fn write_io2<T: Stream>(
         ))),
         Ok(n) => {
             #[cfg(feature = "trace")]
-            log::trace!(
-                "{}: Flushed early {n} bytes from {} pages",
-                ctx.tag(),
-                bufs.len()
-            );
+            log::trace!("{}: Flushed {n} bytes from {} pages", ctx.tag(), bufs.len());
             Poll::Ready(Ok(n))
         }
         Err(e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
@@ -307,56 +310,32 @@ fn write_io2<T: Stream>(
     }
 }
 
-fn read<T: AsyncRead + Unpin>(
-    io: &mut T,
-    ctx: &IoContext,
-    cx: &mut Context<'_>,
-) -> Poll<()> {
+fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> IoTaskStatus {
     let mut buf = ctx.get_read_buf();
 
     // read data from socket
     loop {
         ctx.resize_read_buf(&mut buf);
-        let result = match read_buf(Pin::new(&mut *io), cx, &mut buf) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(0)) => Poll::Ready(Err(None)),
-            Poll::Ready(Ok(_)) => continue,
-            Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
+
+        let io_res =
+            io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
+
+        let result = match io_res {
+            Ok(0) => Poll::Ready(Err(None)),
+            Ok(n) => {
+                // Safety: This is guaranteed to be the number of initialized
+                // bytes due to the invariants provided by `try_read()`.
+                unsafe {
+                    buf.advance_mut(n);
+                }
+                continue;
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
+            Err(e) => Poll::Ready(Err(Some(e))),
         };
 
-        return if matches!(ctx.release_read_buf(buf, result), IoTaskStatus::Stop) {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        };
+        return ctx.release_read_buf(buf, result);
     }
-}
-
-fn read_buf<T: AsyncRead>(
-    io: Pin<&mut T>,
-    cx: &mut Context<'_>,
-    buf: &mut Buffer,
-) -> Poll<io::Result<usize>> {
-    let n = {
-        let dst = buf.chunk_mut().as_mut();
-        let mut buf = ReadBuf::uninit(dst);
-        let ptr = buf.filled().as_ptr();
-        if io.poll_read(cx, &mut buf)?.is_pending() {
-            return Poll::Pending;
-        }
-
-        // Ensure the pointer does not change from under us
-        assert_eq!(ptr, buf.filled().as_ptr());
-        buf.filled().len()
-    };
-
-    // Safety: This is guaranteed to be the number of initialized (and read)
-    // bytes due to the invariants provided by `ReadBuf::filled`.
-    unsafe {
-        buf.advance_mut(n);
-    }
-
-    Poll::Ready(Ok(n))
 }
 
 #[derive(Debug)]
@@ -423,37 +402,5 @@ impl AsyncWrite for TokioIoBoxed {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.as_ref().0.poll_shutdown(cx)
-    }
-}
-
-#[derive(Debug)]
-/// Query TCP Io connections for a handle to set socket options
-pub struct SocketOptions(Weak<Cell<Option<TcpStream>>>);
-
-impl SocketOptions {
-    #[deprecated = "`SO_LINGER` causes the socket to block the thread on drop"]
-    pub fn set_linger(&self, dur: Option<Millis>) -> io::Result<()> {
-        #[allow(deprecated)]
-        {
-            let inner = self.try_self()?;
-            let io = inner.take().unwrap();
-            io.set_linger(dur.map(Into::into))?;
-            inner.set(Some(io));
-            Ok(())
-        }
-    }
-
-    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
-        let inner = self.try_self()?;
-        let io = inner.take().unwrap();
-        io.set_ttl(ttl)?;
-        inner.set(Some(io));
-        Ok(())
-    }
-
-    fn try_self(&self) -> io::Result<Rc<Cell<Option<TcpStream>>>> {
-        self.0
-            .upgrade()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket is gone"))
     }
 }

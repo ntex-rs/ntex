@@ -7,7 +7,7 @@ use ntex_service::cfg::SharedCfg;
 
 mod io_impl;
 
-pub use self::io_impl::{SocketOptions, TokioIoBoxed};
+pub use self::io_impl::TokioIoBoxed;
 use crate::channel::{self, Receiver};
 
 #[doc(hidden)]

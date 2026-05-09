@@ -3,25 +3,25 @@ use std::{any, future::poll_fn, task::Poll};
 use ntex_io::{Handle, IoContext, Readiness, types};
 use ntex_rt::spawn;
 
-use super::stream::{StreamCtl, WeakStreamCtl};
+use super::stream::{StreamCtl, StreamItem, WeakStreamCtl};
 
 impl ntex_io::IoStream for super::TcpStream {
-    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let super::TcpStream(io, ops) = self;
         let (ctl, weak) = ops.register(io, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
-        Some(Box::new(HandleWrapper(weak)))
+        Box::new(HandleWrapper(weak))
     }
 }
 
 impl ntex_io::IoStream for super::UnixStream {
-    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let super::UnixStream(io, ops) = self;
-        let (ctl, _) = ops.register(io, ctx.clone());
+        let (ctl, weak) = ops.register(io, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
-        None
+        Box::new(HandleWrapper(weak))
     }
 }
 
@@ -30,12 +30,16 @@ struct HandleWrapper(WeakStreamCtl);
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            let addr = self.0.with(|io| io.peer_addr().ok());
+            let addr = self.0.with_socket(|io| io.peer_addr().ok());
             if let Some(addr) = addr.and_then(|addr| addr.as_socket()) {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
         }
         None
+    }
+
+    fn write(&self, _: &IoContext) {
+        self.0.with(StreamItem::write_direct);
     }
 }
 
