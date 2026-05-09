@@ -653,6 +653,8 @@ impl<F> Io<F> {
             if !st.flags.is_stopping_filters() {
                 st.start_shutdown();
             }
+            st.flags.unset_all_read_flags();
+            st.flags.unset_read_paused();
 
             st.read_task.wake();
             st.write_task.wake();

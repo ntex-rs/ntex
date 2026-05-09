@@ -84,11 +84,11 @@ async fn run<T: AsyncRead + AsyncWrite + Clone + Unpin + 'static>(io: T, ctx: Io
     let wr_ctx = ctx.clone();
     let wr_task = compio_runtime::spawn(async move {
         write(wr_io, &wr_ctx).await;
-        log::debug!("{} Write task is stopped", wr_ctx.tag());
+        log::debug!("{}: Write task is stopped", wr_ctx.tag());
     });
 
     read(io, &ctx).await;
-    log::debug!("{} Read task is stopped", ctx.tag());
+    log::debug!("{}: Read task is stopped", ctx.tag());
 
     if !wr_task.is_finished() {
         let _ = wr_task.await;
@@ -175,7 +175,8 @@ where
             Readiness::Shutdown => {
                 let bufs = ctx.with_write_buf(build_bufs);
                 write_buf(&mut io, ctx, bufs).await;
-                let _ = io.shutdown().await;
+                let res = io.shutdown().await;
+                ctx.stop(res.err());
                 break;
             }
             Readiness::Terminate => return,
