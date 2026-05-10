@@ -164,9 +164,15 @@ where
         match poll_fn(|cx| ctx.poll_write_ready(cx)).await {
             Readiness::Ready => {
                 let bufs = ctx.with_write_buf(build_bufs);
-                if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
-                    let _ = io.shutdown().await;
-                    break;
+                if bufs.is_empty() {
+                    if ctx.update_write_status(Ok(false)) == IoTaskStatus::Stop {
+                        break;
+                    }
+                } else {
+                    if write_buf(&mut io, ctx, bufs).await == IoTaskStatus::Stop {
+                        let _ = io.shutdown().await;
+                        break;
+                    }
                 }
             }
             Readiness::Shutdown => {
