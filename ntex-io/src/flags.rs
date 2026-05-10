@@ -193,7 +193,7 @@ impl Flags {
         self.insert(FlagsKind::IO_STOPPING_FILTERS);
     }
 
-    pub(crate) fn set_force_closed(&self) {
+    pub(crate) fn set_terminate(&self) {
         self.insert(
             FlagsKind::IO_STOPPED
                 | FlagsKind::IO_STOPPING

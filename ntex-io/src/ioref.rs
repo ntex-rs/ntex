@@ -137,7 +137,6 @@ impl IoRef {
     {
         self.0.buffer.with_read_dst(self, |buf| {
             let res = codec.decode(buf);
-            self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
         })
@@ -158,7 +157,6 @@ impl IoRef {
                 remains: buf.len(),
                 consumed: len - buf.len(),
             });
-            self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
         })
@@ -174,6 +172,7 @@ impl IoRef {
             if self.call_write() == WakeWriteTask::Yes {
                 // io write is pending need to wake write task for io completeion
                 Iops::register_send(self.id());
+                self.0.flags.set_wr_send_scheduled();
             }
 
             if self.0.flags.is_stopping_any()

@@ -110,7 +110,7 @@ impl IoState {
             self.wake_write_task();
             self.notify_disconnect();
             self.handle.take();
-            self.flags.set_force_closed();
+            self.flags.set_terminate();
 
             if !self.dispatch_task.wake_checked() {
                 log::trace!(
@@ -572,7 +572,6 @@ impl<F> Io<F> {
         U: Decoder,
     {
         let st = self.st();
-        st.flags.unset_read_ready();
 
         let decoded = self
             .decode_item(codec)
