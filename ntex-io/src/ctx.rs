@@ -238,6 +238,7 @@ impl IoContext {
                 return;
             }
         };
+        self.0.update_write_destination();
 
         // filters are shutdown and write task is paused
         if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {
