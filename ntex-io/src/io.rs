@@ -94,7 +94,7 @@ impl IoState {
     }
 
     pub(super) fn terminate_connection(&self, err: Option<io::Error>) {
-        if !self.flags.is_stopped() {
+        if !self.flags.is_terminated() {
             log::trace!(
                 "{}: {:?} Io error {:?} flags: {:?}",
                 self.cfg.tag(),
@@ -155,7 +155,6 @@ impl IoState {
 
     pub(super) fn wake_write_task(&self) {
         self.write_task.wake();
-        self.flags.unset_write_paused();
     }
 
     pub(super) fn wake_dispatch_task(&self) {
@@ -489,7 +488,7 @@ impl<F> Io<F> {
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
 
-        if st.flags.is_stopped() {
+        if st.flags.is_closed() {
             Poll::Ready(Ok(None))
         } else {
             let ready = st.flags.is_read_ready();
@@ -523,7 +522,7 @@ impl<F> Io<F> {
     /// Polls for any incoming data.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
-        if st.flags.is_stopped() {
+        if st.flags.is_stopping() {
             Poll::Ready(Ok(None))
         } else if st.flags.check_read_notifed() {
             Poll::Ready(Ok(Some(())))
@@ -581,7 +580,7 @@ impl<F> Io<F> {
 
         if decoded.item.is_some() {
             Ok(decoded)
-        } else if st.flags.is_stopped() {
+        } else if st.flags.is_stopping() {
             Err(RecvError::PeerGone(st.error()))
         } else if st.flags.check_dispatcher_timeout() {
             Err(RecvError::KeepAlive)
@@ -609,7 +608,7 @@ impl<F> Io<F> {
     /// buffer max size.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         let st = self.st();
-        if st.flags.is_stopped() {
+        if st.flags.is_stopping() {
             return Poll::Ready(Err(st.error_or_disconnected()));
         }
 
@@ -637,7 +636,7 @@ impl<F> Io<F> {
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let st = self.st();
 
-        if st.flags.is_stopped() {
+        if st.flags.is_stopping() {
             if let Some(err) = st.error() {
                 Poll::Ready(Err(err))
             } else {
@@ -651,7 +650,6 @@ impl<F> Io<F> {
             st.flags.unset_read_paused();
 
             st.wake_read_task();
-            st.wake_write_task();
             st.dispatch_task.register(cx.waker());
             Poll::Pending
         }
@@ -739,7 +737,7 @@ impl<F> Drop for Io<F> {
         if st.filter.is_set() {
             // filter is unsafe and must be dropped explicitly,
             // and won't be dropped without special attention
-            if !st.flags.is_stopped() {
+            if !st.flags.is_terminated() {
                 log::trace!(
                     "{}: Io is dropped, force stopping io streams {:?}",
                     st.cfg.tag(),
@@ -765,7 +763,7 @@ pub struct OnDisconnect {
 
 impl OnDisconnect {
     pub(super) fn new(inner: Rc<IoState>) -> Self {
-        Self::new_inner(inner.flags.is_stopped(), inner)
+        Self::new_inner(inner.flags.is_stopping(), inner)
     }
 
     fn new_inner(disconnected: bool, inner: Rc<IoState>) -> Self {
@@ -790,7 +788,7 @@ impl OnDisconnect {
     #[inline]
     /// Check if connection is disconnected
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
-        if self.token == usize::MAX || self.inner.flags.is_stopped() {
+        if self.token == usize::MAX || self.inner.flags.is_stopping() {
             Poll::Ready(())
         } else if let Some(on_disconnect) = self.inner.on_disconnect.take() {
             on_disconnect[self.token].register(cx.waker());

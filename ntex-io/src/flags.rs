@@ -92,7 +92,7 @@ impl Flags {
         self.intersects(FlagsKind::IO_STOPPING | FlagsKind::IO_STOPPED)
     }
 
-    pub(crate) fn is_stopped(&self) -> bool {
+    pub(crate) fn is_terminated(&self) -> bool {
         self.contains(FlagsKind::IO_STOPPED)
     }
 

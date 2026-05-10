@@ -194,6 +194,7 @@ impl IoRef {
             // need to wake write task for io completeion
             if self.call_write() == WakeWriteTask::Yes {
                 self.0.wake_write_task();
+                self.0.flags.unset_write_paused();
             }
         }
     }
@@ -227,7 +228,7 @@ impl IoRef {
     {
         let st = &self.0;
 
-        if st.flags.is_stopped() {
+        if st.flags.is_terminated() {
             Err(st.error_or_disconnected())
         } else {
             let result = st.buffer.with_write_src(f);
@@ -448,7 +449,7 @@ mod tests {
         client.read_error(io::Error::other("err"));
         let msg = state.recv(&BytesCodec).await;
         assert!(msg.is_err());
-        assert!(state.flags().is_stopped());
+        assert!(state.flags().is_terminated());
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -458,7 +459,7 @@ mod tests {
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert!(msg.is_err());
-            assert!(state.flags().is_stopped());
+            assert!(state.flags().is_terminated());
         }
 
         let (client, server) = IoTest::create();
@@ -476,14 +477,14 @@ mod tests {
         client.write_error(io::Error::other("err"));
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
-        assert!(state.flags().is_stopped());
+        assert!(state.flags().is_terminated());
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
         state.terminate();
-        assert!(state.flags().is_stopped());
         assert!(state.flags().is_stopping());
+        assert!(state.flags().is_terminated());
     }
 
     #[ntex::test]

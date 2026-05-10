@@ -61,7 +61,7 @@ impl IoContext {
 
     /// Check if io stream is stopped.
     pub fn is_stopped(&self) -> bool {
-        self.st().flags.is_stopped()
+        self.st().flags.is_closed()
     }
 
     /// Get read buffer.
@@ -187,7 +187,7 @@ impl IoContext {
                     st.wake_write_task();
                 }
 
-                if self.is_stopped() {
+                if st.flags.is_closed() {
                     IoTaskStatus::Stop
                 } else if len == 0 {
                     // all data has been written
@@ -207,8 +207,7 @@ impl IoContext {
     /// Wait when io get closed or preparing for close.
     pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
         let st = self.st();
-
-        if flush && !st.flags.is_stopped() {
+        if flush && !st.flags.is_stopping() {
             if st.flags.is_write_paused() {
                 return Poll::Ready(());
             }
@@ -230,35 +229,33 @@ impl IoContext {
         if !st.flags.is_shutting_down_filters() {
             return;
         }
-        let io = &self.0;
 
-        match st.buffer.process_shutdown(io) {
-            Ok(Poll::Ready(())) => {
-                st.filters_stopped();
-            }
-            Ok(Poll::Pending) => {
-                // if buffer is not consumed it is unlikely
-                // that filter will properly complete shutdown
-                if st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure() {
-                    st.filters_stopped();
-                } else {
-                    // filter shutdown timeout
-                    let timeout = st
-                        .shutdown_timeout
-                        .take()
-                        .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
-                    if timeout.poll_elapsed(cx).is_ready() {
-                        st.filters_stopped();
-                    } else {
-                        st.shutdown_timeout.set(Some(timeout));
-                    }
-                }
-                if let Err(err) = st.buffer.process_write_buf(io) {
-                    st.terminate_connection(Some(err));
-                }
-            }
+        let ready = match st.buffer.process_shutdown(&self.0) {
+            Ok(Poll::Ready(())) => true,
+            Ok(Poll::Pending) => false,
             Err(err) => {
                 st.terminate_connection(Some(err));
+                return;
+            }
+        };
+
+        // filters are shutdown and write task is paused
+        if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {
+            st.filters_stopped();
+        } else if st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure() {
+            // if buffer is not consumed it is unlikely
+            // that filter will properly complete shutdown
+            st.filters_stopped();
+        } else {
+            // filter shutdown timeout
+            let timeout = st
+                .shutdown_timeout
+                .take()
+                .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
+            if timeout.poll_elapsed(cx).is_ready() {
+                st.filters_stopped();
+            } else {
+                st.shutdown_timeout.set(Some(timeout));
             }
         }
     }

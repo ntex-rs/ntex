@@ -1,4 +1,4 @@
-use std::{any, future::poll_fn, task::Poll};
+use std::{any, future::poll_fn, task::Context, task::Poll};
 
 use ntex_io::{Handle, IoContext, Readiness, types};
 use ntex_rt::spawn;
@@ -47,50 +47,56 @@ enum Status {
 
 async fn run(ctl: StreamCtl, ctx: IoContext) {
     // Handle io readiness
-    let st = poll_fn(|cx| {
-        let read = match ctx.poll_read_ready(cx) {
-            Poll::Ready(Readiness::Ready) => {
-                ctl.resume_read();
-                Poll::Pending
-            }
-            Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
-            Poll::Pending => {
-                ctl.pause_read();
-                Poll::Pending
-            }
-        };
-
-        let write = match ctx.poll_write_ready(cx) {
-            Poll::Ready(Readiness::Ready) => {
-                ctl.resume_write();
-                Poll::Pending
-            }
-            Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
-            Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
-            Poll::Pending => Poll::Pending,
-        };
-
-        if read.is_pending() && write.is_pending() {
-            Poll::Pending
-        } else if write.is_ready() {
-            write
-        } else {
-            Poll::Ready(Status::Terminate)
-        }
-    })
-    .await;
+    let st = poll_fn(|cx| poll_ctx_readiness(&ctl, &ctx, cx)).await;
 
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
-            ctl.resume_read();
-            ctl.resume_write();
+            let _ = poll_ctx_readiness(&ctl, &ctx, cx);
             ctx.shutdown(flush, cx)
         })
         .await;
     }
+
     let result = ctl.shutdown().await;
     if !ctx.is_stopped() {
         ctx.stop(result.err());
+    }
+}
+
+/// Handle ctx readiness
+fn poll_ctx_readiness(
+    ctl: &StreamCtl,
+    ctx: &IoContext,
+    cx: &mut Context<'_>,
+) -> Poll<Status> {
+    let read = match ctx.poll_read_ready(cx) {
+        Poll::Ready(Readiness::Ready) => {
+            ctl.resume_read();
+            Poll::Pending
+        }
+        Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
+        Poll::Pending => {
+            ctl.pause_read();
+            Poll::Pending
+        }
+    };
+
+    let write = match ctx.poll_write_ready(cx) {
+        Poll::Ready(Readiness::Ready) => {
+            ctl.resume_write();
+            Poll::Pending
+        }
+        Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
+        Poll::Ready(Readiness::Terminate) => Poll::Ready(Status::Terminate),
+        Poll::Pending => Poll::Pending,
+    };
+
+    if read.is_pending() && write.is_pending() {
+        Poll::Pending
+    } else if write.is_ready() {
+        write
+    } else {
+        Poll::Ready(Status::Terminate)
     }
 }

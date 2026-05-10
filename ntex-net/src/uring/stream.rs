@@ -230,7 +230,7 @@ impl Handler for StreamOpsHandler {
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!(
-                            "{}: Recv({id}) {res:?} non-empty:{}",
+                            "{}: RcvDone({id}) {res:?} non-empty:{}",
                             item.ctx.tag(),
                             cqueue::sock_nonempty(flags));
 
@@ -273,9 +273,8 @@ impl Handler for StreamOpsHandler {
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!(
-                            "{}: Snd({id}):{} {res:?} notif:{:?} more:{:?}",
+                            "{}: Sent({id}) res:{res:?} notif:{:?} more:{:?}",
                             item.ctx.tag(),
-                            buf.len(),
                             cqueue::notif(flags),
                             cqueue::more(flags),
                         );
@@ -303,6 +302,7 @@ impl Handler for StreamOpsHandler {
                                 id,
                                 buf,
                                 result: Some(res) });
+                            // we reuse same op id
                             return
                         } else {
                             // reset op reference
@@ -375,7 +375,7 @@ impl StreamOpsStorage {
         if let Some(item) = self.streams.get_mut(id) {
             if item.rd_op.is_none() {
                 #[cfg(feature = "trace")]
-                log::trace!("{}: Recv({id})", item.ctx.tag());
+                log::trace!("{}: Rcv({id})", item.ctx.tag());
 
                 let mut buf = item.ctx.get_read_buf();
                 let s = buf.chunk_mut();
@@ -418,7 +418,7 @@ impl StreamOpsStorage {
                 let page = item.ctx.with_write_buf(BytePages::take);
                 if let Some(buf) = page {
                     #[cfg(feature = "trace")]
-                    log::trace!("{}: Snd({id}) {:?}", item.ctx.tag(), buf.len());
+                    log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
 
                     let buf_ptr = buf.as_ptr();
                     let buf_len = buf.len() as u32;
@@ -542,6 +542,12 @@ impl StreamCtl {
         self.inner
             .with(|storage| {
                 storage.pause_read(self.id, &self.inner.api);
+                #[cfg(feature = "trace")]
+                log::trace!(
+                    "{}: Shutdown ({:?})",
+                    storage.streams[self.id].ctx.tag(),
+                    self.id
+                );
                 let fd = storage.streams[self.id].fd();
                 let (tx, rx) = self.inner.pool.channel();
                 let op_id = storage.add_operation(Operation::shutdown(tx));
