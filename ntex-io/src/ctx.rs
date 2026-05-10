@@ -192,6 +192,9 @@ impl IoContext {
                 } else if len == 0 {
                     // all data has been written
                     st.flags.set_write_paused();
+                    if st.flags.is_stopping_filters() {
+                        st.wake_read_task();
+                    }
                     IoTaskStatus::Pause
                 } else {
                     IoTaskStatus::Io

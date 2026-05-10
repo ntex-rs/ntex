@@ -803,7 +803,7 @@ mod tests {
         client.write("GET /test HTTP/1\r\n\r\n");
 
         let (disp, state) = Dispatcher::debug(
-            Io::from(server),
+            Io::new(server, SharedCfg::new("SRV")),
             BytesCodec,
             ntex_service::fn_service(|_: DispatchItem<BytesCodec>| async move {
                 Err::<Option<Bytes>, _>(())

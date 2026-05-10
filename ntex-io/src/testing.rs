@@ -386,11 +386,10 @@ async fn run(io: Rc<IoTest>, ctx: IoContext) {
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
-            if write(&io, &ctx, cx) == Poll::Ready(Status::Terminate) {
-                Poll::Ready(())
-            } else {
-                ctx.shutdown(flush, cx)
+            if turn(&io, &ctx, cx) == Poll::Ready(Status::Terminate) {
+                return Poll::Ready(());
             }
+            ctx.shutdown(flush, cx)
         })
         .await;
     }

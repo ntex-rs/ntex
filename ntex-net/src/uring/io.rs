@@ -47,12 +47,12 @@ enum Status {
 
 async fn run(ctl: StreamCtl, ctx: IoContext) {
     // Handle io readiness
-    let st = poll_fn(|cx| poll_ctx_readiness(&ctl, &ctx, cx)).await;
+    let st = poll_fn(|cx| poll_readiness(&ctl, &ctx, cx)).await;
 
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
-            let _ = poll_ctx_readiness(&ctl, &ctx, cx);
+            let _ = poll_readiness(&ctl, &ctx, cx);
             ctx.shutdown(flush, cx)
         })
         .await;
@@ -65,11 +65,7 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
 }
 
 /// Handle ctx readiness
-fn poll_ctx_readiness(
-    ctl: &StreamCtl,
-    ctx: &IoContext,
-    cx: &mut Context<'_>,
-) -> Poll<Status> {
+fn poll_readiness(ctl: &StreamCtl, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
     let read = match ctx.poll_read_ready(cx) {
         Poll::Ready(Readiness::Ready) => {
             ctl.resume_read();
