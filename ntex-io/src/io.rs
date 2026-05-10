@@ -572,6 +572,7 @@ impl<F> Io<F> {
         U: Decoder,
     {
         let st = self.st();
+        st.flags.unset_read_ready();
 
         let decoded = self
             .decode_item(codec)
