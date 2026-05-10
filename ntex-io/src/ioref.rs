@@ -137,6 +137,7 @@ impl IoRef {
     {
         self.0.buffer.with_read_dst(self, |buf| {
             let res = codec.decode(buf);
+            self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
         })
@@ -157,6 +158,7 @@ impl IoRef {
                 remains: buf.len(),
                 consumed: len - buf.len(),
             });
+            self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
         })

@@ -11,7 +11,7 @@
 use std::{io, net, net::SocketAddr, panic, panic::RefUnwindSafe, panic::UnwindSafe};
 
 use ntex_io::Io;
-use ntex_rt::{BlockFuture, Driver, Runner, remove_all_items};
+use ntex_rt::{BlockFuture, Driver, Runner};
 use ntex_service::cfg::SharedCfg;
 
 pub mod channel;
@@ -113,7 +113,7 @@ impl Runner for DefaultRuntime {
 
             CURRENT_DRIVER.set(&driver, || {
                 crate::tokio::block_on(fut);
-                remove_all_items();
+                ntex_rt::remove_all_items();
             });
         }
 
@@ -124,7 +124,7 @@ impl Runner for DefaultRuntime {
 
             CURRENT_DRIVER.set(&driver, || {
                 crate::compio::block_on(fut);
-                remove_all_items();
+                ntex_rt::remove_all_items();
             });
         }
 
@@ -142,11 +142,11 @@ impl Runner for DefaultRuntime {
                     let rt = Wrapper(ntex_rt::Runtime::new(driver.handle()));
                     let res = std::panic::catch_unwind(|| rt.block_on(fut, &*driver));
                     if let Err(err) = res {
-                        remove_all_items();
+                        ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
                     } else {
                         driver.clear();
-                        remove_all_items();
+                        ntex_rt::remove_all_items();
                     }
                 });
             }
@@ -163,11 +163,11 @@ impl Runner for DefaultRuntime {
                     let rt = Wrapper(ntex_rt::Runtime::new(driver.handle()));
                     let res = std::panic::catch_unwind(|| rt.block_on(fut, &*driver));
                     if let Err(err) = res {
-                        remove_all_items();
+                        ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
                     } else {
                         driver.clear();
-                        remove_all_items();
+                        ntex_rt::remove_all_items();
                     }
                 });
             }
@@ -195,11 +195,11 @@ impl Runner for DefaultRuntime {
                     let rt = Wrapper(ntex_rt::Runtime::new(driver.handle()));
                     let res = std::panic::catch_unwind(|| rt.block_on(fut, &*driver));
                     if let Err(err) = res {
-                        remove_all_items();
+                        ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
                     } else {
                         driver.clear();
-                        remove_all_items();
+                        ntex_rt::remove_all_items();
                     }
                 });
             }

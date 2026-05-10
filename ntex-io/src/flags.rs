@@ -19,7 +19,7 @@ bitflags::bitflags! {
 
         /// read any data and notify dispatcher
         const RD_NOTIFY           = 0b0000_0000_0010_0000;
-        const RD_NOTIFED          = 0b0000_0000_0000_1000;
+        const RD_NOTIFIED         = 0b0000_0000_0000_1000;
 
         /// new data is available in read buffer
         const BUF_R_READY         = 0b0000_0000_0100_0000;
@@ -144,6 +144,11 @@ impl Flags {
         self.contains(FlagsKind::RD_NOTIFY)
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_read_notified(&self) -> bool {
+        self.contains(FlagsKind::RD_NOTIFIED)
+    }
+
     pub(crate) fn is_rd_backpressure(&self) -> bool {
         self.contains(FlagsKind::RD_BACKPRESSURE)
     }
@@ -206,7 +211,7 @@ impl Flags {
     }
 
     pub(crate) fn set_read_notifed(&self) {
-        self.insert(FlagsKind::RD_NOTIFED);
+        self.insert(FlagsKind::RD_NOTIFIED);
     }
 
     pub(crate) fn set_read_ready(&self) {
@@ -257,8 +262,8 @@ impl Flags {
 
     /// Checks `RD_NOTIFY` and unsets
     pub(crate) fn check_read_notifed(&self) -> bool {
-        if self.contains(FlagsKind::RD_NOTIFED) {
-            self.remove(FlagsKind::RD_NOTIFY | FlagsKind::RD_NOTIFED);
+        if self.contains(FlagsKind::RD_NOTIFIED) {
+            self.remove(FlagsKind::RD_NOTIFY | FlagsKind::RD_NOTIFIED);
             true
         } else {
             false

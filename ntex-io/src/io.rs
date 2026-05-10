@@ -490,7 +490,7 @@ impl<F> Io<F> {
         let st = self.st();
 
         if st.flags.is_stopped() {
-            Poll::Ready(Err(st.error_or_disconnected()))
+            Poll::Ready(Ok(None))
         } else {
             let ready = st.flags.is_read_ready();
 
@@ -523,7 +523,9 @@ impl<F> Io<F> {
     /// Polls for any incoming data.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
-        if st.flags.check_read_notifed() {
+        if st.flags.is_stopped() {
+            Poll::Ready(Ok(None))
+        } else if st.flags.check_read_notifed() {
             Poll::Ready(Ok(Some(())))
         } else {
             st.flags.set_read_notify();
@@ -1004,6 +1006,150 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn read_notify() {
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(8, 4, 16)),
+        );
+        assert!(!io.st().flags.is_read_notify());
+        assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
+        assert!(io.st().dispatch_task.is_set());
+        assert!(io.st().flags.is_read_notify());
+
+        let ctx = IoContext::new(io.get_ref());
+
+        // incoming bytes
+        ctx.update_read_status(Ok(Some(BytesMut::copy_from_slice(b"1"))));
+
+        assert!(!io.st().dispatch_task.is_set());
+        // rd buffer is ready
+        assert!(io.st().flags.is_read_ready());
+        assert!(io.st().flags.is_read_notify());
+        // dispatcher is notified
+        assert!(io.st().flags.is_read_notified());
+        let res = lazy(|cx| io.poll_read_notify(cx)).await;
+        assert!(matches!(res, Poll::Ready(Ok(Some(())))));
+
+        // disapcher is not set
+        assert!(!io.st().dispatch_task.is_set());
+        // rd buffer is ready
+        assert!(io.st().flags.is_read_ready());
+
+        // == start notification process again
+        assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
+        assert!(io.st().dispatch_task.is_set());
+        assert!(io.st().flags.is_read_notify());
+        assert!(io.st().flags.is_read_ready());
+        // read task ready
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+
+        // == enable packpressure
+        ctx.update_read_status(Ok(Some(BytesMut::copy_from_slice(b"2345678"))));
+        // read backpressure is enabled
+        assert!(io.st().flags.is_rd_backpressure());
+
+        // rd buffer is ready
+        assert!(io.st().flags.is_read_ready());
+        assert!(io.st().flags.is_read_notify());
+        // dispatcher is notified
+        assert!(io.st().flags.is_read_notified());
+        let res = lazy(|cx| io.poll_read_notify(cx)).await;
+        assert!(matches!(res, Poll::Ready(Ok(Some(())))));
+        // read task paused
+        assert_eq!(lazy(|cx| ctx.poll_read_ready(cx)).await, Poll::Pending);
+        // read task is set
+        assert!(io.st().read_task.is_set());
+
+        // == start notification process again
+        assert!(lazy(|cx| io.poll_read_notify(cx)).await.is_pending());
+        // read flags active
+        assert!(!io.st().flags.is_rd_backpressure());
+        assert!(!io.st().flags.is_read_ready());
+        assert!(!io.st().flags.is_read_paused());
+        // read task is woken
+        assert!(!io.st().read_task.is_set());
+        // read task ready
+        assert_eq!(
+            lazy(|cx| ctx.poll_read_ready(cx)).await,
+            Poll::Ready(Readiness::Ready)
+        );
+
+        // incoming bytes
+        ctx.update_read_status(Ok(Some(BytesMut::copy_from_slice(b"1"))));
+        assert!(!io.st().dispatch_task.is_set());
+        // rd buffer is ready
+        assert!(io.st().flags.is_read_ready());
+        assert!(io.st().flags.is_read_notify());
+        assert!(io.st().flags.is_read_paused());
+        assert!(io.st().flags.is_rd_backpressure());
+        // dispatcher is notified
+        assert!(io.st().flags.is_read_notified());
+        assert!(matches!(
+            lazy(|cx| io.poll_read_notify(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
+
+        // == Terminate
+        io.terminate();
+        let res = lazy(|cx| io.poll_read_notify(cx)).await;
+        assert!(matches!(res, Poll::Ready(Ok(None))), "{res:?}");
+    }
+
+    #[ntex::test]
+    async fn read_readiness() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let io = Io::from(server);
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+
+        client.write(TEXT);
+        assert_eq!(io.read_ready().await.unwrap(), Some(()));
+        assert!(matches!(
+            lazy(|cx| io.poll_read_ready(cx)).await,
+            Poll::Ready(Ok(Some(())))
+        ));
+
+        let item = io.with_read_buf(BytesMut::take);
+        assert_eq!(item, Bytes::from_static(BIN));
+
+        client.write(TEXT);
+        sleep(Millis(50)).await;
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
+    }
+
+    #[ntex::test]
+    async fn read_backpressure() {
+        let (client, server) = IoTest::create();
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
+        );
+        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
+
+        client.write(BIN2);
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_ready());
+        assert!(io.flags().is_rd_backpressure());
+        let _item = io.recv(&BytesCodec).await.ok().unwrap().unwrap();
+        assert!(!io.flags().is_read_ready());
+        assert!(!io.flags().is_rd_backpressure());
+
+        client.write(BIN2);
+        client.write(BIN2);
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_ready());
+        assert!(io.flags().is_rd_backpressure());
+        assert_eq!(io.read_ready().await.unwrap(), Some(()));
+    }
+
+    #[ntex::test]
     async fn write() {
         let io = Io::new(
             IoTest::create().0,
@@ -1145,57 +1291,6 @@ mod tests {
             lazy(|cx| io.poll_status_update(cx)).await,
             Poll::Ready(IoStatusUpdate::PeerGone(None))
         ));
-    }
-
-    #[ntex::test]
-    async fn read_readiness() {
-        let (client, server) = IoTest::create();
-        client.remote_buffer_cap(1024);
-
-        let io = Io::from(server);
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
-
-        client.write(TEXT);
-        assert_eq!(io.read_ready().await.unwrap(), Some(()));
-        assert!(matches!(
-            lazy(|cx| io.poll_read_ready(cx)).await,
-            Poll::Ready(Ok(Some(())))
-        ));
-
-        let item = io.with_read_buf(BytesMut::take);
-        assert_eq!(item, Bytes::from_static(BIN));
-
-        client.write(TEXT);
-        sleep(Millis(50)).await;
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_ready());
-    }
-
-    #[ntex::test]
-    async fn read_backpressure() {
-        let (client, server) = IoTest::create();
-
-        let io = Io::new(
-            server,
-            SharedCfg::new("SRV").add(IoConfig::default().set_read_buf(64, 32, 12)),
-        );
-        assert!(lazy(|cx| io.poll_read_ready(cx)).await.is_pending());
-
-        client.write(BIN2);
-        client.write(BIN2);
-        sleep(Millis(50)).await;
-        assert!(io.flags().is_read_ready());
-        assert!(io.flags().is_rd_backpressure());
-        let _item = io.recv(&BytesCodec).await.ok().unwrap().unwrap();
-        assert!(!io.flags().is_read_ready());
-        assert!(!io.flags().is_rd_backpressure());
-
-        client.write(BIN2);
-        client.write(BIN2);
-        sleep(Millis(50)).await;
-        assert!(io.flags().is_read_ready());
-        assert!(io.flags().is_rd_backpressure());
-        assert_eq!(io.read_ready().await.unwrap(), Some(()));
     }
 
     #[ntex::test]
