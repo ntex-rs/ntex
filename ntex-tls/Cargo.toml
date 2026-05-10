@@ -1,6 +1,6 @@
 [package]
 name = "ntex-tls"
-version = "3.5.0"
+version = "3.5.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
 keywords = ["network", "framework", "async", "futures"]
@@ -44,8 +44,6 @@ tls_openssl = { workspace = true, optional = true }
 
 # rustls
 tls_rustls = { workspace = true, optional = true }
-
-backtrace = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true, features = ["openssl", "rustls"] }

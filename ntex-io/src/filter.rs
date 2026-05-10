@@ -32,20 +32,22 @@ impl NullFilter {
 }
 
 pub trait Filter: 'static {
+    /// Accesses internal filter information.
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>>;
 
+    /// Processes incoming read-buffer data.
     fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()>;
 
-    /// Process write buffer
+    /// Processes outgoing write-buffer data.
     fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()>;
 
-    /// Gracefully shutdown filter
+    /// Performs a graceful shutdown of the filter.
     fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>>;
 
-    /// Check readiness for read operations
+    /// Checks whether read operations may proceed.
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
-    /// Check readiness for write operations
+    /// Checks whether write operations may proceed.
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
@@ -106,19 +108,7 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
-        let st = &self.0.0;
-
-        let buf = ctx.write_destination();
-        let len = buf.len();
-        if len > 0 && st.flags.is_write_paused() && !st.flags.is_wr_send_op() {
-            st.flags.unset_write_paused();
-            st.wake_write_task();
-        }
-        if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
-            st.flags.set_wr_backpressure();
-            st.wake_dispatch_task();
-        }
+    fn process_write_buf(&self, _: &mut FilterCtx<'_>) -> io::Result<()> {
         Ok(())
     }
 

@@ -127,17 +127,20 @@ where
     T: Stream + Unpin,
 {
     let st = poll_fn(|cx| {
-        loop {
+        'outer: loop {
             return match ready!(ctx.poll_read_ready(cx)) {
                 Readiness::Ready => match ready!(io.as_ref().poll_read_ready(cx)) {
-                    Ok(()) => match read(io.as_ref(), &ctx) {
-                        IoTaskStatus::Pause => Poll::Pending,
-                        IoTaskStatus::Io => continue,
-                        IoTaskStatus::Stop => Poll::Ready(()),
+                    Ok(()) => 'inner: loop {
+                        return match read(io.as_ref(), &ctx) {
+                            Poll::Ready(IoTaskStatus::Io) => continue 'inner,
+                            Poll::Ready(IoTaskStatus::Pause) => Poll::Pending,
+                            Poll::Ready(IoTaskStatus::Stop) => Poll::Ready(()),
+                            Poll::Pending => continue 'outer,
+                        };
                     },
                     Err(err) => {
                         ctx.stop(Some(err));
-                        Poll::Ready(())
+                        return Poll::Ready(());
                     }
                 },
                 Readiness::Shutdown | Readiness::Terminate => Poll::Ready(()),
@@ -242,11 +245,14 @@ where
                 let bufs =
                     unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
 
-                let result = write_io(ctx, io, bufs);
-                let mut written = if let Poll::Ready(Ok(n)) = result { n } else { 0 };
+                let result = match write_io(ctx, io, bufs) {
+                    Poll::Ready(Ok(val)) => Poll::Ready(val),
+                    Poll::Ready(Err(err)) => return (false, Err(err), false),
+                    Poll::Pending => Poll::Pending,
+                };
 
                 // remove written bytes
-                if written > 0 {
+                if let Poll::Ready(mut written) = result {
                     for page in pages[..num].iter_mut().flatten() {
                         let len = cmp::min(page.len(), written);
                         page.advance_to(len);
@@ -256,7 +262,7 @@ where
                         }
                     }
                 }
-                // return unwritten data back to buffer
+                // return unwritten data back to the buffer
                 for p in pages[..num].iter_mut().rev() {
                     if let Some(page) = p.take() {
                         dst.prepend(page);
@@ -264,11 +270,16 @@ where
                 }
 
                 match result {
-                    Poll::Ready(val) => (!dst.is_empty(), val, false),
-                    Poll::Pending => (!dst.is_empty(), Ok(0), true),
+                    Poll::Ready(val) => {
+                        if val == 0 {
+                            ctx.stop(None);
+                        }
+                        (!dst.is_empty(), Ok(val > 0), false)
+                    }
+                    Poll::Pending => (!dst.is_empty(), Ok(false), true),
                 }
             } else {
-                (false, Ok(0), false)
+                (false, Ok(false), false)
             }
         });
 
@@ -312,13 +323,14 @@ fn write_io<T: Stream>(
     }
 }
 
-fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> IoTaskStatus {
+fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
     let mut buf = ctx.get_read_buf();
 
     // read data from socket
     let io_res =
         io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
 
+    let mut pending = false;
     let result = match io_res {
         Ok(0) => Ok(None),
         Ok(n) => {
@@ -327,11 +339,19 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> IoTaskStatus {
             unsafe { buf.advance_mut(n) }
             Ok(Some(buf))
         }
-        Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(Some(buf)),
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+            pending = true;
+            Ok(Some(buf))
+        }
         Err(e) => Err(e),
     };
 
-    ctx.update_read_status(result)
+    let result = ctx.update_read_status(result);
+    if result == IoTaskStatus::Io && pending {
+        Poll::Pending
+    } else {
+        Poll::Ready(result)
+    }
 }
 
 #[derive(Debug)]

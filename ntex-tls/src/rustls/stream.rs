@@ -1,6 +1,4 @@
-use std::cell::RefCell;
-use std::io::{self, Write};
-use std::{any, future::poll_fn, ops::Deref, ops::DerefMut, task::Poll, task::ready};
+use std::{any, cell::RefCell, io, io::Write, ops::Deref, ops::DerefMut};
 
 use ntex_bytes::{BufMut, BytePages, BytesMut};
 use ntex_io::{FilterBuf, Io, types};
@@ -148,17 +146,9 @@ where
         }
 
         if handshaking {
-            poll_fn(|cx| {
-                if ready!(io.poll_read_notify(cx))?.is_none() {
-                    Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::NotConnected,
-                        "disconnected",
-                    )))
-                } else {
-                    Poll::Ready(Ok(()))
-                }
-            })
-            .await?;
+            io.read_notify().await?.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "disconnected")
+            })?;
         } else {
             return Ok(());
         }

@@ -433,7 +433,7 @@ fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
 }
 
 fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
-    let result = ctx.with_write_buf(|buf| write_io(io, buf, cx, ctx.tag()));
+    let result = ctx.with_write_buf(|buf| write_io(io, buf, cx, ctx));
     if ctx.update_write_status(result) == IoTaskStatus::Stop {
         Poll::Ready(Status::Terminate)
     } else {
@@ -468,8 +468,9 @@ pub(super) fn write_io(
     io: &IoTest,
     buf: &mut BytePages,
     cx: &mut Context<'_>,
-    tag: &'static str,
-) -> io::Result<usize> {
+    ctx: &IoContext,
+) -> io::Result<bool> {
+    let tag = ctx.tag();
     let mut written = 0;
 
     while let Some(mut page) = buf.take() {
@@ -479,10 +480,8 @@ pub(super) fn write_io(
         match result {
             Poll::Ready(0) => {
                 log::trace!("{tag}: disconnected during flush, written {written}");
-                return Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "failed to write frame to transport",
-                ));
+                ctx.stop(None);
+                return Ok(false);
             }
             Poll::Ready(n) => {
                 written += n;
@@ -497,7 +496,7 @@ pub(super) fn write_io(
     }
 
     log::debug!("{tag}: flushed {written} bytes, remaining: {}", buf.len());
-    Ok(written)
+    Ok(written > 0)
 }
 
 #[cfg(test)]

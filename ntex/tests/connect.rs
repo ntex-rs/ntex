@@ -54,7 +54,6 @@ async fn test_openssl_string() {
     })
     .set_addr(local_addr);
 
-    println!("1 =================================");
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
     let connector = builder.build();
@@ -79,7 +78,6 @@ async fn test_openssl_string() {
     assert_eq!(io.query::<PeerCertChain>().as_ref().unwrap().0.len(), 1);
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
-    println!("2 =================================");
 
     // ssl connector 2
     let conn = ntex::connect::openssl::SslConnector2::new(connector)

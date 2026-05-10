@@ -11,15 +11,15 @@ bitflags::bitflags! {
         const IO_STOPPING         = 0b0000_0000_0000_0010;
         /// shutting down filters
         const IO_STOPPING_FILTERS = 0b0000_0000_0000_0100;
-        /// need to write buffer
-        const IO_WANTS_WRITE      = 0b0000_0000_0000_1000;
 
         /// pause io read
         const RD_PAUSED           = 0b0000_0000_0001_0000;
-        /// read any data and notify dispatcher
-        const RD_NOTIFY           = 0b0000_0000_0010_0000;
         /// read backpressure
         const RD_BACKPRESSURE     = 0b0000_0000_1000_0000;
+
+        /// read any data and notify dispatcher
+        const RD_NOTIFY           = 0b0000_0000_0010_0000;
+        const RD_NOTIFED          = 0b0000_0000_0000_1000;
 
         /// new data is available in read buffer
         const BUF_R_READY         = 0b0000_0000_0100_0000;
@@ -30,16 +30,16 @@ bitflags::bitflags! {
         const WR_PAUSED           = 0b0000_0010_0000_0000;
         /// write any data and notify dispatcher
         const WR_NOTIFY           = 0b0000_0100_0000_0000;
-        /// write ops is scheduled
-        const WR_SEND             = 0b0000_1000_0000_0000;
+        /// write op is scheduled
+        const WR_SEND_OP          = 0b0000_1000_0000_0000;
 
         /// timeout occurred
         const DSP_TIMEOUT         = 0b0001_0000_0000_0000;
         /// write buffer is full
         const DSP_W_BACKPRESSURE  = 0b0010_0000_0000_0000;
 
-        /// early write
-        const UPFRONT_WRITE       = 0b1000_0000_0000_0000;
+        /// is send-buf enabled
+        const SEND_BUF            = 0b1000_0000_0000_0000;
     }
 }
 
@@ -50,9 +50,9 @@ impl Clone for Flags {
 }
 
 impl Flags {
-    pub(crate) fn new(upfront_write: bool) -> Self {
-        if upfront_write {
-            Self(Cell::new(FlagsKind::WR_PAUSED | FlagsKind::UPFRONT_WRITE))
+    pub(crate) fn new(send_buf: bool) -> Self {
+        if send_buf {
+            Self(Cell::new(FlagsKind::WR_PAUSED | FlagsKind::SEND_BUF))
         } else {
             Self(Cell::new(FlagsKind::WR_PAUSED))
         }
@@ -118,18 +118,14 @@ impl Flags {
         self.intersects(FlagsKind::WR_FLUSH)
     }
 
-    pub(crate) fn is_wants_write(&self) -> bool {
-        self.contains(FlagsKind::IO_WANTS_WRITE)
-    }
-
     pub(crate) fn is_shutting_down_filters(&self) -> bool {
         let f = self.get();
         f.contains(FlagsKind::IO_STOPPING_FILTERS)
             && !f.intersects(FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING)
     }
 
-    pub(crate) fn is_write_upfront_enabled(&self) -> bool {
-        self.contains(FlagsKind::UPFRONT_WRITE | FlagsKind::WR_PAUSED)
+    pub(crate) fn is_send_buf_enabled(&self) -> bool {
+        self.contains(FlagsKind::SEND_BUF)
     }
 
     pub(crate) fn is_read_paused(&self) -> bool {
@@ -156,16 +152,12 @@ impl Flags {
         self.contains(FlagsKind::DSP_W_BACKPRESSURE)
     }
 
-    pub(crate) fn is_wr_send_op(&self) -> bool {
-        self.contains(FlagsKind::WR_SEND)
+    pub(crate) fn is_wr_send_scheduled(&self) -> bool {
+        self.contains(FlagsKind::WR_SEND_OP)
     }
 
     pub(crate) fn is_read_paused_or_backpressure(&self) -> bool {
         self.intersects(FlagsKind::RD_PAUSED | FlagsKind::RD_BACKPRESSURE)
-    }
-
-    pub(crate) fn is_read_ready_or_backpressure(&self) -> bool {
-        self.intersects(FlagsKind::BUF_R_READY | FlagsKind::RD_BACKPRESSURE)
     }
 
     pub(crate) fn is_read_ready_and_backpressure(&self) -> bool {
@@ -184,8 +176,8 @@ impl Flags {
         self.insert(FlagsKind::WR_NOTIFY);
     }
 
-    pub(crate) fn set_wr_send_op(&self) {
-        self.insert(FlagsKind::WR_SEND);
+    pub(crate) fn set_wr_send_scheduled(&self) {
+        self.insert(FlagsKind::WR_SEND_OP);
     }
 
     pub(crate) fn set_wr_backpressure(&self) {
@@ -205,16 +197,16 @@ impl Flags {
         );
     }
 
-    pub(crate) fn set_wants_write(&self) {
-        self.insert(FlagsKind::IO_WANTS_WRITE);
-    }
-
     pub(crate) fn set_wants_write_flush(&self) {
         self.insert(FlagsKind::WR_FLUSH);
     }
 
     pub(crate) fn set_read_notify(&self) {
         self.insert(FlagsKind::RD_NOTIFY);
+    }
+
+    pub(crate) fn set_read_notifed(&self) {
+        self.insert(FlagsKind::RD_NOTIFED);
     }
 
     pub(crate) fn set_read_ready(&self) {
@@ -239,12 +231,8 @@ impl Flags {
         self.remove(FlagsKind::WR_NOTIFY);
     }
 
-    pub(crate) fn unset_wants_write(&self) {
-        self.remove(FlagsKind::IO_WANTS_WRITE);
-    }
-
-    pub(crate) fn unset_wr_send_op(&self) {
-        self.remove(FlagsKind::WR_SEND);
+    pub(crate) fn unset_wr_send_scheduled(&self) {
+        self.remove(FlagsKind::WR_SEND_OP);
     }
 
     pub(crate) fn unset_wr_backpressure(&self) {
@@ -268,9 +256,9 @@ impl Flags {
     }
 
     /// Checks `RD_NOTIFY` and unsets
-    pub(crate) fn check_read_notify(&self) -> bool {
-        if self.contains(FlagsKind::RD_NOTIFY) {
-            self.remove(FlagsKind::RD_NOTIFY);
+    pub(crate) fn check_read_notifed(&self) -> bool {
+        if self.contains(FlagsKind::RD_NOTIFED) {
+            self.remove(FlagsKind::RD_NOTIFY | FlagsKind::RD_NOTIFED);
             true
         } else {
             false

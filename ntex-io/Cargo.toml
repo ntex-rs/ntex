@@ -31,8 +31,6 @@ log = { workspace = true }
 pin-project-lite = { workspace = true }
 slab = { workspace = true }
 
-backtrace = { workspace = true }
-
 [dev-dependencies]
 ntex = { workspace = true }
 rand = { workspace = true }

@@ -239,7 +239,7 @@ where
                         break;
                     }
                 }
-                Ok(n)
+                Ok(true)
             }
             Err(e) => Err(e),
         };

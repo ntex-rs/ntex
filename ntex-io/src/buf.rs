@@ -4,12 +4,6 @@ use ntex_bytes::{BytePageSize, BytePages, BytesMut};
 
 use crate::IoRef;
 
-#[derive(Debug)]
-pub struct Buffer {
-    pub(crate) len: usize,
-    pub(crate) buf: BytesMut,
-}
-
 pub(crate) struct Stack {
     buffers: Cell<Option<Box<[StackBuffer]>>>,
 }
@@ -98,7 +92,7 @@ impl Stack {
         })
     }
 
-    pub(crate) fn with_read_destination<F, R>(&self, io: &IoRef, f: F) -> R
+    pub(crate) fn with_read_dst<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
@@ -122,7 +116,7 @@ impl Stack {
         })
     }
 
-    pub(crate) fn write_buffer_size(&self) -> usize {
+    pub(crate) fn write_buf_size(&self) -> usize {
         self.with_buffers(|buffers| {
             // check size for first level because delayed filter processing
             if buffers.len() == 2 {
@@ -133,36 +127,21 @@ impl Stack {
         })
     }
 
-    pub(crate) fn write_buffer_has_bytes(&self) -> bool {
-        self.with_buffers(|buffers| {
-            // input buffer
-            if !buffers[0].write.is_empty() {
-                true
-            } else if buffers.len() == 2 {
-                // only one filter in chain
-                false
-            } else {
-                // output buffer
-                !buffers[buffers.len() - 2].write.is_empty()
-            }
-        })
-    }
-
-    pub(crate) fn with_write_source<F, R>(&self, f: F) -> R
+    pub(crate) fn with_write_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
         self.with_first_level(|buf| f(&mut buf.write))
     }
 
-    pub(crate) fn with_write_destination<F, R>(&self, f: F) -> R
+    pub(crate) fn with_write_dst<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
     {
         self.with_last_level(|buf| f(&mut buf.write))
     }
 
-    pub(crate) fn read_destination_size(&self) -> usize {
+    pub(crate) fn read_dst_size(&self) -> usize {
         self.with_first_level(|buf| buf.read.as_ref().map_or(0, BytesMut::len))
     }
 
@@ -184,18 +163,6 @@ impl Stack {
     /// API for `tasks::IoContext`
     pub(crate) fn get_read_buf(&self) -> Option<BytesMut> {
         self.with_last_level(|buffer| buffer.read.take())
-    }
-
-    pub(crate) fn set_read_buf(&self, io: &IoRef, buf: BytesMut) {
-        self.with_last_level(move |buffer| {
-            if let Some(mut first_buf) = buffer.read.take() {
-                first_buf.extend_from_slice(&buf);
-                io.cfg().read_buf().release(buf);
-                buffer.read = Some(first_buf);
-            } else {
-                buffer.read = Some(buf);
-            }
-        });
     }
 
     pub(crate) fn process_read_buf(&self, io: &IoRef, buf: BytesMut) -> io::Result<()> {
@@ -288,13 +255,8 @@ impl FilterCtx<'_> {
             io: self.io,
             curr: &mut left[self.idx],
             next: &mut right[0],
-            needs_write: Cell::new(false),
         };
-        let result = f(&mut buf);
-        if buf.needs_write.get() {
-            self.io.wants_write();
-        }
-        result
+        f(&mut buf)
     }
 
     pub(crate) fn set_base_read_buf(&mut self, buf: BytesMut) {
@@ -308,12 +270,12 @@ impl FilterCtx<'_> {
         }
     }
 
-    pub(crate) fn write_destination(&mut self) -> &mut BytePages {
-        &mut self.buffers[self.buffers.len() - 2].write
+    pub fn read_dst_size(&self) -> usize {
+        self.buffers[0].read.as_ref().map_or(0, BytesMut::len)
     }
 
-    pub fn read_destination_size(&self) -> usize {
-        self.buffers[0].read.as_ref().map_or(0, BytesMut::len)
+    pub fn write_dst_size(&mut self) -> usize {
+        self.buffers[self.buffers.len() - 2].write.len()
     }
 }
 
@@ -322,7 +284,6 @@ pub struct FilterBuf<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) curr: &'a mut StackBuffer,
     pub(crate) next: &'a mut StackBuffer,
-    pub(crate) needs_write: Cell<bool>,
 }
 
 impl FilterBuf<'_> {

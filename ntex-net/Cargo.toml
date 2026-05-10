@@ -65,8 +65,6 @@ compio-driver = { workspace = true, optional = true }
 compio-runtime = { workspace = true, optional = true }
 tok-io = { workspace = true, features = ["rt", "net"], optional = true }
 
-backtrace = { workspace = true }
-
 # Linux specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
 ntex-io-uring = { workspace = true, features = ["direct-syscall"] }

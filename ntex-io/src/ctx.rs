@@ -91,14 +91,17 @@ impl IoContext {
     pub fn update_read_status(&self, status: io::Result<Option<BytesMut>>) -> IoTaskStatus {
         let st = self.st();
         let result = status.map(|buf| buf.map(|buffer| {
-            let orig_size = st.buffer.read_destination_size();
+            if buffer.is_empty() {
+                return Ok(())
+            }
+            let orig_size = st.buffer.read_dst_size();
 
-            st.buffer.process_read_buf(&self.0, buffer).and_then(|()| {
-                let size = st.buffer.read_destination_size();
+            st.buffer.process_read_buf(&self.0, buffer).map(|()| {
+                let size = st.buffer.read_dst_size();
 
                 // dest buffer has new data, wake up dispatcher
                 if size > orig_size {
-                    if st.enable_rd_backpressure(size) {
+                    if st.is_rd_backpressure_needed(size) {
                         log::trace!(
                             "{}: Io read buffer is too large {size}, enable read back-pressure",
                             st.tag(),
@@ -109,30 +112,13 @@ impl IoContext {
                     }
                     log::trace!("{}: New {size} bytes available, wakeup dispatcher", st.tag());
                     st.wake_dispatch_task();
-                } else {
-                    if st.flags.is_rd_backpressure() {
-                        // The read task is paused due to read back-pressure,
-                        // but there is no new data in the top-most read buffer.
-                        // We therefore need to wake the read task so it can
-                        // continue reading more data; otherwise, it could
-                        // remain blocked indefinitely.
-                        st.flags.unset_read_ready();
-                    }
-                    if st.flags.is_read_notify() {
-                        // In the case of a "notify" flag, we must wake the
-                        // dispatch task if any data was read from the source.
-                        st.wake_dispatch_task();
-                    }
                 }
 
-                // While reading, the filter chain may have written some data.
-                // In that case, the filters need to process the write buffers
-                // and potentially wake the write task.
-                if st.flags.is_wants_write() {
-                    st.flags.unset_wants_write();
-                    st.buffer.process_write_buf_force(&self.0)
-                } else {
-                    Ok(())
+                if st.flags.is_read_notify() {
+                    // In the case of a "notify" flag, we must wake the
+                    // dispatch task if any data was read from the source.
+                    st.wake_dispatch_task();
+                    st.flags.set_read_notifed();
                 }
             })
         }));
@@ -168,32 +154,34 @@ impl IoContext {
         }
 
         // access to output write buffer
-        self.st().buffer.with_write_destination(|buffer| f(buffer))
+        self.st().buffer.with_write_dst(|buffer| f(buffer))
     }
 
     /// Update write status.
     ///
     /// `Ok(true)` indicates that one or more bytes were successfully written
     /// to the I/O stream.
-    pub fn update_write_status(&self, status: io::Result<usize>) -> IoTaskStatus {
+    pub fn update_write_status(&self, status: io::Result<bool>) -> IoTaskStatus {
         let st = &self.st();
 
         match status {
             Ok(written) => {
-                let len = st.buffer.write_buffer_size();
-
-                // write backpressure is enabled and write buf smaller than half
-                let can_disable_wr_backpressure =
-                    st.flags.is_wr_backpressure() && st.disable_wr_backpressure(len);
-                // write flush is enabled, and write buffer is fully written
-                let can_disable_flush = st.flags.is_write_flush() && len == 0;
-
-                if can_disable_wr_backpressure || can_disable_flush {
+                let len = st.buffer.write_buf_size();
+                // full flush mode is enabled
+                if st.flags.is_write_flush() {
+                    // the write buffer must be fully written
+                    if len == 0 {
+                        st.wake_dispatch_task();
+                    }
+                } else if st.flags.is_wr_backpressure()
+                    && st.should_disable_wr_backpressure(len)
+                {
+                    // Write backpressure is active and the write buffer is below half capacity.
                     st.wake_dispatch_task();
                 }
 
                 // wake up both tasks
-                if written > 0 && st.flags.is_write_notify() {
+                if written && st.flags.is_write_notify() {
                     st.flags.unset_write_notify();
                     st.wake_read_task();
                     st.wake_write_task();
