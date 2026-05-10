@@ -4,8 +4,7 @@
     clippy::missing_fields_in_debug,
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
-    clippy::must_use_candidate,
-    dead_code
+    clippy::must_use_candidate
 )]
 use std::io::{Error as IoError, Result as IoResult};
 use std::{any::Any, any::TypeId, fmt, task::Context, task::Poll};
@@ -29,7 +28,7 @@ mod utils;
 
 use ntex_codec::Decoder;
 
-pub use self::buf::{Buffer, FilterBuf, FilterCtx};
+pub use self::buf::{FilterBuf, FilterCtx};
 pub use self::cfg::IoConfig;
 pub use self::ctx::IoContext;
 pub use self::filter::{Base, Filter, Layer};
@@ -42,19 +41,19 @@ pub use self::utils::{Decoded, seal};
 #[doc(hidden)]
 pub use self::flags::Flags;
 
-/// Filter ready state
+/// Filter readiness state.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Readiness {
-    /// Io task is clear to proceed with io operations
+    /// The I/O task may proceed with I/O operations.
     Ready,
-    /// Initiate graceful io shutdown operation
+    /// Initiates a graceful I/O shutdown.
     Shutdown,
-    /// Immediately terminate connection
+    /// Immediately terminates the I/O stream.
     Terminate,
 }
 
 impl Readiness {
-    /// Merge two Readiness values
+    /// Merges two readiness states.
     pub fn merge(val1: Poll<Readiness>, val2: Poll<Readiness>) -> Poll<Readiness> {
         match val1 {
             Poll::Pending => Poll::Pending,
@@ -74,31 +73,31 @@ impl Readiness {
 #[allow(unused_variables)]
 pub trait FilterLayer: fmt::Debug + 'static {
     #[inline]
-    /// Check readiness for read operations
+    /// Checks whether read operations may proceed.
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         Poll::Ready(Readiness::Ready)
     }
 
     #[inline]
-    /// Check readiness for write operations
+    /// Checks whether write operations may proceed.
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         Poll::Ready(Readiness::Ready)
     }
 
-    /// Process read buffer
+    /// Processes incoming read-buffer data.
     fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
 
-    /// Process write buffer
+    /// Processes outgoing write-buffer data.
     fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
 
     #[inline]
-    /// Query internal filter data
+    /// Accesses internal filter information.
     fn query(&self, id: TypeId) -> Option<Box<dyn Any>> {
         None
     }
 
     #[inline]
-    /// Gracefully shutdown filter
+    /// Performs a graceful shutdown of the filter.
     fn shutdown(&self, buf: &mut FilterBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))
     }
@@ -118,37 +117,37 @@ pub trait Handle {
     fn write(&self, _: &IoContext) {}
 }
 
-/// Status for read task
+/// Current status of the I/O state.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IoTaskStatus {
-    /// More io ops
+    /// Continue performing I/O operations.
     Io,
-    /// Pause io task
+    /// Pause I/O processing temporarily.
     Pause,
-    /// Stop io task
+    /// Stop the I/O task.
     Stop,
 }
 
-/// Io status
+/// I/O status update events.
 #[derive(Debug)]
 pub enum IoStatusUpdate {
-    /// Keep-alive timeout occurred
+    /// Keep-alive timeout has occurred.
     KeepAlive,
-    /// Write backpressure is enabled
+    /// Write backpressure is currently active.
     WriteBackpressure,
-    /// Peer is disconnected
+    /// Peer has disconnected.
     PeerGone(Option<IoError>),
 }
 
-/// Recv error
+/// Errors that can occur while receiving data.
 pub enum RecvError<U: Decoder> {
-    /// Keep-alive timeout occurred
+    /// A keep-alive timeout occurred.
     KeepAlive,
-    /// Write backpressure is enabled
+    /// Write backpressure is currently active.
     WriteBackpressure,
-    /// Unrecoverable frame decoding errors
+    /// Failed to decode an incoming frame.
     Decoder(U::Error),
-    /// Peer is disconnected
+    /// The peer has disconnected.
     PeerGone(Option<IoError>),
 }
 

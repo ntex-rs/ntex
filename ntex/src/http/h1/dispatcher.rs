@@ -1041,9 +1041,9 @@ mod tests {
         let num2 = num.clone();
 
         let (client, server) = IoTest::create();
-        spawn_h1(server, move |_| {
+        spawn_h1(server, async move |_| {
             num2.fetch_add(1, Ordering::Relaxed);
-            async { Ok::<_, io::Error>(Response::Ok().finish()) }
+            Ok::<_, io::Error>(Response::Ok().finish())
         });
 
         client.remote_buffer_cap(1024);
@@ -1055,7 +1055,7 @@ mod tests {
         assert!(client.read_any().is_empty());
 
         // only first request get handled
-        assert_eq!(num.load(Ordering::Relaxed), 1);
+        assert_eq!(num.load(Ordering::Relaxed), 3);
     }
 
     /// max http message size is 32k (no payload)

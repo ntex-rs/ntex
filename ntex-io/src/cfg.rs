@@ -25,7 +25,7 @@ pub struct IoConfig {
     read_buf: BufConfig,
     write_buf: BufConfig,
     write_page_size: BytePageSize,
-    write_buf_limit: usize,
+    write_buf_threshold: usize,
 
     // shared config
     pub(crate) config: CfgContext,
@@ -100,7 +100,7 @@ impl IoConfig {
                 cache_size: DEFAULT_CACHE_SIZE,
             },
             write_page_size: BytePageSize::Size16,
-            write_buf_limit: BytePageSize::Size16.half_capacity(),
+            write_buf_threshold: BytePageSize::Size16.half_capacity(),
         }
     }
 
@@ -153,9 +153,9 @@ impl IoConfig {
     }
 
     #[inline]
-    /// The write buffer limit.
-    pub fn write_buf_limit(&self) -> usize {
-        self.write_buf_limit
+    /// The write buffer threshold that triggers earlier sending.
+    pub fn write_buf_threshold(&self) -> usize {
+        self.write_buf_threshold
     }
 
     /// Set connect timeout in seconds.
@@ -242,7 +242,7 @@ impl IoConfig {
         self
     }
 
-    /// Sets the write buffer limit.
+    /// Sets the write buffer threshold.
     ///
     /// The app encodes data in response to incoming data,
     /// continuing to fill the write buffer until all data
@@ -254,9 +254,11 @@ impl IoConfig {
     /// which introduces latency. To prevent this behavior and
     /// flatten data delivery to the peer, ntex's io can initiate
     /// out-of-order writes based on a configured threshold.
+    ///
+    /// Set `0` to disable send-buf.
     #[must_use]
-    pub fn set_write_buf_limit(mut self, size: usize) -> Self {
-        self.write_buf_limit = size;
+    pub fn set_write_buf_threshold(mut self, size: usize) -> Self {
+        self.write_buf_threshold = size;
         self
     }
 
@@ -282,10 +284,9 @@ impl BufConfig {
     #[inline]
     /// Get buffer
     pub fn get(&self) -> BytesMut {
-        if let Some(mut buf) =
+        if let Some(buf) =
             CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop()))
         {
-            buf.clear();
             buf
         } else {
             BytesMut::with_capacity(self.high)
@@ -321,12 +322,13 @@ impl BufConfig {
 
     #[inline]
     /// Release buffer, buf must be allocated from this pool
-    pub fn release(&self, buf: BytesMut) {
+    pub fn release(&self, mut buf: BytesMut) {
         let cap = buf.capacity();
         if cap > self.low && cap <= self.high {
             CACHE.with(|c| {
                 c.with(self.idx, self.first, |v: &mut Vec<_>| {
                     if v.len() < self.cache_size {
+                        buf.clear();
                         v.push(buf);
                     }
                 });

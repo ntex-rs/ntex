@@ -1,7 +1,7 @@
-use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc, task::Poll};
+use std::{cell::Cell, io, mem, num::NonZeroU32, os::fd::AsRawFd, rc::Rc};
 
-use ntex_bytes::{BufMut, BytePage, BytePages};
-use ntex_io::{Buffer, IoContext, IoTaskStatus};
+use ntex_bytes::{BufMut, BytePage, BytePages, BytesMut};
+use ntex_io::{IoContext, IoTaskStatus};
 use ntex_io_uring::{cqueue, opcode, opcode2, types::Fd};
 use ntex_rt::Arbiter;
 use ntex_util::channel::pool;
@@ -58,12 +58,12 @@ struct StreamItem {
 enum Operation {
     Recv {
         id: usize,
-        buf: Buffer,
+        buf: BytesMut,
     },
     Send {
         id: usize,
         buf: BytePage,
-        result: Option<io::Result<()>>,
+        result: Option<io::Result<usize>>,
     },
     Poll {
         id: usize,
@@ -185,11 +185,14 @@ impl Handler for StreamOpsHandler {
             .with(|st| match st.ops.remove(user_data).unwrap() {
                 Operation::Recv { id, buf } => {
                     if let Some(item) = st.streams.get_mut(id) {
+                        #[cfg(feature = "trace")]
                         log::trace!("{}: Recv canceled {:?}", item.tag(), item.fd());
                         item.rd_op.take();
                         item.flags.remove(Flags::RD_CANCELING);
-                        item.ctx.release_read_buf(buf, Poll::Pending);
-                        if item.flags.contains(Flags::RD_REISSUE) {
+
+                        let res = item.ctx.update_read_status(Ok(Some(buf)));
+                        if item.flags.contains(Flags::RD_REISSUE) || res == IoTaskStatus::Io
+                        {
                             item.flags.remove(Flags::RD_REISSUE);
                             st.recv(id, false, &self.inner.api);
                         }
@@ -197,12 +200,15 @@ impl Handler for StreamOpsHandler {
                 }
                 Operation::Send { id, buf, .. } => {
                     if let Some(item) = st.streams.get_mut(id) {
+                        #[cfg(feature = "trace")]
                         log::trace!("{}: Send canceled: {:?}", item.tag(), item.fd());
                         item.ctx.with_write_buf(|pages| pages.prepend(buf));
                         item.wr_op.take();
                         item.flags.remove(Flags::WR_CANCELING);
-                        item.ctx.update_write_status(Poll::Pending);
-                        if item.flags.contains(Flags::WR_REISSUE) {
+
+                        let res = item.ctx.update_write_status(Ok(false));
+                        if item.flags.contains(Flags::WR_REISSUE) || res == IoTaskStatus::Io
+                        {
                             item.flags.remove(Flags::WR_REISSUE);
                             st.send(id, &self.inner.api);
                         }
@@ -215,11 +221,19 @@ impl Handler for StreamOpsHandler {
             });
     }
 
+    #[allow(clippy::too_many_lines)]
     fn completed(&mut self, user_data: usize, flags: u32, res: io::Result<usize>) {
         self.inner.with(|st| {
             match st.ops[user_data].take().unwrap() {
                 Operation::Recv { id, mut buf, } => {
+
                     if let Some(item) = st.streams.get_mut(id) {
+                        #[cfg(feature = "trace")]
+                        log::trace!(
+                            "{}: RcvDone({id}) {res:?} non-empty:{}",
+                            item.ctx.tag(),
+                            cqueue::sock_nonempty(flags));
+
                         // reset op reference
                         let _ = item.rd_op.take();
 
@@ -228,15 +242,17 @@ impl Handler for StreamOpsHandler {
                             log::error!("{}: Received WouldBlock {:?}, id: {:?}", item.tag(), res, item.ctx.id());
                             st.recv_more(id, buf, &self.inner.api);
                         } else {
-                            let mut total = 0;
-                            let res = Poll::Ready(res.map(|size| {
-                                // SAFETY: kernel tells us how many bytes it read
-                                unsafe { buf.advance_mut(size) };
-                                total = size;
-                            }).map_err(Some));
+                            if let Ok(size) = res {
+                                if size > 0 {
+                                    // SAFETY: kernel tells us how many bytes it read
+                                    unsafe { buf.advance_mut(size) };
+                                } else {
+                                    item.ctx.stop(None);
+                                }
+                            }
 
                             // handle IORING_CQE_F_SOCK_NONEMPTY flag
-                            if cqueue::sock_nonempty(flags) && matches!(res, Poll::Ready(Ok(()))) && total != 0 {
+                            if cqueue::sock_nonempty(flags) && !(matches!(res, Ok(0) | Err(_))) {
                                 // In case of disconnect, sock_nonempty is set to true.
                                 // First completion contains data, second Recv(0)
                                 // Before receiving Recv(0), POLLRDHUP is triggered
@@ -246,7 +262,7 @@ impl Handler for StreamOpsHandler {
                                 st.recv_more(id, buf, &self.inner.api);
                             } else {
                                 item.flags.remove(Flags::RD_MORE);
-                                if item.ctx.release_read_buf(buf, res) == IoTaskStatus::Io {
+                                if item.ctx.update_read_status(res.map(|_| Some(buf))) == IoTaskStatus::Io {
                                     st.recv(id, self.inner.api.is_new(), &self.inner.api);
                                 }
                             }
@@ -255,9 +271,22 @@ impl Handler for StreamOpsHandler {
                 }
                 Operation::Send { id, buf, result } => {
                     if let Some(item) = st.streams.get_mut(id) {
+                        #[cfg(feature = "trace")]
+                        log::trace!(
+                            "{}: Sent({id}) res:{res:?} notif:{:?} more:{:?}",
+                            item.ctx.tag(),
+                            cqueue::notif(flags),
+                            cqueue::more(flags),
+                        );
+
                         if cqueue::notif(flags) {
-                            let res = result.unwrap_or(Ok(()));
-                            if item.ctx.update_write_status(Poll::Ready(res)) == IoTaskStatus::Io {
+                            let res = result.unwrap_or(res).map(|n| {
+                                if n == 0 {
+                                    item.ctx.stop(None);
+                                }
+                                n > 0
+                            });
+                            if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
                         } else if cqueue::more(flags) {
@@ -272,14 +301,21 @@ impl Handler for StreamOpsHandler {
                             st.ops[user_data] = Some(Operation::Send {
                                 id,
                                 buf,
-                                result: Some(res.map(|_| ())) });
+                                result: Some(res) });
+                            // we reuse same op id
                             return
                         } else {
                             // reset op reference
                             item.wr_op.take();
 
                             // release buffer and try to send next chunk
-                            if item.ctx.update_write_status(Poll::Ready(res.map(|_| ()))) == IoTaskStatus::Io {
+                            let res = res.map(|n| {
+                                if n == 0 {
+                                    item.ctx.stop(None);
+                                }
+                                n > 0
+                            });
+                            if item.ctx.update_write_status(res) == IoTaskStatus::Io {
                                 st.send(id, &self.inner.api);
                             }
                         }
@@ -299,6 +335,8 @@ impl Handler for StreamOpsHandler {
                 Operation::Close { id } => {
                     if st.streams[id].flags.contains(Flags::DROPPED_SEC) {
                         let item = st.streams.remove(id);
+                        #[cfg(feature = "trace")]
+                        log::trace!("{}: Close({id})", item.ctx.tag());
                         mem::forget(item.io);
                     } else {
                         st.streams[id].flags.insert(Flags::DROPPED_PRI);
@@ -336,6 +374,9 @@ impl StreamOpsStorage {
     fn recv(&mut self, id: usize, poll_first: bool, api: &DriverApi) {
         if let Some(item) = self.streams.get_mut(id) {
             if item.rd_op.is_none() {
+                #[cfg(feature = "trace")]
+                log::trace!("{}: Rcv({id})", item.ctx.tag());
+
                 let mut buf = item.ctx.get_read_buf();
                 let s = buf.chunk_mut();
                 let buf_ptr = s.as_mut_ptr();
@@ -355,7 +396,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn recv_more(&mut self, id: usize, mut buf: Buffer, api: &DriverApi) {
+    fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &DriverApi) {
         if let Some(item) = self.streams.get_mut(id) {
             item.ctx.resize_read_buf(&mut buf);
 
@@ -376,6 +417,9 @@ impl StreamOpsStorage {
             if item.wr_op.is_none() {
                 let page = item.ctx.with_write_buf(BytePages::take);
                 if let Some(buf) = page {
+                    #[cfg(feature = "trace")]
+                    log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
+
                     let buf_ptr = buf.as_ptr();
                     let buf_len = buf.len() as u32;
                     let op_id = self.ops.insert(Some(Operation::Send {
@@ -498,6 +542,12 @@ impl StreamCtl {
         self.inner
             .with(|storage| {
                 storage.pause_read(self.id, &self.inner.api);
+                #[cfg(feature = "trace")]
+                log::trace!(
+                    "{}: Shutdown ({:?})",
+                    storage.streams[self.id].ctx.tag(),
+                    self.id
+                );
                 let fd = storage.streams[self.id].fd();
                 let (tx, rx) = self.inner.pool.channel();
                 let op_id = storage.add_operation(Operation::shutdown(tx));

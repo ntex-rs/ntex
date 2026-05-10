@@ -158,10 +158,7 @@ impl FilterLayer for SslFilter {
                             continue;
                         }
                         Err(ref e) if e.code() == ssl::ErrorCode::WANT_READ => Ok(()),
-                        Err(ref e) if e.code() == ssl::ErrorCode::WANT_WRITE => {
-                            io.wants_write();
-                            Ok(())
-                        }
+                        Err(ref e) if e.code() == ssl::ErrorCode::WANT_WRITE => Ok(()),
                         Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
                             io.wants_shutdown();
                             Ok(())
@@ -228,8 +225,17 @@ pub async fn connect<F: Filter>(
     loop {
         let result = io.with_buf(|buf| {
             let filter = io.filter();
-            filter.with_buffers(buf, |_| filter.inner.borrow_mut().connect())
+            filter.with_buffers(buf, |buf| {
+                let mut inner = filter.inner.borrow_mut();
+                let result = inner.connect();
+                // copy internal buffer to write dst buffer
+                buf.with_write_buffers(|_, _, w_dst| {
+                    inner.get_mut().destination.move_to(w_dst);
+                });
+                result
+            })
         })?;
+
         if handle_result(&io, result).await?.is_some() {
             break;
         }

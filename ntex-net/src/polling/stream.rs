@@ -449,14 +449,12 @@ impl StreamItem {
                     syscall!(break libc::write(fd, io.cast(), size))
                 } else {
                     syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
-                };
+                }?;
                 #[cfg(feature = "trace")]
                 log::trace!("{}: {fd:?}-Wrt buf({num}:{size}) ({res:?})", self.ctx.tag());
 
-                let mut written = if let Poll::Ready(Ok(n)) = res { n } else { 0 };
-
                 // remove written bytes
-                if written > 0 {
+                if let Poll::Ready(mut written) = res {
                     for page in pages[..num].iter_mut().flatten() {
                         let len = cmp::min(page.len(), written);
                         page.advance_to(len);
@@ -473,43 +471,43 @@ impl StreamItem {
                     }
                 }
 
-                res.map(|res| res.map(|_| ()))
+                match res {
+                    Poll::Ready(n) => {
+                        if n == 0 {
+                            self.ctx.stop(None);
+                        }
+                        Ok(n > 0)
+                    }
+                    Poll::Pending => Ok(false),
+                }
             } else {
-                Poll::Ready(Ok(()))
+                Ok(false)
             }
         });
         self.ctx.update_write_status(res)
     }
 
     fn read(&mut self) -> IoTaskStatus {
+        let fd = self.fd();
         let mut buf = self.ctx.get_read_buf();
 
-        let fd = self.fd();
-        loop {
-            self.ctx.resize_read_buf(&mut buf);
+        let chunk = buf.chunk_mut();
+        let chunk_len = chunk.len();
+        let chunk_ptr = chunk.as_mut_ptr();
 
-            let chunk = buf.chunk_mut();
-            let chunk_len = chunk.len();
-            let chunk_ptr = chunk.as_mut_ptr();
+        let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
+        #[cfg(feature = "trace")]
+        log::trace!("{}: {fd:?}-Rdt sz() = {result:?}", self.tag());
 
-            let res = match syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len)) {
-                Poll::Ready(Ok(size)) => {
-                    if size > 0 {
-                        unsafe { buf.advance_mut(size) };
-                        continue;
-                    }
-                    Poll::Ready(Err(None))
-                }
-                Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
-                Poll::Pending => Poll::Pending,
-            };
-            #[cfg(feature = "trace")]
-            log::trace!(
-                "{}: {fd:?}-Rdt sz({:?}) = {res:?}",
-                self.tag(),
-                buf.newbytes()
-            );
-            return self.ctx.release_read_buf(buf, res);
-        }
+        let st = match result {
+            Poll::Ready(Ok(0)) => Ok(None),
+            Poll::Ready(Ok(n)) => {
+                unsafe { buf.advance_mut(n) };
+                Ok(Some(buf))
+            }
+            Poll::Ready(Err(err)) => Err(err),
+            Poll::Pending => Ok(Some(buf)),
+        };
+        self.ctx.update_read_status(st)
     }
 }

@@ -1,9 +1,9 @@
-use std::{fmt, io, ptr, task::Context, task::Poll};
+use std::{fmt, io, task::Context, task::Poll};
 
-use ntex_bytes::BytePages;
+use ntex_bytes::{BytePages, BytesMut};
 use ntex_util::time::sleep;
 
-use crate::{Buffer, Flags, IoRef, IoTaskStatus, Readiness, io::IoState};
+use crate::{Flags, Id, IoRef, IoTaskStatus, Readiness, io::IoState};
 
 /// Context for io read task
 pub struct IoContext(IoRef);
@@ -25,8 +25,8 @@ impl IoContext {
 
     #[doc(hidden)]
     #[inline]
-    pub fn id(&self) -> usize {
-        ptr::from_ref(self.0.0.as_ref()) as usize
+    pub fn id(&self) -> Id {
+        self.0.id()
     }
 
     #[inline]
@@ -35,43 +35,182 @@ impl IoContext {
         self.0.tag()
     }
 
-    #[inline]
     #[doc(hidden)]
-    /// Io flags
+    /// Io flags.
     pub fn flags(&self) -> Flags {
         self.0.flags()
     }
 
     #[inline]
-    /// Check readiness for read operations
+    /// Check readiness for read operations.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.shutdown_filters(cx);
         self.0.filter().poll_read_ready(cx)
     }
 
     #[inline]
-    /// Check readiness for write operations
+    /// Check readiness for write operations.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.0.filter().poll_write_ready(cx)
     }
 
-    #[inline]
-    /// Stop io
+    /// Stop io stream.
     pub fn stop(&self, e: Option<io::Error>) {
         self.st().terminate_connection(e);
     }
 
-    #[inline]
-    /// Check if Io stopped
+    /// Check if io stream is stopped.
     pub fn is_stopped(&self) -> bool {
-        self.st().flags.is_stopped()
+        self.st().flags.is_closed()
     }
 
-    /// Wait when io get closed or preparing for close
-    pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
+    /// Get read buffer.
+    pub fn get_read_buf(&self) -> BytesMut {
         let st = self.st();
 
-        if flush && !st.flags.is_stopped() {
+        if st.flags.is_read_ready() {
+            // The dispatcher has not consumed the read buffer yet,
+            // so we must not modify it.
+            st.get_read_buf()
+        } else if let Some(mut buf) = st.buffer.get_read_buf() {
+            self.0.resize_read_buf(&mut buf);
+            buf
+        } else {
+            st.get_read_buf()
+        }
+    }
+
+    /// Resize read buffer.
+    pub fn resize_read_buf(&self, buf: &mut BytesMut) {
+        self.0.resize_read_buf(buf);
+    }
+
+    /// Updates the read status.
+    ///
+    /// Status `Ok(None)` indicates the connection was disconnected.
+    pub fn update_read_status(&self, status: io::Result<Option<BytesMut>>) -> IoTaskStatus {
+        let st = self.st();
+        let result = status.map(|buf| buf.map(|buffer| {
+            if buffer.is_empty() {
+                return Ok(())
+            }
+            let orig_size = st.buffer.read_dst_size();
+
+            st.buffer.process_read_buf(&self.0, buffer).map(|()| {
+                let size = st.buffer.read_dst_size();
+
+                // dest buffer has new data, wake up dispatcher
+                if size > orig_size {
+                    if st.is_rd_backpressure_needed(size) {
+                        log::trace!(
+                            "{}: Io read buffer is too large {size}, enable read back-pressure",
+                            st.tag(),
+                        );
+                        st.flags.set_read_ready_and_backpressure();
+                    } else {
+                        st.flags.set_read_ready();
+                    }
+                    log::trace!("{}: New {size} bytes available, wakeup dispatcher", st.tag());
+                    st.wake_dispatch_task();
+                }
+
+                if st.flags.is_read_notify() {
+                    // In the case of a "notify" flag, we must wake the
+                    // dispatch task if any data was read from the source.
+                    st.wake_dispatch_task();
+                    st.flags.set_read_notifed();
+                }
+            })
+        }));
+
+        match result {
+            Ok(Some(Ok(()))) => {
+                if st.flags.is_read_paused_or_backpressure() {
+                    IoTaskStatus::Pause
+                } else {
+                    IoTaskStatus::Io
+                }
+            }
+            Ok(None) => {
+                st.terminate_connection(None);
+                IoTaskStatus::Stop
+            }
+            Err(err) | Ok(Some(Err(err))) => {
+                st.terminate_connection(Some(err));
+                IoTaskStatus::Stop
+            }
+        }
+    }
+
+    /// Get write buffer.
+    pub fn with_write_buf<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytePages) -> R,
+    {
+        // write buffer processing could be delayed,
+        // need to call filter chain for processing
+        if let Err(e) = self.st().buffer.process_write_buf(&self.0) {
+            self.st().terminate_connection(Some(e));
+        }
+
+        // access to output write buffer
+        self.st().buffer.with_write_dst(|buffer| f(buffer))
+    }
+
+    /// Update write status.
+    ///
+    /// `Ok(true)` indicates that one or more bytes were successfully written
+    /// to the I/O stream.
+    pub fn update_write_status(&self, status: io::Result<bool>) -> IoTaskStatus {
+        let st = &self.st();
+
+        match status {
+            Ok(written) => {
+                let len = st.buffer.write_buf_size();
+                // full flush mode is enabled
+                if st.flags.is_write_flush() {
+                    // the write buffer must be fully written
+                    if len == 0 {
+                        st.wake_dispatch_task();
+                    }
+                } else if st.flags.is_wr_backpressure()
+                    && st.should_disable_wr_backpressure(len)
+                {
+                    // Write backpressure is active and the write buffer is below half capacity.
+                    st.wake_dispatch_task();
+                }
+
+                // wake up both tasks
+                if written && st.flags.is_write_notify() {
+                    st.flags.unset_write_notify();
+                    st.wake_read_task();
+                    st.wake_write_task();
+                }
+
+                if st.flags.is_closed() {
+                    IoTaskStatus::Stop
+                } else if len == 0 {
+                    // all data has been written
+                    st.flags.set_write_paused();
+                    if st.flags.is_stopping_filters() {
+                        st.wake_read_task();
+                    }
+                    IoTaskStatus::Pause
+                } else {
+                    IoTaskStatus::Io
+                }
+            }
+            Err(e) => {
+                st.terminate_connection(Some(e));
+                IoTaskStatus::Stop
+            }
+        }
+    }
+
+    /// Wait when io get closed or preparing for close.
+    pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
+        let st = self.st();
+        if flush && !st.flags.is_stopping() {
             if st.flags.is_write_paused() {
                 return Poll::Ready(());
             }
@@ -88,243 +227,39 @@ impl IoContext {
         }
     }
 
-    /// Get read buffer
-    pub fn get_read_buf(&self) -> Buffer {
-        let st = self.st();
-
-        let buf = if st.flags.is_read_ready() {
-            // read buffer is still not read by dispatcher
-            // we cannot touch it
-            st.get_read_buf()
-        } else {
-            st.buffer
-                .get_read_buf()
-                .unwrap_or_else(|| st.get_read_buf())
-        };
-
-        Buffer::new(buf)
-    }
-
-    /// Resize read buffer
-    pub fn resize_read_buf(&self, buf: &mut Buffer) {
-        self.0.resize_read_buf(&mut buf.buf);
-    }
-
-    /// Set read buffer
-    pub fn release_read_buf(
-        &self,
-        buffer: Buffer,
-        result: Poll<Result<(), Option<io::Error>>>,
-    ) -> IoTaskStatus {
-        let st = self.st();
-        let nbytes = buffer.has_newbytes();
-        let read_buf = st.buffer.read_destination_size();
-
-        let mut full = false;
-
-        let st_res = if nbytes {
-            // handle buffer changes
-            match st.buffer.process_read_buf(&self.0, buffer.buf) {
-                Ok(()) => {
-                    let buf_size = st.buffer.read_destination_size();
-
-                    if buf_size > read_buf {
-                        // dest buffer has new data, wake up dispatcher
-                        if st.enable_rd_backpressure(buf_size) {
-                            log::trace!(
-                                "{}: Io read buffer is too large {}, enable read back-pressure",
-                                st.tag(),
-                                buf_size
-                            );
-                            full = true;
-                            st.flags.set_read_ready_and_full();
-                        } else {
-                            st.flags.set_read_ready();
-                        }
-                        log::trace!(
-                            "{}: New {} bytes available, wakeup dispatcher",
-                            st.tag(),
-                            buf_size
-                        );
-                        st.dispatch_task.wake();
-                    } else {
-                        if st.flags.is_rd_backpressure() {
-                            // read task is paused because of read back-pressure
-                            // but there is no new data in top most read buffer
-                            // so we need to wake up read task to read more data
-                            // otherwise read task would sleep forever
-                            st.flags.unset_read_ready();
-                        }
-                        if st.flags.is_read_notify() {
-                            // in case of "notify" we must wake up dispatch task
-                            // if we read any data from source
-                            st.dispatch_task.wake();
-                        }
-                    }
-
-                    // while reading, filter wrote some data
-                    // in that case filters need to process write buffers
-                    // and potentialy wake write task
-                    if st.flags.is_wants_write() {
-                        st.flags.unset_wants_write();
-                        st.buffer.process_write_buf_force(&self.0)
-                    } else {
-                        Ok(())
-                    }
-                }
-                Err(err) => Err(err),
-            }
-        } else {
-            st.buffer.set_read_buf(&self.0, buffer.buf);
-            Ok(())
-        };
-
-        match result {
-            Poll::Ready(Ok(())) => {
-                if let Err(e) = st_res {
-                    st.terminate_connection(Some(e));
-                    IoTaskStatus::Stop
-                } else if !nbytes {
-                    st.terminate_connection(None);
-                    IoTaskStatus::Stop
-                } else if full {
-                    st.flags.set_read_paused();
-                    IoTaskStatus::Pause
-                } else {
-                    IoTaskStatus::Io
-                }
-            }
-            Poll::Ready(Err(e)) => {
-                st.terminate_connection(e);
-                IoTaskStatus::Stop
-            }
-            Poll::Pending => {
-                if let Err(e) = st_res {
-                    st.terminate_connection(Some(e));
-                    IoTaskStatus::Stop
-                } else if full {
-                    st.flags.set_read_paused();
-                    IoTaskStatus::Pause
-                } else {
-                    IoTaskStatus::Io
-                }
-            }
-        }
-    }
-
-    #[inline]
-    /// Get write buffer
-    pub fn with_write_buf<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut BytePages) -> R,
-    {
-        // write buffer processing could be delayed,
-        // need to call filter chain for processing
-        if let Err(e) = self.st().buffer.process_write_buf(&self.0) {
-            self.st().terminate_connection(Some(e));
-        }
-
-        // access to output write buffer
-        self.st().buffer.with_write_destination(|buffer| f(buffer))
-    }
-
-    #[doc(hidden)]
-    #[deprecated]
-    /// Set write buffer
-    pub fn update_write_buf(&self, result: Poll<io::Result<()>>) -> IoTaskStatus {
-        self.update_write_status(result)
-    }
-
-    /// Set write buffer
-    pub fn update_write_status(&self, status: Poll<io::Result<()>>) -> IoTaskStatus {
-        let st = &self.st();
-
-        match status {
-            Poll::Pending => {
-                let len = st.buffer.write_buffer_size();
-
-                // write backpressure is enabled and write buf smaller than half
-                if st.flags.is_wr_backpressure() && st.disable_wr_backpressure(len) {
-                    st.dispatch_task.wake();
-                }
-
-                if len == 0 {
-                    st.flags.set_write_paused();
-                    IoTaskStatus::Pause
-                } else {
-                    IoTaskStatus::Io
-                }
-            }
-            Poll::Ready(Ok(())) => {
-                let len = st.buffer.write_buffer_size();
-
-                // write backpressure is enabled and write buf smaller than half
-                let can_disable_wr_backpressure =
-                    st.flags.is_wr_backpressure() && st.disable_wr_backpressure(len);
-                // write flush is enabled, and write buffer is fully written
-                let can_disable_flush = st.flags.is_write_flush() && len == 0;
-
-                if can_disable_wr_backpressure || can_disable_flush {
-                    st.dispatch_task.wake();
-                }
-
-                // write task
-                if st.flags.is_write_notify() {
-                    st.flags.unset_write_notify();
-                    st.write_task.wake();
-                }
-
-                if self.is_stopped() {
-                    IoTaskStatus::Stop
-                } else if len == 0 {
-                    // all data has been written
-                    st.flags.set_write_paused();
-                    IoTaskStatus::Pause
-                } else {
-                    IoTaskStatus::Io
-                }
-            }
-            Poll::Ready(Err(e)) => {
-                st.terminate_connection(Some(e));
-                IoTaskStatus::Stop
-            }
-        }
-    }
-
     fn shutdown_filters(&self, cx: &mut Context<'_>) {
         let st = &self.st();
         if !st.flags.is_shutting_down_filters() {
             return;
         }
-        let io = &self.0;
 
-        match st.buffer.process_shutdown(io) {
-            Ok(Poll::Ready(())) => {
-                st.filters_stopped();
-            }
-            Ok(Poll::Pending) => {
-                // check read buffer, if buffer is not consumed it is unlikely
-                // that filter will properly complete shutdown
-                if st.flags.is_read_paused() || st.flags.is_read_full_and_ready() {
-                    st.filters_stopped();
-                } else {
-                    // filter shutdown timeout
-                    let timeout = st
-                        .shutdown_timeout
-                        .take()
-                        .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
-                    if timeout.poll_elapsed(cx).is_ready() {
-                        st.filters_stopped();
-                    } else {
-                        st.shutdown_timeout.set(Some(timeout));
-                    }
-                }
-                if let Err(err) = st.buffer.process_write_buf(io) {
-                    st.terminate_connection(Some(err));
-                }
-            }
+        let ready = match st.buffer.process_shutdown(&self.0) {
+            Ok(Poll::Ready(())) => true,
+            Ok(Poll::Pending) => false,
             Err(err) => {
                 st.terminate_connection(Some(err));
+                return;
+            }
+        };
+        self.0.update_write_destination();
+
+        // filters are shutdown and write task is paused
+        if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {
+            st.filters_stopped();
+        } else if st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure() {
+            // if buffer is not consumed it is unlikely
+            // that filter will properly complete shutdown
+            st.filters_stopped();
+        } else {
+            // filter shutdown timeout
+            let timeout = st
+                .shutdown_timeout
+                .take()
+                .unwrap_or_else(|| sleep(st.cfg.disconnect_timeout()));
+            if timeout.poll_elapsed(cx).is_ready() {
+                st.filters_stopped();
+            } else {
+                st.shutdown_timeout.set(Some(timeout));
             }
         }
     }
@@ -348,7 +283,7 @@ mod tests {
         let state = Io::from(server);
         let ctx = IoContext::new(state.get_ref());
         let _ = ctx.flags();
-        assert!(ctx.id() != 0);
+        assert!(ctx.id() != Id::default());
         assert!(format!("{ctx:?}").contains("IoContext"));
     }
 }

@@ -127,17 +127,20 @@ where
     T: Stream + Unpin,
 {
     let st = poll_fn(|cx| {
-        loop {
+        'outer: loop {
             return match ready!(ctx.poll_read_ready(cx)) {
                 Readiness::Ready => match ready!(io.as_ref().poll_read_ready(cx)) {
-                    Ok(()) => match read(io.as_ref(), &ctx) {
-                        IoTaskStatus::Pause => Poll::Pending,
-                        IoTaskStatus::Io => continue,
-                        IoTaskStatus::Stop => Poll::Ready(()),
+                    Ok(()) => 'inner: loop {
+                        return match read(io.as_ref(), &ctx) {
+                            Poll::Ready(IoTaskStatus::Io) => continue 'inner,
+                            Poll::Ready(IoTaskStatus::Pause) => Poll::Pending,
+                            Poll::Ready(IoTaskStatus::Stop) => Poll::Ready(()),
+                            Poll::Pending => continue 'outer,
+                        };
                     },
                     Err(err) => {
                         ctx.stop(Some(err));
-                        Poll::Ready(())
+                        return Poll::Ready(());
                     }
                 },
                 Readiness::Shutdown | Readiness::Terminate => Poll::Ready(()),
@@ -168,7 +171,7 @@ where
                         WrtStatus::Terminate => Poll::Ready(Status::Terminate),
                     },
                     Err(err) => {
-                        ctx.update_write_status(Poll::Ready(Err(err)));
+                        ctx.update_write_status(Err(err));
                         Poll::Ready(Status::Terminate)
                     }
                 },
@@ -191,7 +194,7 @@ where
                 }
             }
             Err(err) => {
-                ctx.update_write_status(Poll::Ready(Err(err)));
+                ctx.update_write_status(Err(err));
                 Poll::Ready(())
             }
         })
@@ -212,7 +215,7 @@ where
     T: Stream,
 {
     loop {
-        let (more, result) = ctx.with_write_buf(|dst| {
+        let (more, result, pending) = ctx.with_write_buf(|dst| {
             let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
                 None, None, None, None, None, None, None, None, None, None, None, None,
                 None, None, None, None,
@@ -242,11 +245,14 @@ where
                 let bufs =
                     unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
 
-                let result = write_io(ctx, io, bufs);
-                let mut written = if let Poll::Ready(Ok(n)) = result { n } else { 0 };
+                let result = match write_io(ctx, io, bufs) {
+                    Poll::Ready(Ok(val)) => Poll::Ready(val),
+                    Poll::Ready(Err(err)) => return (false, Err(err), false),
+                    Poll::Pending => Poll::Pending,
+                };
 
                 // remove written bytes
-                if written > 0 {
+                if let Poll::Ready(mut written) = result {
                     for page in pages[..num].iter_mut().flatten() {
                         let len = cmp::min(page.len(), written);
                         page.advance_to(len);
@@ -256,20 +262,27 @@ where
                         }
                     }
                 }
-                // return unwritten data back to buffer
+                // return unwritten data back to the buffer
                 for p in pages[..num].iter_mut().rev() {
                     if let Some(page) = p.take() {
                         dst.prepend(page);
                     }
                 }
 
-                (!dst.is_empty(), result.map(|res| res.map(|_| ())))
+                match result {
+                    Poll::Ready(val) => {
+                        if val == 0 {
+                            ctx.stop(None);
+                        }
+                        (!dst.is_empty(), Ok(val > 0), false)
+                    }
+                    Poll::Pending => (!dst.is_empty(), Ok(false), true),
+                }
             } else {
-                (false, Poll::Ready(Ok(())))
+                (false, Ok(false), false)
             }
         });
 
-        let pending = result.is_pending();
         break match ctx.update_write_status(result) {
             IoTaskStatus::Stop => WrtStatus::Terminate,
             IoTaskStatus::Pause => WrtStatus::Pending,
@@ -310,31 +323,34 @@ fn write_io<T: Stream>(
     }
 }
 
-fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> IoTaskStatus {
+fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
     let mut buf = ctx.get_read_buf();
 
     // read data from socket
-    loop {
-        ctx.resize_read_buf(&mut buf);
+    let io_res =
+        io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
 
-        let io_res =
-            io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
+    let mut pending = false;
+    let result = match io_res {
+        Ok(0) => Ok(None),
+        Ok(n) => {
+            // Safety: This is guaranteed to be the number of initialized
+            // bytes due to the invariants provided by `try_read()`.
+            unsafe { buf.advance_mut(n) }
+            Ok(Some(buf))
+        }
+        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+            pending = true;
+            Ok(Some(buf))
+        }
+        Err(e) => Err(e),
+    };
 
-        let result = match io_res {
-            Ok(0) => Poll::Ready(Err(None)),
-            Ok(n) => {
-                // Safety: This is guaranteed to be the number of initialized
-                // bytes due to the invariants provided by `try_read()`.
-                unsafe {
-                    buf.advance_mut(n);
-                }
-                continue;
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Poll::Pending,
-            Err(e) => Poll::Ready(Err(Some(e))),
-        };
-
-        return ctx.release_read_buf(buf, result);
+    let result = ctx.update_read_status(result);
+    if result == IoTaskStatus::Io && pending {
+        Poll::Pending
+    } else {
+        Poll::Ready(result)
     }
 }
 

@@ -74,6 +74,15 @@ impl LocalWaker {
     pub fn take(&self) -> Option<Waker> {
         self.waker.take()
     }
+
+    #[doc(hidden)]
+    /// Check if waker is set
+    pub fn is_set(&self) -> bool {
+        let waker = self.waker.take();
+        let set = waker.is_some();
+        self.waker.set(waker);
+        set
+    }
 }
 
 impl Clone for LocalWaker {

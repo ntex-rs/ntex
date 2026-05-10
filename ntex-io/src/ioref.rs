@@ -1,4 +1,4 @@
-use std::{any, fmt, hash, io};
+use std::{any, fmt, hash, io, ptr};
 
 use ntex_bytes::{BytePage, BytePages, BytesMut};
 use ntex_codec::{Decoder, Encoder};
@@ -6,68 +6,68 @@ use ntex_service::cfg::SharedCfg;
 use ntex_util::time::Seconds;
 
 use crate::ops::{Id, Iops, TimerHandle};
-use crate::{Decoded, Filter, FilterBuf, Flags, IoConfig, IoRef, OnDisconnect, types};
+use crate::{Decoded, Filter, FilterBuf, Flags, IoConfig, IoContext, IoRef, types};
 
 impl IoRef {
     #[inline]
-    /// Get id
+    /// Gets the ID.
     pub fn id(&self) -> Id {
         self.0.id()
     }
 
     #[inline]
-    /// Get tag
+    /// Gets the tag.
     pub fn tag(&self) -> &'static str {
         self.0.tag()
     }
 
     #[doc(hidden)]
-    /// Get current state flags
+    /// Gets the current state flags.
     pub fn flags(&self) -> Flags {
         self.0.flags.clone()
     }
 
     #[inline]
-    /// Get current filter
+    /// Gets the current filter.
     pub(crate) fn filter(&self) -> &dyn Filter {
         self.0.filter()
     }
 
     #[inline]
-    /// Get configuration
+    /// Gets the configuration.
     pub fn cfg(&self) -> &IoConfig {
         &self.0.cfg
     }
 
     #[inline]
-    /// Get shared configuration
+    /// Gets the shared configuration.
     pub fn shared(&self) -> SharedCfg {
         self.0.cfg.shared()
     }
 
     #[inline]
-    /// Check if io stream is closed
+    /// Checks whether the I/O stream is closed.
     pub fn is_closed(&self) -> bool {
         self.0.flags.is_closed()
     }
 
     #[inline]
-    /// Check if write back-pressure is enabled
+    /// Checks whether write back-pressure is enabled.
     pub fn is_wr_backpressure(&self) -> bool {
         self.0.flags.is_wr_backpressure()
     }
 
-    /// Gracefully close connection
+    /// Gracefully closes the connection.
     ///
-    /// Initiate io stream shutdown process.
+    /// Initiates the I/O stream shutdown process.
     pub fn close(&self) {
         self.0.start_shutdown();
     }
 
-    /// Force close connection
+    /// Force-closes the connection.
     ///
-    /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
-    /// without any graceful period.
+    /// The dispatcher does not wait for incomplete responses. The I/O stream is
+    /// terminated without any graceful period.
     pub fn terminate(&self) {
         log::trace!("{}: Terminate io stream object", self.tag());
         self.0.terminate_connection(None);
@@ -83,22 +83,17 @@ impl IoRef {
         self.terminate();
     }
 
-    /// Ask io to process write buffer
-    pub fn wants_write(&self) {
-        self.0.flags.set_wants_write();
-    }
-
-    /// Gracefully shutdown io stream
+    /// Gracefully shuts down the I/O stream.
     pub fn wants_shutdown(&self) {
         if !self.0.flags.is_stopping_any() {
             log::trace!("{}: Initiate io shutdown {:?}", self.tag(), self.0.flags);
-            self.0.read_task.wake();
-            self.0.write_task.wake();
+            self.0.wake_read_task();
+            self.0.wake_write_task();
             self.0.flags.set_filter_stopping();
         }
     }
 
-    /// Query filter specific data
+    /// Queries filter-specific data.
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
         if let Some(item) = self.filter().query(any::TypeId::of::<T>()) {
             types::QueryItem::new(item)
@@ -107,7 +102,8 @@ impl IoRef {
         }
     }
 
-    /// Encode item to the write buffer
+    #[inline]
+    /// Encodes the item into the write buffer.
     pub fn encode<U>(&self, item: U::Item, codec: &U) -> Result<(), <U as Encoder>::Error>
     where
         U: Encoder,
@@ -116,12 +112,14 @@ impl IoRef {
             .unwrap_or_else(|_| Ok(()))
     }
 
-    /// Encode slice to the write buffer
+    #[inline]
+    /// Encodes the slice into the write buffer.
     pub fn encode_slice(&self, src: &[u8]) -> io::Result<()> {
         self.with_write_buf(|buf| buf.extend_from_slice(src))
     }
 
-    /// Write bytes to the write buffer
+    #[inline]
+    /// Writes bytes to the write buffer.
     pub fn encode_bytes<B>(&self, src: B) -> io::Result<()>
     where
         BytePage: From<B>,
@@ -129,7 +127,7 @@ impl IoRef {
         self.with_write_buf(|buf| buf.append(src))
     }
 
-    /// Attempts to decode a frame from the read buffer
+    /// Attempts to decode a frame from the read buffer.
     pub fn decode<U>(
         &self,
         codec: &U,
@@ -137,14 +135,15 @@ impl IoRef {
     where
         U: Decoder,
     {
-        self.0.buffer.with_read_destination(self, |buf| {
+        self.0.buffer.with_read_dst(self, |buf| {
             let res = codec.decode(buf);
+            self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
         })
     }
 
-    /// Attempts to decode a frame from the read buffer
+    /// Attempts to decode a frame from the read buffer.
     pub fn decode_item<U>(
         &self,
         codec: &U,
@@ -152,13 +151,14 @@ impl IoRef {
     where
         U: Decoder,
     {
-        self.0.buffer.with_read_destination(self, |buf| {
+        self.0.buffer.with_read_dst(self, |buf| {
             let len = buf.len();
             let res = codec.decode(buf).map(|item| Decoded {
                 item,
                 remains: buf.len(),
                 consumed: len - buf.len(),
             });
+            self.0.flags.unset_read_ready();
             self.update_read_destination(buf);
             res
         })
@@ -169,11 +169,12 @@ impl IoRef {
     /// Requires the underlying runtime to implement `.write()`;
     /// otherwise, no action is taken.
     pub fn send_buf(&self) -> io::Result<()> {
-        if self.0.flags.is_write_upfront_enabled() {
-            // write task is not paused, io write is pending
-            // need to wake write task for io completeion
-            if !self.call_write() {
+        // can send if write task is not awake
+        if self.0.flags.is_write_paused() {
+            if self.call_write() == WakeWriteTask::Yes {
+                // io write is pending need to wake write task for io completeion
                 Iops::register_send(self.id());
+                self.0.flags.set_wr_send_scheduled();
             }
 
             if self.0.flags.is_stopping_any()
@@ -186,18 +187,17 @@ impl IoRef {
     }
 
     pub(crate) fn ops_send_buf(&self) {
+        self.0.flags.unset_wr_send_scheduled();
+
         if self.0.flags.is_write_paused() {
-            // write buffer has data to process
-            if self.0.buffer.write_buffer_has_bytes() {
-                // call handle and get write-paused state
-                // if write task is not paused, io write is pending
-                // need to wake write task for io completeion
-                if self.call_write() {
-                    return;
-                }
+            // call `Handle::write()`.
+            // if write task is not paused, io write is pending
+            // need to wake write task for io completeion
+            if self.call_write() == WakeWriteTask::Yes {
+                self.0.wake_write_task();
+                self.0.flags.unset_write_paused();
             }
         }
-        self.0.write_task.wake();
     }
 
     /// Get access to filter buffer
@@ -205,11 +205,9 @@ impl IoRef {
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
     {
-        self.0.buffer.with_filter(self, |ctx| {
-            let result = ctx.with_buffer(f);
-            self.0.filter().process_write_buf(ctx)?;
-            Ok(result)
-        })
+        let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
+        self.update_write_destination();
+        Ok(result)
     }
 
     /// Get mut access to read buffer
@@ -217,7 +215,7 @@ impl IoRef {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.0.buffer.with_read_destination(self, |buf| {
+        self.0.buffer.with_read_dst(self, |buf| {
             let res = f(buf);
             self.update_read_destination(buf);
             res
@@ -231,47 +229,48 @@ impl IoRef {
     {
         let st = &self.0;
 
-        if st.flags.is_stopped() {
+        if st.flags.is_terminated() {
             Err(st.error_or_disconnected())
         } else {
-            let (wrt, res) = st.buffer.with_write_source(|pages| {
-                let result = f(pages);
+            let result = st.buffer.with_write_src(f);
+            self.update_write_destination();
+            Ok(result)
+        }
+    }
 
-                // wake write task if needsed
-                let mut wrt = false;
-                let len = pages.len();
-                if len > 0 && st.flags.is_write_paused() {
-                    // The app encodes data in response to incoming data,
-                    // continuing to fill the write buffer until all data
-                    // has been processed. Only then can the runtime wake
-                    // the write task to send the buffered data.
-                    //
-                    // By that time, the buffer may have accumulated a large
-                    // amount of data, causing it to be sent in large bursts,
-                    // which introduces latency. To prevent this behavior and
-                    // flatten data delivery to the peer, IoRef can initiate
-                    // out-of-order writes based on a configured threshold.
-                    if st.flags.is_write_upfront_enabled() && len > st.cfg.write_buf_limit()
-                    {
-                        wrt = true;
-                    } else {
-                        Iops::register_send(st.id());
-                    }
+    pub(crate) fn update_write_destination(&self) {
+        let st = &self.0;
+
+        // wake write task if needsed
+        let size = st.buffer.write_buf_size();
+
+        if size > 0 && st.flags.is_write_paused() {
+            // The app encodes data in response to incoming data,
+            // continuing to fill the write buffer until all data
+            // has been processed. Only then can the runtime wake
+            // the write task to send the buffered data.
+            //
+            // By that time, the buffer may have accumulated a large
+            // amount of data, causing it to be sent in large bursts,
+            // which introduces latency. To prevent this behavior and
+            // flatten data delivery to the peer, IoRef can initiate
+            // out-of-order writes based on a configured threshold.
+            if st.flags.is_send_buf_enabled() && size >= st.cfg.write_buf_threshold() {
+                // Send data in-place
+                if self.call_write() == WakeWriteTask::Yes {
+                    // More data needs to be sent
+                    st.flags.set_wr_send_scheduled();
+                    Iops::register_send(st.id());
                 }
-                // enable backpressure
-                if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
-                    st.flags.set_wr_backpressure();
-                    st.dispatch_task.wake();
-                }
-
-                (wrt, Ok(result))
-            });
-
-            // send data in-place and register if more need to send
-            if wrt && !self.call_write() {
+            } else if !st.flags.is_wr_send_scheduled() {
+                st.flags.set_wr_send_scheduled();
                 Iops::register_send(st.id());
             }
-            res
+        }
+        // Enable backpressure
+        if !st.flags.is_wr_backpressure() && st.is_wr_backpressure_needed(size) {
+            st.flags.set_wr_backpressure();
+            st.wake_dispatch_task();
         }
     }
 
@@ -279,14 +278,18 @@ impl IoRef {
         let st = &self.0;
         let half = self.cfg().read_buf().half;
 
-        if st.flags.is_rd_backpressure() && buf.len() <= half {
+        if st.flags.is_rd_backpressure() {
+            // back-pressure is still eanbled
+            if buf.len() > half {
+                return;
+            }
             st.flags.unset_all_read_flags();
         } else {
             st.flags.unset_read_ready();
         }
 
         if st.flags.is_read_paused() {
-            st.read_task.wake();
+            st.wake_read_task();
             st.flags.unset_read_paused();
         }
     }
@@ -306,7 +309,7 @@ impl IoRef {
     /// Wakeup dispatcher
     pub fn notify_dispatcher(&self) {
         log::trace!("{}: Timer, notify dispatcher", self.tag());
-        self.0.dispatch_task.wake();
+        self.0.wake_dispatch_task();
     }
 
     /// Wakeup dispatcher and send keep-alive error
@@ -355,9 +358,30 @@ impl IoRef {
     }
 
     /// Notify when io stream get disconnected
-    pub fn on_disconnect(&self) -> OnDisconnect {
-        OnDisconnect::new(self.0.clone())
+    pub fn on_disconnect(&self) -> crate::OnDisconnect {
+        crate::OnDisconnect::new(self.0.clone())
     }
+
+    /// Call handle write method, returns true if
+    /// `write-paused` is still set
+    fn call_write(&self) -> WakeWriteTask {
+        if let Some(hnd) = self.0.handle.take() {
+            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
+            hnd.write(ctx);
+            self.0.handle.set(Some(hnd));
+        }
+        if !self.0.flags.is_write_paused() || self.0.flags.is_wr_send_scheduled() {
+            WakeWriteTask::No
+        } else {
+            WakeWriteTask::Yes
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum WakeWriteTask {
+    Yes,
+    No,
 }
 
 impl Eq for IoRef {}
@@ -426,7 +450,7 @@ mod tests {
         client.read_error(io::Error::other("err"));
         let msg = state.recv(&BytesCodec).await;
         assert!(msg.is_err());
-        assert!(state.flags().is_stopped());
+        assert!(state.flags().is_terminated());
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
@@ -436,7 +460,7 @@ mod tests {
         let res = poll_fn(|cx| Poll::Ready(state.poll_recv(&BytesCodec, cx))).await;
         if let Poll::Ready(msg) = res {
             assert!(msg.is_err());
-            assert!(state.flags().is_stopped());
+            assert!(state.flags().is_terminated());
         }
 
         let (client, server) = IoTest::create();
@@ -454,18 +478,14 @@ mod tests {
         client.write_error(io::Error::other("err"));
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
-        assert!(state.flags().is_stopped());
+        assert!(state.flags().is_terminated());
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
         state.terminate();
-        assert!(state.flags().is_stopped());
         assert!(state.flags().is_stopping());
-
-        assert!(!state.flags().is_wants_write());
-        state.wants_write();
-        assert!(state.flags().is_wants_write());
+        assert!(state.flags().is_terminated());
     }
 
     #[ntex::test]
@@ -533,11 +553,9 @@ mod tests {
     impl<F: Filter> Filter for Counter<F> {
         fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
             self.read_order.borrow_mut().push(self.idx);
-            let nbytes =
-                ctx.with_buffer(|b| b.read_dst().as_ref().map_or(0, BytesMut::len));
+            let nbytes = ctx.read_dst_size();
             let result = self.layer.process_read_buf(ctx);
-            let nbytes2 =
-                ctx.with_buffer(|b| b.read_dst().as_ref().map_or(0, BytesMut::len));
+            let nbytes2 = ctx.read_dst_size();
             self.in_bytes.set(self.in_bytes.get() + nbytes2 - nbytes);
             result
         }
@@ -636,7 +654,7 @@ mod tests {
 
         assert_eq!(in_bytes.get(), BIN.len() * 2);
         assert_eq!(out_bytes.get(), 16);
-        assert_eq!(state.0.buffer.with_write_destination(|b| b.len()), 0);
+        assert_eq!(state.0.buffer.with_write_dst(|b| b.len()), 0);
 
         // refs
         assert_eq!(Rc::strong_count(&in_bytes), 3);

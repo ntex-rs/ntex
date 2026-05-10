@@ -32,20 +32,22 @@ impl NullFilter {
 }
 
 pub trait Filter: 'static {
+    /// Accesses internal filter information.
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>>;
 
+    /// Processes incoming read-buffer data.
     fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()>;
 
-    /// Process write buffer
+    /// Processes outgoing write-buffer data.
     fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()>;
 
-    /// Gracefully shutdown filter
+    /// Performs a graceful shutdown of the filter.
     fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>>;
 
-    /// Check readiness for read operations
+    /// Checks whether read operations may proceed.
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 
-    /// Check readiness for write operations
+    /// Checks whether write operations may proceed.
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness>;
 }
 
@@ -63,7 +65,6 @@ impl Filter for Base {
     #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
-
         if st.flags.is_closed() {
             Poll::Ready(Readiness::Terminate)
         } else {
@@ -71,7 +72,8 @@ impl Filter for Base {
 
             if st.flags.is_stopping_filters() {
                 Poll::Ready(Readiness::Ready)
-            } else if st.flags.is_read_full_or_paused() {
+            //} else if st.flags.is_read_ready_or_backpressure() {
+            } else if st.flags.is_read_paused_or_backpressure() {
                 // read buffer is fulled of is not processed by dispatcher yet
                 Poll::Pending
             } else {
@@ -82,7 +84,7 @@ impl Filter for Base {
 
     #[inline]
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        if self.0.0.flags.is_stopped() {
+        if self.0.0.flags.is_closed() {
             Poll::Ready(Readiness::Terminate)
         } else {
             self.0.0.write_task.register(cx.waker());
@@ -106,19 +108,7 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
-        let st = &self.0.0;
-
-        let buf = ctx.write_destination();
-        let len = buf.len();
-        if len > 0 && st.flags.is_write_paused() {
-            st.flags.unset_write_paused();
-            st.write_task.wake();
-        }
-        if !st.flags.is_wr_backpressure() && st.enable_wr_backpressure(len) {
-            st.flags.set_wr_backpressure();
-            st.dispatch_task.wake();
-        }
+    fn process_write_buf(&self, _: &mut FilterCtx<'_>) -> io::Result<()> {
         Ok(())
     }
 

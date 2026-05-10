@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::task::{Poll, ready};
 use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
@@ -115,9 +116,9 @@ pub(super) async fn send_body(
             );
             if io.is_wr_backpressure() {
                 io.flush(false).await?;
+                #[cfg(feature = "trace")]
+                log::trace!("{}: flushed", io.tag());
             }
-            #[cfg(feature = "trace")]
-            log::trace!("{}: flushed", io.tag());
         } else {
             io.encode(h1::Message::Chunk(None), codec)?;
             io.flush(true).await?;
