@@ -334,7 +334,7 @@ where
 
     fn send_response(
         &mut self,
-        msg: Response<()>,
+        mut msg: Response<()>,
         body: ResponseBody<B>,
     ) -> State<F, C, S, B> {
         log::trace!(
@@ -343,6 +343,13 @@ where
             msg,
             body.size()
         );
+        // close connection if payload stream is dropped and not consumed
+        if let Some((_pl, snd)) = &self.payload
+            && snd.is_closed()
+        {
+            msg.head_mut()
+                .set_connection_type(http::ConnectionType::Close);
+        }
 
         // we don't need to process responses if socket is disconnected
         // but we still want to handle requests with app service
@@ -1335,14 +1342,17 @@ mod tests {
         client.remote_buffer_cap(4096);
         client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
 
-        let mut h1 = h1(server, |_| {
-            Box::pin(async { Ok::<_, io::Error>(Response::Ok().body("TEST")) })
+        let mut h1 = h1(server, async move |_| {
+            Ok::<_, io::Error>(Response::Ok().body("TEST"))
         });
         // required because io shutdown is async oper
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(h1.inner.io.is_closed());
         let buf = client.local_buffer(BytesMut::take);
-        assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
+        assert_eq!(
+            &buf[..55],
+            b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\nconnection: close\r\n"
+        );
     }
 }

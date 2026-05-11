@@ -95,31 +95,16 @@ impl IoState {
 
     pub(super) fn terminate_connection(&self, err: Option<io::Error>) {
         if !self.flags.is_terminated() {
-            log::trace!(
-                "{}: {:?} Io error {:?} flags: {:?}",
-                self.cfg.tag(),
-                ptr::from_ref(self),
-                err,
-                self.flags
-            );
-
+            log::trace!("{}: Terminate io with error {:?}", self.cfg.tag(), err);
             if err.is_some() {
                 self.error.set(err);
             }
+            self.flags.set_terminate();
             self.wake_read_task();
             self.wake_write_task();
+            self.wake_dispatch_task();
             self.notify_disconnect();
             self.handle.take();
-            self.flags.set_terminate();
-
-            if !self.dispatch_task.wake_checked() {
-                log::trace!(
-                    "{}: {:?} Dispatcher is not registered, flags: {:?}",
-                    self.cfg.tag(),
-                    ptr::from_ref(self),
-                    self.flags
-                );
-            }
         }
     }
 
@@ -738,11 +723,7 @@ impl<F> Drop for Io<F> {
             // filter is unsafe and must be dropped explicitly,
             // and won't be dropped without special attention
             if !st.flags.is_terminated() {
-                log::trace!(
-                    "{}: Io is dropped, force stopping io streams {:?}",
-                    st.cfg.tag(),
-                    st.flags
-                );
+                log::trace!("{}: Io is dropped, terminate connection", st.tag());
             }
 
             st.terminate_connection(None);

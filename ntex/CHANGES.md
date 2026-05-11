@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.2] - 2026-05-11
+
+* http: Add "connection: close" if request payload is not consumed #867
+
 ## [3.9.1] - 2026-05-07
 
 * Fix httparse::Error compat
