@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.2] - 2026-03-12
+
+* Fix openssl filter buffering
+
 ## [3.4.0] - 2026-03-08
 
 * Use ntex_error::Error for connect service
