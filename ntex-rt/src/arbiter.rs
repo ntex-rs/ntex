@@ -62,14 +62,21 @@ impl Clone for Arbiter {
 
 impl Arbiter {
     #[allow(clippy::borrowed_box)]
-    pub(super) fn new_system(sys_id: usize, name: String) -> (Self, ArbiterController) {
+    pub(super) fn new_system(sys: System, name: String) -> (Self, ArbiterController) {
         let (tx, rx) = unbounded();
 
-        let arb = Arbiter::with_sender(sys_id, 0, Arc::new(name), tx);
+        let arb = Arbiter::with_sender(sys.id().0, 0, Arc::new(name), tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
-        (arb, ArbiterController { rx, stop: None })
+        (
+            arb,
+            ArbiterController {
+                sys,
+                rx,
+                stop: None,
+            },
+        )
     }
 
     pub(super) fn dummy() -> Self {
@@ -140,6 +147,7 @@ impl Arbiter {
             .spawn(move || {
                 log::info!("Starting {name2:?} arbiter");
 
+                let sys2 = sys.clone();
                 let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
@@ -154,6 +162,7 @@ impl Arbiter {
                     // start arbiter controller
                     crate::spawn(
                         ArbiterController {
+                            sys,
                             stop: Some(stop),
                             rx: arb_rx,
                         }
@@ -162,7 +171,7 @@ impl Arbiter {
                     ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
                     // register arbiter
-                    let _ = sys
+                    let _ = sys2
                         .sys()
                         .try_send(SystemCommand::RegisterArbiter(Id(id), arb));
 
@@ -380,6 +389,7 @@ impl PartialEq for Arbiter {
 }
 
 pub(crate) struct ArbiterController {
+    sys: System,
     stop: Option<oneshot::Sender<i32>>,
     rx: Receiver<ArbiterCommand>,
 }
@@ -387,9 +397,9 @@ pub(crate) struct ArbiterController {
 impl Drop for ArbiterController {
     fn drop(&mut self) {
         if thread::panicking() {
-            if System::current().stop_on_panic() {
+            if self.sys.stop_on_panic() {
                 eprintln!("Panic in Arbiter thread, shutting down system.");
-                System::current().stop_with_code(1);
+                self.sys.stop_with_code(1);
             } else {
                 eprintln!("Panic in Arbiter thread.");
             }

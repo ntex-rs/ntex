@@ -53,7 +53,7 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
-ntex = "3.9.1"
+ntex = "3.9.2"
 ntex-bytes = "1.6.7"
 ntex-codec = "1.2.1"
 ntex-error = "2.2.0"
@@ -64,10 +64,10 @@ ntex-io = "3.11.2"
 ntex-net = "3.11.0"
 ntex-macros = "3.2.0"
 ntex-router = "1.0.0"
-ntex-rt = "3.13.1"
+ntex-rt = "3.14.0"
 ntex-server = "3.9.0"
 ntex-service = "4.6.0"
-ntex-tls = "3.5.0"
+ntex-tls = "3.5.1"
 ntex-util = "3.6.1"
 
 ntex-polling = "3.10.0"

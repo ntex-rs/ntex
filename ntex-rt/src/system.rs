@@ -96,7 +96,7 @@ impl System {
     /// Constructs new system and sets it as current
     pub(super) fn start(&mut self) -> oneshot::Receiver<i32> {
         let (stop_tx, stop) = oneshot::channel();
-        let (arb, controller) = Arbiter::new_system(self.id, self.config.name.clone());
+        let (arb, controller) = Arbiter::new_system(self.clone(), self.config.name.clone());
 
         self.arbiter.set(Some(arb.clone()));
         *self.rt.write() = arb.clone();
