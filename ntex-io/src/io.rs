@@ -332,6 +332,10 @@ impl<F: Filter> Io<F> {
         // replace current filter
         state.0.filter.add_filter::<F, U>(nf);
 
+        if let Err(e) = self.st().buffer.process_read_buf(&self, BytesMut::new()) {
+            self.st().terminate_connection(Some(e));
+        }
+
         Io(UnsafeCell::new(state), marker::PhantomData)
     }
 

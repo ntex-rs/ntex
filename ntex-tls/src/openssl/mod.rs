@@ -135,8 +135,10 @@ impl FilterLayer for SslFilter {
             Ok(ssl::ShutdownResult::Received) => Ok(Poll::Ready(())),
             Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => Ok(Poll::Ready(())),
             Err(ref e)
-                if e.code() == ssl::ErrorCode::WANT_READ
-                    || e.code() == ssl::ErrorCode::WANT_WRITE =>
+                if matches!(
+                    e.code(),
+                    ssl::ErrorCode::WANT_READ | ssl::ErrorCode::WANT_WRITE
+                ) =>
             {
                 Ok(Poll::Pending)
             }
@@ -252,7 +254,7 @@ async fn handle_result<F>(
         Ok(v) => Ok(Some(v)),
         Err(e) => match e.code() {
             ssl::ErrorCode::WANT_READ => match io.read_notify().await? {
-                None => Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected")),
+                None => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected")),
                 _ => Ok(None),
             },
             ssl::ErrorCode::WANT_WRITE => Ok(None),

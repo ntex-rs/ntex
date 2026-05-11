@@ -55,7 +55,7 @@ impl Stack {
     pub(crate) fn add_layer(&self) {
         let mut buffers = self.buffers.take().unwrap().into_vec();
         let buf = StackBuffer {
-            read: buffers[0].read.take(),
+            read: None,
             write: BytePages::new(buffers[0].write.page_size()),
         };
         buffers.insert(0, buf);

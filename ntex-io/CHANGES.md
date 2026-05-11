@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.2] - 2026-05-11
+
+* Fix bufffers order after .add_filter() call
+
 ## [3.11.1] - 2026-05-11
 
 * Fix reading for testing io
