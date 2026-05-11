@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.1] - 2026-05-11
+
+* Fix reading for testing io
+
 ## [3.11.0] - 2026-05-08
 
 * Send bytes for all Io in one task

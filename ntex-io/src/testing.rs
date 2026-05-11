@@ -13,9 +13,12 @@ use crate::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
 
 impl AtomicWaker {
-    fn wake(&self) {
+    fn wake(&self) -> bool {
         if let Some(waker) = self.0.lock().unwrap().borrow_mut().take() {
             waker.wake();
+            true
+        } else {
+            false
         }
     }
 }
@@ -183,8 +186,8 @@ impl IoTest {
             let guard = self.remote.lock().unwrap();
             let mut remote = guard.borrow_mut();
             remote.read = IoTestState::Close;
-            remote.waker.wake();
-            log::debug!("close remote socket");
+            let res = remote.waker.wake();
+            log::debug!("close remote socket, waker:{res}");
         }
         sleep(Millis(35)).await;
     }
@@ -441,24 +444,29 @@ fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
 }
 
 fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
-    let mut buf = ctx.get_read_buf();
+    loop {
+        let mut buf = ctx.get_read_buf();
 
-    let result = match io.poll_read_buf(cx, &mut buf) {
-        Poll::Ready(Ok(size)) => {
-            if size == 0 {
-                Ok(None)
-            } else {
-                Ok(Some(buf))
+        let (pending, result) = match io.poll_read_buf(cx, &mut buf) {
+            Poll::Ready(Ok(size)) => {
+                let res = if size == 0 { Ok(None) } else { Ok(Some(buf)) };
+                (false, res)
             }
-        }
-        Poll::Pending => Ok(Some(buf)),
-        Poll::Ready(Err(err)) => Err(err),
-    };
+            Poll::Pending => (true, Ok(Some(buf))),
+            Poll::Ready(Err(err)) => (false, Err(err)),
+        };
 
-    if matches!(ctx.update_read_status(result), IoTaskStatus::Stop) {
-        Poll::Ready(())
-    } else {
-        Poll::Pending
+        return match ctx.update_read_status(result) {
+            IoTaskStatus::Io => {
+                if pending {
+                    Poll::Pending
+                } else {
+                    continue;
+                }
+            }
+            IoTaskStatus::Stop => Poll::Ready(()),
+            IoTaskStatus::Pause => Poll::Pending,
+        };
     }
 }
 
