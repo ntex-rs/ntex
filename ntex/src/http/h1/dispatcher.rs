@@ -1062,7 +1062,7 @@ mod tests {
         assert!(client.read_any().is_empty());
 
         // only first request get handled
-        assert_eq!(num.load(Ordering::Relaxed), 3);
+        assert_eq!(num.load(Ordering::Relaxed), 1);
     }
 
     /// max http message size is 32k (no payload)
