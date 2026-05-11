@@ -148,6 +148,7 @@ impl Arbiter {
                 log::info!("Starting {name2:?} arbiter");
 
                 let sys2 = sys.clone();
+                let sys3 = sys.clone();
                 let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
@@ -180,7 +181,7 @@ impl Arbiter {
                 });
 
                 // unregister arbiter
-                let _ = System::current()
+                let _ = sys3
                     .sys()
                     .try_send(SystemCommand::UnregisterArbiter(Id(id)));
 
