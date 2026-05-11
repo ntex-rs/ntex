@@ -10,20 +10,21 @@ use crate::{Stream, task::LocalWaker};
 /// max buffer size 32k
 const MAX_BUFFER_SIZE: usize = 32_768;
 
+/// Indicates the current status of a byte stream.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Status {
-    /// Stream is eof
+    /// End of stream reached.
     Eof,
-    /// Stream is ready
+    /// Stream is ready to accept more bytes.
     Ready,
-    /// Receiver side is dropped
+    /// The receiver side has been dropped.
     Dropped,
 }
 
-/// Create bytes stream.
+/// Creates a byte stream.
 ///
-/// This method construct two objects responsible for bytes stream
-/// generation.
+/// This method constructs two objects responsible for generating
+/// and consuming the byte stream.
 pub fn channel<E>() -> (Sender<E>, Receiver<E>) {
     let inner = Rc::new(Inner::new(false));
 
@@ -50,7 +51,7 @@ pub fn eof<E>() -> (Sender<E>, Receiver<E>) {
     )
 }
 
-/// Create empty stream
+/// Creates an empty byte stream.
 pub fn empty<E>(data: Option<Bytes>) -> Receiver<E> {
     let rx = Receiver {
         inner: Rc::new(Inner::new(true)),
@@ -61,43 +62,44 @@ pub fn empty<E>(data: Option<Bytes>) -> Receiver<E> {
     rx
 }
 
-/// Buffered stream of byte chunks
+/// A buffered stream of byte chunks.
 ///
-/// Payload stores chunks in a vector. Chunks can be received with
-/// `.read()` method.
+/// Incoming payload data is stored internally as a vector of chunks.
+/// Chunks can be retrieved incrementally using the `.read()` method.
 #[derive(Debug)]
 pub struct Receiver<E> {
     inner: Rc<Inner<E>>,
 }
 
 impl<E> Receiver<E> {
-    /// Set size of stream buffer
+    /// Sets the size of the stream buffer.
     ///
-    /// By default buffer size is set to 32Kb
+    /// By default, the buffer size is 32 KB.
     #[inline]
     pub fn max_buffer_size(&self, size: usize) {
         self.inner.max_buffer_size.set(size);
     }
 
-    /// Put unused data back to stream
+    /// Puts unused data back into the stream.
     #[inline]
     pub fn put(&self, data: Bytes) {
         self.inner.unread_data(data);
     }
 
     #[inline]
-    /// Check if stream is eof
+    /// Returns `true` if the stream has reached EOF.
     pub fn is_eof(&self) -> bool {
         self.inner.flags.get().contains(Flags::EOF)
     }
 
     #[inline]
-    /// Read next available bytes chunk
+    /// Reads the next available chunk of bytes from the stream.
     pub async fn read(&self) -> Option<Result<Bytes, E>> {
         poll_fn(|cx| self.poll_read(cx)).await
     }
 
     #[inline]
+    /// Attempts to read the next available chunk of bytes from the stream.
     pub fn poll_read(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Bytes, E>>> {
         if let Some(data) = self.inner.get_data() {
             Poll::Ready(Some(Ok(data)))
@@ -127,10 +129,10 @@ impl<E> Drop for Receiver<E> {
     }
 }
 
-/// Sender part of the payload stream
+/// Sender side of the byte stream.
 ///
-/// It is possible to feed data from a cloned sender, but the readiness
-/// check applies only to the most recently called one.
+/// It is possible to send data from a cloned sender, but readiness
+/// checks apply only to the most recently used instance.
 #[derive(Debug)]
 pub struct Sender<E> {
     inner: Weak<Inner<E>>,
@@ -155,33 +157,38 @@ impl<E> Drop for Sender<E> {
 }
 
 impl<E> Sender<E> {
-    /// Set stream error
+    /// Returns whether this channel is closed.
+    pub fn is_closed(&self) -> bool {
+        self.inner.strong_count() == 0
+    }
+
+    /// Sets the stream error.
     pub fn set_error(&self, err: E) {
         if let Some(shared) = self.inner.upgrade() {
             shared.set_error(err);
         }
     }
 
-    /// Set stream eof
+    /// Marks the stream as EOF.
     pub fn feed_eof(&self) {
         if let Some(shared) = self.inner.upgrade() {
             shared.feed_eof();
         }
     }
 
-    /// Add chunk to the stream
+    /// Adds a chunk to the stream.
     pub fn feed_data(&self, data: Bytes) {
         if let Some(shared) = self.inner.upgrade() {
             shared.feed_data(data);
         }
     }
 
-    /// Check stream readiness
+    /// Checks whether the stream is ready for operation.
     pub async fn ready(&self) -> Status {
         poll_fn(|cx| self.poll_ready(cx)).await
     }
 
-    /// Check stream readiness
+    /// Checks whether the stream is ready for operation.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Status> {
         if let Some(shared) = self.inner.upgrade() {
             let flags = shared.flags.get();
@@ -317,6 +324,20 @@ mod tests {
         rx.max_buffer_size(100);
         assert!(rx.read().await.is_none());
         assert_eq!(tx.ready().await, Status::Eof);
+    }
+
+    #[ntex::test]
+    async fn test_closed() {
+        // drop receiver
+        let (tx, rx) = channel::<()>();
+        assert!(!tx.is_closed());
+        drop(rx);
+        assert!(tx.is_closed());
+
+        // drop sender
+        let (tx, rx) = channel::<()>();
+        drop(tx);
+        assert_eq!(rx.read().await, None);
     }
 
     #[ntex::test]

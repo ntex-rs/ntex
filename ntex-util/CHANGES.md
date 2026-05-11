@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.1] - 2026-05-11
+
+* Add helper method bstream::Sender::is_closed()
+
 ## [3.6.0] - 2026-05-03
 
 * Use NonZeroUsize for TimerHandle so size of Option<TimerHandle>
