@@ -97,15 +97,7 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
             loop {
                 let result = io.with_buf(|buf| {
                     let filter = io.filter();
-                    filter.with_buffers(buf, |buf| {
-                        let mut inner = filter.inner.borrow_mut();
-                        let result = inner.accept();
-                        // copy internal buffer to write dst buffer
-                        buf.with_write_buffers(|_, _, w_dst| {
-                            inner.get_mut().destination.move_to(w_dst);
-                        });
-                        result
-                    })
+                    filter.with_buffers(buf, |_| filter.inner.borrow_mut().accept())
                 })?;
                 if super::handle_result(&io, result).await?.is_some() {
                     break;

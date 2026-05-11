@@ -71,11 +71,19 @@ impl SslFilter {
     {
         self.inner.borrow_mut().get_mut().source = buf.read_src().take();
         let result = f(buf);
-        if let Some(src) = self.inner.borrow_mut().get_mut().source.take()
+
+        let mut inner = self.inner.borrow_mut();
+        if let Some(src) = inner.get_mut().source.take()
             && !src.is_empty()
         {
             *buf.read_src() = Some(src);
         }
+
+        // copy internal buffer to write dst buffer
+        buf.with_write_buffers(|_, _, w_dst| {
+            inner.get_mut().destination.move_to(w_dst);
+        });
+
         result
     }
 }
@@ -203,7 +211,6 @@ impl FilterLayer for SslFilter {
                         }
                     }
                 }
-                self.inner.borrow_mut().get_mut().destination.move_to(w_dst);
                 Ok(())
             })
         })
@@ -227,15 +234,7 @@ pub async fn connect<F: Filter>(
     loop {
         let result = io.with_buf(|buf| {
             let filter = io.filter();
-            filter.with_buffers(buf, |buf| {
-                let mut inner = filter.inner.borrow_mut();
-                let result = inner.connect();
-                // copy internal buffer to write dst buffer
-                buf.with_write_buffers(|_, _, w_dst| {
-                    inner.get_mut().destination.move_to(w_dst);
-                });
-                result
-            })
+            filter.with_buffers(buf, |_| filter.inner.borrow_mut().connect())
         })?;
 
         if handle_result(&io, result).await?.is_some() {
