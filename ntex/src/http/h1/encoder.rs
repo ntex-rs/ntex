@@ -95,7 +95,6 @@ pub(crate) trait MessageType: Sized {
                 dst.extend_from_slice(b"connection: keep-alive\r\n");
             }
             ConnectionType::Close if version >= Version::HTTP_11 => {
-                println!("------------------");
                 dst.extend_from_slice(b"connection: close\r\n");
             }
             _ => (),
