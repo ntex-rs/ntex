@@ -1,5 +1,9 @@
 # Changes
 
+## [3.14.0] - 2026-05-11
+
+* Add System::get_value() API for system-wide storage access.
+
 ## [3.13.1] - 2026-05-09
 
 * Add remove_all_items() helper, removes all arbiter's items

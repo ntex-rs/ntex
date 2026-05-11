@@ -230,6 +230,20 @@ fn test_spawn_cb() {
     assert!(val > 0);
 }
 
+#[ntex::test]
+async fn system_storage() {
+    let val = System::current().get_value::<usize>(|| 10);
+    assert_eq!(val, 10);
+
+    let arb = Arbiter::new();
+    let val2 = arb
+        .handle()
+        .spawn(async { System::current().get_value::<usize>(|| 11) })
+        .await
+        .unwrap();
+    assert_eq!(val2, 10);
+}
+
 #[cfg(all(target_os = "linux", feature = "neon-polling"))]
 #[ntex::test]
 async fn idle_disconnect_polling() {
