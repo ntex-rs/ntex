@@ -175,7 +175,7 @@ impl Arbiter {
                     .sys()
                     .try_send(SystemCommand::UnregisterArbiter(Id(id)));
 
-                STORAGE.with(|cell| cell.borrow_mut().clear());
+                remove_all_items();
             })
             .unwrap_or_else(|err| {
                 panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
@@ -455,4 +455,5 @@ where
 /// Remove all items from storage.
 pub fn remove_all_items() {
     STORAGE.with(move |cell| cell.borrow_mut().clear());
+    System::remove_current();
 }

@@ -1,10 +1,12 @@
+use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, RwLock, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
 use std::{cell::Cell, cell::RefCell, fmt, future::Future, panic, pin::Pin};
 
 use async_channel::{Receiver, Sender, unbounded};
 use futures_timer::Delay;
+use parking_lot::RwLock;
 
 use crate::pool::ThreadPool;
 use crate::{Arbiter, BlockingResult, Builder, Handle, Runner, SystemRunner};
@@ -35,6 +37,7 @@ pub struct System {
     sender: Sender<SystemCommand>,
     receiver: Receiver<SystemCommand>,
     rt: Arc<RwLock<Arbiter>>,
+    storage: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Sync + Send>>>>,
     pool: ThreadPool,
 }
 
@@ -63,6 +66,7 @@ impl Clone for System {
             sender: self.sender.clone(),
             receiver: self.receiver.clone(),
             rt: self.rt.clone(),
+            storage: self.storage.clone(),
             pool: self.pool.clone(),
         }
     }
@@ -84,6 +88,7 @@ impl System {
             receiver,
             pool,
             rt: Arc::new(RwLock::new(Arbiter::dummy())),
+            storage: Arc::new(RwLock::new(HashMap::default())),
             arbiter: Cell::new(None),
         }
     }
@@ -94,7 +99,7 @@ impl System {
         let (arb, controller) = Arbiter::new_system(self.id, self.config.name.clone());
 
         self.arbiter.set(Some(arb.clone()));
-        *self.rt.write().unwrap() = arb.clone();
+        *self.rt.write() = arb.clone();
         System::set_current(self.clone());
 
         // system support tasks
@@ -149,6 +154,12 @@ impl System {
         });
     }
 
+    pub(super) fn remove_current() {
+        CURRENT.with(|cell| {
+            cell.borrow_mut().take();
+        });
+    }
+
     /// System id
     pub fn id(&self) -> Id {
         Id(self.id)
@@ -190,7 +201,7 @@ impl System {
             }
         }
 
-        let arb = self.rt.read().unwrap().clone();
+        let arb = self.rt.read().clone();
         self.arbiter.set(Some(arb.clone()));
         arb
     }
@@ -252,6 +263,27 @@ impl System {
         R: Send + 'static,
     {
         self.pool.execute(f)
+    }
+
+    /// Returns a previously registered type, or inserts and returns a new one.
+    ///
+    /// This method acquires a lock on the internal data structure.
+    /// To avoid repeated locking, prefer storing a cloned value in the arbiter's storage.
+    pub fn get_value<T>(&self, f: impl FnOnce() -> T) -> T
+    where
+        T: Clone + Send + Sync + 'static,
+    {
+        if let Some(boxed) = self.storage.read().get(&TypeId::of::<T>())
+            && let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>()
+        {
+            val.clone()
+        } else {
+            let val = f();
+            self.storage
+                .write()
+                .insert(TypeId::of::<T>(), Box::new(val.clone()));
+            val
+        }
     }
 }
 
