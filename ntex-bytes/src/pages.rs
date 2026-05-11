@@ -264,13 +264,28 @@ impl BytePages {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
+        let cap = self.current.capacity();
         let mut buf = BytesMut {
             storage: StorageVec(self.current.0),
         };
-        buf.storage.unsize();
 
         let res = f(&mut buf);
+
+        // `buf.storage` cal re-allocate, makes self.current invalid
+        self.current.0 = buf.storage.0;
+        if buf.capacity() != cap {
+            buf.storage.unsize();
+        }
+        // buf.storage.0 uses same pointer as self.current.0
         mem::forget(buf);
+
+        // add new page
+        if self.current.len() >= self.page_size().capacity() {
+            let storage = StorageVec::sized(self.page_size());
+            let page = BytePage::from(mem::replace(&mut self.current, storage));
+            self.pages_mut().push_back(page);
+        }
+
         res
     }
 }
@@ -705,6 +720,8 @@ impl fmt::Debug for BytePage {
 
 #[cfg(test)]
 mod tests {
+    use rand::Rng;
+
     use super::*;
 
     #[test]
@@ -869,11 +886,24 @@ mod tests {
         let p2 = pages2.freeze();
         assert_eq!(p2, b"1");
 
-        // with_bytes_vec()
+        // .with_bytes_mut()
         let mut pages = BytePages::default();
         pages.with_bytes_mut(|buf| buf.extend_from_slice(b"123"));
+        assert_eq!(pages.len(), 3);
         let p = pages.freeze();
         assert_eq!(p, b"123");
+
+        let data = rand::rng()
+            .sample_iter(&rand::distr::Alphanumeric)
+            .take(65_536)
+            .map(char::from)
+            .collect::<String>();
+
+        let mut pages = BytePages::default();
+        pages.with_bytes_mut(|buf| buf.extend_from_slice(data.as_bytes()));
+        assert_eq!(pages.len(), 65_536);
+        let p = pages.freeze();
+        assert_eq!(p, data.as_bytes());
     }
 
     #[test]
