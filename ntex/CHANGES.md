@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.4] - 2026-05-12
+
+* Fix handling h2 disconnect error in client
+
 ## [3.9.2] - 2026-05-11
 
 * http: Add "connection: close" if request payload is not consumed #867

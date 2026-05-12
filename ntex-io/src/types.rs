@@ -23,7 +23,7 @@ impl fmt::Debug for PeerAddr {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-/// Http protocol definition
+/// HTTP protocol version definition
 pub enum HttpProtocol {
     Http1,
     Http2,

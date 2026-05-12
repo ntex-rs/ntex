@@ -38,8 +38,8 @@ bitflags::bitflags! {
         /// write buffer is full
         const DSP_W_BACKPRESSURE  = 0b0010_0000_0000_0000;
 
-        /// is send-buf enabled
-        const SEND_BUF            = 0b1000_0000_0000_0000;
+        /// is direct-write enabled
+        const DIRECT_WR_SUP       = 0b1000_0000_0000_0000;
     }
 }
 
@@ -50,9 +50,9 @@ impl Clone for Flags {
 }
 
 impl Flags {
-    pub(crate) fn new(send_buf: bool) -> Self {
-        if send_buf {
-            Self(Cell::new(FlagsKind::WR_PAUSED | FlagsKind::SEND_BUF))
+    pub(crate) fn new(direct_wr: bool) -> Self {
+        if direct_wr {
+            Self(Cell::new(FlagsKind::WR_PAUSED | FlagsKind::DIRECT_WR_SUP))
         } else {
             Self(Cell::new(FlagsKind::WR_PAUSED))
         }
@@ -124,8 +124,8 @@ impl Flags {
             && !f.intersects(FlagsKind::IO_STOPPED | FlagsKind::IO_STOPPING)
     }
 
-    pub(crate) fn is_send_buf_enabled(&self) -> bool {
-        self.contains(FlagsKind::SEND_BUF)
+    pub(crate) fn is_direct_wr_enabled(&self) -> bool {
+        self.contains(FlagsKind::DIRECT_WR_SUP)
     }
 
     pub(crate) fn is_read_paused(&self) -> bool {

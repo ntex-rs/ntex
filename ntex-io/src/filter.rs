@@ -132,8 +132,11 @@ where
     fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>> {
         if !self.2.get() {
             if ctx.with_buffer(|buf| self.0.shutdown(buf))?.is_ready() {
-                self.2.set(true);
                 self.process_write_buf(ctx)?;
+                self.2.set(true);
+
+                // Discard the write buffer; it won't be processed
+                ctx.clear_write_buf();
             } else {
                 return Ok(Poll::Pending);
             }

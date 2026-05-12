@@ -69,21 +69,30 @@ impl SslFilter {
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
     {
-        self.inner.borrow_mut().get_mut().source = buf.read_src().take();
-        let result = f(buf);
-
-        let mut inner = self.inner.borrow_mut();
-        if let Some(src) = inner.get_mut().source.take()
-            && !src.is_empty()
         {
-            *buf.read_src() = Some(src);
+            let mut inner = self.inner.borrow_mut();
+            let st = inner.get_mut();
+            st.source = buf.read_src().take();
+
+            // get current page from destination buffer (optimization)
+            buf.with_write_buffers(|_, _, dst| st.destination.try_get_current_from(dst));
         }
 
-        // copy internal buffer to write dst buffer
-        buf.with_write_buffers(|_, _, w_dst| {
-            inner.get_mut().destination.move_to(w_dst);
-        });
+        let result = f(buf);
 
+        {
+            let mut inner = self.inner.borrow_mut();
+            let st = inner.get_mut();
+
+            if let Some(src) = st.source.take()
+                && !src.is_empty()
+            {
+                *buf.read_src() = Some(src);
+            }
+
+            // copy internal buffer to write dst buffer
+            buf.with_write_buffers(|_, _, dst| st.destination.move_to(dst));
+        }
         result
     }
 }
@@ -186,12 +195,9 @@ impl FilterLayer for SslFilter {
 
     fn process_write_buf(&self, wb: &mut FilterBuf<'_>) -> io::Result<()> {
         self.with_buffers(wb, |buf| {
-            buf.with_buffers(|_, _, _, w_src, w_dst| {
+            buf.with_write_buffers(|_, w_src, _| {
                 if !w_src.is_empty() {
                     let mut inner = self.inner.borrow_mut();
-
-                    // get current page from destination buffer (optimization)
-                    inner.get_mut().destination.try_get_current_from(w_dst);
 
                     while let Some(mut page) = w_src.take() {
                         match inner.ssl_write(&page) {

@@ -163,18 +163,28 @@ where
 {
     let st = poll_fn(|cx| {
         loop {
-            return match ready!(ctx.poll_write_ready(cx)) {
-                Readiness::Ready => match ready!(io.poll_write_ready(cx)) {
-                    Ok(()) => match write(io.as_ref(), &ctx) {
-                        WrtStatus::Pending => Poll::Pending,
-                        WrtStatus::More => continue,
-                        WrtStatus::Terminate => Poll::Ready(Status::Terminate),
-                    },
-                    Err(err) => {
-                        ctx.update_write_status(Err(err));
-                        Poll::Ready(Status::Terminate)
+            let ctx_state = ctx.poll_write_ready(cx);
+            #[cfg(feature = "trace")]
+            log::trace!("{}: Write task, context state {ctx_state:?}", ctx.tag());
+
+            return match ready!(ctx_state) {
+                Readiness::Ready => {
+                    let io_state = io.poll_write_ready(cx);
+                    #[cfg(feature = "trace")]
+                    log::trace!("{}: Io write readiness {io_state:?}", ctx.tag());
+
+                    match ready!(io_state) {
+                        Ok(()) => match write(io.as_ref(), &ctx) {
+                            WrtStatus::Pending => Poll::Pending,
+                            WrtStatus::More => continue,
+                            WrtStatus::Terminate => Poll::Ready(Status::Terminate),
+                        },
+                        Err(err) => {
+                            ctx.update_write_status(Err(err));
+                            Poll::Ready(Status::Terminate)
+                        }
                     }
-                },
+                }
                 Readiness::Shutdown => Poll::Ready(Status::Shutdown),
                 Readiness::Terminate => Poll::Ready(Status::Terminate),
             };
@@ -250,6 +260,8 @@ where
                     Poll::Ready(Err(err)) => return (false, Err(err), false),
                     Poll::Pending => Poll::Pending,
                 };
+                #[cfg(feature = "trace")]
+                log::trace!("{}: Io write result {result:?}", ctx.tag());
 
                 // remove written bytes
                 if let Poll::Ready(mut written) = result {

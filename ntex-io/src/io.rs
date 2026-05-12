@@ -18,7 +18,7 @@ use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
-/// Interface object to underlying io stream
+/// Interface object to the underlying I/O stream
 pub struct Io<F = Base>(UnsafeCell<IoRef>, marker::PhantomData<F>);
 
 #[derive(Clone)]
@@ -69,7 +69,7 @@ impl IoState {
         }
     }
 
-    /// Get current io error
+    /// Get the current I/O error.
     pub(super) fn error(&self) -> Option<io::Error> {
         if let Some(err) = self.error.take() {
             self.error
@@ -80,7 +80,7 @@ impl IoState {
         }
     }
 
-    /// Get current io result
+    /// Returns the current I/O error, or creates a `NotConnected` error.
     pub(super) fn error_or_disconnected(&self) -> io::Error {
         self.error()
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Disconnected"))
@@ -108,7 +108,7 @@ impl IoState {
         }
     }
 
-    /// Gracefully shutdown read and write io tasks
+    /// Gracefully shuts down the read and write I/O tasks.
     pub(super) fn start_shutdown(&self) {
         if !self.flags.is_stopping_any() {
             log::trace!("{}: Initiate io shutdown {:?}", self.cfg.tag(), self.flags);
@@ -182,8 +182,7 @@ impl fmt::Debug for IoState {
 }
 
 impl Io {
-    #[inline]
-    /// Create `Io` instance
+    /// Creates a new `Io` instance.
     pub fn new<I: IoStream, T: Into<SharedCfg>>(io: I, cfg: T) -> Self {
         let cfg = cfg.into().get::<IoConfig>();
         let size = cfg.write_page_size();
@@ -246,16 +245,16 @@ impl IoRef {
 
 impl<F> Io<F> {
     #[inline]
-    /// Get instance of `IoRef`
+    /// Get an instance of `IoRef`.
     pub fn get_ref(&self) -> IoRef {
         self.io_ref().clone()
     }
 
     #[inline]
     #[must_use]
-    /// Clone current io object.
+    /// Takes the current I/O object.
     ///
-    /// Current io object becomes closed.
+    /// After this call, the I/O object is no longer valid for use.
     pub fn take(&self) -> Self {
         Self(UnsafeCell::new(self.take_io_ref()), marker::PhantomData)
     }
@@ -273,7 +272,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Set shared io config
+    /// Updates the shared I/O configuration.
     pub fn set_config<T: Into<SharedCfg>>(&self, cfg: T) {
         unsafe {
             let cfg = cfg.into().get::<IoConfig>();
@@ -285,7 +284,7 @@ impl<F> Io<F> {
 
 impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
     #[inline]
-    /// Get referece to a filter
+    /// Returns a reference to a filter.
     pub fn filter(&self) -> &F {
         &self.st().filter.filter::<Layer<F, T>>().0
     }
@@ -293,7 +292,7 @@ impl<F: FilterLayer, T: Filter> Io<Layer<F, T>> {
 
 impl<F: Filter> Io<F> {
     #[inline]
-    /// Convert current io stream into sealed version
+    /// Convert the current I/O stream into a sealed version.
     pub fn seal(self) -> Io<Sealed> {
         let state = self.take_io_ref();
         state.0.filter.seal::<F>();
@@ -302,34 +301,34 @@ impl<F: Filter> Io<F> {
     }
 
     #[inline]
-    /// Convert current io stream into boxed version
+    /// Convert the current I/O stream into a boxed version.
     pub fn boxed(self) -> IoBoxed {
         self.seal().into()
     }
 
     #[inline]
-    /// Add new layer current current filter
+    /// Adds a new processing layer to the current filter chain.
     pub fn add_filter<U>(self, nf: U) -> Io<Layer<U, F>>
     where
         U: FilterLayer,
     {
-        // write buffer processing could be delayed,
-        // need to call filter chain for processing
+        // Write buffer processing may be delayed,
+        // call the filter chain to process pending writes
         if let Err(e) = self.st().buffer.process_write_buf(&self) {
             self.st().terminate_connection(Some(e));
         }
 
         let state = self.take_io_ref();
 
-        // add buffers layer
-        // Safety: .add_layer() only increases internal buffers
-        // there is no api that holds references into buffers storage
-        // all apis first removes buffer from storage and then work with it
+        // Add the buffers layer.
+        //
+        // Safety: no references into the buffer storage are retained.
+        // All APIs first remove the buffer from storage before processing it.
         unsafe { &mut *(Rc::as_ptr(&state.0).cast_mut()) }
             .buffer
             .add_layer();
 
-        // replace current filter
+        // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
 
         if let Err(e) = self.st().buffer.process_read_buf(&self, BytesMut::new()) {
@@ -339,14 +338,14 @@ impl<F: Filter> Io<F> {
         Io(UnsafeCell::new(state), marker::PhantomData)
     }
 
-    /// Map layer
+    /// Wraps the current layer with a wrapper.
     pub fn map_filter<U, R>(self, f: U) -> Io<R>
     where
         U: FnOnce(F) -> R,
         R: Filter,
     {
-        // write buffer processing could be delayed,
-        // need to call filter chain for processing
+        // Write buffer processing may be delayed,
+        // call the filter chain to process pending writes
         if let Err(e) = self.st().buffer.process_write_buf(&self) {
             self.st().terminate_connection(Some(e));
         }
@@ -359,7 +358,7 @@ impl<F: Filter> Io<F> {
 }
 
 impl<F> Io<F> {
-    /// Read incoming io stream and decode codec item.
+    /// Reads from the incoming I/O stream and decodes a codec item.
     pub async fn recv<U>(
         &self,
         codec: &U,
@@ -387,7 +386,9 @@ impl<F> Io<F> {
         }
     }
 
-    /// Pull some bytes from this source into the specified buffer.
+    /// Reads bytes from this I/O stream into the specified buffer.
+    ///
+    /// If there is not enough data available, waits for incoming data.
     pub async fn read(&self, dst: &mut [u8]) -> io::Result<()> {
         loop {
             let completed = self.with_read_buf(|buf| {
@@ -406,19 +407,19 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Wait until read becomes ready.
+    /// Waits until the I/O stream is ready for reading.
     pub async fn read_ready(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_ready(cx)).await
     }
 
     #[inline]
-    /// Wait until io reads any data.
+    /// Waits until the I/O stream receives new data.
     pub async fn read_notify(&self) -> io::Result<Option<()>> {
         poll_fn(|cx| self.poll_read_notify(cx)).await
     }
 
     #[inline]
-    /// Pause read task
+    /// Pauses the read task.
     pub fn pause(&self) {
         let st = self.st();
         if !st.flags.is_read_paused() {
@@ -428,7 +429,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Encode item, send to the peer. Fully flush write buffer.
+    /// Encodes an item and sends it to the peer, fully flushing the write buffer.
     pub async fn send<U>(
         &self,
         item: U::Item,
@@ -447,15 +448,15 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Wake write task and instruct to flush data.
+    /// Wakes the write task and requests a flush of buffered data.
     ///
-    /// This is async version of `poll_flush()` method.
+    /// This is the async version of `.poll_flush()` method.
     pub async fn flush(&self, full: bool) -> io::Result<()> {
         poll_fn(|cx| self.poll_flush(cx, full)).await
     }
 
     #[inline]
-    /// Gracefully shutdown io stream
+    /// Gracefully shuts down the I/O stream.
     pub async fn shutdown(&self) -> io::Result<()> {
         poll_fn(|cx| self.poll_shutdown(cx)).await
     }
@@ -463,17 +464,18 @@ impl<F> Io<F> {
     #[inline]
     /// Polls for read readiness.
     ///
-    /// If the io stream is not currently ready for reading,
-    /// this method will store a clone of the Waker from the provided Context.
-    /// When the io stream becomes ready for reading, `Waker::wake()` will be called on the waker.
+    /// If the I/O stream is not currently ready for reading,
+    /// this method will store a clone of the `Waker` from the provided `Context`.
+    /// When the I/O stream becomes ready for reading, `wake()` will be called on the waker.
     ///
-    /// Return value
+    /// # Returns
+    ///
     /// The function returns:
     ///
-    /// `Poll::Pending` if the io stream is not ready for reading.
-    /// `Poll::Ready(Ok(Some(()))))` if the io stream is ready for reading.
-    /// `Poll::Ready(Ok(None))` if io stream is disconnected
-    /// `Some(Poll::Ready(Err(e)))` if an error is encountered.
+    /// - `Poll::Pending` if the I/O stream is not ready for reading.
+    /// - `Poll::Ready(Ok(Some(())))` if the I/O stream is ready for reading.
+    /// - `Poll::Ready(Ok(None))` if the I/O stream is disconnected.
+    /// - `Poll::Ready(Err(e))` if an error is encountered.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
 
@@ -508,7 +510,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Polls for any incoming data.
+    /// Polls the I/O stream for availability of incoming data.
     pub fn poll_read_notify(&self, cx: &mut Context<'_>) -> Poll<io::Result<Option<()>>> {
         let st = self.st();
         if st.flags.is_stopping() {
@@ -578,7 +580,8 @@ impl<F> Io<F> {
         } else {
             match self.poll_read_ready(cx) {
                 Poll::Pending | Poll::Ready(Ok(Some(()))) => {
-                    if log::log_enabled!(log::Level::Trace) && decoded.remains != 0 {
+                    #[cfg(feature = "trace")]
+                    if decoded.remains != 0 {
                         log::trace!("{}: Not enough data to decode next frame", self.tag());
                     }
                     Ok(decoded)
@@ -590,23 +593,20 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Wake write task and instruct to flush data.
+    /// Wakes the write task and instructs it to flush data.
     ///
-    /// If `full` is true then wake up dispatcher when all data is flushed
-    /// otherwise wake up when size of write buffer is lower than
-    /// buffer max size.
+    /// If `full` is true, wakes the dispatcher when all data has been flushed;
+    /// otherwise, it wakes when the write buffer size falls below the low-watermark size.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         let st = self.st();
-        if st.flags.is_stopping() {
-            return Poll::Ready(Err(st.error_or_disconnected()));
-        }
-
         st.buffer.process_write_buf_force(self)?;
         self.update_write_destination();
 
         let len = st.buffer.write_buf_size();
         if len > 0 {
-            if full {
+            if st.flags.is_closed() {
+                return Poll::Ready(Err(st.error_or_disconnected()));
+            } else if full {
                 st.dispatch_task.register(cx.waker());
                 st.flags.set_wants_write_flush();
                 return Poll::Pending;
@@ -616,12 +616,16 @@ impl<F> Io<F> {
                 return Poll::Pending;
             }
         }
-        st.flags.unset_wr_backpressure_and_flush();
-        Poll::Ready(Ok(()))
+        if st.flags.is_closed() && !st.flags.is_write_flush() {
+            Poll::Ready(Err(st.error_or_disconnected()))
+        } else {
+            st.flags.unset_wr_backpressure_and_flush();
+            Poll::Ready(Ok(()))
+        }
     }
 
     #[inline]
-    /// Gracefully shutdown io stream
+    /// Gracefully shuts down the I/O stream.
     pub fn poll_shutdown(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let st = self.st();
 
@@ -645,16 +649,16 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Pause read task
+    /// Pauses the read task.
     ///
-    /// Returns status updates
+    /// Returns status updates.
     pub fn poll_read_pause(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         self.pause();
         self.poll_status_update(cx)
     }
 
     #[inline]
-    /// Wait for status updates
+    /// Polls for available status updates.
     pub fn poll_status_update(&self, cx: &mut Context<'_>) -> Poll<IoStatusUpdate> {
         let st = self.st();
         st.dispatch_task.register(cx.waker());
@@ -674,7 +678,7 @@ impl<F> Io<F> {
     }
 
     #[inline]
-    /// Register dispatch task
+    /// Registers a dispatch task.
     pub fn poll_dispatch(&self, cx: &mut Context<'_>) {
         self.st().dispatch_task.register(cx.waker());
     }
@@ -739,7 +743,7 @@ impl<F> Drop for Io<F> {
 }
 
 #[derive(Debug)]
-/// `OnDisconnect` future resolves when socket get disconnected
+/// The `OnDisconnect` future resolves when the I/O stream is disconnected.
 #[must_use = "OnDisconnect do nothing unless polled"]
 pub struct OnDisconnect {
     token: usize,
@@ -771,7 +775,7 @@ impl OnDisconnect {
     }
 
     #[inline]
-    /// Check if connection is disconnected
+    /// Checks if the I/O stream is disconnected.
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
         if self.token == usize::MAX || self.inner.flags.is_stopping() {
             Poll::Ready(())
@@ -811,7 +815,9 @@ mod tests {
     use ntex_util::{future::lazy, time::Millis, time::sleep};
 
     use super::*;
-    use crate::{IoContext, IoTaskStatus, Readiness, ops::Iops, testing::IoTest};
+    use crate::{
+        FilterBuf, IoContext, IoTaskStatus, Readiness, ops::Iops, testing::IoTest,
+    };
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -1140,7 +1146,7 @@ mod tests {
         );
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
         assert!(io.st().dispatch_task.is_set());
-        assert!(io.st().flags.is_send_buf_enabled());
+        assert!(io.st().flags.is_direct_wr_enabled());
 
         let ctx = IoContext::new(io.get_ref());
 
@@ -1308,5 +1314,59 @@ mod tests {
             Poll::Ready(Ok(()))
         ));
         assert!(!io.flags().is_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn shutdown() {
+        // layer drops all unprocessed data after filter shutdown
+        #[derive(Debug)]
+        struct F;
+
+        impl FilterLayer for F {
+            fn process_read_buf(&self, _: &mut FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+            fn process_write_buf(&self, _: &mut FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let io = Io::new(
+            IoTest::create().0,
+            SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8, 4, 16)),
+        );
+        let st = io.st();
+        assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
+        assert!(st.dispatch_task.is_set());
+        assert!(!st.flags.is_closed());
+        assert!(!st.flags.is_stopping_filters());
+
+        let ctx = IoContext::new(io.get_ref());
+
+        // == init shutdown
+        io.close();
+        assert!(!st.flags.is_closed());
+        assert!(st.flags.is_stopping_filters());
+        // encoding is not allowed in shutting down stage
+        let err = io.with_write_buf(|_| 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+
+        st.buffer.add_layer();
+        let layer = Layer::new(F, Base::new(io.get_ref()));
+
+        st.buffer.with_write_src(|p| p.put_slice(b"123"));
+        assert_eq!(st.buffer.write_buf_size(), 3);
+        let res = st.buffer.with_filter(io.as_ref(), |f| layer.shutdown(f));
+        assert!(matches!(res, Ok(Poll::Ready(()))));
+        assert_eq!(st.buffer.write_buf_size(), 0);
+
+        // == terminate
+        ctx.stop(None);
+        assert!(st.flags.is_closed());
+        assert!(st.flags.is_terminated());
+        assert!(st.flags.is_stopping_filters());
+
+        let err = io.with_write_buf(|_| 1).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
     }
 }

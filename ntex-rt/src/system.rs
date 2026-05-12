@@ -145,6 +145,11 @@ impl System {
         })
     }
 
+    /// Runs a function using the system context.
+    pub fn try_current() -> Option<System> {
+        CURRENT.with(|cell| cell.borrow().as_ref().map(Clone::clone))
+    }
+
     /// Set current running system
     #[doc(hidden)]
     pub fn set_current(sys: System) {

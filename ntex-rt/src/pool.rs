@@ -117,6 +117,17 @@ impl ThreadPool {
         }
     }
 
+    pub(crate) fn execute_inplace<F, R>(f: F) -> BlockingResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = oneshot::async_channel();
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
+        let _ = tx.send(result);
+        BlockingResult { rx }
+    }
+
     #[allow(clippy::missing_panics_doc)]
     /// Submits a task (closure) to the thread pool.
     ///
