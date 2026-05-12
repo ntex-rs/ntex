@@ -108,6 +108,7 @@ async fn get_response(
         .recv()
         .await
         .ok_or(ClientError::Connect(ConnectError::Disconnected(None)))?;
+
     match kind {
         h2::MessageKind::Headers {
             pseudo,
@@ -220,6 +221,7 @@ async fn get_response(
                 ))),
             }
         }
+        h2::MessageKind::Disconnect(err) => Err(ClientError::H2(err.into_error())),
         _ => Err(ClientError::Error(Rc::new(io::Error::new(
             io::ErrorKind::Unsupported,
             "Unexpected h2 message",

@@ -813,7 +813,9 @@ mod tests {
     use ntex_util::{future::lazy, time::Millis, time::sleep};
 
     use super::*;
-    use crate::{IoContext, IoTaskStatus, Readiness, ops::Iops, testing::IoTest};
+    use crate::{
+        FilterBuf, IoContext, IoTaskStatus, Readiness, ops::Iops, testing::IoTest,
+    };
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -1314,28 +1316,53 @@ mod tests {
 
     #[ntex::test]
     async fn shutdown() {
+        // layer drops all unprocessed data after filter shutdown
+        #[derive(Debug)]
+        struct F;
+
+        impl FilterLayer for F {
+            fn process_read_buf(&self, _: &mut FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+            fn process_write_buf(&self, _: &mut FilterBuf<'_>) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
         let io = Io::new(
             IoTest::create().0,
             SharedCfg::new("SRV").add(IoConfig::default().set_write_buf(8, 4, 16)),
         );
+        let st = io.st();
         assert!(lazy(|cx| io.poll_status_update(cx)).await.is_pending());
-        assert!(io.st().dispatch_task.is_set());
-        assert!(!io.st().flags.is_closed());
-        assert!(!io.st().flags.is_stopping_filters());
+        assert!(st.dispatch_task.is_set());
+        assert!(!st.flags.is_closed());
+        assert!(!st.flags.is_stopping_filters());
 
         let ctx = IoContext::new(io.get_ref());
 
         // == init shutdown
         io.close();
-        assert!(!io.st().flags.is_closed());
-        assert!(io.st().flags.is_stopping_filters());
+        assert!(!st.flags.is_closed());
+        assert!(st.flags.is_stopping_filters());
+        // encoding is not allowed in shutting down stage
         let err = io.with_write_buf(|_| 1).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other);
 
+        st.buffer.add_layer();
+        let layer = Layer::new(F, Base::new(io.get_ref()));
+
+        st.buffer.with_write_src(|p| p.put_slice(b"123"));
+        assert_eq!(st.buffer.write_buf_size(), 3);
+        let res = st.buffer.with_filter(io.as_ref(), |f| layer.shutdown(f));
+        assert!(matches!(res, Ok(Poll::Ready(()))));
+        assert_eq!(st.buffer.write_buf_size(), 0);
+
+        // == terminate
         ctx.stop(None);
-        assert!(io.st().flags.is_closed());
-        assert!(io.st().flags.is_terminated());
-        assert!(io.st().flags.is_stopping_filters());
+        assert!(st.flags.is_closed());
+        assert!(st.flags.is_terminated());
+        assert!(st.flags.is_stopping_filters());
 
         let err = io.with_write_buf(|_| 1).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotConnected);

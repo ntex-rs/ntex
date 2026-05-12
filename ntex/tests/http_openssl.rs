@@ -13,7 +13,8 @@ use ntex::http::{HttpService, Method, Request, Response, StatusCode, Version, bo
 use ntex::service::{ServiceFactory, cfg::SharedCfg, fn_service};
 use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, BytesMut, Ready};
-use ntex::{channel::oneshot, rt, web::error::InternalError, ws, ws::handshake_response};
+use ntex::ws::{self, handshake_response};
+use ntex::{channel::oneshot, client, rt, web::error::InternalError};
 use ntex_tls::TlsConfig;
 
 async fn load_body<S>(stream: S) -> Result<BytesMut, PayloadError>
@@ -569,12 +570,18 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
 
     let req = srv.srequest(Method::GET, "/");
     rt::spawn(async move {
-        let _ = req.send().await.unwrap();
+        assert!(matches!(
+            req.send().await,
+            Err(client::error::ClientError::H2 { .. })
+        ));
         sleep(Millis(100000)).await;
     });
     let req = srv.srequest(Method::GET, "/");
     rt::spawn(async move {
-        let _ = req.send().await.unwrap();
+        assert!(matches!(
+            req.send().await,
+            Err(client::error::ClientError::H2 { .. })
+        ));
         sleep(Millis(100000)).await;
     });
     let _ = rx.await;
