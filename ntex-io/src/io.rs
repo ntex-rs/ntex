@@ -599,16 +599,14 @@ impl<F> Io<F> {
     /// otherwise, it wakes when the write buffer size falls below the low-watermark size.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         let st = self.st();
-        if st.flags.is_stopping() {
-            return Poll::Ready(Err(st.error_or_disconnected()));
-        }
-
         st.buffer.process_write_buf_force(self)?;
         self.update_write_destination();
 
         let len = st.buffer.write_buf_size();
         if len > 0 {
-            if full {
+            if st.flags.is_closed() {
+                return Poll::Ready(Err(st.error_or_disconnected()));
+            } else if full {
                 st.dispatch_task.register(cx.waker());
                 st.flags.set_wants_write_flush();
                 return Poll::Pending;
@@ -618,8 +616,12 @@ impl<F> Io<F> {
                 return Poll::Pending;
             }
         }
-        st.flags.unset_wr_backpressure_and_flush();
-        Poll::Ready(Ok(()))
+        if st.flags.is_closed() && !st.flags.is_write_flush() {
+            Poll::Ready(Err(st.error_or_disconnected()))
+        } else {
+            st.flags.unset_wr_backpressure_and_flush();
+            Poll::Ready(Ok(()))
+        }
     }
 
     #[inline]

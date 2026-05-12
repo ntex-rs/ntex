@@ -480,9 +480,14 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"test"));
 
         client.write_error(io::Error::other("err"));
+        state
+            .send(Bytes::from_static(b"test"), &BytesCodec)
+            .await
+            .unwrap();
+        assert!(state.flags().is_terminated());
+
         let res = state.send(Bytes::from_static(b"test"), &BytesCodec).await;
         assert!(res.is_err());
-        assert!(state.flags().is_terminated());
 
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);

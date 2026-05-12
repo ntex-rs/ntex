@@ -825,7 +825,7 @@ mod tests {
         pages.pages_mut().push_back(p);
         assert_eq!(format!("{pages:?}"), "BytePages(b\"b\", b\"a123\")");
 
-        assert_eq!(pages.len(), 4);
+        assert_eq!(pages.len(), 5);
         pages.clear();
         assert_eq!(pages.len(), 0);
     }
