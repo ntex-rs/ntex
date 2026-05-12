@@ -160,7 +160,6 @@ impl Stack {
         })
     }
 
-    /// API for `tasks::IoContext`
     pub(crate) fn get_read_buf(&self) -> Option<BytesMut> {
         self.with_last_level(|buffer| buffer.read.take())
     }
@@ -221,13 +220,13 @@ pub struct FilterCtx<'a> {
 
 impl FilterCtx<'_> {
     #[inline]
-    /// Get io object.
+    /// Gets a reference to the I/O object.
     pub fn io(&self) -> &IoRef {
         self.io
     }
 
     #[inline]
-    /// Get io tag.
+    /// Gets the I/O tag.
     pub fn tag(&self) -> &'static str {
         self.io.tag()
     }
@@ -270,12 +269,20 @@ impl FilterCtx<'_> {
         }
     }
 
+    #[inline]
+    /// Returns the size of the last read buffer in the chain.
     pub fn read_dst_size(&self) -> usize {
         self.buffers[0].read.as_ref().map_or(0, BytesMut::len)
     }
 
+    #[inline]
+    /// Returns the size of the last write buffer in the chain.
     pub fn write_dst_size(&mut self) -> usize {
         self.buffers[self.buffers.len() - 2].write.len()
+    }
+
+    pub(crate) fn clear_write_buf(&mut self) {
+        self.buffers[self.idx].write.clear();
     }
 }
 
@@ -288,7 +295,7 @@ pub struct FilterBuf<'a> {
 
 impl FilterBuf<'_> {
     #[inline]
-    /// Get io tag.
+    /// Gets the I/O tag.
     pub fn tag(&self) -> &'static str {
         self.io.tag()
     }

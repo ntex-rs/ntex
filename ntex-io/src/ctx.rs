@@ -30,41 +30,41 @@ impl IoContext {
     }
 
     #[inline]
-    /// Io tag
+    /// Gets the I/O tag.
     pub fn tag(&self) -> &'static str {
         self.0.tag()
     }
 
     #[doc(hidden)]
-    /// Io flags.
+    /// Gets the flags.
     pub fn flags(&self) -> Flags {
         self.0.flags()
     }
 
     #[inline]
-    /// Check readiness for read operations.
+    /// Checks readiness for read operations.
     pub fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.shutdown_filters(cx);
         self.0.filter().poll_read_ready(cx)
     }
 
     #[inline]
-    /// Check readiness for write operations.
+    /// Checks readiness for write operations.
     pub fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         self.0.filter().poll_write_ready(cx)
     }
 
-    /// Stop io stream.
+    /// Stops the I/O stream.
     pub fn stop(&self, e: Option<io::Error>) {
         self.st().terminate_connection(e);
     }
 
-    /// Check if io stream is stopped.
+    /// Checks if the I/O stream is stopped.
     pub fn is_stopped(&self) -> bool {
         self.st().flags.is_closed()
     }
 
-    /// Get read buffer.
+    /// Gets the read buffer.
     pub fn get_read_buf(&self) -> BytesMut {
         let st = self.st();
 
@@ -80,16 +80,26 @@ impl IoContext {
         }
     }
 
-    /// Resize read buffer.
+    /// Resizes the read buffer.
     pub fn resize_read_buf(&self, buf: &mut BytesMut) {
         self.0.resize_read_buf(buf);
     }
 
     /// Updates the read status.
     ///
-    /// Status `Ok(None)` indicates the connection was disconnected.
+    /// Returns `Ok(Some(buf))` containing the read buffer.
+    /// `Ok(None)` indicates that the connection has been disconnected.
     pub fn update_read_status(&self, status: io::Result<Option<BytesMut>>) -> IoTaskStatus {
         let st = self.st();
+
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: update-read-status == {:?} flags:{:?}",
+            st.tag(),
+            status.as_ref().map(|b| b.len()),
+            st.flags
+        );
+
         let result = status.map(|buf| buf.map(|buffer| {
             if buffer.is_empty() {
                 return Ok(())
@@ -142,7 +152,7 @@ impl IoContext {
         }
     }
 
-    /// Get write buffer.
+    /// Gets the write buffer.
     pub fn with_write_buf<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BytePages) -> R,
@@ -157,12 +167,20 @@ impl IoContext {
         self.st().buffer.with_write_dst(|buffer| f(buffer))
     }
 
-    /// Update write status.
+    /// Updates the write status.
     ///
     /// `Ok(true)` indicates that one or more bytes were successfully written
     /// to the I/O stream.
     pub fn update_write_status(&self, status: io::Result<bool>) -> IoTaskStatus {
         let st = &self.st();
+
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: update-write-status == {status:?} buf-len:{} flags:{:?}",
+            st.tag(),
+            st.buffer.write_buf_size(),
+            st.flags
+        );
 
         match status {
             Ok(written) => {
@@ -207,7 +225,7 @@ impl IoContext {
         }
     }
 
-    /// Wait when io get closed or preparing for close.
+    /// Waits for the I/O stream to close or begin closing.
     pub fn shutdown(&self, flush: bool, cx: &mut Context<'_>) -> Poll<()> {
         let st = self.st();
         if flush && !st.flags.is_stopping() {
@@ -242,6 +260,14 @@ impl IoContext {
             }
         };
         self.0.update_write_destination();
+
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: shutdown filters, done:{ready:?} buf-len:{:?}, flags:{:?}",
+            st.tag(),
+            st.buffer.write_buf_size(),
+            st.flags,
+        );
 
         // filters are shutdown and write task is paused
         if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {

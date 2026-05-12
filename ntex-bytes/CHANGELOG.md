@@ -1,5 +1,9 @@
 # Changes
 
+## [1.6.8] (2026-05-12)
+
+* Add PagePages::clear() method
+
 ## [1.6.7] (2026-05-11)
 
 * Handle buffer re-allocation in BytePages::with_bytes_mut()

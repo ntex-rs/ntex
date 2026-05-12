@@ -233,6 +233,12 @@ impl BytePages {
         }
     }
 
+    /// Clears the buffer, removing all data.
+    #[inline]
+    pub fn clear(&mut self) {
+        while self.take().is_some() {}
+    }
+
     /// Converts `self` into an immutable `Bytes`.
     #[inline]
     #[must_use]
@@ -818,6 +824,10 @@ mod tests {
         pages.append(Bytes::copy_from_slice(b"123"));
         pages.pages_mut().push_back(p);
         assert_eq!(format!("{pages:?}"), "BytePages(b\"b\", b\"a123\")");
+
+        assert_eq!(pages.len(), 4);
+        pages.clear();
+        assert_eq!(pages.len(), 0);
     }
 
     #[test]

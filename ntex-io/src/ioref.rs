@@ -16,7 +16,7 @@ impl IoRef {
     }
 
     #[inline]
-    /// Gets the tag.
+    /// Gets the I/O tag.
     pub fn tag(&self) -> &'static str {
         self.0.tag()
     }
@@ -229,8 +229,12 @@ impl IoRef {
     {
         let st = &self.0;
 
-        if st.flags.is_terminated() {
-            Err(st.error_or_disconnected())
+        if st.flags.is_stopping_any() {
+            if st.flags.is_closed() {
+                Err(st.error_or_disconnected())
+            } else {
+                Err(io::Error::other("I/O stream is closing"))
+            }
         } else {
             let result = st.buffer.with_write_src(f);
             self.update_write_destination();
@@ -255,7 +259,7 @@ impl IoRef {
             // which introduces latency. To prevent this behavior and
             // flatten data delivery to the peer, IoRef can initiate
             // out-of-order writes based on a configured threshold.
-            if st.flags.is_send_buf_enabled() && size >= st.cfg.write_buf_threshold() {
+            if st.flags.is_direct_wr_enabled() && size >= st.cfg.write_buf_threshold() {
                 // Send data in-place
                 if self.call_write() == WakeWriteTask::Yes {
                     // More data needs to be sent

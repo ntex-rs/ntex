@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.3] - 2026-05-12
+
+* Do not allow writing to I/O while shutting down filters
+
 ## [3.11.2] - 2026-05-11
 
 * Fix bufffers order after .add_filter() call

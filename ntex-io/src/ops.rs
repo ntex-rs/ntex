@@ -90,11 +90,6 @@ impl TimerStorage {
         // setup current delta
         if !self.running {
             self.current = (now() - self.base).as_secs() as u32;
-            log::debug!(
-                "{}: Timer driver does not run, current: {}",
-                io.tag(),
-                self.current
-            );
         }
 
         let hnd = {
