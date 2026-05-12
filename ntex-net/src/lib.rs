@@ -118,8 +118,7 @@ impl Runner for DefaultRuntime {
 
         #[cfg(all(feature = "compio", not(feature = "tokio")))]
         {
-            let driver: Box<dyn Reactor + RefUnwindSafe> =
-                Box::new(self::compio::CompioDriver);
+            let driver: Box<dyn Reactor> = Box::new(self::compio::CompioDriver);
 
             CURRENT_DRIVER.set(&driver, || {
                 crate::compio::block_on(fut);
