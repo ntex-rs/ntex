@@ -8,7 +8,7 @@
     clippy::missing_errors_doc,
     clippy::missing_panics_doc
 )]
-use std::{io, net, net::SocketAddr, panic, panic::RefUnwindSafe, panic::UnwindSafe};
+use std::{io, net, net::SocketAddr, panic};
 
 use ntex_io::Io;
 use ntex_rt::{BlockFuture, Driver, Runner};
@@ -98,7 +98,7 @@ fn with_current<T, F: FnOnce(&dyn Reactor) -> T>(f: F) -> T {
     }
 }
 
-scoped_tls::scoped_thread_local!(static CURRENT_DRIVER: Box<dyn Reactor + RefUnwindSafe>);
+scoped_tls::scoped_thread_local!(static CURRENT_DRIVER: Box<dyn Reactor>);
 
 #[derive(Debug)]
 pub struct DefaultRuntime;
@@ -108,8 +108,7 @@ impl Runner for DefaultRuntime {
     fn block_on(&self, fut: BlockFuture) {
         #[cfg(feature = "tokio")]
         {
-            let driver: Box<dyn Reactor + RefUnwindSafe> =
-                Box::new(self::tokio::TokioDriver);
+            let driver: Box<dyn Reactor> = Box::new(self::tokio::TokioDriver);
 
             CURRENT_DRIVER.set(&driver, || {
                 crate::tokio::block_on(fut);
@@ -134,13 +133,13 @@ impl Runner for DefaultRuntime {
             {
                 let driver =
                     crate::polling::Driver::new().expect("Cannot construct driver");
-                let driver: Box<dyn Reactor + RefUnwindSafe> = Box::new(driver);
-
-                let fut = BlockFutureWrapper(fut);
+                let driver: Box<dyn Reactor> = Box::new(driver);
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let rt = Wrapper(ntex_rt::Runtime::new(driver.handle()));
-                    let res = std::panic::catch_unwind(|| rt.block_on(fut, &*driver));
+                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        let rt = ntex_rt::Runtime::new(driver.handle());
+                        rt.block_on(fut, &*driver);
+                    }));
                     if let Err(err) = res {
                         ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
@@ -155,13 +154,13 @@ impl Runner for DefaultRuntime {
             {
                 let driver =
                     crate::uring::Driver::new(2048).expect("Cannot construct driver");
-                let driver: Box<dyn Reactor + RefUnwindSafe> = Box::new(driver);
-
-                let fut = BlockFutureWrapper(fut);
+                let driver: Box<dyn Reactor> = Box::new(driver);
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let rt = Wrapper(ntex_rt::Runtime::new(driver.handle()));
-                    let res = std::panic::catch_unwind(|| rt.block_on(fut, &*driver));
+                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        let rt = ntex_rt::Runtime::new(driver.handle());
+                        rt.block_on(fut, &*driver);
+                    }));
                     if let Err(err) = res {
                         ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
@@ -175,7 +174,7 @@ impl Runner for DefaultRuntime {
             #[cfg(all(not(feature = "neon-uring"), not(feature = "neon-polling")))]
             {
                 #[cfg(target_os = "linux")]
-                let driver: Box<dyn Reactor + RefUnwindSafe> =
+                let driver: Box<dyn Reactor> =
                     if let Ok(driver) = crate::uring::Driver::new(2048) {
                         Box::new(driver)
                     } else {
@@ -185,15 +184,15 @@ impl Runner for DefaultRuntime {
                     };
 
                 #[cfg(not(target_os = "linux"))]
-                let driver: Box<dyn Reactor + RefUnwindSafe> = Box::new(
+                let driver: Box<dyn Reactor> = Box::new(
                     crate::polling::Driver::new().expect("Cannot construct driver"),
                 );
 
-                let fut = BlockFutureWrapper(fut);
-
                 CURRENT_DRIVER.set(&driver, || {
-                    let rt = Wrapper(ntex_rt::Runtime::new(driver.handle()));
-                    let res = std::panic::catch_unwind(|| rt.block_on(fut, &*driver));
+                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        let rt = ntex_rt::Runtime::new(driver.handle());
+                        rt.block_on(fut, &*driver);
+                    }));
                     if let Err(err) = res {
                         ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
@@ -204,32 +203,5 @@ impl Runner for DefaultRuntime {
                 });
             }
         }
-    }
-}
-
-#[allow(dead_code)]
-struct Wrapper(ntex_rt::Runtime);
-#[allow(dead_code)]
-struct BlockFutureWrapper(BlockFuture);
-
-impl UnwindSafe for Wrapper {}
-impl RefUnwindSafe for Wrapper {}
-impl UnwindSafe for BlockFutureWrapper {}
-impl RefUnwindSafe for BlockFutureWrapper {}
-
-#[cfg(target_os = "linux")]
-impl UnwindSafe for crate::uring::Driver {}
-#[cfg(target_os = "linux")]
-impl RefUnwindSafe for crate::uring::Driver {}
-
-#[cfg(unix)]
-impl UnwindSafe for crate::polling::Driver {}
-#[cfg(unix)]
-impl RefUnwindSafe for crate::polling::Driver {}
-
-#[allow(dead_code)]
-impl Wrapper {
-    fn block_on(&self, fut: BlockFutureWrapper, driver: &dyn Driver) {
-        self.0.block_on(fut.0, driver);
     }
 }

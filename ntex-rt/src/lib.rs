@@ -38,7 +38,11 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    System::current().spawn_blocking(f)
+    if let Some(sys) = System::try_current() {
+        sys.spawn_blocking(f)
+    } else {
+        ThreadPool::execute_inplace(f)
+    }
 }
 
 #[cfg(feature = "tokio")]
