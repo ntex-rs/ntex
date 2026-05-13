@@ -99,9 +99,9 @@ impl IoContext {
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-read-status == {status:?} buf:{:?} flags:{:?}",
+            "{}: update-read-status == {status:?} buf:{buf_len:?} orig:{:?} flags:{:?}",
             st.tag(),
-            status.as_ref().unwrap_or(0),
+            st.buffer.read_dst_size(),
             st.flags
         );
 
@@ -113,7 +113,7 @@ impl IoContext {
             let orig_size = buf_len.saturating_sub(nbytes);
 
             if nbytes == 0 {
-                return Ok(())
+                return Ok(());
             }
             st.buffer.process_read_buf(&self.0, nbytes).map(|()| {
                 let size = st.buffer.read_dst_size();
@@ -121,15 +121,13 @@ impl IoContext {
                 // dest buffer has new data, wake up dispatcher
                 if size > orig_size {
                     if st.is_rd_backpressure_needed(size) {
-                        log::trace!(
-                            "{}: Io read buffer is too large {size}, enable read back-pressure",
-                            st.tag(),
-                        );
+                        log::trace!("{}: Io read buffer is too large {size}, enable read back-pressure", st.tag());
                         st.flags.set_read_ready_and_backpressure();
                     } else {
                         st.flags.set_read_ready();
                     }
-                    log::trace!("{}: New {size} bytes available, wakeup dispatcher", st.tag());
+                    #[cfg(feature = "trace")]
+                    log::trace!("{}: New {size} bytes available (orig:{orig_size}), wakeup dispatcher", st.tag());
                     st.wake_dispatch_task();
                 }
 
@@ -184,7 +182,7 @@ impl IoContext {
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-write-status == {status:?} buf-len:{} flags:{:?}",
+            "{}: update-write-status == {status:?} buf:{} flags:{:?}",
             st.tag(),
             st.buffer.write_buf_size(),
             st.flags
@@ -223,6 +221,7 @@ impl IoContext {
                     }
                     IoTaskStatus::Pause
                 } else {
+                    st.flags.unset_write_paused();
                     IoTaskStatus::Io
                 }
             }

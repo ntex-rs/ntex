@@ -139,6 +139,8 @@ impl IoState {
     }
 
     pub(super) fn wake_write_task(&self) {
+        #[cfg(feature = "trace")]
+        log::trace!("{}: Wake write task, flags:{:?}", self.tag(), self.flags);
         self.write_task.wake();
     }
 
