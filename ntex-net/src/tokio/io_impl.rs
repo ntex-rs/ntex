@@ -252,7 +252,7 @@ where
         let mut size = 0;
 
         #[cfg(feature = "trace")]
-        log::trace!("{}: Try write buf({})", ctx.tag(), dst.len(),);
+        log::trace!("{}: Try write buf({})", ctx.tag(), dst.len());
 
         while let Some(page) = dst.take() {
             size += page.len();
@@ -300,7 +300,7 @@ where
 
             #[cfg(feature = "trace")]
             log::trace!(
-                "{}: Io write (direct:{direct}) result {result:?} buf:{} flags:{:?}",
+                "{}: Io write (direct:{direct}) result:{result:?} buf:{} flags:{:?}",
                 ctx.tag(),
                 dst.len(),
                 ctx.flags()

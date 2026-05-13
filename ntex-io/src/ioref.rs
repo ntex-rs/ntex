@@ -164,38 +164,44 @@ impl IoRef {
     /// Requires the underlying runtime to implement `.write()`;
     /// otherwise, no action is taken.
     pub fn send_buf(&self) -> io::Result<()> {
-        // can send if write task is not awake
-        if self.0.flags.is_write_paused() {
-            if self.call_write() == WakeWriteTask::Yes {
-                // io write is pending need to wake write task for io completeion
-                Iops::register_send(self.id());
-                self.0.flags.set_wr_send_scheduled();
-            }
+        let st = &self.0;
 
-            if self.0.flags.is_stopping_any()
-                && let Some(err) = self.0.error.take()
-            {
-                return Err(err);
-            }
+        // can send if write task is not awake
+        if st.flags.is_write_paused()
+            && self.call_write() == WakeWriteTask::Yes
+            && !st.flags.is_wr_send_scheduled()
+        {
+            // io write is pending need to wake write task for io completeion
+            st.flags.set_wr_send_scheduled();
+            Iops::register_send(self.id());
         }
-        Ok(())
+
+        if st.flags.is_stopping_any()
+            && let Some(err) = st.error.take()
+        {
+            Err(err)
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn ops_send_buf(&self) {
         let st = &self.0;
-        st.flags.unset_wr_send_scheduled();
+        if st.flags.is_wr_send_scheduled() {
+            st.flags.unset_wr_send_scheduled();
 
-        if st.flags.is_write_paused() {
-            // call `Handle::write()`.
-            // if write task is not paused, io write is pending
-            // need to wake write task for io completeion
-            if self.call_write() == WakeWriteTask::Yes {
-                st.wake_write_task();
-                st.flags.unset_write_paused();
-                return;
+            if st.flags.is_write_paused() {
+                // call `Handle::write()`.
+                // if write task is not paused, io write is pending
+                // need to wake write task for io completeion
+                if self.call_write() == WakeWriteTask::Yes {
+                    st.wake_write_task();
+                    st.flags.unset_write_paused();
+                    return;
+                }
             }
+            st.wake_write_task();
         }
-        st.wake_write_task();
     }
 
     /// Get access to filter buffer
@@ -265,14 +271,18 @@ impl IoRef {
                 if self.call_write() == WakeWriteTask::Yes {
                     #[cfg(feature = "trace")]
                     log::trace!(
-                        "{}: write-upd == schedule(more) ({}) flags:{:?}",
+                        "{}: write-upd == schedule(more):{} flags:{:?}",
                         st.tag(),
                         st.buffer.write_buf_size(),
                         st.flags
                     );
-                    // More data needs to be sent
-                    st.flags.set_wr_send_scheduled();
-                    Iops::register_send(st.id());
+                    if !st.flags.is_wr_send_scheduled() {
+                        // More data needs to be sent
+                        st.flags.set_wr_send_scheduled();
+                        Iops::register_send(st.id());
+                    }
+                } else {
+                    st.flags.unset_wr_send_scheduled();
                 }
             } else if !st.flags.is_wr_send_scheduled() {
                 #[cfg(feature = "trace")]
@@ -400,7 +410,7 @@ impl IoRef {
             hnd.write(ctx);
             self.0.handle.set(Some(hnd));
         }
-        if self.0.flags.is_write_paused() || self.0.flags.is_wr_send_scheduled() {
+        if self.0.flags.is_write_paused() {
             WakeWriteTask::No
         } else {
             WakeWriteTask::Yes
