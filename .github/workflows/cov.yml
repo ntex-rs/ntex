@@ -38,8 +38,12 @@ jobs:
         run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (tokio)
-        timeout-minutes: 10
-        run: cargo +nightly llvm-cov test --no-report --doctests --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        uses: nick-fields/retry@v3
+        with:
+          timeout-minutes: 10
+          max_attempts: 3
+          retry_on: error
+          command: cargo +nightly llvm-cov test --no-report --doctests --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (compio)
         timeout-minutes: 10
