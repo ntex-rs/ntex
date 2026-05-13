@@ -85,12 +85,7 @@ impl IoRef {
 
     /// Gracefully shuts down the I/O stream.
     pub fn wants_shutdown(&self) {
-        if !self.0.flags.is_stopping_any() {
-            log::trace!("{}: Initiate io shutdown {:?}", self.tag(), self.0.flags);
-            self.0.wake_read_task();
-            self.0.wake_write_task();
-            self.0.flags.set_filter_stopping();
-        }
+        self.0.start_shutdown();
     }
 
     /// Queries filter-specific data.
@@ -187,16 +182,15 @@ impl IoRef {
     }
 
     pub(crate) fn ops_send_buf(&self) {
-        self.0.flags.unset_wr_send_scheduled();
+        let st = &self.0;
+        st.flags.unset_wr_send_scheduled();
 
-        if self.0.flags.is_write_paused() {
-            // call `Handle::write()`.
-            // if write task is not paused, io write is pending
-            // need to wake write task for io completeion
-            if self.call_write() == WakeWriteTask::Yes {
-                self.0.wake_write_task();
-                self.0.flags.unset_write_paused();
-            }
+        // call `Handle::write()`.
+        // if write task is not paused, io write is pending
+        // need to wake write task for io completeion
+        if self.call_write() == WakeWriteTask::Yes {
+            st.wake_write_task();
+            st.flags.unset_write_paused();
         }
     }
 
@@ -248,6 +242,9 @@ impl IoRef {
         // wake write task if needsed
         let size = st.buffer.write_buf_size();
 
+        #[cfg(feature = "trace")]
+        log::trace!("{}: write-upd == buf:{size} flags:{:?}", st.tag(), st.flags);
+
         if size > 0 && st.flags.is_write_paused() {
             // The app encodes data in response to incoming data,
             // continuing to fill the write buffer until all data
@@ -262,11 +259,20 @@ impl IoRef {
             if st.flags.is_direct_wr_enabled() && size >= st.cfg.write_buf_threshold() {
                 // Send data in-place
                 if self.call_write() == WakeWriteTask::Yes {
+                    #[cfg(feature = "trace")]
+                    log::trace!(
+                        "{}: write-upd == schedule(more) ({}) flags:{:?}",
+                        st.tag(),
+                        st.buffer.write_buf_size(),
+                        st.flags
+                    );
                     // More data needs to be sent
                     st.flags.set_wr_send_scheduled();
                     Iops::register_send(st.id());
                 }
             } else if !st.flags.is_wr_send_scheduled() {
+                #[cfg(feature = "trace")]
+                log::trace!("{}: write-upd == schedule(too small)", st.tag());
                 st.flags.set_wr_send_scheduled();
                 Iops::register_send(st.id());
             }
@@ -281,6 +287,14 @@ impl IoRef {
     fn update_read_destination(&self, buf: &mut BytesMut) {
         let st = &self.0;
         let half = self.cfg().read_buf().half;
+
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: read-upd == buf:{} flags:{:?}",
+            st.tag(),
+            buf.len(),
+            st.flags
+        );
 
         if st.flags.is_rd_backpressure() {
             // back-pressure is still eanbled
@@ -370,11 +384,19 @@ impl IoRef {
     /// `write-paused` is still set
     fn call_write(&self) -> WakeWriteTask {
         if let Some(hnd) = self.0.handle.take() {
+            self.0.flags.unset_write_paused();
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: call-write ({}), flags:{:?}",
+                self.tag(),
+                self.0.buffer.write_buf_size(),
+                self.0.flags
+            );
             let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
             hnd.write(ctx);
             self.0.handle.set(Some(hnd));
         }
-        if !self.0.flags.is_write_paused() || self.0.flags.is_wr_send_scheduled() {
+        if self.0.flags.is_write_paused() || self.0.flags.is_wr_send_scheduled() {
             WakeWriteTask::No
         } else {
             WakeWriteTask::Yes

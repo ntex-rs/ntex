@@ -98,7 +98,7 @@ impl Handle for HandleWrapper {
     }
 
     fn write(&self, ctx: &IoContext) {
-        let _ = write(self.0.as_ref(), ctx);
+        let _ = write(self.0.as_ref(), ctx, true);
     }
 }
 
@@ -112,7 +112,7 @@ impl Handle for HandleWrapperUnix {
     }
 
     fn write(&self, ctx: &IoContext) {
-        let _ = write(self.0.as_ref(), ctx);
+        let _ = write(self.0.as_ref(), ctx, true);
     }
 }
 
@@ -127,22 +127,36 @@ where
     T: Stream + Unpin,
 {
     let st = poll_fn(|cx| {
+        let ctx_state = ctx.poll_read_ready(cx);
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: Read task, ctx:{ctx_state:?} flags:{:?}",
+            ctx.tag(),
+            ctx.flags()
+        );
+
         'outer: loop {
-            return match ready!(ctx.poll_read_ready(cx)) {
-                Readiness::Ready => match ready!(io.as_ref().poll_read_ready(cx)) {
-                    Ok(()) => 'inner: loop {
-                        return match read(io.as_ref(), &ctx) {
-                            Poll::Ready(IoTaskStatus::Io) => continue 'inner,
-                            Poll::Ready(IoTaskStatus::Pause) => Poll::Pending,
-                            Poll::Ready(IoTaskStatus::Stop) => Poll::Ready(()),
-                            Poll::Pending => continue 'outer,
-                        };
-                    },
-                    Err(err) => {
-                        ctx.stop(Some(err));
-                        return Poll::Ready(());
+            return match ready!(ctx_state) {
+                Readiness::Ready => {
+                    let io_state = io.poll_read_ready(cx);
+                    #[cfg(feature = "trace")]
+                    log::trace!("{}: Io read ready: {io_state:?}", ctx.tag());
+
+                    match ready!(io_state) {
+                        Ok(()) => 'inner: loop {
+                            return match read(io.as_ref(), &ctx) {
+                                Poll::Ready(IoTaskStatus::Io) => continue 'inner,
+                                Poll::Ready(IoTaskStatus::Pause) => Poll::Pending,
+                                Poll::Ready(IoTaskStatus::Stop) => Poll::Ready(()),
+                                Poll::Pending => continue 'outer,
+                            };
+                        },
+                        Err(err) => {
+                            ctx.stop(Some(err));
+                            return Poll::Ready(());
+                        }
                     }
-                },
+                }
                 Readiness::Shutdown | Readiness::Terminate => Poll::Ready(()),
             };
         }
@@ -150,7 +164,7 @@ where
     .await;
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum WrtStatus {
     More,
     Pending,
@@ -162,32 +176,34 @@ where
     T: Stream,
 {
     let st = poll_fn(|cx| {
-        loop {
-            let ctx_state = ctx.poll_write_ready(cx);
-            #[cfg(feature = "trace")]
-            log::trace!("{}: Write task, context state {ctx_state:?}", ctx.tag());
+        let ctx_state = ctx.poll_write_ready(cx);
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: Write task, ctx {ctx_state:?} flags:{:?}",
+            ctx.tag(),
+            ctx.flags()
+        );
 
-            return match ready!(ctx_state) {
-                Readiness::Ready => {
-                    let io_state = io.poll_write_ready(cx);
-                    #[cfg(feature = "trace")]
-                    log::trace!("{}: Io write readiness {io_state:?}", ctx.tag());
+        match ready!(ctx_state) {
+            Readiness::Ready => loop {
+                let io_state = io.poll_write_ready(cx);
+                #[cfg(feature = "trace")]
+                log::trace!("{}: Io write ready {io_state:?}", ctx.tag());
 
-                    match ready!(io_state) {
-                        Ok(()) => match write(io.as_ref(), &ctx) {
-                            WrtStatus::Pending => Poll::Pending,
-                            WrtStatus::More => continue,
-                            WrtStatus::Terminate => Poll::Ready(Status::Terminate),
-                        },
-                        Err(err) => {
-                            ctx.update_write_status(Err(err));
-                            Poll::Ready(Status::Terminate)
-                        }
+                return match ready!(io_state) {
+                    Ok(()) => match write(io.as_ref(), &ctx, false) {
+                        WrtStatus::More => continue,
+                        WrtStatus::Pending => Poll::Pending,
+                        WrtStatus::Terminate => Poll::Ready(Status::Terminate),
+                    },
+                    Err(err) => {
+                        ctx.update_write_status(Err(err));
+                        Poll::Ready(Status::Terminate)
                     }
-                }
-                Readiness::Shutdown => Poll::Ready(Status::Shutdown),
-                Readiness::Terminate => Poll::Ready(Status::Terminate),
-            };
+                };
+            },
+            Readiness::Shutdown => Poll::Ready(Status::Shutdown),
+            Readiness::Terminate => Poll::Ready(Status::Terminate),
         }
     })
     .await;
@@ -197,7 +213,7 @@ where
         let flush = st == Status::Shutdown;
         poll_fn(|cx| match ready!(io.poll_write_ready(cx)) {
             Ok(()) => {
-                if write(io.as_ref(), &ctx) == WrtStatus::Terminate {
+                if write(io.as_ref(), &ctx, false) == WrtStatus::Terminate {
                     Poll::Ready(())
                 } else {
                     ctx.shutdown(flush, cx)
@@ -220,93 +236,104 @@ where
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
 
-fn write<T>(io: &T, ctx: &IoContext) -> WrtStatus
+fn write<T>(io: &T, ctx: &IoContext, direct: bool) -> WrtStatus
 where
     T: Stream,
 {
-    loop {
-        let (more, result, pending) = ctx.with_write_buf(|dst| {
-            let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
-                None, None, None, None, None, None, None, None, None, None, None, None,
-                None, None, None, None,
-            ];
-            let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
-                [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
+    let result = ctx.with_write_buf(|dst| {
+        let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
+            None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None,
+        ];
+        let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
+            [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
 
-            let mut num = 0;
-            let mut size = 0;
-            while let Some(page) = dst.take() {
-                size += page.len();
+        let mut num = 0;
+        let mut size = 0;
 
-                // SAFETY: Page is stored in `pages` for lifetime of `bufs`
-                bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
-                    mem::transmute::<&[u8], &[u8]>(page.as_ref())
-                }));
-                pages[num] = Some(page);
+        #[cfg(feature = "trace")]
+        log::trace!("{}: Try write buf({})", ctx.tag(), dst.len(),);
 
-                num += 1;
-                if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
-                    break;
+        while let Some(page) = dst.take() {
+            size += page.len();
+
+            // SAFETY: Page is stored in `pages` for lifetime of `bufs`
+            bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
+                mem::transmute::<&[u8], &[u8]>(page.as_ref())
+            }));
+            pages[num] = Some(page);
+
+            num += 1;
+            if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+                break;
+            }
+        }
+
+        if num > 0 {
+            // SAFETY: initialize in previous block
+            let bufs =
+                unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
+
+            let result = match write_io(ctx, io, bufs) {
+                Poll::Ready(Ok(val)) => Poll::Ready(val),
+                Poll::Ready(Err(err)) => return Err(err),
+                Poll::Pending => Poll::Pending,
+            };
+
+            // remove written bytes
+            if let Poll::Ready(mut written) = result {
+                for page in pages[..num].iter_mut().flatten() {
+                    let len = cmp::min(page.len(), written);
+                    page.advance_to(len);
+                    written -= len;
+                    if written == 0 {
+                        break;
+                    }
+                }
+            }
+            // return unwritten data back to the buffer
+            for p in pages[..num].iter_mut().rev() {
+                if let Some(page) = p.take() {
+                    dst.prepend(page);
                 }
             }
 
-            if num > 0 {
-                // SAFETY: initialize in previous block
-                let bufs =
-                    unsafe { &*(&raw const bufs[..num] as *const [std::io::IoSlice<'_>]) };
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: Io write (direct:{direct}) result {result:?} buf:{} flags:{:?}",
+                ctx.tag(),
+                dst.len(),
+                ctx.flags()
+            );
 
-                let result = match write_io(ctx, io, bufs) {
-                    Poll::Ready(Ok(val)) => Poll::Ready(val),
-                    Poll::Ready(Err(err)) => return (false, Err(err), false),
-                    Poll::Pending => Poll::Pending,
-                };
-                #[cfg(feature = "trace")]
-                log::trace!("{}: Io write result {result:?}", ctx.tag());
-
-                // remove written bytes
-                if let Poll::Ready(mut written) = result {
-                    for page in pages[..num].iter_mut().flatten() {
-                        let len = cmp::min(page.len(), written);
-                        page.advance_to(len);
-                        written -= len;
-                        if written == 0 {
-                            break;
-                        }
+            match result {
+                Poll::Ready(val) => {
+                    if val == 0 {
+                        ctx.stop(None);
                     }
+                    Ok(val > 0)
                 }
-                // return unwritten data back to the buffer
-                for p in pages[..num].iter_mut().rev() {
-                    if let Some(page) = p.take() {
-                        dst.prepend(page);
-                    }
-                }
-
-                match result {
-                    Poll::Ready(val) => {
-                        if val == 0 {
-                            ctx.stop(None);
-                        }
-                        (!dst.is_empty(), Ok(val > 0), false)
-                    }
-                    Poll::Pending => (!dst.is_empty(), Ok(false), true),
-                }
-            } else {
-                (false, Ok(false), false)
+                Poll::Pending => Ok(false),
             }
-        });
+        } else {
+            Ok(false)
+        }
+    });
 
-        break match ctx.update_write_status(result) {
-            IoTaskStatus::Stop => WrtStatus::Terminate,
-            IoTaskStatus::Pause => WrtStatus::Pending,
-            IoTaskStatus::Io => {
-                if pending && more {
-                    WrtStatus::More
-                } else {
-                    continue;
-                }
-            }
-        };
-    }
+    let st = ctx.update_write_status(result);
+    let result = match st {
+        IoTaskStatus::Stop => WrtStatus::Terminate,
+        IoTaskStatus::Pause => WrtStatus::Pending,
+        IoTaskStatus::Io => WrtStatus::More,
+    };
+
+    #[cfg(feature = "trace")]
+    log::trace!(
+        "{}: Write status \"{st:?}({result:?})\" flags:{:?}",
+        ctx.tag(),
+        ctx.flags()
+    );
+    result
 }
 
 /// Flush write buffer to underlying I/O stream.
@@ -340,8 +367,9 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
 
     #[cfg(feature = "trace")]
     log::trace!(
-        "{}: Read attempt, buf cap {}",
+        "{}: Read attempt, buf len({}) cap({})",
         ctx.tag(),
+        buf.len(),
         buf.remaining_mut()
     );
 
@@ -369,6 +397,13 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
     };
 
     let result = ctx.update_read_status(buf, result);
+
+    #[cfg(feature = "trace")]
+    log::trace!(
+        "{}: Read status \"{result:?}\" pending({pending})",
+        ctx.tag()
+    );
+
     if result == IoTaskStatus::Io && pending {
         Poll::Pending
     } else {

@@ -121,11 +121,12 @@ impl IoContext {
                 // dest buffer has new data, wake up dispatcher
                 if size > orig_size {
                     if st.is_rd_backpressure_needed(size) {
-                        log::trace!("{}: Io read buffer is too large {size}, enable read back-pressure", st.tag());
+                        log::trace!("{}: Io read buffer is too large {size}, enable read back-pressure", st.tag(),);
                         st.flags.set_read_ready_and_backpressure();
                     } else {
                         st.flags.set_read_ready();
                     }
+                    #[cfg(feature = "trace")]
                     log::trace!("{}: New {size} bytes available (orig:{orig_size}), wakeup dispatcher", st.tag());
                     st.wake_dispatch_task();
                 }
@@ -181,7 +182,7 @@ impl IoContext {
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-write-status == {status:?} buf-len:{} flags:{:?}",
+            "{}: update-write-status == {status:?} buf:{} flags:{:?}",
             st.tag(),
             st.buffer.write_buf_size(),
             st.flags
@@ -220,6 +221,7 @@ impl IoContext {
                     }
                     IoTaskStatus::Pause
                 } else {
+                    st.flags.unset_write_paused();
                     IoTaskStatus::Io
                 }
             }
