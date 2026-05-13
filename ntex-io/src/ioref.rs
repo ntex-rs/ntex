@@ -185,13 +185,17 @@ impl IoRef {
         let st = &self.0;
         st.flags.unset_wr_send_scheduled();
 
-        // call `Handle::write()`.
-        // if write task is not paused, io write is pending
-        // need to wake write task for io completeion
-        if self.call_write() == WakeWriteTask::Yes {
-            st.wake_write_task();
-            st.flags.unset_write_paused();
+        if st.flags.is_write_paused() {
+            // call `Handle::write()`.
+            // if write task is not paused, io write is pending
+            // need to wake write task for io completeion
+            if self.call_write() == WakeWriteTask::Yes {
+                st.wake_write_task();
+                st.flags.unset_write_paused();
+                return;
+            }
         }
+        st.wake_write_task();
     }
 
     /// Get access to filter buffer
