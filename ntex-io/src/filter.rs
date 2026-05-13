@@ -100,10 +100,7 @@ impl Filter for Base {
     }
 
     #[inline]
-    fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
-        if let Some(buf) = ctx.read_buffer.take() {
-            ctx.set_base_read_buf(buf);
-        }
+    fn process_read_buf(&self, _: &mut FilterCtx<'_>) -> io::Result<()> {
         Ok(())
     }
 

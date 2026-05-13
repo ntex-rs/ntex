@@ -562,10 +562,9 @@ mod tests {
     impl<F: Filter> Filter for Counter<F> {
         fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
             self.read_order.borrow_mut().push(self.idx);
-            let nbytes = ctx.read_dst_size();
             let result = self.layer.process_read_buf(ctx);
-            let nbytes2 = ctx.read_dst_size();
-            self.in_bytes.set(self.in_bytes.get() + nbytes2 - nbytes);
+            self.in_bytes
+                .set(self.in_bytes.get() + ctx.new_read_bytes());
             result
         }
 

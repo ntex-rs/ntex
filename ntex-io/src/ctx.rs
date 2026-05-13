@@ -89,24 +89,33 @@ impl IoContext {
     ///
     /// Returns `Ok(Some(buf))` containing the read buffer.
     /// `Ok(None)` indicates that the connection has been disconnected.
-    pub fn update_read_status(&self, status: io::Result<Option<BytesMut>>) -> IoTaskStatus {
+    pub fn update_read_status(
+        &self,
+        buf: BytesMut,
+        status: io::Result<usize>,
+    ) -> IoTaskStatus {
         let st = self.st();
+        let buf_len = buf.len();
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-read-status == {:?} flags:{:?}",
+            "{}: update-read-status == {status:?} buf:{:?} flags:{:?}",
             st.tag(),
-            status.as_ref().map(|b| b.len()),
+            status.as_ref().unwrap_or(0),
             st.flags
         );
 
-        let result = status.map(|buf| buf.map(|buffer| {
-            if buffer.is_empty() {
+        // release read buffer
+        st.buffer.set_read_buf(buf, self.0.cfg());
+
+        // process read buf
+        let result = status.map(|nbytes| {
+            let orig_size = buf_len.saturating_sub(nbytes);
+
+            if nbytes == 0 {
                 return Ok(())
             }
-            let orig_size = st.buffer.read_dst_size();
-
-            st.buffer.process_read_buf(&self.0, buffer).map(|()| {
+            st.buffer.process_read_buf(&self.0, nbytes).map(|()| {
                 let size = st.buffer.read_dst_size();
 
                 // dest buffer has new data, wake up dispatcher
@@ -131,21 +140,20 @@ impl IoContext {
                     st.flags.set_read_notifed();
                 }
             })
-        }));
+        });
 
         match result {
-            Ok(Some(Ok(()))) => {
-                if st.flags.is_read_paused_or_backpressure() {
+            Ok(Ok(())) => {
+                if st.flags.is_closed() {
+                    // st.terminate_connection(None);
+                    IoTaskStatus::Stop
+                } else if st.flags.is_read_paused_or_backpressure() {
                     IoTaskStatus::Pause
                 } else {
                     IoTaskStatus::Io
                 }
             }
-            Ok(None) => {
-                st.terminate_connection(None);
-                IoTaskStatus::Stop
-            }
-            Err(err) | Ok(Some(Err(err))) => {
+            Err(err) | Ok(Err(err)) => {
                 st.terminate_connection(Some(err));
                 IoTaskStatus::Stop
             }

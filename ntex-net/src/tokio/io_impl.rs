@@ -344,21 +344,24 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
 
     let mut pending = false;
     let result = match io_res {
-        Ok(0) => Ok(None),
+        Ok(0) => {
+            ctx.stop(None);
+            Ok(0)
+        }
         Ok(n) => {
             // Safety: This is guaranteed to be the number of initialized
             // bytes due to the invariants provided by `try_read()`.
             unsafe { buf.advance_mut(n) }
-            Ok(Some(buf))
+            Ok(n)
         }
         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
             pending = true;
-            Ok(Some(buf))
+            Ok(0)
         }
         Err(e) => Err(e),
     };
 
-    let result = ctx.update_read_status(result);
+    let result = ctx.update_read_status(buf, result);
     if result == IoTaskStatus::Io && pending {
         Poll::Pending
     } else {

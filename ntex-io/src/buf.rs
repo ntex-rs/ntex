@@ -2,7 +2,7 @@ use std::{cell::Cell, fmt, io, task::Poll};
 
 use ntex_bytes::{BytePageSize, BytePages, BytesMut};
 
-use crate::IoRef;
+use crate::{IoConfig, IoRef};
 
 pub(crate) struct Stack {
     buffers: Cell<Option<Box<[StackBuffer]>>>,
@@ -154,7 +154,7 @@ impl Stack {
                 io,
                 buffers,
                 idx: 0,
-                read_buffer: None,
+                nbytes: 0,
             };
             f(&mut ctx)
         })
@@ -164,13 +164,27 @@ impl Stack {
         self.with_last_level(|buffer| buffer.read.take())
     }
 
-    pub(crate) fn process_read_buf(&self, io: &IoRef, buf: BytesMut) -> io::Result<()> {
+    pub(crate) fn set_read_buf(&self, buf: BytesMut, cfg: &IoConfig) {
+        self.with_last_level(move |buffer| {
+            if let Some(mut first_buf) = buffer.read.take() {
+                first_buf.extend_from_slice(&buf);
+                cfg.read_buf().release(buf);
+                buffer.read = Some(first_buf);
+            } else if !buf.is_empty() {
+                buffer.read = Some(buf);
+            } else {
+                cfg.read_buf().release(buf);
+            }
+        });
+    }
+
+    pub(crate) fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<()> {
         self.with_buffers(move |buffers| {
             let mut ctx = FilterCtx {
                 io,
                 buffers,
+                nbytes,
                 idx: 0,
-                read_buffer: Some(buf),
             };
             io.filter().process_read_buf(&mut ctx)
         })
@@ -185,7 +199,7 @@ impl Stack {
                     io,
                     buffers,
                     idx: 0,
-                    read_buffer: None,
+                    nbytes: 0,
                 };
                 io.filter().process_write_buf(&mut ctx)
             }
@@ -198,7 +212,7 @@ impl Stack {
                 io,
                 buffers,
                 idx: 0,
-                read_buffer: None,
+                nbytes: 0,
             };
             io.filter().process_write_buf(&mut ctx)
         })
@@ -214,8 +228,8 @@ impl Stack {
 pub struct FilterCtx<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) idx: usize,
+    pub(crate) nbytes: usize,
     pub(crate) buffers: &'a mut [StackBuffer],
-    pub(crate) read_buffer: Option<BytesMut>,
 }
 
 impl FilterCtx<'_> {
@@ -229,6 +243,12 @@ impl FilterCtx<'_> {
     /// Gets the I/O tag.
     pub fn tag(&self) -> &'static str {
         self.io.tag()
+    }
+
+    #[inline]
+    /// Gets new bytes count for read buffer.
+    pub fn new_read_bytes(&self) -> usize {
+        self.nbytes
     }
 
     #[inline]
@@ -256,17 +276,6 @@ impl FilterCtx<'_> {
             next: &mut right[0],
         };
         f(&mut buf)
-    }
-
-    pub(crate) fn set_base_read_buf(&mut self, buf: BytesMut) {
-        let curr = &mut self.buffers[self.idx];
-        if let Some(mut first_buf) = curr.read.take() {
-            first_buf.extend_from_slice(&buf);
-            self.io.cfg().read_buf().release(buf);
-            curr.read = Some(first_buf);
-        } else {
-            curr.read = Some(buf);
-        }
     }
 
     #[inline]
