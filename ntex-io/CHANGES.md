@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.6] - 2026-05-15
+
+* Optimize send-buf() call
+
 ## [3.11.4] - 2026-05-13
 
 * Fix read status updates api

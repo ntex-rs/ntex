@@ -609,8 +609,8 @@ impl<F> Io<F> {
             if st.flags.is_closed() {
                 return Poll::Ready(Err(st.error_or_disconnected()));
             } else if full {
-                st.dispatch_task.register(cx.waker());
                 st.flags.set_wants_write_flush();
+                st.dispatch_task.register(cx.waker());
                 return Poll::Pending;
             } else if st.is_wr_backpressure_needed(len) {
                 st.flags.set_wr_backpressure();
