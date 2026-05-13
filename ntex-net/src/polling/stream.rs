@@ -500,14 +500,14 @@ impl StreamItem {
         log::trace!("{}: {fd:?}-Rdt sz() = {result:?}", self.tag());
 
         let st = match result {
-            Poll::Ready(Ok(0)) => Ok(None),
+            Poll::Ready(Ok(0)) => Ok(0),
             Poll::Ready(Ok(n)) => {
                 unsafe { buf.advance_mut(n) };
-                Ok(Some(buf))
+                Ok(n)
             }
             Poll::Ready(Err(err)) => Err(err),
-            Poll::Pending => Ok(Some(buf)),
+            Poll::Pending => Ok(0),
         };
-        self.ctx.update_read_status(st)
+        self.ctx.update_read_status(buf, st)
     }
 }

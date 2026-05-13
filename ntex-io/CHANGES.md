@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.4] - 2026-05-13
+
+* Fix read status updates api
+
 ## [3.11.3] - 2026-05-12
 
 * Do not allow writing to I/O while shutting down filters

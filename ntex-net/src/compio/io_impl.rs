@@ -108,12 +108,7 @@ where
 
         match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
-                let res = match result {
-                    Ok(0) => Ok(None),
-                    Ok(_) => Ok(Some(cbuf.0)),
-                    Err(e) => Err(e),
-                };
-                if ctx.update_read_status(res) == IoTaskStatus::Stop {
+                if ctx.update_read_status(cbuf.0, result) == IoTaskStatus::Stop {
                     break;
                 }
                 read_fut = Some(Box::pin(read_buf(&io, ctx.get_read_buf())));

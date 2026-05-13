@@ -331,7 +331,7 @@ impl<F: Filter> Io<F> {
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
 
-        if let Err(e) = self.st().buffer.process_read_buf(&self, BytesMut::new()) {
+        if let Err(e) = self.st().buffer.process_read_buf(&self, 0) {
             self.st().terminate_connection(Some(e));
         }
 
