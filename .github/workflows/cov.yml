@@ -9,18 +9,18 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v6
-      - uses: jlumbroso/free-disk-space@main
       - uses: taiki-e/install-action@nextest
+      - uses: jlumbroso/free-disk-space@main
+        with:
+          dotnet: true
+          android: false
+          large-packages: false
 
       - name: Install Rust
         run: rustup update nightly
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-        with:
-          large-packages: false
-          dotnet: true
-          android: false
 
       - name: Generate Cargo.lock
         uses: actions-rs/cargo@v1
