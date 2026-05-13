@@ -338,6 +338,13 @@ fn write_io<T: Stream>(
 fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
     let mut buf = ctx.get_read_buf();
 
+    #[cfg(feature = "trace")]
+    log::trace!(
+        "{}: Read attempt, buf cap {}",
+        ctx.tag(),
+        buf.remaining_mut()
+    );
+
     // read data from socket
     let io_res =
         io.try_read(unsafe { &mut *(ptr::from_mut(buf.chunk_mut()) as *mut [u8]) });
