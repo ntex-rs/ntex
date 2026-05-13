@@ -177,7 +177,7 @@ impl IoRef {
         if st.flags.is_stopping_any()
             && let Some(err) = st.error.take()
         {
-            Err(err);
+            Err(err)
         } else {
             Ok(())
         }
