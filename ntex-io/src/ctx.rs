@@ -110,7 +110,7 @@ impl IoContext {
 
         // process read buf
         let result = status.map(|nbytes| {
-            let orig_size = buf_len.checked_sub(nbytes).unwrap_or(0);
+            let orig_size = buf_len.saturating_sub(nbytes);
 
             if nbytes == 0 {
                 return Ok(())

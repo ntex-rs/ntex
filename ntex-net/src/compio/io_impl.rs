@@ -108,6 +108,9 @@ where
 
         match select(read_fut.as_mut().unwrap(), not_read_ready(ctx)).await {
             Either::Left(BufResult(result, cbuf)) => {
+                if matches!(result, Ok(0)) {
+                    ctx.stop(None);
+                }
                 if ctx.update_read_status(cbuf.0, result) == IoTaskStatus::Stop {
                     break;
                 }

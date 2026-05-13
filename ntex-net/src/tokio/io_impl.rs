@@ -344,7 +344,10 @@ fn read<T: Stream + Unpin>(io: &T, ctx: &IoContext) -> Poll<IoTaskStatus> {
 
     let mut pending = false;
     let result = match io_res {
-        Ok(0) => Ok(0),
+        Ok(0) => {
+            ctx.stop(None);
+            Ok(0)
+        }
         Ok(n) => {
             // Safety: This is guaranteed to be the number of initialized
             // bytes due to the invariants provided by `try_read()`.
