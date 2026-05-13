@@ -2,7 +2,7 @@
 
 ## [3.11.6] - 2026-05-15
 
-* Optimize send-buf() call
+* Optimize direct write call
 
 ## [3.11.4] - 2026-05-13
 
