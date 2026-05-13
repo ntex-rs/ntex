@@ -168,21 +168,19 @@ impl IoRef {
 
         // can send if write task is not awake
         if st.flags.is_write_paused() {
-            if self.call_write() == WakeWriteTask::Yes {
-                if !st.flags.is_wr_send_scheduled() {
-                    // io write is pending need to wake write task for io completeion
-                    st.flags.set_wr_send_scheduled();
-                    Iops::register_send(self.id());
-                }
-            }
-
-            if st.flags.is_stopping_any()
-                && let Some(err) = st.error.take()
-            {
-                return Err(err);
+            if self.call_write() == WakeWriteTask::Yes && !st.flags.is_wr_send_scheduled() {
+                // io write is pending need to wake write task for io completeion
+                st.flags.set_wr_send_scheduled();
+                Iops::register_send(self.id());
             }
         }
-        Ok(())
+        if st.flags.is_stopping_any()
+            && let Some(err) = st.error.take()
+        {
+            Err(err);
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn ops_send_buf(&self) {
