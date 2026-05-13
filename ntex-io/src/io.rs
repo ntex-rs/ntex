@@ -888,8 +888,7 @@ mod tests {
         assert!(!io.st().flags.is_rd_backpressure());
 
         // == Enable backpressure
-        let buf = BytesMut::copy_from_slice(b"1234567890");
-        ctx.update_read_status(Ok(Some(buf)));
+        ctx.update_read_status(BytesMut::copy_from_slice(b"1234567890"), Ok(10));
 
         // dispatcher is woken
         assert!(!io.st().dispatch_task.is_set());
@@ -936,8 +935,7 @@ mod tests {
         lazy(|cx| io.poll_dispatch(cx)).await;
 
         // == Enable backpressure, 4 bytes in buffer + 4 more
-        let buf = BytesMut::copy_from_slice(b"1234");
-        ctx.update_read_status(Ok(Some(buf)));
+        ctx.update_read_status(BytesMut::copy_from_slice(b"1234"), Ok(4));
 
         // dispatcher is woken
         assert!(!io.st().dispatch_task.is_set());
@@ -959,8 +957,7 @@ mod tests {
         lazy(|cx| io.poll_dispatch(cx)).await;
 
         // == No backpressure, 4 bytes in buffer + 3 more
-        let buf = BytesMut::copy_from_slice(b"567");
-        ctx.update_read_status(Ok(Some(buf)));
+        ctx.update_read_status(BytesMut::copy_from_slice(b"567"), Ok(3));
 
         // read task is paused
         assert!(!io.st().flags.is_read_paused());
@@ -1008,7 +1005,7 @@ mod tests {
         let ctx = IoContext::new(io.get_ref());
 
         // incoming bytes
-        ctx.update_read_status(Ok(Some(BytesMut::copy_from_slice(b"1"))));
+        ctx.update_read_status(BytesMut::copy_from_slice(b"1"), Ok(1));
 
         assert!(!io.st().dispatch_task.is_set());
         // rd buffer is ready
@@ -1036,7 +1033,7 @@ mod tests {
         );
 
         // == enable packpressure
-        ctx.update_read_status(Ok(Some(BytesMut::copy_from_slice(b"2345678"))));
+        ctx.update_read_status(BytesMut::copy_from_slice(b"2345678"), Ok(7));
         // read backpressure is enabled
         assert!(io.st().flags.is_rd_backpressure());
 
@@ -1067,7 +1064,7 @@ mod tests {
         );
 
         // incoming bytes
-        ctx.update_read_status(Ok(Some(BytesMut::copy_from_slice(b"1"))));
+        ctx.update_read_status(BytesMut::copy_from_slice(b"1"), Ok(1));
         assert!(!io.st().dispatch_task.is_set());
         // rd buffer is ready
         assert!(io.st().flags.is_read_ready());

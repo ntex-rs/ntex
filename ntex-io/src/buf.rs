@@ -247,7 +247,7 @@ impl FilterCtx<'_> {
 
     #[inline]
     /// Gets new bytes count for read buffer.
-    pub fn read_bytes(&self) -> usize {
+    pub fn new_read_bytes(&self) -> usize {
         self.nbytes
     }
 
