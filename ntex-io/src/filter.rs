@@ -72,7 +72,6 @@ impl Filter for Base {
 
             if st.flags.is_stopping_filters() {
                 Poll::Ready(Readiness::Ready)
-            //} else if st.flags.is_read_ready_or_backpressure() {
             } else if st.flags.is_read_paused_or_backpressure() {
                 // read buffer is fulled of is not processed by dispatcher yet
                 Poll::Pending

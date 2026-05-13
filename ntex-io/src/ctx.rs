@@ -121,7 +121,7 @@ impl IoContext {
                 // dest buffer has new data, wake up dispatcher
                 if size > orig_size {
                     if st.is_rd_backpressure_needed(size) {
-                        log::trace!("{}: Io read buffer is too large {size}, enable read back-pressure", st.tag(),);
+                        log::trace!("{}: Io read buffer is too large {size}, enable read back-pressure", st.tag());
                         st.flags.set_read_ready_and_backpressure();
                     } else {
                         st.flags.set_read_ready();
