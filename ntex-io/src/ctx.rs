@@ -95,12 +95,12 @@ impl IoContext {
         status: io::Result<usize>,
     ) -> IoTaskStatus {
         let st = self.st();
-        let buf_len = buf.len();
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-read-status == {status:?} buf:{buf_len:?} orig:{:?} flags:{:?}",
+            "{}: update-read-status == {status:?} buf:{:?} orig:{:?} flags:{:?}",
             st.tag(),
+            buf.len(),
             st.buffer.read_dst_size(),
             st.flags
         );
