@@ -601,8 +601,10 @@ impl<F> Io<F> {
     /// otherwise, it wakes when the write buffer size falls below the low-watermark size.
     pub fn poll_flush(&self, cx: &mut Context<'_>, full: bool) -> Poll<io::Result<()>> {
         let st = self.st();
+
+        // flush filter state
         st.buffer.process_write_buf_force(self)?;
-        self.update_write_destination();
+        self.consolidate_write_state(false);
 
         let len = st.buffer.write_buf_size();
         if len > 0 {

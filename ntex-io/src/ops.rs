@@ -257,7 +257,7 @@ pub(crate) struct Iops {
 }
 
 impl Iops {
-    pub(crate) fn register_send(id: Id) {
+    pub(crate) fn schedule_write(id: Id) {
         IoManager::with(|mgr| {
             mgr.iops.ops.push(id);
 
