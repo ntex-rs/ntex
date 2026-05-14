@@ -95,13 +95,13 @@ impl IoContext {
         status: io::Result<usize>,
     ) -> IoTaskStatus {
         let st = self.st();
+        let orig = st.buffer.read_dst_size();
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-read-status == {status:?} buf:{:?} orig:{:?} flags:{:?}",
+            "{}: update-read-status == {status:?} buf:{:?} orig:{orig:?} flags:{:?}",
             st.tag(),
             buf.len(),
-            st.buffer.read_dst_size(),
             st.flags
         );
 
@@ -113,8 +113,6 @@ impl IoContext {
             if nbytes == 0 {
                 return Ok(());
             }
-
-            let orig = st.buffer.read_dst_size();
             st.buffer.process_read_buf(&self.0, nbytes).map(|wrt| {
                 let size = st.buffer.read_dst_size();
 
