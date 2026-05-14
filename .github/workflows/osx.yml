@@ -23,11 +23,6 @@ jobs:
         with:
           toolchain: ${{ matrix.version }}-aarch64-apple-darwin
 
-      - name: Generate Cargo.lock
-        uses: actions-rs/cargo@v1
-        with:
-          command: generate-lockfile
-
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2.8.2
 
