@@ -223,9 +223,9 @@ impl IoContext {
                 } else if len == 0 {
                     // All data has been written, so pause the write task.
                     st.flags.set_write_paused();
-                    //if st.flags.is_stopping_filters() {
-                    //st.wake_read_task();
-                    //}
+                    if st.flags.is_stopping_filters() {
+                        st.wake_read_task();
+                    }
                     IoTaskStatus::Pause
                 } else {
                     st.flags.unset_write_paused();
