@@ -100,6 +100,8 @@ impl Handle for HandleWrapper {
     fn write(&self, ctx: &IoContext) {
         let _ = write(self.0.as_ref(), ctx, true);
     }
+
+    fn notify(&self, _: &IoContext) {}
 }
 
 #[cfg(unix)]
@@ -127,15 +129,14 @@ where
     T: Stream + Unpin,
 {
     let st = poll_fn(|cx| {
-        let ctx_state = ctx.poll_read_ready(cx);
-        #[cfg(feature = "trace")]
-        log::trace!(
-            "{}: Read task, ctx:{ctx_state:?} flags:{:?}",
-            ctx.tag(),
-            ctx.flags()
-        );
-
         'outer: loop {
+            let ctx_state = ctx.poll_read_ready(cx);
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: Read task, ctx:{ctx_state:?} flags:{:?}",
+                ctx.tag(),
+                ctx.flags()
+            );
             return match ready!(ctx_state) {
                 Readiness::Ready => {
                     let io_state = io.poll_read_ready(cx);
@@ -153,7 +154,7 @@ where
                         },
                         Err(err) => {
                             ctx.stop(Some(err));
-                            return Poll::Ready(());
+                            Poll::Ready(())
                         }
                     }
                 }

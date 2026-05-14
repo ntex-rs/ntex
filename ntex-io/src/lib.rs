@@ -7,7 +7,7 @@
     clippy::must_use_candidate
 )]
 use std::io::{Error as IoError, Result as IoResult};
-use std::{any::Any, any::TypeId, fmt, task::Context, task::Poll};
+use std::{any::Any, any::TypeId, fmt, task::Poll};
 
 pub mod cfg;
 pub mod testing;
@@ -72,18 +72,6 @@ impl Readiness {
 
 #[allow(unused_variables)]
 pub trait FilterLayer: fmt::Debug + 'static {
-    #[inline]
-    /// Checks whether read operations may proceed.
-    fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Ready)
-    }
-
-    #[inline]
-    /// Checks whether write operations may proceed.
-    fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        Poll::Ready(Readiness::Ready)
-    }
-
     /// Processes incoming read-buffer data.
     fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
 
@@ -115,6 +103,12 @@ pub trait Handle {
     #[inline]
     /// Initiate io write operation
     fn write(&self, _: &IoContext) {}
+
+    #[inline]
+    /// Called when readiness changes
+    fn notify(&self, ctx: &IoContext) {
+        ctx.notify();
+    }
 }
 
 /// Current status of the I/O state.

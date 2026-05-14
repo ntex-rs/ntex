@@ -1,5 +1,9 @@
 # Changes
 
+## [3.12.0] - 2026-05-15
+
+* Fix tokio runtime support
+
 ## [3.11.0] - 2026-05-08
 
 * Simplify tokio integration impl

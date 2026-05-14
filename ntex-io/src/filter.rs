@@ -160,12 +160,12 @@ where
 
     #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        Readiness::merge(self.0.poll_read_ready(cx), self.1.poll_read_ready(cx))
+        self.1.poll_read_ready(cx)
     }
 
     #[inline]
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
-        Readiness::merge(self.0.poll_write_ready(cx), self.1.poll_write_ready(cx))
+        self.1.poll_write_ready(cx)
     }
 }
 

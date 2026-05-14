@@ -411,6 +411,14 @@ impl IoRef {
             WakeWriteTask::Yes
         }
     }
+
+    pub(crate) fn call_notify(&self) {
+        if let Some(hnd) = self.0.handle.take() {
+            let ctx = unsafe { &*(ptr::from_ref(self).cast::<IoContext>()) };
+            hnd.notify(ctx);
+            self.0.handle.set(Some(hnd));
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

@@ -1,10 +1,10 @@
 # Changes
 
-## [3.11.6] - 2026-05-15
+## [3.11.7] - 2026-05-15
 
 * Optimize direct write call
 
-* Handle filter writes
+* Correct handling filter writes
 
 ## [3.11.4] - 2026-05-13
 
