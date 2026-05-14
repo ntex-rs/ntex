@@ -95,13 +95,13 @@ impl IoContext {
         status: io::Result<usize>,
     ) -> IoTaskStatus {
         let st = self.st();
-        let buf_len = buf.len();
+        let orig = st.buffer.read_dst_size();
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-read-status == {status:?} buf:{buf_len:?} orig:{:?} flags:{:?}",
+            "{}: update-read-status == {status:?} buf:{:?} orig:{orig:?} flags:{:?}",
             st.tag(),
-            st.buffer.read_dst_size(),
+            buf.len(),
             st.flags
         );
 
@@ -110,32 +110,42 @@ impl IoContext {
 
         // process read buf
         let result = status.map(|nbytes| {
-            let orig_size = buf_len.saturating_sub(nbytes);
-
             if nbytes == 0 {
                 return Ok(());
             }
-            st.buffer.process_read_buf(&self.0, nbytes).map(|()| {
+            st.buffer.process_read_buf(&self.0, nbytes).map(|wrt| {
                 let size = st.buffer.read_dst_size();
 
-                // dest buffer has new data, wake up dispatcher
-                if size > orig_size {
+                // The destination read buffer has new data; wake up the dispatcher.
+                if size > orig {
                     if st.is_rd_backpressure_needed(size) {
-                        log::trace!("{}: Io read buffer is too large {size}, enable read back-pressure", st.tag());
+                        log::trace!(
+                            "{}: Large rb buf({size}), enable rb back-pressure",
+                            st.tag()
+                        );
                         st.flags.set_read_ready_and_backpressure();
                     } else {
                         st.flags.set_read_ready();
                     }
                     #[cfg(feature = "trace")]
-                    log::trace!("{}: New {size} bytes available (orig:{orig_size}), wakeup dispatcher", st.tag());
+                    log::trace!("{}: New {size} bytes available (orig:{orig})", st.tag());
                     st.wake_dispatch_task();
                 }
 
                 if st.flags.is_read_notify() {
-                    // In the case of a "notify" flag, we must wake the
-                    // dispatch task if any data was read from the source.
+                    // If the "notify" flag is set, we must wake the
+                    // dispatch task whenever data is read from the source.
                     st.wake_dispatch_task();
                     st.flags.set_read_notifed();
+                }
+
+                // Check if the filter wrote data during read buffer processing
+                if wrt {
+                    if let Err(err) = st.buffer.process_write_buf_force(&self.0) {
+                        st.terminate_connection(Some(err));
+                    } else {
+                        self.0.consolidate_write_state(false);
+                    }
                 }
             })
         });
@@ -143,7 +153,6 @@ impl IoContext {
         match result {
             Ok(Ok(())) => {
                 if st.flags.is_closed() {
-                    // st.terminate_connection(None);
                     IoTaskStatus::Stop
                 } else if st.flags.is_read_paused_or_backpressure() {
                     IoTaskStatus::Pause
@@ -163,13 +172,11 @@ impl IoContext {
     where
         F: FnOnce(&mut BytePages) -> R,
     {
-        // write buffer processing could be delayed,
-        // need to call filter chain for processing
+        // Write buffer processing may be delayed
         if let Err(e) = self.st().buffer.process_write_buf(&self.0) {
             self.st().terminate_connection(Some(e));
         }
 
-        // access to output write buffer
         self.st().buffer.with_write_dst(|buffer| f(buffer))
     }
 
@@ -191,20 +198,20 @@ impl IoContext {
         match status {
             Ok(written) => {
                 let len = st.buffer.write_buf_size();
-                // full flush mode is enabled
+                // Full flush is active.
                 if st.flags.is_write_flush() {
-                    // the write buffer must be fully written
+                    // The write buffer must be fully written
                     if len == 0 {
                         st.wake_dispatch_task();
                     }
                 } else if st.flags.is_wr_backpressure()
                     && st.should_disable_wr_backpressure(len)
                 {
-                    // Write backpressure is active and the write buffer is below half capacity.
+                    // Write backpressure is active and  write buffer is below threshold.
                     st.wake_dispatch_task();
                 }
 
-                // wake up both tasks
+                // Write notify is enabled
                 if written && st.flags.is_write_notify() {
                     st.flags.unset_write_notify();
                     st.wake_read_task();
@@ -214,7 +221,7 @@ impl IoContext {
                 if st.flags.is_closed() {
                     IoTaskStatus::Stop
                 } else if len == 0 {
-                    // all data has been written
+                    // All data has been written, so pause the write task.
                     st.flags.set_write_paused();
                     if st.flags.is_stopping_filters() {
                         st.wake_read_task();
@@ -225,8 +232,8 @@ impl IoContext {
                     IoTaskStatus::Io
                 }
             }
-            Err(e) => {
-                st.terminate_connection(Some(e));
+            Err(err) => {
+                st.terminate_connection(Some(err));
                 IoTaskStatus::Stop
             }
         }
@@ -266,7 +273,7 @@ impl IoContext {
                 return;
             }
         };
-        self.0.update_write_destination();
+        self.0.consolidate_write_state(true);
 
         #[cfg(feature = "trace")]
         log::trace!(

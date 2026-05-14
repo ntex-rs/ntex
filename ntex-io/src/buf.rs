@@ -155,6 +155,7 @@ impl Stack {
                 buffers,
                 idx: 0,
                 nbytes: 0,
+                wants_write: false,
             };
             f(&mut ctx)
         })
@@ -178,15 +179,17 @@ impl Stack {
         });
     }
 
-    pub(crate) fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<()> {
+    pub(crate) fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<bool> {
         self.with_buffers(move |buffers| {
             let mut ctx = FilterCtx {
                 io,
                 buffers,
                 nbytes,
                 idx: 0,
+                wants_write: false,
             };
-            io.filter().process_read_buf(&mut ctx)
+            let result = io.filter().process_read_buf(&mut ctx);
+            result.map(|()| ctx.wants_write)
         })
     }
 
@@ -200,6 +203,7 @@ impl Stack {
                     buffers,
                     idx: 0,
                     nbytes: 0,
+                    wants_write: true,
                 };
                 io.filter().process_write_buf(&mut ctx)
             }
@@ -213,6 +217,7 @@ impl Stack {
                 buffers,
                 idx: 0,
                 nbytes: 0,
+                wants_write: true,
             };
             io.filter().process_write_buf(&mut ctx)
         })
@@ -230,6 +235,7 @@ pub struct FilterCtx<'a> {
     pub(crate) idx: usize,
     pub(crate) nbytes: usize,
     pub(crate) buffers: &'a mut [StackBuffer],
+    pub(crate) wants_write: bool,
 }
 
 impl FilterCtx<'_> {
@@ -274,8 +280,13 @@ impl FilterCtx<'_> {
             io: self.io,
             curr: &mut left[self.idx],
             next: &mut right[0],
+            wants_write: self.wants_write,
         };
-        f(&mut buf)
+        let result = f(&mut buf);
+        if buf.wants_write {
+            self.wants_write = true;
+        }
+        result
     }
 
     #[inline]
@@ -300,6 +311,7 @@ pub struct FilterBuf<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) curr: &'a mut StackBuffer,
     pub(crate) next: &'a mut StackBuffer,
+    pub(crate) wants_write: bool,
 }
 
 impl FilterBuf<'_> {
@@ -334,6 +346,7 @@ impl FilterBuf<'_> {
     {
         let mut read_src = self.next.read.take();
         let mut read_dst = self.curr.read.take();
+        let write_len = if self.wants_write { 0 } else { self.next.write.len() };
 
         let result = f(
             self.io,
@@ -342,6 +355,10 @@ impl FilterBuf<'_> {
             &mut self.curr.write,
             &mut self.next.write,
         );
+
+        if !self.wants_write && self.next.write.len() > write_len {
+            self.wants_write = true;
+        }
 
         if let Some(b) = read_src {
             if b.is_empty() {
@@ -397,6 +414,12 @@ impl FilterBuf<'_> {
     where
         F: FnOnce(&IoRef, &mut BytePages, &mut BytePages) -> R,
     {
-        f(self.io, &mut self.curr.write, &mut self.next.write)
+        let write_len = if self.wants_write { 0 } else { self.next.write.len() };
+        let result = f(self.io, &mut self.curr.write, &mut self.next.write);
+
+        if !self.wants_write && self.next.write.len() > write_len {
+            self.wants_write = true;
+        }
+        result
     }
 }

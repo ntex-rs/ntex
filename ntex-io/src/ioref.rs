@@ -74,7 +74,7 @@ impl IoRef {
     }
 
     #[doc(hidden)]
-    #[deprecated(since = "3.10.0", note = "use Io::terminate() instead")]
+    #[deprecated(since = "3.10.0", note = "use IoRef::terminate() instead")]
     /// Force close connection
     ///
     /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
@@ -83,6 +83,8 @@ impl IoRef {
         self.terminate();
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.11.0", note = "use IoRef::close() instead")]
     /// Gracefully shuts down the I/O stream.
     pub fn wants_shutdown(&self) {
         self.0.start_shutdown();
@@ -164,20 +166,11 @@ impl IoRef {
     /// Requires the underlying runtime to implement `.write()`;
     /// otherwise, no action is taken.
     pub fn send_buf(&self) -> io::Result<()> {
-        let st = &self.0;
+        // try send bytes
+        self.consolidate_write_state(true);
 
-        // can send if write task is not awake
-        if st.flags.is_write_paused()
-            && self.call_write() == WakeWriteTask::Yes
-            && !st.flags.is_wr_send_scheduled()
-        {
-            // io write is pending need to wake write task for io completeion
-            st.flags.set_wr_send_scheduled();
-            Iops::register_send(self.id());
-        }
-
-        if st.flags.is_stopping_any()
-            && let Some(err) = st.error.take()
+        if self.0.flags.is_stopping_any()
+            && let Some(err) = self.0.error.take()
         {
             Err(err)
         } else {
@@ -197,10 +190,10 @@ impl IoRef {
                 if self.call_write() == WakeWriteTask::Yes {
                     st.wake_write_task();
                     st.flags.unset_write_paused();
-                    return;
                 }
+            } else {
+                st.wake_write_task();
             }
-            st.wake_write_task();
         }
     }
 
@@ -210,7 +203,7 @@ impl IoRef {
         F: FnOnce(&mut FilterBuf<'_>) -> R,
     {
         let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
-        self.update_write_destination();
+        self.consolidate_write_state(false);
         Ok(result)
     }
 
@@ -241,12 +234,12 @@ impl IoRef {
             }
         } else {
             let result = st.buffer.with_write_src(f);
-            self.update_write_destination();
+            self.consolidate_write_state(false);
             Ok(result)
         }
     }
 
-    pub(crate) fn update_write_destination(&self) {
+    pub(crate) fn consolidate_write_state(&self, force: bool) {
         let st = &self.0;
 
         // wake write task if needsed
@@ -266,7 +259,9 @@ impl IoRef {
             // which introduces latency. To prevent this behavior and
             // flatten data delivery to the peer, IoRef can initiate
             // out-of-order writes based on a configured threshold.
-            if st.flags.is_direct_wr_enabled() && size >= st.cfg.write_buf_threshold() {
+            if st.flags.is_direct_wr_enabled()
+                && (force || size >= st.cfg.write_buf_threshold())
+            {
                 // Send data in-place
                 if self.call_write() == WakeWriteTask::Yes {
                     #[cfg(feature = "trace")]
@@ -279,7 +274,7 @@ impl IoRef {
                     if !st.flags.is_wr_send_scheduled() {
                         // More data needs to be sent
                         st.flags.set_wr_send_scheduled();
-                        Iops::register_send(st.id());
+                        Iops::schedule_write(st.id());
                     }
                 } else {
                     st.flags.unset_wr_send_scheduled();
@@ -288,7 +283,7 @@ impl IoRef {
                 #[cfg(feature = "trace")]
                 log::trace!("{}: write-upd == schedule(too small)", st.tag());
                 st.flags.set_wr_send_scheduled();
-                Iops::register_send(st.id());
+                Iops::schedule_write(st.id());
             }
         }
         // Enable backpressure

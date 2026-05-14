@@ -91,7 +91,11 @@ impl SslFilter {
             }
 
             // copy internal buffer to write dst buffer
-            buf.with_write_buffers(|_, _, dst| st.destination.move_to(dst));
+            buf.with_write_buffers(|_, _, dst| {
+                if !st.destination.is_empty() {
+                    st.destination.move_to(dst);
+                }
+            });
         }
         result
     }
@@ -167,7 +171,9 @@ impl FilterLayer for SslFilter {
         self.with_buffers(rb, |buf| {
             buf.with_read_buffers(|io, _, dst| {
                 loop {
-                    io.resize_read_buf(dst);
+                    if dst.remaining_mut() == 0 {
+                        io.resize_read_buf(dst);
+                    }
 
                     let chunk: &mut [u8] =
                         unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
@@ -179,7 +185,7 @@ impl FilterLayer for SslFilter {
                         Err(ref e) if e.code() == ssl::ErrorCode::WANT_READ => Ok(()),
                         Err(ref e) if e.code() == ssl::ErrorCode::WANT_WRITE => Ok(()),
                         Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                            io.wants_shutdown();
+                            io.close();
                             Ok(())
                         }
                         Err(e) => {

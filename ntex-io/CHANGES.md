@@ -4,6 +4,8 @@
 
 * Optimize direct write call
 
+* Handle filter writes
+
 ## [3.11.4] - 2026-05-13
 
 * Fix read status updates api
