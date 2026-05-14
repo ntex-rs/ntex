@@ -155,6 +155,7 @@ impl Stack {
                 buffers,
                 idx: 0,
                 nbytes: 0,
+                notify: false,
                 wants_write: false,
             };
             f(&mut ctx)
@@ -179,17 +180,22 @@ impl Stack {
         });
     }
 
-    pub(crate) fn process_read_buf(&self, io: &IoRef, nbytes: usize) -> io::Result<bool> {
+    pub(crate) fn process_read_buf(
+        &self,
+        io: &IoRef,
+        nbytes: usize,
+    ) -> io::Result<(bool, bool)> {
         self.with_buffers(move |buffers| {
             let mut ctx = FilterCtx {
                 io,
                 buffers,
                 nbytes,
                 idx: 0,
+                notify: false,
                 wants_write: false,
             };
             let result = io.filter().process_read_buf(&mut ctx);
-            result.map(|()| ctx.wants_write)
+            result.map(|()| (ctx.wants_write, ctx.notify))
         })
     }
 
@@ -203,6 +209,7 @@ impl Stack {
                     buffers,
                     idx: 0,
                     nbytes: 0,
+                    notify: false,
                     wants_write: true,
                 };
                 io.filter().process_write_buf(&mut ctx)
@@ -217,6 +224,7 @@ impl Stack {
                 buffers,
                 idx: 0,
                 nbytes: 0,
+                notify: false,
                 wants_write: true,
             };
             io.filter().process_write_buf(&mut ctx)
@@ -236,6 +244,7 @@ pub struct FilterCtx<'a> {
     pub(crate) nbytes: usize,
     pub(crate) buffers: &'a mut [StackBuffer],
     pub(crate) wants_write: bool,
+    pub(crate) notify: bool,
 }
 
 impl FilterCtx<'_> {
@@ -255,6 +264,12 @@ impl FilterCtx<'_> {
     /// Gets new bytes count for read buffer.
     pub fn new_read_bytes(&self) -> usize {
         self.nbytes
+    }
+
+    #[inline]
+    /// Notifies about readiness changes.
+    pub fn notify(&mut self) {
+        self.notify = true;
     }
 
     #[inline]
