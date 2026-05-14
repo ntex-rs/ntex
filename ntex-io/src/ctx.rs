@@ -114,7 +114,7 @@ impl IoContext {
                 return Ok(());
             }
 
-            let orig = buf_len.saturating_sub(nbytes);
+            let orig = st.buffer.read_dst_size();
             st.buffer.process_read_buf(&self.0, nbytes).map(|wrt| {
                 let size = st.buffer.read_dst_size();
 

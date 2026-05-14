@@ -171,7 +171,7 @@ impl FilterLayer for SslFilter {
         self.with_buffers(rb, |buf| {
             buf.with_read_buffers(|io, _, dst| {
                 loop {
-                    if dst.is_empty() {
+                    if dst.remaining_mut() == 0 {
                         io.resize_read_buf(dst);
                     }
 
