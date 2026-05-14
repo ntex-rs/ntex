@@ -107,7 +107,7 @@ pub trait Handle {
     #[inline]
     /// Called when readiness changes
     fn notify(&self, ctx: &IoContext) {
-        ctx.notify()
+        ctx.notify();
     }
 }
 

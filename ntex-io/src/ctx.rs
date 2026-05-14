@@ -149,7 +149,7 @@ impl IoContext {
                 }
 
                 if nf {
-                    self.0.call_notify()
+                    self.0.call_notify();
                 }
             })
         });
