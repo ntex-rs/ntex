@@ -88,7 +88,7 @@ impl crate::Reactor for TokioDriver {
 
         #[cfg(not(unix))]
         {
-            Receiver::new(Err(std::io::Error::other(
+            crate::channel::Receiver::new(Err(std::io::Error::other(
                 "Unix domain sockets are not supported",
             )))
         }
