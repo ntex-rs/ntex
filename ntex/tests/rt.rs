@@ -100,11 +100,11 @@ fn test_block_on() {
 
     impl ntex::rt::Runner for Custom {
         fn block_on(&self, fut: ntex::rt::BlockFuture) {
-            let rt = ntex::rt::tokio::runtime::Builder::new_current_thread()
+            let rt = ntex::rt::tokio::internal::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
-            ntex::rt::tokio::task::LocalSet::new().block_on(&rt, fut);
+            ntex::rt::tokio::internal::task::LocalSet::new().block_on(&rt, fut);
         }
     }
 

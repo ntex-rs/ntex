@@ -7,7 +7,9 @@ use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
 #[doc(hidden)]
-pub use tok_io::*;
+pub mod internal {
+    pub use tok_io::*;
+}
 
 use crate::channel;
 
