@@ -150,16 +150,17 @@ mod tests {
     }
 
     impl FilterLayer for DropFilter {
-        fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
-            buf.with_buffers(|_, src, dst, _, _| {
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
                 if let Some(src) = src.take() {
-                    *dst = Some(src);
+                    dst.extend_from_slice(&src);
                 }
                 Ok(())
             })
         }
-        fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
-            buf.with_write_buffers(|_, src, dst| {
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(|src, dst| {
                 src.move_to(dst);
                 Ok(())
             })

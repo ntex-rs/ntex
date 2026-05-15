@@ -65,17 +65,17 @@ impl io::Write for IoInner {
 }
 
 impl SslFilter {
-    fn with_buffers<F, R>(&self, buf: &mut FilterBuf<'_>, f: F) -> R
+    fn with_buffers<F, R>(&self, buf: &FilterBuf<'_>, f: F) -> R
     where
-        F: FnOnce(&mut FilterBuf<'_>) -> R,
+        F: FnOnce(&FilterBuf<'_>) -> R,
     {
         {
             let mut inner = self.inner.borrow_mut();
             let st = inner.get_mut();
-            st.source = buf.read_src().take();
+            st.source = buf.with_read_src(Option::take);
 
             // get current page from destination buffer (optimization)
-            buf.with_write_buffers(|_, _, dst| st.destination.try_get_current_from(dst));
+            buf.with_write_buffers(|_, dst| st.destination.try_get_current_from(dst));
         }
 
         let result = f(buf);
@@ -87,11 +87,11 @@ impl SslFilter {
             if let Some(src) = st.source.take()
                 && !src.is_empty()
             {
-                *buf.read_src() = Some(src);
+                buf.with_read_src(|buf| *buf = Some(src));
             }
 
             // copy internal buffer to write dst buffer
-            buf.with_write_buffers(|_, _, dst| {
+            buf.with_write_buffers(|_, dst| {
                 if !st.destination.is_empty() {
                     st.destination.move_to(dst);
                 }
@@ -149,7 +149,7 @@ impl FilterLayer for SslFilter {
         }
     }
 
-    fn shutdown(&self, buf: &mut FilterBuf<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
         let ssl_result = self.with_buffers(buf, |_| self.inner.borrow_mut().shutdown());
         match ssl_result {
             Ok(ssl::ShutdownResult::Sent) => Ok(Poll::Pending),
@@ -167,12 +167,12 @@ impl FilterLayer for SslFilter {
         }
     }
 
-    fn process_read_buf(&self, rb: &mut FilterBuf<'_>) -> io::Result<()> {
+    fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         self.with_buffers(rb, |buf| {
-            buf.with_read_buffers(|io, _, dst| {
+            buf.with_read_buffers(|_, dst| {
                 loop {
                     if dst.remaining_mut() == 0 {
-                        io.resize_read_buf(dst);
+                        rb.io().resize_read_buf(dst);
                     }
 
                     let chunk: &mut [u8] =
@@ -185,11 +185,11 @@ impl FilterLayer for SslFilter {
                         Err(ref e) if e.code() == ssl::ErrorCode::WANT_READ => Ok(()),
                         Err(ref e) if e.code() == ssl::ErrorCode::WANT_WRITE => Ok(()),
                         Err(ref e) if e.code() == ssl::ErrorCode::ZERO_RETURN => {
-                            io.close();
+                            rb.io().close();
                             Ok(())
                         }
                         Err(e) => {
-                            log::trace!("{}: SSL Error: {:?}", io.tag(), e);
+                            log::trace!("{}: SSL Error: {:?}", rb.tag(), e);
                             Err(map_to_ioerr(e))
                         }
                     };
@@ -199,9 +199,9 @@ impl FilterLayer for SslFilter {
         })
     }
 
-    fn process_write_buf(&self, wb: &mut FilterBuf<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, wb: &FilterBuf<'_>) -> io::Result<()> {
         self.with_buffers(wb, |buf| {
-            buf.with_write_buffers(|_, w_src, _| {
+            buf.with_write_buffers(|w_src, _| {
                 if !w_src.is_empty() {
                     let mut inner = self.inner.borrow_mut();
 

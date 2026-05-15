@@ -328,7 +328,7 @@ impl<F: Filter> Io<F> {
         // All APIs first remove the buffer from storage before processing it.
         unsafe { &mut *(Rc::as_ptr(&state.0).cast_mut()) }
             .buffer
-            .add_layer();
+            .add_layer(self.st().cfg.write_page_size());
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
@@ -1324,10 +1324,10 @@ mod tests {
         struct F;
 
         impl FilterLayer for F {
-            fn process_read_buf(&self, _: &mut FilterBuf<'_>) -> io::Result<()> {
+            fn process_read_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
                 Ok(())
             }
-            fn process_write_buf(&self, _: &mut FilterBuf<'_>) -> io::Result<()> {
+            fn process_write_buf(&self, _: &FilterBuf<'_>) -> io::Result<()> {
                 Ok(())
             }
         }
@@ -1352,9 +1352,10 @@ mod tests {
         let err = io.with_write_buf(|_| 1).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Other);
 
-        st.buffer.add_layer();
+        let io = io.add_filter(F);
         let layer = Layer::new(F, Base::new(io.get_ref()));
 
+        let st = io.st();
         st.buffer.with_write_src(|p| p.put_slice(b"123"));
         assert_eq!(st.buffer.write_buf_size(), 3);
         let res = st.buffer.with_filter(io.as_ref(), |f| layer.shutdown(f));
