@@ -5,7 +5,7 @@ use compio_runtime::Runtime;
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
-mod io_impl;
+mod io;
 
 use crate::channel::{self, Receiver};
 

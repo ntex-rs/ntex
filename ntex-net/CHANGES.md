@@ -2,7 +2,9 @@
 
 ## [3.12.0] - 2026-05-15
 
-* Fix tokio runtime support
+* Update ntex-io
+
+* Fix readiness checks in tokio support
 
 ## [3.11.0] - 2026-05-08
 

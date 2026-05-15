@@ -36,8 +36,6 @@ impl Handle for HandleWrapper {
         }
         None
     }
-
-    fn notify(&self, _: &IoContext) {}
 }
 
 #[allow(dead_code)]

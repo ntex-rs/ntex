@@ -99,9 +99,8 @@ impl IoContext {
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-read-status == {status:?} buf:{:?} orig:{orig:?} flags:{:?}",
+            "{}: read-status == {status:?} orig:{orig:?} flags:{:?}",
             st.tag(),
-            buf.len(),
             st.flags
         );
 
@@ -109,38 +108,35 @@ impl IoContext {
         st.buffer.set_read_buf(buf, self.0.cfg());
 
         // process read buf
-        let result = status.map(|nbytes| {
+        let result = status.and_then(|nbytes| {
             if nbytes == 0 {
                 return Ok(());
             }
-            st.buffer.process_read_buf(&self.0, nbytes).map(|(wr, nf)| {
+            st.buffer.process_read_buf(&self.0, nbytes).map(|status| {
                 let size = st.buffer.read_dst_size();
 
-                // The destination read buffer has new data; wake up the dispatcher.
+                // The destination read buffer has new data, wake up the dispatcher
                 if size > orig {
                     if st.is_rd_backpressure_needed(size) {
-                        log::trace!(
-                            "{}: Large rb buf({size}), enable rb back-pressure",
-                            st.tag()
-                        );
+                        log::trace!("{}: Read buf({size}), enable back-pressure", st.tag());
                         st.flags.set_read_ready_and_backpressure();
                     } else {
                         st.flags.set_read_ready();
                     }
                     #[cfg(feature = "trace")]
-                    log::trace!("{}: New {size} bytes available (orig:{orig})", st.tag());
+                    log::trace!("{}: New {size} bytes available", st.tag());
                     st.wake_dispatch_task();
                 }
 
                 if st.flags.is_read_notify() {
                     // If the "notify" flag is set, we must wake the
-                    // dispatch task whenever data is read from the source.
+                    // dispatcher task whenever data is read from the source.
                     st.wake_dispatch_task();
                     st.flags.set_read_notifed();
                 }
 
-                // Check if the filter wrote data during read buffer processing
-                if wr {
+                // Check if the filter wrote data during buffer processing
+                if status.wants_write {
                     if let Err(err) = st.buffer.process_write_buf_force(&self.0) {
                         st.terminate_connection(Some(err));
                     } else {
@@ -148,26 +144,22 @@ impl IoContext {
                     }
                 }
 
-                if nf {
+                // Check whether the filter notifies about readiness changes
+                if status.notify {
                     self.0.call_notify();
                 }
             })
         });
 
-        match result {
-            Ok(Ok(())) => {
-                if st.flags.is_closed() {
-                    IoTaskStatus::Stop
-                } else if st.flags.is_read_paused_or_backpressure() {
-                    IoTaskStatus::Pause
-                } else {
-                    IoTaskStatus::Io
-                }
-            }
-            Err(err) | Ok(Err(err)) => {
-                st.terminate_connection(Some(err));
-                IoTaskStatus::Stop
-            }
+        if let Err(err) = result {
+            st.terminate_connection(Some(err));
+            IoTaskStatus::Stop
+        } else if st.flags.is_closed() {
+            IoTaskStatus::Stop
+        } else if st.flags.is_read_paused_or_backpressure() {
+            IoTaskStatus::Pause
+        } else {
+            IoTaskStatus::Io
         }
     }
 
@@ -193,7 +185,7 @@ impl IoContext {
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: update-write-status == {status:?} buf:{} flags:{:?}",
+            "{}: write-status == {status:?} buf:{} flags:{:?}",
             st.tag(),
             st.buffer.write_buf_size(),
             st.flags
@@ -202,7 +194,7 @@ impl IoContext {
         match status {
             Ok(written) => {
                 let len = st.buffer.write_buf_size();
-                // Full flush is active.
+                // Full flush is active
                 if st.flags.is_write_flush() {
                     // The write buffer must be fully written
                     if len == 0 {
@@ -211,7 +203,7 @@ impl IoContext {
                 } else if st.flags.is_wr_backpressure()
                     && st.should_disable_wr_backpressure(len)
                 {
-                    // Write backpressure is active and  write buffer is below threshold.
+                    // Write backpressure is active and write buffer is below threshold
                     st.wake_dispatch_task();
                 }
 
@@ -225,7 +217,7 @@ impl IoContext {
                 if st.flags.is_closed() {
                     IoTaskStatus::Stop
                 } else if len == 0 {
-                    // All data has been written, so pause the write task.
+                    // All data has been written, pause the write task.
                     st.flags.set_write_paused();
                     if st.flags.is_stopping_filters() {
                         st.wake_read_task();
@@ -269,6 +261,7 @@ impl IoContext {
             return;
         }
 
+        // process filter shutdown
         let ready = match st.buffer.process_shutdown(&self.0) {
             Ok(Poll::Ready(())) => true,
             Ok(Poll::Pending) => false,
@@ -281,7 +274,7 @@ impl IoContext {
 
         #[cfg(feature = "trace")]
         log::trace!(
-            "{}: shutdown filters, done:{ready:?} buf-len:{:?}, flags:{:?}",
+            "{}: shutdown filters, done:{ready:?} wr-buf:{:?}, flags:{:?}",
             st.tag(),
             st.buffer.write_buf_size(),
             st.flags,
@@ -291,7 +284,7 @@ impl IoContext {
         if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {
             st.filters_stopped();
         } else if st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure() {
-            // if buffer is not consumed it is unlikely
+            // if read buffer is not consumed it is unlikely
             // that filter will properly complete shutdown
             st.filters_stopped();
         } else {

@@ -92,11 +92,7 @@ impl IoRef {
 
     /// Queries filter-specific data.
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
-        if let Some(item) = self.filter().query(any::TypeId::of::<T>()) {
-            types::QueryItem::new(item)
-        } else {
-            types::QueryItem::empty()
-        }
+        types::QueryItem::new(self.filter().query(any::TypeId::of::<T>()))
     }
 
     #[inline]
@@ -295,7 +291,6 @@ impl IoRef {
 
     fn update_read_destination(&self, buf: &mut BytesMut) {
         let st = &self.0;
-        let half = self.cfg().read_buf().half;
 
         #[cfg(feature = "trace")]
         log::trace!(
@@ -307,7 +302,7 @@ impl IoRef {
 
         if st.flags.is_rd_backpressure() {
             // back-pressure is still eanbled
-            if buf.len() > half {
+            if st.is_rd_backpressure_needed(buf.len()) {
                 return;
             }
             st.flags.unset_all_read_flags();
@@ -344,7 +339,7 @@ impl IoRef {
         self.0.notify_timeout();
     }
 
-    /// current timer handle
+    /// Current timer handle
     pub fn timer_handle(&self) -> TimerHandle {
         self.0.timeout.get()
     }
