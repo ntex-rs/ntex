@@ -1,6 +1,8 @@
 # Changes
 
-## [3.11.7] - 2026-05-15
+## [3.12.0] - 2026-05-15
+
+* Simplify filter api
 
 * Optimize direct write call
 

@@ -72,19 +72,17 @@ impl Readiness {
 
 #[allow(unused_variables)]
 pub trait FilterLayer: fmt::Debug + 'static {
+    /// Accesses internal filter information.
+    fn query(&self, id: TypeId) -> Option<Box<dyn Any>> {
+        None
+    }
+
     /// Processes incoming read-buffer data.
     fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
 
     /// Processes outgoing write-buffer data.
     fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
 
-    #[inline]
-    /// Accesses internal filter information.
-    fn query(&self, id: TypeId) -> Option<Box<dyn Any>> {
-        None
-    }
-
-    #[inline]
     /// Performs a graceful shutdown of the filter.
     fn shutdown(&self, buf: &mut FilterBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))

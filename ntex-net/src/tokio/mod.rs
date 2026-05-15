@@ -5,7 +5,7 @@ use std::os::unix::net::UnixStream as OsUnixStream;
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
-mod io_impl;
+mod io;
 
 pub use self::io_impl::TokioIoBoxed;
 use crate::channel::{self, Receiver};
