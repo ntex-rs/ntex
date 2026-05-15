@@ -1,17 +1,16 @@
 #![allow(unused_variables)]
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as OsUnixStream;
+use std::{io::Result as IoResult, net, net::SocketAddr, path::PathBuf};
 
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
+use crate::channel;
+
 mod io;
 
-pub use self::io_impl::TokioIoBoxed;
-use crate::channel::{self, Receiver};
-
-#[doc(hidden)]
-pub use tok_io::*;
+pub use self::io::TokioIoBoxed;
 
 pub(crate) struct TcpStream(tok_io::net::TcpStream);
 
@@ -51,7 +50,7 @@ impl ntex_rt::Driver for TokioDriver {
 }
 
 impl crate::Reactor for TokioDriver {
-    fn tcp_connect(&self, addr: std::net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
+    fn tcp_connect(&self, addr: SocketAddr, cfg: SharedCfg) -> channel::Receiver<Io> {
         let (tx, rx) = channel::create();
         ntex_rt::spawn(async move {
             let result = async {
@@ -66,7 +65,7 @@ impl crate::Reactor for TokioDriver {
         rx
     }
 
-    fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> Receiver<Io> {
+    fn unix_connect(&self, addr: PathBuf, cfg: SharedCfg) -> channel::Receiver<Io> {
         #[cfg(unix)]
         {
             let (tx, rx) = channel::create();
@@ -90,11 +89,7 @@ impl crate::Reactor for TokioDriver {
         }
     }
 
-    fn from_tcp_stream(
-        &self,
-        stream: std::net::TcpStream,
-        cfg: SharedCfg,
-    ) -> std::io::Result<Io> {
+    fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> IoResult<Io> {
         stream.set_nonblocking(true)?;
         stream.set_nodelay(true)?;
         Ok(Io::new(
@@ -104,11 +99,7 @@ impl crate::Reactor for TokioDriver {
     }
 
     #[cfg(unix)]
-    fn from_unix_stream(
-        &self,
-        stream: OsUnixStream,
-        cfg: SharedCfg,
-    ) -> std::io::Result<Io> {
+    fn from_unix_stream(&self, stream: OsUnixStream, cfg: SharedCfg) -> IoResult<Io> {
         stream.set_nonblocking(true)?;
         Ok(Io::new(
             UnixStream(tok_io::net::UnixStream::from_std(stream)?),
