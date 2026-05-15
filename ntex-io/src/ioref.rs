@@ -605,7 +605,7 @@ mod tests {
         fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
             self.write_order.borrow_mut().push(self.idx);
             ctx.with_buffer(|buf| {
-                buf.with_write_buffers(|_, src, _| {
+                buf.with_write_buffers(|src, _| {
                     self.out_bytes.set(self.out_bytes.get() + src.len());
                 });
             });

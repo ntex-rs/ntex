@@ -56,7 +56,7 @@ impl WsTransport {
 
 impl FilterLayer for WsTransport {
     #[inline]
-    fn shutdown(&self, buf: &mut FilterBuf<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
         let flags = self.flags.get();
         if !flags.contains(Flags::CLOSED) {
             self.insert_flags(Flags::CLOSED);
@@ -65,7 +65,7 @@ impl FilterLayer for WsTransport {
             } else {
                 CloseCode::Normal
             };
-            let _ = buf.with_write_buffers(|_, _, w_dst| {
+            let _ = buf.with_write_buffers(|_, w_dst| {
                 self.codec.encodev(
                     Message::Close(Some(CloseReason {
                         code,
@@ -78,11 +78,9 @@ impl FilterLayer for WsTransport {
         Ok(Poll::Ready(()))
     }
 
-    fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
-        buf.with_buffers(|io, r_src, r_dst, _, w_dst| {
+    fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_read_buffers(|r_src, dst| {
             if let Some(src) = r_src {
-                let mut dst = r_dst.take().unwrap_or_else(|| io.cfg().read_buf().get());
-
                 loop {
                     let Some(frame) = self.codec.decode(src).map_err(|e| {
                         log::trace!("Failed to decode ws codec frames: {e:?}");
@@ -127,24 +125,24 @@ impl FilterLayer for WsTransport {
                             ));
                         }
                         Frame::Ping(msg) => {
-                            let _ = self.codec.encodev(Message::Pong(msg), w_dst);
+                            buf.with_write_buffers(|_, w_dst| {
+                                let _ = self.codec.encodev(Message::Pong(msg), w_dst);
+                            });
                         }
                         Frame::Pong(_) => (),
                         Frame::Close(_) => {
-                            io.close();
+                            buf.io().close();
                             break;
                         }
                     }
                 }
-
-                *r_dst = Some(dst);
             }
             Ok(())
         })
     }
 
-    fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
-        buf.with_buffers(|_, _, _, w_src, w_dst| {
+    fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_write_buffers(|w_src, w_dst| {
             while let Some(page) = w_src.take() {
                 self.codec.encode_page(page, w_dst);
             }

@@ -29,11 +29,11 @@ impl FilterLayer for TlsServerFilter {
         }
     }
 
-    fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
+    fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
         Stream::new(&mut *self.session.borrow_mut()).process_read_buf(buf)
     }
 
-    fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
         Stream::new(&mut *self.session.borrow_mut()).process_write_buf(buf)
     }
 }

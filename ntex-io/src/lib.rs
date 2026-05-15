@@ -78,13 +78,13 @@ pub trait FilterLayer: fmt::Debug + 'static {
     }
 
     /// Processes incoming read-buffer data.
-    fn process_read_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
+    fn process_read_buf(&self, buf: &FilterBuf<'_>) -> IoResult<()>;
 
     /// Processes outgoing write-buffer data.
-    fn process_write_buf(&self, buf: &mut FilterBuf<'_>) -> IoResult<()>;
+    fn process_write_buf(&self, buf: &FilterBuf<'_>) -> IoResult<()>;
 
     /// Performs a graceful shutdown of the filter.
-    fn shutdown(&self, buf: &mut FilterBuf<'_>) -> IoResult<Poll<()>> {
+    fn shutdown(&self, buf: &FilterBuf<'_>) -> IoResult<Poll<()>> {
         Ok(Poll::Ready(()))
     }
 }

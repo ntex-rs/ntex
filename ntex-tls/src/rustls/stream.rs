@@ -1,6 +1,6 @@
 use std::{any, cell::RefCell, io, io::Write, ops::Deref, ops::DerefMut};
 
-use ntex_bytes::{BufMut, BytePages, BytesMut};
+use ntex_bytes::{BufMut, BytePages};
 use ntex_io::{FilterBuf, Io, types};
 use tls_rustls::{ConnectionCommon, SideData};
 
@@ -57,8 +57,8 @@ where
         }
     }
 
-    pub(crate) fn process_read_buf(&mut self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
-        buf.with_buffers(|io, r_src, r_dst, _, _| {
+    pub(crate) fn process_read_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_read_buffers(|r_src, r_dst| {
             if let Some(src) = r_src {
                 loop {
                     match self.session.read_tls(src) {
@@ -73,17 +73,12 @@ where
 
                     let new_b = state.plaintext_bytes_to_read();
                     if new_b > 0 {
-                        if r_dst.is_none() {
-                            *r_dst = Some(io.cfg().read_buf().get());
-                        }
-                        if let Some(dst) = r_dst {
-                            dst.reserve(new_b);
+                        r_dst.reserve(new_b);
 
-                            let chunk: &mut [u8] =
-                                unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
-                            let v = io::Read::read(&mut self.session.reader(), chunk)?;
-                            unsafe { dst.advance_mut(v) };
-                        }
+                        let chunk: &mut [u8] =
+                            unsafe { &mut *(&raw mut *r_dst.chunk_mut() as *mut [u8]) };
+                        let v = io::Read::read(&mut self.session.reader(), chunk)?;
+                        unsafe { r_dst.advance_mut(v) };
                     } else if src.is_empty() {
                         break;
                     }
@@ -95,8 +90,8 @@ where
         })
     }
 
-    pub(crate) fn process_write_buf(&mut self, buf: &mut FilterBuf<'_>) -> io::Result<()> {
-        buf.with_buffers(|_, r_src, _, w_src, w_dst| {
+    pub(crate) fn process_write_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_write_buffers(|w_src, w_dst| {
             'outer: loop {
                 // write to tls stream
                 while let Some(mut page) = w_src.take() {
@@ -109,7 +104,7 @@ where
 
                 // write tls records to output buffer
                 if self.session.wants_write() {
-                    let mut wrp = Wrapper { r_src, w_dst };
+                    let mut wrp = Wrapper { w_dst, buf };
                     loop {
                         match self.session.write_tls(&mut wrp) {
                             Ok(0) => continue 'outer,
@@ -156,17 +151,19 @@ where
 }
 
 pub(crate) struct Wrapper<'a> {
-    r_src: &'a mut Option<BytesMut>,
     w_dst: &'a mut BytePages,
+    buf: &'a FilterBuf<'a>,
 }
 
 impl io::Read for Wrapper<'_> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        if let Some(buf) = self.r_src {
-            io::Read::read(buf, dst)
-        } else {
-            Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-        }
+        self.buf.with_read_src(|r_src| {
+            if let Some(b) = r_src {
+                io::Read::read(b, dst)
+            } else {
+                Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
+            }
+        })
     }
 }
 
