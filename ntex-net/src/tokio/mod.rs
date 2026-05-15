@@ -6,6 +6,9 @@ use std::{io::Result as IoResult, net, net::SocketAddr, path::PathBuf};
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
+#[doc(hidden)]
+pub use tok_io::*;
+
 use crate::channel;
 
 mod io;

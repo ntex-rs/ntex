@@ -112,7 +112,7 @@ impl IoContext {
             if nbytes == 0 {
                 return Ok(());
             }
-            st.buffer.process_read_buf(&self.0, nbytes).map(|(wr, nf)| {
+            st.buffer.process_read_buf(&self.0, nbytes).map(|status| {
                 let size = st.buffer.read_dst_size();
 
                 // The destination read buffer has new data, wake up the dispatcher
@@ -136,7 +136,7 @@ impl IoContext {
                 }
 
                 // Check if the filter wrote data during buffer processing
-                if wr {
+                if status.wants_write {
                     if let Err(err) = st.buffer.process_write_buf_force(&self.0) {
                         st.terminate_connection(Some(err));
                     } else {
@@ -145,7 +145,7 @@ impl IoContext {
                 }
 
                 // Check whether the filter notifies about readiness changes
-                if nf {
+                if status.notify {
                     self.0.call_notify();
                 }
             })

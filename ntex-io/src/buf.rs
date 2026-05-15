@@ -155,8 +155,10 @@ impl Stack {
                 buffers,
                 idx: 0,
                 nbytes: 0,
-                notify: false,
-                wants_write: false,
+                st: FilterUpdates {
+                    wants_write: false,
+                    notify: false,
+                },
             };
             f(&mut ctx)
         })
@@ -184,18 +186,20 @@ impl Stack {
         &self,
         io: &IoRef,
         nbytes: usize,
-    ) -> io::Result<(bool, bool)> {
+    ) -> io::Result<FilterUpdates> {
         self.with_buffers(move |buffers| {
             let mut ctx = FilterCtx {
                 io,
                 buffers,
                 nbytes,
                 idx: 0,
-                notify: false,
-                wants_write: false,
+                st: FilterUpdates {
+                    wants_write: false,
+                    notify: false,
+                },
             };
             let result = io.filter().process_read_buf(&mut ctx);
-            result.map(|()| (ctx.wants_write, ctx.notify))
+            result.map(|()| ctx.st)
         })
     }
 
@@ -209,8 +213,10 @@ impl Stack {
                     buffers,
                     idx: 0,
                     nbytes: 0,
-                    notify: false,
-                    wants_write: true,
+                    st: FilterUpdates {
+                        wants_write: true,
+                        notify: false,
+                    },
                 };
                 io.filter().process_write_buf(&mut ctx)
             }
@@ -224,8 +230,10 @@ impl Stack {
                 buffers,
                 idx: 0,
                 nbytes: 0,
-                notify: false,
-                wants_write: true,
+                st: FilterUpdates {
+                    wants_write: true,
+                    notify: false,
+                },
             };
             io.filter().process_write_buf(&mut ctx)
         })
@@ -237,14 +245,19 @@ impl Stack {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct FilterUpdates {
+    pub(crate) wants_write: bool,
+    pub(crate) notify: bool,
+}
+
 #[derive(Debug)]
 pub struct FilterCtx<'a> {
     pub(crate) io: &'a IoRef,
     pub(crate) idx: usize,
     pub(crate) nbytes: usize,
     pub(crate) buffers: &'a mut [StackBuffer],
-    pub(crate) wants_write: bool,
-    pub(crate) notify: bool,
+    st: FilterUpdates,
 }
 
 impl FilterCtx<'_> {
@@ -269,7 +282,7 @@ impl FilterCtx<'_> {
     #[inline]
     /// Notifies about readiness changes.
     pub fn notify(&mut self) {
-        self.notify = true;
+        self.st.notify = true;
     }
 
     #[inline]
@@ -295,11 +308,11 @@ impl FilterCtx<'_> {
             io: self.io,
             curr: &mut left[self.idx],
             next: &mut right[0],
-            wants_write: self.wants_write,
+            wants_write: self.st.wants_write,
         };
         let result = f(&mut buf);
         if buf.wants_write {
-            self.wants_write = true;
+            self.st.wants_write = true;
         }
         result
     }
