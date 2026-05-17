@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use ntex_bytes::{BytesMut, buf::BufMut};
+use ntex_bytes::{BytePageSize, BytesMut, buf::BufMut};
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{time::Millis, time::Seconds};
 
@@ -24,6 +24,8 @@ pub struct IoConfig {
     // io read/write cache and params
     read_buf: BufConfig,
     write_buf: BufConfig,
+    write_page_size: BytePageSize,
+    write_buf_threshold: usize,
 
     // shared config
     pub(crate) config: CfgContext,
@@ -97,6 +99,8 @@ impl IoConfig {
                 first: false,
                 cache_size: DEFAULT_CACHE_SIZE,
             },
+            write_page_size: BytePageSize::Size16,
+            write_buf_threshold: BytePageSize::Size16.half_capacity(),
         }
     }
 
@@ -140,6 +144,18 @@ impl IoConfig {
     /// Get write buffer parameters
     pub fn write_buf(&self) -> &BufConfig {
         &self.write_buf
+    }
+
+    #[inline]
+    /// Get write page size
+    pub fn write_page_size(&self) -> BytePageSize {
+        self.write_page_size
+    }
+
+    #[inline]
+    /// The write buffer threshold that triggers earlier sending.
+    pub fn write_buf_threshold(&self) -> usize {
+        self.write_buf_threshold
     }
 
     /// Set connect timeout in seconds.
@@ -217,6 +233,35 @@ impl IoConfig {
         self
     }
 
+    /// Set write buffer page size.
+    ///
+    /// By default page size is set to 16kb.
+    #[must_use]
+    pub fn set_write_page_size(mut self, size: BytePageSize) -> Self {
+        self.write_page_size = size;
+        self
+    }
+
+    /// Sets the write buffer threshold.
+    ///
+    /// The app encodes data in response to incoming data,
+    /// continuing to fill the write buffer until all data
+    /// has been processed. Only then can the runtime wake
+    /// the write task to send the buffered data.
+    ///
+    /// By that time, the buffer may have accumulated a large
+    /// amount of data, causing it to be sent in large bursts,
+    /// which introduces latency. To prevent this behavior and
+    /// flatten data delivery to the peer, ntex's io can initiate
+    /// out-of-order writes based on a configured threshold.
+    ///
+    /// Set `0` to disable send-buf.
+    #[must_use]
+    pub fn set_write_buf_threshold(mut self, size: usize) -> Self {
+        self.write_buf_threshold = size;
+        self
+    }
+
     /// Set write buffer parameters.
     ///
     /// By default high watermark is set to 16Kb, low watermark 1kb.
@@ -239,10 +284,9 @@ impl BufConfig {
     #[inline]
     /// Get buffer
     pub fn get(&self) -> BytesMut {
-        if let Some(mut buf) =
+        if let Some(buf) =
             CACHE.with(|c| c.with(self.idx, self.first, |c: &mut Vec<_>| c.pop()))
         {
-            buf.clear();
             buf
         } else {
             BytesMut::with_capacity(self.high)
@@ -258,12 +302,7 @@ impl BufConfig {
     /// Resize buffer
     pub fn resize(&self, buf: &mut BytesMut) {
         if buf.remaining_mut() < self.low {
-            let cap = buf.capacity();
-            let mut size = self.high;
-            while cap >= size {
-                size += self.high;
-            }
-            buf.reserve_capacity(size);
+            self.resize_min(buf, self.high);
         }
     }
 
@@ -272,24 +311,24 @@ impl BufConfig {
     pub fn resize_min(&self, buf: &mut BytesMut, size: usize) {
         let mut avail = buf.remaining_mut();
         if avail < size {
-            avail += self.high;
-            let mut new_size = self.high + self.high;
+            let mut new_cap = buf.capacity();
             while avail < size {
                 avail += self.high;
-                new_size += self.high;
+                new_cap += self.high;
             }
-            buf.reserve_capacity(new_size);
+            buf.reserve_capacity(new_cap);
         }
     }
 
     #[inline]
     /// Release buffer, buf must be allocated from this pool
-    pub fn release(&self, buf: BytesMut) {
+    pub fn release(&self, mut buf: BytesMut) {
         let cap = buf.capacity();
         if cap > self.low && cap <= self.high {
             CACHE.with(|c| {
                 c.with(self.idx, self.first, |v: &mut Vec<_>| {
                     if v.len() < self.cache_size {
+                        buf.clear();
                         v.push(buf);
                     }
                 });

@@ -101,6 +101,7 @@ impl Head for RequestHead {
     fn clear(&mut self) {
         self.io = CurrentIo::None;
         self.flags = Flags::empty();
+        self.version = Version::HTTP_11;
         self.headers.clear();
         self.extensions.get_mut().clear();
     }
@@ -239,10 +240,10 @@ pub struct ResponseHead {
 impl ResponseHead {
     /// Create new instance of `ResponseHead` type
     #[inline]
-    pub fn new(status: StatusCode) -> ResponseHead {
+    pub fn new(status: StatusCode, version: Version) -> ResponseHead {
         ResponseHead {
             status,
-            version: Version::default(),
+            version,
             headers: HeaderMap::with_capacity(12),
             reason: None,
             flags: Flags::empty(),
@@ -356,7 +357,7 @@ impl ResponseHead {
 
 impl Default for ResponseHead {
     fn default() -> Self {
-        Self::new(StatusCode::default())
+        Self::new(StatusCode::default(), Version::default())
     }
 }
 

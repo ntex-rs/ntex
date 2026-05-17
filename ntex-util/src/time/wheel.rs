@@ -2,6 +2,7 @@
 //!
 //! Inspired by linux kernel timers system
 #![allow(arithmetic_overflow)]
+use std::num::NonZeroUsize;
 use std::time::{Duration, Instant, SystemTime};
 use std::{cell::Cell, cmp::max, future::Future, mem, pin::Pin, rc::Rc, task, task::Poll};
 
@@ -92,7 +93,7 @@ pub fn query_system_time() -> SystemTime {
 }
 
 #[derive(Debug)]
-pub struct TimerHandle(usize);
+pub struct TimerHandle(NonZeroUsize);
 
 impl TimerHandle {
     /// Createt new timer and return handle
@@ -102,22 +103,22 @@ impl TimerHandle {
 
     /// Resets the `TimerHandle` instance to a new deadline.
     pub fn reset(&self, millis: u64) {
-        TIMER.with(|t| t.update_timer(self.0, millis));
+        TIMER.with(|t| t.update_timer(self.0.get(), millis));
     }
 
     /// Resets the `TimerHandle` instance to elapsed state.
     pub fn elapse(&self) {
-        TIMER.with(|t| t.remove_timer(self.0));
+        TIMER.with(|t| t.remove_timer(self.0.get()));
     }
 
     pub fn is_elapsed(&self) -> bool {
-        TIMER.with(|t| t.with_mod(|m| m.timers[self.0].bucket.is_none()))
+        TIMER.with(|t| t.with_mod(|m| m.timers[self.0.get()].bucket.is_none()))
     }
 
     pub fn poll_elapsed(&self, cx: &mut task::Context<'_>) -> Poll<()> {
         TIMER.with(|t| {
             t.with_mod(|inner| {
-                let entry = &inner.timers[self.0];
+                let entry = &inner.timers[self.0.get()];
                 if entry.bucket.is_none() {
                     Poll::Ready(())
                 } else {
@@ -131,7 +132,7 @@ impl TimerHandle {
 
 impl Drop for TimerHandle {
     fn drop(&mut self) {
-        TIMER.with(|t| t.with_mod(|inner| inner.remove_timer_bucket(self.0, true)));
+        TIMER.with(|t| t.with_mod(|inner| inner.remove_timer_bucket(self.0.get(), true)));
     }
 }
 
@@ -175,6 +176,14 @@ struct TimerMod {
 
 impl Timer {
     fn new() -> Self {
+        let mut timers = Slab::default();
+        // insert one entry, so 0 key is preoccupied
+        timers.insert(TimerEntry {
+            bucket: None,
+            bucket_entry: 0,
+            task: LocalWaker::new(),
+        });
+
         Timer(Rc::new(TimerInner {
             elapsed: Cell::new(0),
             elapsed_time: Cell::new(None),
@@ -185,8 +194,8 @@ impl Timer {
             lowres_stime: Cell::new(None),
             lowres_driver: LocalWaker::new(),
             inner: Cell::new(Some(Box::new(TimerMod {
+                timers,
                 buckets: Self::create_buckets(),
-                timers: Slab::default(),
                 driver_sleep: Delay::new(Duration::ZERO),
                 occupied: [0; WHEEL_SIZE],
                 lowres_driver_sleep: Delay::new(Duration::ZERO),
@@ -266,7 +275,8 @@ impl Timer {
                     bucket: None,
                     task: LocalWaker::new(),
                 });
-                return TimerHandle(no);
+                // SAFETY: We add TimerEntry for 0 position in constructor
+                return TimerHandle(unsafe { NonZeroUsize::new_unchecked(no) });
             }
 
             let mut flags = self.0.flags.get();
@@ -303,7 +313,8 @@ impl Timer {
                 }
             }
 
-            TimerHandle(no)
+            // SAFETY: We add TimerEntry for 0 position in constructor
+            TimerHandle(unsafe { NonZeroUsize::new_unchecked(no) })
         })
     }
 

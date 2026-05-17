@@ -1,21 +1,4 @@
-use std::io;
-
 use percent_encoding::{AsciiSet, CONTROLS};
-
-use crate::util::BytesMut;
-
-pub(crate) struct Writer<'a>(pub(crate) &'a mut BytesMut);
-
-impl io::Write for Writer<'_> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
 
 /// `<https://url.spec.whatwg.org/#fragment-percent-encode-set>`
 const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');

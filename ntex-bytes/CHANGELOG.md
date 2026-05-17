@@ -1,5 +1,57 @@
 # Changes
 
+## [1.6.8] (2026-05-12)
+
+* Add PagePages::clear() method
+
+## [1.6.7] (2026-05-11)
+
+* Handle buffer re-allocation in BytePages::with_bytes_mut()
+
+## [1.6.6] (2026-05-06)
+
+* Optimize BytePages::freeze()
+
+## [1.6.5] (2026-05-06)
+
+* Add BytePages::split_into() and BytePages::with_bytes_mut() methods
+
+## [1.6.4] (2026-05-05)
+
+* Add BytePages::copy_to() and BytePages::split_to() methods
+
+* Add Clone impl for BytePage
+
+* Add BytePage::split_to() method
+
+## [1.6.3] (2026-05-05)
+
+* Add helper methods for BytePages type
+
+## [1.6.2] (2026-05-04)
+
+* Add Vec<u8> support to BytePage
+
+* Add helper BytePages::try_get_current_from()
+
+## [1.6.0] (2026-05-02)
+
+* Add new type BytesPages and BytePage
+
+* Add io::Read impl for Bytes, BytesMut, BytePage
+
+## [1.5.3] (2026-03-07)
+
+* Update Buf impls for &[u8]
+
+## [1.5.2] (2026-03-01)
+
+* Add io::Write impl to BytesMut
+
+## [1.5.1] (2026-03-01)
+
+* fmt::Write impl does not fail
+
 ## [1.5.0] (2026-02-03)
 
 * Add AsMut impl for UninitSlice

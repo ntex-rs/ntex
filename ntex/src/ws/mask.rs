@@ -1,7 +1,5 @@
 //! This is code from [Tungstenite project](https://github.com/snapview/tungstenite-rs)
-#![allow(clippy::cast_ptr_alignment)]
-use std::ptr::copy_nonoverlapping;
-use std::slice;
+use std::{ptr::copy_nonoverlapping, slice};
 
 // Holds a slice guaranteed to be shorter than 8 bytes
 struct ShortSlice<'a>(&'a mut [u8]);
@@ -67,6 +65,7 @@ fn xor_short(buf: ShortSlice<'_>, mask: u64) {
 #[inline]
 // Unsafe: caller must ensure the buffer has the correct size and alignment
 unsafe fn cast_slice(buf: &mut [u8]) -> &mut [u64] {
+    #[allow(clippy::cast_ptr_alignment)]
     unsafe {
         // Assert correct size and alignment in debug builds
         debug_assert!(buf.len().trailing_zeros() >= 3);

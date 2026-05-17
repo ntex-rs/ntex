@@ -21,7 +21,7 @@ pub struct TestResponse {
 impl Default for TestResponse {
     fn default() -> TestResponse {
         TestResponse {
-            head: ResponseHead::new(StatusCode::OK),
+            head: ResponseHead::new(StatusCode::OK, Version::default()),
             payload: None,
             #[cfg(feature = "cookie")]
             cookies: CookieJar::new(),

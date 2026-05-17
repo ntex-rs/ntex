@@ -1,9 +1,12 @@
 use std::cell::{Cell, RefCell};
-use std::{error::Error, fmt, future::poll_fn, io, marker, mem, rc::Rc, task::Context};
+use std::{
+    error::Error as StdError, fmt, future::poll_fn, io, marker, mem, rc::Rc, task::Context,
+};
 
 use ntex_h2::{self as h2, frame::StreamId, server};
 
 use crate::channel::oneshot;
+use crate::error::Error;
 use crate::http::body::{BodySize, MessageBody};
 use crate::http::config::DispatcherConfig;
 use crate::http::error::{DispatchError, H2Error, ResponseError};
@@ -19,6 +22,8 @@ use crate::util::{Bytes, BytesMut, HashMap, HashSet};
 use super::{DefaultControlService, payload::Payload, payload::PayloadSender};
 
 /// `ServiceFactory` implementation for HTTP2 transport
+#[derive(derive_more::Debug)]
+#[debug("H2Service")]
 pub struct H2Service<F, S, B, C> {
     srv: S,
     ctl: Rc<C>,
@@ -62,7 +67,7 @@ mod openssl {
         B: MessageBody,
         C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
             + 'static,
-        C::Error: Error,
+        C::Error: StdError,
         C::InitError: fmt::Debug,
     {
         /// Create ssl based service
@@ -103,7 +108,7 @@ mod rustls {
         B: MessageBody,
         C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
             + 'static,
-        C::Error: Error,
+        C::Error: StdError,
         C::InitError: fmt::Debug,
     {
         /// Create openssl based service
@@ -137,14 +142,14 @@ where
     S::InitError: fmt::Debug,
     B: MessageBody,
     C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
-    C::Error: Error,
+    C::Error: StdError,
     C::InitError: fmt::Debug,
 {
     /// Provide http/2 control service
     pub fn control<CT>(self, ctl: CT) -> H2Service<F, S, B, CT>
     where
         CT: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
-        CT::Error: Error,
+        CT::Error: StdError,
         CT::InitError: fmt::Debug,
     {
         H2Service {
@@ -164,7 +169,7 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
     C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck> + 'static,
-    C::Error: Error,
+    C::Error: StdError,
     C::InitError: fmt::Debug,
 {
     type Response = ();
@@ -195,6 +200,8 @@ where
 }
 
 /// `Service` implementation for http/2 transport
+#[derive(derive_more::Debug)]
+#[debug("H2ServiceHandler")]
 pub struct H2ServiceHandler<F, S: Service<Request>, B, C> {
     cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, ()>>,
@@ -213,7 +220,7 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
     C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck> + 'static,
-    C::Error: Error,
+    C::Error: StdError,
     C::InitError: fmt::Debug,
 {
     type Response = ();
@@ -253,7 +260,7 @@ where
                 let _ = rx.await;
             }
 
-            log::trace!("Shutting down is complected",);
+            log::trace!("Shutting down is complected");
         }
 
         self.config.service.shutdown().await;
@@ -311,7 +318,7 @@ where
     S::Response: Into<Response<B>>,
     B: MessageBody,
     C2: Service<h2::Control<H2Error>, Response = h2::ControlAck> + 'static,
-    C2::Error: Error,
+    C2::Error: StdError,
 {
     let ioref = io.get_ref();
 
@@ -372,6 +379,7 @@ where
                 let pl = if eof {
                     None
                 } else {
+                    #[cfg(feature = "trace")]
                     log::debug!(
                         "{}: Creating local payload stream for {:?}",
                         self.io.tag(),
@@ -384,6 +392,7 @@ where
                 (self.io.clone(), pseudo, headers, eof, pl)
             }
             h2::MessageKind::Data(data, cap) => {
+                #[cfg(feature = "trace")]
                 log::debug!(
                     "{}: Got data chunk for {:?}: {:?}",
                     self.io.tag(),
@@ -415,13 +424,15 @@ where
                         h2::StreamEof::Trailers(_) => {
                             sender.feed_eof(Bytes::new());
                         }
-                        h2::StreamEof::Error(err) => sender.set_error(err.into()),
+                        h2::StreamEof::Error(err) => {
+                            sender.set_error(err.into_error().into());
+                        }
                     }
                 }
                 return Ok(());
             }
             h2::MessageKind::Disconnect(err) => {
-                log::debug!("{}: Connection is disconnected {err:?}", self.io.tag(),);
+                log::debug!("{}: Connection is disconnected {err:?}", self.io.tag());
                 if let Some(sender) = self.streams.borrow_mut().remove(&stream.id()) {
                     sender.set_error(
                         io::Error::new(io::ErrorKind::UnexpectedEof, err).into(),
@@ -473,6 +484,7 @@ where
         let mut size = body.size();
         prepare_response(head, &mut size);
 
+        #[cfg(feature = "trace")]
         log::debug!(
             "{}: Received service response: {head:?} payload: {size:?}",
             self.io.tag()
@@ -480,22 +492,31 @@ where
 
         let hdrs = mem::replace(&mut head.headers, HeaderMap::new());
         if size.is_eof() || is_head_req {
-            stream.send_response(head.status, hdrs, true)?;
+            stream
+                .send_response(head.status, hdrs, true)
+                .map_err(Error::into_error)?;
         } else {
-            stream.send_response(head.status, hdrs, false)?;
+            stream
+                .send_response(head.status, hdrs, false)
+                .map_err(Error::into_error)?;
 
             loop {
                 match poll_fn(|cx| body.poll_next_chunk(cx)).await {
                     None => {
+                        #[cfg(feature = "trace")]
                         log::debug!(
                             "{}: {:?} closing payload stream",
                             self.io.tag(),
                             stream.id()
                         );
-                        stream.send_payload(Bytes::new(), true).await?;
+                        stream
+                            .send_payload(Bytes::new(), true)
+                            .await
+                            .map_err(Error::into_error)?;
                         break;
                     }
                     Some(Ok(chunk)) => {
+                        #[cfg(feature = "trace")]
                         log::debug!(
                             "{}: {:?} sending data chunk {:?} bytes",
                             self.io.tag(),
@@ -503,10 +524,14 @@ where
                             chunk.len()
                         );
                         if !chunk.is_empty() {
-                            stream.send_payload(chunk, false).await?;
+                            stream
+                                .send_payload(chunk, false)
+                                .await
+                                .map_err(Error::into_error)?;
                         }
                     }
                     Some(Err(e)) => {
+                        #[cfg(feature = "trace")]
                         log::error!(
                             "{}: Response payload stream error: {e:?}",
                             self.io.tag()
@@ -544,9 +569,11 @@ fn prepare_response(head: &mut ResponseHead, size: &mut BodySize) {
             .headers
             .insert(header::CONTENT_LENGTH, ZERO_CONTENT_LENGTH),
         BodySize::Sized(len) => {
+            let mut buf = BytesMut::new();
+            crate::http::h1::encoder::convert_usize(*len, &mut buf, false);
             head.headers.insert(
                 header::CONTENT_LENGTH,
-                HeaderValue::try_from(format!("{len}")).unwrap(),
+                HeaderValue::from_shared(buf.freeze()).unwrap(),
             );
         }
     }

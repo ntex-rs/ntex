@@ -74,7 +74,7 @@ impl<T> PartialEq for Worker<T> {
 ///
 /// Stop future resolves when worker completes processing
 /// incoming items and stop arbiter
-pub struct WorkerStop(oneshot::Receiver<bool>);
+pub struct WorkerStop(oneshot::AsyncReceiver<bool>);
 
 impl<T> Worker<T> {
     /// Start worker.
@@ -88,7 +88,7 @@ impl<T> Worker<T> {
         let (avail, avail_tx) = WorkerAvailability::create();
         let name2 = name.clone();
 
-        Arbiter::with_name(name.clone()).exec_fn(move || {
+        Arbiter::with_name(name.clone()).handle().spawn(async move {
             if let Some(cid) = cid
                 && core_affinity::set_for_current(cid)
             {
@@ -164,7 +164,7 @@ impl<T> Worker<T> {
     ///
     /// If timeout value is zero, force shutdown worker
     pub fn stop(&self, timeout: Millis) -> WorkerStop {
-        let (result, rx) = oneshot::channel();
+        let (result, rx) = oneshot::async_channel();
         let _ = self.tx2.try_send(Shutdown { timeout, result });
         WorkerStop(rx)
     }

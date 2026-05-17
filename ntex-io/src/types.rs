@@ -23,7 +23,7 @@ impl fmt::Debug for PeerAddr {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-/// Http protocol definition
+/// HTTP protocol version definition
 pub enum HttpProtocol {
     Http1,
     Http2,
@@ -36,16 +36,9 @@ pub struct QueryItem<T> {
 }
 
 impl<T: any::Any> QueryItem<T> {
-    pub(crate) fn new(item: Box<dyn any::Any>) -> Self {
+    pub(crate) fn new(item: Option<Box<dyn any::Any>>) -> Self {
         Self {
-            item: Some(item),
-            _t: PhantomData,
-        }
-    }
-
-    pub(crate) fn empty() -> Self {
-        Self {
-            item: None,
+            item,
             _t: PhantomData,
         }
     }

@@ -95,7 +95,7 @@ pub trait Service<Req> {
     /// Responses given by the service.
     type Response;
 
-    /// Errors produced by the service when polling readiness or executing call.
+    /// Errors produced by the service when checking readiness or executing call.
     type Error;
 
     /// Processes a request and returns the response asynchronously.

@@ -66,12 +66,14 @@ mod bvec;
 mod bytes;
 mod debug;
 mod hex;
+mod pages;
 mod serde;
 mod storage;
 mod string;
 
 pub use crate::bvec::BytesMut;
 pub use crate::bytes::Bytes;
+pub use crate::pages::{BytePage, BytePages};
 pub use crate::string::ByteString;
 
 #[doc(hidden)]
@@ -93,9 +95,73 @@ pub mod info {
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub enum Kind {
-        Arc,
         Inline,
         Static,
         Vec,
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum BytePageSize {
+    Size4 = 0,
+    Size8 = 1,
+    #[default]
+    Size16 = 2,
+    Size24 = 3,
+    Size32 = 4,
+    Size48 = 5,
+    Size64 = 6,
+    Unset = 7,
+}
+
+impl BytePageSize {
+    pub const fn capacity(self) -> usize {
+        match self {
+            BytePageSize::Size4 => 4 * 1024,
+            BytePageSize::Size8 => 8 * 1024,
+            BytePageSize::Size16 => 16 * 1024,
+            BytePageSize::Size24 => 24 * 1024,
+            BytePageSize::Size32 => 32 * 1024,
+            BytePageSize::Size48 => 48 * 1024,
+            BytePageSize::Size64 | BytePageSize::Unset => 64 * 1024,
+        }
+    }
+
+    pub const fn half_capacity(self) -> usize {
+        match self {
+            BytePageSize::Size4 => 2 * 1024,
+            BytePageSize::Size8 => 4 * 1024,
+            BytePageSize::Size16 => 8 * 1024,
+            BytePageSize::Size24 => 12 * 1024,
+            BytePageSize::Size32
+            | BytePageSize::Size48
+            | BytePageSize::Size64
+            | BytePageSize::Unset => 16 * 1024,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_size() {
+        assert_eq!(BytePageSize::Size4.capacity(), 4 * 1024);
+        assert_eq!(BytePageSize::Size8.capacity(), 8 * 1024);
+        assert_eq!(BytePageSize::Size16.capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Size24.capacity(), 24 * 1024);
+        assert_eq!(BytePageSize::Size32.capacity(), 32 * 1024);
+        assert_eq!(BytePageSize::Size48.capacity(), 48 * 1024);
+        assert_eq!(BytePageSize::Size64.capacity(), 64 * 1024);
+        assert_eq!(BytePageSize::Unset.capacity(), 64 * 1024);
+        assert_eq!(BytePageSize::Size4.half_capacity(), 2 * 1024);
+        assert_eq!(BytePageSize::Size8.half_capacity(), 4 * 1024);
+        assert_eq!(BytePageSize::Size16.half_capacity(), 8 * 1024);
+        assert_eq!(BytePageSize::Size24.half_capacity(), 12 * 1024);
+        assert_eq!(BytePageSize::Size32.half_capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Size48.half_capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Size64.half_capacity(), 16 * 1024);
+        assert_eq!(BytePageSize::Unset.half_capacity(), 16 * 1024);
     }
 }

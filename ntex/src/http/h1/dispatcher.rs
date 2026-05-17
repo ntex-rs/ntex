@@ -91,7 +91,7 @@ where
         io: Io<F>,
         config: Rc<DispatcherConfig<S, C>>,
     ) -> Self {
-        let codec = Codec::new(id, config.keep_alive_enabled(), io.shared().get());
+        let codec = Codec::new(id, &io.shared().get());
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
@@ -168,9 +168,8 @@ where
                             inner.send_response(res, body.into())
                         }
                         ControlResult::Continue(req) => {
-                            let result = inner.io.with_write_buf(|buf| {
-                                buf.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
-                            });
+                            let result =
+                                inner.io.encode_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
                             if let Err(err) = result {
                                 *this.st = inner.ctl_peer_gone(Some(err));
                                 continue;
@@ -335,7 +334,7 @@ where
 
     fn send_response(
         &mut self,
-        msg: Response<()>,
+        mut msg: Response<()>,
         body: ResponseBody<B>,
     ) -> State<F, C, S, B> {
         log::trace!(
@@ -344,10 +343,17 @@ where
             msg,
             body.size()
         );
+        // close connection if payload stream is dropped and not consumed
+        if let Some((_pl, snd)) = &self.payload
+            && snd.is_closed()
+        {
+            msg.head_mut()
+                .set_connection_type(http::ConnectionType::Close);
+        }
 
-        // we dont need to process responses if socket is disconnected
+        // we don't need to process responses if socket is disconnected
         // but we still want to handle requests with app service
-        // so we skip response processing for droppped connection
+        // so we skip response processing for dropped connection
         if self.io.is_closed() {
             self.ctl_peer_gone(None)
         } else {
@@ -646,6 +652,26 @@ where
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
+        } else if self.codec.is_reading_hdrs()
+            && !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
+            && let Some(cfg) = self.config.headers_read_rate()
+        {
+            log::debug!(
+                "{}: Start headers read timer {:?}",
+                self.io.tag(),
+                cfg.timeout
+            );
+
+            // we got new data but not enough to parse single frame
+            // start read timer
+            self.flags
+                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
+            self.flags.insert(Flags::READ_HDRS_TIMEOUT);
+
+            self.read_consumed = 0;
+            self.read_remains = decoded.remains as u32;
+            self.read_max_timeout = cfg.max_timeout;
+            self.io.start_timer(cfg.timeout);
         } else if self.read_remains == 0 && decoded.remains == 0 {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
@@ -664,23 +690,6 @@ where
                 self.io.close();
                 return Some(self.ctl_keepalive(false));
             }
-        } else if let Some(cfg) = self.config.headers_read_rate() {
-            log::debug!(
-                "{}: Start headers read timer {:?}",
-                self.io.tag(),
-                cfg.timeout
-            );
-
-            // we got new data but not enough to parse single frame
-            // start read timer
-            self.flags
-                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
-            self.flags.insert(Flags::READ_HDRS_TIMEOUT);
-
-            self.read_consumed = 0;
-            self.read_remains = decoded.remains as u32;
-            self.read_max_timeout = cfg.max_timeout;
-            self.io.start_timer(cfg.timeout);
         }
         None
     }
@@ -797,7 +806,7 @@ mod tests {
     use crate::http::config::HttpServiceConfig;
     use crate::http::h1::{DefaultControlService, control::Reason};
     use crate::http::{ResponseHead, StatusCode, body};
-    use crate::io::{self as nio, Base, IoConfig};
+    use crate::io::{self as nio, Base};
     use crate::service::{IntoService, cfg::SharedCfg, fn_service};
     use crate::util::{Bytes, BytesMut, lazy, stream_recv};
     use crate::{codec::Decoder, testing::IoTest, time::Millis, time::sleep};
@@ -823,9 +832,10 @@ mod tests {
                     .set_client_timeout(Seconds(1)),
             )
             .into();
+
         Dispatcher::new(
             0,
-            nio::Io::new(stream, SharedCfg::default()),
+            nio::Io::new(stream, config.clone()),
             Rc::new(DispatcherConfig::new(
                 config.get(),
                 service.into_service(),
@@ -842,9 +852,17 @@ mod tests {
         S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
+        let config: SharedCfg = SharedCfg::new("DBG")
+            .add(
+                HttpServiceConfig::new()
+                    .set_keepalive(Seconds(5))
+                    .set_client_timeout(Seconds(1)),
+            )
+            .into();
+
         crate::rt::spawn(Dispatcher::<Base, S, B, _>::new(
             0,
-            nio::Io::new(stream, SharedCfg::default()),
+            nio::Io::new(stream, config),
             Rc::new(DispatcherConfig::new(
                 SharedCfg::default().get(),
                 service.into_service(),
@@ -929,7 +947,7 @@ mod tests {
     async fn test_pipeline() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true, SharedCfg::default().get::<IoConfig>());
+        let mut decoder = ClientCodec::new(true);
         spawn_h1(server, |_| async {
             Ok::<_, io::Error>(Response::Ok().finish())
         });
@@ -957,7 +975,7 @@ mod tests {
     async fn test_pipeline_with_payload() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true, SharedCfg::default().get::<IoConfig>());
+        let mut decoder = ClientCodec::new(true);
 
         spawn_h1(server, |mut req: Request| async move {
             let mut p = req.take_payload();
@@ -988,7 +1006,7 @@ mod tests {
     async fn test_pipeline_with_delay() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true, SharedCfg::default().get::<IoConfig>());
+        let mut decoder = ClientCodec::new(true);
         spawn_h1(server, |_| async {
             sleep(Millis(100)).await;
             Ok::<_, io::Error>(Response::Ok().finish())
@@ -1030,9 +1048,9 @@ mod tests {
         let num2 = num.clone();
 
         let (client, server) = IoTest::create();
-        spawn_h1(server, move |_| {
+        spawn_h1(server, async move |_| {
             num2.fetch_add(1, Ordering::Relaxed);
-            async { Ok::<_, io::Error>(Response::Ok().finish()) }
+            Ok::<_, io::Error>(Response::Ok().finish())
         });
 
         client.remote_buffer_cap(1024);
@@ -1064,7 +1082,7 @@ mod tests {
             ),
         );
 
-        let mut decoder = ClientCodec::new(true, h1.inner.io.shared().get());
+        let mut decoder = ClientCodec::new(true);
 
         // generate large http message
         let data = rand::rng()
@@ -1173,7 +1191,7 @@ mod tests {
 
         client.remote_buffer_cap(65536);
         sleep(Millis(50)).await;
-        assert_eq!(state.with_write_buf(|buf| buf.len()).unwrap(), 93);
+        assert_eq!(state.with_write_buf(|buf| { buf.len() }).unwrap(), 93);
 
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
         assert_eq!(num.load(Ordering::Relaxed), 65_536 * 2);
@@ -1220,7 +1238,7 @@ mod tests {
         // http message must be consumed
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
-        let mut decoder = ClientCodec::new(true, h1.inner.io.shared().get());
+        let mut decoder = ClientCodec::new(true);
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
@@ -1324,14 +1342,17 @@ mod tests {
         client.remote_buffer_cap(4096);
         client.write("GET /test HTTP/1.1\r\ncontent-length:512\r\n\r\n");
 
-        let mut h1 = h1(server, |_| {
-            Box::pin(async { Ok::<_, io::Error>(Response::Ok().body("TEST")) })
+        let mut h1 = h1(server, async move |_| {
+            Ok::<_, io::Error>(Response::Ok().body("TEST"))
         });
         // required because io shutdown is async oper
         assert!(poll_fn(|cx| Pin::new(&mut h1).poll(cx)).await.is_ok());
 
         assert!(h1.inner.io.is_closed());
         let buf = client.local_buffer(BytesMut::take);
-        assert_eq!(&buf[..15], b"HTTP/1.1 200 OK");
+        assert_eq!(
+            &buf[..55],
+            b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\nconnection: close\r\n"
+        );
     }
 }

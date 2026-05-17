@@ -1,11 +1,8 @@
 //! Traits and structures to aid consuming and writing HTTP payloads.
-use std::{
-    error::Error, fmt, marker::PhantomData, mem, pin::Pin, rc::Rc, task::Context,
-    task::Poll,
-};
+use std::{error::Error, fmt, marker, mem, pin::Pin, rc::Rc, task::Context, task::Poll};
 
 use futures_core::Stream;
-use ntex_bytes::{Bytes, BytesMut};
+use ntex_bytes::{BytePages, Bytes, BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 /// Body size hint
@@ -264,6 +261,12 @@ impl From<BytesMut> for Body {
     }
 }
 
+impl From<BytePages> for Body {
+    fn from(pages: BytePages) -> Body {
+        Body::from_message(pages)
+    }
+}
+
 impl<S> From<SizedStream<S>> for Body
 where
     S: Stream<Item = Result<Bytes, Rc<dyn Error>>> + Unpin + 'static,
@@ -322,6 +325,23 @@ impl MessageBody for BytesMut {
             Poll::Ready(None)
         } else {
             Poll::Ready(Some(Ok(mem::take(self).freeze())))
+        }
+    }
+}
+
+impl MessageBody for BytePages {
+    fn size(&self) -> BodySize {
+        BodySize::Sized(self.len() as u64)
+    }
+
+    fn poll_next_chunk(
+        &mut self,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Bytes, Rc<dyn Error>>>> {
+        if let Some(page) = self.take() {
+            Poll::Ready(Some(Ok(page.freeze())))
+        } else {
+            Poll::Ready(None)
         }
     }
 }
@@ -399,7 +419,7 @@ impl MessageBody for String {
 /// Response does not contain `content-length` header and appropriate transfer encoding is used.
 pub struct BodyStream<S, E> {
     stream: S,
-    _t: PhantomData<E>,
+    _t: marker::PhantomData<E>,
 }
 
 impl<S, E> BodyStream<S, E>
@@ -410,7 +430,7 @@ where
     pub fn new(stream: S) -> Self {
         BodyStream {
             stream,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -575,6 +595,13 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn test_size() {
+        assert_eq!(32, std::mem::size_of::<Body>());
+        assert_eq!(32, std::mem::size_of::<ResponseBody<Bytes>>());
+        assert_eq!(40, std::mem::size_of::<ResponseBody<Body>>());
+    }
+
+    #[ntex::test]
     async fn test_static_str() {
         assert_eq!(Body::from("").size(), BodySize::Sized(0));
         assert_eq!(Body::from("test").size(), BodySize::Sized(4));
@@ -590,6 +617,22 @@ mod tests {
             Some(Bytes::from("test"))
         );
         assert!(poll_fn(|cx| "".poll_next_chunk(cx)).await.is_none());
+    }
+
+    #[ntex::test]
+    async fn test_pages() {
+        let mut pages = BytePages::default();
+        pages.append(Bytes::from("1111"));
+        pages.append(Bytes::from("2222"));
+        pages.append(Bytes::from("3333"));
+
+        let mut body = Body::from(pages);
+        assert_eq!(body.size(), BodySize::Sized(12));
+        assert_eq!(
+            poll_fn(|cx| body.poll_next_chunk(cx)).await.unwrap().ok(),
+            Some(Bytes::from("111122223333"))
+        );
+        assert!(poll_fn(|cx| body.poll_next_chunk(cx)).await.is_none());
     }
 
     #[ntex::test]

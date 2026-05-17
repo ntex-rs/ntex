@@ -1,5 +1,9 @@
 //! Shared configuration for services
-#![allow(clippy::should_implement_trait, clippy::new_ret_no_self)]
+#![allow(
+    clippy::should_implement_trait,
+    clippy::new_ret_no_self,
+    clippy::missing_panics_doc
+)]
 use std::any::{Any, TypeId};
 use std::cell::{RefCell, UnsafeCell};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
@@ -10,16 +14,18 @@ type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::RandomState
 
 thread_local! {
     static DEFAULT_CFG: Arc<Storage> = {
-        let mut st = Arc::new(Storage::new("--", false, CfgContext(ptr::null())));
+        let mut st = Arc::new(Storage::new("--", "", false, CfgContext(ptr::null())));
         let p = Arc::as_ptr(&st);
         Arc::get_mut(&mut st).unwrap().ctx.update(p);
         st
     };
-    static MAPPING: RefCell<HashMap<Key, Box<dyn Any + Send + Sync>>> = {
+    static MAPPING: RefCell<HashMap<Key, Arc<dyn Any + Send + Sync>>> = {
         RefCell::new(HashMap::default())
     };
 }
 static IDX: AtomicUsize = AtomicUsize::new(0);
+const KIND_ARC: usize = 1;
+const KIND_UNMASK: usize = !KIND_ARC;
 
 pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
     const NAME: &'static str;
@@ -33,18 +39,25 @@ pub trait Configuration: Default + Send + Sync + fmt::Debug + 'static {
 struct Storage {
     id: usize,
     tag: &'static str,
+    service: &'static str,
     ctx: CfgContext,
     building: bool,
     data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 impl Storage {
-    fn new(tag: &'static str, building: bool, ctx: CfgContext) -> Self {
+    fn new(
+        tag: &'static str,
+        service: &'static str,
+        building: bool,
+        ctx: CfgContext,
+    ) -> Self {
         let id = IDX.fetch_add(1, Ordering::SeqCst);
         Storage {
             id,
-            tag,
             ctx,
+            tag,
+            service,
             building,
             data: HashMap::default(),
         }
@@ -62,20 +75,23 @@ impl CfgContext {
         self.0 = new_p;
     }
 
-    #[inline]
     /// Unique id of the context.
     pub fn id(&self) -> usize {
         self.get_ref().id
     }
 
     #[inline]
-    /// Context tag
+    /// Context tag.
     pub fn tag(&self) -> &'static str {
         self.get_ref().tag
     }
 
-    #[inline]
-    /// Get a reference to a previously inserted on configuration.
+    /// Service name.
+    pub fn service(&self) -> &'static str {
+        self.get_ref().service
+    }
+
+    /// Get a reference to a configuration.
     pub fn get<T>(&self) -> Cfg<T>
     where
         T: Configuration,
@@ -86,7 +102,6 @@ impl CfgContext {
         cfg
     }
 
-    #[inline]
     /// Get a shared configuration.
     pub fn shared(&self) -> SharedCfg {
         let inner: Arc<Storage> = unsafe { Arc::from_raw(self.0) };
@@ -111,6 +126,10 @@ impl Default for CfgContext {
 pub struct Cfg<T: Configuration>(UnsafeCell<*const T>, PhantomData<rc::Rc<T>>);
 
 impl<T: Configuration> Cfg<T> {
+    fn new(ptr: *const T) -> Self {
+        Self(UnsafeCell::new(ptr), PhantomData)
+    }
+
     #[inline]
     /// Unique id of the configuration.
     pub fn id(&self) -> usize {
@@ -118,19 +137,28 @@ impl<T: Configuration> Cfg<T> {
     }
 
     #[inline]
-    /// Context tag
+    /// Context tag.
     pub fn tag(&self) -> &'static str {
         self.get_ref().ctx().tag()
     }
 
-    #[inline]
+    /// Service name.
+    pub fn service(&self) -> &'static str {
+        self.get_ref().ctx().service()
+    }
+
     /// Get a shared configuration.
     pub fn shared(&self) -> SharedCfg {
         self.get_ref().ctx().shared()
     }
 
     fn get_ref(&self) -> &T {
-        unsafe { (*self.0.get()).as_ref().unwrap() }
+        unsafe {
+            (*self.0.get())
+                .map_addr(|addr| addr & KIND_UNMASK)
+                .as_ref()
+                .unwrap()
+        }
     }
 
     #[allow(clippy::needless_pass_by_value)]
@@ -148,6 +176,7 @@ impl<T: Configuration> Cfg<T> {
 
     #[doc(hidden)]
     #[deprecated(since = "4.5.0")]
+    #[must_use]
     pub fn into_static(&self) -> Cfg<T> {
         self.ctx().get()
     }
@@ -156,7 +185,12 @@ impl<T: Configuration> Cfg<T> {
 impl<T: Configuration> Drop for Cfg<T> {
     fn drop(&mut self) {
         unsafe {
-            Arc::decrement_strong_count(self.get_ref().ctx().0);
+            let addr = (*self.0.get()).map_addr(|addr| addr & KIND_UNMASK);
+            Arc::decrement_strong_count(addr.as_ref().unwrap().ctx().0);
+
+            if ((*self.0.get()).addr() & KIND_ARC) != 0 {
+                Arc::from_raw(addr);
+            }
         }
     }
 }
@@ -228,14 +262,20 @@ impl SharedCfg {
     }
 
     #[inline]
-    /// Get tag
+    /// Get tag.
     pub fn tag(&self) -> &'static str {
         self.0.tag
+    }
+
+    /// Service name.
+    pub fn service(&self) -> &'static str {
+        self.0.service
     }
 
     /// Get a reference to a previously inserted on configuration.
     ///
     /// # Panics
+    ///
     /// if shared config is in building stage
     pub fn get<T>(&self) -> Cfg<T>
     where
@@ -261,7 +301,7 @@ impl<T: Configuration> From<SharedCfg> for Cfg<T> {
 
 impl SharedCfgBuilder {
     fn new(tag: &'static str) -> SharedCfgBuilder {
-        let mut storage = Arc::new(Storage::new(tag, true, CfgContext::default()));
+        let mut storage = Arc::new(Storage::new(tag, tag, true, CfgContext::default()));
         let ctx = CfgContext(Arc::as_ptr(&storage));
         Arc::get_mut(&mut storage).unwrap().ctx.update(ctx.0);
 
@@ -269,7 +309,13 @@ impl SharedCfgBuilder {
     }
 
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
+    /// Set service name.
+    pub fn service(mut self, name: &'static str) -> Self {
+        Arc::get_mut(&mut self.storage).unwrap().service = name;
+        self
+    }
+
+    #[must_use]
     /// Insert a type into this configuration.
     ///
     /// If a config of this type already existed, it will
@@ -314,17 +360,15 @@ where
 
     let tp = TypeId::of::<T>();
     if let Some(arc) = st.data.get(&tp) {
-        Cfg(
-            UnsafeCell::new(arc.as_ref().downcast_ref::<T>().unwrap()),
-            PhantomData,
-        )
+        Cfg::new(arc.as_ref().downcast_ref::<T>().unwrap())
     } else {
         MAPPING.with(|store| {
             let key = (st.id, tp);
             if let Some(arc) = store.borrow().get(&key) {
-                Cfg(
-                    UnsafeCell::new(arc.as_ref().downcast_ref::<T>().unwrap()),
-                    PhantomData,
+                Cfg::new(
+                    Arc::into_raw(arc.clone())
+                        .cast::<T>()
+                        .map_addr(|addr| addr ^ KIND_ARC),
                 )
             } else {
                 log::info!(
@@ -334,12 +378,13 @@ where
                 );
                 let mut val = T::default();
                 val.set_ctx(CfgContext(st.ctx.0));
-                let arc: Box<dyn Any + Send + Sync> = Box::new(val);
-                let inner = UnsafeCell::new(ptr::from_ref(
-                    arc.as_ref().downcast_ref::<T>().unwrap(),
-                ));
-                store.borrow_mut().insert(key, arc);
-                Cfg(inner, PhantomData)
+                let arc = Arc::new(val);
+                store.borrow_mut().insert(key, arc.clone());
+                Cfg::new(
+                    Arc::into_raw(arc)
+                        .cast::<T>()
+                        .map_addr(|addr| addr ^ KIND_ARC),
+                )
             }
         })
     }
@@ -399,14 +444,20 @@ mod tests {
             }
         }
 
-        let cfg: SharedCfg = SharedCfg::new("TEST").add(TestCfg::default()).into();
+        let cfg: SharedCfg = SharedCfg::new("TEST")
+            .add(TestCfg::default())
+            .service("SVC")
+            .into();
 
         assert_eq!(cfg.tag(), "TEST");
+        assert_eq!(cfg.service(), "SVC");
         let t = cfg.get::<TestCfg>();
         assert_eq!(t.tag(), "TEST");
+        assert_eq!(t.service(), "SVC");
         assert_eq!(t.shared(), cfg);
         let t: Cfg<TestCfg> = Cfg::default();
         assert_eq!(t.tag(), "--");
+        assert_eq!(t.service(), "");
         assert_eq!(t.ctx().id(), t.id());
 
         let t: Cfg<TestCfg> = t.ctx().get();

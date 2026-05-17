@@ -2,13 +2,14 @@ use std::{cell::Cell, cell::RefCell};
 
 use bitflags::bitflags;
 
+use crate::client::ClientRawRequest;
 use crate::codec::{Decoder, Encoder};
 use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::h1::{
     Message, MessageType, PayloadDecoder, PayloadItem, PayloadType, decoder, encoder,
 };
 use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, Version};
-use crate::{Cfg, client::ClientRawRequest, io::IoConfig, util::Bytes, util::BytesMut};
+use crate::util::{BytePages, Bytes, BytesMut};
 
 bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -33,7 +34,6 @@ pub(crate) struct ClientPayloadCodec {
 
 #[derive(Debug)]
 struct ClientCodecInner {
-    cfg: Cfg<IoConfig>,
     decoder: decoder::MessageDecoder<ResponseHead>,
     payload: RefCell<Option<PayloadDecoder>>,
     version: Cell<Version>,
@@ -48,7 +48,7 @@ impl ClientCodec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub(crate) fn new(keep_alive: bool, cfg: Cfg<IoConfig>) -> Self {
+    pub(crate) fn new(keep_alive: bool) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -56,8 +56,7 @@ impl ClientCodec {
         };
         ClientCodec {
             inner: ClientCodecInner {
-                cfg,
-                decoder: decoder::MessageDecoder::default(),
+                decoder: decoder::MessageDecoder::new(96, 64 * 1024),
                 payload: RefCell::new(None),
                 version: Cell::new(Version::HTTP_11),
                 ctype: Cell::new(ConnectionType::Close),
@@ -170,7 +169,7 @@ impl Encoder for ClientCodec {
     type Item = Message<ClientRawRequest>;
     type Error = EncodeError;
 
-    fn encode(&self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encodev(&self, item: Self::Item, dst: &mut BytePages) -> Result<(), Self::Error> {
         match item {
             Message::Item(mut req) => {
                 let inner = &self.inner;
@@ -202,13 +201,10 @@ impl Encoder for ClientCodec {
                     req.size,
                     inner.ctype.get(),
                     headers,
-                    &self.inner.cfg,
                 )?;
             }
             Message::Chunk(Some(bytes)) => {
-                self.inner
-                    .encoder
-                    .encode_chunk(bytes.as_ref(), dst, &self.inner.cfg)?;
+                self.inner.encoder.encode_chunk(bytes, dst)?;
             }
             Message::Chunk(None) => {
                 self.inner.encoder.encode_eof(dst)?;

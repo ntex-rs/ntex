@@ -10,10 +10,13 @@ use crate::util::{Bytes, Stream};
 
 const INPLACE: usize = 2049;
 
+#[derive(derive_more::Debug)]
 pub struct Decoder<S> {
+    #[debug(skip)]
     inner: Option<ContentDecoder>,
     stream: S,
     eof: bool,
+    #[debug(skip)]
     fut: Option<BlockingResult<Result<(Option<Bytes>, ContentDecoder), io::Error>>>,
 }
 

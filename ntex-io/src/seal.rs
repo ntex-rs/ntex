@@ -1,7 +1,6 @@
 use std::{any::Any, any::TypeId, fmt, io, ops, task::Context, task::Poll};
 
-use crate::filter::{Filter, FilterReadStatus};
-use crate::{FilterCtx, Io, Readiness};
+use crate::{Filter, FilterCtx, Io, Readiness};
 
 /// Sealed filter type
 pub struct Sealed(pub(crate) Box<dyn Filter>);
@@ -19,21 +18,17 @@ impl Filter for Sealed {
     }
 
     #[inline]
-    fn process_read_buf(
-        &self,
-        ctx: FilterCtx<'_>,
-        nbytes: usize,
-    ) -> io::Result<FilterReadStatus> {
-        self.0.process_read_buf(ctx, nbytes)
+    fn process_read_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
+        self.0.process_read_buf(ctx)
     }
 
     #[inline]
-    fn process_write_buf(&self, ctx: FilterCtx<'_>) -> io::Result<()> {
+    fn process_write_buf(&self, ctx: &mut FilterCtx<'_>) -> io::Result<()> {
         self.0.process_write_buf(ctx)
     }
 
     #[inline]
-    fn shutdown(&self, ctx: FilterCtx<'_>) -> io::Result<Poll<()>> {
+    fn shutdown(&self, ctx: &mut FilterCtx<'_>) -> io::Result<Poll<()>> {
         self.0.shutdown(ctx)
     }
 
@@ -81,5 +76,40 @@ impl ops::Deref for IoBoxed {
 impl From<IoBoxed> for Io<Sealed> {
     fn from(value: IoBoxed) -> Self {
         value.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ntex_bytes::Bytes;
+    use ntex_codec::BytesCodec;
+    use ntex_service::{ServiceFactory, cfg::SharedCfg, fn_service};
+
+    use super::*;
+    use crate::{testing::IoTest, utils::seal};
+
+    #[ntex::test]
+    async fn test_seal() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+        client.write("REQ");
+
+        let svc = seal(fn_service(|io: IoBoxed| async move {
+            let t = io.recv(&BytesCodec).await.unwrap().unwrap();
+            assert_eq!(t, b"REQ".as_ref());
+            io.send(Bytes::from_static(b"RES"), &BytesCodec)
+                .await
+                .unwrap();
+            Ok::<_, ()>(())
+        }))
+        .pipeline(())
+        .await
+        .unwrap();
+
+        let srv: Io<Sealed> = Io::new(server, SharedCfg::default()).boxed().into();
+        let _ = svc.call(srv).await;
+
+        let buf = client.read().await.unwrap();
+        assert_eq!(buf, b"RES".as_ref());
     }
 }

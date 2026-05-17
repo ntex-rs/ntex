@@ -1,6 +1,6 @@
 [package]
 name = "ntex-bytes"
-version = "1.5.0"
+version = "1.6.8"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
@@ -27,5 +27,6 @@ serde = { workspace = true }
 simdutf8 = { workspace = true, optional = true }
 
 [dev-dependencies]
+rand = { workspace = true }
 serde_test = { workspace = true }
 serde_json = { workspace = true }

@@ -169,6 +169,8 @@ impl<Err: ErrorRenderer> Responder<Err> for BytesMut {
 }
 
 /// Allows to override status code and headers for a responder.
+#[derive(derive_more::Debug)]
+#[debug("CustomResponder")]
 pub struct CustomResponder<T: Responder<Err>, Err> {
     responder: T,
     status: Option<StatusCode>,

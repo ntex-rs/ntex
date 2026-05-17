@@ -1,11 +1,11 @@
 use std::{fmt, time};
 
 use crate::http::body::Body;
-use crate::http::{Payload, ResponseHead};
+use crate::http::{Payload, ResponseHead, Version};
 use crate::io::{IoBoxed, types::HttpProtocol};
 use crate::time::Millis;
 
-use super::{ClientRawRequest, error::SendRequestError, h1proto, h2proto, pool::Acquired};
+use super::{ClientRawRequest, error::ClientError, h1proto, h2proto, pool::Acquired};
 
 pub(super) enum ConnectionType {
     H1(IoBoxed),
@@ -90,15 +90,19 @@ impl Connection {
 
     pub(super) async fn send_request(
         mut self,
-        req: ClientRawRequest,
+        mut req: ClientRawRequest,
         body: Body,
         timeout: Millis,
-    ) -> Result<(ResponseHead, Payload), SendRequestError> {
+    ) -> Result<(ResponseHead, Payload), ClientError> {
         match self.io.take().unwrap() {
             ConnectionType::H1(io) => {
+                req.head.version = Version::HTTP_11;
                 h1proto::send_request(io, req, body, self.created, timeout, self.pool).await
             }
-            ConnectionType::H2(io) => h2proto::send_request(io, req, body, timeout).await,
+            ConnectionType::H2(io) => {
+                req.head.version = Version::HTTP_2;
+                h2proto::send_request(io, req, body, timeout).await
+            }
         }
     }
 }

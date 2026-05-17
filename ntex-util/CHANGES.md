@@ -1,5 +1,22 @@
 # Changes
 
+## [3.6.1] - 2026-05-11
+
+* Add helper method bstream::Sender::is_closed()
+
+## [3.6.0] - 2026-05-03
+
+* Use NonZeroUsize for TimerHandle so size of Option<TimerHandle>
+  is same as TimerHandle
+
+## [3.5.1] - 2026-04-02
+
+* Update to ntex-error 2.0
+
+## [3.5.0] - 2026-03-14
+
+* Move ErrorMessage to ntex-error
+
 ## [3.4.0] - 2025-12-17
 
 * Upgrade to ntex-service v4

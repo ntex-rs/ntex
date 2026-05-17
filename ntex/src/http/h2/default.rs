@@ -5,7 +5,7 @@ use ntex_h2 as h2;
 use crate::http::error::H2Error;
 use crate::service::{Service, ServiceCtx, ServiceFactory, cfg::SharedCfg};
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 /// Default control service
 pub struct DefaultControlService;
 

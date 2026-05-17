@@ -4,16 +4,14 @@
     clippy::cast_sign_loss,
     clippy::too_many_arguments
 )]
-use std::marker::PhantomData;
-use std::{cell::Cell, cmp, io::Write, mem, ptr, ptr::copy_nonoverlapping, slice};
+use std::{cell::Cell, cmp, io::Write, marker::PhantomData, mem, ptr, slice};
 
-use crate::http::body::BodySize;
 use crate::http::config::DateService;
 use crate::http::error::EncodeError;
 use crate::http::header::{CONNECTION, CONTENT_LENGTH, DATE, TRANSFER_ENCODING, Value};
 use crate::http::message::{ConnectionType, RequestHead};
-use crate::http::{HeaderMap, Response, StatusCode, Version, helpers};
-use crate::{io::IoConfig, util::BufMut, util::BytesMut};
+use crate::http::{HeaderMap, Response, StatusCode, Version, body::BodySize};
+use crate::{util::BufMut, util::BytePages, util::Bytes};
 
 #[derive(Debug)]
 pub(crate) struct MessageEncoder<T: MessageType> {
@@ -49,16 +47,15 @@ pub(crate) trait MessageType: Sized {
 
     fn chunked(&self) -> bool;
 
-    fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError>;
+    fn encode_status(&self, dst: &mut BytePages);
 
     fn encode_headers(
         &self,
-        dst: &mut BytesMut,
+        dst: &mut BytePages,
         version: Version,
         mut length: BodySize,
         ctype: ConnectionType,
         extra_headers: Option<HeaderMap>,
-        cfg: &IoConfig,
     ) -> Result<(), EncodeError> {
         let chunked = self.chunked();
         let mut skip_len = length != BodySize::Stream;
@@ -112,10 +109,7 @@ pub(crate) trait MessageType: Sized {
             .chain(extra_headers.iter_inner());
 
         // write headers
-        let mut pos = 0;
         let mut has_date = false;
-        let mut remaining = dst.remaining_mut();
-        let mut buf = dst.chunk_mut().as_mut_ptr();
         for (key, value) in headers {
             match *key {
                 CONNECTION => continue,
@@ -125,66 +119,22 @@ pub(crate) trait MessageType: Sized {
                 }
                 _ => (),
             }
-            let k = key.as_str().as_bytes();
             match value {
                 Value::One(val) => {
-                    let v = val.as_ref();
-                    let v_len = v.len();
-                    let k_len = k.len();
-                    let len = k_len + v_len + 4;
-
-                    unsafe {
-                        if len > remaining {
-                            dst.advance_mut(pos);
-                            pos = 0;
-                            cfg.write_buf().resize_min(dst, len + len);
-                            remaining = dst.remaining_mut();
-                            buf = dst.chunk_mut().as_mut_ptr();
-                        }
-                        copy_nonoverlapping(k.as_ptr(), buf, k_len);
-                        buf = buf.add(k_len);
-                        copy_nonoverlapping(b": ".as_ptr(), buf, 2);
-                        buf = buf.add(2);
-                        copy_nonoverlapping(v.as_ptr(), buf, v_len);
-                        buf = buf.add(v_len);
-                        copy_nonoverlapping(b"\r\n".as_ptr(), buf, 2);
-                        buf = buf.add(2);
-                    }
-                    pos += len;
-                    remaining -= len;
+                    dst.put_slice(key.as_ref());
+                    dst.put_slice(b": ");
+                    dst.put_slice(val.as_ref());
+                    dst.put_slice(b"\r\n");
                 }
                 Value::Multi(vec) => {
                     for val in vec {
-                        let v = val.as_ref();
-                        let v_len = v.len();
-                        let k_len = k.len();
-                        let len = k_len + v_len + 4;
-
-                        unsafe {
-                            if len > remaining {
-                                dst.advance_mut(pos);
-                                pos = 0;
-                                cfg.write_buf().resize_min(dst, len + len);
-                                remaining = dst.remaining_mut();
-                                buf = dst.chunk_mut().as_mut_ptr();
-                            }
-                            copy_nonoverlapping(k.as_ptr(), buf, k_len);
-                            buf = buf.add(k_len);
-                            copy_nonoverlapping(b": ".as_ptr(), buf, 2);
-                            buf = buf.add(2);
-                            copy_nonoverlapping(v.as_ptr(), buf, v_len);
-                            buf = buf.add(v_len);
-                            copy_nonoverlapping(b"\r\n".as_ptr(), buf, 2);
-                            buf = buf.add(2);
-                        };
-                        pos += len;
-                        remaining -= len;
+                        dst.put_slice(key.as_ref());
+                        dst.put_slice(b": ");
+                        dst.put_slice(val.as_ref());
+                        dst.put_slice(b"\r\n");
                     }
                 }
             }
-        }
-        unsafe {
-            dst.advance_mut(pos);
         }
 
         // optimized date header, set_date writes \r\n
@@ -192,7 +142,7 @@ pub(crate) trait MessageType: Sized {
             // msg eof
             dst.extend_from_slice(b"\r\n");
         } else {
-            DateService.set_date_header(dst);
+            DateService.set_date_header2(dst);
         }
 
         Ok(())
@@ -212,14 +162,13 @@ impl MessageType for Response<()> {
         &self.head().headers
     }
 
-    fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
+    fn encode_status(&self, dst: &mut BytePages) {
         let head = self.head();
         let reason = head.reason().as_bytes();
 
         // status line
         write_status_line(head.version, head.status.as_u16(), dst);
         dst.extend_from_slice(reason);
-        Ok(())
     }
 }
 
@@ -236,21 +185,25 @@ impl MessageType for RequestHead {
         self.headers()
     }
 
-    fn encode_status(&self, dst: &mut BytesMut) -> Result<(), EncodeError> {
-        write!(
-            helpers::Writer(dst),
-            "{} {} {}",
-            self.method,
-            self.uri.path_and_query().map_or("/", |u| u.as_str()),
+    fn encode_status(&self, dst: &mut BytePages) {
+        dst.put_slice(self.method.as_str().as_bytes());
+        dst.put_u8(b' ');
+        dst.put_slice(
+            self.uri
+                .path_and_query()
+                .map_or("/", |u| u.as_str())
+                .as_bytes(),
+        );
+        dst.put_u8(b' ');
+        dst.put_slice(
             // only HTTP-0.9/1.1
             match self.version {
-                Version::HTTP_09 => "HTTP/0.9",
-                Version::HTTP_10 => "HTTP/1.0",
-                Version::HTTP_11 => "HTTP/1.1",
-                _ => return Err(EncodeError::UnsupportedVersion(self.version)),
-            }
-        )
-        .map_err(EncodeError::Fmt)
+                Version::HTTP_09 => b"HTTP/0.9",
+                Version::HTTP_10 => b"HTTP/1.0",
+                // Version::HTTP_11 => "HTTP/1.1",
+                _ => b"HTTP/1.1",
+            },
+        );
     }
 }
 
@@ -258,18 +211,17 @@ impl<T: MessageType> MessageEncoder<T> {
     /// Encode message
     pub(crate) fn encode_chunk(
         &self,
-        msg: &[u8],
-        buf: &mut BytesMut,
-        cfg: &IoConfig,
+        msg: Bytes,
+        buf: &mut BytePages,
     ) -> Result<bool, EncodeError> {
         let mut te = self.te.get();
-        let result = te.encode(msg, buf, cfg);
+        let result = te.encode(msg, buf);
         self.te.set(te);
         result
     }
 
     /// Encode eof
-    pub(crate) fn encode_eof(&self, buf: &mut BytesMut) -> Result<(), EncodeError> {
+    pub(crate) fn encode_eof(&self, buf: &mut BytePages) -> Result<(), EncodeError> {
         let mut te = self.te.get();
         let result = te.encode_eof(buf);
         self.te.set(te);
@@ -278,7 +230,7 @@ impl<T: MessageType> MessageEncoder<T> {
 
     pub(crate) fn encode(
         &self,
-        dst: &mut BytesMut,
+        dst: &mut BytePages,
         message: &T,
         head: bool,
         stream: bool,
@@ -286,7 +238,6 @@ impl<T: MessageType> MessageEncoder<T> {
         length: BodySize,
         ctype: ConnectionType,
         extra_headers: Option<HeaderMap>,
-        cfg: &IoConfig,
     ) -> Result<(), EncodeError> {
         // transfer encoding
         if head {
@@ -305,8 +256,8 @@ impl<T: MessageType> MessageEncoder<T> {
             });
         }
 
-        message.encode_status(dst)?;
-        message.encode_headers(dst, version, length, ctype, extra_headers, cfg)
+        message.encode_status(dst);
+        message.encode_headers(dst, version, length, ctype, extra_headers)
     }
 }
 
@@ -363,15 +314,17 @@ impl TransferEncoding {
     #[inline]
     pub(crate) fn encode(
         &mut self,
-        msg: &[u8],
-        buf: &mut BytesMut,
-        cfg: &IoConfig,
+        mut msg: Bytes,
+        buf: &mut BytePages,
     ) -> Result<bool, EncodeError> {
         match self.kind {
             TransferEncodingKind::Eof => {
-                let eof = msg.is_empty();
-                buf.extend_from_slice(msg);
-                Ok(eof)
+                if msg.is_empty() {
+                    Ok(true)
+                } else {
+                    buf.append(msg);
+                    Ok(false)
+                }
             }
             TransferEncodingKind::Chunked(eof) => {
                 if eof {
@@ -383,11 +336,9 @@ impl TransferEncoding {
                     self.kind = TransferEncodingKind::Chunked(true);
                     true
                 } else {
-                    writeln!(helpers::Writer(buf), "{:X}\r", msg.len())
-                        .map_err(EncodeError::Fmt)?;
+                    writeln!(buf, "{:X}\r", msg.len()).map_err(EncodeError::Fmt)?;
 
-                    cfg.write_buf().resize_min(buf, msg.len() + 2);
-                    buf.extend_from_slice(msg);
+                    buf.append(msg);
                     buf.extend_from_slice(b"\r\n");
                     false
                 };
@@ -400,8 +351,7 @@ impl TransferEncoding {
                     }
                     let len = cmp::min(remaining, msg.len() as u64);
 
-                    cfg.write_buf().resize_min(buf, len as usize);
-                    buf.extend_from_slice(&msg[..len as usize]);
+                    buf.append(msg.split_to(len as usize));
 
                     remaining -= len;
                     self.kind = TransferEncodingKind::Length(remaining);
@@ -415,7 +365,7 @@ impl TransferEncoding {
 
     /// Encode eof. Return `EOF` state of encoder
     #[inline]
-    pub(crate) fn encode_eof(&mut self, buf: &mut BytesMut) -> Result<(), EncodeError> {
+    pub(crate) fn encode_eof(&mut self, buf: &mut BytePages) -> Result<(), EncodeError> {
         match self.kind {
             TransferEncodingKind::Eof => Ok(()),
             TransferEncodingKind::Length(rem) => {
@@ -445,7 +395,7 @@ const DEC_DIGITS_LUT: &[u8] = b"0001020304050607080910111213141516171819\
 const STATUS_LINE_BUF_SIZE: usize = 13;
 
 #[allow(clippy::cast_possible_wrap)]
-fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesMut) {
+fn write_status_line(version: Version, mut n: u16, bytes: &mut BytePages) {
     let mut buf: [u8; STATUS_LINE_BUF_SIZE] = match version {
         Version::HTTP_2 => *b"HTTP/2       ",
         Version::HTTP_10 => *b"HTTP/1.0     ",
@@ -484,19 +434,13 @@ fn write_status_line(version: Version, mut n: u16, bytes: &mut BytesMut) {
 }
 
 /// NOTE: bytes object has to contain enough space
-fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
+fn write_content_length(mut n: u64, bytes: &mut BytePages) {
     if n < 10 {
-        let mut buf: [u8; 21] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
-            b'g', b't', b'h', b':', b' ', b'0', b'\r', b'\n',
-        ];
+        let mut buf: [u8; 21] = *b"\r\ncontent-length: 0\r\n";
         buf[18] = (n as u8) + b'0';
         bytes.extend_from_slice(&buf);
     } else if n < 100 {
-        let mut buf: [u8; 22] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
-            b'g', b't', b'h', b':', b' ', b'0', b'0', b'\r', b'\n',
-        ];
+        let mut buf: [u8; 22] = *b"\r\ncontent-length: 00\r\n";
         let d1 = n << 1;
         unsafe {
             ptr::copy_nonoverlapping(
@@ -507,10 +451,7 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
         }
         bytes.extend_from_slice(&buf);
     } else if n < 1000 {
-        let mut buf: [u8; 23] = [
-            b'\r', b'\n', b'c', b'o', b'n', b't', b'e', b'n', b't', b'-', b'l', b'e', b'n',
-            b'g', b't', b'h', b':', b' ', b'0', b'0', b'0', b'\r', b'\n',
-        ];
+        let mut buf: [u8; 23] = *b"\r\ncontent-length: 000\r\n";
         // decode 2 more chars, if > 2 chars
         let d1 = (n % 100) << 1;
         n /= 100;
@@ -528,56 +469,65 @@ fn write_content_length(mut n: u64, bytes: &mut BytesMut) {
         bytes.extend_from_slice(&buf);
     } else {
         bytes.extend_from_slice(b"\r\ncontent-length: ");
-        unsafe { convert_usize(n, bytes) };
+        convert_usize(n, bytes, true);
     }
 }
 
-unsafe fn convert_usize(mut n: u64, bytes: &mut BytesMut) {
-    let mut curr: isize = 39;
-    #[allow(invalid_value, clippy::uninit_assumed_init)]
-    let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
-    buf[39] = b'\r';
-    buf[40] = b'\n';
-    let buf_ptr = buf.as_mut_ptr();
-    let lut_ptr = DEC_DIGITS_LUT.as_ptr();
+pub(crate) fn convert_usize<B: BufMut>(mut n: u64, bytes: &mut B, eol: bool) {
+    unsafe {
+        let mut curr: isize = 39;
+        #[allow(invalid_value, clippy::uninit_assumed_init)]
+        let mut buf: [u8; 41] = mem::MaybeUninit::uninit().assume_init();
+        buf[39] = b'\r';
+        buf[40] = b'\n';
+        let buf_ptr = buf.as_mut_ptr();
+        let lut_ptr = DEC_DIGITS_LUT.as_ptr();
 
-    // eagerly decode 4 characters at a time
-    while n >= 10_000 {
-        let rem = (n % 10_000) as isize;
-        n /= 10_000;
+        // eagerly decode 4 characters at a time
+        while n >= 10_000 {
+            let rem = (n % 10_000) as isize;
+            n /= 10_000;
 
-        let d1 = (rem / 100) << 1;
-        let d2 = (rem % 100) << 1;
-        curr -= 4;
-        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-        ptr::copy_nonoverlapping(lut_ptr.offset(d2), buf_ptr.offset(curr + 2), 2);
+            let d1 = (rem / 100) << 1;
+            let d2 = (rem % 100) << 1;
+            curr -= 4;
+            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
+            ptr::copy_nonoverlapping(lut_ptr.offset(d2), buf_ptr.offset(curr + 2), 2);
+        }
+
+        // if we reach here numbers are <= 9999, so at most 4 chars long
+        let mut n = n as isize; // possibly reduce 64bit math
+
+        // decode 2 more chars, if > 2 chars
+        if n >= 100 {
+            let d1 = (n % 100) << 1;
+            n /= 100;
+            curr -= 2;
+            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
+        }
+
+        // decode last 1 or 2 chars
+        if n < 10 {
+            curr -= 1;
+            *buf_ptr.offset(curr) = (n as u8) + b'0';
+        } else {
+            let d1 = n << 1;
+            curr -= 2;
+            ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
+        }
+
+        if eol {
+            bytes.put_slice(slice::from_raw_parts(
+                buf_ptr.offset(curr),
+                41 - curr as usize,
+            ));
+        } else {
+            bytes.put_slice(slice::from_raw_parts(
+                buf_ptr.offset(curr),
+                39 - curr as usize,
+            ));
+        }
     }
-
-    // if we reach here numbers are <= 9999, so at most 4 chars long
-    let mut n = n as isize; // possibly reduce 64bit math
-
-    // decode 2 more chars, if > 2 chars
-    if n >= 100 {
-        let d1 = (n % 100) << 1;
-        n /= 100;
-        curr -= 2;
-        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-    }
-
-    // decode last 1 or 2 chars
-    if n < 10 {
-        curr -= 1;
-        *buf_ptr.offset(curr) = (n as u8) + b'0';
-    } else {
-        let d1 = n << 1;
-        curr -= 2;
-        ptr::copy_nonoverlapping(lut_ptr.offset(d1), buf_ptr.offset(curr), 2);
-    }
-
-    bytes.extend_from_slice(slice::from_raw_parts(
-        buf_ptr.offset(curr),
-        41 - curr as usize,
-    ));
 }
 
 #[cfg(test)]
@@ -585,30 +535,19 @@ mod tests {
     use super::*;
     use crate::http::RequestHead;
     use crate::http::header::{AUTHORIZATION, HeaderValue};
-    use crate::util::Bytes;
 
     #[test]
     fn test_chunked_te() {
-        let mut bytes = BytesMut::new();
+        let mut bytes = BytePages::default();
         let mut enc = TransferEncoding::chunked();
-        {
-            assert!(
-                !enc.encode(b"test", &mut bytes, &IoConfig::default())
-                    .ok()
-                    .unwrap()
-            );
-            assert!(
-                enc.encode(b"", &mut bytes, &IoConfig::default())
-                    .ok()
-                    .unwrap()
-            );
-        }
-        assert_eq!(bytes.take(), Bytes::from_static(b"4\r\ntest\r\n0\r\n\r\n"));
+        assert!(!enc.encode(b"test".into(), &mut bytes).ok().unwrap());
+        assert!(enc.encode(b"".into(), &mut bytes).ok().unwrap());
+        assert_eq!(bytes.take().unwrap().as_ref(), b"4\r\ntest\r\n0\r\n\r\n");
     }
 
     #[test]
     fn test_extra_headers() {
-        let mut bytes = BytesMut::with_capacity(2048);
+        let mut bytes = BytePages::default();
 
         let mut head = RequestHead::default();
         head.headers.insert(
@@ -629,9 +568,8 @@ mod tests {
             BodySize::Empty,
             ConnectionType::Close,
             Some(extra_headers),
-            &IoConfig::default(),
         );
-        let data = String::from_utf8(Vec::from(bytes.take().as_ref())).unwrap();
+        let data = String::from_utf8(Vec::from(bytes.take().unwrap().as_ref())).unwrap();
         assert!(data.contains("content-length: 0\r\n"));
         assert!(data.contains("connection: close\r\n"));
         assert!(data.contains("authorization: another authorization\r\n"));
@@ -640,38 +578,29 @@ mod tests {
 
     #[test]
     fn test_write_content_length() {
-        let mut bytes = BytesMut::new();
-        bytes.reserve(50);
-        write_content_length(0, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 0\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(9, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 9\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(10, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 10\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(99, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 99\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(100, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 100\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(101, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 101\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(998, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 998\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(1000, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 1000\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(1001, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 1001\r\n"[..]);
-        bytes.reserve(50);
-        write_content_length(5909, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 5909\r\n"[..]);
-        write_content_length(25999, &mut bytes);
-        assert_eq!(bytes.take(), b"\r\ncontent-length: 25999\r\n"[..]);
+        let mut b = BytePages::default();
+
+        write_content_length(0, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 0\r\n");
+        write_content_length(9, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 9\r\n");
+        write_content_length(10, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 10\r\n");
+        write_content_length(99, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 99\r\n");
+        write_content_length(100, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 100\r\n");
+        write_content_length(101, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 101\r\n");
+        write_content_length(998, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 998\r\n");
+        write_content_length(1000, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 1000\r\n");
+        write_content_length(1001, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 1001\r\n");
+        write_content_length(5909, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 5909\r\n");
+        write_content_length(25999, &mut b);
+        assert_eq!(b.take().unwrap().as_ref(), b"\r\ncontent-length: 25999\r\n");
     }
 }

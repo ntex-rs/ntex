@@ -5,6 +5,7 @@ use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, th
 
 use async_channel::{Receiver, Sender, unbounded};
 
+use crate::Handle;
 use crate::system::{FnExec, Id, System, SystemCommand};
 
 thread_local!(
@@ -29,7 +30,8 @@ pub struct Arbiter {
     id: usize,
     pub(crate) sys_id: usize,
     name: Arc<String>,
-    sender: Sender<ArbiterCommand>,
+    pub(crate) hnd: Option<Handle>,
+    pub(crate) sender: Sender<ArbiterCommand>,
     thread_handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -47,20 +49,45 @@ impl Default for Arbiter {
 
 impl Clone for Arbiter {
     fn clone(&self) -> Self {
-        Self::with_sender(self.sys_id, self.id, self.name.clone(), self.sender.clone())
+        Self {
+            id: self.id,
+            sys_id: self.sys_id,
+            name: self.name.clone(),
+            sender: self.sender.clone(),
+            hnd: self.hnd.clone(),
+            thread_handle: None,
+        }
     }
 }
 
 impl Arbiter {
     #[allow(clippy::borrowed_box)]
-    pub(super) fn new_system(name: String) -> (Self, ArbiterController) {
+    pub(super) fn new_system(sys: System, name: String) -> (Self, ArbiterController) {
         let (tx, rx) = unbounded();
 
-        let arb = Arbiter::with_sender(0, 0, Arc::new(name), tx);
+        let arb = Arbiter::with_sender(sys.id().0, 0, Arc::new(name), tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
-        (arb, ArbiterController { rx, stop: None })
+        (
+            arb,
+            ArbiterController {
+                sys,
+                rx,
+                stop: None,
+            },
+        )
+    }
+
+    pub(super) fn dummy() -> Self {
+        Arbiter {
+            id: 0,
+            hnd: None,
+            name: String::new().into(),
+            sys_id: 0,
+            sender: unbounded().0,
+            thread_handle: None,
+        }
     }
 
     /// Returns the current thread's arbiter's address
@@ -73,6 +100,12 @@ impl Arbiter {
             Some(ref addr) => addr.clone(),
             None => panic!("Arbiter is not running"),
         })
+    }
+
+    pub(crate) fn set_current(&self) {
+        ADDR.with(|cell| {
+            *cell.borrow_mut() = Some(self.clone());
+        });
     }
 
     /// Stop arbiter from continuing it's event loop.
@@ -108,22 +141,29 @@ impl Arbiter {
 
         let name = name2.clone();
         let sys_id = sys.id();
+        let (arb_hnd_tx, arb_hnd_rx) = oneshot::channel();
 
         let handle = builder
             .spawn(move || {
                 log::info!("Starting {name2:?} arbiter");
 
-                let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
-
+                let sys2 = sys.clone();
+                let sys3 = sys.clone();
                 let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
-                System::set_current(sys);
+                System::set_current(sys.clone());
 
-                config.block_on(async move {
+                crate::driver::block_on(config.runner.as_ref(), async move {
+                    let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
+                    arb_hnd_tx
+                        .send(arb.hnd.clone())
+                        .expect("Controller thread has gone");
+
                     // start arbiter controller
                     crate::spawn(
                         ArbiterController {
+                            sys,
                             stop: Some(stop),
                             rx: arb_rx,
                         }
@@ -132,7 +172,7 @@ impl Arbiter {
                     ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
                     // register arbiter
-                    let _ = System::current()
+                    let _ = sys2
                         .sys()
                         .try_send(SystemCommand::RegisterArbiter(Id(id), arb));
 
@@ -141,16 +181,21 @@ impl Arbiter {
                 });
 
                 // unregister arbiter
-                let _ = System::current()
+                let _ = sys3
                     .sys()
                     .try_send(SystemCommand::UnregisterArbiter(Id(id)));
+
+                remove_all_items();
             })
             .unwrap_or_else(|err| {
                 panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
             });
 
+        let hnd = arb_hnd_rx.recv().expect("Could not start new arbiter");
+
         Arbiter {
             id,
+            hnd,
             name,
             sys_id: sys_id.0,
             sender: arb_tx2,
@@ -164,11 +209,21 @@ impl Arbiter {
         name: Arc<String>,
         sender: Sender<ArbiterCommand>,
     ) -> Self {
+        #[cfg(feature = "tokio")]
+        let hnd = { Handle::new(sender.clone()) };
+
+        #[cfg(feature = "compio")]
+        let hnd = { Handle::new(sender.clone()) };
+
+        #[cfg(all(not(feature = "compio"), not(feature = "tokio")))]
+        let hnd = { Handle::current() };
+
         Self {
             id,
             sys_id,
             name,
             sender,
+            hnd: Some(hnd),
             thread_handle: None,
         }
     }
@@ -183,6 +238,14 @@ impl Arbiter {
         self.name.as_ref()
     }
 
+    #[inline]
+    /// Handle to a runtime
+    pub fn handle(&self) -> &Handle {
+        self.hnd.as_ref().unwrap()
+    }
+
+    #[doc(hidden)]
+    #[deprecated(since = "3.8.0", note = "use `ntex_rt::spawn()`")]
     /// Send a future to the Arbiter's thread, and spawn it.
     pub fn spawn<F>(&self, future: F)
     where
@@ -193,19 +256,20 @@ impl Arbiter {
             .try_send(ArbiterCommand::Execute(Box::pin(future)));
     }
 
-    #[rustfmt::skip]
+    #[doc(hidden)]
+    #[deprecated(since = "3.8.0", note = "use `ntex_rt::Handle::spawn()`")]
     /// Send a function to the Arbiter's thread and spawns it's resulting future.
     /// This can be used to spawn non-send futures on the arbiter thread.
     pub fn spawn_with<F, R, O>(
         &self,
-        f: F
+        f: F,
     ) -> impl Future<Output = Result<O, oneshot::RecvError>> + Send + 'static
     where
         F: FnOnce() -> R + Send + 'static,
         R: Future<Output = O> + 'static,
         O: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = oneshot::async_channel();
         let _ = self
             .sender
             .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
@@ -216,16 +280,20 @@ impl Arbiter {
         rx
     }
 
-    #[rustfmt::skip]
+    #[doc(hidden)]
+    #[deprecated(since = "3.8.0", note = "use `ntex_rt::Handle::spawn()`")]
     /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
     /// A future is created, and when resolved will contain the result of the function sent
     /// to the Arbiters thread.
-    pub fn exec<F, R>(&self, f: F) -> impl Future<Output = Result<R, oneshot::RecvError>> + Send + 'static
+    pub fn exec<F, R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = Result<R, oneshot::RecvError>> + Send + 'static
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = oneshot::async_channel();
         let _ = self
             .sender
             .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
@@ -234,6 +302,8 @@ impl Arbiter {
         rx
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.8.0", note = "use `ntex_rt::Handle::spawn()`")]
     /// Send a function to the Arbiter's thread, and execute it. Any result from the function
     /// is discarded.
     pub fn exec_fn<F>(&self, f: F)
@@ -247,17 +317,22 @@ impl Arbiter {
             })));
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.8.0", note = "use `ntex_rt::set_item()`")]
     /// Set item to current arbiter's storage
     pub fn set_item<T: 'static>(item: T) {
-        STORAGE
-            .with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item)));
+        set_item(item);
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.8.0", note = "use `ntex_rt::get_item()`")]
     /// Check if arbiter storage contains item
     pub fn contains_item<T: 'static>() -> bool {
         STORAGE.with(move |cell| cell.borrow().get(&TypeId::of::<T>()).is_some())
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.8.0", note = "use `ntex_rt::get_item()`")]
     /// Get a reference to a type previously inserted on this arbiter's storage
     ///
     /// # Panics
@@ -315,6 +390,7 @@ impl PartialEq for Arbiter {
 }
 
 pub(crate) struct ArbiterController {
+    sys: System,
     stop: Option<oneshot::Sender<i32>>,
     rx: Receiver<ArbiterCommand>,
 }
@@ -322,9 +398,9 @@ pub(crate) struct ArbiterController {
 impl Drop for ArbiterController {
     fn drop(&mut self) {
         if thread::panicking() {
-            if System::current().stop_on_panic() {
+            if self.sys.stop_on_panic() {
                 eprintln!("Panic in Arbiter thread, shutting down system.");
-                System::current().stop_with_code(1);
+                self.sys.stop_with_code(1);
             } else {
                 eprintln!("Panic in Arbiter thread.");
             }
@@ -352,4 +428,43 @@ impl ArbiterController {
             }
         }
     }
+}
+
+/// Set item to current runtime's storage
+pub fn set_item<T: 'static>(item: T) {
+    STORAGE.with(move |cell| cell.borrow_mut().insert(TypeId::of::<T>(), Box::new(item)));
+}
+
+/// Get a reference to a type previously inserted on this runtime's storage
+pub fn get_item<T: Clone + 'static>() -> Option<T> {
+    STORAGE.with(move |cell| {
+        cell.borrow()
+            .get(&TypeId::of::<T>())
+            .and_then(|boxed| boxed.downcast_ref())
+            .cloned()
+    })
+}
+
+/// Get a reference to a type or create new if it doesnt exists
+pub fn with_item<T: Default + 'static, F, R>(f: F) -> R
+where
+    F: FnOnce(&T) -> R,
+{
+    STORAGE.with(move |cell| {
+        let mut st = cell.borrow_mut();
+        if let Some(boxed) = st.get(&TypeId::of::<T>()) {
+            f(boxed.downcast_ref().unwrap())
+        } else {
+            let item = T::default();
+            let result = f(&item);
+            st.insert(TypeId::of::<T>(), Box::new(item));
+            result
+        }
+    })
+}
+
+/// Remove all items from storage.
+pub fn remove_all_items() {
+    STORAGE.with(move |cell| cell.borrow_mut().clear());
+    System::remove_current();
 }

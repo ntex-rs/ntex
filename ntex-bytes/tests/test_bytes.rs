@@ -2,7 +2,7 @@
 use std::{borrow::Borrow, borrow::BorrowMut};
 
 use ntex_bytes::info::Kind;
-use ntex_bytes::{Buf, BufMut, Bytes, BytesMut};
+use ntex_bytes::{Buf, BufMut, BytePage, BytePages, Bytes, BytesMut};
 
 const LONG: &[u8] = b"mary had a little lamb, little lamb, little lamb";
 const SHORT: &[u8] = b"hello world";
@@ -20,7 +20,10 @@ fn is_send<T: Send>() {}
 fn test_size() {
     assert_eq!(24, std::mem::size_of::<Bytes>());
     assert_eq!(24, std::mem::size_of::<Option<Bytes>>());
-    assert_eq!(20, ntex_bytes::METADATA_SIZE);
+    assert_eq!(24, ntex_bytes::METADATA_SIZE);
+    assert_eq!(8, std::mem::size_of::<BytesMut>());
+    assert_eq!(16, std::mem::size_of::<BytePages>());
+    assert_eq!(32, std::mem::size_of::<BytePage>());
 
     let mut t = BytesMut::new();
     t.extend_from_slice(&b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"[..]);
@@ -97,10 +100,18 @@ fn fmt_write() {
     write!(b, "{}", &s[..32]).unwrap();
     write!(b, "{}", &s[32..64]).unwrap();
     assert_eq!(b, s[..64].as_bytes());
+}
 
-    let mut c = BytesMut::with_capacity(2);
-    write!(c, "{s}").unwrap_err();
-    assert!(c.is_empty());
+#[allow(clippy::sliced_string_as_bytes)]
+#[test]
+fn fmt_io_write() {
+    use std::io::Write;
+
+    let mut a = BytesMut::new();
+    assert_eq!(a.write(b"abcdefg").unwrap(), 7);
+    assert_eq!(&a, b"abcdefg");
+
+    a.flush().unwrap();
 }
 
 #[test]
@@ -353,6 +364,7 @@ fn split_off_to_at_gt_len() {
 
 #[test]
 #[allow(
+    clippy::byte_char_slices,
     clippy::cmp_owned,
     clippy::redundant_slicing,
     clippy::iter_cloned_collect,
@@ -407,17 +419,17 @@ fn fns_defined_for_bytes() {
     );
 
     let bytes = Bytes::copy_from_slice(&B[..]);
-    assert!(bytes.info().kind == Kind::Vec);
-    assert!(bytes.info().refs == 1);
-    assert_eq!(bytes.info().capacity, 72);
+    assert_eq!(bytes.info().kind, Kind::Vec);
+    assert_eq!(bytes.info().refs, 1);
+    assert_eq!(bytes.info().capacity, 76);
     let b2 = bytes.clone();
-    assert!(b2.info().kind == Kind::Vec);
-    assert!(b2.info().refs == 2);
-    assert!(b2.info().capacity == 72);
+    assert_eq!(b2.info().kind, Kind::Vec);
+    assert_eq!(b2.info().refs, 2);
+    assert_eq!(b2.info().capacity, 76);
     drop(b2);
-    assert!(bytes.info().kind == Kind::Vec);
-    assert!(bytes.info().refs == 1);
-    assert!(bytes.info().capacity == 72);
+    assert_eq!(bytes.info().kind, Kind::Vec);
+    assert_eq!(bytes.info().refs, 1);
+    assert_eq!(bytes.info().capacity, 76);
 
     let mut bytes = Bytes::from(&b"hello world"[..]);
 

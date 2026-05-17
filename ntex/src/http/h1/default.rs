@@ -6,7 +6,7 @@ use crate::service::{Service, ServiceCtx, ServiceFactory, cfg::SharedCfg};
 
 use super::control::{Control, ControlAck};
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 /// Default control service
 pub struct DefaultControlService;
 

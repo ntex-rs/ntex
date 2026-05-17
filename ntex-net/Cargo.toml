@@ -1,12 +1,12 @@
 [package]
 name = "ntex-net"
-version = "3.7.0"
+version = "3.12.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntexwork utils for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
 homepage = "https://ntex.rs"
 repository = "https://github.com/ntex-rs/ntex.git"
-documentation = "https://docs.rs/ntex-connect/"
+documentation = "https://docs.rs/ntex-net/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
@@ -37,9 +37,12 @@ neon-uring = []
 # polling only
 neon-polling = []
 
+trace = []
+
 [dependencies]
 ntex-service = { workspace = true }
 ntex-bytes = { workspace = true }
+ntex-error = { workspace = true }
 ntex-http = { workspace = true }
 ntex-io = { workspace = true }
 ntex-rt = { workspace = true }

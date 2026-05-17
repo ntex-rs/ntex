@@ -10,7 +10,6 @@
 #![allow(
     type_alias_bounds,
     missing_debug_implementations,
-    clippy::clone_on_copy,
     clippy::cast_possible_truncation,
     clippy::missing_errors_doc,
     clippy::missing_fields_in_debug,
@@ -114,11 +113,20 @@ pub mod tls {
     pub use ntex_tls::*;
 }
 
+pub mod error {
+    pub use ntex_error::*;
+}
+
 pub mod util {
     use std::{error::Error, io, rc::Rc};
 
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
-    pub use ntex_util::{HashMap, HashSet, error::*, future::*, services::*};
+    pub use ntex_bytes::{BytePage, BytePageSize, BytePages};
+    pub use ntex_util::{HashMap, HashSet, future::*, services::*};
+
+    #[doc(hidden)]
+    #[allow(deprecated)]
+    pub use ntex_util::error::*;
 
     #[doc(hidden)]
     pub fn enable_test_logging() {

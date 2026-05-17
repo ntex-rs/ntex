@@ -1,9 +1,7 @@
-use std::cell::RefCell;
-use std::io::{self, Read, Write};
-use std::{any, cmp, future::poll_fn, ops::Deref, ops::DerefMut, task::Poll, task::ready};
+use std::{any, cell::RefCell, io, io::Write, ops::Deref, ops::DerefMut};
 
-use ntex_bytes::BufMut;
-use ntex_io::{Io, ReadBuf, WriteBuf, types};
+use ntex_bytes::{BufMut, BytePages};
+use ntex_io::{FilterBuf, Io, types};
 use tls_rustls::{ConnectionCommon, SideData};
 
 use super::{PeerCert, PeerCertChain};
@@ -59,71 +57,67 @@ where
         }
     }
 
-    pub(crate) fn process_read_buf(&mut self, buf: &ReadBuf<'_>) -> io::Result<usize> {
-        let mut new_bytes = 0;
-
-        // get processed buffer
-        buf.with_src(|src| {
-            if let Some(src) = src {
-                buf.with_dst(|dst| {
-                    loop {
-                        let mut cursor = io::Cursor::new(&src);
-                        let n = match self.session.read_tls(&mut cursor) {
-                            Ok(n) => n,
-                            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                                break;
-                            }
-                            Err(err) => return Err(err),
-                        };
-                        src.advance_to(n);
-                        let state = self
-                            .session
-                            .process_new_packets()
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-                        let new_b = state.plaintext_bytes_to_read();
-                        if new_b > 0 {
-                            dst.reserve(new_b);
-                            let chunk: &mut [u8] =
-                                unsafe { &mut *(&raw mut *dst.chunk_mut() as *mut [u8]) };
-                            let v = self.session.reader().read(chunk)?;
-                            unsafe { dst.advance_mut(v) };
-                            new_bytes += v;
-                        } else if src.is_empty() {
-                            break;
-                        }
+    pub(crate) fn process_read_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_read_buffers(|r_src, r_dst| {
+            if let Some(src) = r_src {
+                loop {
+                    match self.session.read_tls(src) {
+                        Ok(_) => {}
+                        Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                        Err(err) => return Err(err),
                     }
-                    Ok::<_, io::Error>(())
-                })?;
+                    let state = self
+                        .session
+                        .process_new_packets()
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+                    let new_b = state.plaintext_bytes_to_read();
+                    if new_b > 0 {
+                        r_dst.reserve(new_b);
+
+                        let chunk: &mut [u8] =
+                            unsafe { &mut *(&raw mut *r_dst.chunk_mut() as *mut [u8]) };
+                        let v = io::Read::read(&mut self.session.reader(), chunk)?;
+                        unsafe { r_dst.advance_mut(v) };
+                    } else if src.is_empty() {
+                        break;
+                    }
+                }
+                Ok::<_, io::Error>(())
+            } else {
+                Ok(())
             }
-            Ok(new_bytes)
         })
     }
 
-    pub(crate) fn process_write_buf(&mut self, buf: &WriteBuf<'_>) -> io::Result<()> {
-        buf.with_src(|src| {
-            if let Some(src) = src {
-                let mut io = Wrapper(buf);
+    pub(crate) fn process_write_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_write_buffers(|w_src, w_dst| {
+            'outer: loop {
+                // write to tls stream
+                while let Some(mut page) = w_src.take() {
+                    page.advance_to(self.session.writer().write(&page)?);
+                    if w_src.prepend(page) {
+                        // buffer partially consumed, need to write_tls
+                        break;
+                    }
+                }
 
-                'outer: loop {
-                    if !src.is_empty() {
-                        src.advance_to(self.session.writer().write(src)?);
-
-                        loop {
-                            match self.session.write_tls(&mut io) {
-                                Ok(0) => continue 'outer,
-                                Ok(_) => (),
-                                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                                    break;
-                                }
-                                Err(err) => return Err(err),
+                // write tls records to output buffer
+                if self.session.wants_write() {
+                    let mut wrp = Wrapper { w_dst, buf };
+                    loop {
+                        match self.session.write_tls(&mut wrp) {
+                            Ok(0) => continue 'outer,
+                            Ok(_) => {}
+                            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
+                                continue 'outer;
                             }
+                            Err(err) => return Err(err),
                         }
                     }
-                    break;
                 }
+                return Ok(());
             }
-            Ok(())
         })
     }
 }
@@ -137,78 +131,45 @@ where
     SD: SideData,
 {
     loop {
-        let handshaking = io.with_buf(|buf| {
-            let mut session = session.borrow_mut();
-            let mut wrp = Wrapper(buf);
+        let (wants_write, handshaking) = {
+            let s = session.borrow_mut();
+            (s.wants_write(), s.is_handshaking())
+        };
 
-            while session.wants_read() {
-                let has_data = buf.with_read_buf(|rbuf| {
-                    rbuf.with_src(|b| b.as_ref().is_some_and(|b| !b.is_empty()))
-                });
-
-                if has_data {
-                    if session.read_tls(&mut wrp)? == 0 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::NotConnected,
-                            "disconnected",
-                        ));
-                    }
-                    session.process_new_packets().map_err(|err| {
-                        // In case we have an alert to send describing this error,
-                        // try a last-gasp write -- but don't predate the primary
-                        // error.
-                        let _ = session.write_tls(&mut wrp);
-                        io::Error::new(io::ErrorKind::InvalidData, err)
-                    })?;
-                } else {
-                    break;
-                }
-            }
-
-            while session.wants_write() {
-                session.write_tls(&mut wrp).map(|_| ())?;
-            }
-            Ok(session.is_handshaking())
-        })??;
+        if wants_write {
+            io.flush(false).await?;
+        }
 
         if handshaking {
-            poll_fn(|cx| {
-                Poll::Ready(if ready!(io.poll_read_notify(cx))?.is_none() {
-                    Err(io::Error::new(io::ErrorKind::NotConnected, "disconnected"))
-                } else {
-                    Ok(())
-                })
-            })
-            .await?;
+            io.read_notify().await?.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "disconnected")
+            })?;
         } else {
             return Ok(());
         }
     }
 }
 
-pub(crate) struct Wrapper<'a, 'b>(&'a WriteBuf<'b>);
+pub(crate) struct Wrapper<'a> {
+    w_dst: &'a mut BytePages,
+    buf: &'a FilterBuf<'a>,
+}
 
-impl io::Read for Wrapper<'_, '_> {
+impl io::Read for Wrapper<'_> {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        self.0.with_read_buf(|buf| {
-            buf.with_src(|buf| {
-                if let Some(buf) = buf {
-                    let len = cmp::min(buf.len(), dst.len());
-                    if len > 0 {
-                        dst[..len].copy_from_slice(&buf[..len]);
-                        buf.advance_to(len);
-                        return Ok(len);
-                    }
-                }
+        self.buf.with_read_src(|r_src| {
+            if let Some(b) = r_src {
+                io::Read::read(b, dst)
+            } else {
                 Err(io::Error::new(io::ErrorKind::WouldBlock, ""))
-            })
+            }
         })
     }
 }
 
-impl io::Write for Wrapper<'_, '_> {
+impl io::Write for Wrapper<'_> {
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.0.with_dst(|buf| buf.extend_from_slice(src));
+        self.w_dst.put_slice(src);
         Ok(src.len())
     }
 

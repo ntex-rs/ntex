@@ -41,20 +41,14 @@ impl ConnectionInfo {
                             && let Some(val) = items.next()
                         {
                             match &name.to_lowercase() as &str {
-                                "for" => {
-                                    if remote.is_none() {
-                                        remote = Some(val.trim());
-                                    }
+                                "for" if remote.is_none() => {
+                                    remote = Some(val.trim());
                                 }
-                                "proto" => {
-                                    if scheme.is_none() {
-                                        scheme = Some(val.trim());
-                                    }
+                                "proto" if scheme.is_none() => {
+                                    scheme = Some(val.trim());
                                 }
-                                "host" => {
-                                    if host.is_none() {
-                                        host = Some(val.trim());
-                                    }
+                                "host" if host.is_none() => {
+                                    host = Some(val.trim());
                                 }
                                 _ => (),
                             }

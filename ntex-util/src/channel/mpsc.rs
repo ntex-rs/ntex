@@ -97,7 +97,7 @@ pub struct Receiver<T> {
 }
 
 impl<T> Receiver<T> {
-    /// Create a Sender
+    /// Creates an additional sender for this channel.
     pub fn sender(&self) -> Sender<T> {
         Sender {
             shared: self.shared.clone(),
@@ -112,7 +112,7 @@ impl<T> Receiver<T> {
         self.shared.get_mut().has_receiver = false;
     }
 
-    /// Returns whether this channel is closed without needing a context.
+    /// Returns whether this channel is closed.
     pub fn is_closed(&self) -> bool {
         self.shared.strong_count() == 1 || !self.shared.get_ref().has_receiver
     }

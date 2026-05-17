@@ -101,6 +101,8 @@ impl AppState {
 }
 
 /// Application service configuration
+#[derive(derive_more::Debug)]
+#[debug("WebServiceConfig")]
 pub struct WebServiceConfig<Err: ErrorRenderer> {
     state: AppState,
     root: bool,

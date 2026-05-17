@@ -12,6 +12,8 @@ use super::response::Response;
 use super::{h1, h2};
 
 /// `ServiceFactory` HTTP1.1/HTTP2 transport implementation
+#[derive(derive_more::Debug)]
+#[debug("HttpService")]
 pub struct HttpService<
     F,
     S,
@@ -273,6 +275,8 @@ where
 }
 
 /// `Service` implementation for http transport
+#[derive(derive_more::Debug)]
+#[debug("HttpServiceHandler")]
 pub struct HttpServiceHandler<F, S, B, C1, C2> {
     cfg: SharedCfg,
     config: Rc<DispatcherConfig<S, C1>>,
@@ -343,7 +347,7 @@ where
                 let _ = rx.await;
             }
 
-            log::trace!("Shutting down is complected",);
+            log::trace!("Shutting down is complected");
         }
 
         join(
@@ -380,7 +384,8 @@ where
             };
 
             log::trace!(
-                "New http2 connection {id}, peer address {:?}, in-flight: {inflight}",
+                "{}: New http2 connection {id}, peer address {:?}, in-flight: {inflight}",
+                io.tag(),
                 io.query::<types::PeerAddr>().get(),
             );
 
@@ -393,7 +398,8 @@ where
             };
 
             log::trace!(
-                "New http1 connection {id}, peer address {:?}, in-flight: {inflight}",
+                "{}: New http1 connection {id}, peer address {:?}, in-flight: {inflight}",
+                io.tag(),
                 io.query::<types::PeerAddr>().get(),
             );
             h1::handle_io(id, io, self.config.clone()).await

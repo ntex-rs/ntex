@@ -20,7 +20,7 @@ pub trait ResponseError: fmt::Display + fmt::Debug {
     fn error_response(&self) -> Response {
         let mut resp = Response::new(StatusCode::INTERNAL_SERVER_ERROR);
         let mut buf = BytesMut::new();
-        let _ = write!(crate::http::helpers::Writer(&mut buf), "{self}");
+        let _ = write!(&mut buf, "{self}");
         resp.headers_mut().insert(
             header::CONTENT_TYPE,
             header::HeaderValue::from_static("text/plain; charset=utf-8"),
@@ -61,7 +61,7 @@ impl ResponseError for serde_json::error::Error {}
 #[derive(thiserror::Error, Debug)]
 pub enum EncodeError {
     /// An invalid `HttpVersion`, such as `HTP/1.1`
-    #[error("Unsupported HTTP version specified")]
+    #[error("Unsupported HTTP version specified, {0:?}")]
     UnsupportedVersion(super::Version),
 
     #[error("Unexpected end of bytes stream")]
@@ -97,6 +97,9 @@ pub enum DecodeError {
     /// An invalid `Header`.
     #[error("Invalid Header provided")]
     Header,
+    /// Maximum number of headers are received.
+    #[error("Maximum number of headers are received")]
+    MaxHeaders,
     /// A message head is too large to be reasonable.
     #[error("Message head is too large")]
     TooLarge(usize),
@@ -123,6 +126,20 @@ impl From<ntex_http::compat::InvalidUri> for DecodeError {
 impl From<FromUtf8Error> for DecodeError {
     fn from(_: FromUtf8Error) -> DecodeError {
         DecodeError::Utf8
+    }
+}
+
+impl From<ntex_httparse::Error> for DecodeError {
+    fn from(err: ntex_httparse::Error) -> DecodeError {
+        match err {
+            ntex_httparse::Error::HeaderName
+            | ntex_httparse::Error::HeaderValue
+            | ntex_httparse::Error::NewLine
+            | ntex_httparse::Error::Token => DecodeError::Header,
+            ntex_httparse::Error::Status => DecodeError::Status,
+            ntex_httparse::Error::TooManyHeaders => DecodeError::TooLarge(0),
+            ntex_httparse::Error::Version => DecodeError::Version,
+        }
     }
 }
 
@@ -331,13 +348,13 @@ mod tests {
 
     #[test]
     fn test_from() {
-        from!(httparse::Error::HeaderName => DecodeError::Header);
-        from!(httparse::Error::HeaderName => DecodeError::Header);
-        from!(httparse::Error::HeaderValue => DecodeError::Header);
-        from!(httparse::Error::NewLine => DecodeError::Header);
-        from!(httparse::Error::Status => DecodeError::Status);
-        from!(httparse::Error::Token => DecodeError::Header);
-        from!(httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
-        from!(httparse::Error::Version => DecodeError::Version);
+        from!(ntex_httparse::Error::HeaderName => DecodeError::Header);
+        from!(ntex_httparse::Error::HeaderName => DecodeError::Header);
+        from!(ntex_httparse::Error::HeaderValue => DecodeError::Header);
+        from!(ntex_httparse::Error::NewLine => DecodeError::Header);
+        from!(ntex_httparse::Error::Status => DecodeError::Status);
+        from!(ntex_httparse::Error::Token => DecodeError::Header);
+        from!(ntex_httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
+        from!(ntex_httparse::Error::Version => DecodeError::Version);
     }
 }

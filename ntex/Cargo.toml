@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.4.0"
+version = "3.9.5"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -69,10 +69,13 @@ ws = ["dep:sha1"]
 # disable [ntex::test] logging configuration
 no-test-logging = []
 
+trace = []
+
 [dependencies]
 ntex-bytes = { workspace = true }
 ntex-codec = { workspace = true }
 ntex-dispatcher = { workspace = true }
+ntex-error = { workspace = true }
 ntex-http = { workspace = true }
 ntex-router = { workspace = true }
 ntex-service = { workspace = true }
@@ -84,9 +87,11 @@ ntex-rt = { workspace = true }
 ntex-io = { workspace = true }
 ntex-net = { workspace = true }
 ntex-tls = { workspace = true }
+ntex-httparse = { workspace = true }
 
 base64 = { workspace = true }
 bitflags = { workspace = true }
+derive_more = { workspace = true, features = ["debug"] }
 log = { workspace = true }
 pin-project-lite = { workspace = true }
 regex = { workspace = true }

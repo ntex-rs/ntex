@@ -133,9 +133,7 @@ mod tests {
     use ntex_codec::BytesCodec;
 
     use super::*;
-    use crate::{
-        Base, Handle, Io, IoContext, IoStream, ReadBuf, WriteBuf, testing::IoTest,
-    };
+    use crate::{Base, FilterBuf, Handle, Io, IoContext, IoStream, testing::IoTest};
 
     const BIN: &[u8] = b"GET /test HTTP/1\r\n\r\n";
     const TEXT: &str = "GET /test HTTP/1\r\n\r\n";
@@ -152,30 +150,34 @@ mod tests {
     }
 
     impl FilterLayer for DropFilter {
-        fn process_read_buf(&self, buf: &ReadBuf<'_>) -> io::Result<usize> {
-            if let Some(src) = buf.take_src() {
-                let len = src.len();
-                buf.set_dst(Some(src));
-                Ok(len)
-            } else {
-                Ok(0)
-            }
+        fn process_read_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_read_buffers(|src, dst| {
+                if let Some(src) = src.take() {
+                    dst.extend_from_slice(&src);
+                }
+                Ok(())
+            })
         }
-        fn process_write_buf(&self, buf: &WriteBuf<'_>) -> io::Result<()> {
-            if let Some(src) = buf.take_src() {
-                buf.set_dst(Some(src));
-            }
-            Ok(())
+
+        fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
+            buf.with_write_buffers(|src, dst| {
+                src.move_to(dst);
+                Ok(())
+            })
         }
     }
 
     struct IoTestWrapper;
 
     impl IoStream for IoTestWrapper {
-        fn start(self, _: IoContext) -> Option<Box<dyn Handle>> {
-            None
+        fn start(self, _: IoContext) -> Box<dyn Handle> {
+            Box::new(TestHandle)
         }
     }
+
+    struct TestHandle;
+
+    impl Handle for TestHandle {}
 
     #[ntex::test]
     async fn drop_filter() {

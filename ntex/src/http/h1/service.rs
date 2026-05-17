@@ -13,6 +13,8 @@ use super::default::DefaultControlService;
 use super::dispatcher::Dispatcher;
 
 /// `ServiceFactory` implementation for HTTP1 transport
+#[derive(derive_more::Debug)]
+#[debug("H1Service")]
 pub struct H1Service<F, S, B, C> {
     srv: S,
     ctl: C,
@@ -196,6 +198,8 @@ where
 }
 
 /// `Service` implementation for HTTP1 transport
+#[derive(derive_more::Debug)]
+#[debug("H1ServiceHandler")]
 pub struct H1ServiceHandler<F, S, B, C> {
     config: Rc<DispatcherConfig<S, C>>,
     inflight: RefCell<HashSet<IoRef>>,
@@ -259,7 +263,7 @@ where
                 let _ = rx.await;
             }
 
-            log::trace!("Shutting down is complected",);
+            log::trace!("Shutting down is complected");
         }
 
         join(
@@ -279,7 +283,8 @@ where
         let ioref = io.get_ref();
 
         log::trace!(
-            "New http1 connection {id}, peer address {:?}, inflight: {}",
+            "{}: New http1 connection {id}, peer address {:?}, inflight: {}",
+            io.tag(),
             io.query::<types::PeerAddr>().get(),
             inflight
         );

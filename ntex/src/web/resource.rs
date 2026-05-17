@@ -45,6 +45,8 @@ type ResourcePipeline<F, Err> =
 ///
 /// If no matching route could be found, *405* response code get returned.
 /// Default behavior could be overriden with `default_resource()` method.
+#[derive(derive_more::Debug)]
+#[debug("Resource({rdef:?})")]
 pub struct Resource<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
     filter: ServiceChainFactory<T, WebRequest<Err>, SharedCfg>,
@@ -424,6 +426,8 @@ where
 }
 
 /// Resource service
+#[derive(derive_more::Debug)]
+#[debug("ResourceServiceFactory")]
 pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
     middleware: M,
     filter: F,
@@ -484,6 +488,8 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
     }
 }
 
+#[derive(derive_more::Debug)]
+#[debug("ResourceRouter")]
 pub struct ResourceRouter<Err: ErrorRenderer> {
     state: Option<AppState>,
     routes: Vec<RouteService<Err>>,

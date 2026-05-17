@@ -1,7 +1,7 @@
-use ntex::client::{Client, error::SendRequestError};
+use ntex::client::{Client, error::ClientError};
 
 #[ntex::main]
-async fn main() -> Result<(), SendRequestError> {
+async fn main() -> Result<(), ClientError> {
     env_logger::init();
 
     let client = Client::new().await;

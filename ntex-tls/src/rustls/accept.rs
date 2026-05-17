@@ -10,9 +10,9 @@ use ntex_util::services::Counter;
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 
 #[derive(Clone, Debug)]
-/// Support `SSL` connections via rustls package
+/// Support `TLS` connections via rustls package
 ///
-/// `rust-tls` feature enables `RustlsAcceptor` type
+/// `rust-tls` feature enables `TlsAcceptor` type
 pub struct TlsAcceptor {
     config: Arc<ServerConfig>,
 }

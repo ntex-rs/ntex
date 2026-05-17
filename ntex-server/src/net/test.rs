@@ -75,7 +75,6 @@ where
             let sys = System::with_config(&name, cfg);
             let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
             let local_addr = tcp.local_addr().unwrap();
-            let system = sys.system();
 
             sys.run(move || {
                 let server = Server::builder()
@@ -87,7 +86,7 @@ where
                     .run();
 
                 ntex_rt::spawn(async move {
-                    tx.send((system, local_addr, server))
+                    tx.send((System::current(), local_addr, server))
                         .expect("Failed to send Server to TestServer");
                 });
 
@@ -160,7 +159,6 @@ where
     // run server in separate thread
     thread::spawn(move || {
         let sys = System::with_config(&name, cfg);
-        let system = sys.system();
 
         sys.block_on(async move {
             let server = factory(super::build())
@@ -168,7 +166,7 @@ where
                 .workers(1)
                 .disable_signals()
                 .run();
-            tx.send((system, server.clone()))
+            tx.send((System::current(), server.clone()))
                 .expect("Failed to send Server to TestServer");
             let _ = server.await;
         });

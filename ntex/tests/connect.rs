@@ -39,16 +39,7 @@ async fn test_openssl_string() {
     let mut tcp = Some(tcp);
     let srv = build_test_server(async move |srv| {
         srv.listen("test", tcp.take().unwrap(), async |_| {
-            chain_factory(
-                fn_service(|io: Io<_>| async move {
-                    let res = io.read_ready().await;
-                    assert!(res.is_ok());
-                    Ok(io)
-                })
-                .map_init_err(|_| ()),
-            )
-            .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
-            .and_then(
+            chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
                 fn_service(|io: Io<_>| async move {
                     io.send(Bytes::from_static(b"test"), &BytesCodec)
                         .await
@@ -65,9 +56,11 @@ async fn test_openssl_string() {
 
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
+    let connector = builder.build();
 
-    let conn = ntex::connect::openssl::SslConnector::new(builder.build())
-        .pipeline(SharedCfg::default())
+    // ssl connector
+    let conn = ntex::connect::openssl::SslConnector::new(connector.clone())
+        .pipeline(SharedCfg::new("CLIENT").into())
         .await
         .unwrap();
     let addr = format!("127.0.0.1:{}", srv.addr().port());
@@ -85,6 +78,42 @@ async fn test_openssl_string() {
     assert_eq!(io.query::<PeerCertChain>().as_ref().unwrap().0.len(), 1);
     let item = io.recv(&BytesCodec).await.unwrap().unwrap();
     assert_eq!(item, Bytes::from_static(b"test"));
+
+    // ssl connector 2
+    let conn = ntex::connect::openssl::SslConnector2::new(connector)
+        .pipeline(SharedCfg::new("CLIENT").into())
+        .await
+        .unwrap();
+    let addr = format!("127.0.0.1:{}", srv.addr().port());
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    assert_eq!(
+        io.query::<HttpProtocol>().get().unwrap(),
+        HttpProtocol::Http1
+    );
+    let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
+    assert_eq!(
+        io.query::<PeerCert>().as_ref().unwrap().0.to_der().unwrap(),
+        cert.to_der().unwrap()
+    );
+    assert_eq!(io.query::<PeerCertChain>().as_ref().unwrap().0.len(), 1);
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+    assert_eq!(item, Bytes::from_static(b"test"));
+
+    // error
+    #[cfg(unix)]
+    {
+        use ntex::error::ErrorDiagnostic;
+
+        let addr = "127.0.0.1".to_string();
+        let err = conn.call(addr.into()).await.err().unwrap();
+        err.backtrace().unwrap().resolver().resolve();
+        assert!(
+            format!("{:?}", err.debug()).contains("ntex_net::connect::service::connect::"),
+            "{:#?}",
+            err.debug()
+        );
+    }
 }
 
 #[cfg(feature = "openssl")]
@@ -94,15 +123,7 @@ async fn test_openssl_read_before_error() {
     use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 
     let srv = test_server(async || {
-        chain_factory(
-            fn_service(async move |io: Io<_>| {
-                let _ = io.read_ready().await;
-                Ok(io)
-            })
-            .map_init_err(|_| ()),
-        )
-        .and_then(openssl::SslAcceptor::new(ssl_acceptor()))
-        .and_then(
+        chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
             fn_service(|io: Io<_>| async move {
                 io.send(Bytes::from_static(b"test"), &Rc::new(BytesCodec))
                     .await
@@ -116,9 +137,27 @@ async fn test_openssl_read_before_error() {
 
     let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
     builder.set_verify(SslVerifyMode::NONE);
+    let connector = builder.build();
 
     let conn = Pipeline::new(
-        ntex::connect::openssl::SslConnector::new(builder.build())
+        ntex::connect::openssl::SslConnector::new(connector.clone())
+            .create(srv.config())
+            .await
+            .unwrap(),
+    );
+    let addr = format!("127.0.0.1:{}", srv.addr().port());
+    let io = conn.call(addr.into()).await.unwrap();
+    let item = io.recv(&Rc::new(BytesCodec)).await.unwrap().unwrap();
+    assert_eq!(item, Bytes::from_static(b"test"));
+
+    io.send(Bytes::from_static(b"test"), &BytesCodec)
+        .await
+        .unwrap();
+    assert!(io.recv(&BytesCodec).await.unwrap().is_none());
+
+    // ssl connector 2
+    let conn = Pipeline::new(
+        ntex::connect::openssl::SslConnector2::new(connector)
             .create(srv.config())
             .await
             .unwrap(),
@@ -135,24 +174,16 @@ async fn test_openssl_read_before_error() {
 }
 
 #[cfg(feature = "rustls")]
-#[ignore]
 #[ntex::test]
 async fn test_rustls_string() {
     use std::{fs::File, io::BufReader};
 
     use ntex::{io::types::HttpProtocol, server::rustls};
+    use ntex_tls::rustls::{TlsConnector, TlsConnector2};
     use ntex_tls::{rustls::PeerCert, rustls::PeerCertChain};
 
     let srv = test_server(async || {
         chain_factory(
-            fn_service(|io: Io<_>| async move {
-                let res = io.read_ready().await;
-                assert!(res.is_ok());
-                Ok(io)
-            })
-            .map_init_err(|_| ()),
-        )
-        .and_then(
             rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
                 log::error!("tls negotiation is failed: {e:?}");
                 e
@@ -166,14 +197,51 @@ async fn test_rustls_string() {
                     .await
                     .unwrap();
                 assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
-                Ok::<_, std::io::Error>(())
+                Ok::<_, io::Error>(())
             })
             .map_init_err(|_| ()),
         )
     });
 
+    // tls connector
     let conn = Pipeline::new(
-        ntex::connect::rustls::TlsConnector::new(rustls_utils::tls_connector())
+        TlsConnector::new(rustls_utils::tls_connector())
+            .create(SharedCfg::new("CLIENT").into())
+            .await
+            .unwrap(),
+    );
+    let addr = format!("localhost:{}", srv.addr().port());
+
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    assert_eq!(
+        io.query::<HttpProtocol>().get().unwrap(),
+        HttpProtocol::Http1
+    );
+
+    let cert_file = &mut BufReader::new(File::open("tests/cert.pem").unwrap());
+    let cert_chain = rustls_pemfile::certs(cert_file)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        io.query::<PeerCert<'_>>().as_ref().unwrap().0,
+        *cert_chain.first().unwrap()
+    );
+    assert_eq!(
+        io.query::<PeerCertChain<'_>>().as_ref().unwrap().0,
+        cert_chain
+    );
+
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+    assert_eq!(item, Bytes::from_static(b"test"));
+
+    io.encode(Bytes::from_static(b"test"), &BytesCodec).unwrap();
+    io.send_buf().unwrap();
+    assert!(io.recv(&BytesCodec).await.unwrap().is_none());
+
+    // tls connector 2
+    let conn = Pipeline::new(
+        TlsConnector2::new(rustls_utils::tls_connector())
             .create(SharedCfg::default())
             .await
             .unwrap(),
@@ -218,6 +286,7 @@ async fn test_static_str() {
         })
     });
 
+    // original
     let conn = Pipeline::new(ntex::connect::ConnectorService::new());
 
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
@@ -225,6 +294,17 @@ async fn test_static_str() {
 
     let connect = Connect::new("127.0.0.1".to_owned());
     let conn = Pipeline::new(ntex::connect::ConnectorService::new());
+    let io = conn.call(connect).await;
+    assert!(io.is_err());
+
+    // new error
+    let conn = Pipeline::new(ntex::connect::ConnectorService2::new());
+
+    let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+
+    let connect = Connect::new("127.0.0.1".to_owned());
+    let conn = Pipeline::new(ntex::connect::ConnectorService2::new());
     let io = conn.call(connect).await;
     assert!(io.is_err());
 }
@@ -239,14 +319,19 @@ async fn test_create() {
             Ok::<_, io::Error>(())
         })
     });
+    time::sleep(time::Millis(100)).await;
 
     let factory = ntex::connect::Connector::new();
     let conn = factory.pipeline(SharedCfg::default()).await.unwrap();
     let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
     assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+
+    let factory = ntex::connect::Connector2::new();
+    let conn = factory.pipeline(SharedCfg::default()).await.unwrap();
+    let io = conn.call(Connect::with("10", srv.addr())).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
 }
 
-#[cfg(feature = "openssl")]
 #[ntex::test]
 async fn test_uri() {
     let srv = test_server(async || {
@@ -257,8 +342,17 @@ async fn test_uri() {
             Ok::<_, io::Error>(())
         })
     });
+    time::sleep(time::Millis(100)).await;
 
     let conn = Pipeline::new(ntex::connect::ConnectorService::default());
+    let addr =
+        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
+            .unwrap();
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+
+    // new error
+    let conn = Pipeline::new(ntex::connect::ConnectorService2::default());
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
@@ -269,16 +363,33 @@ async fn test_uri() {
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_uri() {
+    use ntex::server::rustls;
+
     let srv = test_server(async || {
-        fn_service(|io: Io| async move {
+        chain_factory(
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+                log::error!("tls negotiation is failed: {e:?}");
+                e
+            }),
+        )
+        .and_then(fn_service(|io: Io<_>| async move {
             io.send(Bytes::from_static(b"test"), &BytesCodec)
                 .await
                 .unwrap();
             Ok::<_, io::Error>(())
-        })
+        }))
     });
+    time::sleep(time::Millis(50)).await;
 
     let conn = Pipeline::new(ntex::connect::ConnectorService::default());
+    let addr =
+        ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
+            .unwrap();
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+
+    // new error
+    let conn = Pipeline::new(ntex::connect::ConnectorService2::default());
     let addr =
         ntex::http::Uri::try_from(format!("https://localhost:{}", srv.addr().port()))
             .unwrap();
@@ -304,7 +415,7 @@ async fn basic_connect_service() {
     assert!(result.is_err());
     let result = srv.connect("localhost:99999").await;
     assert!(result.is_err());
-    assert!(format!("{srv:?}").contains("Connector"));
+    assert!(format!("{srv:?}").contains("ConnectorService"));
 
     let srv = ntex_net::connect::ConnectorService::default();
     let result = srv.connect(format!("{}", server.addr())).await;
@@ -321,5 +432,24 @@ async fn basic_connect_service() {
 
     let msg = Connect::new(server.addr());
     let result = ntex_net::connect::connect(msg).await;
+    assert!(result.is_ok());
+
+    // new error
+    let srv = ntex_net::connect::Connector2::default()
+        .create(
+            ntex::SharedCfg::new("T")
+                .add(ntex::io::IoConfig::new().set_connect_timeout(time::Millis(5000)))
+                .into(),
+        )
+        .await
+        .unwrap();
+    let result = srv.connect("").await;
+    assert!(result.is_err());
+    let result = srv.connect("localhost:99999").await;
+    assert!(result.is_err());
+    assert!(format!("{srv:?}").contains("ConnectorService2"));
+
+    let srv = ntex_net::connect::ConnectorService2::default();
+    let result = srv.connect(format!("{}", server.addr())).await;
     assert!(result.is_ok());
 }

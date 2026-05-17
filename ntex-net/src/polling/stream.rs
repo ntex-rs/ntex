@@ -1,6 +1,7 @@
-use std::{cell::Cell, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
+#![allow(clippy::cast_possible_wrap)]
+use std::{cell::Cell, cmp, io, mem, os, os::fd::AsRawFd, rc::Rc, task::Poll};
 
-use ntex_bytes::BufMut;
+use ntex_bytes::{BufMut, BytePage};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::{Arbiter, syscall};
 use slab::Slab;
@@ -8,12 +9,15 @@ use socket2::Socket;
 
 use super::{Driver, DriverApi, Event, Handler};
 
-pub(crate) struct StreamCtl {
+const MAX_WRITE_SIZE: usize = 64 * 1024;
+const MAX_WRITE_ITEMS: usize = 16;
+
+pub(super) struct StreamCtl {
     id: u32,
     inner: Rc<StreamOpsInner>,
 }
 
-pub(crate) struct WeakStreamCtl {
+pub(super) struct WeakStreamCtl {
     id: u32,
     inner: Rc<StreamOpsInner>,
 }
@@ -34,7 +38,7 @@ enum IdType {
 }
 
 #[derive(Debug)]
-struct StreamItem {
+pub(super) struct StreamItem {
     io: Socket,
     flags: Flags,
     ctx: IoContext,
@@ -119,6 +123,7 @@ impl Handler for StreamOpsHandler {
             }
             let io = &mut streams[id];
             let mut renew = Event::new(0, false, false).with_interrupt();
+            #[cfg(feature = "trace")]
             log::trace!(
                 "{}: {:?}-Evt rd({:?}) wr({:?}) {:?}",
                 io.tag(),
@@ -129,7 +134,7 @@ impl Handler for StreamOpsHandler {
             );
 
             if ev.readable {
-                if io.read().ready() {
+                if io.read() == IoTaskStatus::Io {
                     renew.readable = true;
                     io.flags.insert(Flags::RD);
                 } else {
@@ -140,7 +145,7 @@ impl Handler for StreamOpsHandler {
             }
 
             if ev.writable {
-                if io.write().ready() {
+                if io.write() == IoTaskStatus::Io {
                     renew.writable = true;
                     io.flags.insert(Flags::WR);
                 } else {
@@ -153,6 +158,7 @@ impl Handler for StreamOpsHandler {
             if ev.is_interrupt() {
                 io.ctx.stop(None);
             } else {
+                #[cfg(feature = "trace")]
                 log::trace!(
                     "{}: {:?}-Renew rd({:?}) wr({:?})",
                     io.tag(),
@@ -285,6 +291,67 @@ impl StreamOpsInner {
             }
         }
     }
+
+    /// Modify poll interest for the stream
+    fn interest(&self, id: u32, rd: bool, wr: bool) {
+        self.with(|streams| {
+            let io = &mut streams[id as usize];
+            let mut event = Event::new(0, false, false).with_interrupt();
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: {:?}-Mod rd({rd:?}) wr({wr:?}) {:?}",
+                io.tag(),
+                io.fd(),
+                io.flags
+            );
+
+            let mut want_update_read = true;
+            if rd {
+                if io.flags.contains(Flags::RD) {
+                    event.readable = true;
+                    want_update_read = false;
+                } else if io.read() == IoTaskStatus::Io {
+                    event.readable = true;
+                    io.flags.insert(Flags::RD);
+                } else {
+                    want_update_read = false;
+                }
+            } else if io.flags.contains(Flags::RD) {
+                io.flags.remove(Flags::RD);
+            } else {
+                want_update_read = false;
+            }
+
+            let mut want_update_write = true;
+            if wr {
+                if io.flags.contains(Flags::WR) {
+                    event.writable = true;
+                    want_update_write = false;
+                } else if io.write() == IoTaskStatus::Io {
+                    event.writable = true;
+                    io.flags.insert(Flags::WR);
+                } else {
+                    want_update_write = false;
+                }
+            } else if io.flags.contains(Flags::WR) {
+                io.flags.remove(Flags::WR);
+            } else {
+                want_update_write = false;
+            }
+
+            if want_update_read || want_update_write {
+                #[cfg(feature = "trace")]
+                log::trace!(
+                    "{}: {:?}-Upd rd({:?}) wr({:?})",
+                    io.tag(),
+                    io.fd(),
+                    event.readable,
+                    event.writable
+                );
+                self.api.modify(io.fd(), id, event);
+            }
+        });
+    }
 }
 
 impl StreamCtl {
@@ -304,61 +371,7 @@ impl StreamCtl {
 
     /// Modify poll interest for the stream
     pub(crate) fn interest(&self, rd: bool, wr: bool) {
-        self.inner.with(|streams| {
-            let io = &mut streams[self.id as usize];
-            let mut event = Event::new(0, false, false).with_interrupt();
-            log::trace!(
-                "{}: {:?}-Mod rd({rd:?}) wr({wr:?}) {:?}",
-                io.tag(),
-                io.fd(),
-                io.flags
-            );
-
-            let mut want_update_read = true;
-            if rd {
-                if io.flags.contains(Flags::RD) {
-                    event.readable = true;
-                    want_update_read = false;
-                } else if io.read().ready() {
-                    event.readable = true;
-                    io.flags.insert(Flags::RD);
-                } else {
-                    want_update_read = false;
-                }
-            } else if io.flags.contains(Flags::RD) {
-                io.flags.remove(Flags::RD);
-            } else {
-                want_update_read = false;
-            }
-
-            let mut want_update_write = true;
-            if wr {
-                if io.flags.contains(Flags::WR) {
-                    event.writable = true;
-                    want_update_write = false;
-                } else if io.write().ready() {
-                    event.writable = true;
-                    io.flags.insert(Flags::WR);
-                } else {
-                    want_update_write = false;
-                }
-            } else if io.flags.contains(Flags::WR) {
-                io.flags.remove(Flags::WR);
-            } else {
-                want_update_write = false;
-            }
-
-            if want_update_read || want_update_write {
-                log::trace!(
-                    "{}: {:?}-Upd rd({:?}) wr({:?})",
-                    io.tag(),
-                    io.fd(),
-                    event.readable,
-                    event.writable
-                );
-                self.inner.api.modify(io.fd(), self.id, event);
-            }
-        });
+        self.inner.interest(self.id, rd, wr);
     }
 }
 
@@ -369,11 +382,18 @@ impl Drop for StreamCtl {
 }
 
 impl WeakStreamCtl {
-    pub(crate) fn with<F, R>(&self, f: F) -> R
+    pub(super) fn with_socket<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&Socket) -> R,
     {
         self.inner.with(|streams| f(&streams[self.id as usize].io))
+    }
+
+    pub(super) fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut StreamItem) -> R,
+    {
+        self.inner.with(|streams| f(&mut streams[self.id as usize]))
     }
 }
 
@@ -392,42 +412,105 @@ impl StreamItem {
         self.ctx.tag()
     }
 
+    pub(super) fn write_direct(&mut self) {
+        self.write();
+    }
+
     fn write(&mut self) -> IoTaskStatus {
-        if let Some(buf) = self.ctx.get_write_buf() {
-            let fd = self.fd();
-            log::trace!("{}: {fd:?}-Wrt buf({:?})", self.ctx.tag(), buf.len());
-            let res = syscall!(break libc::write(fd, buf[..].as_ptr().cast(), buf.len()));
-            return self.ctx.release_write_buf(buf, res);
-        }
-        IoTaskStatus::Pause
+        let res = self.ctx.with_write_buf(|wrt| {
+            let mut pages: [Option<BytePage>; MAX_WRITE_ITEMS] = [
+                None, None, None, None, None, None, None, None, None, None, None, None,
+                None, None, None, None,
+            ];
+            let mut bufs: [mem::MaybeUninit<io::IoSlice<'_>>; MAX_WRITE_ITEMS] =
+                [mem::MaybeUninit::uninit(); MAX_WRITE_ITEMS];
+
+            let mut num = 0;
+            let mut size = 0;
+            while let Some(page) = wrt.take() {
+                size += page.len();
+
+                // SAFETY: Page is stored in `pages` for lifetime of `bufs`
+                bufs[num] = mem::MaybeUninit::new(io::IoSlice::new(unsafe {
+                    mem::transmute::<&[u8], &[u8]>(page.as_ref())
+                }));
+                pages[num] = Some(page);
+
+                num += 1;
+                if num == MAX_WRITE_ITEMS || size >= MAX_WRITE_SIZE {
+                    break;
+                }
+            }
+
+            if num > 0 {
+                let fd = self.fd();
+                let res = if num == 1 {
+                    let io = unsafe { bufs[0].assume_init_ref().as_ptr() };
+                    syscall!(break libc::write(fd, io.cast(), size))
+                } else {
+                    syscall!(break libc::writev(fd, bufs.as_ptr().cast(), num as i32))
+                }?;
+                #[cfg(feature = "trace")]
+                log::trace!("{}: {fd:?}-Wrt buf({num}:{size}) ({res:?})", self.ctx.tag());
+
+                // remove written bytes
+                if let Poll::Ready(mut written) = res {
+                    for page in pages[..num].iter_mut().flatten() {
+                        let len = cmp::min(page.len(), written);
+                        page.advance_to(len);
+                        written -= len;
+                        if written == 0 {
+                            break;
+                        }
+                    }
+                }
+                // return unwritten data back to buffer
+                for p in pages[..num].iter_mut().rev() {
+                    if let Some(page) = p.take() {
+                        wrt.prepend(page);
+                    }
+                }
+
+                match res {
+                    Poll::Ready(n) => {
+                        if n == 0 {
+                            self.ctx.stop(None);
+                        }
+                        Ok(n > 0)
+                    }
+                    Poll::Pending => Ok(false),
+                }
+            } else {
+                Ok(false)
+            }
+        });
+        self.ctx.update_write_status(res)
     }
 
     fn read(&mut self) -> IoTaskStatus {
+        let fd = self.fd();
         let mut buf = self.ctx.get_read_buf();
 
-        let fd = self.fd();
-        let mut total = 0;
-        loop {
-            self.ctx.resize_read_buf(&mut buf);
+        let chunk = buf.chunk_mut();
+        let chunk_len = chunk.len();
+        let chunk_ptr = chunk.as_mut_ptr();
 
-            let chunk = buf.chunk_mut();
-            let chunk_len = chunk.len();
-            let chunk_ptr = chunk.as_mut_ptr();
+        let result = syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len));
+        #[cfg(feature = "trace")]
+        log::trace!("{}: {fd:?}-Rdt sz() = {result:?}", self.tag());
 
-            let res = match syscall!(break libc::read(fd, chunk_ptr.cast(), chunk_len)) {
-                Poll::Ready(Ok(size)) => {
-                    total += size;
-                    if size > 0 {
-                        unsafe { buf.advance_mut(size) };
-                        continue;
-                    }
-                    Poll::Ready(Err(None))
-                }
-                Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
-                Poll::Pending => Poll::Pending,
-            };
-            log::trace!("{}: {fd:?}-Rdt sz({total:?}) = {res:?}", self.tag());
-            return self.ctx.release_read_buf(total, buf, res);
-        }
+        let st = match result {
+            Poll::Ready(Ok(0)) => {
+                self.ctx.stop(None);
+                Ok(0)
+            }
+            Poll::Ready(Ok(n)) => {
+                unsafe { buf.advance_mut(n) };
+                Ok(n)
+            }
+            Poll::Ready(Err(err)) => Err(err),
+            Poll::Pending => Ok(0),
+        };
+        self.ctx.update_read_status(buf, st)
     }
 }

@@ -293,7 +293,6 @@ where
         let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let local_addr = tcp.local_addr().unwrap();
 
-        let system = sys.system();
         sys.run(move || {
             let srv = crate::server::build()
                 .listen("test", tcp, async move |_| factory().await)?
@@ -303,7 +302,7 @@ where
                 .run();
 
             crate::rt::spawn(async move {
-                tx.send((system, srv, local_addr)).unwrap();
+                tx.send((System::current(), srv, local_addr)).unwrap();
             });
             Ok(())
         })

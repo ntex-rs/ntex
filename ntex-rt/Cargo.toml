@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "3.7.1"
+version = "3.14.1"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -33,6 +33,7 @@ compio = ["compio-driver", "compio-runtime"]
 neon = []
 
 [dependencies]
+ntex-error = { workspace = true }
 ntex-service = { workspace = true }
 
 async-channel = { workspace = true }
@@ -41,8 +42,9 @@ crossbeam-queue = { workspace = true }
 crossbeam-channel = { workspace = true }
 foldhash = { workspace = true }
 futures-timer = { workspace = true }
-oneshot = { workspace = true }
 log = { workspace = true }
+oneshot = { workspace = true }
+parking_lot = { workspace = true }
 scoped-tls = { workspace = true }
 swap-buffer-queue = { workspace = true }
 

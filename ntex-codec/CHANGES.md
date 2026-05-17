@@ -1,5 +1,13 @@
 # Changes
 
+## [1.2.1] - 2026-05-06
+
+* Use optimized BytePages::with_bytes_mut() method
+
+## [1.2.0] - 2026-05-03
+
+* Add Encoder::encodev() method with BytePages as buffer
+
 ## [1.1.0] - 2026-01-17
 
 * Simplify api

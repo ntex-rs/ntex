@@ -1,8 +1,8 @@
-use std::{cell::Cell, ptr::copy_nonoverlapping, time};
+use std::{cell::Cell, time};
 
 use crate::service::cfg::{Cfg, CfgContext, Configuration};
 use crate::time::{Millis, Seconds, sleep};
-use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytesMut};
+use crate::{io::cfg::FrameReadRate, service::Pipeline, util::BytePages, util::BytesMut};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 /// Server keep-alive setting
@@ -42,6 +42,8 @@ impl From<Option<usize>> for KeepAlive {
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
+    pub(super) max_headers: usize,
+    pub(super) max_buf_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
     pub(super) payload_read_rate: Option<FrameReadRate>,
 
@@ -89,9 +91,35 @@ impl HttpServiceConfig {
                 timeout: client_timeout,
                 max_timeout: client_timeout + Seconds(15),
             }),
+            max_headers: 96,
+            max_buf_size: 64 * 1024,
             payload_read_rate: None,
             config: CfgContext::default(),
         }
+    }
+
+    #[must_use]
+    /// Set the maximum number of headers.
+    ///
+    /// When a request is received, the parser will reserve a buffer
+    /// to store headers for optimal performance.
+    ///
+    /// If server receives more headers than the buffer size, it responds
+    /// to the client with “431 Request Header Fields Too Large”.
+    ///
+    /// Default is set to 96
+    pub fn set_max_headers(mut self, val: usize) -> Self {
+        self.max_headers = val;
+        self
+    }
+
+    #[must_use]
+    /// Set the maximum buffer size for parsing http message.
+    ///
+    /// Default is 64kb
+    pub fn set_max_buf_size(mut self, val: usize) -> Self {
+        self.max_buf_size = val;
+        self
     }
 
     #[must_use]
@@ -204,8 +232,6 @@ impl HttpServiceConfig {
 bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
     struct Flags: u8 {
-        /// Keep-alive enabled
-        const KA_ENABLED = 0b0000_0001;
         /// Shutdown service
         const SHUTDOWN   = 0b0000_0010;
     }
@@ -225,11 +251,7 @@ impl<S, C> DispatcherConfig<S, C> {
             idx: Cell::new(0),
             service: service.into(),
             control: control.into(),
-            flags: Cell::new(if config.ka_enabled {
-                Flags::KA_ENABLED
-            } else {
-                Flags::empty()
-            }),
+            flags: Cell::new(Flags::empty()),
             config,
         }
     }
@@ -248,7 +270,7 @@ impl<S, C> DispatcherConfig<S, C> {
 
     /// Return state of connection keep-alive functionality
     pub(super) fn keep_alive_enabled(&self) -> bool {
-        self.flags.get().contains(Flags::KA_ENABLED)
+        self.config.ka_enabled
     }
 
     pub(super) fn headers_read_rate(&self) -> Option<&FrameReadRate> {
@@ -259,7 +281,7 @@ impl<S, C> DispatcherConfig<S, C> {
         self.config.payload_read_rate.as_ref()
     }
 
-    /// Service is shuting down
+    /// Service is shutting down
     pub(super) fn is_shutdown(&self) -> bool {
         self.flags.get().contains(Flags::SHUTDOWN)
     }
@@ -274,11 +296,8 @@ impl<S, C> DispatcherConfig<S, C> {
 }
 
 const DATE_VALUE_LENGTH_HDR: usize = 39;
-const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] = [
-    b'd', b'a', b't', b'e', b':', b' ', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0',
-    b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'0',
-    b'0', b'0', b'0', b'0', b'0', b'0', b'0', b'\r', b'\n', b'\r', b'\n',
-];
+const DATE_VALUE_DEFAULT: [u8; DATE_VALUE_LENGTH_HDR] =
+    *b"date: 00000000000000000000000000000\r\n\r\n";
 
 #[derive(Debug, Copy, Clone)]
 pub struct DateService;
@@ -333,7 +352,6 @@ impl DateService {
 
     pub(super) fn set_date<F: FnMut(&[u8])>(mut f: F) {
         DateService::check_date();
-
         DATE.with(|date| {
             let date = date.current_date.get();
             f(&date[6..35]);
@@ -343,38 +361,24 @@ impl DateService {
     #[doc(hidden)]
     pub fn set_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
-
         DATE.with(|date| {
-            // SAFETY: reserves exact size
-            let len = dst.len();
-            dst.reserve(DATE_VALUE_LENGTH_HDR);
-            unsafe {
-                copy_nonoverlapping(
-                    date.current_date.as_ptr().cast(),
-                    dst.as_mut_ptr().add(len),
-                    DATE_VALUE_LENGTH_HDR,
-                );
-                dst.set_len(len + DATE_VALUE_LENGTH_HDR);
-            }
+            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
+        });
+    }
+
+    #[doc(hidden)]
+    pub fn set_date_header2(&self, dst: &mut BytePages) {
+        DateService::check_date();
+        DATE.with(|date| {
+            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
         });
     }
 
     #[doc(hidden)]
     pub fn bset_date_header(&self, dst: &mut BytesMut) {
         DateService::check_date();
-
         DATE.with(|date| {
-            // SAFETY: reserves exact size
-            let len = dst.len();
-            dst.reserve(DATE_VALUE_LENGTH_HDR);
-            unsafe {
-                copy_nonoverlapping(
-                    date.current_date.as_ptr().cast(),
-                    dst.as_mut_ptr().add(len),
-                    DATE_VALUE_LENGTH_HDR,
-                );
-                dst.set_len(len + DATE_VALUE_LENGTH_HDR);
-            }
+            dst.extend_from_slice(unsafe { date.current_date.as_ptr().as_ref().unwrap() });
         });
     }
 }

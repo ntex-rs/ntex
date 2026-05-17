@@ -5,18 +5,17 @@ use ntex_util::future::Either;
 
 use crate::IoBoxed;
 
-/// A unified interface to an underlying I/O object, using
-/// the `Encoder` and `Decoder` traits to encode and decode frames.
-/// `Framed` is heavily optimized for streaming io.
+/// A unified interface to an underlying I/O stream.
+///
+/// Uses the `Encoder` and `Decoder` traits to encode and decode frames.
 pub struct Framed<U> {
     io: IoBoxed,
     codec: U,
 }
 
 impl<U> Framed<U> {
-    #[inline]
-    /// Provides an interface for reading and writing to
-    /// `Io` object, using `Decode` and `Encode` traits of codec.
+    /// Provides an interface for reading from and writing to an `Io` object,
+    /// using the `Decode` and `Encode` traits of the codec.
     pub fn new<Io>(io: Io, codec: U) -> Framed<U>
     where
         IoBoxed: From<Io>,
@@ -40,7 +39,7 @@ impl<U> Framed<U> {
     }
 
     #[inline]
-    /// Return inner types of framed object
+    /// Return inner types of framed object.
     pub fn into_inner(self) -> (IoBoxed, U) {
         (self.io, self.codec)
     }
@@ -50,7 +49,6 @@ impl<U> Framed<U>
 where
     U: Decoder + Encoder,
 {
-    #[inline]
     /// Wake write task and instruct to flush data.
     ///
     /// This is async version of `poll_flush()` method.
@@ -58,8 +56,7 @@ where
         self.io.flush(full).await
     }
 
-    #[inline]
-    /// Shut down io stream
+    /// Shut down io stream.
     pub async fn shutdown(&self) -> Result<(), io::Error> {
         self.io.shutdown().await
     }
@@ -81,7 +78,7 @@ where
     U: Encoder,
 {
     #[inline]
-    /// Serialize item and Write to the inner buffer
+    /// Serialize item and write to the inner buffer
     pub async fn send(
         &self,
         item: <U as Encoder>::Item,

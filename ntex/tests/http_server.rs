@@ -213,7 +213,6 @@ async fn test_slow_request2() {
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
-
     let _ = stream.write_all(DATA);
     let mut data = String::new();
     let _ = stream.read_to_string(&mut data);
@@ -806,7 +805,7 @@ async fn test_h1_client_drop() -> io::Result<()> {
                 let _st = SetOnDrop(count, tx.lock().unwrap().take());
                 assert!(req.peer_addr().is_some());
                 assert_eq!(req.version(), Version::HTTP_11);
-                sleep(Millis(50000)).await;
+                sleep(Millis(150000)).await;
                 Ok::<_, io::Error>(Response::Ok().finish())
             }
         })

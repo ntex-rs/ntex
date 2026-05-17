@@ -8,7 +8,7 @@
     clippy::missing_errors_doc,
     clippy::missing_panics_doc
 )]
-use std::{io, net, net::SocketAddr};
+use std::{io, net, net::SocketAddr, panic};
 
 use ntex_io::Io;
 use ntex_rt::{BlockFuture, Driver, Runner};
@@ -112,6 +112,7 @@ impl Runner for DefaultRuntime {
 
             CURRENT_DRIVER.set(&driver, || {
                 crate::tokio::block_on(fut);
+                ntex_rt::remove_all_items();
             });
         }
 
@@ -121,6 +122,7 @@ impl Runner for DefaultRuntime {
 
             CURRENT_DRIVER.set(&driver, || {
                 crate::compio::block_on(fut);
+                ntex_rt::remove_all_items();
             });
         }
 
@@ -133,9 +135,17 @@ impl Runner for DefaultRuntime {
                 let driver: Box<dyn Reactor> = Box::new(driver);
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let rt = ntex_rt::Runtime::new(driver.handle());
-                    rt.block_on(fut, &*driver);
-                    driver.clear();
+                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        let rt = ntex_rt::Runtime::new(driver.handle());
+                        rt.block_on(fut, &*driver);
+                    }));
+                    if let Err(err) = res {
+                        ntex_rt::remove_all_items();
+                        panic::resume_unwind(err);
+                    } else {
+                        driver.clear();
+                        ntex_rt::remove_all_items();
+                    }
                 });
             }
 
@@ -146,9 +156,17 @@ impl Runner for DefaultRuntime {
                 let driver: Box<dyn Reactor> = Box::new(driver);
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let rt = ntex_rt::Runtime::new(driver.handle());
-                    rt.block_on(fut, &*driver);
-                    driver.clear();
+                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        let rt = ntex_rt::Runtime::new(driver.handle());
+                        rt.block_on(fut, &*driver);
+                    }));
+                    if let Err(err) = res {
+                        ntex_rt::remove_all_items();
+                        panic::resume_unwind(err);
+                    } else {
+                        driver.clear();
+                        ntex_rt::remove_all_items();
+                    }
                 });
             }
 
@@ -170,9 +188,17 @@ impl Runner for DefaultRuntime {
                 );
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let rt = ntex_rt::Runtime::new(driver.handle());
-                    rt.block_on(fut, &*driver);
-                    driver.clear();
+                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                        let rt = ntex_rt::Runtime::new(driver.handle());
+                        rt.block_on(fut, &*driver);
+                    }));
+                    if let Err(err) = res {
+                        ntex_rt::remove_all_items();
+                        panic::resume_unwind(err);
+                    } else {
+                        driver.clear();
+                        ntex_rt::remove_all_items();
+                    }
                 });
             }
         }

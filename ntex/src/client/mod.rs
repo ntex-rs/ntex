@@ -49,8 +49,7 @@ pub struct Connect {
     pub addr: Option<std::net::SocketAddr>,
 }
 
-type BoxedSender =
-    boxed::BoxService<ServiceRequest, ServiceResponse, error::SendRequestError>;
+type BoxedSender = boxed::BoxService<ServiceRequest, ServiceResponse, error::ClientError>;
 
 /// An HTTP Client
 ///
@@ -94,7 +93,7 @@ impl Client {
     }
 
     /// Returns when the client is ready to process requests.
-    pub async fn ready(&self) -> Result<(), error::SendRequestError> {
+    pub async fn ready(&self) -> Result<(), error::ClientError> {
         self.svc.ready().await
     }
 

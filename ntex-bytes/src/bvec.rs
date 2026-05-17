@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, borrow::BorrowMut, fmt, ops::Deref, ops::DerefMut, ptr};
+use std::{borrow, cmp, fmt, io, ops::Deref, ops::DerefMut, ptr};
 
 use crate::{Buf, BufMut, Bytes, buf::IntoIter, buf::UninitSlice, storage::StorageVec};
 
@@ -705,14 +705,14 @@ impl Default for BytesMut {
     }
 }
 
-impl Borrow<[u8]> for BytesMut {
+impl borrow::Borrow<[u8]> for BytesMut {
     #[inline]
     fn borrow(&self) -> &[u8] {
         self.as_ref()
     }
 }
 
-impl BorrowMut<[u8]> for BytesMut {
+impl borrow::BorrowMut<[u8]> for BytesMut {
     #[inline]
     fn borrow_mut(&mut self) -> &mut [u8] {
         self.as_mut()
@@ -725,6 +725,28 @@ impl PartialEq<Bytes> for BytesMut {
     }
 }
 
+impl io::Read for BytesMut {
+    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        let len = cmp::min(self.len(), dst.len());
+        if len > 0 {
+            dst[..len].copy_from_slice(&self[..len]);
+            self.advance_to(len);
+        }
+        Ok(len)
+    }
+}
+
+impl io::Write for BytesMut {
+    fn write(&mut self, src: &[u8]) -> Result<usize, io::Error> {
+        self.extend_from_slice(src);
+        Ok(src.len())
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
+}
+
 impl fmt::Debug for BytesMut {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&crate::debug::BsDebug(self.storage.as_ref()), fmt)
@@ -734,17 +756,8 @@ impl fmt::Debug for BytesMut {
 impl fmt::Write for BytesMut {
     #[inline]
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        if self.remaining_mut() >= s.len() {
-            self.put_slice(s.as_bytes());
-            Ok(())
-        } else {
-            Err(fmt::Error)
-        }
-    }
-
-    #[inline]
-    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
-        fmt::write(self, args)
+        self.extend_from_slice(s.as_bytes());
+        Ok(())
     }
 }
 
@@ -962,5 +975,22 @@ impl From<&Bytes> for BytesMut {
     #[inline]
     fn from(src: &Bytes) -> BytesMut {
         BytesMut::copy_from_slice(&src[..])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bvec_read() {
+        use std::io::Read;
+
+        let mut b = BytesMut::copy_from_slice(b"123");
+
+        let mut buf = [0; 10];
+        assert_eq!(b.read(&mut buf).unwrap(), 3);
+        assert_eq!(b.len(), 0);
+        assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
 }

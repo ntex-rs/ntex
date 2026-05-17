@@ -27,7 +27,7 @@ pub enum Signal {
 /// Register signal handler.
 pub fn signal() -> oneshot::Receiver<Signal> {
     let (tx, rx) = oneshot::channel();
-    System::current().arbiter().exec_fn(|| {
+    System::current().handle().spawn(async move {
         HANDLERS.with(|handlers| {
             handlers.borrow_mut().push(tx);
         });
@@ -53,7 +53,7 @@ fn handle_signal(sig: Signal) {
         && let Some((sys, srv)) = &*guard.borrow()
     {
         (*srv)(sig);
-        sys.arbiter().exec_fn(move || {
+        sys.handle().spawn(async move {
             HANDLERS.with(|handlers| {
                 for tx in handlers.borrow_mut().drain(..) {
                     let _ = tx.send(sig);

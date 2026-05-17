@@ -1,5 +1,33 @@
 # Changes
 
+## [3.12.0] - 2026-05-15
+
+* Update ntex-io
+
+* Fix readiness checks in tokio support
+
+## [3.11.0] - 2026-05-08
+
+* Simplify tokio integration impl
+
+* Optimize neon(polling) impl
+
+## [3.10.0] - 2026-05-03
+
+* Enable vectored writes for tokio,compio,neon runtime
+
+## [3.9.1] - 2026-04-07
+
+* Update tokio compat impl
+
+## [3.9.0] - 2026-04-02
+
+* Update to ntex-error 2.0
+
+## [3.8.0] - 2026-03-08
+
+* Use ntex_error::Error for connect service
+
 ## [3.7.0] - 2026-02-16
 
 * SharedCfg is not Copy

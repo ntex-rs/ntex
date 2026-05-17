@@ -1,23 +1,25 @@
-use std::{future::poll_fn, io, rc::Rc};
+use std::{fmt::Write, future::poll_fn, io, rc::Rc};
 
 use ntex_h2::{self as h2, client::RecvStream, client::SimpleClient, frame};
 
+use crate::error::Error;
 use crate::http::ResponseHead;
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::header::{self, HeaderMap, HeaderValue};
 use crate::http::{Method, Payload, Version, h2::Payload as H2Payload};
 use crate::time::{Millis, timeout_checked};
-use crate::util::{ByteString, Bytes, Either, select};
+use crate::util::{ByteString, Bytes, BytesMut, Either, select};
 
 use super::ClientRawRequest;
-use super::error::{ConnectError, SendRequestError};
+use super::error::{ClientError, ConnectError};
 
 pub(super) async fn send_request(
     client: H2Client,
     req: ClientRawRequest,
     body: Body,
     timeout: Millis,
-) -> Result<(ResponseHead, Payload), SendRequestError> {
+) -> Result<(ResponseHead, Payload), ClientError> {
+    #[cfg(feature = "trace")]
     log::trace!(
         "{}: Sending client request: {req:?} {:?}",
         client.client.tag(),
@@ -54,22 +56,32 @@ pub(super) async fn send_request(
         BodySize::Empty => {
             hdrs.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
         }
-        BodySize::Sized(len) => hdrs.insert(
-            header::CONTENT_LENGTH,
-            HeaderValue::try_from(format!("{len}")).unwrap(),
-        ),
+        BodySize::Sized(len) => {
+            let mut buf = BytesMut::new();
+            crate::http::h1::encoder::convert_usize(len, &mut buf, false);
+
+            hdrs.insert(
+                header::CONTENT_LENGTH,
+                HeaderValue::from_shared(buf.freeze()).unwrap(),
+            );
+        }
     }
 
     // send request
     let uri = &req.head.uri;
     let path = uri.path_and_query().map_or_else(
         || ByteString::from(uri.path()),
-        |p| ByteString::from(format!("{p}")),
+        |p| {
+            let mut buf = BytesMut::new();
+            write!(&mut buf, "{p}").unwrap();
+            ByteString::try_from(buf).unwrap()
+        },
     );
     let (snd_stream, rcv_stream) = client
         .client
         .send(req.head.method.clone(), path, hdrs, eof)
-        .await?;
+        .await
+        .map_err(Error::into_error)?;
 
     // send body
     if !eof {
@@ -85,23 +97,25 @@ pub(super) async fn send_request(
 
     timeout_checked(timeout, get_response(rcv_stream))
         .await
-        .map_err(|()| SendRequestError::Timeout)
+        .map_err(|()| ClientError::Timeout)
         .and_then(|res| res)
 }
 
 async fn get_response(
     rcv_stream: RecvStream,
-) -> Result<(ResponseHead, Payload), SendRequestError> {
+) -> Result<(ResponseHead, Payload), ClientError> {
     let h2::Message { stream, kind } = rcv_stream
         .recv()
         .await
-        .ok_or(SendRequestError::Connect(ConnectError::Disconnected(None)))?;
+        .ok_or(ClientError::Connect(ConnectError::Disconnected(None)))?;
+
     match kind {
         h2::MessageKind::Headers {
             pseudo,
             headers,
             eof,
         } => {
+            #[cfg(feature = "trace")]
             log::trace!(
                 "{}: {:?} got response (eof: {eof}): {pseudo:#?}\nheaders: {headers:#?}",
                 stream.tag(),
@@ -110,13 +124,13 @@ async fn get_response(
 
             match pseudo.status {
                 Some(status) => {
-                    let mut head = ResponseHead::new(status);
+                    let mut head = ResponseHead::new(status, Version::HTTP_2);
                     head.headers = headers;
-                    head.version = Version::HTTP_2;
 
                     let payload = if eof {
                         Payload::None
                     } else {
+                        #[cfg(feature = "trace")]
                         log::debug!(
                             "{}: Creating local payload stream for {:?}",
                             stream.tag(),
@@ -126,6 +140,7 @@ async fn get_response(
 
                         crate::rt::spawn(async move {
                             loop {
+                                #[allow(unused_variables)]
                                 let h2::Message { stream, kind } = match select(
                                     rcv_stream.recv(),
                                     poll_fn(|cx| pl.on_cancel(cx.waker())),
@@ -142,6 +157,7 @@ async fn get_response(
 
                                 match kind {
                                     h2::MessageKind::Data(data, cap) => {
+                                        #[cfg(feature = "trace")]
                                         log::trace!(
                                             "{}: Got data chunk for {:?}: {:?}",
                                             stream.tag(),
@@ -151,6 +167,7 @@ async fn get_response(
                                         pl.feed_data(data, cap);
                                     }
                                     h2::MessageKind::Eof(item) => {
+                                        #[cfg(feature = "trace")]
                                         log::trace!(
                                             "{}: Got payload eof for {:?}: {item:?}",
                                             stream.tag(),
@@ -164,11 +181,12 @@ async fn get_response(
                                                 pl.feed_eof(Bytes::new());
                                             }
                                             h2::StreamEof::Error(err) => {
-                                                pl.set_error(err.into());
+                                                pl.set_error(err.into_error().into());
                                             }
                                         }
                                     }
                                     h2::MessageKind::Disconnect(err) => {
+                                        #[cfg(feature = "trace")]
                                         log::trace!(
                                             "{}: Connection is disconnected {err:?}",
                                             stream.tag(),
@@ -185,7 +203,7 @@ async fn get_response(
                                         pl.set_error(
                                             io::Error::new(
                                                 io::ErrorKind::Unsupported,
-                                                "unexpected h2 message",
+                                                "Unexpected h2 message",
                                             )
                                             .into(),
                                         );
@@ -198,14 +216,15 @@ async fn get_response(
                     };
                     Ok((head, payload))
                 }
-                None => Err(SendRequestError::H2(h2::OperationError::Connection(
+                None => Err(ClientError::H2(h2::OperationError::Connection(
                     h2::ConnectionError::MissingPseudo("Status"),
                 ))),
             }
         }
-        _ => Err(SendRequestError::Error(Rc::new(io::Error::new(
+        h2::MessageKind::Disconnect(err) => Err(ClientError::H2(err.into_error())),
+        _ => Err(ClientError::Error(Rc::new(io::Error::new(
             io::ErrorKind::Unsupported,
-            "unexpected h2 message",
+            "Unexpected h2 message",
         )))),
     }
 }
@@ -213,22 +232,30 @@ async fn get_response(
 async fn send_body(
     mut body: Body,
     stream: &h2::client::SendStream,
-) -> Result<(), SendRequestError> {
+) -> Result<(), ClientError> {
     loop {
         match poll_fn(|cx| body.poll_next_chunk(cx)).await {
             Some(Ok(b)) => {
+                #[cfg(feature = "trace")]
                 log::trace!(
                     "{}: {:?} sending chunk, {} bytes",
                     stream.tag(),
                     stream.id(),
                     b.len()
                 );
-                stream.send_payload(b, false).await?;
+                stream
+                    .send_payload(b, false)
+                    .await
+                    .map_err(Error::into_error)?;
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
+                #[cfg(feature = "trace")]
                 log::trace!("{}: {:?} eof of send stream ", stream.tag(), stream.id());
-                stream.send_payload(Bytes::new(), true).await?;
+                stream
+                    .send_payload(Bytes::new(), true)
+                    .await
+                    .map_err(Error::into_error)?;
                 return Ok(());
             }
         }

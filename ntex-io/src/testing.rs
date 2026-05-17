@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::{any, cell::RefCell, cmp, fmt, future::poll_fn, io, mem, net, rc::Rc};
 
-use ntex_bytes::{BufMut, Bytes, BytesMut};
+use ntex_bytes::{BufMut, BytePages, Bytes, BytesMut};
 use ntex_util::time::{Millis, sleep};
 
 use crate::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
@@ -13,9 +13,12 @@ use crate::{Handle, IoContext, IoStream, IoTaskStatus, Readiness, types};
 struct AtomicWaker(Arc<Mutex<RefCell<Option<Waker>>>>);
 
 impl AtomicWaker {
-    fn wake(&self) {
+    fn wake(&self) -> bool {
         if let Some(waker) = self.0.lock().unwrap().borrow_mut().take() {
             waker.wake();
+            true
+        } else {
+            false
         }
     }
 }
@@ -183,8 +186,8 @@ impl IoTest {
             let guard = self.remote.lock().unwrap();
             let mut remote = guard.borrow_mut();
             remote.read = IoTestState::Close;
-            remote.waker.wake();
-            log::debug!("close remote socket");
+            let res = remote.waker.wake();
+            log::debug!("close remote socket, waker:{res}");
         }
         sleep(Millis(35)).await;
     }
@@ -197,7 +200,7 @@ impl IoTest {
         write.waker.wake();
     }
 
-    /// Read any available data
+    /// Set remote buffer capacity
     pub fn remote_buffer_cap(&self, cap: usize) {
         // change cap
         self.local.lock().unwrap().borrow_mut().buf_cap = cap;
@@ -252,6 +255,7 @@ impl IoTest {
 
         if !ch.buf.is_empty() {
             let size = std::cmp::min(ch.buf.len(), buf.remaining_mut());
+            assert!(size > 0, "Supplied buffer is zero sized");
             let b = ch.buf.split_to(size);
             buf.put_slice(&b);
             return Poll::Ready(Ok(size));
@@ -354,10 +358,10 @@ impl Drop for IoTest {
 }
 
 impl IoStream for IoTest {
-    fn start(self, ctx: IoContext) -> Option<Box<dyn Handle>> {
+    fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let io = Rc::new(self);
         ntex_util::spawn(run(io.clone(), ctx));
-        Some(Box::new(io))
+        Box::new(io)
     }
 }
 
@@ -385,11 +389,10 @@ async fn run(io: Rc<IoTest>, ctx: IoContext) {
     if !ctx.is_stopped() {
         let flush = st == Status::Shutdown;
         poll_fn(|cx| {
-            if write(&io, &ctx, cx) == Poll::Ready(Status::Terminate) {
-                Poll::Ready(())
-            } else {
-                ctx.shutdown(flush, cx)
+            if turn(&io, &ctx, cx) == Poll::Ready(Status::Terminate) {
+                return Poll::Ready(());
             }
+            ctx.shutdown(flush, cx)
         })
         .await;
     }
@@ -432,52 +435,36 @@ fn turn(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
 }
 
 fn write(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
-    if let Some(mut buf) = ctx.get_write_buf() {
-        let result = write_io(io, &mut buf, cx, ctx.tag());
-        if ctx.release_write_buf(buf, result) == IoTaskStatus::Stop {
-            Poll::Ready(Status::Terminate)
-        } else {
-            Poll::Pending
-        }
+    let result = ctx.with_write_buf(|buf| write_io(io, buf, cx, ctx));
+    if ctx.update_write_status(result) == IoTaskStatus::Stop {
+        Poll::Ready(Status::Terminate)
     } else {
         Poll::Pending
     }
 }
 
 fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
-    let mut buf = ctx.get_read_buf();
-
-    // read data from socket
-    let mut n = 0;
     loop {
-        ctx.resize_read_buf(&mut buf);
+        let mut buf = ctx.get_read_buf();
 
-        let result = match io.poll_read_buf(cx, &mut buf) {
-            Poll::Pending => {
-                if n > 0 {
-                    Poll::Ready(Ok(()))
-                } else {
-                    Poll::Pending
-                }
+        let (pending, result) = match io.poll_read_buf(cx, &mut buf) {
+            Poll::Ready(Ok(0)) => {
+                ctx.stop(None);
+                (false, Ok(0))
             }
-            Poll::Ready(Ok(size)) => {
-                n += size;
-                if size > 0 && buf.remaining_mut() > 0 {
+            Poll::Ready(val) => (false, val),
+            Poll::Pending => (true, Ok(0)),
+        };
+        return match ctx.update_read_status(buf, result) {
+            IoTaskStatus::Io => {
+                if pending {
+                    Poll::Pending
+                } else {
                     continue;
                 }
-                if size == 0 {
-                    Poll::Ready(Err(None))
-                } else {
-                    Poll::Ready(Ok(()))
-                }
             }
-            Poll::Ready(Err(err)) => Poll::Ready(Err(Some(err))),
-        };
-
-        return if matches!(ctx.release_read_buf(n, buf, result), IoTaskStatus::Stop) {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
+            IoTaskStatus::Stop => Poll::Ready(()),
+            IoTaskStatus::Pause => Poll::Pending,
         };
     }
 }
@@ -485,38 +472,37 @@ fn read(io: &IoTest, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<()> {
 /// Flush write buffer to underlying I/O stream.
 pub(super) fn write_io(
     io: &IoTest,
-    buf: &mut BytesMut,
+    buf: &mut BytePages,
     cx: &mut Context<'_>,
-    tag: &'static str,
-) -> Poll<io::Result<usize>> {
-    let len = buf.len();
+    ctx: &IoContext,
+) -> io::Result<bool> {
+    let tag = ctx.tag();
+    let mut written = 0;
 
-    if len != 0 {
-        log::debug!("{tag}: flushing framed transport: {len}");
+    while let Some(mut page) = buf.take() {
+        log::debug!("{tag}: flushing framed transport: {}", page.len());
 
-        let mut written = 0;
-        while let Poll::Ready(n) = io.poll_write_buf(cx, &buf[written..])? {
-            if n == 0 {
+        let result = io.poll_write_buf(cx, &page)?;
+        match result {
+            Poll::Ready(0) => {
                 log::trace!("{tag}: disconnected during flush, written {written}");
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "failed to write frame to transport",
-                )));
+                ctx.stop(None);
+                return Ok(false);
             }
-            written += n;
-            if written == len {
+            Poll::Ready(n) => {
+                written += n;
+                page.advance_to(n);
+                buf.prepend(page);
+            }
+            Poll::Pending => {
+                buf.prepend(page);
                 break;
             }
         }
-        log::debug!("{tag}: flushed {written} bytes");
-        if written > 0 {
-            Poll::Ready(Ok(written))
-        } else {
-            Poll::Pending
-        }
-    } else {
-        Poll::Pending
     }
+
+    log::debug!("{tag}: flushed {written} bytes, remaining: {}", buf.len());
+    Ok(written > 0)
 }
 
 #[cfg(test)]

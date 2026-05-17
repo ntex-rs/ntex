@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::{sync::mpsc, thread};
 
@@ -34,6 +35,8 @@ async fn test_join_handle() {
 
     let result = rx.await.unwrap();
     assert_eq!(result, "test2");
+
+    assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
 }
 
 #[test]
@@ -45,8 +48,10 @@ fn test_async() {
             .stop_on_panic(true)
             .build(ntex::rt::DefaultRuntime);
 
-        tx.send(runner.system()).unwrap();
-        let _ = runner.run_until_stop();
+        let _ = runner.run(move || {
+            tx.send(System::current()).unwrap();
+            Ok(())
+        });
     });
     let s = System::new("test", ntex_net::DefaultRuntime);
 
@@ -54,6 +59,20 @@ fn test_async() {
     let id = sys.id();
     let (tx, rx) = mpsc::channel();
     sys.arbiter().exec_fn(move || {
+        let _ = tx.send(System::current().id());
+    });
+    let id2 = rx.recv().unwrap();
+    assert_eq!(id, id2);
+
+    let (tx, rx) = mpsc::channel();
+    sys.handle().spawn(async move {
+        let _ = tx.send(System::current().id());
+    });
+    let id2 = rx.recv().unwrap();
+    assert_eq!(id, id2);
+
+    let (tx, rx) = mpsc::channel();
+    sys.arbiter().handle().spawn(async move {
         let _ = tx.send(System::current().id());
     });
     let id2 = rx.recv().unwrap();
@@ -81,11 +100,11 @@ fn test_block_on() {
 
     impl ntex::rt::Runner for Custom {
         fn block_on(&self, fut: ntex::rt::BlockFuture) {
-            let rt = ntex::rt::tokio::runtime::Builder::new_current_thread()
+            let rt = ntex::rt::tokio::internal::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
-            ntex::rt::tokio::task::LocalSet::new().block_on(&rt, fut);
+            ntex::rt::tokio::internal::task::LocalSet::new().block_on(&rt, fut);
         }
     }
 
@@ -95,8 +114,10 @@ fn test_block_on() {
             .ping_interval(25)
             .build(Custom);
 
-        tx.send(runner.system()).unwrap();
-        let _ = runner.run_until_stop();
+        let _ = runner.run(move || {
+            tx.send(System::current()).unwrap();
+            Ok(())
+        });
     });
     let s = System::new("test", ntex::rt::DefaultRuntime);
 
@@ -136,7 +157,9 @@ fn test_arbiter_local_storage() {
     assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
     assert!(Arbiter::contains_item::<&'static str>());
     assert!(Arbiter::get_value(|| 64u64) == 64);
-    assert!(format!("{:?}", Arbiter::current()).contains("Arbiter"));
+
+    ntex::rt::set_item(100u32);
+    assert_eq!(ntex::rt::get_item::<u32>().unwrap(), 100);
 }
 
 #[test]
@@ -207,13 +230,27 @@ fn test_spawn_cb() {
     assert!(val > 0);
 }
 
+#[ntex::test]
+async fn system_storage() {
+    let val = System::current().get_value::<usize>(|| 10);
+    assert_eq!(val, 10);
+
+    let arb = Arbiter::new();
+    let val2 = arb
+        .handle()
+        .spawn(async { System::current().get_value::<usize>(|| 11) })
+        .await
+        .unwrap();
+    assert_eq!(val2, 10);
+}
+
 #[cfg(all(target_os = "linux", feature = "neon-polling"))]
 #[ntex::test]
 async fn idle_disconnect_polling() {
     use std::sync::Mutex;
 
     use ntex::connect::Connect;
-    use ntex::{SharedCfg, io::Io, io::IoConfig, time::Millis, time::sleep};
+    use ntex::{SharedCfg, io::Io, io::IoConfig, time::Millis, time::sleep, util::Bytes};
 
     const DATA: &[u8] = b"Hello World Hello World Hello World Hello World Hello World \
                           Hello World Hello World Hello World Hello World Hello World \
@@ -246,7 +283,7 @@ async fn idle_disconnect_polling() {
             tx.lock().unwrap().take().unwrap().send(()).unwrap();
 
             async move {
-                io.write(DATA).unwrap();
+                io.encode_bytes(Bytes::from_static(DATA)).unwrap();
                 sleep(Millis(250)).await;
                 io.close();
                 Ok::<_, ()>(())
@@ -270,9 +307,8 @@ async fn idle_disconnect_polling() {
 async fn idle_disconnect_uring() {
     use std::sync::Mutex;
 
-    use ntex::{
-        SharedCfg, connect::Connect, io::Io, io::IoConfig, time::Millis, time::sleep,
-    };
+    use ntex::io::{Io, IoConfig};
+    use ntex::{SharedCfg, connect::Connect, time::Millis, time::sleep, util::Bytes};
 
     const DATA: &[u8] = b"Hello World Hello World Hello World Hello World Hello World \
                           Hello World Hello World Hello World Hello World Hello World \
@@ -305,9 +341,9 @@ async fn idle_disconnect_uring() {
             tx.lock().unwrap().take().unwrap().send(()).unwrap();
 
             async move {
-                io.write(DATA).unwrap();
+                io.encode_slice(DATA).unwrap();
                 sleep(Millis(250)).await;
-                io.write(DATA).unwrap();
+                io.encode_bytes(Bytes::from_static(DATA)).unwrap();
                 sleep(Millis(250)).await;
                 io.close();
                 Ok::<_, ()>(())

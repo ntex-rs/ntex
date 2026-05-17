@@ -37,6 +37,9 @@ impl<F: FnOnce()> Drop for OnDropFn<F> {
 
 /// Trait adds future `on_drop` support
 pub trait OnDropFutureExt: Future + Sized {
+    /// Wraps this future so that `on_drop` is called if the future is dropped
+    /// before it completes. The callback is cancelled if the future resolves
+    /// successfully.
     fn on_drop<F: FnOnce()>(self, on_drop: F) -> OnDropFuture<Self, F> {
         OnDropFuture::new(self, on_drop)
     }
@@ -53,6 +56,8 @@ pin_project_lite::pin_project! {
 }
 
 impl<Ft: Future, F: FnOnce()> OnDropFuture<Ft, F> {
+    /// Creates a new `OnDropFuture` that calls `on_drop` if `fut` is dropped
+    /// before it completes.
     pub fn new(fut: Ft, on_drop: F) -> Self {
         Self {
             fut,

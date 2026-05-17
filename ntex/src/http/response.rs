@@ -302,7 +302,7 @@ impl ResponseBuilder {
     /// Set HTTP status code of this response.
     #[inline]
     pub fn status(&mut self, status: StatusCode) -> &mut Self {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             parts.status = status;
         }
         self
@@ -327,7 +327,7 @@ impl ResponseBuilder {
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             match HeaderName::try_from(key) {
                 Ok(key) => match HeaderValue::try_from(value) {
                     Ok(value) => {
@@ -360,7 +360,7 @@ impl ResponseBuilder {
         <HeaderName as TryFrom<K>>::Error: Into<HttpError>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             match HeaderName::try_from(key) {
                 Ok(key) => match HeaderValue::try_from(value) {
                     Ok(value) => {
@@ -377,7 +377,7 @@ impl ResponseBuilder {
     /// Set the custom reason for the response.
     #[inline]
     pub fn reason(&mut self, reason: &'static str) -> &mut Self {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             parts.reason = Some(reason);
         }
         self
@@ -386,7 +386,7 @@ impl ResponseBuilder {
     /// Set connection type to `KeepAlive`
     #[inline]
     pub fn keep_alive(&mut self) -> &mut Self {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             parts.set_connection_type(ConnectionType::KeepAlive);
         }
         self
@@ -399,7 +399,7 @@ impl ResponseBuilder {
         HeaderValue: TryFrom<V>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             parts.set_connection_type(ConnectionType::Upgrade);
         }
         self.set_header(header::UPGRADE, value)
@@ -408,7 +408,7 @@ impl ResponseBuilder {
     /// Force close connection, even if it is marked as keep-alive
     #[inline]
     pub fn force_close(&mut self) -> &mut Self {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             parts.set_connection_type(ConnectionType::Close);
         }
         self
@@ -417,7 +417,7 @@ impl ResponseBuilder {
     /// Disable chunked transfer encoding for HTTP/1.1 streaming responses.
     #[inline]
     pub fn no_chunking(&mut self) -> &mut Self {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             parts.no_chunking(true);
         }
         self
@@ -430,7 +430,7 @@ impl ResponseBuilder {
         HeaderValue: TryFrom<V>,
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
-        if let Some(parts) = parts(&mut self.head, &self.err) {
+        if let Some(parts) = parts(&mut self.head, self.err) {
             match HeaderValue::try_from(value) {
                 Ok(value) => {
                     parts.headers.insert(header::CONTENT_TYPE, value);
@@ -578,7 +578,7 @@ impl ResponseBuilder {
     pub fn json<T: Serialize>(&mut self, value: &T) -> Response {
         match serde_json::to_string(value) {
             Ok(body) => {
-                let contains = if let Some(parts) = parts(&mut self.head, &self.err) {
+                let contains = if let Some(parts) = parts(&mut self.head, self.err) {
                     parts.headers.contains_key(header::CONTENT_TYPE)
                 } else {
                     true
@@ -616,10 +616,10 @@ impl ResponseBuilder {
 
 #[inline]
 #[allow(clippy::ref_option)]
-fn parts<'a>(
-    parts: &'a mut Option<Message<ResponseHead>>,
-    err: &Option<HttpError>,
-) -> Option<&'a mut ResponseHead> {
+fn parts(
+    parts: &mut Option<Message<ResponseHead>>,
+    err: Option<HttpError>,
+) -> Option<&mut ResponseHead> {
     if err.is_some() {
         return None;
     }

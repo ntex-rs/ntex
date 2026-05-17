@@ -8,6 +8,7 @@ mod uri;
 pub use self::error::{ConnectError, ConnectServiceError};
 pub use self::message::{Address, Connect};
 pub use self::service::{Connector, ConnectorService};
+pub use self::service::{Connector2, ConnectorService2};
 
 use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;

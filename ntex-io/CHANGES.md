@@ -1,5 +1,61 @@
 # Changes
 
+## [3.12.0] - 2026-05-15
+
+* Simplify filter api
+
+* Optimize direct write call
+
+* Correct handling filter writes
+
+## [3.11.4] - 2026-05-13
+
+* Fix read status updates api
+
+## [3.11.3] - 2026-05-12
+
+* Do not allow writing to I/O while shutting down filters
+
+## [3.11.2] - 2026-05-11
+
+* Fix bufffers order after .add_filter() call
+
+## [3.11.1] - 2026-05-11
+
+* Fix reading for testing io
+
+## [3.11.0] - 2026-05-08
+
+* Send bytes for all Io in one task
+
+* Refactor timers management
+
+## [3.10.2] - 2026-05-07
+
+* Cleanup read readiness process
+
+* Fix .poll_status_update() registration
+
+## [3.10.1] - 2026-05-05
+
+* Rename IoRef::write() to IoRef::send_buf()
+
+## [3.10.0] - 2026-05-04
+
+* Add support for vectored writes
+
+* Add support for out-of-order writes during data encoding
+
+* Delay processing of write buffer until write task pick work
+
+## [3.9.2] - 2026-04-07
+
+* Fix shutdown handling, could dead lock in edge cases
+
+## [3.9.1] - 2026-03-08
+
+* Resize buffer in blocks
+
 ## [3.9.0] - 2026-02-16
 
 * SharedCfg is not Copy

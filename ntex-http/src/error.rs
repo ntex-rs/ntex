@@ -1,8 +1,8 @@
-use std::{error, fmt, result};
+use std::{error, fmt};
 
 pub use crate::value::{InvalidHeaderValue, ToStrError};
 
-#[derive(Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 /// A generic "error" for HTTP connections
 ///
 /// This error type is less specific than the error returned from other
@@ -44,10 +44,7 @@ pub struct InvalidMethod {
     _priv: (),
 }
 
-/// A `Result` typedef to use with the `http::Error` type
-pub type Result<T> = result::Result<T, Error>;
-
-#[derive(Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 enum ErrorKind {
     StatusCode(InvalidStatusCode),
     Method(InvalidMethod),

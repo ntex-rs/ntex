@@ -1,4 +1,4 @@
-use std::{borrow, cmp, fmt, hash, mem, ops};
+use std::{borrow, cmp, fmt, hash, io, mem, ops};
 
 use crate::{Buf, BytesMut, buf::IntoIter, debug, storage::INLINE_CAP, storage::Storage};
 
@@ -462,7 +462,7 @@ impl Bytes {
     /// [`split_off`]: #method.split_off
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        self.storage.truncate(len, true);
+        self.storage.truncate(len);
     }
 
     /// Shortens the buffer to `len` bytes and dropping the rest.
@@ -540,6 +540,11 @@ impl Buf for Bytes {
     fn advance(&mut self, cnt: usize) {
         self.advance_to(cnt);
     }
+
+    #[inline]
+    fn get_u8(&mut self) -> u8 {
+        self.storage.get_u8()
+    }
 }
 
 impl bytes::buf::Buf for Bytes {
@@ -556,6 +561,11 @@ impl bytes::buf::Buf for Bytes {
     #[inline]
     fn advance(&mut self, cnt: usize) {
         self.advance_to(cnt);
+    }
+
+    #[inline]
+    fn get_u8(&mut self) -> u8 {
+        self.storage.get_u8()
     }
 }
 
@@ -660,6 +670,17 @@ impl Default for Bytes {
     #[inline]
     fn default() -> Bytes {
         Bytes::new()
+    }
+}
+
+impl io::Read for Bytes {
+    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        let len = cmp::min(self.len(), dst.len());
+        if len > 0 {
+            dst[..len].copy_from_slice(&self[..len]);
+            self.advance_to(len);
+        }
+        Ok(len)
     }
 }
 
@@ -931,13 +952,19 @@ mod tests {
         b.advance_to(1);
         assert_eq!(&b, &LONG[1..10]);
 
-        let b = Bytes::from(b"123");
+        let mut b = Bytes::from(b"123");
         assert!(&b"12"[..] > &b);
         assert!("123" == &b);
         assert!("12" > &b);
+        assert!("12" > b);
+        assert_eq!(b.get_u8(), b'1');
+        assert_eq!("23", &b);
 
-        let b = Bytes::from(&Bytes::from(LONG));
+        let mut b = Bytes::from(&Bytes::from(LONG));
         assert_eq!(b, LONG);
+        assert_eq!(b.get_u8(), LONG[0]);
+        assert_eq!(b.get_u8(), LONG[1]);
+        assert_eq!(b.len(), LONG.len() - 2);
 
         let b = Bytes::from(BytesMut::from(LONG));
         assert_eq!(b, LONG);
@@ -984,5 +1011,25 @@ mod tests {
         assert_eq!(iter.get_mut(), &LONG[4..]);
         let b = iter.into_inner();
         assert_eq!(b, &LONG[4..]);
+
+        let mut b = Bytes::copy_from_slice(b"123");
+        assert!(b.is_inline());
+        assert_eq!(b.storage.capacity(), 23);
+        b.truncate(2);
+        assert_eq!(b, *b"12");
+        assert_eq!(bytes::buf::Buf::get_u8(&mut b), 49);
+        assert_eq!(b.len(), 1);
+    }
+
+    #[test]
+    fn bytes_read() {
+        use std::io::Read;
+
+        let mut b = Bytes::copy_from_slice(b"123");
+
+        let mut buf = [0; 10];
+        assert_eq!(b.read(&mut buf).unwrap(), 3);
+        assert_eq!(b.len(), 0);
+        assert_eq!(buf, [49, 50, 51, 0, 0, 0, 0, 0, 0, 0]);
     }
 }

@@ -55,7 +55,7 @@ impl<T: Default> fmt::Debug for Condition<T> {
 }
 
 impl Condition<()> {
-    /// Coonstruct new condition instance
+    /// Construct new condition instance
     pub fn new() -> Condition<()> {
         Condition {
             inner: Cell::new(Inner {

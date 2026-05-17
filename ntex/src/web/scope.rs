@@ -56,6 +56,8 @@ type HttpNewService<Err: ErrorRenderer> =
 ///  * `/{project_id}/path2` - `GET` requests
 ///  * `/{project_id}/path3` - `HEAD` requests
 ///
+#[derive(derive_more::Debug)]
+#[debug("Scope({rdef:?})")]
 pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
     filter: ServiceChainFactory<T, WebRequest<Err>, SharedCfg>,
@@ -503,6 +505,8 @@ where
     }
 }
 
+#[derive(derive_more::Debug)]
+#[debug("ScopeService")]
 pub struct ScopeService<F, Err: ErrorRenderer> {
     filter: F,
     routing: ScopeRouter<Err>,

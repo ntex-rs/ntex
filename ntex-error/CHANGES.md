@@ -1,0 +1,67 @@
+# Changes
+
+## [2.2.0] - 2026-04-08
+
+* Add fmt_diag_typ helper
+
+## [2.1.0] - 2026-04-05
+
+* Simplify ErrorDiagnostic trait, remove explicit ResultType category
+
+## [2.0.0] - 2026-04-02
+
+* Remove ResultKind trait
+
+* Move .tp() and .signature() to ErrorDiagnostic
+
+## [1.7.1] - 2026-04-01
+
+* Add ResultType impl for Result<T, E> where E: ErrorDiagnostic
+
+## [1.7.0] - 2026-03-26
+
+* Add support for a user-defined tag to the `ErrorDiagnostic` trait
+
+## [1.6.0] - 2026-03-23
+
+* Rename ResultKind::signature() to ResultKind::category()
+
+## [1.5.2] - 2026-03-20
+
+* Add utility for module path generation
+
+## [1.5.1] - 2026-03-19
+
+* Add BacktraceResolver
+
+## [1.5.0] - 2026-03-19
+
+* Delay backtrace resolve operation
+
+## [1.4.0] - 2026-03-17
+
+* Fix Error::source()
+
+* Tune error formatter
+
+## [1.3.0] - 2026-03-15
+
+* Add error extensions api, get_item() and insert_item() methods
+
+## [1.2.0] - 2026-03-14
+
+* Refactor ErrorDiagnostic trait
+
+* Create ErrorInformation from Error reference
+
+## [1.1.0] - 2026-03-09
+
+* Introduce ErrorInformation type
+
+## [1.0.1] - 2026-03-08
+
+* Allow to create Backtrace
+
+## [1.0.0] - 2026-03-07
+
+* Initial error management implementation

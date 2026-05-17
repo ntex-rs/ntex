@@ -45,7 +45,6 @@ mod route;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse_macro_input;
 
 /// Creates route handler with `GET` method guard.
 ///
@@ -58,7 +57,6 @@ use syn::parse_macro_input;
 /// - `error = "ErrorRenderer"` - Register handler for different error renderer
 #[proc_macro_attribute]
 pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Get) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -73,7 +71,6 @@ pub fn web_get(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Attributes are the same as in [get](attr.get.html)
 #[proc_macro_attribute]
 pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Post) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -88,7 +85,6 @@ pub fn web_post(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Attributes are the same as in [get](attr.get.html)
 #[proc_macro_attribute]
 pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Put) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -103,7 +99,6 @@ pub fn web_put(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Attributes are the same as in [get](attr.get.html)
 #[proc_macro_attribute]
 pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Delete) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -118,7 +113,6 @@ pub fn web_delete(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Attributes are the same as in [head](attr.head.html)
 #[proc_macro_attribute]
 pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Head) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -133,7 +127,6 @@ pub fn web_head(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Attributes are the same as in [connect](attr.connect.html)
 #[proc_macro_attribute]
 pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Connect) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -148,7 +141,6 @@ pub fn web_connect(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Attributes are the same as in [options](attr.options.html)
 #[proc_macro_attribute]
 pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Options) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -163,7 +155,6 @@ pub fn web_options(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Attributes are the same as in [trace](attr.trace.html)
 #[proc_macro_attribute]
 pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Trace) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -178,7 +169,6 @@ pub fn web_trace(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Attributes are the same as in [patch](attr.patch.html)
 #[proc_macro_attribute]
 pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as syn::AttributeArgs);
     let gen_code = match route::Route::new(args, input, route::MethodType::Patch) {
         Ok(gen_code) => gen_code,
         Err(err) => return err.to_compile_error().into(),
@@ -246,7 +236,7 @@ pub fn rt_test(_: TokenStream, item: TokenStream) -> TokenStream {
     let mut has_test_attr = false;
 
     for attr in attrs {
-        if attr.path.is_ident("test") {
+        if attr.path().is_ident("test") {
             has_test_attr = true;
         }
     }
@@ -312,7 +302,7 @@ pub fn rt_test2(_: TokenStream, item: TokenStream) -> TokenStream {
     let mut has_test_attr = false;
 
     for attr in attrs {
-        if attr.path.is_ident("test") {
+        if attr.path().is_ident("test") {
             has_test_attr = true;
         }
     }
@@ -376,7 +366,7 @@ pub fn rt_test_internal(_: TokenStream, item: TokenStream) -> TokenStream {
     let mut has_test_attr = false;
 
     for attr in attrs {
-        if attr.path.is_ident("test") {
+        if attr.path().is_ident("test") {
             has_test_attr = true;
         }
     }

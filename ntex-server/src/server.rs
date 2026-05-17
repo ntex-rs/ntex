@@ -17,7 +17,7 @@ pub(crate) struct ServerShared {
 pub struct Server<T> {
     shared: Arc<ServerShared>,
     cmd: Sender<ServerCommand<T>>,
-    stop: Option<oneshot::Receiver<()>>,
+    stop: Option<oneshot::AsyncReceiver<()>>,
 }
 
 impl<T> Server<T> {
@@ -105,7 +105,7 @@ impl<T> Future for Server<T> {
         let this = self.get_mut();
 
         if this.stop.is_none() {
-            let (tx, rx) = oneshot::channel();
+            let (tx, rx) = oneshot::async_channel();
             if this.cmd.try_send(ServerCommand::NotifyStopped(tx)).is_err() {
                 return Poll::Ready(Ok(()));
             }

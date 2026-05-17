@@ -22,10 +22,10 @@ pub mod rt_compio;
 #[cfg(feature = "tokio")]
 pub mod rt_tokio;
 
-pub use self::arbiter::Arbiter;
+pub use self::arbiter::{Arbiter, get_item, remove_all_items, set_item, with_item};
 pub use self::builder::{Builder, SystemRunner};
 pub use self::driver::{BlockFuture, Driver, DriverType, Notify, PollResult, Runner};
-pub use self::pool::{BlockingError, BlockingResult};
+pub use self::pool::{BlockingError, BlockingResult, ThreadPool};
 pub use self::rt::{Runtime, RuntimeBuilder};
 pub use self::system::{Id, PingRecord, System};
 pub use self::task::{task_callbacks, task_opt_callbacks};
@@ -38,7 +38,11 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    System::current().spawn_blocking(f)
+    if let Some(sys) = System::try_current() {
+        sys.spawn_blocking(f)
+    } else {
+        ThreadPool::execute_inplace(f)
+    }
 }
 
 #[cfg(feature = "tokio")]

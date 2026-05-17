@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::task::{Poll, ready};
 use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
@@ -10,7 +11,7 @@ use crate::time::{Millis, timeout_checked};
 use crate::util::{BufMut, Bytes, BytesMut, Stream};
 
 use super::connection::{Connection, ConnectionType};
-use super::error::{ConnectError, SendRequestError};
+use super::error::{ClientError, ConnectError};
 use super::{ClientCodec, ClientPayloadCodec, ClientRawRequest, pool::Acquired};
 
 pub(super) async fn send_request(
@@ -20,7 +21,7 @@ pub(super) async fn send_request(
     created: Instant,
     timeout: Millis,
     pool: Option<Acquired>,
-) -> Result<(ResponseHead, Payload), SendRequestError> {
+) -> Result<(ResponseHead, Payload), ClientError> {
     // set request host header
     if !req.head.headers.contains_key(HOST)
         && let Some(host) = req.head.uri.host()
@@ -38,13 +39,17 @@ pub(super) async fn send_request(
         }
     }
 
-    log::trace!("sending http1 request {req:?} body size: {:?}", body.size());
+    log::trace!(
+        "{}: sending http1 request {req:?} body size: {:?}",
+        io.tag(),
+        body.size()
+    );
 
     // send request
-    let codec = ClientCodec::new(true, io.shared().get());
+    let codec = ClientCodec::new(true);
     io.send(req.into(), &codec).await?;
 
-    log::trace!("http1 request has been sent");
+    log::trace!("{}: http1 request has been sent", io.tag());
 
     // send request body
     match body.size() {
@@ -54,24 +59,25 @@ pub(super) async fn send_request(
         }
     }
 
-    log::trace!("reading http1 response");
+    log::trace!("{}: reading http1 response", io.tag());
 
     // read response and init read body
     let fut = async {
         if let Some(result) = io.recv(&codec).await? {
             log::trace!(
-                "http1 response is received, type: {:?}, response: {result:#?}",
+                "{}: http1 response is received, type: {:?}, response: {result:#?}",
+                io.tag(),
                 codec.message_type()
             );
             Ok(result)
         } else {
-            Err(SendRequestError::from(ConnectError::Disconnected(None)))
+            Err(ClientError::from(ConnectError::Disconnected(None)))
         }
     };
 
     let head = timeout_checked(timeout, fut)
         .await
-        .map_err(|()| SendRequestError::Timeout)
+        .map_err(|()| ClientError::Timeout)
         .and_then(|res| res)?;
 
     if codec.message_type() == h1::MessageType::None {
@@ -94,17 +100,31 @@ pub(super) async fn send_body(
     mut body: Body,
     io: &IoBoxed,
     codec: &ClientCodec,
-) -> Result<(), SendRequestError> {
+) -> Result<(), ClientError> {
     loop {
         if let Some(result) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
-            io.encode(h1::Message::Chunk(Some(result?)), codec)?;
-            io.flush(false).await?;
+            let chunk = result?;
+            #[cfg(feature = "trace")]
+            let chunk_len = chunk.len();
+            io.encode(h1::Message::Chunk(Some(chunk)), codec)?;
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: sending chunk, {} bytes, backpressure: {}",
+                io.tag(),
+                chunk_len,
+                io.is_wr_backpressure()
+            );
+            if io.is_wr_backpressure() {
+                io.flush(false).await?;
+                #[cfg(feature = "trace")]
+                log::trace!("{}: flushed", io.tag());
+            }
         } else {
             io.encode(h1::Message::Chunk(None), codec)?;
+            io.flush(true).await?;
             break;
         }
     }
-    io.flush(true).await?;
 
     Ok(())
 }

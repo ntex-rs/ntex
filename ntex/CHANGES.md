@@ -1,5 +1,67 @@
 # Changes
 
+## [3.9.4] - 2026-05-12
+
+* Fix handling h2 disconnect error in client
+
+## [3.9.2] - 2026-05-11
+
+* http: Add "connection: close" if request payload is not consumed #867
+
+## [3.9.1] - 2026-05-07
+
+* Fix httparse::Error compat
+
+## [3.9.0] - 2026-05-07
+
+* Allow to configure MAX_HEADERS/MAX_BUFFER_SIZE #611
+
+## [3.8.0] - 2026-05-03
+
+* Enable vectored writes for tokio runtime
+
+* Enable vectored writes for compio runtime
+
+* Update http and ws codec, use BytePages buffer
+
+* Upgrade WsTransport
+
+## [3.7.2] - 2026-04-08
+
+* Configure web test server listener #831
+
+## [3.7.1] - 2026-04-02
+
+* Update to ntex-error 2.0
+
+## [3.7.0] - 2026-03-26
+
+* Rename client::error::SendRequestError to ClientError
+
+## [3.6.2] - 2026-03-19
+
+* Fix UnsupportedVersion http error
+
+* Move http types to ntex-http
+
+## [3.6.1] - 2026-03-14
+
+* Re-export more types from ntex-error
+
+## [3.6.0] - 2026-03-08
+
+* Include ntex-error
+
+* web: Configure web test server port #790
+
+## [3.5.1] - 2026-02-19
+
+* Fix http client request version
+
+## [3.5.0] - 2026-02-17
+
+* Use new ntex-rt api
+
 ## [3.4.0] - 2026-02-17
 
 * Propagate shutdown to user service from `ws::start` #765

@@ -597,7 +597,7 @@ where
 ///
 /// #[ntex::test]
 /// async fn test_example() {
-///     let mut srv = test::server_with(test::config().h1(), ||
+///     let mut srv = test::server_with(test::config().h1().port(4000), ||
 ///         App::new().service(web::resource("/").to(my_handler))
 ///     );
 ///
@@ -635,10 +635,12 @@ where
     thread::spawn(move || {
         let sys = System::with_config(&name, sys);
 
-        let cfg = cfg.clone();
         let factory = factory.clone();
         let ctimeout = cfg.client_timeout;
-        let tcp = net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = cfg.port;
+        let tcp = cfg
+            .listener
+            .unwrap_or(net::TcpListener::bind(format!("127.0.0.1:{port}")).unwrap());
         let local_addr = tcp.local_addr().unwrap();
 
         sys.run(move || {
@@ -707,9 +709,7 @@ where
             )
             .run();
 
-            crate::rt::spawn(async move {
-                tx.send((System::current(), srv, local_addr)).unwrap();
-            });
+            tx.send((System::current(), srv, local_addr)).unwrap();
             Ok(())
         })
     });
@@ -765,12 +765,14 @@ where
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 /// Test server configuration
 pub struct TestServerConfig {
     tp: HttpVer,
     stream: StreamType,
     client_timeout: Seconds,
+    port: u16,
+    listener: Option<net::TcpListener>,
 }
 
 #[derive(Clone, Debug)]
@@ -822,6 +824,8 @@ impl TestServerConfig {
             tp: HttpVer::Both,
             stream: StreamType::Tcp,
             client_timeout: Seconds(5),
+            port: 0,
+            listener: None,
         }
     }
 
@@ -859,6 +863,19 @@ impl TestServerConfig {
     /// Set server client timeout in seconds for first request.
     pub fn client_timeout(mut self, val: Seconds) -> Self {
         self.client_timeout = val;
+        self
+    }
+
+    #[must_use]
+    /// Set server port. By default, test server binds to a random port assigned by OS.
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+
+    #[must_use]
+    pub fn listener(mut self, listener: net::TcpListener) -> Self {
+        self.listener = Some(listener);
         self
     }
 }

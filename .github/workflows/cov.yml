@@ -9,8 +9,12 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v6
-      - uses: jlumbroso/free-disk-space@main
       - uses: taiki-e/install-action@nextest
+      - uses: jlumbroso/free-disk-space@main
+        with:
+          dotnet: true
+          android: false
+          large-packages: false
 
       - name: Install Rust
         run: rustup update nightly
@@ -30,15 +34,23 @@ jobs:
         run: cargo +nightly llvm-cov clean --workspace
 
       - name: Code coverage (neon-poling)
+        timeout-minutes: 10
         run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/neon-polling,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (neon-uring)
+        timeout-minutes: 10
         run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/neon-uring,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (tokio)
-        run: cargo +nightly llvm-cov test --no-report --doctests --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_on: error
+          command: cargo +nightly llvm-cov test --no-report --doctests --all --no-default-features --features="ntex/tokio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Code coverage (compio)
+        timeout-minutes: 10
         run: cargo +nightly llvm-cov nextest --no-report --retries=3 --all --no-default-features --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Generate coverage report

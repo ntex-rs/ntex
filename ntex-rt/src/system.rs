@@ -1,13 +1,15 @@
+use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
-use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, rc::Rc};
+use std::{cell::Cell, cell::RefCell, fmt, future::Future, panic, pin::Pin};
 
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver, Sender, unbounded};
 use futures_timer::Delay;
+use parking_lot::RwLock;
 
 use crate::pool::ThreadPool;
-use crate::{Arbiter, BlockingResult, Builder, Runner, SystemRunner};
+use crate::{Arbiter, BlockingResult, Builder, Handle, Runner, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -23,55 +25,91 @@ struct Arbiters {
     list: Vec<Arbiter>,
 }
 
+/// System id
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Id(pub(crate) usize);
 
 /// System is a runtime manager
-#[derive(Clone, Debug)]
 pub struct System {
     id: usize,
-    sys: Sender<SystemCommand>,
-    arbiter: Arbiter,
+    arbiter: Cell<Option<Arbiter>>,
     config: SystemConfig,
+    sender: Sender<SystemCommand>,
+    receiver: Receiver<SystemCommand>,
+    rt: Arc<RwLock<Arbiter>>,
+    storage: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Sync + Send>>>>,
     pool: ThreadPool,
 }
 
 #[derive(Clone)]
 pub struct SystemConfig {
     pub(super) name: String,
-    pub(super) runner: Arc<dyn Runner>,
     pub(super) stack_size: usize,
     pub(super) stop_on_panic: bool,
+    pub(super) ping_interval: usize,
+    pub(super) pool_limit: usize,
+    pub(super) pool_recv_timeout: Duration,
     pub(super) testing: bool,
+    pub(super) runner: Arc<dyn Runner>,
 }
 
 thread_local!(
     static CURRENT: RefCell<Option<System>> = const { RefCell::new(None) };
 );
 
+impl Clone for System {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            arbiter: Cell::new(None),
+            config: self.config.clone(),
+            sender: self.sender.clone(),
+            receiver: self.receiver.clone(),
+            rt: self.rt.clone(),
+            storage: self.storage.clone(),
+            pool: self.pool.clone(),
+        }
+    }
+}
+
 impl System {
     /// Constructs new system and sets it as current
-    pub(super) fn construct(
-        sys: Sender<SystemCommand>,
-        mut arbiter: Arbiter,
-        config: SystemConfig,
-        pool: ThreadPool,
-    ) -> Self {
+    pub(super) fn construct(config: SystemConfig) -> Self {
         let id = SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst);
-        arbiter.sys_id = id;
+        let (sender, receiver) = unbounded();
 
-        let sys = System {
+        let pool =
+            ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
+
+        System {
             id,
-            sys,
-            arbiter,
             config,
+            sender,
+            receiver,
             pool,
-        };
-        System::set_current(sys.clone());
-        sys
+            rt: Arc::new(RwLock::new(Arbiter::dummy())),
+            storage: Arc::new(RwLock::new(HashMap::default())),
+            arbiter: Cell::new(None),
+        }
     }
 
-    /// Build a new system with a customized tokio runtime
+    /// Constructs new system and sets it as current
+    pub(super) fn start(&mut self) -> oneshot::Receiver<i32> {
+        let (stop_tx, stop) = oneshot::channel();
+        let (arb, controller) = Arbiter::new_system(self.clone(), self.config.name.clone());
+
+        self.arbiter.set(Some(arb.clone()));
+        *self.rt.write() = arb.clone();
+        System::set_current(self.clone());
+
+        // system support tasks
+        crate::spawn(SystemSupport::new(self, stop_tx).run(arb.id(), arb));
+        crate::spawn(controller.run());
+
+        stop
+    }
+
+    /// Build a new system with a customized runtime
     ///
     /// This allows to customize the runtime. See struct level docs on
     /// `Builder` for more information.
@@ -82,7 +120,7 @@ impl System {
     #[allow(clippy::new_ret_no_self)]
     /// Create new system
     ///
-    /// This method panics if it can not create tokio runtime
+    /// This method panics if it can not create runtime
     pub fn new<R: Runner>(name: &str, runner: R) -> SystemRunner {
         Self::build().name(name).build(runner)
     }
@@ -90,7 +128,7 @@ impl System {
     #[allow(clippy::new_ret_no_self)]
     /// Create new system
     ///
-    /// This method panics if it can not create tokio runtime
+    /// This method panics if it can not create runtime
     pub fn with_config(name: &str, config: SystemConfig) -> SystemRunner {
         Self::build().name(name).build_with(config)
     }
@@ -107,11 +145,23 @@ impl System {
         })
     }
 
+    /// Runs a function using the system context.
+    pub fn try_current() -> Option<System> {
+        CURRENT.with(|cell| cell.borrow().as_ref().map(Clone::clone))
+    }
+
     /// Set current running system
     #[doc(hidden)]
     pub fn set_current(sys: System) {
+        sys.arbiter().set_current();
         CURRENT.with(|s| {
             *s.borrow_mut() = Some(sys);
+        });
+    }
+
+    pub(super) fn remove_current() {
+        CURRENT.with(|cell| {
+            cell.borrow_mut().take();
         });
     }
 
@@ -132,7 +182,7 @@ impl System {
 
     /// Stop the system with a particular exit code
     pub fn stop_with_code(&self, code: i32) {
-        let _ = self.sys.try_send(SystemCommand::Exit(code));
+        let _ = self.sender.try_send(SystemCommand::Exit(code));
     }
 
     /// Return status of `stop_on_panic` option
@@ -144,8 +194,21 @@ impl System {
     }
 
     /// System arbiter
-    pub fn arbiter(&self) -> &Arbiter {
-        &self.arbiter
+    ///
+    /// # Panics
+    ///
+    /// Panics if system is not started
+    pub fn arbiter(&self) -> Arbiter {
+        if let Some(arb) = self.arbiter.take() {
+            self.arbiter.set(Some(arb.clone()));
+            if arb.hnd.is_some() {
+                return arb;
+            }
+        }
+
+        let arb = self.rt.read().clone();
+        self.arbiter.set(Some(arb.clone()));
+        arb
     }
 
     /// Retrieves a list of all arbiters in the system
@@ -177,12 +240,18 @@ impl System {
     }
 
     pub(super) fn sys(&self) -> &Sender<SystemCommand> {
-        &self.sys
+        &self.sender
     }
 
     /// System config
     pub fn config(&self) -> SystemConfig {
         self.config.clone()
+    }
+
+    #[inline]
+    /// Runtime handle for main thread
+    pub fn handle(&self) -> Handle {
+        self.arbiter().handle().clone()
     }
 
     /// Testing flag
@@ -198,7 +267,28 @@ impl System {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.pool.dispatch(f)
+        self.pool.execute(f)
+    }
+
+    /// Returns a previously registered type, or inserts and returns a new one.
+    ///
+    /// This method acquires a lock on the internal data structure.
+    /// To avoid repeated locking, prefer storing a cloned value in the arbiter's storage.
+    pub fn get_value<T>(&self, f: impl FnOnce() -> T) -> T
+    where
+        T: Clone + Send + Sync + 'static,
+    {
+        if let Some(boxed) = self.storage.read().get(&TypeId::of::<T>())
+            && let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>()
+        {
+            val.clone()
+        } else {
+            let val = f();
+            self.storage
+                .write()
+                .insert(TypeId::of::<T>(), Box::new(val.clone()));
+            val
+        }
     }
 }
 
@@ -208,23 +298,15 @@ impl SystemConfig {
     pub fn testing(&self) -> bool {
         self.testing
     }
+}
 
-    /// Execute a future with custom `block_on` method and wait for result
-    #[inline]
-    pub(super) fn block_on<F, R>(&self, fut: F) -> R
-    where
-        F: Future<Output = R> + 'static,
-        R: 'static,
-    {
-        // run loop
-        let result = Rc::new(RefCell::new(None));
-        let result_inner = result.clone();
-
-        self.runner.block_on(Box::pin(async move {
-            let r = fut.await;
-            *result_inner.borrow_mut() = Some(r);
-        }));
-        result.borrow_mut().take().unwrap()
+impl fmt::Debug for System {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("System")
+            .field("id", &self.id)
+            .field("config", &self.config)
+            .field("pool", &self.pool)
+            .finish()
     }
 }
 
@@ -247,30 +329,31 @@ pub(super) enum SystemCommand {
 }
 
 #[derive(Debug)]
-pub(super) struct SystemSupport {
+struct SystemSupport {
     stop: Option<oneshot::Sender<i32>>,
     commands: Receiver<SystemCommand>,
     ping_interval: Duration,
 }
 
 impl SystemSupport {
-    pub(super) fn new(
-        stop: oneshot::Sender<i32>,
-        commands: Receiver<SystemCommand>,
-        ping_interval: usize,
-    ) -> Self {
+    fn new(sys: &System, stop: oneshot::Sender<i32>) -> Self {
         Self {
-            commands,
             stop: Some(stop),
-            ping_interval: Duration::from_millis(ping_interval as u64),
+            commands: sys.receiver.clone(),
+            ping_interval: Duration::from_millis(sys.config.ping_interval as u64),
         }
     }
 
-    pub(super) async fn run(mut self) {
+    async fn run(mut self, id: Id, arb: Arbiter) {
         ARBITERS.with(move |arbs| {
             let mut arbiters = arbs.borrow_mut();
             arbiters.all.clear();
             arbiters.list.clear();
+
+            // system arbiter
+            arbiters.all.insert(id, arb.clone());
+            arbiters.list.push(arb.clone());
+            crate::spawn(ping_arbiter(arb, self.ping_interval));
         });
 
         loop {
@@ -352,7 +435,8 @@ async fn ping_arbiter(arb: Arbiter, interval: Duration) {
         });
 
         let result = arb
-            .spawn_with(|| async {
+            .handle()
+            .spawn(async {
                 yield_to().await;
             })
             .await;

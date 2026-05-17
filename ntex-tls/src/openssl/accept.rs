@@ -1,5 +1,6 @@
 use std::{cell::RefCell, error::Error, fmt, io};
 
+use ntex_bytes::BytePages;
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
@@ -85,8 +86,7 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
             let ssl = ctx_result.map_err(super::map_to_ioerr)?;
             let inner = super::IoInner {
                 source: None,
-                destination: None,
-                stopped: false,
+                destination: BytePages::new(io.cfg().write_page_size()),
             };
             let filter = SslFilter {
                 inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
@@ -97,7 +97,7 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
             loop {
                 let result = io.with_buf(|buf| {
                     let filter = io.filter();
-                    filter.with_buffers(buf, || filter.inner.borrow_mut().accept())
+                    filter.with_buffers(buf, |_| filter.inner.borrow_mut().accept())
                 })?;
                 if super::handle_result(&io, result).await?.is_some() {
                     break;

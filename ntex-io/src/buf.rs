@@ -1,360 +1,371 @@
-use std::{cell::Cell, fmt};
+use std::{cell::Cell, fmt, io, task::Poll};
 
-use ntex_bytes::BytesMut;
-use ntex_util::future::Either;
+use ntex_bytes::{BytePageSize, BytePages, BytesMut};
 
-use crate::{IoRef, cfg::BufConfig};
+use crate::{IoConfig, IoRef};
+
+pub(crate) struct Stack {
+    buffers: Vec<Buffer>,
+}
 
 #[derive(Default)]
-pub(crate) struct Buffer {
+struct Buffer {
     read: Cell<Option<BytesMut>>,
-    write: Cell<Option<BytesMut>>,
+    write: Cell<Option<BytePages>>,
 }
 
-impl fmt::Debug for Buffer {
+impl fmt::Debug for Stack {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let b0 = self.read.take();
-        let b1 = self.write.take();
-        let res = f
-            .debug_struct("Buffer")
-            .field("read", &b0)
-            .field("write", &b1)
-            .finish();
-        self.read.set(b0);
-        self.write.set(b1);
-        res
+        f.debug_struct("Stack")
+            .field("len", &self.buffers.len())
+            .finish()
     }
-}
-
-const INLINE_SIZE: usize = 3;
-
-#[derive(Debug)]
-pub(crate) struct Stack {
-    len: usize,
-    buffers: Either<[Buffer; INLINE_SIZE], Vec<Buffer>>,
 }
 
 impl Stack {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(size: BytePageSize) -> Self {
         Self {
-            len: 1,
-            buffers: Either::Left(Default::default()),
+            buffers: vec![
+                Buffer {
+                    read: Cell::new(None),
+                    write: Cell::new(Some(BytePages::new(size))),
+                },
+                Buffer {
+                    read: Cell::new(None),
+                    write: Cell::new(Some(BytePages::new(size))),
+                },
+            ],
         }
     }
 
-    pub(crate) fn add_layer(&mut self) {
-        match &mut self.buffers {
-            Either::Left(b) => {
-                // move to vec
-                if self.len == INLINE_SIZE {
-                    let mut vec = vec![Buffer {
-                        read: Cell::new(None),
-                        write: Cell::new(None),
-                    }];
-                    for item in b.iter_mut().take(self.len) {
-                        vec.push(Buffer {
-                            read: Cell::new(item.read.take()),
-                            write: Cell::new(item.write.take()),
-                        });
-                    }
-                    self.len += 1;
-                    self.buffers = Either::Right(vec);
-                } else {
-                    let mut idx = self.len;
-                    while idx > 0 {
-                        let item = Buffer {
-                            read: Cell::new(b[idx - 1].read.take()),
-                            write: Cell::new(b[idx - 1].write.take()),
-                        };
-                        b[idx] = item;
-                        idx -= 1;
-                    }
-                    b[0] = Buffer {
-                        read: Cell::new(None),
-                        write: Cell::new(None),
-                    };
-                    self.len += 1;
-                }
-            }
-            Either::Right(vec) => {
-                self.len += 1;
-                vec.insert(
-                    0,
-                    Buffer {
-                        read: Cell::new(None),
-                        write: Cell::new(None),
-                    },
-                );
-            }
+    pub(crate) fn set_page_size(&self, size: BytePageSize) {
+        for b in &self.buffers {
+            b.with_write(|b| b.set_page_size(size));
         }
     }
 
-    fn get_buffers<F, R>(&self, idx: usize, f: F) -> R
+    pub(crate) fn add_layer(&mut self, page_size: BytePageSize) {
+        self.buffers.insert(
+            0,
+            Buffer {
+                read: Cell::new(None),
+                write: Cell::new(Some(BytePages::new(page_size))),
+            },
+        );
+    }
+
+    fn with_first<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&Buffer, &Buffer) -> R,
+        F: FnOnce(&Buffer) -> R,
     {
-        let buffers = match self.buffers {
-            Either::Left(ref b) => &b[..],
-            Either::Right(ref b) => &b[..],
-        };
-
-        let next = idx + 1;
-        if self.len > next {
-            f(&buffers[idx], &buffers[next])
-        } else {
-            f(&buffers[idx], &Buffer::default())
-        }
+        f(&self.buffers[0])
     }
 
-    fn get_first_level(&self) -> &Buffer {
-        match &self.buffers {
-            Either::Left(b) => &b[0],
-            Either::Right(b) => &b[0],
-        }
+    fn with_last<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&Buffer) -> R,
+    {
+        f(&self.buffers[self.buffers.len() - 2])
     }
 
-    fn get_last_level(&self) -> &Buffer {
-        match &self.buffers {
-            Either::Left(b) => &b[self.len - 1],
-            Either::Right(b) => &b[self.len - 1],
-        }
-    }
-
-    pub(crate) fn get_read_source(&self) -> Option<BytesMut> {
-        self.get_last_level().read.take()
-    }
-
-    pub(crate) fn set_read_source(&self, io: &IoRef, buf: BytesMut) {
-        if buf.is_empty() {
-            io.cfg().read_buf().release(buf);
-        } else {
-            self.get_last_level().read.set(Some(buf));
-        }
-    }
-
-    pub(crate) fn with_read_destination<F, R>(&self, io: &IoRef, f: F) -> R
+    pub(crate) fn with_read_dst<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let item = self.get_first_level();
-        let mut rb = item
+        self.with_first(|buf| buf.with_read(io, f))
+    }
+
+    pub(crate) fn write_buf_size(&self) -> usize {
+        // check size for first level because delayed filter processing
+        if self.buffers.len() == 2 {
+            self.buffers[0].write_len()
+        } else {
+            self.buffers[0].write_len() + self.buffers[self.buffers.len() - 2].write_len()
+        }
+    }
+
+    pub(crate) fn with_write_src<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytePages) -> R,
+    {
+        self.buffers[0].with_write(f)
+    }
+
+    pub(crate) fn with_write_dst<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytePages) -> R,
+    {
+        self.buffers[self.buffers.len() - 2].with_write(f)
+    }
+
+    pub(crate) fn read_dst_size(&self) -> usize {
+        self.buffers[0].read_len()
+    }
+
+    pub(crate) fn with_filter<F, R>(&self, io: &IoRef, f: F) -> R
+    where
+        F: FnOnce(&mut FilterCtx<'_>) -> R,
+    {
+        let mut ctx = FilterCtx {
+            io,
+            idx: 0,
+            nbytes: 0,
+            stack: self,
+            st: FilterUpdates {
+                wants_write: false,
+                notify: false,
+            },
+        };
+        f(&mut ctx)
+    }
+
+    pub(crate) fn get_read_buf(&self) -> Option<BytesMut> {
+        self.with_last(|buffer| buffer.read.take())
+    }
+
+    pub(crate) fn set_read_buf(&self, buf: BytesMut, cfg: &IoConfig) {
+        self.with_last(move |buffer| {
+            if let Some(mut first_buf) = buffer.read.take() {
+                first_buf.extend_from_slice(&buf);
+                cfg.read_buf().release(buf);
+                buffer.read.set(Some(first_buf));
+            } else if !buf.is_empty() {
+                buffer.read.set(Some(buf));
+            } else {
+                cfg.read_buf().release(buf);
+            }
+        });
+    }
+
+    pub(crate) fn process_read_buf(
+        &self,
+        io: &IoRef,
+        nbytes: usize,
+    ) -> io::Result<FilterUpdates> {
+        let mut ctx = FilterCtx {
+            io,
+            nbytes,
+            idx: 0,
+            stack: self,
+            st: FilterUpdates {
+                wants_write: false,
+                notify: false,
+            },
+        };
+        let result = io.filter().process_read_buf(&mut ctx);
+        result.map(|()| ctx.st)
+    }
+
+    pub(crate) fn process_write_buf(&self, io: &IoRef) -> io::Result<()> {
+        if self.buffers[0].is_write_empty() {
+            Ok(())
+        } else {
+            let mut ctx = FilterCtx {
+                io,
+                idx: 0,
+                nbytes: 0,
+                stack: self,
+                st: FilterUpdates {
+                    wants_write: true,
+                    notify: false,
+                },
+            };
+            io.filter().process_write_buf(&mut ctx)
+        }
+    }
+
+    pub(crate) fn process_write_buf_force(&self, io: &IoRef) -> io::Result<()> {
+        let mut ctx = FilterCtx {
+            io,
+            idx: 0,
+            nbytes: 0,
+            stack: self,
+            st: FilterUpdates {
+                wants_write: true,
+                notify: false,
+            },
+        };
+        io.filter().process_write_buf(&mut ctx)
+    }
+
+    pub(crate) fn process_shutdown(&self, io: &IoRef) -> io::Result<Poll<()>> {
+        self.process_write_buf(io)?;
+        self.with_filter(io, |ctx| io.filter().shutdown(ctx))
+    }
+}
+
+impl Buffer {
+    fn is_write_empty(&self) -> bool {
+        self.with_write(|b| b.is_empty())
+    }
+
+    fn read_len(&self) -> usize {
+        if let Some(rb) = self.read.take() {
+            let l = rb.len();
+            self.read.set(Some(rb));
+            l
+        } else {
+            0
+        }
+    }
+
+    fn write_len(&self) -> usize {
+        self.with_write(|b| b.len())
+    }
+
+    fn with_read<F, R>(&self, io: &IoRef, f: F) -> R
+    where
+        F: FnOnce(&mut BytesMut) -> R,
+    {
+        let mut rb = self
             .read
             .take()
             .unwrap_or_else(|| io.cfg().read_buf().get());
-
         let result = f(&mut rb);
 
         // check nested updates
-        if item.read.take().is_some() {
+        if self.read.take().is_some() {
             log::error!("Nested read io operation is detected");
-            io.force_close();
+            io.terminate();
         }
 
         if rb.is_empty() {
             io.cfg().read_buf().release(rb);
         } else {
-            item.read.set(Some(rb));
+            self.read.set(Some(rb));
         }
         result
     }
 
-    pub(crate) fn get_write_destination(&self) -> Option<BytesMut> {
-        self.get_last_level().write.take()
-    }
-
-    pub(crate) fn set_write_destination(&self, buf: BytesMut) -> Option<BytesMut> {
-        let b = self.get_last_level().write.take();
-        if b.is_some() {
-            self.get_last_level().write.set(b);
-            Some(buf)
-        } else {
-            self.get_last_level().write.set(Some(buf));
-            None
-        }
-    }
-
-    pub(crate) fn with_write_source<F, R>(&self, io: &IoRef, f: F) -> R
+    fn with_write<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesMut) -> R,
+        F: FnOnce(&mut BytePages) -> R,
     {
-        let item = self.get_first_level();
-        let mut wb = item
-            .write
-            .take()
-            .unwrap_or_else(|| io.cfg().write_buf().get());
-
+        let mut wb = self.write.take().unwrap();
         let result = f(&mut wb);
-        if wb.is_empty() {
-            io.cfg().write_buf().release(wb);
-        } else {
-            item.write.set(Some(wb));
-        }
+        self.write.set(Some(wb));
         result
-    }
-
-    pub(crate) fn with_write_destination<F, R>(&self, io: &IoRef, f: F) -> R
-    where
-        F: FnOnce(Option<&mut BytesMut>) -> R,
-    {
-        let item = self.get_last_level();
-        let mut wb = item.write.take();
-
-        let result = f(wb.as_mut());
-
-        // check nested updates
-        if item.write.take().is_some() {
-            log::error!("Nested write io operation is detected");
-            io.force_close();
-        }
-
-        if let Some(b) = wb {
-            if b.is_empty() {
-                io.cfg().write_buf().release(b);
-            } else {
-                item.write.set(Some(b));
-            }
-        }
-        result
-    }
-
-    pub(crate) fn read_destination_size(&self) -> usize {
-        let item = self.get_first_level();
-        let rb = item.read.take();
-        let size = rb.as_ref().map_or(0, BytesMut::len);
-        item.read.set(rb);
-        size
-    }
-
-    pub(crate) fn write_destination_size(&self) -> usize {
-        let item = self.get_last_level();
-        let wb = item.write.take();
-        let size = wb.as_ref().map_or(0, BytesMut::len);
-        item.write.set(wb);
-        size
     }
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct FilterCtx<'a> {
-    pub(crate) io: &'a IoRef,
-    pub(crate) stack: &'a Stack,
-    pub(crate) idx: usize,
+pub(crate) struct FilterUpdates {
+    pub(crate) wants_write: bool,
+    pub(crate) notify: bool,
 }
 
-impl<'a> FilterCtx<'a> {
-    pub(crate) fn new(io: &'a IoRef, stack: &'a Stack) -> Self {
-        Self { io, stack, idx: 0 }
-    }
+#[derive(Debug)]
+pub struct FilterCtx<'a> {
+    io: &'a IoRef,
+    idx: usize,
+    nbytes: usize,
+    stack: &'a Stack,
+    st: FilterUpdates,
+}
 
+impl FilterCtx<'_> {
     #[inline]
-    /// Get io
+    /// Gets a reference to the I/O object.
     pub fn io(&self) -> &IoRef {
         self.io
     }
 
     #[inline]
-    /// Get io tag
+    /// Gets the I/O tag.
     pub fn tag(&self) -> &'static str {
         self.io.tag()
     }
 
     #[inline]
-    #[must_use]
-    /// Get filter ctx for next filter in chain
-    pub fn next(&self) -> Self {
-        Self {
-            io: self.io,
-            stack: self.stack,
-            idx: self.idx + 1,
-        }
-    }
-
-    #[inline]
-    /// Get current read buffer
-    pub fn read_buf<F, R>(&self, nbytes: usize, f: F) -> R
-    where
-        F: FnOnce(&ReadBuf<'_>) -> R,
-    {
-        self.stack.get_buffers(self.idx, |curr, next| {
-            let buf = ReadBuf {
-                nbytes,
-                curr,
-                next,
-                io: self.io,
-                need_write: Cell::new(false),
-            };
-            f(&buf)
-        })
-    }
-
-    #[inline]
-    /// Get current write buffer
-    pub fn write_buf<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&WriteBuf<'_>) -> R,
-    {
-        self.stack.get_buffers(self.idx, |curr, next| {
-            let buf = WriteBuf {
-                curr,
-                next,
-                io: self.io,
-                need_write: Cell::new(false),
-            };
-            f(&buf)
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct ReadBuf<'a> {
-    pub(crate) io: &'a IoRef,
-    pub(crate) curr: &'a Buffer,
-    pub(crate) next: &'a Buffer,
-    pub(crate) nbytes: usize,
-    pub(crate) need_write: Cell<bool>,
-}
-
-impl ReadBuf<'_> {
-    #[inline]
-    /// Get io tag
-    pub fn tag(&self) -> &'static str {
-        self.io.tag()
-    }
-
-    #[inline]
-    /// Get buffer params
-    pub fn cfg(&self) -> &BufConfig {
-        self.io.cfg().read_buf()
-    }
-
-    #[inline]
-    /// Get number of newly added bytes
-    pub fn nbytes(&self) -> usize {
+    /// Gets new bytes count for read buffer.
+    pub fn new_read_bytes(&self) -> usize {
         self.nbytes
     }
 
     #[inline]
-    /// Initiate graceful io stream shutdown
-    pub fn want_shutdown(&self) {
-        self.io.want_shutdown();
+    /// Notifies about readiness changes.
+    pub fn notify(&mut self) {
+        self.st.notify = true;
     }
 
     #[inline]
-    /// Make sure buffer has enough free space
-    pub fn resize_buf(&self, buf: &mut BytesMut) {
-        self.io.cfg().read_buf().resize(buf);
+    /// Returns the filter context for the next filter in the chain.
+    pub fn with_next<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.idx += 1;
+        let res = f(self);
+        self.idx -= 1;
+        res
     }
 
     #[inline]
-    /// Get reference to source read buffer
-    pub fn with_src<F, R>(&self, f: F) -> R
+    /// Returns the filter buffer.
+    pub fn with_buffer<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut FilterBuf<'_>) -> R,
+    {
+        let mut buf = FilterBuf {
+            io: self.io,
+            curr: &self.stack.buffers[self.idx],
+            next: &self.stack.buffers[self.idx + 1],
+            wants_write: Cell::new(self.st.wants_write),
+        };
+        let result = f(&mut buf);
+        if buf.wants_write.get() {
+            self.st.wants_write = true;
+        }
+        result
+    }
+
+    #[inline]
+    /// Returns the size of the last read buffer in the chain.
+    pub fn read_dst_size(&self) -> usize {
+        self.stack.buffers[0].read_len()
+    }
+
+    #[inline]
+    /// Returns the size of the last write buffer in the chain.
+    pub fn write_dst_size(&mut self) -> usize {
+        self.stack.buffers[self.stack.buffers.len() - 2].write_len()
+    }
+
+    pub(crate) fn clear_write_buf(&mut self) {
+        self.stack.buffers[self.idx].with_write(BytePages::clear);
+    }
+}
+
+#[derive(Debug)]
+pub struct FilterBuf<'a> {
+    io: &'a IoRef,
+    curr: &'a Buffer,
+    next: &'a Buffer,
+    wants_write: Cell<bool>,
+}
+
+impl FilterBuf<'_> {
+    #[inline]
+    /// Gets a reference to the I/O object.
+    pub fn io(&self) -> &IoRef {
+        self.io
+    }
+
+    #[inline]
+    /// Gets the I/O tag.
+    pub fn tag(&self) -> &'static str {
+        self.io.tag()
+    }
+
+    /// Returns references to the source read buffer.
+    pub fn with_read_src<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Option<BytesMut>) -> R,
     {
-        let mut buf = self.next.read.take();
-        let result = f(&mut buf);
+        let mut read_src = self.next.read.take();
+        let result = f(&mut read_src);
 
-        if let Some(b) = buf {
+        if let Some(b) = read_src {
             if b.is_empty() {
                 self.io.cfg().read_buf().release(b);
             } else {
@@ -364,252 +375,74 @@ impl ReadBuf<'_> {
         result
     }
 
-    #[inline]
-    /// Get reference to destination read buffer
-    pub fn with_dst<F, R>(&self, f: F) -> R
+    /// Returns references to the source and destination read buffers.
+    pub fn with_read_buffers<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&mut BytesMut) -> R,
+        F: FnOnce(&mut Option<BytesMut>, &mut BytesMut) -> R,
     {
-        let mut rb = self
+        let mut read_src = self.next.read.take();
+        let mut read_dst = self
             .curr
             .read
             .take()
             .unwrap_or_else(|| self.io.cfg().read_buf().get());
 
-        let result = f(&mut rb);
-        if rb.is_empty() {
-            self.io.cfg().read_buf().release(rb);
-        } else {
-            self.curr.read.set(Some(rb));
-        }
-        result
-    }
+        let result = f(&mut read_src, &mut read_dst);
 
-    #[inline]
-    /// Take source read buffer
-    pub fn take_src(&self) -> Option<BytesMut> {
-        self.next.read.take().and_then(|b| {
+        if let Some(b) = read_src {
             if b.is_empty() {
                 self.io.cfg().read_buf().release(b);
-                None
             } else {
-                Some(b)
-            }
-        })
-    }
-
-    #[inline]
-    /// Set source read buffer
-    pub fn set_src(&self, src: Option<BytesMut>) {
-        if let Some(src) = src {
-            if src.is_empty() {
-                self.io.cfg().read_buf().release(src);
-            } else if let Some(mut buf) = self.next.read.take() {
-                buf.extend_from_slice(&src);
-                self.next.read.set(Some(buf));
-                self.io.cfg().read_buf().release(src);
-            } else {
-                self.next.read.set(Some(src));
+                self.next.read.set(Some(b));
             }
         }
-    }
-
-    #[inline]
-    /// Take destination read buffer
-    pub fn take_dst(&self) -> BytesMut {
-        self.curr
-            .read
-            .take()
-            .unwrap_or_else(|| self.io.cfg().read_buf().get())
-    }
-
-    #[inline]
-    /// Set destination read buffer
-    pub fn set_dst(&self, dst: Option<BytesMut>) {
-        if let Some(dst) = dst {
-            if dst.is_empty() {
-                self.io.cfg().read_buf().release(dst);
-            } else if let Some(mut buf) = self.curr.read.take() {
-                buf.extend_from_slice(&dst);
-                self.curr.read.set(Some(buf));
-                self.io.cfg().read_buf().release(dst);
-            } else {
-                self.curr.read.set(Some(dst));
-            }
-        }
-    }
-
-    #[inline]
-    pub fn with_write_buf<'b, F, R>(&'b self, f: F) -> R
-    where
-        F: FnOnce(&WriteBuf<'b>) -> R,
-    {
-        let mut buf = WriteBuf {
-            io: self.io,
-            curr: self.curr,
-            next: self.next,
-            need_write: Cell::new(self.need_write.get()),
-        };
-        let result = f(&mut buf);
-        self.need_write.set(buf.need_write.get());
-        result
-    }
-}
-
-#[derive(Debug)]
-pub struct WriteBuf<'a> {
-    pub(crate) io: &'a IoRef,
-    pub(crate) curr: &'a Buffer,
-    pub(crate) next: &'a Buffer,
-    pub(crate) need_write: Cell<bool>,
-}
-
-impl WriteBuf<'_> {
-    #[inline]
-    /// Get io tag
-    pub fn tag(&self) -> &'static str {
-        self.io.tag()
-    }
-
-    #[inline]
-    /// Get buffer params
-    pub fn cfg(&self) -> &BufConfig {
-        self.io.cfg().write_buf()
-    }
-
-    #[inline]
-    /// Initiate graceful io stream shutdown
-    pub fn want_shutdown(&self) {
-        self.io.want_shutdown();
-    }
-
-    #[inline]
-    /// Make sure buffer has enough free space
-    pub fn resize_buf(&self, buf: &mut BytesMut) {
-        self.io.cfg().write_buf().resize(buf);
-    }
-
-    #[inline]
-    /// Make sure buffer has enough free space
-    pub fn resize_buf_min(&self, buf: &mut BytesMut, size: usize) {
-        self.io.cfg().write_buf().resize_min(buf, size);
-    }
-
-    #[inline]
-    /// Get reference to source write buffer
-    pub fn with_src<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut Option<BytesMut>) -> R,
-    {
-        let mut wb = self.curr.write.take();
-        let result = f(&mut wb);
-        if let Some(b) = wb {
-            if b.is_empty() {
-                self.io.cfg().write_buf().release(b);
-            } else {
-                self.curr.write.set(Some(b));
-            }
-        }
-        result
-    }
-
-    #[inline]
-    /// Get reference to destination write buffer
-    pub fn with_dst<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut BytesMut) -> R,
-    {
-        let mut wb = self
-            .next
-            .write
-            .take()
-            .unwrap_or_else(|| self.io.cfg().write_buf().get());
-
-        let total = wb.len();
-        let result = f(&mut wb);
-
-        if wb.is_empty() {
-            self.io.cfg().write_buf().release(wb);
+        if read_dst.is_empty() {
+            self.io.cfg().read_buf().release(read_dst);
         } else {
-            self.need_write
-                .set(self.need_write.get() | (total != wb.len()));
-            self.next.write.set(Some(wb));
+            self.curr.read.set(Some(read_dst));
         }
+
         result
     }
 
     #[inline]
-    /// Take source write buffer
-    pub fn take_src(&self) -> Option<BytesMut> {
-        self.curr.write.take().and_then(|b| {
-            if b.is_empty() {
-                self.io.cfg().write_buf().release(b);
-                None
-            } else {
-                Some(b)
-            }
-        })
-    }
-
-    #[inline]
-    /// Set source write buffer
-    pub fn set_src(&self, src: Option<BytesMut>) {
-        if let Some(src) = src {
-            if src.is_empty() {
-                self.io.cfg().write_buf().release(src);
-            } else if let Some(mut buf) = self.curr.write.take() {
-                buf.extend_from_slice(&src);
-                self.curr.write.set(Some(buf));
-                self.io.cfg().write_buf().release(src);
-            } else {
-                self.curr.write.set(Some(src));
-            }
-        }
-    }
-
-    #[inline]
-    /// Take destination write buffer
-    pub fn take_dst(&self) -> BytesMut {
-        self.next
-            .write
-            .take()
-            .unwrap_or_else(|| self.io.cfg().write_buf().get())
-    }
-
-    #[inline]
-    /// Set destination write buffer
-    pub fn set_dst(&self, dst: Option<BytesMut>) {
-        if let Some(dst) = dst {
-            if dst.is_empty() {
-                self.io.cfg().write_buf().release(dst);
-            } else {
-                self.need_write.set(true);
-
-                if let Some(mut buf) = self.next.write.take() {
-                    buf.extend_from_slice(&dst);
-                    self.next.write.set(Some(buf));
-                    self.io.cfg().write_buf().release(dst);
-                } else {
-                    self.next.write.set(Some(dst));
-                }
-            }
-        }
-    }
-
-    #[inline]
-    pub fn with_read_buf<'b, F, R>(&'b self, f: F) -> R
+    /// Returns references to the source and destination write buffers.
+    pub fn with_write_buffers<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&ReadBuf<'b>) -> R,
+        F: FnOnce(&mut BytePages, &mut BytePages) -> R,
     {
-        let mut buf = ReadBuf {
-            io: self.io,
-            curr: self.curr,
-            next: self.next,
-            nbytes: 0,
-            need_write: Cell::new(self.need_write.get()),
+        let mut write_curr = self.curr.write.take().unwrap();
+        let mut write_next = self.next.write.take().unwrap();
+        let write_len = if self.wants_write.get() {
+            0
+        } else {
+            write_next.len()
         };
-        let result = f(&mut buf);
-        self.need_write.set(buf.need_write.get());
+
+        let result = f(&mut write_curr, &mut write_next);
+
+        if !self.wants_write.get() && write_next.len() > write_len {
+            self.wants_write.set(true);
+        }
+
+        self.curr.write.set(Some(write_curr));
+        self.next.write.set(Some(write_next));
+        result
+    }
+}
+
+impl fmt::Debug for Buffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let read = self.read.take();
+        let write = self.write.take();
+
+        let result = f
+            .debug_struct("Buffer")
+            .field("read", &read)
+            .field("write", &write)
+            .finish();
+        self.read.set(read);
+        self.write.set(write);
         result
     }
 }

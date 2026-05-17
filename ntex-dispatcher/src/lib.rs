@@ -46,7 +46,7 @@ pub enum Reason<U: Encoder + Decoder> {
 
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
-    /// and pass then to the service.
+    /// and pass them to the service.
     pub struct Dispatcher<S, U>
     where
         S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
@@ -189,7 +189,7 @@ where
             self.insert_flags(Flags::IDLE);
         }
         if wake {
-            io.wake();
+            io.notify_dispatcher();
         }
     }
 
@@ -409,7 +409,7 @@ where
         // check for errors
         if let Some(err) = self.shared.error.take() {
             log::trace!(
-                "{}: Error occured, stopping dispatcher",
+                "{}: Error occurred, stopping dispatcher",
                 self.shared.io.tag()
             );
             self.st = DispatcherState::Stop;
@@ -628,7 +628,7 @@ mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
     use std::{cell::RefCell, io};
 
-    use ntex_bytes::{Bytes, BytesMut};
+    use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{ServiceCtx, cfg::SharedCfg};
@@ -660,8 +660,8 @@ mod tests {
         type Item = Bytes;
         type Error = io::Error;
 
-        fn encode(&self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-            dst.extend_from_slice(&item[..]);
+        fn encodev(&self, item: Bytes, dst: &mut BytePages) -> Result<(), Self::Error> {
+            dst.append(item);
             Ok(())
         }
     }
@@ -803,7 +803,7 @@ mod tests {
         client.write("GET /test HTTP/1\r\n\r\n");
 
         let (disp, state) = Dispatcher::debug(
-            Io::from(server),
+            Io::new(server, SharedCfg::new("SRV")),
             BytesCodec,
             ntex_service::fn_service(|_: DispatchItem<BytesCodec>| async move {
                 Err::<Option<Bytes>, _>(())
@@ -1060,7 +1060,7 @@ mod tests {
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
-        assert!(flags.contains(Flags::IO_STOPPING));
+        assert!(flags.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1110,7 +1110,7 @@ mod tests {
 
         // write side must be closed, dispatcher should fail with keep-alive
         let flags = state.flags();
-        assert!(flags.contains(Flags::IO_STOPPING));
+        assert!(flags.is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1220,15 +1220,15 @@ mod tests {
 
         client.write("1");
         sleep(Millis(1000)).await;
-        assert!(!state.flags().contains(Flags::IO_STOPPING));
+        assert!(!state.flags().is_stopping());
         client.write("23");
         sleep(Millis(1000)).await;
-        assert!(!state.flags().contains(Flags::IO_STOPPING));
+        assert!(!state.flags().is_stopping());
         client.write("4");
         sleep(Millis(2000)).await;
 
         // write side must be closed, dispatcher should fail with keep-alive
-        assert!(state.flags().contains(Flags::IO_STOPPING));
+        assert!(state.flags().is_stopping());
         assert!(client.is_closed());
         assert_eq!(&data.lock().unwrap().borrow()[..], &[0, 1]);
     }
@@ -1281,7 +1281,7 @@ mod tests {
         assert_eq!(buf, Bytes::from_static(b"1"));
 
         sleep(Millis(1000)).await;
-        assert!(state.flags().contains(Flags::IO_STOPPING));
+        assert!(state.flags().is_stopping());
         assert!(client.is_closed());
     }
 
