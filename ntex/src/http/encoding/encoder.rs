@@ -234,10 +234,10 @@ impl ContentEncoder {
         match *self {
             ContentEncoder::Gzip(ref mut encoder) => encoder
                 .write_all(data)
-                .inspect_err(|err| log::trace!("Error decoding gzip encoding: {err}")),
+                .inspect_err(|err| log::trace!("Failed to encode to gzip: {err}")),
             ContentEncoder::Deflate(ref mut encoder) => encoder
                 .write_all(data)
-                .inspect_err(|err| log::trace!("Error decoding deflate encoding: {err}")),
+                .inspect_err(|err| log::trace!("Failed to encode to deflate: {err}")),
         }
     }
 }
