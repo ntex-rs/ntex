@@ -268,8 +268,11 @@ async fn test_http1_keepalive_timeout() {
     sleep(Millis(1100)).await;
 
     let mut data = vec![0; 1024];
-    let res = stream.read(&mut data).unwrap();
-    assert_eq!(res, 0);
+    stream.read(&mut data).unwrap();
+    assert_eq!(
+        &data[..49],
+        b"HTTP/1.1 408 Request Timeout\r\ncontent-length: 0\r\n"
+    );
 }
 
 /// Keep-alive must occure only while waiting complete request
@@ -317,8 +320,11 @@ async fn test_http1_keepalive_close() {
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 
     let mut data = vec![0; 1024];
-    let res = stream.read(&mut data).unwrap();
-    assert_eq!(res, 0);
+    stream.read(&mut data).unwrap();
+    assert_eq!(
+        &data[..49],
+        b"HTTP/1.1 408 Request Timeout\r\ncontent-length: 0\r\n"
+    );
 }
 
 #[ntex::test]
@@ -335,8 +341,11 @@ async fn test_http10_keepalive_default_close() {
     assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
 
     let mut data = vec![0; 1024];
-    let res = stream.read(&mut data).unwrap();
-    assert_eq!(res, 0);
+    stream.read(&mut data).unwrap();
+    assert_eq!(
+        &data[..49],
+        b"HTTP/1.0 408 Request Timeout\r\ncontent-length: 0\r\n"
+    );
 }
 
 #[ntex::test]
@@ -360,8 +369,11 @@ async fn test_http10_keepalive() {
     assert_eq!(&data[..17], b"HTTP/1.0 200 OK\r\n");
 
     let mut data = vec![0; 1024];
-    let res = stream.read(&mut data).unwrap();
-    assert_eq!(res, 0);
+    stream.read(&mut data).unwrap();
+    assert_eq!(
+        &data[..49],
+        b"HTTP/1.0 408 Request Timeout\r\ncontent-length: 0\r\n"
+    );
 }
 
 #[ntex::test]
@@ -380,8 +392,11 @@ async fn test_http1_keepalive_disabled() {
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
 
     let mut data = vec![0; 1024];
-    let res = stream.read(&mut data).unwrap();
-    assert_eq!(res, 0);
+    stream.read(&mut data).unwrap();
+    assert_eq!(
+        &data[..49],
+        b"HTTP/1.1 408 Request Timeout\r\ncontent-length: 0\r\n"
+    );
 }
 
 /// Payload timer should not fire aftre dispatcher has read whole payload

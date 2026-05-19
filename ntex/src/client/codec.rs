@@ -4,11 +4,13 @@ use bitflags::bitflags;
 
 use crate::client::ClientRawRequest;
 use crate::codec::{Decoder, Encoder};
+use crate::http::HttpServiceConfig;
 use crate::http::error::{DecodeError, EncodeError, PayloadError};
 use crate::http::h1::{
     Message, MessageType, PayloadDecoder, PayloadItem, PayloadType, decoder, encoder,
 };
 use crate::http::{ConnectionType, Method, RequestHead, ResponseHead, Version};
+use crate::service::cfg::Cfg;
 use crate::util::{BytePages, Bytes, BytesMut};
 
 bitflags! {
@@ -48,7 +50,7 @@ impl ClientCodec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub(crate) fn new(keep_alive: bool) -> Self {
+    pub(crate) fn new(keep_alive: bool, cfg: Cfg<HttpServiceConfig>) -> Self {
         let flags = if keep_alive {
             Flags::KEEPALIVE_ENABLED
         } else {
@@ -56,7 +58,7 @@ impl ClientCodec {
         };
         ClientCodec {
             inner: ClientCodecInner {
-                decoder: decoder::MessageDecoder::new(96, 64 * 1024),
+                decoder: decoder::MessageDecoder::new(cfg),
                 payload: RefCell::new(None),
                 version: Cell::new(Version::HTTP_11),
                 ctype: Cell::new(ConnectionType::Close),
