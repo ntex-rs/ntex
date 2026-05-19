@@ -8,7 +8,7 @@ use crate::http::config::{DateService, HttpServiceConfig};
 use crate::http::error::{DecodeError, EncodeError};
 use crate::http::message::ConnectionType;
 use crate::http::{Method, Version, request::Request, response::Response};
-use crate::{util::BytePages, util::BytesMut};
+use crate::{Cfg, util::BytePages, util::BytesMut};
 
 use super::{Message, decoder, decoder::PayloadType, encoder};
 
@@ -63,13 +63,13 @@ impl Codec {
     /// Create HTTP/1 codec.
     ///
     /// `keepalive_enabled` how response `connection` header get generated.
-    pub fn new(con_id: usize, cfg: &HttpServiceConfig) -> Self {
+    pub fn new(con_id: usize, cfg: Cfg<HttpServiceConfig>) -> Self {
         let flags = if cfg.ka_enabled {
             Flags::KEEPALIVE_ENABLED
         } else {
             Flags::empty()
         };
-        let decoder = decoder::MessageDecoder::new(cfg.max_headers, cfg.max_buf_size);
+        let decoder = decoder::MessageDecoder::new(cfg);
 
         Codec {
             con_id,
@@ -79,10 +79,6 @@ impl Codec {
             ctype: Cell::new(ConnectionType::KeepAlive),
             encoder: encoder::MessageEncoder::default(),
         }
-    }
-
-    pub(super) fn is_reading_hdrs(&self) -> bool {
-        self.decoder.is_reading_hdrs()
     }
 
     #[inline]
@@ -192,14 +188,13 @@ impl Encoder for Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{http::HttpMessage, http::h1::PayloadItem, util::Bytes};
+    use crate::{SharedCfg, http::HttpMessage, http::h1::PayloadItem, util::Bytes};
 
     #[test]
     fn test_http_request_chunked_payload_and_next_message() {
-        let mut cfg = HttpServiceConfig::default();
-        cfg.ka_enabled = true;
+        let cfg: SharedCfg = SharedCfg::new("DBG").add(HttpServiceConfig::new()).into();
 
-        let codec = Codec::new(0, &cfg);
+        let codec = Codec::new(0, cfg.get());
         assert!(format!("{codec:?}").contains("h1::Codec"));
 
         let mut buf = BytesMut::from(
@@ -233,7 +228,7 @@ mod tests {
         assert_eq!(*req.method(), Method::POST);
         assert!(req.chunked().unwrap());
 
-        let codec = Codec::new(0, &cfg);
+        let codec = Codec::new(0, cfg.get());
         let mut buf = BytesMut::from(
             "GET /test HTTP/1.1\r\n\
              connection: upgrade\r\n\r\n",

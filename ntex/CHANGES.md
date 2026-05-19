@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.6] - 2026-05-19
+
+* Revert changes related to headers parsing #889
+
 ## [3.9.4] - 2026-05-12
 
 * Fix handling h2 disconnect error in client

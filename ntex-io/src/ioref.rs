@@ -176,6 +176,14 @@ impl IoRef {
 
     pub(crate) fn ops_send_buf(&self) {
         let st = &self.0;
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: ops-send == buf:{} flags:{:?}",
+            st.tag(),
+            st.buffer.write_buf_size(),
+            st.flags
+        );
+
         if st.flags.is_wr_send_scheduled() {
             st.flags.unset_wr_send_scheduled();
 

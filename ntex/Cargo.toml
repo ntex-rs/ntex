@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.9.5"
+version = "3.9.6"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -87,7 +87,6 @@ ntex-rt = { workspace = true }
 ntex-io = { workspace = true }
 ntex-net = { workspace = true }
 ntex-tls = { workspace = true }
-ntex-httparse = { workspace = true }
 
 base64 = { workspace = true }
 bitflags = { workspace = true }

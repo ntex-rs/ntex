@@ -46,7 +46,7 @@ pub(super) async fn send_request(
     );
 
     // send request
-    let codec = ClientCodec::new(true);
+    let codec = ClientCodec::new(true, io.shared().get());
     io.send(req.into(), &codec).await?;
 
     log::trace!("{}: http1 request has been sent", io.tag());

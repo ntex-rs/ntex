@@ -91,7 +91,7 @@ where
         io: Io<F>,
         config: Rc<DispatcherConfig<S, C>>,
     ) -> Self {
-        let codec = Codec::new(id, &io.shared().get());
+        let codec = Codec::new(id, io.shared().get());
 
         // slow-request timer
         let (flags, max_timeout) = if let Some(cfg) = config.headers_read_rate() {
@@ -652,8 +652,7 @@ where
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
-        } else if self.codec.is_reading_hdrs()
-            && !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
+        } else if !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
             && let Some(cfg) = self.config.headers_read_rate()
         {
             log::debug!(
@@ -947,7 +946,7 @@ mod tests {
     async fn test_pipeline() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true);
+        let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
         spawn_h1(server, |_| async {
             Ok::<_, io::Error>(Response::Ok().finish())
         });
@@ -975,7 +974,7 @@ mod tests {
     async fn test_pipeline_with_payload() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true);
+        let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
 
         spawn_h1(server, |mut req: Request| async move {
             let mut p = req.take_payload();
@@ -1006,7 +1005,7 @@ mod tests {
     async fn test_pipeline_with_delay() {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(4096);
-        let mut decoder = ClientCodec::new(true);
+        let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
         spawn_h1(server, |_| async {
             sleep(Millis(100)).await;
             Ok::<_, io::Error>(Response::Ok().finish())
@@ -1082,7 +1081,7 @@ mod tests {
             ),
         );
 
-        let mut decoder = ClientCodec::new(true);
+        let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
 
         // generate large http message
         let data = rand::rng()
@@ -1238,7 +1237,7 @@ mod tests {
         // http message must be consumed
         assert_eq!(client.remote_buffer(|buf| buf.len()), 0);
 
-        let mut decoder = ClientCodec::new(true);
+        let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
         assert!(load(&mut decoder, &mut buf).status.is_success());
         assert!(lazy(|cx| Pin::new(&mut h1).poll(cx)).await.is_pending());
