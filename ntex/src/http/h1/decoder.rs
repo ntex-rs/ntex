@@ -239,7 +239,7 @@ impl MessageType for Request {
         let (len, method, uri, ver, headers) = {
             let mut req = httparse::Request::new(&mut []);
 
-            match req.parse_with_uninit_headers(src, &mut buf.headers())? {
+            match req.parse_with_uninit_headers(src, buf.headers())? {
                 httparse::Status::Complete(len) => {
                     let method = Method::from_bytes(req.method.unwrap().as_bytes())
                         .map_err(|_| DecodeError::Method)?;
@@ -266,7 +266,7 @@ impl MessageType for Request {
                 }
             }
         };
-        buf.record(headers, src.split_to(len));
+        buf.record(headers, &src.split_to(len));
 
         let mut msg = Request::new();
 
@@ -366,7 +366,7 @@ impl MessageType for ResponseHead {
                 }
             }
         };
-        buf.record(headers, src.split_to(len));
+        buf.record(headers, &src.split_to(len));
 
         let mut msg = ResponseHead::new(status, ver);
 
@@ -491,7 +491,7 @@ impl HeadersBuf {
         }
     }
 
-    fn record(&mut self, len: usize, bytes: Bytes) {
+    fn record(&mut self, len: usize, bytes: &Bytes) {
         self.indices.clear();
 
         let bytes_ptr = bytes.as_ptr() as usize;
@@ -840,7 +840,7 @@ mod tests {
 
     macro_rules! parse_ready {
         ($e:expr) => {{
-            match MessageDecoder::<Request>::new(Default::default()).decode($e) {
+            match MessageDecoder::<Request>::new(Cfg::default()).decode($e) {
                 Ok(Some((msg, _))) => msg,
                 Ok(_) => unreachable!("Eof during parsing http request"),
                 Err(err) => unreachable!("Error during parsing http request: {:?}", err),
@@ -850,7 +850,7 @@ mod tests {
 
     macro_rules! expect_parse_err {
         ($e:expr) => {{
-            match MessageDecoder::<Request>::new(Default::default()).decode($e) {
+            match MessageDecoder::<Request>::new(Cfg::default()).decode($e) {
                 Err(_) => (),
                 _ => unreachable!("Error expected"),
             }
@@ -861,7 +861,7 @@ mod tests {
     fn test_parse() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n\r\n");
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         match reader.decode(&mut buf) {
             Ok(Some((req, _))) => {
                 assert_eq!(req.version(), Version::HTTP_11);
@@ -892,7 +892,7 @@ mod tests {
     fn test_parse_partial() {
         let mut buf = BytesMut::from("PUT /test HTTP/1");
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         assert!(reader.decode(&mut buf).unwrap().is_none());
 
         buf.extend(b".1\r\n\r\n");
@@ -910,7 +910,7 @@ mod tests {
             abc",
         );
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.version(), Version::HTTP_10);
         assert_eq!(*req.method(), Method::GET);
@@ -922,7 +922,7 @@ mod tests {
             \r\n",
         );
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.version(), Version::HTTP_10);
         assert_eq!(*req.method(), Method::GET);
@@ -935,7 +935,7 @@ mod tests {
             abc",
         );
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.version(), Version::HTTP_10);
         assert_eq!(*req.method(), Method::GET);
@@ -951,7 +951,7 @@ mod tests {
             abc",
         );
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.version(), Version::HTTP_10);
         assert_eq!(*req.method(), Method::POST);
@@ -963,7 +963,7 @@ mod tests {
             \r\n",
         );
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.version(), Version::HTTP_10);
         assert_eq!(*req.method(), Method::POST);
@@ -973,7 +973,7 @@ mod tests {
             "POST /test3 HTTP/1.0\r\n\
             \r\n",
         );
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let err = reader.decode(&mut buf).unwrap_err();
         assert!(err.to_string().contains("Header"));
     }
@@ -982,7 +982,7 @@ mod tests {
     fn test_parse_body() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
         assert_eq!(req.version(), Version::HTTP_11);
@@ -999,7 +999,7 @@ mod tests {
         let mut buf =
             BytesMut::from("\r\nGET /test HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody");
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
         assert_eq!(req.version(), Version::HTTP_11);
@@ -1014,7 +1014,7 @@ mod tests {
     #[test]
     fn test_parse_partial_eof() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n");
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         assert!(reader.decode(&mut buf).unwrap().is_none());
 
         buf.extend(b"\r\n");
@@ -1028,7 +1028,7 @@ mod tests {
     fn test_headers_split_field() {
         let mut buf = BytesMut::from("GET /test HTTP/1.1\r\n");
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         assert! { reader.decode(&mut buf).unwrap().is_none() }
 
         buf.extend(b"t");
@@ -1058,7 +1058,7 @@ mod tests {
              Set-Cookie: c1=cookie1\r\n\
              Set-Cookie: c2=cookie2\r\n\r\n",
         );
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
 
         let val: Vec<_> = req
@@ -1279,7 +1279,7 @@ mod tests {
              upgrade: websocket\r\n\r\n\
              some raw data",
         );
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(req.head().connection_type(), ConnectionType::Upgrade);
         assert!(req.upgrade());
@@ -1342,7 +1342,7 @@ mod tests {
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
         assert!(req.chunked().unwrap());
@@ -1365,7 +1365,7 @@ mod tests {
             "GET /test HTTP/1.1\r\n\
              transfer-encoding: chunked\r\n\r\n",
         );
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
         assert!(req.chunked().unwrap());
@@ -1396,7 +1396,7 @@ mod tests {
              transfer-encoding: chunked\r\n\r\n",
         );
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
         assert!(req.chunked().unwrap());
@@ -1441,7 +1441,7 @@ mod tests {
               transfer-encoding: chunked\r\n\r\n",
         );
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
         assert!(msg.chunked().unwrap());
@@ -1459,7 +1459,7 @@ mod tests {
     fn test_response_http10_read_until_eof() {
         let mut buf = BytesMut::from("HTTP/1.0 200 Ok\r\n\r\ntest data");
 
-        let reader = MessageDecoder::<ResponseHead>::new(Default::default());
+        let reader = MessageDecoder::<ResponseHead>::new(Cfg::default());
         let (_msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
 
@@ -1603,7 +1603,7 @@ mod tests {
              0\r\n",
         );
 
-        let reader = MessageDecoder::<Request>::new(Default::default());
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (_msg, pl) = reader.decode(&mut buf).unwrap().unwrap();
         let pl = pl.unwrap();
 
