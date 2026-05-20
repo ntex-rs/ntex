@@ -104,7 +104,7 @@ pub enum ConnectError {
     /// SSL error
     #[cfg(feature = "openssl")]
     #[error("{0}")]
-    SslError(#[source] Rc<dyn StdError>),
+    SslError(#[source] Rc<SslError>),
 
     /// SSL Handshake error
     #[cfg(feature = "openssl")]
@@ -344,7 +344,3 @@ impl From<ClientBuilderError> for io::Error {
         io::Error::other(err)
     }
 }
-
-#[doc(hidden)]
-#[deprecated(since = "3.7.0", note = "Use ntex::client::error::ClientError instead")]
-pub type SendRequestError = ClientError;
