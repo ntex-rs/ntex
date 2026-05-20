@@ -1,5 +1,9 @@
 # Changes
 
+## [1.6.9] (2026-05-20)
+
+* Add From<ByteString> for Bytes impls
+
 ## [1.6.8] (2026-05-12)
 
 * Add PagePages::clear() method

@@ -1,5 +1,5 @@
 //! Http client errors
-use std::{error::Error, io, ops::Deref, rc::Rc};
+use std::{error::Error as StdError, io, ops::Deref, rc::Rc};
 
 use serde_json::error::Error as JsonError;
 
@@ -9,6 +9,10 @@ use tls_openssl::ssl::{Error as SslError, HandshakeError};
 use crate::error::ErrorDiagnostic;
 use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::util::{Either, clone_io_error};
+
+#[doc(hidden)]
+#[deprecated(since = "3.7.0", note = "ClientError")]
+pub type SendRequestError = ClientError;
 
 /// A set of errors that can occur during parsing json payloads
 #[derive(thiserror::Error, Debug)]
@@ -105,7 +109,7 @@ pub enum ConnectError {
     /// SSL Handshake error
     #[cfg(feature = "openssl")]
     #[error("{0}")]
-    SslHandshakeError(String),
+    SslHandshakeError(#[source] Rc<dyn StdError>),
 
     /// Failed to resolve the hostname
     #[error("Failed resolving hostname: {0}")]
@@ -194,9 +198,9 @@ impl From<crate::connect::ConnectError> for ConnectError {
 }
 
 #[cfg(feature = "openssl")]
-impl<T: std::fmt::Debug> From<HandshakeError<T>> for ConnectError {
+impl<T: StdError + 'static> From<HandshakeError<T>> for ConnectError {
     fn from(err: HandshakeError<T>) -> ConnectError {
-        ConnectError::SslHandshakeError(format!("{err:?}"))
+        ConnectError::SslHandshakeError(Rc::new(err))
     }
 }
 
@@ -209,12 +213,12 @@ pub enum InvalidUrl {
     #[error("Missing host name")]
     MissingHost,
     #[error("Url parse error: {0}")]
-    Http(#[from] HttpError),
+    Http(
+        #[from]
+        #[source]
+        HttpError,
+    ),
 }
-
-#[doc(hidden)]
-#[deprecated(since = "3.2.0", note = "ClientError")]
-pub type SendRequestError = ClientError;
 
 /// A set of errors that can occur during request sending and response reading
 #[derive(Debug, thiserror::Error)]
@@ -279,7 +283,7 @@ pub enum ClientError {
     Error(
         #[from]
         #[source]
-        Rc<dyn Error>,
+        Rc<dyn StdError>,
     ),
 }
 
