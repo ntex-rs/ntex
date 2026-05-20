@@ -599,6 +599,18 @@ impl From<&Bytes> for Bytes {
     }
 }
 
+impl From<crate::ByteString> for Bytes {
+    fn from(src: crate::ByteString) -> Bytes {
+        src.into_bytes()
+    }
+}
+
+impl From<&crate::ByteString> for Bytes {
+    fn from(src: &crate::ByteString) -> Bytes {
+        src.clone().into_bytes()
+    }
+}
+
 impl From<Vec<u8>> for Bytes {
     /// Convert a `Vec` into a `Bytes`
     fn from(src: Vec<u8>) -> Bytes {

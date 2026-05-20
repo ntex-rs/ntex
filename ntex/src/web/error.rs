@@ -94,7 +94,11 @@ pub enum UrlGenerationError {
     /// URL parse error
     #[cfg(feature = "url")]
     #[error("{0}")]
-    ParseError(#[from] UrlParseError),
+    ParseError(
+        #[from]
+        #[source]
+        UrlParseError,
+    ),
 }
 
 /// A set of errors that can occur during parsing urlencoded payloads
@@ -119,7 +123,11 @@ pub enum UrlencodedError {
     Parse,
     /// Payload error
     #[error("Error that occur during reading payload: {0}")]
-    Payload(#[from] error::PayloadError),
+    Payload(
+        #[from]
+        #[source]
+        error::PayloadError,
+    ),
 }
 
 /// A set of errors that can occur during parsing json payloads
@@ -133,10 +141,18 @@ pub enum JsonPayloadError {
     ContentType,
     /// Deserialize error
     #[error("Json deserialize error: {0}")]
-    Deserialize(#[from] serde_json::error::Error),
+    Deserialize(
+        #[from]
+        #[source]
+        serde_json::error::Error,
+    ),
     /// Payload error
     #[error("Error that occur during reading payload: {0}")]
-    Payload(#[from] error::PayloadError),
+    Payload(
+        #[from]
+        #[source]
+        error::PayloadError,
+    ),
 }
 
 /// A set of errors that can occur during parsing request paths
@@ -144,7 +160,11 @@ pub enum JsonPayloadError {
 pub enum PathError {
     /// Deserialize error
     #[error("Path deserialize error: {0}")]
-    Deserialize(#[from] serde::de::value::Error),
+    Deserialize(
+        #[from]
+        #[source]
+        serde::de::value::Error,
+    ),
 }
 
 /// A set of errors that can occur during parsing query strings
@@ -152,18 +172,34 @@ pub enum PathError {
 pub enum QueryPayloadError {
     /// Deserialize error
     #[error("Query deserialize error: {0}")]
-    Deserialize(#[from] serde::de::value::Error),
+    Deserialize(
+        #[from]
+        #[source]
+        serde::de::value::Error,
+    ),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum PayloadError {
     /// Http error.
     #[error("{0:?}")]
-    Http(#[from] error::HttpError),
+    Http(
+        #[from]
+        #[source]
+        error::HttpError,
+    ),
     #[error("{0}")]
-    Payload(#[from] error::PayloadError),
+    Payload(
+        #[from]
+        #[source]
+        error::PayloadError,
+    ),
     #[error("{0}")]
-    ContentType(#[from] error::ContentTypeError),
+    ContentType(
+        #[from]
+        #[source]
+        error::ContentTypeError,
+    ),
     #[error("Cannot decode body")]
     Decoding,
 }
