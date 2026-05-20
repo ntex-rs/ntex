@@ -173,7 +173,7 @@ pub enum PayloadError {
         DecodeError,
     ),
     /// Io error
-    #[error("")]
+    #[error("{0}")]
     Io(
         #[from]
         #[source]
@@ -327,14 +327,15 @@ mod tests {
     #[test]
     fn test_payload_error() {
         let err: PayloadError = io::Error::other("DecodeError").into();
-        assert!(format!("{err}").contains("DecodeError"));
+        println!("{err}");
+        assert!(format!("{err}").contains("DecodeError"), "{err}");
 
         let err: PayloadError = BlockingError::Canceled.into();
-        assert!(format!("{err}").contains("Operation is canceled"));
+        assert!(format!("{err}").contains("Operation is canceled"), "{err}");
 
         let err: PayloadError =
             BlockingError::Error(io::Error::other("DecodeError")).into();
-        assert!(format!("{err}").contains("DecodeError"));
+        assert!(format!("{err}").contains("DecodeError"), "{err}");
 
         let err = PayloadError::Incomplete(None);
         assert_eq!(
