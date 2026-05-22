@@ -238,8 +238,11 @@ pub async fn connect<F: Filter>(
         source: None,
         destination: BytePages::new(io.cfg().write_page_size()),
     };
+    let mut stream = ssl::SslStream::new(ssl, inner)?;
+    let _ = stream.connect();
+
     let filter = SslFilter {
-        inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
+        inner: RefCell::new(stream),
     };
     let io = io.add_filter(filter);
 

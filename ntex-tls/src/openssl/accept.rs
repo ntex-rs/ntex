@@ -88,8 +88,11 @@ impl<F: Filter> Service<Io<F>> for SslAcceptorService {
                 source: None,
                 destination: BytePages::new(io.cfg().write_page_size()),
             };
+            let mut stream = ssl::SslStream::new(ssl, inner)?;
+            let _ = stream.accept();
+
             let filter = SslFilter {
-                inner: RefCell::new(ssl::SslStream::new(ssl, inner)?),
+                inner: RefCell::new(stream),
             };
             let io = io.add_filter(filter);
 

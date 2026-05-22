@@ -328,16 +328,18 @@ impl<F: Filter> Io<F> {
         // All APIs first remove the buffer from storage before processing it.
         unsafe { &mut *(Rc::as_ptr(&state.0).cast_mut()) }
             .buffer
-            .add_layer(self.st().cfg.write_page_size());
+            .add_layer(state.0.cfg.write_page_size());
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
 
-        if let Err(e) = self.st().buffer.process_read_buf(&self, 0) {
-            self.st().terminate_connection(Some(e));
-        }
+        let io = Io(UnsafeCell::new(state), marker::PhantomData);
 
-        Io(UnsafeCell::new(state), marker::PhantomData)
+        // push read data into new filter
+        if let Err(e) = io.st().buffer.process_read_buf(&io, 0) {
+            io.st().terminate_connection(Some(e));
+        }
+        io
     }
 
     /// Wraps the current layer with a wrapper.
