@@ -1,5 +1,9 @@
 # Changes
 
+## [3.6.2] - 2026-03-22
+
+* Init connect/accept process before adding to filters
+
 ## [3.5.2] - 2026-03-12
 
 * Fix openssl filter buffering
