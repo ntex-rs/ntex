@@ -1,5 +1,9 @@
 # Changes
 
+## [3.12.2] - 2026-05-22
+
+* Do not use invalid io while adding new filter
+
 ## [3.12.0] - 2026-05-15
 
 * Simplify filter api
