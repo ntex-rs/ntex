@@ -328,7 +328,7 @@ impl<F: Filter> Io<F> {
         // All APIs first remove the buffer from storage before processing it.
         unsafe { &mut *(Rc::as_ptr(&state.0).cast_mut()) }
             .buffer
-            .add_layer(state.cfg.write_page_size());
+            .add_layer(state.0.cfg.write_page_size());
 
         // Replace current filter
         state.0.filter.add_filter::<F, U>(nf);
