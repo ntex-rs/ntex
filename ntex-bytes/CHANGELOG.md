@@ -1,8 +1,10 @@
 # Changes
 
-## [1.6.9] (2026-05-20)
+## [1.7.0] (2026-06-03)
 
 * Add From<ByteString> for Bytes impls
+
+* Allow to set pages cache size
 
 ## [1.6.8] (2026-05-12)
 

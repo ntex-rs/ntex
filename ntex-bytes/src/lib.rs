@@ -141,6 +141,13 @@ impl BytePageSize {
     }
 }
 
+/// Set pages cache size
+///
+/// Size is set for current thread
+pub fn set_pages_cache(size: usize) {
+    self::storage::set_pages_cache(size);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

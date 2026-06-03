@@ -623,9 +623,9 @@ impl StorageVec {
     /// Create new empty storage with specified size category
     pub(crate) fn sized(size: BytePageSize) -> StorageVec {
         CACHE.with(|c| {
-            let mut cache = c.take().unwrap();
-            let item = cache[size as usize].pop();
-            c.set(Some(cache));
+            let mut cst = c.take().unwrap();
+            let item = cst.cache[size as usize].pop();
+            c.set(Some(cst));
 
             if let Some(mut item) = item {
                 unsafe {
@@ -914,9 +914,22 @@ impl Drop for StorageVec {
 
 // TODO: Drop *mut SharedVec on thread local destroy
 thread_local! {
-    static CACHE: Cell<Option<Box<[Vec<StorageVec>; 7]>>> = Cell::new(Some(Box::default()));
+    static CACHE: Cell<Option<Box<Cache>>> = Cell::new(Some(Box::default()));
 }
-const CACHE_SIZE: usize = 128;
+
+pub(crate) fn set_pages_cache(size: usize) {
+    CACHE.with(|c| {
+        let mut cst = c.take().unwrap();
+        cst.size = size;
+        c.set(Some(cst));
+    });
+}
+
+#[derive(Default)]
+struct Cache {
+    size: usize,
+    cache: [Vec<StorageVec>; 7],
+}
 
 impl SharedVec {
     fn create(size: BytePageSize, cap: usize, src: &[u8]) -> NonNull<SharedVec> {
@@ -1001,8 +1014,8 @@ fn release_shared_vec(ptr: *mut SharedVec) {
         let size = (*ptr).size;
         if size != BytePageSize::Unset {
             let cached = CACHE.with(|c| {
-                let mut cache = c.take().unwrap();
-                let res = if cache[size as usize].len() < CACHE_SIZE {
+                let mut cst = c.take().unwrap();
+                let res = if cst.cache[size as usize].len() < cst.size {
                     let capacity = cap - METADATA_SIZE_U32;
                     (*ptr).len = 0;
                     (*ptr).offset = METADATA_SIZE_U32;
@@ -1010,12 +1023,12 @@ fn release_shared_vec(ptr: *mut SharedVec) {
                     (*ptr).remaining = capacity;
                     (*ptr).ref_count = AtomicU32::new(1);
                     (*ptr).size = BytePageSize::Unset;
-                    cache[size as usize].push(StorageVec(NonNull::new_unchecked(ptr)));
+                    cst.cache[size as usize].push(StorageVec(NonNull::new_unchecked(ptr)));
                     true
                 } else {
                     false
                 };
-                c.set(Some(cache));
+                c.set(Some(cst));
                 res
             });
             if cached {

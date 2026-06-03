@@ -869,7 +869,7 @@ mod tests {
         // .split_to()
         let mut pages = BytePages::default();
         pages.put_slice(b"456");
-        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        pages.prepend(BytePage::from(&Bytes::copy_from_slice(b"123")));
         let mut pages2 = pages.split_to(1);
         let p = pages.freeze();
         assert_eq!(p, b"23456");
@@ -888,7 +888,7 @@ mod tests {
         // .split_into()
         let mut pages = BytePages::default();
         pages.put_slice(b"456");
-        pages.prepend(BytePage::from(Bytes::copy_from_slice(b"123")));
+        pages.prepend(BytePage::from(crate::ByteString::from_static("123")));
         let mut pages2 = BytePages::default();
         pages.split_into(1, &mut pages2);
         let p = pages.freeze();
@@ -914,6 +914,13 @@ mod tests {
         assert_eq!(pages.len(), 65_536);
         let p = pages.freeze();
         assert_eq!(p, data.as_bytes());
+
+        // into bytes
+        let page = BytePage::from(Bytes::copy_from_slice(b"123"));
+        assert_eq!(page, b"123");
+        assert_eq!(<BytePage as Borrow<[u8]>>::borrow(&page), b"123");
+        let b = Bytes::from(page);
+        assert_eq!(b, b"123");
     }
 
     #[test]
