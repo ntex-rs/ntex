@@ -5,7 +5,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue};
 use crate::service::{Identity, Middleware, Service, ServiceFactory, Stack, boxed};
-use crate::{SharedCfg, time::Millis};
+use crate::{SharedCfg, error::Error, time::Millis};
 
 use super::error::{ClientBuilderError, ClientError};
 use super::sender::Sender;
@@ -202,7 +202,7 @@ impl<M> ClientBuilder<M> {
     where
         T: Into<SharedCfg>,
         M: Middleware<Sender, ClientConfig>,
-        M::Service: Service<ServiceRequest, Response = ServiceResponse, Error = ClientError>
+        M::Service: Service<ServiceRequest, Response = ServiceResponse, Error = Error<ClientError>>
             + 'static,
     {
         let cfg = cfg.into();

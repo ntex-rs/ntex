@@ -8,7 +8,9 @@ use ntex_tls::TlsConfig;
 use uuid::Uuid;
 
 use crate::channel::bstream;
+use crate::client::error::ClientPayloadError;
 use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::error::Error;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
@@ -18,7 +20,7 @@ use crate::service::{ServiceFactory, cfg::SharedCfg};
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{rt::System, time::Millis, time::Seconds, time::sleep, util::Bytes};
 
-use super::error::{HttpError, PayloadError};
+use super::error::HttpError;
 use super::header::{self, HeaderMap, HeaderName, HeaderValue};
 use super::payload::Payload;
 use super::{Method, Request, Uri, Version};
@@ -437,7 +439,10 @@ impl TestServer {
     }
 
     /// Load response's body
-    pub async fn load_body(&self, response: ClientResponse) -> Result<Bytes, PayloadError> {
+    pub async fn load_body(
+        &self,
+        response: ClientResponse,
+    ) -> Result<Bytes, Error<ClientPayloadError>> {
         response.body().limit(10_485_760).await
     }
 

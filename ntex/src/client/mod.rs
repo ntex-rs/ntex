@@ -41,7 +41,7 @@ pub use self::test::TestResponse;
 
 pub(crate) use self::codec::{ClientCodec, ClientPayloadCodec};
 use crate::http::{HeaderMap, Method, RequestHead, Uri, body::BodySize, error::HttpError};
-use crate::{Pipeline, SharedCfg, service::boxed};
+use crate::{Pipeline, SharedCfg, error::Error, service::boxed};
 
 #[derive(Debug, Clone)]
 pub struct Connect {
@@ -49,7 +49,8 @@ pub struct Connect {
     pub addr: Option<std::net::SocketAddr>,
 }
 
-type BoxedSender = boxed::BoxService<ServiceRequest, ServiceResponse, error::ClientError>;
+type BoxedSender =
+    boxed::BoxService<ServiceRequest, ServiceResponse, Error<error::ClientError>>;
 
 /// An HTTP Client
 ///
@@ -93,7 +94,7 @@ impl Client {
     }
 
     /// Returns when the client is ready to process requests.
-    pub async fn ready(&self) -> Result<(), error::ClientError> {
+    pub async fn ready(&self) -> Result<(), Error<error::ClientError>> {
         self.svc.ready().await
     }
 
@@ -103,7 +104,8 @@ impl Client {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
-        let mut req = ClientRequest::new(method, url, self.svc.clone());
+        let mut req =
+            ClientRequest::new(method, url, self.config.clone(), self.svc.clone());
 
         for (key, value) in self.config.headers() {
             req = req.set_header_if_none(key.clone(), value.clone());

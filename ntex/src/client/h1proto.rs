@@ -2,11 +2,13 @@
 use std::task::{Poll, ready};
 use std::{future::poll_fn, io, io::Write, pin::Pin, task, time::Instant};
 
+use crate::error::{Error, ErrorMapping, with_service};
 use crate::http::body::{Body, BodySize, MessageBody};
 use crate::http::error::PayloadError;
 use crate::http::header::{HOST, HeaderValue};
 use crate::http::{Payload, PayloadStream, ResponseHead, Version, h1};
 use crate::io::{IoBoxed, RecvError};
+use crate::service::cfg::Configuration;
 use crate::time::{Millis, timeout_checked};
 use crate::util::{BufMut, Bytes, BytesMut, Stream};
 
@@ -16,12 +18,27 @@ use super::{ClientCodec, ClientPayloadCodec, ClientRawRequest, pool::Acquired};
 
 pub(super) async fn send_request(
     io: IoBoxed,
+    req: ClientRawRequest,
+    body: Body,
+    created: Instant,
+    timeout: Millis,
+    pool: Option<Acquired>,
+) -> Result<(ResponseHead, Payload), Error<ClientError>> {
+    with_service(
+        io.cfg().ctx().service(),
+        send_request_inner(io, req, body, created, timeout, pool),
+    )
+    .await
+}
+
+async fn send_request_inner(
+    io: IoBoxed,
     mut req: ClientRawRequest,
     body: Body,
     created: Instant,
     timeout: Millis,
     pool: Option<Acquired>,
-) -> Result<(ResponseHead, Payload), ClientError> {
+) -> Result<(ResponseHead, Payload), Error<ClientError>> {
     // set request host header
     if !req.head.headers.contains_key(HOST)
         && let Some(host) = req.head.uri.host()
@@ -47,7 +64,7 @@ pub(super) async fn send_request(
 
     // send request
     let codec = ClientCodec::new(true, io.shared().get());
-    io.send(req.into(), &codec).await?;
+    io.send(req.into(), &codec).await.into_error()?;
 
     log::trace!("{}: http1 request has been sent", io.tag());
 
@@ -63,7 +80,7 @@ pub(super) async fn send_request(
 
     // read response and init read body
     let fut = async {
-        if let Some(result) = io.recv(&codec).await? {
+        if let Some(result) = io.recv(&codec).await.into_error()? {
             log::trace!(
                 "{}: http1 response is received, type: {:?}, response: {result:#?}",
                 io.tag(),
@@ -71,13 +88,15 @@ pub(super) async fn send_request(
             );
             Ok(result)
         } else {
-            Err(ClientError::from(ConnectError::Disconnected(None)))
+            Err(Error::from(ClientError::from(ConnectError::Disconnected(
+                None,
+            ))))
         }
     };
 
     let head = timeout_checked(timeout, fut)
         .await
-        .map_err(|()| ClientError::Timeout)
+        .map_err(|()| Error::from(ClientError::Timeout))
         .and_then(|res| res)?;
 
     if codec.message_type() == h1::MessageType::None {
@@ -100,13 +119,14 @@ pub(super) async fn send_body(
     mut body: Body,
     io: &IoBoxed,
     codec: &ClientCodec,
-) -> Result<(), ClientError> {
+) -> Result<(), Error<ClientError>> {
     loop {
         if let Some(result) = poll_fn(|cx| body.poll_next_chunk(cx)).await {
-            let chunk = result?;
+            let chunk = result.into_error()?;
             #[cfg(feature = "trace")]
             let chunk_len = chunk.len();
-            io.encode(h1::Message::Chunk(Some(chunk)), codec)?;
+            io.encode(h1::Message::Chunk(Some(chunk)), codec)
+                .into_error()?;
             #[cfg(feature = "trace")]
             log::trace!(
                 "{}: sending chunk, {} bytes, backpressure: {}",
@@ -115,13 +135,12 @@ pub(super) async fn send_body(
                 io.is_wr_backpressure()
             );
             if io.is_wr_backpressure() {
-                io.flush(false).await?;
+                io.flush(false).await.into_error()?;
                 #[cfg(feature = "trace")]
                 log::trace!("{}: flushed", io.tag());
             }
         } else {
-            io.encode(h1::Message::Chunk(None), codec)?;
-            io.flush(true).await?;
+            io.encode(h1::Message::Chunk(None), codec).into_error()?;
             break;
         }
     }
@@ -179,9 +198,10 @@ impl Stream for PlStream {
                         return Poll::Ready(None);
                     }
                 }
-                Err(RecvError::KeepAlive) => {
-                    Err(io::Error::new(io::ErrorKind::TimedOut, "Keep-alive").into())
-                }
+                Err(RecvError::KeepAlive) => Err(PayloadError::from(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Keep-alive",
+                ))),
                 Err(RecvError::WriteBackpressure) => {
                     ready!(this.io.as_ref().unwrap().poll_flush(cx, false))?;
                     continue;
