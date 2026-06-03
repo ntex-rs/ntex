@@ -925,10 +925,18 @@ pub(crate) fn set_pages_cache(size: usize) {
     });
 }
 
-#[derive(Default)]
 struct Cache {
     size: usize,
     cache: [Vec<StorageVec>; 7],
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            size: 128,
+            cache: Default::default(),
+        }
+    }
 }
 
 impl SharedVec {
