@@ -81,14 +81,59 @@ async fn web_no_ws() {
     })
     .await;
 
+    let err = srv.ws().await.err().unwrap();
     assert!(matches!(
-        srv.ws().await.err().unwrap(),
+        err,
         WsClientError::InvalidResponseStatus(StatusCode::OK)
     ));
+    assert_eq!(err.to_string(), "Invalid response status: 200 OK");
+
+    let err = srv.ws_at("/ws_error").await.err().unwrap();
     assert!(matches!(
-        srv.ws_at("/ws_error").await.err().unwrap(),
+        err,
         WsClientError::InvalidResponseStatus(StatusCode::INTERNAL_SERVER_ERROR)
     ));
+    assert_eq!(
+        err.to_string(),
+        "Invalid response status: 500 Internal Server Error"
+    );
+}
+
+#[ntex::test]
+async fn web_ws_after_pooled_post_request() {
+    let srv = test::server(async || {
+        App::new()
+            .service(
+                web::resource("/").route(web::to(|req: HttpRequest| async move {
+                    ws::start::<_, _, &str, web::Error>(
+                        req,
+                        None,
+                        fn_factory_with_config(|_| async {
+                            Ok::<_, web::Error>(fn_service(service))
+                        }),
+                    )
+                    .await
+                })),
+            )
+            .service(
+                web::resource("/post")
+                    .route(web::post().to(|| async { HttpResponse::Ok() })),
+            )
+    })
+    .await;
+
+    // a completed POST request releases its RequestHead back to the
+    // thread-local message pool; a ws client built afterwards on the same
+    // thread must not reuse the recycled POST method for its handshake
+    let res = srv.post("/post").send().await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let (io, codec, _) = srv.ws().await.unwrap().into_inner();
+    io.send(ws::Message::Text(ByteString::from_static("text")), &codec)
+        .await
+        .unwrap();
+    let item = io.recv(&codec).await.unwrap().unwrap();
+    assert_eq!(item, ws::Frame::Text(Bytes::from_static(b"text")));
 }
 
 #[ntex::test]

@@ -14,7 +14,7 @@ use nanorand::{Rng, WyRand};
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
 use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
-use crate::http::{ConnectionType, Message, RequestHead, StatusCode, Uri};
+use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
@@ -279,6 +279,9 @@ impl WsClientBuilder<Base, ()> {
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
     {
         let mut head = Message::<RequestHead>::new();
+        // the message pool may return a recycled head whose method is not GET
+        // (e.g. previously used by the HTTP/1 server dispatcher for a POST request)
+        head.method = Method::GET;
         let err = match Uri::try_from(uri) {
             Ok(uri) => {
                 head.uri = uri;
@@ -981,5 +984,21 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[crate::rt_test]
+    async fn pooled_request_head_method_is_get() {
+        // a request head released back to the thread-local message pool keeps its
+        // method (e.g. POST from the HTTP/1 server dispatcher); a ws client built
+        // from such a recycled head must still send a GET handshake
+        let mut head = Message::<RequestHead>::new();
+        head.method = Method::POST;
+        drop(head);
+
+        let client = WsClient::builder("http://localhost")
+            .build(SharedCfg::default())
+            .await
+            .unwrap();
+        assert_eq!(client.head.method, Method::GET);
     }
 }

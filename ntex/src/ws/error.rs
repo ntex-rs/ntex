@@ -95,7 +95,7 @@ pub enum WsClientError {
         DecodeError,
     ),
     /// Invalid response status
-    #[error("Invalid response status")]
+    #[error("Invalid response status: {0}")]
     InvalidResponseStatus(StatusCode),
     /// Invalid upgrade header
     #[error("Invalid upgrade header")]
