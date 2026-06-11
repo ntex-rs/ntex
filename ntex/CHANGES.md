@@ -6,6 +6,9 @@
   non-GET method (e.g. POST) in the handshake request after the worker thread served
   an HTTP request with that method
 
+* Include the received status code in `WsClientError::InvalidResponseStatus` display
+  message
+
 ## [3.9.7] - 2026-06-11
 
 * HTTP/1 client silently truncates the auto-generated Host header #894
