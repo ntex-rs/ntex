@@ -1,5 +1,9 @@
 # Changes
 
+## [1.7.1] (2026-06-11)
+
+* Deprecate `Writer`
+
 ## [1.7.0] (2026-06-03)
 
 * Add From<ByteString> for Bytes impls
