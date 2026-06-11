@@ -1,5 +1,11 @@
 # Changes
 
+## [3.9.8] - 2026-06-xx
+
+* Reset method of pooled `RequestHead` on release; ws client could send a recycled
+  non-GET method (e.g. POST) in the handshake request after the worker thread served
+  an HTTP request with that method
+
 ## [3.9.7] - 2026-06-11
 
 * HTTP/1 client silently truncates the auto-generated Host header #894
