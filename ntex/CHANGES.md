@@ -1,6 +1,6 @@
 # Changes
 
-## [3.9.8] - 2026-06-xx
+## [3.9.8] - 2026-06-11
 
 * Reset method of pooled `RequestHead` on release; ws client could send a recycled
   non-GET method (e.g. POST) in the handshake request after the worker thread served
