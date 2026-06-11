@@ -1,5 +1,9 @@
 # Changes
 
+## [3.9.7] - 2026-06-11
+
+* HTTP/1 client silently truncates the auto-generated Host header #894
+
 ## [3.9.6] - 2026-05-19
 
 * Revert changes related to headers parsing #889

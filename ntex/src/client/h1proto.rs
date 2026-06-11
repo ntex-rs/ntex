@@ -26,14 +26,14 @@ pub(super) async fn send_request(
     if !req.head.headers.contains_key(HOST)
         && let Some(host) = req.head.uri.host()
     {
-        let mut wrt = BytesMut::with_capacity(host.len() + 5).writer();
+        let mut wrt = BytesMut::with_capacity(host.len() + 16);
 
         let _ = match req.head.uri.port_u16() {
             None | Some(80 | 443) => write!(wrt, "{host}"),
             Some(port) => write!(wrt, "{host}:{port}"),
         };
 
-        match HeaderValue::from_shared(wrt.get_mut().take()) {
+        match HeaderValue::from_shared(wrt.take()) {
             Ok(value) => req.head.headers.insert(HOST, value),
             Err(e) => log::error!("Cannot set HOST header {e}"),
         }

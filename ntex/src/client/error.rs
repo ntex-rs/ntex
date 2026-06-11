@@ -295,7 +295,7 @@ impl Clone for ClientError {
             ClientError::Request(err) => ClientError::Request(err.clone()),
             ClientError::Response(err) => ClientError::Response(*err),
             ClientError::Http(err) => ClientError::Http(*err),
-            ClientError::H2(err) => ClientError::H2(err.clone()),
+            ClientError::H2(err) => ClientError::H2(*err),
             ClientError::Timeout => ClientError::Timeout,
             ClientError::TunnelNotSupported => ClientError::TunnelNotSupported,
             ClientError::Error(err) => ClientError::Error(err.clone()),

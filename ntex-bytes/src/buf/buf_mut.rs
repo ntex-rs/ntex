@@ -839,6 +839,7 @@ pub trait BufMut {
         self.put_u64_le(n.to_bits());
     }
 
+    #[deprecated(since = "1.7.1", note = "Use BytesMut instead")]
     /// Creates an adaptor which implements the `Write` trait for `self`.
     ///
     /// This function returns a new value which implements `Write` by adapting

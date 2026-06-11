@@ -850,3 +850,32 @@ async fn test_h1_v2() {
     let bytes = response.body().await.unwrap();
     assert_eq!(bytes, Bytes::from_static(STR.as_ref()));
 }
+
+/// Server receives the truncated Host header.
+#[ntex::test]
+async fn untruncated_host_header() {
+    let srv = test::server(|| async {
+        App::new().route(
+            "/host",
+            web::get().to(|req: HttpRequest| async move {
+                req.headers()
+                    .get(ntex::http::header::HOST)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("<missing>")
+                    .to_string()
+            }),
+        )
+    })
+    .await;
+
+    let port = srv.addr().port();
+    let resp = srv
+        .request(ntex::http::Method::GET, srv.url("/host"))
+        .send()
+        .await
+        .unwrap();
+    let body = resp.body().await.unwrap();
+    let received = String::from_utf8(body.to_vec()).unwrap();
+
+    assert_eq!(received, format!("localhost:{port}"));
+}
