@@ -6,9 +6,10 @@ use crate::{buf::UninitSlice, storage::StorageVec};
 
 pub struct BytePages {
     st: Option<Box<Inner>>,
-    current: StorageVec,
+    current: Option<StorageVec>,
 }
 
+#[derive(Debug)]
 struct Inner {
     size: BytePageSize,
     pages: VecDeque<BytePage>,
@@ -45,7 +46,7 @@ impl BytePages {
 
         BytePages {
             st: Some(st),
-            current: StorageVec::sized(size),
+            current: None,
         }
     }
 
@@ -55,6 +56,18 @@ impl BytePages {
 
     fn pages_mut(&mut self) -> &mut VecDeque<BytePage> {
         &mut self.st.as_mut().unwrap().pages
+    }
+
+    fn push_back(&mut self, page: BytePage) {
+        let pages = &mut self.st.as_mut().unwrap().pages;
+        pages.push_back(page);
+
+        #[cfg(feature = "overuse")]
+        if pages.len() > 32 {
+            let bt = backtrace::Backtrace::new();
+            log::warn!("Number of pages {}\n{bt:?}", pages.len());
+            println!("{bt:?}");
+        }
     }
 
     /// Get size of the page.
@@ -87,28 +100,39 @@ impl BytePages {
         BytePage: From<T>,
     {
         let p = BytePage::from(buf);
-        let remaining = self.current.remaining();
+        if !p.is_empty() {
+            let remaining = self.remaining_mut();
 
-        if p.len() <= remaining {
-            self.put_slice(p.as_ref());
-        } else if self.current.len() == 0 {
-            match p.into_storage() {
-                Ok(st) => {
-                    self.current = st;
+            if p.len() <= remaining {
+                self.put_slice(p.as_ref());
+            } else if self.current_len() == 0 {
+                match p.into_storage() {
+                    Ok(st) => {
+                        self.current = Some(st);
+                    }
+                    Err(page) => {
+                        // add buffer to stack
+                        self.push_back(page);
+                    }
                 }
-                Err(page) => {
-                    // add buffer to stack
-                    self.pages_mut().push_back(page);
+            } else {
+                let page = self.current.take();
+                let pages = self.pages_mut();
+
+                // push current storage to stack
+                if let Some(page) = page {
+                    pages.push_back(From::from(page));
+                }
+                // add buffer to stack
+                pages.push_back(p);
+
+                #[cfg(feature = "overuse")]
+                if pages.len() > 32 {
+                    let bt = backtrace::Backtrace::new();
+                    log::warn!("Number of pages {}\n{bt:?}", pages.len());
+                    println!("{bt:?}");
                 }
             }
-        } else {
-            // push current storage to stack
-            let storage = StorageVec::sized(self.page_size());
-            let page: BytePage = From::from(mem::replace(&mut self.current, storage));
-            let pages = self.pages_mut();
-            pages.push_back(page);
-            // add buffer to stack
-            pages.push_back(p);
         }
     }
 
@@ -127,7 +151,14 @@ impl BytePages {
     pub fn len(&self) -> usize {
         self.pages()
             .iter()
-            .fold(self.current.len(), |c, page| c + page.len())
+            .fold(self.current_len(), |c, page| c + page.len())
+    }
+
+    fn current_len(&self) -> usize {
+        self.current
+            .as_ref()
+            .map(StorageVec::len)
+            .unwrap_or_default()
     }
 
     #[inline]
@@ -138,13 +169,13 @@ impl BytePages {
                 return false;
             }
         }
-        self.current.len() == 0
+        self.current_len() == 0
     }
 
     #[inline]
     /// Returns the total number of pages contained in this object.
     pub fn num_pages(&self) -> usize {
-        if self.current.len() == 0 {
+        if self.current.is_none() {
             self.pages().len()
         } else {
             self.pages().len() + 1
@@ -155,11 +186,8 @@ impl BytePages {
     pub fn take(&mut self) -> Option<BytePage> {
         if let Some(page) = self.pages_mut().pop_front() {
             Some(page)
-        } else if self.current.len() == 0 {
-            None
         } else {
-            let storage = StorageVec::sized(self.page_size());
-            Some(BytePage::from(mem::replace(&mut self.current, storage)))
+            self.current.take().map(BytePage::from)
         }
     }
 
@@ -173,10 +201,8 @@ impl BytePages {
             pages.append(p.clone());
         }
 
-        if self.current.len() != 0 {
-            pages.append(BytePage::from(Bytes::copy_from_slice(
-                self.current.as_ref(),
-            )));
+        if let Some(st) = &self.current {
+            pages.append(BytePage::from(Bytes::copy_from_slice(st.as_ref())));
         }
     }
 
@@ -259,9 +285,11 @@ impl BytePages {
 
     #[inline]
     pub fn try_get_current_from(&mut self, pages: &mut BytePages) {
-        if self.pages().is_empty() && self.current.len() == 0 && pages.current.len() != 0 {
-            self.current =
-                mem::replace(&mut pages.current, StorageVec::sized(self.page_size()));
+        if self.pages().is_empty()
+            && self.current.is_none()
+            && let Some(st) = pages.current.take()
+        {
+            self.current = Some(st);
         }
     }
 
@@ -270,15 +298,20 @@ impl BytePages {
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        let cap = self.current.capacity();
+        let mut st = self
+            .current
+            .take()
+            .unwrap_or_else(|| StorageVec::sized(self.page_size()));
+
+        let cap = st.capacity();
         let mut buf = BytesMut {
-            storage: StorageVec(self.current.0),
+            storage: StorageVec(st.0),
         };
 
         let res = f(&mut buf);
 
         // `buf.storage` cal re-allocate, makes self.current invalid
-        self.current.0 = buf.storage.0;
+        st.0 = buf.storage.0;
         if buf.capacity() != cap {
             buf.storage.unsize();
         }
@@ -286,13 +319,33 @@ impl BytePages {
         mem::forget(buf);
 
         // add new page
-        if self.current.len() >= self.page_size().capacity() {
-            let storage = StorageVec::sized(self.page_size());
-            let page = BytePage::from(mem::replace(&mut self.current, storage));
-            self.pages_mut().push_back(page);
+        if st.len() >= self.page_size().capacity() {
+            self.push_back(BytePage::from(st));
+        } else {
+            self.current = Some(st);
         }
 
         res
+    }
+
+    fn with_current<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut StorageVec) -> R,
+    {
+        let mut st = self
+            .current
+            .take()
+            .unwrap_or_else(|| StorageVec::sized(self.page_size()));
+        let result = f(&mut st);
+
+        // add new page
+        if st.is_full() {
+            self.push_back(BytePage::from(st));
+        } else {
+            self.current = Some(st);
+        }
+
+        result
     }
 }
 
@@ -316,8 +369,8 @@ impl fmt::Debug for BytePages {
         for p in self.pages() {
             f.field(p);
         }
-        if self.current.len() != 0 {
-            f.field(&crate::debug::BsDebug(self.current.as_ref()));
+        if let Some(st) = &self.current {
+            f.field(&crate::debug::BsDebug(st.as_ref()));
         }
         f.finish()
     }
@@ -332,57 +385,54 @@ impl Default for BytePages {
 impl BufMut for BytePages {
     #[inline]
     fn remaining_mut(&self) -> usize {
-        self.current.remaining()
+        self.current
+            .as_ref()
+            .map(StorageVec::remaining)
+            .unwrap_or_default()
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, cnt: usize) {
         // This call will panic if `cnt` is too big
-        self.current.set_len(self.current.len() + cnt);
+        let st = self.current.as_mut().unwrap();
+        st.set_len(st.len() + cnt);
     }
 
     #[inline]
     fn chunk_mut(&mut self) -> &mut UninitSlice {
         unsafe {
+            if self.current.is_none() {
+                self.current = Some(StorageVec::sized(self.page_size()));
+            }
             // This will never panic as `len` can never become invalid
-            let ptr = &mut self.current.as_ptr();
-            UninitSlice::from_raw_parts_mut(
-                ptr.add(self.current.len()),
-                self.remaining_mut(),
-            )
+            let st = self.current.as_ref().unwrap();
+            let ptr = &mut st.as_ptr();
+            UninitSlice::from_raw_parts_mut(ptr.add(st.len()), self.remaining_mut())
         }
     }
 
     fn put_slice(&mut self, mut src: &[u8]) {
         while !src.is_empty() {
-            let amount = cmp::min(src.len(), self.current.remaining());
-            unsafe {
-                ptr::copy_nonoverlapping(
-                    src.as_ptr(),
-                    self.chunk_mut().as_mut_ptr(),
-                    amount,
-                );
-                self.advance_mut(amount);
-            }
-            src = &src[amount..];
+            let amount = self.with_current(|st| {
+                let amount = cmp::min(src.len(), st.remaining());
+                unsafe {
+                    let ptr = &mut st.as_ptr();
+                    let chunk =
+                        UninitSlice::from_raw_parts_mut(ptr.add(st.len()), st.remaining());
 
-            // add new page
-            if self.current.is_full() {
-                let storage = StorageVec::sized(self.page_size());
-                let page = BytePage::from(mem::replace(&mut self.current, storage));
-                self.pages_mut().push_back(page);
-            }
+                    ptr::copy_nonoverlapping(src.as_ptr(), chunk.as_mut_ptr(), amount);
+                    st.set_len(st.len() + amount);
+                }
+                amount
+            });
+
+            src = &src[amount..];
         }
     }
 
     #[inline]
     fn put_u8(&mut self, n: u8) {
-        self.current.put_u8(n);
-        if self.current.is_full() {
-            let storage = StorageVec::sized(self.page_size());
-            let page: BytePage = From::from(mem::replace(&mut self.current, storage));
-            self.pages_mut().push_back(page);
-        }
+        self.with_current(|st| st.put_u8(n));
     }
 
     #[inline]
@@ -755,14 +805,14 @@ mod tests {
         assert_eq!(pgs.num_pages(), 1);
         pgs.put_u8(b'a');
         assert_eq!(pgs.num_pages(), 1);
-        assert_eq!(pgs.current.len(), 0);
+        assert!(pgs.current.is_none());
 
         pgs.put_u8(b'a');
         assert_eq!(pgs.num_pages(), 2);
 
         pgs.append(Bytes::copy_from_slice("a".repeat(8 * 1024).as_bytes()));
         assert_eq!(pgs.num_pages(), 3);
-        assert_eq!(pgs.current.len(), 0);
+        assert!(pgs.current.is_none());
 
         // page
         let p = pages.take().unwrap();

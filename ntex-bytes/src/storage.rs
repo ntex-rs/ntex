@@ -128,6 +128,7 @@ pub(crate) struct SharedVec {
     size: BytePageSize,
 }
 
+#[derive(Debug)]
 pub(crate) struct StorageVec(pub(crate) NonNull<SharedVec>);
 
 // Buffer storage strategy flags.

@@ -1,5 +1,11 @@
 # Changes
 
+## [1.7.2] (2026-06-12)
+
+* Do not allocate default buffer for ButePages
+
+* Log pages overuse
+
 ## [1.7.1] (2026-06-11)
 
 * Deprecate `Writer`
