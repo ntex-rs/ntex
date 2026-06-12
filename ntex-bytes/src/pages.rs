@@ -101,11 +101,7 @@ impl BytePages {
     {
         let p = BytePage::from(buf);
         if !p.is_empty() {
-            let remaining = self.remaining_mut();
-
-            if p.len() <= remaining {
-                self.put_slice(p.as_ref());
-            } else if self.current_len() == 0 {
+            if self.current_len() == 0 {
                 match p.into_storage() {
                     Ok(st) => {
                         self.current = Some(st);
@@ -115,6 +111,8 @@ impl BytePages {
                         self.push_back(page);
                     }
                 }
+            } else if p.len() <= self.remaining_mut() {
+                self.put_slice(p.as_ref());
             } else {
                 let page = self.current.take();
                 let pages = self.pages_mut();
