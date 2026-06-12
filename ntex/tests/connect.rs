@@ -274,6 +274,231 @@ async fn test_rustls_string() {
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
+#[cfg(feature = "rustls")]
+#[ntex::test]
+async fn test_rustls_peer_close_notify_closes_io() {
+    use std::io::{Read as _, Write as _};
+    use std::{sync::Arc, time::Duration};
+
+    use ntex::server::rustls;
+    use tls_rustls::pki_types::ServerName;
+
+    let srv = test_server(async || {
+        chain_factory(
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+                log::error!("tls negotiation is failed: {e:?}");
+                e
+            }),
+        )
+        .and_then(
+            fn_service(|io: Io<_>| async move {
+                // echo round-trip proves the data path works
+                let msg = io.recv(&BytesCodec).await.unwrap().unwrap();
+                io.send(msg, &BytesCodec).await.unwrap();
+
+                // wait until the peer disconnects
+                while let Ok(Some(_)) = io.recv(&BytesCodec).await {}
+                Ok::<_, io::Error>(())
+            })
+            .map_init_err(|_| ()),
+        )
+    });
+
+    // raw blocking rustls client
+    let config = Arc::new(rustls_utils::tls_connector());
+    let mut conn = tls_rustls::ClientConnection::new(
+        config,
+        ServerName::try_from("localhost").unwrap(),
+    )
+    .unwrap();
+    let mut tcp = std::net::TcpStream::connect(srv.addr()).unwrap();
+
+    // handshake + echo round-trip
+    {
+        let mut tls = tls_rustls::Stream::new(&mut conn, &mut tcp);
+        tls.write_all(b"hello").unwrap();
+        tls.flush().unwrap();
+        let mut echo = [0u8; 5];
+        tls.read_exact(&mut echo).unwrap();
+        assert_eq!(&echo, b"hello");
+    }
+
+    // send TLS close_notify, but keep the tcp stream fully open
+    // (no shutdown of the write side - tls level half-close only);
+    // queue one more plaintext record so that plaintext and close_notify
+    // arrive in the same batch
+    conn.writer().write_all(b"bye").unwrap();
+    conn.send_close_notify();
+    while conn.wants_write() {
+        conn.write_tls(&mut tcp).unwrap();
+    }
+    tcp.flush().unwrap();
+
+    // server must close the connection in a timely manner
+    tcp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let mut buf = [0u8; 4096];
+    loop {
+        match tcp.read(&mut buf) {
+            // EOF, server closed the connection
+            Ok(0) => break,
+            // tls records (e.g. server's close_notify alert), keep reading
+            Ok(_) => continue,
+            Err(ref e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                panic!("server did not close connection after receiving close_notify: {e}");
+            }
+            // connection reset also indicates closure
+            Err(_) => break,
+        }
+    }
+}
+
+#[cfg(feature = "rustls")]
+#[ntex::test]
+async fn test_rustls_shutdown_sends_close_notify() {
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
+    use ntex::server::rustls;
+
+    let srv = test_server(async || {
+        chain_factory(
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+                log::error!("tls negotiation is failed: {e:?}");
+                e
+            }),
+        )
+        .and_then(
+            fn_service(|io: Io<_>| async move {
+                let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+                io.send(item, &BytesCodec).await.unwrap();
+                // graceful shutdown, must deliver TLS close_notify to the peer
+                io.shutdown().await.unwrap();
+                Ok::<_, io::Error>(())
+            })
+            .map_init_err(|_| ()),
+        )
+    });
+    let addr = srv.addr();
+
+    // raw blocking rustls client
+    let cfg = Arc::new(rustls_utils::tls_connector());
+    let name = tls_rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let mut conn = tls_rustls::ClientConnection::new(cfg, name).unwrap();
+    let mut sock = std::net::TcpStream::connect(addr).unwrap();
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let mut tls = tls_rustls::Stream::new(&mut conn, &mut sock);
+
+    tls.write_all(b"hello").unwrap();
+    tls.flush().unwrap();
+
+    let mut echo = [0u8; 5];
+    tls.read_exact(&mut echo).unwrap();
+    assert_eq!(&echo, b"hello");
+
+    // keep reading until EOF; a clean Ok(0) means close_notify was received,
+    // an UnexpectedEof error means the peer closed without sending close_notify
+    let mut tmp = [0u8; 1024];
+    loop {
+        match tls.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(e) => panic!("expected clean EOF (close_notify), got error: {e:?}"),
+        }
+    }
+}
+
+#[cfg(feature = "rustls")]
+#[ntex::test]
+async fn test_rustls_keyupdate_response_flushed() {
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
+    use ntex::server::rustls;
+    use tls_rustls::pki_types::ServerName;
+
+    let srv = test_server(async || {
+        chain_factory(
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+                log::error!("tls negotiation is failed: {e:?}");
+                e
+            }),
+        )
+        .and_then(
+            fn_service(|io: Io<_>| async move {
+                // echo frames, then sit idle waiting for more data
+                while let Some(item) = io.recv(&BytesCodec).await.unwrap() {
+                    io.send(item, &BytesCodec).await.unwrap();
+                }
+                Ok::<_, io::Error>(())
+            })
+            .map_init_err(|_| ()),
+        )
+    });
+
+    // raw blocking rustls client, tls 1.3 only (KeyUpdate requires it)
+    let config = tls_rustls::ClientConfig::builder_with_protocol_versions(&[
+        &tls_rustls::version::TLS13,
+    ])
+    .dangerous()
+    .with_custom_certificate_verifier(Arc::new(rustls_utils::NoCertificateVerification))
+    .with_no_client_auth();
+    let mut conn = tls_rustls::ClientConnection::new(
+        Arc::new(config),
+        ServerName::try_from("localhost").unwrap(),
+    )
+    .unwrap();
+
+    let mut tcp = std::net::TcpStream::connect(srv.addr()).unwrap();
+    tcp.set_nodelay(true).unwrap();
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+        .unwrap();
+    conn.complete_io(&mut tcp).unwrap();
+    assert!(!conn.is_handshaking());
+
+    // echo round-trip to make sure the connection is fully operational
+    conn.writer().write_all(b"ping").unwrap();
+    while conn.wants_write() {
+        conn.write_tls(&mut tcp).unwrap();
+    }
+    let mut echo = Vec::new();
+    while echo.len() < 4 {
+        if conn.read_tls(&mut tcp).unwrap() == 0 {
+            panic!("server closed connection before echo");
+        }
+        let state = conn.process_new_packets().unwrap();
+        let n = state.plaintext_bytes_to_read();
+        if n > 0 {
+            let mut chunk = vec![0u8; n];
+            conn.reader().read_exact(&mut chunk).unwrap();
+            echo.extend_from_slice(&chunk);
+        }
+    }
+    assert_eq!(echo, b"ping");
+
+    // request a key update; the server must answer with its own KeyUpdate
+    conn.refresh_traffic_keys().unwrap();
+    while conn.wants_write() {
+        conn.write_tls(&mut tcp).unwrap();
+    }
+
+    // the connection is otherwise idle; the server's KeyUpdate response
+    // (generated while processing incoming data) must still reach the wire
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    match conn.read_tls(&mut tcp) {
+        Ok(n) if n > 0 => {
+            conn.process_new_packets().unwrap();
+        }
+        other => panic!(
+            "server did not flush KeyUpdate response generated during read processing: {other:?}"
+        ),
+    }
+}
+
 #[ntex::test]
 async fn test_static_str() {
     let srv = test_server(async || {

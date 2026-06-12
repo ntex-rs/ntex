@@ -1,3 +1,4 @@
+use std::task::Poll;
 use std::{any, cell::RefCell, io, io::Write, ops::Deref, ops::DerefMut};
 
 use ntex_bytes::{BufMut, BytePages};
@@ -58,7 +59,7 @@ where
     }
 
     pub(crate) fn process_read_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        buf.with_read_buffers(|r_src, r_dst| {
+        let result = buf.with_read_buffers(|r_src, r_dst| {
             if let Some(src) = r_src {
                 loop {
                     match self.session.read_tls(src) {
@@ -79,6 +80,10 @@ where
                             unsafe { &mut *(&raw mut *r_dst.chunk_mut() as *mut [u8]) };
                         let v = io::Read::read(&mut self.session.reader(), chunk)?;
                         unsafe { r_dst.advance_mut(v) };
+                    } else if state.peer_has_closed() {
+                        // peer sent close_notify, start graceful shutdown
+                        buf.io().close();
+                        break;
                     } else if src.is_empty() {
                         break;
                     }
@@ -87,7 +92,24 @@ where
             } else {
                 Ok(())
             }
-        })
+        });
+
+        // flush tls records generated while processing incoming data
+        // (e.g. KeyUpdate responses), original error takes priority;
+        // during handshake flushing is driven by the handshake helper
+        if !self.session.is_handshaking() {
+            // materialize tls records queued by the session, rustls keeps
+            // KeyUpdate responses outside of its sendable tls buffer until
+            // the next plaintext write; an empty write is a no-op otherwise
+            let _ = self.session.writer().write(&[]);
+
+            if self.session.wants_write() {
+                let flushed = self.write_tls_records(buf);
+                result?;
+                return flushed;
+            }
+        }
+        result
     }
 
     pub(crate) fn process_write_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
@@ -119,6 +141,34 @@ where
                 return Ok(());
             }
         })
+    }
+
+    /// Write pending tls records to the output buffer
+    fn write_tls_records(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_write_buffers(|_, w_dst| {
+            let mut wrp = Wrapper { w_dst, buf };
+            while self.session.wants_write() {
+                self.session.write_tls(&mut wrp)?;
+            }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn shutdown(&mut self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+        // drain pending application data into tls records first
+        self.process_write_buf(buf)?;
+
+        // queue close_notify alert (idempotent, may be called on every poll)
+        self.session.send_close_notify();
+
+        // write pending tls records (incl. close_notify) to the output buffer
+        self.write_tls_records(buf)?;
+
+        if self.session.wants_write() {
+            Ok(Poll::Pending)
+        } else {
+            Ok(Poll::Ready(()))
+        }
     }
 }
 

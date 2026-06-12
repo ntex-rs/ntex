@@ -1,5 +1,13 @@
 # Changes
 
+## [3.6.3] - 2026-06-12
+
+* rustls: Send close_notify on filter shutdown
+
+* rustls: Flush tls records generated while processing incoming data (e.g. KeyUpdate responses)
+
+* rustls: Start io shutdown when peer sends close_notify
+
 ## [3.6.2] - 2026-03-22
 
 * Init connect/accept process before adding to filters
