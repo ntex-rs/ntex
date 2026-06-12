@@ -418,6 +418,94 @@ async fn test_rustls_shutdown_sends_close_notify() {
     }
 }
 
+#[cfg(feature = "rustls")]
+#[ntex::test]
+async fn test_rustls_keyupdate_response_flushed() {
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
+    use ntex::server::rustls;
+    use tls_rustls::pki_types::ServerName;
+
+    let srv = test_server(async || {
+        chain_factory(
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+                log::error!("tls negotiation is failed: {e:?}");
+                e
+            }),
+        )
+        .and_then(
+            fn_service(|io: Io<_>| async move {
+                // echo frames, then sit idle waiting for more data
+                while let Some(item) = io.recv(&BytesCodec).await.unwrap() {
+                    io.send(item, &BytesCodec).await.unwrap();
+                }
+                Ok::<_, io::Error>(())
+            })
+            .map_init_err(|_| ()),
+        )
+    });
+
+    // raw blocking rustls client, tls 1.3 only (KeyUpdate requires it)
+    let config = tls_rustls::ClientConfig::builder_with_protocol_versions(&[
+        &tls_rustls::version::TLS13,
+    ])
+    .dangerous()
+    .with_custom_certificate_verifier(Arc::new(rustls_utils::NoCertificateVerification))
+    .with_no_client_auth();
+    let mut conn = tls_rustls::ClientConnection::new(
+        Arc::new(config),
+        ServerName::try_from("localhost").unwrap(),
+    )
+    .unwrap();
+
+    let mut tcp = std::net::TcpStream::connect(srv.addr()).unwrap();
+    tcp.set_nodelay(true).unwrap();
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(15)))
+        .unwrap();
+    conn.complete_io(&mut tcp).unwrap();
+    assert!(!conn.is_handshaking());
+
+    // echo round-trip to make sure the connection is fully operational
+    conn.writer().write_all(b"ping").unwrap();
+    while conn.wants_write() {
+        conn.write_tls(&mut tcp).unwrap();
+    }
+    let mut echo = Vec::new();
+    while echo.len() < 4 {
+        if conn.read_tls(&mut tcp).unwrap() == 0 {
+            panic!("server closed connection before echo");
+        }
+        let state = conn.process_new_packets().unwrap();
+        let n = state.plaintext_bytes_to_read();
+        if n > 0 {
+            let mut chunk = vec![0u8; n];
+            conn.reader().read_exact(&mut chunk).unwrap();
+            echo.extend_from_slice(&chunk);
+        }
+    }
+    assert_eq!(echo, b"ping");
+
+    // request a key update; the server must answer with its own KeyUpdate
+    conn.refresh_traffic_keys().unwrap();
+    while conn.wants_write() {
+        conn.write_tls(&mut tcp).unwrap();
+    }
+
+    // the connection is otherwise idle; the server's KeyUpdate response
+    // (generated while processing incoming data) must still reach the wire
+    tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    match conn.read_tls(&mut tcp) {
+        Ok(n) if n > 0 => {
+            conn.process_new_packets().unwrap();
+        }
+        other => panic!(
+            "server did not flush KeyUpdate response generated during read processing: {other:?}"
+        ),
+    }
+}
+
 #[ntex::test]
 async fn test_static_str() {
     let srv = test_server(async || {

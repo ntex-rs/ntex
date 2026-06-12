@@ -59,7 +59,7 @@ where
     }
 
     pub(crate) fn process_read_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
-        buf.with_read_buffers(|r_src, r_dst| {
+        let result = buf.with_read_buffers(|r_src, r_dst| {
             if let Some(src) = r_src {
                 loop {
                     match self.session.read_tls(src) {
@@ -92,7 +92,24 @@ where
             } else {
                 Ok(())
             }
-        })
+        });
+
+        // flush tls records generated while processing incoming data
+        // (e.g. KeyUpdate responses), original error takes priority;
+        // during handshake flushing is driven by the handshake helper
+        if !self.session.is_handshaking() {
+            // materialize tls records queued by the session, rustls keeps
+            // KeyUpdate responses outside of its sendable tls buffer until
+            // the next plaintext write; an empty write is a no-op otherwise
+            let _ = self.session.writer().write(&[]);
+
+            if self.session.wants_write() {
+                let flushed = self.write_tls_records(buf);
+                result?;
+                return flushed;
+            }
+        }
+        result
     }
 
     pub(crate) fn process_write_buf(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
