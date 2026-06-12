@@ -79,6 +79,10 @@ where
                             unsafe { &mut *(&raw mut *r_dst.chunk_mut() as *mut [u8]) };
                         let v = io::Read::read(&mut self.session.reader(), chunk)?;
                         unsafe { r_dst.advance_mut(v) };
+                    } else if state.peer_has_closed() {
+                        // peer sent close_notify, start graceful shutdown
+                        buf.io().close();
+                        break;
                     } else if src.is_empty() {
                         break;
                     }
