@@ -965,6 +965,13 @@ impl SharedVec {
             }
             let capacity = (layout.size() - METADATA_SIZE) as u32;
 
+            #[cfg(feature = "overuse")]
+            if cap > 1058816 {
+                let bt = backtrace::Backtrace::new();
+                log::warn!("Buffer size {capacity}\n{bt:?}");
+                println!("Buffer oversized {bt:?}");
+            }
+
             #[allow(clippy::cast_ptr_alignment)]
             ptr::write(
                 ptr.cast::<SharedVec>(),
