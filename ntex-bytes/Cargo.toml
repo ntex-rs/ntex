@@ -1,6 +1,6 @@
 [package]
 name = "ntex-bytes"
-version = "1.7.1"
+version = "1.7.2"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
 description = "Types and traits for working with bytes (bytes crate fork)"
 documentation = "https://docs.rs/ntex-bytes"
@@ -18,13 +18,17 @@ default = []
 # simd utf8 check support
 simd = ["simdutf8"]
 
+overuse = ["backtrace", "log"]
+
 [lints]
 workspace = true
 
 [dependencies]
 bytes = { workspace = true }
 serde = { workspace = true }
+log = { workspace = true, optional = true }
 simdutf8 = { workspace = true, optional = true }
+backtrace = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand = { workspace = true }

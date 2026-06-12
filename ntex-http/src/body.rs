@@ -584,7 +584,7 @@ mod tests {
     use std::{future::poll_fn, io};
 
     use futures_util::stream;
-    use ntex::util::Ready;
+    use ntex::util::{BufMut, Ready};
 
     use super::*;
 
@@ -622,7 +622,7 @@ mod tests {
     #[ntex::test]
     async fn test_pages() {
         let mut pages = BytePages::default();
-        pages.append(Bytes::from("1111"));
+        pages.put_slice(b"1111");
         pages.append(Bytes::from("2222"));
         pages.append(Bytes::from("3333"));
 

@@ -128,6 +128,7 @@ pub(crate) struct SharedVec {
     size: BytePageSize,
 }
 
+#[derive(Debug)]
 pub(crate) struct StorageVec(pub(crate) NonNull<SharedVec>);
 
 // Buffer storage strategy flags.
@@ -963,6 +964,13 @@ impl SharedVec {
                 alloc::handle_alloc_error(layout);
             }
             let capacity = (layout.size() - METADATA_SIZE) as u32;
+
+            #[cfg(feature = "overuse")]
+            if cap > 1058816 {
+                let bt = backtrace::Backtrace::new();
+                log::warn!("Buffer size {capacity}\n{bt:?}");
+                println!("Buffer oversized {bt:?}");
+            }
 
             #[allow(clippy::cast_ptr_alignment)]
             ptr::write(
