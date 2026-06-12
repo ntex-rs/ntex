@@ -362,6 +362,62 @@ async fn test_rustls_peer_close_notify_closes_io() {
     }
 }
 
+#[cfg(feature = "rustls")]
+#[ntex::test]
+async fn test_rustls_shutdown_sends_close_notify() {
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
+    use ntex::server::rustls;
+
+    let srv = test_server(async || {
+        chain_factory(
+            rustls::TlsAcceptor::new(rustls_utils::tls_acceptor_arc()).map_err(|e| {
+                log::error!("tls negotiation is failed: {e:?}");
+                e
+            }),
+        )
+        .and_then(
+            fn_service(|io: Io<_>| async move {
+                let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+                io.send(item, &BytesCodec).await.unwrap();
+                // graceful shutdown, must deliver TLS close_notify to the peer
+                io.shutdown().await.unwrap();
+                Ok::<_, io::Error>(())
+            })
+            .map_init_err(|_| ()),
+        )
+    });
+    let addr = srv.addr();
+
+    // raw blocking rustls client
+    let cfg = Arc::new(rustls_utils::tls_connector());
+    let name = tls_rustls::pki_types::ServerName::try_from("localhost").unwrap();
+    let mut conn = tls_rustls::ClientConnection::new(cfg, name).unwrap();
+    let mut sock = std::net::TcpStream::connect(addr).unwrap();
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let mut tls = tls_rustls::Stream::new(&mut conn, &mut sock);
+
+    tls.write_all(b"hello").unwrap();
+    tls.flush().unwrap();
+
+    let mut echo = [0u8; 5];
+    tls.read_exact(&mut echo).unwrap();
+    assert_eq!(&echo, b"hello");
+
+    // keep reading until EOF; a clean Ok(0) means close_notify was received,
+    // an UnexpectedEof error means the peer closed without sending close_notify
+    let mut tmp = [0u8; 1024];
+    loop {
+        match tls.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(e) => panic!("expected clean EOF (close_notify), got error: {e:?}"),
+        }
+    }
+}
+
 #[ntex::test]
 async fn test_static_str() {
     let srv = test_server(async || {

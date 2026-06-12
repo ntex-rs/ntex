@@ -1,3 +1,4 @@
+use std::task::Poll;
 use std::{any, cell::RefCell, io, io::Write, ops::Deref, ops::DerefMut};
 
 use ntex_bytes::{BufMut, BytePages};
@@ -123,6 +124,34 @@ where
                 return Ok(());
             }
         })
+    }
+
+    /// Write pending tls records to the output buffer
+    fn write_tls_records(&mut self, buf: &FilterBuf<'_>) -> io::Result<()> {
+        buf.with_write_buffers(|_, w_dst| {
+            let mut wrp = Wrapper { w_dst, buf };
+            while self.session.wants_write() {
+                self.session.write_tls(&mut wrp)?;
+            }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn shutdown(&mut self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+        // drain pending application data into tls records first
+        self.process_write_buf(buf)?;
+
+        // queue close_notify alert (idempotent, may be called on every poll)
+        self.session.send_close_notify();
+
+        // write pending tls records (incl. close_notify) to the output buffer
+        self.write_tls_records(buf)?;
+
+        if self.session.wants_write() {
+            Ok(Poll::Pending)
+        } else {
+            Ok(Poll::Ready(()))
+        }
     }
 }
 

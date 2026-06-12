@@ -1,5 +1,5 @@
 //! An implementation of SSL streams for ntex backed by OpenSSL
-use std::{any, cell::RefCell, io, sync::Arc};
+use std::{any, cell::RefCell, io, sync::Arc, task::Poll};
 
 use ntex_io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use ntex_util::{time, time::Millis};
@@ -35,6 +35,10 @@ impl FilterLayer for TlsServerFilter {
 
     fn process_write_buf(&self, buf: &FilterBuf<'_>) -> io::Result<()> {
         Stream::new(&mut *self.session.borrow_mut()).process_write_buf(buf)
+    }
+
+    fn shutdown(&self, buf: &FilterBuf<'_>) -> io::Result<Poll<()>> {
+        Stream::new(&mut *self.session.borrow_mut()).shutdown(buf)
     }
 }
 
