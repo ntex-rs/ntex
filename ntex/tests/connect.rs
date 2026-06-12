@@ -297,12 +297,7 @@ async fn test_rustls_peer_close_notify_closes_io() {
                 io.send(msg, &BytesCodec).await.unwrap();
 
                 // wait until the peer disconnects
-                loop {
-                    match io.recv(&BytesCodec).await {
-                        Ok(Some(_)) => continue,
-                        Ok(None) | Err(_) => break,
-                    }
-                }
+                while let Ok(Some(_)) = io.recv(&BytesCodec).await {}
                 Ok::<_, io::Error>(())
             })
             .map_init_err(|_| ()),
@@ -352,9 +347,7 @@ async fn test_rustls_peer_close_notify_closes_io() {
                 if e.kind() == io::ErrorKind::WouldBlock
                     || e.kind() == io::ErrorKind::TimedOut =>
             {
-                panic!(
-                    "server did not close connection after receiving close_notify: {e}"
-                );
+                panic!("server did not close connection after receiving close_notify: {e}");
             }
             // connection reset also indicates closure
             Err(_) => break,
