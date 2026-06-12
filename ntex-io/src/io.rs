@@ -1320,6 +1320,60 @@ mod tests {
     }
 
     #[ntex::test]
+    async fn shutdown_flushes_write_buf_with_read_backpressure() {
+        // Graceful shutdown must flush the pending write buffer even if
+        // the peer keeps sending data (read backpressure is enabled).
+        let (client, server) = IoTest::create();
+        // remote side does not accept any data yet, write task stalls
+        client.remote_buffer_cap(0);
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_buf(8, 4, 16)
+                    .set_disconnect_timeout(ntex_util::time::Seconds(2)),
+            ),
+        );
+
+        // queue response data; remote is stalled so it stays in the write buffer
+        io.encode_slice(b"response-tail").unwrap();
+        sleep(Millis(50)).await;
+        assert_eq!(io.st().buffer.write_buf_size(), 13);
+
+        // peer keeps sending, crossing the read high watermark,
+        // read task gets paused with back-pressure enabled
+        client.write("0123456789");
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_paused());
+        assert!(io.flags().is_rd_backpressure());
+        assert_eq!(io.st().buffer.write_buf_size(), 13);
+
+        // start graceful shutdown while the write buffer is not empty
+        io.close();
+        sleep(Millis(50)).await;
+
+        // peer starts draining the connection
+        client.remote_buffer_cap(1024);
+
+        // all previously queued data must be written before io stream is closed.
+        // Without the fix graceful shutdown completes immediately (read is paused
+        // with back-pressure), dropping the buffered write data, so the read here
+        // returns nothing instead of the queued response tail.
+        let data = ntex_util::time::timeout(Millis(2000), client.read())
+            .await
+            .expect("write buffer was dropped during shutdown")
+            .unwrap();
+        assert_eq!(&data[..], b"response-tail");
+
+        // the connection still closes gracefully afterwards (within the
+        // disconnect timeout) instead of hanging
+        ntex_util::time::timeout(Millis(4000), io.on_disconnect())
+            .await
+            .expect("io stream did not disconnect after flush");
+    }
+
+    #[ntex::test]
     async fn shutdown() {
         // layer drops all unprocessed data after filter shutdown
         #[derive(Debug)]

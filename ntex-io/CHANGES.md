@@ -1,5 +1,9 @@
 # Changes
 
+## [Unreleased]
+
+* Do not abort the write-buffer flush during graceful shutdown when filter shutdown has completed but read backpressure is active; this dropped a buffered response tail
+
 ## [3.12.2] - 2026-05-22
 
 * Do not use invalid io while adding new filter
