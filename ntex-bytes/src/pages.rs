@@ -63,7 +63,7 @@ impl BytePages {
         pages.push_back(page);
 
         #[cfg(feature = "overuse")]
-        if pages.len() > 128 {
+        if pages.len() == 128 {
             let bt = backtrace::Backtrace::new();
             log::warn!("Number of pages {}\n{bt:?}", pages.len());
             println!("{bt:?}");
@@ -125,7 +125,7 @@ impl BytePages {
                 pages.push_back(p);
 
                 #[cfg(feature = "overuse")]
-                if pages.len() > 128 {
+                if pages.len() == 128 {
                     let bt = backtrace::Backtrace::new();
                     log::warn!("Number of pages {}\n{bt:?}", pages.len());
                     println!("{bt:?}");
