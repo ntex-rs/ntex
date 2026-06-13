@@ -54,6 +54,8 @@ struct StreamOpsInner {
     api: DriverApi,
     delayed_drop: Cell<bool>,
     delayed_feed: Cell<Option<Vec<IdType>>>,
+    delayed_write: Cell<bool>,
+    write_feed: Cell<Option<Vec<u32>>>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
 }
 
@@ -67,6 +69,8 @@ impl StreamOps {
                     api,
                     delayed_drop: Cell::new(false),
                     delayed_feed: Cell::new(Some(Vec::new())),
+                    delayed_write: Cell::new(false),
+                    write_feed: Cell::new(Some(Vec::new())),
                     streams: Cell::new(Some(Box::new(Slab::new()))),
                 });
                 inner = Some(ops.clone());
@@ -201,6 +205,7 @@ impl Handler for StreamOpsHandler {
             }
         }
         self.inner.delayed_feed.take();
+        self.inner.write_feed.take();
     }
 }
 
@@ -211,8 +216,54 @@ impl StreamOpsInner {
     {
         let mut streams = self.streams.take().unwrap();
         let result = f(&mut streams);
+        if self.delayed_write.get() {
+            self.check_delayed_writes(&mut streams);
+        }
         self.streams.set(Some(streams));
         result
+    }
+
+    /// Initiate write operation for the stream
+    fn write_stream(&self, id: u32) {
+        if let Some(mut streams) = self.streams.take() {
+            if let Some(item) = streams.get_mut(id as usize) {
+                item.write();
+            }
+            if self.delayed_write.get() {
+                self.check_delayed_writes(&mut streams);
+            }
+            self.streams.set(Some(streams));
+        } else {
+            // Write is initiated while `StreamOps` is handling an event
+            // (e.g. a filter generated data during read processing).
+            // Delay the write until the streams slab is released,
+            // dropping it would stall the connection.
+            self.delayed_write.set(true);
+            if let Some(mut feed) = self.write_feed.take() {
+                feed.push(id);
+                self.write_feed.set(Some(feed));
+            }
+        }
+    }
+
+    /// Process writes that were requested while the streams slab was taken
+    fn check_delayed_writes(&self, streams: &mut Slab<StreamItem>) {
+        while let Some(mut feed) = self.write_feed.take() {
+            if feed.is_empty() {
+                self.write_feed.set(Some(feed));
+                self.delayed_write.set(false);
+                break;
+            }
+            let ids = mem::take(&mut feed);
+            self.write_feed.set(Some(feed));
+            for id in ids {
+                if let Some(item) = streams.get_mut(id as usize)
+                    && !item.ctx.is_stopped()
+                {
+                    item.write();
+                }
+            }
+        }
     }
 
     fn drop_stream(&self, id: u32) {
@@ -389,11 +440,9 @@ impl WeakStreamCtl {
         self.inner.with(|streams| f(&streams[self.id as usize].io))
     }
 
-    pub(super) fn with<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut StreamItem) -> R,
-    {
-        self.inner.with(|streams| f(&mut streams[self.id as usize]))
+    /// Initiate write operation for the stream
+    pub(super) fn write(&self) {
+        self.inner.write_stream(self.id);
     }
 }
 
@@ -410,10 +459,6 @@ impl StreamItem {
 
     fn tag(&self) -> &'static str {
         self.ctx.tag()
-    }
-
-    pub(super) fn write_direct(&mut self) {
-        self.write();
     }
 
     fn write(&mut self) -> IoTaskStatus {
