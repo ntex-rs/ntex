@@ -29,6 +29,9 @@ openssl = ["tls_openssl"]
 rustls = ["tls_rustls", "tls_rustls/std"]
 rustls-ring = ["tls_rustls", "tls_rustls/ring", "tls_rustls/std"]
 
+# Windows Schannel support
+schannel = ["windows-sys"]
+
 [dependencies]
 ntex-bytes = { workspace = true }
 ntex-error = { workspace = true }
@@ -44,6 +47,14 @@ tls_openssl = { workspace = true, optional = true }
 
 # rustls
 tls_rustls = { workspace = true, optional = true }
+
+# Windows Schannel
+windows-sys = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
+] }
 
 [dev-dependencies]
 ntex = { workspace = true, features = ["openssl", "rustls"] }
