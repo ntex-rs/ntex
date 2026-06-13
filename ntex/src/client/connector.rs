@@ -6,6 +6,13 @@ use crate::{SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::{Connect, Connection, error::ConnectError, pool::ConnectionPool};
 
+#[cfg(any(
+    all(feature = "openssl", feature = "rustls"),
+    all(feature = "openssl", feature = "schannel"),
+    all(feature = "rustls", feature = "schannel"),
+))]
+compile_error!("You can only choose one of openssl, rustls, or schannel");
+
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::SslConnector as OpensslConnector;
 
@@ -71,7 +78,11 @@ impl Connector {
 
             conn.openssl(ssl.build())
         }
-        #[cfg(all(not(feature = "openssl"), feature = "rustls"))]
+        #[cfg(all(windows, feature = "schannel"))]
+        {
+            conn.schannel()
+        }
+        #[cfg(feature = "rustls")]
         {
             use tls_rustls::RootCertStore;
 
@@ -84,7 +95,11 @@ impl Connector {
             config.alpn_protocols = protos;
             conn.rustls(config)
         }
-        #[cfg(not(any(feature = "openssl", feature = "rustls")))]
+        #[cfg(not(any(
+            feature = "openssl",
+            all(windows, feature = "schannel"),
+            feature = "rustls"
+        )))]
         {
             conn
         }
@@ -108,6 +123,15 @@ impl Connector {
         use crate::connect::rustls::TlsConnector;
 
         self.secure_connector(TlsConnector::new(connector))
+    }
+
+    #[must_use]
+    #[cfg(all(windows, feature = "schannel"))]
+    /// Use Windows Schannel connector for secured connections.
+    pub fn schannel(self) -> Self {
+        use crate::connect::schannel::TlsConnector;
+
+        self.secure_connector(TlsConnector::new())
     }
 
     #[must_use]

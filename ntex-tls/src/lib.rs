@@ -15,6 +15,9 @@ pub mod openssl;
 #[cfg(feature = "rustls")]
 pub mod rustls;
 
+#[cfg(all(windows, feature = "schannel"))]
+pub mod schannel;
+
 use ntex_service::cfg::{CfgContext, Configuration};
 use ntex_util::{services::Counter, time::Millis, time::Seconds};
 

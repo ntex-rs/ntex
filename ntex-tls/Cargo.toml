@@ -3,11 +3,11 @@ name = "ntex-tls"
 version = "3.6.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "An implementation of SSL streams for ntex backed by OpenSSL"
-keywords = ["network", "framework", "async", "futures"]
+keywords = ["async", "framework", "futures", "network"]
 homepage = "https://ntex.rs"
 repository = "https://github.com/ntex-rs/ntex.git"
 documentation = "https://docs.rs/ntex-tls/"
-categories = ["network-programming", "asynchronous"]
+categories = ["asynchronous", "network-programming"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
 rust-version = "1.88"
@@ -16,8 +16,36 @@ rust-version = "1.88"
 name = "ntex_tls"
 path = "src/lib.rs"
 
-[lints]
-workspace = true
+[dependencies]
+ntex-bytes = { workspace = true }
+ntex-error = { workspace = true }
+ntex-io = { workspace = true }
+ntex-net = { workspace = true }
+ntex-service = { workspace = true }
+ntex-util = { workspace = true }
+
+log = { workspace = true }
+
+# openssl
+tls_openssl = { workspace = true, optional = true }
+
+# rustls
+tls_rustls = { workspace = true, optional = true }
+
+# Windows Schannel
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Security_Authentication_Identity",
+  "Win32_Security_Credentials",
+  "Win32_Security_Cryptography",
+], optional = true }
+
+[dev-dependencies]
+env_logger = { workspace = true }
+ntex = { workspace = true, features = ["openssl", "rustls"] }
+rustls-pemfile = { workspace = true }
+tls_rustls = { workspace = true, features = ["ring", "std"] }
+webpki-roots = { workspace = true }
 
 [features]
 default = []
@@ -29,25 +57,8 @@ openssl = ["tls_openssl"]
 rustls = ["tls_rustls", "tls_rustls/std"]
 rustls-ring = ["tls_rustls", "tls_rustls/ring", "tls_rustls/std"]
 
-[dependencies]
-ntex-bytes = { workspace = true }
-ntex-error = { workspace = true }
-ntex-io = { workspace = true }
-ntex-util = { workspace = true }
-ntex-service = { workspace = true }
-ntex-net = { workspace = true }
+# Windows Schannel support
+schannel = ["dep:windows-sys"]
 
-log = { workspace = true }
-
-# openssl
-tls_openssl = { workspace = true, optional = true }
-
-# rustls
-tls_rustls = { workspace = true, optional = true }
-
-[dev-dependencies]
-ntex = { workspace = true, features = ["openssl", "rustls"] }
-env_logger = { workspace = true }
-rustls-pemfile = { workspace = true }
-webpki-roots = { workspace = true }
-tls_rustls = { workspace = true, features = ["ring", "std"] }
+[lints]
+workspace = true
