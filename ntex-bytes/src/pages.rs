@@ -129,7 +129,7 @@ impl BytePages {
                 #[cfg(feature = "overuse")]
                 if pages.len() == 128 {
                     log::debug!(
-                        "Number of pages {}\n{bt:?}",
+                        "Number of pages {}\n{:?}",
                         pages.len(),
                         backtrace::Backtrace::new()
                     );
