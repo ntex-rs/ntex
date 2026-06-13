@@ -7,18 +7,26 @@ use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::time::timeout_checked;
 
-use super::{SchannelFilter, connect as connect_io};
+use super::{ClientConfig, SchannelFilter, connect as connect_io};
 use crate::TlsConfig;
 
 #[derive(Clone, Debug)]
 pub struct TlsConnector<S = Connector<String>> {
     connector: S,
+    config: ClientConfig,
 }
 
 #[derive(Clone, Debug)]
 pub struct TlsConnectorService<S> {
     svc: S,
     cfg: Cfg<TlsConfig>,
+    config: ClientConfig,
+}
+
+impl<A: Address> Default for TlsConnector<Connector<A>> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<A: Address> TlsConnector<Connector<A>> {
@@ -26,6 +34,15 @@ impl<A: Address> TlsConnector<Connector<A>> {
     pub fn new() -> Self {
         TlsConnector {
             connector: Connector::default(),
+            config: ClientConfig::default(),
+        }
+    }
+
+    /// Construct new Schannel connector factory with custom configuration.
+    pub fn with_config(config: ClientConfig) -> Self {
+        TlsConnector {
+            connector: Connector::default(),
+            config,
         }
     }
 }
@@ -45,6 +62,7 @@ where
         Ok(TlsConnectorService {
             svc,
             cfg: cfg.get(),
+            config: self.config.clone(),
         })
     }
 }
@@ -71,7 +89,12 @@ where
         let tag = io.tag();
         log::trace!("{tag}: TLS Handshake start for: {host:?}");
 
-        match timeout_checked(self.cfg.handshake_timeout(), connect_io(io, &host)).await {
+        match timeout_checked(
+            self.cfg.handshake_timeout(),
+            connect_io(io, &host, self.config.clone()),
+        )
+        .await
+        {
             Ok(Ok(io)) => {
                 log::trace!("{tag}: TLS Handshake success: {host:?}");
                 Ok(io)
@@ -91,12 +114,20 @@ where
 #[derive(Clone, Debug)]
 pub struct TlsConnector2<S = Connector2<String>> {
     connector: S,
+    config: ClientConfig,
 }
 
 #[derive(Clone, Debug)]
 pub struct TlsConnectorService2<S> {
     svc: S,
     cfg: Cfg<TlsConfig>,
+    config: ClientConfig,
+}
+
+impl<A: Address> Default for TlsConnector2<Connector2<A>> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<A: Address> TlsConnector2<Connector2<A>> {
@@ -104,6 +135,15 @@ impl<A: Address> TlsConnector2<Connector2<A>> {
     pub fn new() -> Self {
         TlsConnector2 {
             connector: Connector2::default(),
+            config: ClientConfig::default(),
+        }
+    }
+
+    /// Construct new Schannel connector factory with custom configuration.
+    pub fn with_config(config: ClientConfig) -> Self {
+        TlsConnector2 {
+            connector: Connector2::default(),
+            config,
         }
     }
 }
@@ -123,6 +163,7 @@ where
         Ok(TlsConnectorService2 {
             svc,
             cfg: cfg.get(),
+            config: self.config.clone(),
         })
     }
 }
@@ -150,7 +191,11 @@ where
         log::trace!("{tag}: TLS Handshake start for: {host:?} {io:?}");
 
         async {
-            match timeout_checked(self.cfg.handshake_timeout(), connect_io(io, &host)).await
+            match timeout_checked(
+                self.cfg.handshake_timeout(),
+                connect_io(io, &host, self.config.clone()),
+            )
+            .await
             {
                 Ok(Ok(io)) => {
                     log::trace!("{tag}: TLS Handshake success: {host:?}");

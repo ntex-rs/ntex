@@ -14,7 +14,8 @@ use windows_sys::Win32::Security::Authentication::Identity::{
     FreeContextBuffer, FreeCredentialsHandle, ISC_REQ_ALLOCATE_MEMORY,
     ISC_REQ_CONFIDENTIALITY, ISC_REQ_EXTENDED_ERROR, ISC_REQ_REPLAY_DETECT,
     ISC_REQ_SEQUENCE_DETECT, ISC_REQ_STREAM, InitializeSecurityContextW,
-    QueryContextAttributesW, SCH_CRED_AUTO_CRED_VALIDATION, SCH_USE_STRONG_CRYPTO,
+    QueryContextAttributesW, SCH_CRED_AUTO_CRED_VALIDATION,
+    SCH_CRED_MANUAL_CRED_VALIDATION, SCH_CRED_NO_SERVERNAME_CHECK, SCH_USE_STRONG_CRYPTO,
     SCHANNEL_CRED, SCHANNEL_CRED_VERSION, SECBUFFER_APPLICATION_PROTOCOLS, SECBUFFER_DATA,
     SECBUFFER_EMPTY, SECBUFFER_EXTRA, SECBUFFER_STREAM_HEADER, SECBUFFER_STREAM_TRAILER,
     SECBUFFER_TOKEN, SECBUFFER_VERSION, SECPKG_ATTR_APPLICATION_PROTOCOL,
@@ -32,6 +33,33 @@ mod connect;
 pub use self::connect::{
     TlsConnector, TlsConnector2, TlsConnectorService, TlsConnectorService2,
 };
+
+/// Windows Schannel client configuration.
+#[derive(Clone, Debug)]
+pub struct ClientConfig {
+    verify: bool,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ClientConfig {
+    /// Construct default Schannel client configuration.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { verify: true }
+    }
+
+    /// Accept invalid server certificates and hostnames.
+    #[must_use]
+    pub fn danger_accept_invalid_certs(mut self, accept_invalid_certs: bool) -> Self {
+        self.verify = !accept_invalid_certs;
+        self
+    }
+}
 
 /// Connection's peer certificate in DER encoding.
 #[derive(Clone, Debug)]
@@ -78,12 +106,18 @@ enum HandshakeState {
 }
 
 impl Context {
-    fn new(domain: &str) -> io::Result<Self> {
+    fn new(domain: &str, config: &ClientConfig) -> io::Result<Self> {
         let mut cred = unsafe { mem::zeroed::<SecHandle>() };
         let mut expiry = 0i64;
         let mut schannel_cred = unsafe { mem::zeroed::<SCHANNEL_CRED>() };
         schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
-        schannel_cred.dwFlags = SCH_CRED_AUTO_CRED_VALIDATION | SCH_USE_STRONG_CRYPTO;
+        schannel_cred.dwFlags = SCH_USE_STRONG_CRYPTO;
+        if config.verify {
+            schannel_cred.dwFlags |= SCH_CRED_AUTO_CRED_VALIDATION;
+        } else {
+            schannel_cred.dwFlags |=
+                SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_NO_SERVERNAME_CHECK;
+        }
 
         let status = unsafe {
             AcquireCredentialsHandleW(
@@ -111,6 +145,7 @@ impl Context {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handshake_step(
         &mut self,
         input: Option<&mut BytesMut>,
@@ -148,7 +183,8 @@ impl Context {
         ];
         let in_desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
-            cBuffers: in_bufs.len() as u32,
+            cBuffers: u32::try_from(in_bufs.len())
+                .expect("static SecBuffer count fits u32"),
             pBuffers: in_bufs.as_mut_ptr(),
         };
 
@@ -285,7 +321,7 @@ impl Context {
                 pvBuffer: frame.as_mut_ptr().cast(),
             },
             SecBuffer {
-                cbBuffer: len as u32,
+                cbBuffer: u32::try_from(len).expect("TLS message length fits u32"),
                 BufferType: SECBUFFER_DATA,
                 pvBuffer: unsafe { frame.as_mut_ptr().add(header_len).cast() },
             },
@@ -302,7 +338,7 @@ impl Context {
         ];
         let desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
-            cBuffers: bufs.len() as u32,
+            cBuffers: u32::try_from(bufs.len()).expect("static SecBuffer count fits u32"),
             pBuffers: bufs.as_mut_ptr(),
         };
         let status = unsafe { EncryptMessage(&raw const self.ctxt, 0, &raw const desc, 0) };
@@ -352,7 +388,7 @@ impl Context {
         ];
         let desc = SecBufferDesc {
             ulVersion: SECBUFFER_VERSION,
-            cBuffers: bufs.len() as u32,
+            cBuffers: u32::try_from(bufs.len()).expect("static SecBuffer count fits u32"),
             pBuffers: bufs.as_mut_ptr(),
         };
         let mut qop = 0u32;
@@ -545,10 +581,11 @@ impl SchannelFilter {
 pub async fn connect<F: Filter>(
     io: Io<F>,
     domain: &str,
+    config: ClientConfig,
 ) -> io::Result<Io<Layer<SchannelFilter, F>>> {
     let filter = SchannelFilter {
         inner: RefCell::new(Schannel {
-            ctx: Context::new(domain)?,
+            ctx: Context::new(domain, &config)?,
             state: State::Handshaking,
         }),
     };
@@ -598,11 +635,8 @@ struct SspiError {
 
 impl std::fmt::Display for SspiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} failed with HRESULT 0x{:08X}",
-            self.context, self.status as u32
-        )
+        let status = u32::from_ne_bytes(self.status.to_ne_bytes());
+        write!(f, "{} failed with HRESULT 0x{status:08X}", self.context)
     }
 }
 

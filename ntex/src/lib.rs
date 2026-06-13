@@ -4,7 +4,6 @@
 //!
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
-//! * `schannel` - enables ssl support via Windows Schannel
 //! * `compress` - enables compression support in http and web modules
 //! * `cookie` - enables cookie support in http and web modules
 #![deny(clippy::pedantic)]
@@ -61,11 +60,6 @@ pub mod connect {
     #[cfg(feature = "rustls")]
     pub mod rustls {
         pub use ntex_tls::rustls::*;
-    }
-
-    #[cfg(all(windows, feature = "schannel"))]
-    pub mod schannel {
-        pub use ntex_tls::schannel::*;
     }
 }
 
