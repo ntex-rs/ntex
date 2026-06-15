@@ -136,7 +136,7 @@ socket2 = "0.6.1"
 swap-buffer-queue = "0.2.1"
 variadics_please = "1.1"
 windows-sys = "0.52.0"
-time = "=0.3.47"
+time = "0.3.47"
 thiserror = "2"
 tok-io = { version = "1", package = "tokio", default-features = false }
 webpki-roots = "1.0"
