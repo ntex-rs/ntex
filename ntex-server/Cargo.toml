@@ -1,6 +1,6 @@
 [package]
 name = "ntex-server"
-version = "3.9.0"
+version = "3.10.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Server for ntex framework"
 keywords = ["network", "framework", "async", "futures"]
@@ -31,6 +31,7 @@ async-channel = { workspace = true }
 atomic-waker = { workspace = true }
 core_affinity = { workspace = true }
 oneshot = { workspace = true }
+libc = { workspace = true }
 log = { workspace = true }
 socket2 = { workspace = true }
 uuid = { workspace = true }

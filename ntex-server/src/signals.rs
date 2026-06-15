@@ -14,6 +14,8 @@ static CUR_SYS: Mutex<RefCell<Option<(System, CB)>>> = Mutex::new(RefCell::new(N
 /// Different types of process signals
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Signal {
+    /// SIGUSR1
+    Usr1,
     /// SIGHUP
     Hup,
     /// SIGINT
@@ -86,6 +88,7 @@ pub(crate) fn start<T: Send + 'static>(srv: Server<T>) {
                 };
                 for info in &mut signals {
                     let sig = match info {
+                        SIGUSR1 => Signal::Usr1,
                         SIGHUP => Signal::Hup,
                         SIGTERM => Signal::Term,
                         SIGINT => Signal::Int,
