@@ -38,9 +38,3 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true }
-
-[target.'cfg(target_family = "unix")'.dependencies]
-signal-hook = { workspace = true, features=["iterator"] }
-
-[target.'cfg(target_family = "windows")'.dependencies]
-ctrlc = { workspace = true }

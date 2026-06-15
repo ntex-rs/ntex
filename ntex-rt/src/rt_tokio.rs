@@ -109,7 +109,7 @@ impl Handle {
     }
 
     pub fn current() -> Self {
-        Self(Arbiter::current().sender.clone())
+        Self(Arbiter::current().0.sender.clone())
     }
 
     #[inline]

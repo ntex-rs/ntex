@@ -1,5 +1,9 @@
 # Changes
 
+## [3.15.0] - 2026-06-15
+
+* Try to log stacktraces for arbiters in tight loop
+
 ## [3.14.0] - 2026-05-11
 
 * Add System::get_value() API for system-wide storage access.

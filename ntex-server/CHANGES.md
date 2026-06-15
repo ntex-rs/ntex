@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.0] - 2026-06-15
+
+* Move signals management to ntex-rt
+
 ## [3.9.0] - 2026-02-17
 
 * Use new ntex-rt api

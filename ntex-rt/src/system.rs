@@ -1,20 +1,20 @@
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
-use std::{cell::Cell, cell::RefCell, fmt, future::Future, panic, pin::Pin};
+use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, rc::Rc};
 
 use async_channel::{Receiver, Sender, unbounded};
 use futures_timer::Delay;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
+use crate::arbiter::Arbiter;
 use crate::pool::ThreadPool;
-use crate::{Arbiter, BlockingResult, Builder, Handle, Runner, SystemRunner};
+use crate::{BlockingResult, Builder, Handle, HashMap, HashSet, Runner, SystemRunner};
 
 static SYSTEM_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 thread_local!(
-    static ARBITERS: RefCell<Arbiters> = RefCell::new(Arbiters::default());
     static PINGS: RefCell<HashMap<Id, VecDeque<PingRecord>>> =
         RefCell::new(HashMap::default());
 );
@@ -30,14 +30,16 @@ struct Arbiters {
 pub struct Id(pub(crate) usize);
 
 /// System is a runtime manager
-pub struct System {
+pub struct System(Arc<SystemInner>);
+
+struct SystemInner {
     id: usize,
-    arbiter: Cell<Option<Arbiter>>,
+    arbiter: Arbiter,
     config: SystemConfig,
     sender: Sender<SystemCommand>,
     receiver: Receiver<SystemCommand>,
-    rt: Arc<RwLock<Arbiter>>,
-    storage: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Sync + Send>>>>,
+    storage: RwLock<HashMap<TypeId, Box<dyn Any + Sync + Send>>>,
+    arbiters: Mutex<Arbiters>,
     pool: ThreadPool,
 }
 
@@ -49,6 +51,7 @@ pub struct SystemConfig {
     pub(super) ping_interval: usize,
     pub(super) pool_limit: usize,
     pub(super) pool_recv_timeout: Duration,
+    pub(super) disable_signals: bool,
     pub(super) testing: bool,
     pub(super) runner: Arc<dyn Runner>,
 }
@@ -59,54 +62,43 @@ thread_local!(
 
 impl Clone for System {
     fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            arbiter: Cell::new(None),
-            config: self.config.clone(),
-            sender: self.sender.clone(),
-            receiver: self.receiver.clone(),
-            rt: self.rt.clone(),
-            storage: self.storage.clone(),
-            pool: self.pool.clone(),
-        }
+        Self(self.0.clone())
     }
 }
 
 impl System {
     /// Constructs new system and sets it as current
-    pub(super) fn construct(config: SystemConfig) -> Self {
+    pub(super) fn start(config: SystemConfig) -> (Self, oneshot::Receiver<i32>) {
         let id = SYSTEM_COUNT.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = unbounded();
 
         let pool =
             ThreadPool::new(&config.name, config.pool_limit, config.pool_recv_timeout);
+        let (arbiter, controller) = Arbiter::new_system(id, config.name.clone());
 
-        System {
+        let mut arbiters = Arbiters::default();
+        arbiters.all.insert(arbiter.id(), arbiter.clone());
+        arbiters.list.push(arbiter.clone());
+
+        let sys = System(Arc::new(SystemInner {
             id,
             config,
+            arbiter,
             sender,
             receiver,
             pool,
-            rt: Arc::new(RwLock::new(Arbiter::dummy())),
-            storage: Arc::new(RwLock::new(HashMap::default())),
-            arbiter: Cell::new(None),
-        }
-    }
+            arbiters: Mutex::new(arbiters),
+            storage: RwLock::new(HashMap::default()),
+        }));
+        System::set_current(sys.clone());
 
-    /// Constructs new system and sets it as current
-    pub(super) fn start(&mut self) -> oneshot::Receiver<i32> {
         let (stop_tx, stop) = oneshot::channel();
-        let (arb, controller) = Arbiter::new_system(self.clone(), self.config.name.clone());
-
-        self.arbiter.set(Some(arb.clone()));
-        *self.rt.write() = arb.clone();
-        System::set_current(self.clone());
 
         // system support tasks
-        crate::spawn(SystemSupport::new(self, stop_tx).run(arb.id(), arb));
-        crate::spawn(controller.run());
+        crate::spawn(SystemSupport::new(&sys, stop_tx).run());
+        crate::spawn(controller.run(sys.clone()));
 
-        stop
+        (sys, stop)
     }
 
     /// Build a new system with a customized runtime
@@ -153,10 +145,33 @@ impl System {
     /// Set current running system
     #[doc(hidden)]
     pub fn set_current(sys: System) {
-        sys.arbiter().set_current();
         CURRENT.with(|s| {
             *s.borrow_mut() = Some(sys);
         });
+    }
+
+    pub(crate) fn register_arbiter(&self, arb: Arbiter) {
+        CURRENT.with(|s| {
+            *s.borrow_mut() = Some(self.clone());
+        });
+        let mut arbiters = self.0.arbiters.lock();
+        arbiters.all.insert(arb.id(), arb.clone());
+        arbiters.list.push(arb);
+    }
+
+    pub(crate) fn unregister_arbiter(&self, id: Id) {
+        CURRENT.with(|s| {
+            *s.borrow_mut() = None;
+        });
+        let mut arbiters = self.0.arbiters.lock();
+        if let Some(hnd) = arbiters.all.remove(&id) {
+            for (idx, arb) in arbiters.list.iter().enumerate() {
+                if &hnd == arb {
+                    arbiters.list.remove(idx);
+                    break;
+                }
+            }
+        }
     }
 
     pub(super) fn remove_current() {
@@ -167,12 +182,12 @@ impl System {
 
     /// System id
     pub fn id(&self) -> Id {
-        Id(self.id)
+        Id(self.0.id)
     }
 
     /// System name
     pub fn name(&self) -> &str {
-        &self.config.name
+        &self.0.config.name
     }
 
     /// Stop the system
@@ -182,7 +197,7 @@ impl System {
 
     /// Stop the system with a particular exit code
     pub fn stop_with_code(&self, code: i32) {
-        let _ = self.sender.try_send(SystemCommand::Exit(code));
+        let _ = self.0.sender.try_send(SystemCommand::Exit(code));
     }
 
     /// Return status of `stop_on_panic` option
@@ -190,7 +205,12 @@ impl System {
     /// It controls whether the System is stopped when an
     /// uncaught panic is thrown from a worker thread.
     pub fn stop_on_panic(&self) -> bool {
-        self.config.stop_on_panic
+        self.0.config.stop_on_panic
+    }
+
+    /// Return status of `signals` option
+    pub fn signals_disabled(&self) -> bool {
+        self.0.config.disable_signals
     }
 
     /// System arbiter
@@ -199,27 +219,18 @@ impl System {
     ///
     /// Panics if system is not started
     pub fn arbiter(&self) -> Arbiter {
-        if let Some(arb) = self.arbiter.take() {
-            self.arbiter.set(Some(arb.clone()));
-            if arb.hnd.is_some() {
-                return arb;
-            }
-        }
-
-        let arb = self.rt.read().clone();
-        self.arbiter.set(Some(arb.clone()));
-        arb
+        self.0.arbiter.clone()
     }
 
     /// Retrieves a list of all arbiters in the system
     ///
     /// This method should be called from the thread where the system has been initialized,
     /// typically the "main" thread.
-    pub fn list_arbiters<F, R>(f: F) -> R
+    pub fn list_arbiters<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&[Arbiter]) -> R,
     {
-        ARBITERS.with(|arbs| f(arbs.borrow().list.as_ref()))
+        f(&self.0.arbiters.lock().list)
     }
 
     /// Retrieves a list of last pings records for specified arbiter
@@ -239,13 +250,9 @@ impl System {
         })
     }
 
-    pub(super) fn sys(&self) -> &Sender<SystemCommand> {
-        &self.sender
-    }
-
     /// System config
     pub fn config(&self) -> SystemConfig {
-        self.config.clone()
+        self.0.config.clone()
     }
 
     #[inline]
@@ -256,7 +263,7 @@ impl System {
 
     /// Testing flag
     pub fn testing(&self) -> bool {
-        self.config.testing()
+        self.0.config.testing()
     }
 
     /// Spawns a blocking task in a new thread, and wait for it
@@ -267,7 +274,7 @@ impl System {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.pool.execute(f)
+        self.0.pool.execute(f)
     }
 
     /// Returns a previously registered type, or inserts and returns a new one.
@@ -278,13 +285,14 @@ impl System {
     where
         T: Clone + Send + Sync + 'static,
     {
-        if let Some(boxed) = self.storage.read().get(&TypeId::of::<T>())
+        if let Some(boxed) = self.0.storage.read().get(&TypeId::of::<T>())
             && let Some(val) = (&**boxed as &(dyn Any + 'static)).downcast_ref::<T>()
         {
             val.clone()
         } else {
             let val = f();
-            self.storage
+            self.0
+                .storage
                 .write()
                 .insert(TypeId::of::<T>(), Box::new(val.clone()));
             val
@@ -303,9 +311,9 @@ impl SystemConfig {
 impl fmt::Debug for System {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("System")
-            .field("id", &self.id)
-            .field("config", &self.config)
-            .field("pool", &self.pool)
+            .field("id", &self.0.id)
+            .field("config", &self.0.config)
+            .field("pool", &self.0.pool)
             .finish()
     }
 }
@@ -317,6 +325,7 @@ impl fmt::Debug for SystemConfig {
             .field("testing", &self.testing)
             .field("stack_size", &self.stack_size)
             .field("stop_on_panic", &self.stop_on_panic)
+            .field("signals_disabled", &self.disable_signals)
             .finish()
     }
 }
@@ -324,12 +333,11 @@ impl fmt::Debug for SystemConfig {
 #[derive(Debug)]
 pub(super) enum SystemCommand {
     Exit(i32),
-    RegisterArbiter(Id, Arbiter),
-    UnregisterArbiter(Id),
 }
 
 #[derive(Debug)]
 struct SystemSupport {
+    sys: System,
     stop: Option<oneshot::Sender<i32>>,
     commands: Receiver<SystemCommand>,
     ping_interval: Duration,
@@ -338,23 +346,15 @@ struct SystemSupport {
 impl SystemSupport {
     fn new(sys: &System, stop: oneshot::Sender<i32>) -> Self {
         Self {
+            sys: sys.clone(),
             stop: Some(stop),
-            commands: sys.receiver.clone(),
-            ping_interval: Duration::from_millis(sys.config.ping_interval as u64),
+            commands: sys.0.receiver.clone(),
+            ping_interval: Duration::from_millis(sys.0.config.ping_interval as u64),
         }
     }
 
-    async fn run(mut self, id: Id, arb: Arbiter) {
-        ARBITERS.with(move |arbs| {
-            let mut arbiters = arbs.borrow_mut();
-            arbiters.all.clear();
-            arbiters.list.clear();
-
-            // system arbiter
-            arbiters.all.insert(id, arb.clone());
-            arbiters.list.push(arb.clone());
-            crate::spawn(ping_arbiter(arb, self.ping_interval));
-        });
+    async fn run(mut self) {
+        crate::spawn(ping_arbiters(self.sys.clone(), self.ping_interval));
 
         loop {
             match self.commands.recv().await {
@@ -362,39 +362,16 @@ impl SystemSupport {
                     log::debug!("Stopping system with {code} code");
 
                     // stop arbiters
-                    ARBITERS.with(move |arbs| {
-                        let mut arbiters = arbs.borrow_mut();
-                        for arb in arbiters.list.drain(..) {
-                            arb.stop();
-                        }
-                        arbiters.all.clear();
-                    });
+                    let mut arbiters = self.sys.0.arbiters.lock();
+                    for arb in arbiters.list.drain(..) {
+                        arb.stop();
+                    }
+                    arbiters.all.clear();
 
                     // stop event loop
                     if let Some(stop) = self.stop.take() {
                         let _ = stop.send(code);
                     }
-                }
-                Ok(SystemCommand::RegisterArbiter(id, hnd)) => {
-                    crate::spawn(ping_arbiter(hnd.clone(), self.ping_interval));
-                    ARBITERS.with(move |arbs| {
-                        let mut arbiters = arbs.borrow_mut();
-                        arbiters.all.insert(id, hnd.clone());
-                        arbiters.list.push(hnd);
-                    });
-                }
-                Ok(SystemCommand::UnregisterArbiter(id)) => {
-                    ARBITERS.with(move |arbs| {
-                        let mut arbiters = arbs.borrow_mut();
-                        if let Some(hnd) = arbiters.all.remove(&id) {
-                            for (idx, arb) in arbiters.list.iter().enumerate() {
-                                if &hnd == arb {
-                                    arbiters.list.remove(idx);
-                                    break;
-                                }
-                            }
-                        }
-                    });
                 }
                 Err(_) => {
                     log::debug!("System stopped");
@@ -413,47 +390,98 @@ pub struct PingRecord {
     pub rtt: Option<Duration>,
 }
 
-async fn ping_arbiter(arb: Arbiter, interval: Duration) {
+async fn ping_arbiters(sys: System, interval: Duration) {
+    let pings = Rc::new(RefCell::new(HashSet::default()));
+
     loop {
+        // send pings
+        {
+            pings.borrow_mut().clear();
+
+            let start = Instant::now();
+            let arbiters = sys.0.arbiters.lock();
+
+            for arb in &arbiters.list {
+                let id = arb.id();
+                let pings = pings.clone();
+                let fut = arb.handle().spawn(async move {
+                    yield_to().await;
+                });
+
+                // calc ttl
+                PINGS.with(|pings| {
+                    let mut p = pings.borrow_mut();
+                    let recs = p.entry(arb.id()).or_default();
+                    recs.push_front(PingRecord { start, rtt: None });
+                    recs.truncate(10);
+                });
+
+                crate::spawn(async move {
+                    if fut.await.is_ok() {
+                        pings.borrow_mut().insert(id);
+
+                        PINGS.with(|pings| {
+                            pings
+                                .borrow_mut()
+                                .get_mut(&id)
+                                .unwrap()
+                                .front_mut()
+                                .unwrap()
+                                .rtt = Some(start.elapsed());
+                        });
+                    }
+                });
+            }
+        }
+
         Delay::new(interval).await;
 
-        // check if arbiter is still active
-        let is_alive = ARBITERS.with(|arbs| arbs.borrow().all.contains_key(&arb.id()));
+        // check pings
+        #[cfg(target_os = "linux")]
+        {
+            const SPIN: Duration = Duration::from_micros(100);
 
-        if !is_alive {
-            PINGS.with(|pings| pings.borrow_mut().remove(&arb.id()));
-            break;
+            let mut no_pongs = Vec::new();
+
+            {
+                for arb in &sys.0.arbiters.lock().list {
+                    let pong = pings.borrow_mut().remove(&arb.id());
+                    if !pong {
+                        no_pongs.push(arb.clone());
+                    }
+                }
+            }
+
+            for arb in no_pongs {
+                // no response from arbiter
+                log::error!("Arbiter {}({:?}) did not return pong", arb.name(), arb.id());
+
+                // send tgkill to thread id to capture backtrace
+                *CAPTURED.lock() = None;
+                EXPECTED_TID.store(arb.tid(), Ordering::Release);
+                unsafe {
+                    libc::syscall(
+                        libc::SYS_tgkill,
+                        libc::getpid(),
+                        arb.tid(),
+                        libc::SIGUSR2,
+                    );
+                }
+
+                // Spin
+                for _ in 0..1000 {
+                    Delay::new(SPIN).await;
+                    if let Some(bt) = CAPTURED.lock().take() {
+                        let bt = ntex_error::Backtrace::from(bt);
+                        bt.resolver().resolve();
+                        log::error!(
+                            "Worker does not returned pong within {interval:?} time.\n{bt:?}"
+                        );
+                        break;
+                    }
+                }
+            }
         }
-
-        // calc ttl
-        let start = Instant::now();
-        PINGS.with(|pings| {
-            let mut p = pings.borrow_mut();
-            let recs = p.entry(arb.id()).or_default();
-            recs.push_front(PingRecord { start, rtt: None });
-            recs.truncate(10);
-        });
-
-        let result = arb
-            .handle()
-            .spawn(async {
-                yield_to().await;
-            })
-            .await;
-
-        if result.is_err() {
-            break;
-        }
-
-        PINGS.with(|pings| {
-            pings
-                .borrow_mut()
-                .get_mut(&arb.id())
-                .unwrap()
-                .front_mut()
-                .unwrap()
-                .rtt = Some(start.elapsed());
-        });
     }
 }
 
@@ -480,16 +508,23 @@ async fn yield_to() {
     Yield { completed: false }.await;
 }
 
-pub(super) trait FnExec: Send + 'static {
-    fn call_box(self: Box<Self>);
-}
+#[cfg(target_os = "linux")]
+static EXPECTED_TID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+#[cfg(target_os = "linux")]
+static CAPTURED: Mutex<Option<ntex_error::BacktraceRaw>> = Mutex::new(None);
 
-impl<F> FnExec for F
-where
-    F: FnOnce() + Send + 'static,
-{
-    #[allow(clippy::boxed_local)]
-    fn call_box(self: Box<Self>) {
-        (*self)();
+#[track_caller]
+#[cfg(target_family = "unix")]
+pub(crate) fn sig_usr2() {
+    #[cfg(target_os = "linux")]
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        let tid = unsafe { libc::syscall(libc::SYS_gettid) } as i32;
+        if EXPECTED_TID.load(Ordering::Acquire) == tid {
+            // backtrace::Backtrace::new_unresolved uses libunwind frame walking,
+            // which is signal-safe. Symbol resolution is NOT — do it later.
+            let bt = ntex_error::BacktraceRaw::new(panic::Location::caller());
+            *CAPTURED.lock() = Some(bt);
+        }
     }
 }

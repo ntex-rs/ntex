@@ -18,6 +18,8 @@ pub struct Builder {
     stack_size: usize,
     /// Arbiters ping interval
     ping_interval: usize,
+    /// Disable signal handling
+    disable_signals: bool,
     /// Thread pool config
     pool_limit: usize,
     pool_recv_timeout: time::Duration,
@@ -32,6 +34,7 @@ impl Builder {
             stop_on_panic: false,
             stack_size: 0,
             ping_interval: 1000,
+            disable_signals: false,
             testing: false,
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_secs(60),
@@ -58,6 +61,15 @@ impl Builder {
     }
 
     #[must_use]
+    /// Disable signal handling.
+    ///
+    /// By default signal handling is enabled.
+    pub fn disable_signals(mut self) -> Self {
+        self.disable_signals = true;
+        self
+    }
+
+    #[must_use]
     /// Sets the size of the stack (in bytes) for the new thread.
     pub fn stack_size(mut self, size: usize) -> Self {
         self.stack_size = size;
@@ -67,7 +79,7 @@ impl Builder {
     #[must_use]
     /// Sets ping interval for spawned arbiters.
     ///
-    /// Interval is in milliseconds. By default 5000 milliseconds is set.
+    /// Interval is in milliseconds. By default 1000 milliseconds is set.
     /// To disable pings set value to zero.
     pub fn ping_interval(mut self, interval: usize) -> Self {
         self.ping_interval = interval;
@@ -86,6 +98,7 @@ impl Builder {
     /// Mark system as testing
     pub fn testing(mut self) -> Self {
         self.testing = true;
+        self.disable_signals = true;
         self
     }
 
@@ -110,6 +123,7 @@ impl Builder {
             stack_size: self.stack_size,
             stop_on_panic: self.stop_on_panic,
             ping_interval: self.ping_interval,
+            disable_signals: self.disable_signals,
             pool_limit: self.pool_limit,
             pool_recv_timeout: self.pool_recv_timeout,
             runner: Arc::new(runner),
@@ -122,11 +136,10 @@ impl Builder {
     /// This method panics if it can not create runtime
     pub fn build_with(self, config: SystemConfig) -> SystemRunner {
         let runner = config.runner.clone();
-        let system = System::construct(config);
 
         // init system arbiter and run configuration method
         SystemRunner {
-            system,
+            config,
             runner,
             _t: PhantomData,
         }
@@ -136,17 +149,12 @@ impl Builder {
 /// Helper object that runs System's event loop
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
-    system: System,
+    config: SystemConfig,
     runner: Arc<dyn Runner>,
     _t: PhantomData<Rc<()>>,
 }
 
 impl SystemRunner {
-    /// Get current system.
-    pub fn system(&self) -> System {
-        self.system.clone()
-    }
-
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
     pub fn run_until_stop(self) -> io::Result<()> {
@@ -159,15 +167,14 @@ impl SystemRunner {
     where
         F: FnOnce() -> io::Result<()> + 'static,
     {
-        log::info!("Starting {:?} system", self.system.name());
+        log::info!("Starting {:?} system", self.config.name);
 
-        let SystemRunner {
-            mut system, runner, ..
-        } = self;
+        let SystemRunner { config, runner, .. } = self;
 
         // run loop
         crate::driver::block_on(runner.as_ref(), async move {
-            let stop = system.start();
+            let (system, stop) = System::start(config);
+            crate::signals::start(&system);
 
             f()?;
 
@@ -190,13 +197,11 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner {
-            mut system, runner, ..
-        } = self;
+        let SystemRunner { config, runner, .. } = self;
 
         crate::driver::block_on(runner.as_ref(), async move {
-            let stop = system.start();
-            drop(stop);
+            let (system, _) = System::start(config);
+            crate::signals::start(&system);
 
             let loc = current_location();
             ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
@@ -211,13 +216,12 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner { mut system, .. } = self;
+        let SystemRunner { config, .. } = self;
 
         // run loop
         tok_io::task::LocalSet::new()
             .run_until(async move {
-                let stop = system.start();
-                drop(stop);
+                _ = System::start(config);
 
                 let loc = current_location();
                 ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
@@ -235,7 +239,7 @@ pub(crate) fn current_location() -> &'static panic::Location<'static> {
 impl fmt::Debug for SystemRunner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemRunner")
-            .field("system", &self.system)
+            .field("config", &self.config)
             .finish()
     }
 }

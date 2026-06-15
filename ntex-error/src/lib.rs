@@ -17,7 +17,7 @@ mod message;
 mod repr;
 pub mod utils;
 
-pub use crate::bt::{Backtrace, BacktraceResolver};
+pub use crate::bt::{Backtrace, BacktraceRaw, BacktraceResolver};
 pub use crate::error::Error;
 pub use crate::info::ErrorInfo;
 pub use crate::message::{ErrorMessage, ErrorMessageChained};

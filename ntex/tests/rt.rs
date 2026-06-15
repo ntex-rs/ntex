@@ -58,7 +58,7 @@ fn test_async() {
     let sys = rx.recv().unwrap();
     let id = sys.id();
     let (tx, rx) = mpsc::channel();
-    sys.arbiter().exec_fn(move || {
+    sys.handle().spawn(async move {
         let _ = tx.send(System::current().id());
     });
     let id2 = rx.recv().unwrap();
@@ -79,12 +79,12 @@ fn test_async() {
     assert_eq!(id, id2);
 
     let id2 = s
-        .block_on(sys.arbiter().exec(|| System::current().id()))
+        .block_on(sys.handle().spawn(async { System::current().id() }))
         .unwrap();
     assert_eq!(id, id2);
 
     let (tx, rx) = mpsc::channel();
-    sys.arbiter().spawn(Box::pin(async move {
+    sys.handle().spawn(Box::pin(async move {
         let _ = tx.send(System::current().id());
     }));
     let id2 = rx.recv().unwrap();
@@ -124,19 +124,19 @@ fn test_block_on() {
     let sys = rx.recv().unwrap();
     let id = sys.id();
     let (tx, rx) = mpsc::channel();
-    sys.arbiter().exec_fn(move || {
+    sys.arbiter().handle().spawn(async move {
         let _ = tx.send(System::current().id());
     });
     let id2 = rx.recv().unwrap();
     assert_eq!(id, id2);
 
     let id2 = s
-        .block_on(sys.arbiter().exec(|| System::current().id()))
+        .block_on(sys.handle().spawn(async { System::current().id() }))
         .unwrap();
     assert_eq!(id, id2);
 
     let (tx, rx) = mpsc::channel();
-    sys.arbiter().spawn(async move {
+    sys.handle().spawn(async move {
         ntex::time::sleep(std::time::Duration::from_millis(100)).await;
 
         let recs = System::list_arbiter_pings(Arbiter::current().id(), |recs| {
@@ -153,9 +153,6 @@ fn test_block_on() {
 #[test]
 fn test_arbiter_local_storage() {
     let _s = System::new("test", ntex::rt::DefaultRuntime);
-    Arbiter::set_item("test");
-    assert!(Arbiter::get_item::<&'static str, _, _>(|s| *s == "test"));
-    assert!(Arbiter::contains_item::<&'static str>());
     assert!(Arbiter::get_value(|| 64u64) == 64);
 
     ntex::rt::set_item(100u32);
@@ -360,4 +357,32 @@ async fn idle_disconnect_uring() {
     rx.await.unwrap();
 
     io.on_disconnect().await;
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn test_log_backtrace() {
+    use std::time::Duration;
+
+    let (tx, rx) = oneshot::channel();
+
+    thread::spawn(move || {
+        crate::System::build()
+            .stop_on_panic(true)
+            .build(ntex::rt::DefaultRuntime)
+            .block_on(async move {
+                let (tx, rx) = oneshot::channel();
+                Arbiter::with_name("ttttt".to_string())
+                    .handle()
+                    .spawn(async {
+                        thread::sleep(Duration::from_secs(2));
+                        let _ = tx.send(());
+                    });
+
+                let _ = rx.await;
+            });
+        let _ = tx.send(());
+    });
+
+    let _ = rx.recv();
 }
