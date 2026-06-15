@@ -23,8 +23,8 @@ pub enum Signal {
 }
 
 /// Register signal handler.
-pub fn signal() -> oneshot::Receiver<Signal> {
-    let (tx, rx) = oneshot::channel();
+pub fn signal() -> oneshot::AsyncReceiver<Signal> {
+    let (tx, rx) = oneshot::async_channel();
     System::current().handle().spawn(async move {
         HANDLERS.with(|handlers| {
             handlers.borrow_mut().push(tx);
