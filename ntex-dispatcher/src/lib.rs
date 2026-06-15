@@ -1326,10 +1326,6 @@ mod tests {
     /// Service becomes not ready and write backpressure is enabled
     #[ntex::test]
     async fn service_is_not_ready_and_backpressure() {
-        let (ctx, rx) = oneshot::channel();
-
-        let cnt = Rc::new(Cell::new(0));
-
         struct Srv(
             Cell<Option<oneshot::Receiver<()>>>,
             Rc<Cell<usize>>,
@@ -1364,6 +1360,8 @@ mod tests {
             }
         }
 
+        let (ctx, rx) = oneshot::channel();
+        let cnt = Rc::new(Cell::new(0));
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(0);
 
