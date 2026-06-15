@@ -4,8 +4,9 @@ use std::task::{Context, Poll, ready};
 use std::{future::Future, io, pin::Pin};
 
 use async_channel::Sender;
+use ntex_rt::signals::Signal;
 
-use crate::{manager::ServerCommand, signals::Signal};
+use crate::manager::ServerCommand;
 
 #[derive(Debug)]
 pub(crate) struct ServerShared {

@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [3.12.3] - 2026-06-15
 
 * Do not abort the write-buffer flush during graceful shutdown when filter shutdown has completed but read backpressure is active; this dropped a buffered response tail
 

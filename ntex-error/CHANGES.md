@@ -1,5 +1,9 @@
 # Changes
 
+## [2.3.0] - 2026-06-15
+
+* Export BacktraceRaw type
+
 ## [2.2.0] - 2026-04-08
 
 * Add fmt_diag_typ helper

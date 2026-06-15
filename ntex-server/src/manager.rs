@@ -3,12 +3,11 @@ use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 use async_channel::{Receiver, Sender, unbounded};
 use core_affinity::CoreId;
-use ntex_rt::System;
+use ntex_rt::{System, signals::Signal};
 use ntex_util::future::join_all;
 use ntex_util::time::{Millis, sleep, timeout};
 
 use crate::server::ServerShared;
-use crate::signals::Signal;
 use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
 
 const STOP_DELAY: Millis = Millis(500);
@@ -87,7 +86,12 @@ impl<F: ServerConfiguration> ServerManager<F> {
 
         // handle signals
         if !no_signals {
-            crate::signals::start(srv.clone());
+            let srv2 = srv.clone();
+            ntex_rt::spawn(async move {
+                while let Ok(sig) = ntex_rt::signals::signal().await {
+                    srv2.signal(sig);
+                }
+            });
         }
 
         srv
