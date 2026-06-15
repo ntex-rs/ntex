@@ -299,7 +299,10 @@ where
                 // handle write back-pressure
                 DispatcherState::Backpressure => {
                     match ready!(inner.poll_service(cx)) {
-                        PollService::Ready => (),
+                        PollService::Ready
+                        | PollService::ItemWait(DispatchItem::Control(
+                            Control::WBackPressureEnabled,
+                        )) => (),
                         PollService::Item(item) => inner.call_service(cx, item, true),
                         PollService::ItemWait(item) => inner.call_service(cx, item, false),
                         PollService::Continue => continue,
@@ -632,7 +635,7 @@ mod tests {
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
     use ntex_service::{ServiceCtx, cfg::SharedCfg};
-    use ntex_util::{time::Millis, time::sleep};
+    use ntex_util::{channel::oneshot, time::Millis, time::sleep};
     use rand::Rng;
 
     use super::*;
@@ -1318,5 +1321,77 @@ mod tests {
         sleep(Millis(50)).await;
 
         assert!(handled.load(Relaxed));
+    }
+
+    /// Service becomes not ready and write backpressure is enabled
+    #[ntex::test]
+    async fn service_is_not_ready_and_backpressure() {
+        let (ctx, rx) = oneshot::channel();
+
+        let cnt = Rc::new(Cell::new(0));
+
+        struct Srv(
+            Cell<Option<oneshot::Receiver<()>>>,
+            Rc<Cell<usize>>,
+            Cell<bool>,
+        );
+
+        impl Service<DispatchItem<BytesCodec>> for Srv {
+            type Response = Option<Bytes>;
+            type Error = ();
+
+            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+                if self.2.get()
+                    && let Some(rx) = self.0.take()
+                {
+                    let _ = rx.await;
+                }
+                Ok(())
+            }
+
+            async fn call(
+                &self,
+                msg: DispatchItem<BytesCodec>,
+                _: ServiceCtx<'_, Self>,
+            ) -> Result<Option<Bytes>, Self::Error> {
+                if let DispatchItem::Item(msg) = msg {
+                    self.2.set(true);
+                    return Ok::<_, ()>(Some(msg));
+                } else if let DispatchItem::Control(Control::WBackPressureEnabled) = msg {
+                    self.1.set(self.1.get() + 1);
+                }
+                Ok::<_, ()>(None)
+            }
+        }
+
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(0);
+
+        let (disp, _) = Dispatcher::debug(
+            Io::new(
+                server,
+                SharedCfg::new("DBG").add(IoConfig::new().set_write_buf(2, 1, 128)),
+            ),
+            BytesCodec,
+            Srv(Cell::new(Some(rx)), cnt.clone(), Cell::new(false)),
+        );
+        let (tx, rx) = ntex::channel::oneshot::channel();
+        ntex_util::spawn(async move {
+            let _ = disp.await;
+            let _ = tx.send(());
+        });
+
+        client.write("123456789");
+        client.remote_buffer_cap(9);
+        sleep(Millis(125)).await;
+        let _ = ctx.send(());
+        client.write("123456789");
+        sleep(Millis(125)).await;
+        client.remote_buffer_cap(16);
+        let res = client.read().await;
+        assert_eq!(res.unwrap(), Bytes::from_static(b"123456789"));
+        client.close().await;
+        let _ = rx.await;
+        assert_eq!(cnt.get(), 2);
     }
 }
