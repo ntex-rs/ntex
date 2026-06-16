@@ -243,6 +243,15 @@ impl IoRef {
         }
     }
 
+    #[inline]
+    /// Get mut access to dest write buffer
+    pub fn with_write_dst_buf<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytePages) -> R,
+    {
+        self.0.buffer.with_write_dst(f)
+    }
+
     pub(crate) fn consolidate_write_state(&self, force: bool) {
         let st = &self.0;
 
@@ -512,7 +521,9 @@ mod tests {
         let (client, server) = IoTest::create();
         client.remote_buffer_cap(1024);
         let state = Io::from(server);
+        assert_eq!(0, state.with_write_dst_buf(|b| b.len()));
         state.encode_slice(b"test").unwrap();
+        assert_eq!(4, state.with_write_dst_buf(|b| b.len()));
         let buf = client.read().await.unwrap();
         assert_eq!(buf, Bytes::from_static(b"test"));
 
