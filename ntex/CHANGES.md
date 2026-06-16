@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.0] - 2026-06-16
+
+* Allow to override `SharedCfg` test server and client configs #910
+
 ## [3.9.8] - 2026-06-11
 
 * Reset method of pooled `RequestHead` on release; ws client could send a recycled
