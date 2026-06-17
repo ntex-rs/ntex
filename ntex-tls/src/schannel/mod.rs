@@ -189,20 +189,16 @@ impl Context {
         };
 
         let mut input_len = 0usize;
-        let input_desc = if let Some(src) = input.as_ref() {
+        if let Some(src) = input.as_ref() {
             input_len = src.len();
-            if input_len == 0 {
-                ptr::null()
-            } else {
+            if input_len != 0 {
                 in_bufs[0].BufferType = SECBUFFER_TOKEN;
                 in_bufs[0].cbBuffer = u32::try_from(input_len)
                     .map_err(|_| io::Error::other("TLS input buffer is too large"))?;
                 in_bufs[0].pvBuffer = src.as_ptr().cast_mut().cast();
-                &raw const in_desc
             }
-        } else {
-            ptr::null()
-        };
+        }
+        let input_desc = &raw const in_desc;
 
         let mut attrs = 0u32;
         let mut expiry = 0i64;
@@ -346,14 +342,11 @@ impl Context {
             return Err(sspi_error("EncryptMessage", status));
         }
 
-        for buf in &bufs[..3] {
-            if buf.cbBuffer != 0 {
-                let data = unsafe {
-                    slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize)
-                };
-                dst.put_slice(data);
-            }
-        }
+        let tls_len = usize::try_from(bufs[0].cbBuffer)
+            .expect("TLS header length fits usize")
+            + usize::try_from(bufs[1].cbBuffer).expect("TLS data length fits usize")
+            + usize::try_from(bufs[2].cbBuffer).expect("TLS trailer length fits usize");
+        dst.put_slice(&frame[..tls_len]);
         Ok(len)
     }
 
@@ -410,20 +403,22 @@ impl Context {
         }
 
         let mut produced = false;
-        for buf in &bufs {
-            if buf.BufferType == SECBUFFER_DATA && buf.cbBuffer != 0 {
-                let data = unsafe {
-                    slice::from_raw_parts(buf.pvBuffer.cast::<u8>(), buf.cbBuffer as usize)
-                };
-                dst.put_slice(data);
-                produced = true;
-            }
+        if bufs[1].BufferType == SECBUFFER_DATA && bufs[1].cbBuffer != 0 {
+            let data = unsafe {
+                slice::from_raw_parts(
+                    bufs[1].pvBuffer.cast::<u8>(),
+                    bufs[1].cbBuffer as usize,
+                )
+            };
+            dst.put_slice(data);
+            produced = true;
         }
 
-        let extra = bufs
-            .iter()
-            .find(|buf| buf.BufferType == SECBUFFER_EXTRA)
-            .map_or(0, |buf| buf.cbBuffer as usize);
+        let extra = if bufs[3].BufferType == SECBUFFER_EXTRA {
+            bufs[3].cbBuffer as usize
+        } else {
+            0
+        };
         let consumed = input_len.saturating_sub(extra);
         if consumed != 0 {
             src.advance_to(consumed);

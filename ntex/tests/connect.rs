@@ -183,10 +183,8 @@ async fn test_schannel_string() {
     let srv = test_server(async || {
         chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
             fn_service(|io: Io<_>| async move {
-                io.send(Bytes::from_static(b"test"), &BytesCodec)
-                    .await
-                    .unwrap();
-                assert_eq!(io.recv(&BytesCodec).await.unwrap().unwrap(), "test");
+                let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+                io.send(item, &BytesCodec).await.unwrap();
                 Ok::<_, Box<dyn std::error::Error>>(())
             })
             .map_init_err(|_| ()),
@@ -214,13 +212,11 @@ async fn test_schannel_string() {
         io.query::<PeerCert>().as_ref().unwrap().0,
         cert.to_der().unwrap()
     );
-    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
-    assert_eq!(item, Bytes::from_static(b"test"));
-
     io.send(Bytes::from_static(b"test"), &BytesCodec)
         .await
         .unwrap();
-    assert!(io.recv(&BytesCodec).await.unwrap().is_none());
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+    assert_eq!(item, Bytes::from_static(b"test"));
 
     // schannel connector 2
     let conn = Pipeline::new(
@@ -241,13 +237,11 @@ async fn test_schannel_string() {
         io.query::<PeerCert>().as_ref().unwrap().0,
         cert.to_der().unwrap()
     );
-    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
-    assert_eq!(item, Bytes::from_static(b"test"));
-
     io.send(Bytes::from_static(b"test"), &BytesCodec)
         .await
         .unwrap();
-    assert!(io.recv(&BytesCodec).await.unwrap().is_none());
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+    assert_eq!(item, Bytes::from_static(b"test"));
 }
 
 #[cfg(feature = "rustls")]
