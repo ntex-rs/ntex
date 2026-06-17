@@ -223,6 +223,15 @@ impl Accept {
         // Create storage for events
         let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
 
+        // notify start
+        for idx in 0..self.sockets.len() {
+            self.add_source(idx);
+        }
+        if let Some(tx) = self.tx.take() {
+            thread::yield_now();
+            let _ = tx.send(());
+        }
+
         loop {
             events.clear();
 
@@ -240,12 +249,6 @@ impl Accept {
                         self.add_source(idx);
                     }
                 }
-            }
-
-            // notify start
-            if let Some(tx) = self.tx.take() {
-                thread::sleep(Duration::from_millis(25));
-                let _ = tx.send(());
             }
 
             match self.process_cmd() {
