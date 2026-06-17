@@ -228,7 +228,7 @@ impl Accept {
             self.add_source(idx);
         }
         if let Some(tx) = self.tx.take() {
-            thread::yield_now();
+            thread::sleep(Duration::from_millis(25));
             let _ = tx.send(());
         }
 
