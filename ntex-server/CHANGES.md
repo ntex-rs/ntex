@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.1] - 2026-06-17
+
+* Fix server ready notification
+
 ## [3.10.0] - 2026-06-15
 
 * Move signals management to ntex-rt

@@ -223,18 +223,14 @@ impl Accept {
         // Create storage for events
         let mut events = Events::with_capacity(NonZeroUsize::new(512).unwrap());
 
-        let mut timeout = Some(Duration::ZERO);
         loop {
             events.clear();
 
-            if let Err(e) = self.poller.wait(&mut events, timeout) {
+            if let Err(e) = self.poller.wait(&mut events, None) {
                 assert!(
                     e.kind() == io::ErrorKind::Interrupted,
                     "Cannot wait for events in poller: {e}"
                 );
-            } else if timeout.is_some() {
-                timeout = None;
-                let _ = self.tx.take().unwrap().send(());
             }
 
             for idx in 0..self.sockets.len() {
@@ -244,6 +240,12 @@ impl Accept {
                         self.add_source(idx);
                     }
                 }
+            }
+
+            // notify start
+            if let Some(tx) = self.tx.take() {
+                thread::sleep(Duration::from_millis(25));
+                let _ = tx.send(());
             }
 
             match self.process_cmd() {
