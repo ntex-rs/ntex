@@ -206,7 +206,10 @@ impl IoRef {
     where
         F: FnOnce(&mut FilterBuf<'_>) -> R,
     {
+        self.with_callbacks(|cb| cb.before_processing(self));
         let result = self.0.buffer.with_filter(self, |ctx| ctx.with_buffer(f));
+        self.with_callbacks(|cb| cb.after_processing(self));
+
         self.consolidate_write_state(false);
         Ok(result)
     }
@@ -241,6 +244,15 @@ impl IoRef {
             self.consolidate_write_state(false);
             Ok(result)
         }
+    }
+
+    #[inline]
+    /// Get mut access to src read buffer
+    pub fn with_read_src_buf<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut BytesMut) -> R,
+    {
+        self.0.buffer.with_read_src(self, f)
     }
 
     #[inline]
@@ -401,6 +413,12 @@ impl IoRef {
         crate::OnDisconnect::new(self.0.clone())
     }
 
+    #[doc(hidden)]
+    /// Register filter callbacks
+    pub fn register_filter_callbacks<F: crate::IoCallbacks + 'static>(&self, f: F) {
+        self.0.extensions.register_filter_callbacks(f);
+    }
+
     /// Call handle write method, returns true if
     /// `write-paused` is still set
     fn call_write(&self) -> WakeWriteTask {
@@ -430,6 +448,13 @@ impl IoRef {
             hnd.notify(ctx);
             self.0.handle.set(Some(hnd));
         }
+    }
+
+    pub(crate) fn with_callbacks<F>(&self, f: F)
+    where
+        F: FnOnce(&dyn crate::IoCallbacks),
+    {
+        self.0.extensions.with_callbacks(f);
     }
 }
 

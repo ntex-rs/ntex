@@ -1,5 +1,9 @@
 # Changes
 
+## [3.7.0] - 2026-06-18
+
+* Add `.connect()` methods for openssl connectors
+
 ## [3.6.3] - 2026-06-12
 
 * rustls: Send close_notify on filter shutdown

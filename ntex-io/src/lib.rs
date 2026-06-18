@@ -93,6 +93,16 @@ pub trait IoStream {
     fn start(self, _: IoContext) -> Box<dyn Handle>;
 }
 
+#[doc(hidden)]
+/// Callbacks for filter processing
+pub trait IoCallbacks {
+    /// Get called before processing read or write buffers chain
+    fn before_processing(&self, io: &IoRef);
+
+    /// Get called after processing read or write buffers chain
+    fn after_processing(&self, io: &IoRef);
+}
+
 pub trait Handle {
     fn query(&self, _: TypeId) -> Option<Box<dyn Any>> {
         None

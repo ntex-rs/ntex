@@ -16,6 +16,7 @@ use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
 use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
+use crate::utils::Extensions;
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 /// Interface object to the underlying I/O stream
@@ -37,8 +38,7 @@ pub(crate) struct IoState {
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) timeout: Cell<TimerHandle>,
     pub(super) shutdown_timeout: Cell<Option<Sleep>>,
-    #[allow(clippy::box_collection)]
-    pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
+    pub(super) extensions: Extensions,
 }
 
 impl IoState {
@@ -62,11 +62,7 @@ impl IoState {
     }
 
     pub(super) fn notify_disconnect(&self) {
-        if let Some(on_disconnect) = self.on_disconnect.take() {
-            for item in on_disconnect.into_iter() {
-                item.wake();
-            }
-        }
+        self.extensions.notify_disconnect();
     }
 
     /// Get the current I/O error.
@@ -203,7 +199,7 @@ impl Io {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             shutdown_timeout: Cell::new(None),
-            on_disconnect: Cell::new(None),
+            extensions: Extensions::default(),
         });
         inner.filter.set(Base::new(IoRef(inner.clone())));
 
@@ -240,7 +236,7 @@ impl IoRef {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             shutdown_timeout: Cell::new(None),
-            on_disconnect: Cell::new(None),
+            extensions: Extensions::default(),
         }))
     }
 }
@@ -314,9 +310,11 @@ impl<F: Filter> Io<F> {
     where
         U: FilterLayer,
     {
+        self.with_callbacks(|cb| cb.before_processing(&self));
+
         // Write buffer processing may be delayed,
         // call the filter chain to process pending writes
-        if let Err(e) = self.st().buffer.process_write_buf(&self) {
+        if let Err(e) = self.st().buffer.process_write_buf_no_cb(&self) {
             self.st().terminate_connection(Some(e));
         }
 
@@ -336,9 +334,11 @@ impl<F: Filter> Io<F> {
         let io = Io(UnsafeCell::new(state), marker::PhantomData);
 
         // push read data into new filter
-        if let Err(e) = io.st().buffer.process_read_buf(&io, 0) {
+        if let Err(e) = io.st().buffer.process_read_buf_no_cb(&io, 0) {
             io.st().terminate_connection(Some(e));
         }
+        io.with_callbacks(|cb| cb.after_processing(&io));
+
         io
     }
 
@@ -348,6 +348,8 @@ impl<F: Filter> Io<F> {
         U: FnOnce(F) -> R,
         R: Filter,
     {
+        self.with_callbacks(|cb| cb.before_processing(&self));
+
         // Write buffer processing may be delayed,
         // call the filter chain to process pending writes
         if let Err(e) = self.st().buffer.process_write_buf(&self) {
@@ -357,7 +359,9 @@ impl<F: Filter> Io<F> {
         let state = self.take_io_ref();
         state.0.filter.map_filter::<F, U, R>(f);
 
-        Io(UnsafeCell::new(state), marker::PhantomData)
+        let io = Io(UnsafeCell::new(state), marker::PhantomData);
+        io.with_callbacks(|cb| cb.after_processing(&io));
+        io
     }
 }
 
@@ -765,17 +769,7 @@ impl OnDisconnect {
         let token = if disconnected {
             usize::MAX
         } else {
-            let mut on_disconnect = inner.on_disconnect.take();
-            let token = if let Some(ref mut on_disconnect) = on_disconnect {
-                let token = on_disconnect.len();
-                on_disconnect.push(LocalWaker::default());
-                token
-            } else {
-                on_disconnect = Some(Box::new(vec![LocalWaker::default()]));
-                0
-            };
-            inner.on_disconnect.set(on_disconnect);
-            token
+            inner.extensions.register_disconnect()
         };
         Self { token, inner }
     }
@@ -785,12 +779,10 @@ impl OnDisconnect {
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
         if self.token == usize::MAX || self.inner.flags.is_stopping() {
             Poll::Ready(())
-        } else if let Some(on_disconnect) = self.inner.on_disconnect.take() {
-            on_disconnect[self.token].register(cx.waker());
-            self.inner.on_disconnect.set(Some(on_disconnect));
-            Poll::Pending
         } else {
-            Poll::Ready(())
+            self.inner
+                .extensions
+                .poll_disconnect(self.token, cx.waker())
         }
     }
 }

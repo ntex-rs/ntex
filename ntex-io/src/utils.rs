@@ -1,7 +1,9 @@
-use ntex_service::{ServiceFactory, chain_factory, fn_service};
-use ntex_util::future::Ready;
+use std::{cell::Cell, task::Poll, task::Waker};
 
-use crate::{Filter, Io, IoBoxed};
+use ntex_service::{ServiceFactory, chain_factory, fn_service};
+use ntex_util::{future::Ready, task::LocalWaker};
+
+use crate::{Filter, Io, IoBoxed, IoCallbacks};
 
 /// Decoded item from buffer
 #[doc(hidden)]
@@ -30,6 +32,97 @@ where
     chain_factory(fn_service(|io: Io<F>| Ready::Ok(io.boxed())))
         .map_init_err(|()| unreachable!())
         .and_then(srv)
+}
+
+pub(crate) struct Extensions(Cell<Option<Box<ExtensionsInner>>>);
+
+#[derive(Default)]
+pub(crate) struct ExtensionsInner {
+    disconnect: Option<Vec<LocalWaker>>,
+    pub(crate) callbacks: Option<Box<dyn IoCallbacks>>,
+}
+
+impl Default for Extensions {
+    fn default() -> Extensions {
+        Extensions(Cell::new(None))
+    }
+}
+
+impl Extensions {
+    fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut ExtensionsInner) -> R,
+    {
+        let mut inner = if let Some(inner) = self.0.take() {
+            inner
+        } else {
+            Box::new(ExtensionsInner::default())
+        };
+        let result = f(&mut inner);
+        self.0.set(Some(inner));
+        result
+    }
+
+    fn with_opt<F>(&self, f: F)
+    where
+        F: FnOnce(&mut ExtensionsInner),
+    {
+        if let Some(mut inner) = self.0.take() {
+            f(&mut inner);
+            self.0.set(Some(inner));
+        }
+    }
+
+    pub(super) fn notify_disconnect(&self) {
+        self.with_opt(|inner| {
+            if let Some(disconnect) = inner.disconnect.take() {
+                for item in disconnect {
+                    item.wake();
+                }
+            }
+        });
+    }
+
+    pub(super) fn register_disconnect(&self) -> usize {
+        self.with(|inner| {
+            if let Some(ref mut disconnect) = inner.disconnect {
+                let token = disconnect.len();
+                disconnect.push(LocalWaker::default());
+                token
+            } else {
+                inner.disconnect = Some(vec![LocalWaker::default()]);
+                0
+            }
+        })
+    }
+
+    pub(super) fn poll_disconnect(&self, token: usize, waker: &Waker) -> Poll<()> {
+        self.with(|inner| {
+            if let Some(ref mut disconnect) = inner.disconnect {
+                disconnect[token].register(waker);
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
+    }
+
+    pub(super) fn register_filter_callbacks<T: IoCallbacks + 'static>(&self, cb: T) {
+        self.with(|inner| {
+            inner.callbacks = Some(Box::new(cb));
+        });
+    }
+
+    pub(crate) fn with_callbacks<F>(&self, f: F)
+    where
+        F: FnOnce(&dyn IoCallbacks),
+    {
+        self.with_opt(|inner| {
+            if let Some(ref cb) = inner.callbacks {
+                f(cb.as_ref());
+            }
+        });
+    }
 }
 
 #[cfg(test)]
