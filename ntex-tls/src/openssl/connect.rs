@@ -1,7 +1,7 @@
 use std::io;
 
 use ntex_error::Error;
-use ntex_io::{Io, Layer};
+use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector, Connector2};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
@@ -25,7 +25,7 @@ pub struct SslConnectorService<S> {
 }
 
 impl<A: Address> SslConnector<Connector<A>> {
-    /// Construct new `OpensslConnectService` factory
+    /// Construct new `SslConnector` factory.
     pub fn new(connector: OpensslConnector) -> Self {
         SslConnector {
             openssl: connector,
@@ -54,25 +54,13 @@ where
     }
 }
 
-impl<A: Address, S> Service<Connect<A>> for SslConnectorService<S>
-where
-    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
-{
-    type Response = Io<Layer<SslFilter>>;
-    type Error = ConnectError;
-
-    ntex_service::forward_ready!(svc);
-    ntex_service::forward_poll!(svc);
-    ntex_service::forward_shutdown!(svc);
-
-    async fn call(
+impl<S> SslConnectorService<S> {
+    /// Establish a TLS connection on top of an existing I/O stream.
+    pub async fn connect<F: Filter>(
         &self,
-        message: Connect<A>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        let host = message.host().split(':').next().unwrap().to_string();
-
-        let io = ctx.call(&self.svc, message).await?;
+        io: Io<F>,
+        host: &str,
+    ) -> Result<Io<Layer<SslFilter, F>>, ConnectError> {
         let tag = io.tag();
         log::trace!("{tag}: SSL Handshake start for: {host:?}");
 
@@ -80,7 +68,7 @@ where
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e).into()),
             Ok(config) => {
                 let ssl = config
-                    .into_ssl(&host)
+                    .into_ssl(host)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
                 match timeout_checked(self.cfg.handshake_timeout(), connect_io(io, ssl))
@@ -108,6 +96,28 @@ where
     }
 }
 
+impl<A: Address, S> Service<Connect<A>> for SslConnectorService<S>
+where
+    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
+{
+    type Response = Io<Layer<SslFilter>>;
+    type Error = ConnectError;
+
+    ntex_service::forward_ready!(svc);
+    ntex_service::forward_poll!(svc);
+    ntex_service::forward_shutdown!(svc);
+
+    async fn call(
+        &self,
+        message: Connect<A>,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let host = message.host().split(':').next().unwrap().to_string();
+        let io = ctx.call(&self.svc, message).await?;
+        self.connect(io, &host).await
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SslConnector2<S> {
     connector: S,
@@ -122,7 +132,7 @@ pub struct SslConnectorService2<S> {
 }
 
 impl<A: Address> SslConnector2<Connector2<A>> {
-    /// Construct new `OpensslConnectService` factory
+    /// Construct new `SslConnector2` factory
     pub fn new(connector: OpensslConnector) -> Self {
         SslConnector2 {
             openssl: connector,
@@ -151,25 +161,13 @@ where
     }
 }
 
-impl<A: Address, S> Service<Connect<A>> for SslConnectorService2<S>
-where
-    S: Service<Connect<A>, Response = Io, Error = Error<ConnectError>>,
-{
-    type Response = Io<Layer<SslFilter>>;
-    type Error = Error<ConnectError>;
-
-    ntex_service::forward_ready!(svc);
-    ntex_service::forward_poll!(svc);
-    ntex_service::forward_shutdown!(svc);
-
-    async fn call(
+impl<S> SslConnectorService2<S> {
+    /// Establish a TLS connection on top of an existing I/O stream.
+    pub async fn connect<F: Filter>(
         &self,
-        message: Connect<A>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        let host = message.host().split(':').next().unwrap().to_string();
-
-        let io = ctx.call(&self.svc, message).await?;
+        io: Io<F>,
+        host: &str,
+    ) -> Result<Io<Layer<SslFilter, F>>, Error<ConnectError>> {
         let tag = io.tag();
         log::trace!("{tag}: SSL Handshake start for: {host:?} {io:?}");
 
@@ -177,7 +175,7 @@ where
             let config = self.openssl.configure().map_err(|e| {
                 ConnectError::from(io::Error::new(io::ErrorKind::InvalidInput, e))
             })?;
-            let ssl = config.into_ssl(&host).map_err(|e| {
+            let ssl = config.into_ssl(host).map_err(|e| {
                 ConnectError::from(io::Error::new(io::ErrorKind::InvalidInput, e))
             })?;
 
@@ -202,6 +200,28 @@ where
         }
         .await
         .map_err(|e: Error<_>| e.set_service(self.cfg.service()))
+    }
+}
+
+impl<A: Address, S> Service<Connect<A>> for SslConnectorService2<S>
+where
+    S: Service<Connect<A>, Response = Io, Error = Error<ConnectError>>,
+{
+    type Response = Io<Layer<SslFilter>>;
+    type Error = Error<ConnectError>;
+
+    ntex_service::forward_ready!(svc);
+    ntex_service::forward_poll!(svc);
+    ntex_service::forward_shutdown!(svc);
+
+    async fn call(
+        &self,
+        message: Connect<A>,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let host = message.host().split(':').next().unwrap().to_string();
+        let io = ctx.call(&self.svc, message).await?;
+        self.connect(io, &host).await
     }
 }
 

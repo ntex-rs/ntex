@@ -91,11 +91,11 @@ impl SslFilter {
             }
 
             // copy internal buffer to write dst buffer
-            buf.with_write_buffers(|_, dst| {
-                if !st.destination.is_empty() {
+            if !st.destination.is_empty() {
+                buf.with_write_buffers(|_, dst| {
                     st.destination.move_to(dst);
-                }
-            });
+                });
+            }
         }
         result
     }

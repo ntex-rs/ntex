@@ -1,5 +1,9 @@
 # Changes
 
+## [3.13.0] - 2026-06-18
+
+* Refactor io callbacks management and add filter callbacks
+
 ## [3.12.4] - 2026-06-16
 
 * Add IoRef::with_write_dst_buf() helper method
