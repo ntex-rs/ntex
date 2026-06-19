@@ -126,7 +126,8 @@ impl Arbiter {
 
         let handle = builder
             .spawn(move || {
-                log::info!("Starting {name2:?} arbiter");
+                let name3 = name2.clone();
+                log::info!("Starting {name3:?} arbiter");
 
                 let sys2 = sys.clone();
                 let (stop, stop_rx) = oneshot::channel();
@@ -161,6 +162,8 @@ impl Arbiter {
                 sys2.unregister_arbiter(Id(id));
 
                 remove_all_items();
+
+                log::info!("Arbiter {name3:?} has been stopped");
             })
             .unwrap_or_else(|err| {
                 panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
