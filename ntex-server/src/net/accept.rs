@@ -142,6 +142,7 @@ impl fmt::Debug for AcceptLoop {
 }
 
 struct Accept {
+    name: String,
     poller: Arc<Poller>,
     rx: mpsc::Receiver<AcceptorCommand>,
     tx: Option<oneshot::Sender<()>>,
@@ -171,14 +172,26 @@ impl Accept {
 
         // start accept thread
         let sys = System::current();
-        let _ = thread::Builder::new().name(name).spawn(move || {
+        let _ = thread::Builder::new().name(name.clone()).spawn(move || {
             System::set_current(sys);
-            Accept::new(tx, rx, poller, socks, srv, notify, testing, status_handler).poll();
+            Accept::new(
+                name,
+                tx,
+                rx,
+                poller,
+                socks,
+                srv,
+                notify,
+                testing,
+                status_handler,
+            )
+            .poll();
         });
     }
 
     #[allow(clippy::too_many_arguments)]
     fn new(
+        name: String,
         tx: oneshot::Sender<()>,
         rx: mpsc::Receiver<AcceptorCommand>,
         poller: Arc<Poller>,
@@ -200,6 +213,7 @@ impl Accept {
         }
 
         Accept {
+            name,
             poller,
             rx,
             sockets,
@@ -258,7 +272,7 @@ impl Accept {
                     for info in self.sockets.drain(..) {
                         info.sock.remove_source();
                     }
-                    log::info!("Accept loop has been stopped");
+                    log::info!("Accept loop {:?} has been stopped", self.name);
 
                     if let Some(rx) = rx {
                         if !self.testing {
@@ -341,25 +355,25 @@ impl Accept {
                 Ok(cmd) => match cmd {
                     AcceptorCommand::Stop(rx) => {
                         if !self.backpressure {
-                            log::info!("Stopping accept loop");
+                            log::info!("Stopping accept loop {:?}", self.name);
                             self.backpressure(true);
                         }
                         break Either::Right(Some(rx));
                     }
                     AcceptorCommand::Terminate => {
-                        log::info!("Stopping accept loop");
+                        log::info!("Stopping accept loop {:?}", self.name);
                         self.backpressure(true);
                         break Either::Right(None);
                     }
                     AcceptorCommand::Pause => {
                         if !self.backpressure {
-                            log::info!("Pausing accept loop");
+                            log::info!("Pausing accept loop {:?}", self.name);
                             self.backpressure(true);
                         }
                     }
                     AcceptorCommand::Resume => {
                         if self.backpressure {
-                            log::info!("Resuming accept loop");
+                            log::info!("Resuming accept loop {:?}", self.name);
                             self.backpressure(false);
                         }
                     }
@@ -371,7 +385,7 @@ impl Accept {
                     break match err {
                         mpsc::TryRecvError::Empty => Either::Left(()),
                         mpsc::TryRecvError::Disconnected => {
-                            log::error!("Dropping accept loop");
+                            log::error!("Dropping accept loop {:?}", self.name);
                             self.backpressure(true);
                             Either::Right(None)
                         }

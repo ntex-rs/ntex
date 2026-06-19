@@ -252,6 +252,11 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 
     async fn stop(&mut self, graceful: bool, completion: Option<oneshot::Sender<()>>) {
+        log::info!(
+            "Stopping {:?} server, graceful({graceful})",
+            self.mgr.0.cfg.name
+        );
+
         self.mgr.0.stopping.set(true);
 
         // stop server
@@ -273,12 +278,8 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             }
         }
 
-        // notify sender
-        if let Some(tx) = completion {
-            let _ = tx.send(());
-        }
-
         sleep(STOP_DELAY).await;
+        log::info!("All worker are stopped in {:?} server", self.mgr.0.cfg.name);
 
         // notify Server instance
         let notify = std::mem::take(&mut *self.mgr.0.stop_notify.borrow_mut());
@@ -286,10 +287,23 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             let _ = tx.send(());
         }
 
+        // notify sender
+        log::trace!(
+            "Notify caller {} of {:?} server",
+            completion.is_some(),
+            self.mgr.0.cfg.name
+        );
+        if let Some(tx) = completion {
+            let _ = tx.send(());
+        }
+
         // stop system
         if self.mgr.0.cfg.stop_runtime {
+            log::trace!("Stopping ntex system, {:?} server", self.mgr.0.cfg.name);
             System::current().stop();
         }
+
+        log::info!("Server {:?} has been stopped", self.mgr.0.cfg.name);
     }
 }
 
