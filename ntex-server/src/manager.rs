@@ -10,7 +10,7 @@ use ntex_util::time::{Millis, sleep, timeout};
 use crate::server::ServerShared;
 use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
 
-const STOP_DELAY: Millis = Millis(500);
+const STOP_DELAY: Millis = Millis(250);
 const RESTART_DELAY: Millis = Millis(250);
 
 #[derive(Clone)]
@@ -278,7 +278,9 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             }
         }
 
-        sleep(STOP_DELAY).await;
+        if !System::current().testing() {
+            sleep(STOP_DELAY).await;
+        }
         log::info!("All worker are stopped in {:?} server", self.mgr.0.cfg.name);
 
         // notify Server instance
