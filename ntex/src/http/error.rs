@@ -327,7 +327,6 @@ mod tests {
     #[test]
     fn test_payload_error() {
         let err: PayloadError = io::Error::other("DecodeError").into();
-        println!("{err}");
         assert!(format!("{err}").contains("DecodeError"), "{err}");
 
         let err: PayloadError = BlockingError::Canceled.into();

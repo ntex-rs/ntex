@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.2] - 2026-06-19
+
+* Do not delay server stop for testing mode
+
 ## [3.10.1] - 2026-06-19
 
 * Fix server ready notification
