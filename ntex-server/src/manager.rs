@@ -278,13 +278,15 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             let _ = tx.send(());
         }
 
+        sleep(STOP_DELAY).await;
+
+        // notify Server instance
         let notify = std::mem::take(&mut *self.mgr.0.stop_notify.borrow_mut());
         for tx in notify {
             let _ = tx.send(());
         }
-        sleep(STOP_DELAY).await;
 
-        // stop system if server was spawned
+        // stop system
         if self.mgr.0.cfg.stop_runtime {
             System::current().stop();
         }
