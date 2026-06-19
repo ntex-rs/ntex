@@ -18,8 +18,8 @@ pub struct Builder {
     stack_size: usize,
     /// Arbiters ping interval
     ping_interval: usize,
-    /// Disable signal handling
-    disable_signals: bool,
+    /// Signal handling
+    signals: bool,
     /// Thread pool config
     pool_limit: usize,
     pool_recv_timeout: time::Duration,
@@ -34,7 +34,7 @@ impl Builder {
             stop_on_panic: false,
             stack_size: 0,
             ping_interval: 1000,
-            disable_signals: false,
+            signals: false,
             testing: false,
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_secs(60),
@@ -63,9 +63,18 @@ impl Builder {
     #[must_use]
     /// Disable signal handling.
     ///
-    /// By default signal handling is enabled.
+    /// By default signal handling is disabled.
     pub fn disable_signals(mut self) -> Self {
-        self.disable_signals = true;
+        self.signals = false;
+        self
+    }
+
+    #[must_use]
+    /// Enable signal handling.
+    ///
+    /// By default signal handling is enabled.
+    pub fn enable_signals(mut self) -> Self {
+        self.signals = true;
         self
     }
 
@@ -98,7 +107,7 @@ impl Builder {
     /// Mark system as testing
     pub fn testing(mut self) -> Self {
         self.testing = true;
-        self.disable_signals = true;
+        self.signals = false;
         self
     }
 
@@ -140,7 +149,7 @@ impl Builder {
         SystemRunner {
             config,
             runner,
-            signals: !self.disable_signals,
+            signals: self.signals,
             _t: PhantomData,
         }
     }
