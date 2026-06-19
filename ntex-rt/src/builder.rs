@@ -18,8 +18,8 @@ pub struct Builder {
     stack_size: usize,
     /// Arbiters ping interval
     ping_interval: usize,
-    /// Disable signal handling
-    disable_signals: bool,
+    /// Signal handling
+    signals: bool,
     /// Thread pool config
     pool_limit: usize,
     pool_recv_timeout: time::Duration,
@@ -34,7 +34,7 @@ impl Builder {
             stop_on_panic: false,
             stack_size: 0,
             ping_interval: 1000,
-            disable_signals: false,
+            signals: false,
             testing: false,
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_secs(60),
@@ -63,9 +63,18 @@ impl Builder {
     #[must_use]
     /// Disable signal handling.
     ///
-    /// By default signal handling is enabled.
+    /// By default signal handling is disabled.
     pub fn disable_signals(mut self) -> Self {
-        self.disable_signals = true;
+        self.signals = false;
+        self
+    }
+
+    #[must_use]
+    /// Enable signal handling.
+    ///
+    /// By default signal handling is enabled.
+    pub fn enable_signals(mut self) -> Self {
+        self.signals = true;
         self
     }
 
@@ -98,7 +107,7 @@ impl Builder {
     /// Mark system as testing
     pub fn testing(mut self) -> Self {
         self.testing = true;
-        self.disable_signals = true;
+        self.signals = false;
         self
     }
 
@@ -123,7 +132,6 @@ impl Builder {
             stack_size: self.stack_size,
             stop_on_panic: self.stop_on_panic,
             ping_interval: self.ping_interval,
-            disable_signals: self.disable_signals,
             pool_limit: self.pool_limit,
             pool_recv_timeout: self.pool_recv_timeout,
             runner: Arc::new(runner),
@@ -141,6 +149,7 @@ impl Builder {
         SystemRunner {
             config,
             runner,
+            signals: self.signals,
             _t: PhantomData,
         }
     }
@@ -151,6 +160,7 @@ impl Builder {
 pub struct SystemRunner {
     config: SystemConfig,
     runner: Arc<dyn Runner>,
+    signals: bool,
     _t: PhantomData<Rc<()>>,
 }
 
@@ -169,12 +179,19 @@ impl SystemRunner {
     {
         log::info!("Starting {:?} system", self.config.name);
 
-        let SystemRunner { config, runner, .. } = self;
+        let SystemRunner {
+            config,
+            runner,
+            signals,
+            ..
+        } = self;
 
         // run loop
         crate::driver::block_on(runner.as_ref(), async move {
             let (system, stop) = System::start(config);
-            crate::signals::start(&system);
+            if signals {
+                system.enable_signals();
+            }
 
             f()?;
 
@@ -197,11 +214,18 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner { config, runner, .. } = self;
+        let SystemRunner {
+            config,
+            runner,
+            signals,
+            ..
+        } = self;
 
         crate::driver::block_on(runner.as_ref(), async move {
             let (system, _) = System::start(config);
-            crate::signals::start(&system);
+            if signals {
+                system.enable_signals();
+            }
 
             let loc = current_location();
             ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);

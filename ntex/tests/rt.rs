@@ -369,6 +369,7 @@ fn test_log_backtrace() {
     thread::spawn(move || {
         crate::System::build()
             .stop_on_panic(true)
+            .enable_signals()
             .build(ntex::rt::DefaultRuntime)
             .block_on(async move {
                 let (tx, rx) = oneshot::channel();

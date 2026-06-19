@@ -1,8 +1,10 @@
 # Changes
 
-## [3.10.1] - 2026-06-17
+## [3.10.1] - 2026-06-19
 
 * Fix server ready notification
+
+* Better signals handling
 
 ## [3.10.0] - 2026-06-15
 

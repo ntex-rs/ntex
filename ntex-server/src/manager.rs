@@ -85,11 +85,17 @@ impl<F: ServerConfiguration> ServerManager<F> {
         let srv = Server::new(tx, shared);
 
         // handle signals
-        if !no_signals {
+        if no_signals {
+            System::current().disable_signals();
+        } else {
+            System::current().enable_signals();
+
             let srv2 = srv.clone();
             ntex_rt::spawn(async move {
-                while let Ok(sig) = ntex_rt::signals::signal().await {
-                    srv2.signal(sig);
+                while let Ok(sigs) = ntex_rt::signals::signal().await {
+                    for sig in sigs.as_ref() {
+                        srv2.signal(*sig);
+                    }
                 }
             });
         }

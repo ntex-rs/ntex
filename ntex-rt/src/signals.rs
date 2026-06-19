@@ -1,13 +1,18 @@
-use parking_lot::Mutex;
-use std::cell::RefCell;
+#![allow(static_mut_refs)]
+use std::{cell::RefCell, future::poll_fn, sync::Arc, task::Poll};
+
+use atomic_waker::AtomicWaker;
 
 use crate::System;
 
 thread_local! {
-    static HANDLERS: RefCell<Vec<oneshot::Sender<Signal>>> = RefCell::default();
+    static STOP: RefCell<Option<oneshot::Sender<()>>> = const { RefCell::new(None) };
+    static HANDLERS: RefCell<Vec<oneshot::Sender<Arc<[Signal]>>>> = RefCell::default();
 }
 
-static CUR_SYS: Mutex<RefCell<Option<System>>> = Mutex::new(RefCell::new(None));
+static mut CUR_SYS: Option<System> = None;
+static mut SIGS: [Option<Signal>; 10] = [None; 10];
+static HND_WAKER: AtomicWaker = AtomicWaker::new();
 
 /// Different types of process signals
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -23,7 +28,10 @@ pub enum Signal {
 }
 
 /// Register signal handler.
-pub fn signal() -> oneshot::AsyncReceiver<Signal> {
+///
+/// Signals are handled by oneshots, you have to re-register
+/// interest after each signal.
+pub fn signal() -> oneshot::AsyncReceiver<Arc<[Signal]>> {
     let (tx, rx) = oneshot::async_channel();
     System::current().handle().spawn(async move {
         HANDLERS.with(|handlers| {
@@ -35,51 +43,104 @@ pub fn signal() -> oneshot::AsyncReceiver<Signal> {
 }
 
 fn register_system(sys: &System) -> bool {
-    if sys.signals_disabled() {
-        true
-    } else {
-        let guard = CUR_SYS.lock();
+    unsafe {
+        if CUR_SYS.is_some() {
+            false
+        } else {
+            CUR_SYS = Some(sys.clone());
 
-        let mut store = guard.borrow_mut();
-        let started = store.is_some();
-        *store = Some(sys.clone());
-        started
+            let (tx, rx) = oneshot::async_channel();
+            sys.handle().spawn(signals(rx));
+            STOP.with(|stop| {
+                *stop.borrow_mut() = Some(tx);
+            });
+            true
+        }
+    }
+}
+
+fn unregister_system(sys: &System) -> bool {
+    unsafe {
+        if let Some(cur) = CUR_SYS.take() {
+            if cur.id() == sys.id() {
+                sys.handle().spawn(async move {
+                    STOP.with(|stop| {
+                        if let Some(tx) = stop.borrow_mut().take() {
+                            let _ = tx.send(());
+                        }
+                    });
+                });
+                true
+            } else {
+                CUR_SYS = Some(cur);
+                false
+            }
+        } else {
+            false
+        }
     }
 }
 
 fn handle_signal(sig: Signal) {
-    let guard = CUR_SYS.lock();
-    if let Some(sys) = &*guard.borrow() {
-        sys.handle().spawn(async move {
-            HANDLERS.with(|handlers| {
-                for tx in handlers.borrow_mut().drain(..) {
-                    let _ = tx.send(sig);
-                }
-            });
-        });
+    unsafe {
+        for s in &mut SIGS {
+            if s.is_none() {
+                *s = Some(sig);
+                break;
+            }
+        }
+        HND_WAKER.wake();
     }
 }
 
 #[cfg(target_family = "unix")]
+static mut SIG_HANDLERS: [Option<signal_hook::SigId>; 10] = [None; 10];
+
+#[cfg(target_family = "unix")]
 /// Register signal handler.
-///
-/// Signals are handled by oneshots, you have to re-register
-/// after each signal.
 pub(crate) fn start(sys: &System) {
-    if !register_system(sys) {
+    if register_system(sys) {
         use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR2};
         use signal_hook::low_level::register;
 
-        for (s, sig) in [
-            (SIGHUP, Signal::Hup),
-            (SIGINT, Signal::Int),
-            (SIGTERM, Signal::Term),
-            (SIGQUIT, Signal::Quit),
+        for (idx, s, sig) in [
+            (0, SIGHUP, Signal::Hup),
+            (1, SIGINT, Signal::Int),
+            (2, SIGTERM, Signal::Term),
+            (3, SIGQUIT, Signal::Quit),
         ] {
-            let _ = unsafe { register(s, move || handle_signal(sig)) };
+            unsafe {
+                match register(s, move || handle_signal(sig)) {
+                    Ok(s) => SIG_HANDLERS[idx] = Some(s),
+                    Err(e) => {
+                        log::error!("Cannot install signal handler for {sig:?} with {e:?}");
+                    }
+                }
+            }
         }
 
-        let _ = unsafe { register(SIGUSR2, || crate::system::sig_usr2()) };
+        unsafe {
+            match register(SIGUSR2, || crate::system::sig_usr2()) {
+                Ok(s) => SIG_HANDLERS[5] = Some(s),
+                Err(_) => log::error!("Cannot install signal handler for SIGUSR2"),
+            }
+        }
+    }
+}
+
+#[cfg(target_family = "unix")]
+/// Unregister signal handler.
+pub(crate) fn stop(sys: &System) {
+    if unregister_system(sys) {
+        use signal_hook::low_level::unregister;
+
+        unsafe {
+            for sig in &mut SIG_HANDLERS {
+                if let Some(s) = sig.take() {
+                    let _ = unregister(s);
+                }
+            }
+        }
     }
 }
 
@@ -89,12 +150,49 @@ pub(crate) fn start(sys: &System) {
 /// Signals are handled by oneshots, you have to re-register
 /// after each signal.
 pub(crate) fn start(sys: &System) {
-    if !register_system(sys) {
-        let _ = std::thread::Builder::new()
-            .name("ntex signals".to_string())
-            .spawn(move || {
-                ctrlc::set_handler(move || handle_signal(Signal::Int))
-                    .expect("Error setting Ctrl-C handler");
-            });
+    if register_system(sys) {
+        ctrlc::set_handler(move || handle_signal(Signal::Int))
+            .expect("Error setting Ctrl-C handler");
     }
+}
+
+#[cfg(target_family = "windows")]
+/// Unregister signal handler.
+pub(crate) fn stop(sys: &System) {
+    if unregister_system(sys) {
+        log::info!("Signals handling is disabled");
+    }
+}
+
+async fn signals(rx: oneshot::AsyncReceiver<()>) {
+    let mut rx = std::pin::pin!(rx);
+
+    poll_fn(|cx| {
+        if rx.as_mut().poll(cx).is_ready() {
+            Poll::Ready(())
+        } else {
+            HND_WAKER.register(cx.waker());
+
+            let mut sigs = Vec::new();
+            unsafe {
+                for sig in &mut SIGS {
+                    if let Some(sig) = sig.take() {
+                        sigs.push(sig);
+                    }
+                }
+            }
+            if !sigs.is_empty() {
+                let sigs: Arc<[Signal]> = Arc::from(sigs);
+
+                HANDLERS.with(|handlers| {
+                    for tx in handlers.borrow_mut().drain(..) {
+                        let _ = tx.send(sigs.clone());
+                    }
+                });
+            }
+
+            Poll::Pending
+        }
+    })
+    .await;
 }

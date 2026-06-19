@@ -1,5 +1,9 @@
 # Changes
 
+## [3.15.2] - 2026-06-19
+
+* Improve signals handling
+
 ## [3.15.0] - 2026-06-15
 
 * Try to log stacktraces for arbiters in tight loop
