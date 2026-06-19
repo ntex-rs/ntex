@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "3.15.1"
+version = "3.15.2"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -36,7 +36,7 @@ neon = []
 ntex-error = { workspace = true }
 ntex-service = { workspace = true }
 
-arc-swap = { workspace = true }
+atomic-waker = { workspace = true }
 async-channel = { workspace = true }
 async-task = { workspace = true }
 backtrace = { workspace = true }
@@ -56,7 +56,7 @@ compio-runtime = { workspace = true, optional = true }
 tok-io = { workspace = true, features = ["rt", "net"], optional = true }
 
 [target.'cfg(target_family = "unix")'.dependencies]
-signal-hook = { workspace = true, features=["iterator"] }
+signal-hook = { workspace = true }
 
 [target.'cfg(target_family = "windows")'.dependencies]
 ctrlc = { workspace = true }

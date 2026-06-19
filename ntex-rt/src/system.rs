@@ -1,6 +1,6 @@
 use std::any::{Any, TypeId};
 use std::collections::VecDeque;
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, fmt, future::Future, panic, pin::Pin, rc::Rc};
 
@@ -40,6 +40,7 @@ struct SystemInner {
     receiver: Receiver<SystemCommand>,
     storage: RwLock<HashMap<TypeId, Box<dyn Any + Sync + Send>>>,
     arbiters: Mutex<Arbiters>,
+    signals: AtomicBool,
     pool: ThreadPool,
 }
 
@@ -51,7 +52,6 @@ pub struct SystemConfig {
     pub(super) ping_interval: usize,
     pub(super) pool_limit: usize,
     pub(super) pool_recv_timeout: Duration,
-    pub(super) disable_signals: bool,
     pub(super) testing: bool,
     pub(super) runner: Arc<dyn Runner>,
 }
@@ -89,6 +89,7 @@ impl System {
             pool,
             arbiters: Mutex::new(arbiters),
             storage: RwLock::new(HashMap::default()),
+            signals: AtomicBool::new(false),
         }));
         System::set_current(sys.clone());
 
@@ -209,8 +210,24 @@ impl System {
     }
 
     /// Return status of `signals` option
-    pub fn signals_disabled(&self) -> bool {
-        self.0.config.disable_signals
+    pub fn signals(&self) -> bool {
+        self.0.signals.load(Ordering::Relaxed)
+    }
+
+    /// Enable `signals` handling
+    pub fn enable_signals(&self) {
+        if !self.signals() {
+            crate::signals::start(self);
+            self.0.signals.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Disable `signals` handling
+    pub fn disable_signals(&self) {
+        if self.signals() {
+            crate::signals::stop(self);
+            self.0.signals.store(false, Ordering::Relaxed);
+        }
     }
 
     /// System arbiter
@@ -313,6 +330,7 @@ impl fmt::Debug for System {
         f.debug_struct("System")
             .field("id", &self.0.id)
             .field("config", &self.0.config)
+            .field("signals", &self.signals())
             .field("pool", &self.0.pool)
             .finish()
     }
@@ -325,7 +343,6 @@ impl fmt::Debug for SystemConfig {
             .field("testing", &self.testing)
             .field("stack_size", &self.stack_size)
             .field("stop_on_panic", &self.stop_on_panic)
-            .field("signals_disabled", &self.disable_signals)
             .finish()
     }
 }
