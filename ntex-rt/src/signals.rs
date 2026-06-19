@@ -62,18 +62,18 @@ fn register_system(sys: &System) -> bool {
 fn unregister_system(sys: &System) -> bool {
     unsafe {
         if let Some(cur) = CUR_SYS.take() {
-            if cur.id() != sys.id() {
-                CUR_SYS = Some(cur);
-                false
-            } else {
+            if cur.id() == sys.id() {
                 sys.handle().spawn(async move {
                     STOP.with(|stop| {
                         if let Some(tx) = stop.borrow_mut().take() {
                             let _ = tx.send(());
                         }
-                    })
+                    });
                 });
                 true
+            } else {
+                CUR_SYS = Some(cur);
+                false
             }
         } else {
             false
@@ -83,9 +83,9 @@ fn unregister_system(sys: &System) -> bool {
 
 fn handle_signal(sig: Signal) {
     unsafe {
-        for idx in 0..10 {
-            if SIGS[idx].is_none() {
-                SIGS[idx] = Some(sig);
+        for s in &mut SIGS {
+            if s.is_none() {
+                *s = Some(sig);
                 break;
             }
         }
@@ -109,22 +109,22 @@ pub(crate) fn start(sys: &System) {
             (2, SIGTERM, Signal::Term),
             (3, SIGQUIT, Signal::Quit),
         ] {
-            let _ = unsafe {
+            unsafe {
                 match register(s, move || handle_signal(sig)) {
                     Ok(s) => SIG_HANDLERS[idx] = Some(s),
                     Err(e) => {
-                        log::error!("Cannot install signal handler for {sig:?} with {e:?}")
+                        log::error!("Cannot install signal handler for {sig:?} with {e:?}");
                     }
                 }
-            };
+            }
         }
 
-        let _ = unsafe {
+        unsafe {
             match register(SIGUSR2, || crate::system::sig_usr2()) {
                 Ok(s) => SIG_HANDLERS[5] = Some(s),
                 Err(_) => log::error!("Cannot install signal handler for SIGUSR2"),
             }
-        };
+        }
     }
 }
 
@@ -134,9 +134,9 @@ pub(crate) fn stop(sys: &System) {
     if unregister_system(sys) {
         use signal_hook::low_level::unregister;
 
-        for idx in 0..10 {
-            unsafe {
-                if let Some(s) = SIG_HANDLERS[idx].take() {
+        unsafe {
+            for sig in &mut SIG_HANDLERS {
+                if let Some(s) = sig.take() {
                     let _ = unregister(s);
                 }
             }
@@ -174,9 +174,11 @@ async fn signals(rx: oneshot::AsyncReceiver<()>) {
             HND_WAKER.register(cx.waker());
 
             let mut sigs = Vec::new();
-            for idx in 0..10 {
-                if let Some(sig) = unsafe { SIGS[idx].take() } {
-                    sigs.push(sig);
+            unsafe {
+                for sig in &mut SIGS {
+                    if let Some(sig) = sig.take() {
+                        sigs.push(sig);
+                    }
                 }
             }
             if !sigs.is_empty() {
