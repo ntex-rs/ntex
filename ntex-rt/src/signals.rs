@@ -158,7 +158,11 @@ pub(crate) fn start(sys: &System) {
 
 #[cfg(target_family = "windows")]
 /// Unregister signal handler.
-pub(crate) fn stop(sys: &System) {}
+pub(crate) fn stop(sys: &System) {
+    if unregister_system(sys) {
+        log::info!("Signals handling is disabled");
+    }
+}
 
 async fn signals(rx: oneshot::AsyncReceiver<()>) {
     let mut rx = std::pin::pin!(rx);
