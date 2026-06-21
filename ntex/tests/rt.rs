@@ -1,5 +1,5 @@
 #![allow(deprecated)]
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::{sync::mpsc, thread};
 
 use ntex::rt::{self, Arbiter, Handle, System};
@@ -364,26 +364,39 @@ async fn idle_disconnect_uring() {
 fn test_log_backtrace() {
     use std::time::Duration;
 
+    fn run(tx: oneshot::Sender<()>) {
+        thread::spawn(move || {
+            crate::System::build()
+                .stop_on_panic(true)
+                .enable_signals()
+                .build(ntex::rt::DefaultRuntime)
+                .block_on(async move {
+                    let (tx, rx) = oneshot::channel();
+                    Arbiter::with_name("ttttt".to_string())
+                        .handle()
+                        .spawn(async {
+                            thread::sleep(Duration::from_secs(2));
+                            let _ = tx.send(());
+                        });
+
+                    let _ = rx.await;
+                });
+            let _ = tx.send(());
+        });
+    }
+
     let (tx, rx) = oneshot::channel();
+    run(tx);
+    let _ = rx.recv();
 
-    thread::spawn(move || {
-        crate::System::build()
-            .stop_on_panic(true)
-            .enable_signals()
-            .build(ntex::rt::DefaultRuntime)
-            .block_on(async move {
-                let (tx, rx) = oneshot::channel();
-                Arbiter::with_name("ttttt".to_string())
-                    .handle()
-                    .spawn(async {
-                        thread::sleep(Duration::from_secs(2));
-                        let _ = tx.send(());
-                    });
-
-                let _ = rx.await;
-            });
-        let _ = tx.send(());
+    let tag = Arc::new(AtomicBool::new(false));
+    let tag2 = tag.clone();
+    System::set_latency_callback(move |_| {
+        tag2.store(true, Ordering::Relaxed);
     });
 
+    let (tx, rx) = oneshot::channel();
+    run(tx);
     let _ = rx.recv();
+    assert!(tag.load(Ordering::Relaxed));
 }
