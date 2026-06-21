@@ -868,7 +868,7 @@ mod tests {
         // disconnect during read
         let fut = ntex_rt::spawn(async move {
             let mut buf: [u8; 4] = [0, 0, 0, 0];
-            server.read(&mut buf).await.map(|_| ())
+            server.read(&mut buf).await
         });
         client.close().await;
         let err = fut.await.unwrap().err().unwrap();
