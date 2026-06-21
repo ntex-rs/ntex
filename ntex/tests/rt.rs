@@ -1,5 +1,5 @@
 #![allow(deprecated)]
-use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 use std::{sync::mpsc, thread};
 
 use ntex::rt::{self, Arbiter, Handle, System};
@@ -362,7 +362,7 @@ async fn idle_disconnect_uring() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_log_backtrace() {
-    use std::time::Duration;
+    use std::{sync::atomic::AtomicBool, time::Duration};
 
     fn run(tx: oneshot::Sender<()>) {
         thread::spawn(move || {
