@@ -244,15 +244,12 @@ impl WorkerAvailability {
 
     async fn wait_for_update(&self) {
         poll_fn(|cx| {
-            if self.inner.updated.swap(false, Ordering::AcqRel) {
+            if self.inner.updated.load(Ordering::Acquire) {
+                self.inner.updated.store(false, Ordering::Release);
                 Poll::Ready(())
             } else {
                 self.inner.waker.register(cx.waker());
-                if self.inner.updated.swap(false, Ordering::AcqRel) {
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
-                }
+                Poll::Pending
             }
         })
         .await;
