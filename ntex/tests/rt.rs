@@ -362,7 +362,7 @@ async fn idle_disconnect_uring() {
 #[cfg(target_os = "linux")]
 #[test]
 fn test_log_backtrace() {
-    use std::{atomic::AtomicBool, time::Duration};
+    use std::{sync::atomic::AtomicBool, time::Duration};
 
     fn run(tx: oneshot::Sender<()>) {
         thread::spawn(move || {
