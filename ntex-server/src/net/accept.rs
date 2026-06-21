@@ -282,11 +282,28 @@ impl Accept {
             }
 
             events.clear();
+            if self.backpressure {
+                log::debug!(
+                    "Accept loop {:?}: entering poll wait, backpressure={}, backlog={}",
+                    self.name,
+                    self.backpressure,
+                    self.backlog.len()
+                );
+            }
 
             if let Err(e) = self.poller.wait(&mut events, None) {
                 assert!(
                     e.kind() == io::ErrorKind::Interrupted,
                     "Cannot wait for events in poller: {e}"
+                );
+            }
+            if self.backpressure {
+                log::debug!(
+                    "Accept loop {:?}: poll wait returned {} events, backpressure={}, backlog={}",
+                    self.name,
+                    events.len(),
+                    self.backpressure,
+                    self.backlog.len()
                 );
             }
 

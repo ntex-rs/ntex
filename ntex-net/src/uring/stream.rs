@@ -71,6 +71,8 @@ enum Operation {
     },
     Shutdown {
         tx: Option<pool::Sender<io::Result<()>>>,
+        fd: Fd,
+        tag: &'static str,
     },
     Close {
         id: usize,
@@ -173,8 +175,33 @@ impl StreamOps {
 }
 
 impl Operation {
-    fn shutdown(tx: pool::Sender<io::Result<()>>) -> Self {
-        Operation::Shutdown { tx: Some(tx) }
+    fn shutdown(tx: pool::Sender<io::Result<()>>, fd: Fd, tag: &'static str) -> Self {
+        Operation::Shutdown {
+            tx: Some(tx),
+            fd,
+            tag,
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Operation::Recv { .. } => "recv",
+            Operation::Send { .. } => "send",
+            Operation::Poll { .. } => "poll",
+            Operation::Shutdown { .. } => "shutdown",
+            Operation::Close { .. } => "close",
+            Operation::Nop => "nop",
+        }
+    }
+
+    fn stream_id(&self) -> Option<usize> {
+        match self {
+            Operation::Recv { id, .. }
+            | Operation::Send { id, .. }
+            | Operation::Poll { id }
+            | Operation::Close { id } => Some(*id),
+            Operation::Shutdown { .. } | Operation::Nop => None,
+        }
     }
 }
 
@@ -326,7 +353,8 @@ impl Handler for StreamOpsHandler {
                             item.ctx.stop(res.err());
                         }
                 }
-                Operation::Shutdown { tx } => {
+                Operation::Shutdown { tx, fd, tag } => {
+                    log::trace!("{tag}: Shutdown complete fd={fd:?} result={res:?}");
                     if let Some(tx) = tx {
                         let _ = tx.send(res.map(|_| ()));
                     }
@@ -335,9 +363,19 @@ impl Handler for StreamOpsHandler {
                     if st.streams[id].flags.contains(Flags::DROPPED_SEC) {
                         let item = st.streams.remove(id);
                         #[cfg(feature = "trace")]
-                        log::trace!("{}: Close({id})", item.ctx.tag());
+                        log::trace!(
+                            "{}: Close({id}) completed fd={:?}",
+                            item.ctx.tag(),
+                            item.fd()
+                        );
                         mem::forget(item.io);
                     } else {
+                        let item = &st.streams[id];
+                        log::trace!(
+                            "{}: Close({id}) completed fd={:?}, waiting for weak drop",
+                            item.ctx.tag(),
+                            item.fd()
+                        );
                         st.streams[id].flags.insert(Flags::DROPPED_PRI);
                     }
                 }
@@ -353,6 +391,29 @@ impl Handler for StreamOpsHandler {
 
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.storage.take() {
+            for (op_id, op) in v.ops.iter() {
+                if let Some(op) = op.as_ref()
+                    && !matches!(op, Operation::Nop)
+                {
+                    log::trace!(
+                        "cleanup pending uring op id={op_id} kind={} stream_id={:?}",
+                        op.kind(),
+                        op.stream_id()
+                    );
+                }
+            }
+            for (id, val) in v.streams.iter() {
+                log::trace!(
+                    "{}: cleanup stream id={id} fd={:?} flags={:?} rd_op={:?} wr_op={:?} peer={:?} local={:?}",
+                    val.ctx.tag(),
+                    val.fd(),
+                    val.flags,
+                    val.rd_op,
+                    val.wr_op,
+                    val.io.peer_addr(),
+                    val.io.local_addr()
+                );
+            }
             for (_, val) in v.streams {
                 if val.flags.contains(Flags::DROPPED_PRI) {
                     mem::forget(val.io);
@@ -462,7 +523,14 @@ impl StreamOpsStorage {
     fn drop_stream(&mut self, id: usize, api: &DriverApi) {
         // Dropping while `StreamOps` handling event
         let item = &mut self.streams[id];
-        log::trace!("{}: Close ({:?})", item.tag(), item.fd());
+        log::trace!(
+            "{}: Submit close id={id} fd={:?} flags={:?} rd_op={:?} wr_op={:?}",
+            item.tag(),
+            item.fd(),
+            item.flags,
+            item.rd_op,
+            item.wr_op
+        );
 
         let entry = opcode::Close::new(item.fd()).build();
         let op_id = self.add_operation(Operation::Close { id });
@@ -475,8 +543,19 @@ impl StreamOpsStorage {
         if item.flags.contains(Flags::DROPPED_PRI) {
             // io is closed already, remove from storage
             let item = self.streams.remove(id);
+            log::trace!(
+                "{}: Forget closed stream id={id} fd={:?}",
+                item.tag(),
+                item.fd()
+            );
             mem::forget(item.io);
         } else {
+            log::trace!(
+                "{}: Weak stream dropped before close completion id={id} fd={:?} flags={:?}",
+                item.tag(),
+                item.fd(),
+                item.flags
+            );
             item.flags.insert(Flags::DROPPED_SEC);
         }
     }
@@ -528,8 +607,10 @@ impl StreamCtl {
                     self.id
                 );
                 let fd = storage.streams[self.id].fd();
+                let tag = storage.streams[self.id].ctx.tag();
+                log::trace!("{tag}: Submit shutdown id={} fd={fd:?}", self.id);
                 let (tx, rx) = self.inner.pool.channel();
-                let op_id = storage.add_operation(Operation::shutdown(tx));
+                let op_id = storage.add_operation(Operation::shutdown(tx, fd, tag));
                 self.inner
                     .api
                     .submit(op_id, opcode::Shutdown::new(fd, libc::SHUT_RDWR).build());
