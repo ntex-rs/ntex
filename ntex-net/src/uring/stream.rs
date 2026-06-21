@@ -396,7 +396,7 @@ impl Handler for StreamOpsHandler {
                     && !matches!(op, Operation::Nop)
                 {
                     log::trace!(
-                        "cleanup pending uring op id={op_id} kind={} stream_id={:?}",
+                        "cleanup pending uring op id={op_id} kind={} stream_id={:?} op={op:?}",
                         op.kind(),
                         op.stream_id()
                     );
@@ -423,7 +423,12 @@ impl Handler for StreamOpsHandler {
                         val.ctx.tag(),
                         val.io.peer_addr()
                     );
-                    let _ = self.inner.api.cancel_all_sync(val.fd());
+                    let fd = val.fd();
+                    let result = self.inner.api.cancel_all_sync(fd);
+                    log::trace!(
+                        "{}: cancel_all_sync fd={fd:?} result={result:?}",
+                        val.ctx.tag()
+                    );
                 }
             }
         }

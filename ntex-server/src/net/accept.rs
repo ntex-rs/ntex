@@ -298,8 +298,12 @@ impl Accept {
                 );
             }
             if self.backpressure {
+                let event_keys = events
+                    .iter()
+                    .map(|ev| format!("{}:r{}w{}", ev.key, ev.readable, ev.writable))
+                    .collect::<Vec<_>>();
                 log::debug!(
-                    "Accept loop {:?}: poll wait returned {} events, backpressure={}, backlog={}",
+                    "Accept loop {:?}: poll wait returned {} events, keys={event_keys:?}, backpressure={}, backlog={}",
                     self.name,
                     events.len(),
                     self.backpressure,
@@ -550,9 +554,15 @@ impl Accept {
     fn accept(&mut self, token: usize) -> bool {
         loop {
             if let Some(info) = self.sockets.get_mut(token) {
+                log::debug!(
+                    "Accept loop {:?}: calling accept on token {:?} addr {}",
+                    self.name,
+                    info.token,
+                    info.addr
+                );
                 match info.sock.accept() {
                     Ok(Some(io)) => {
-                        log::trace!(
+                        log::debug!(
                             "Accept loop {:?}: accepted connection on token {:?}: {io:?}",
                             self.name,
                             info.token
@@ -576,9 +586,29 @@ impl Accept {
                             self.name
                         );
                     }
-                    Ok(None) => return true,
-                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return true,
-                    Err(ref e) if connection_error(e) => (),
+                    Ok(None) => {
+                        log::debug!(
+                            "Accept loop {:?}: accept returned None on token {:?}",
+                            self.name,
+                            info.token
+                        );
+                        return true;
+                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        log::debug!(
+                            "Accept loop {:?}: accept returned WouldBlock on token {:?}",
+                            self.name,
+                            info.token
+                        );
+                        return true;
+                    }
+                    Err(ref e) if connection_error(e) => {
+                        log::debug!(
+                            "Accept loop {:?}: transient accept error on token {:?}: {e}",
+                            self.name,
+                            info.token
+                        );
+                    }
                     Err(e) => {
                         log::error!("Error accepting socket: {e}");
 
