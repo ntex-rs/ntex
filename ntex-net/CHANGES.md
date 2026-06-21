@@ -1,6 +1,6 @@
 # Changes
 
-## [Unreleased]
+## [3.13.0] - 2026-06-21
 
 * polling (neon) driver: do not panic with "called `Option::unwrap()` on a `None`
   value" when a filter emits a large (>= write_buf_threshold) write burst during

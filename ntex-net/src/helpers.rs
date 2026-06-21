@@ -1,4 +1,4 @@
-use std::{io, net};
+use std::{cell::UnsafeCell, collections::VecDeque, io, marker::PhantomData, net, rc::Rc};
 
 use socket2::Socket;
 
@@ -34,4 +34,39 @@ pub(crate) fn close_socket(sock: Socket) {
         let _ = sock.shutdown(net::Shutdown::Both);
         drop(sock);
     });
+}
+
+#[derive(Default)]
+pub(crate) struct Queue<T> {
+    inner: UnsafeCell<VecDeque<T>>,
+    _t: PhantomData<Rc<()>>,
+}
+
+impl<T> Queue<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: UnsafeCell::new(VecDeque::default()),
+            _t: PhantomData,
+        }
+    }
+
+    pub(crate) fn clear(&self) {
+        // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
+        unsafe { &mut *self.inner.get() }.clear();
+    }
+
+    pub(crate) fn pop(&self) -> Option<T> {
+        // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
+        unsafe { &mut *self.inner.get() }.pop_front()
+    }
+
+    pub(crate) fn push_front(&self, item: T) {
+        // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
+        unsafe { &mut *self.inner.get() }.push_front(item);
+    }
+
+    pub(crate) fn push_back(&self, item: T) {
+        // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
+        unsafe { &mut *self.inner.get() }.push_back(item);
+    }
 }
