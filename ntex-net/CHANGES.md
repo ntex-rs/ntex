@@ -1,5 +1,12 @@
 # Changes
 
+## [Unreleased]
+
+* polling (neon) driver: do not panic with "called `Option::unwrap()` on a `None`
+  value" when a filter emits a large (>= write_buf_threshold) write burst during
+  read processing; the reentrant write is now deferred until the streams slab is
+  released instead of re-taking it
+
 ## [3.12.0] - 2026-05-15
 
 * Update ntex-io
