@@ -33,7 +33,7 @@ pub trait Driver: 'static {
 
     fn run(&self, rt: &Runtime) -> io::Result<()>;
 
-    fn clear(&self);
+    fn clear(&self) {}
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
