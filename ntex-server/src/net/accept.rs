@@ -428,6 +428,11 @@ impl Accept {
             on,
             self.backlog.len()
         );
+        self.update_status(if on {
+            ServerStatus::NotReady
+        } else {
+            ServerStatus::Ready
+        });
 
         if self.backpressure && !on {
             // handle backlog
@@ -468,9 +473,7 @@ impl Accept {
                     );
                 }
             }
-            self.update_status(ServerStatus::Ready);
         } else if !self.backpressure && on {
-            self.update_status(ServerStatus::NotReady);
             self.backpressure = true;
             log::trace!(
                 "Accept loop {:?}: backpressure enabled, disabling listeners",
@@ -491,12 +494,6 @@ impl Accept {
                     log::trace!("Accept loop {:?}: listener {} disabled", self.name, addr);
                 }
             }
-        } else {
-            self.update_status(if on {
-                ServerStatus::NotReady
-            } else {
-                ServerStatus::Ready
-            });
         }
     }
 
