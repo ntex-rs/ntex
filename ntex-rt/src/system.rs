@@ -267,6 +267,20 @@ impl System {
         })
     }
 
+    #[cfg(target_os = "linux")]
+    #[doc(hidden)]
+    /// Set arbiter latency callback.
+    ///
+    /// This callback is called when the arbiter response latency exceeds the
+    /// configured threshold. The provided backtrace is not resolved.
+    ///
+    /// Note: This callback is not thread-safe.
+    pub fn set_latency_callback<F: Fn(ntex_error::Backtrace) + 'static>(f: F) {
+        unsafe {
+            ARB_CB = Some(Box::new(f));
+        }
+    }
+
     /// System config
     pub fn config(&self) -> SystemConfig {
         self.0.config.clone()
@@ -490,10 +504,14 @@ async fn ping_arbiters(sys: System, interval: Duration) {
                     Delay::new(SPIN).await;
                     if let Some(bt) = CAPTURED.lock().take() {
                         let bt = ntex_error::Backtrace::from(bt);
-                        bt.resolver().resolve();
-                        log::error!(
-                            "Worker does not returned pong within {interval:?} time.\n{bt:?}"
-                        );
+                        if let Some(f) = ARB_CB {
+                            f(bt);
+                        } else {
+                            bt.resolver().resolve();
+                            log::error!(
+                                "Worker does not returned pong within {interval:?} time.\n{bt:?}"
+                            );
+                        }
                         break;
                     }
                 }
@@ -524,6 +542,9 @@ async fn yield_to() {
 
     Yield { completed: false }.await;
 }
+
+#[cfg(target_os = "linux")]
+static mut ARB_CB: Option<Box<dyn Fn(ntex_error::Backtrace)>> = None;
 
 #[cfg(target_os = "linux")]
 static EXPECTED_TID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);

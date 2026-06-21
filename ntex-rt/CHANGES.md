@@ -1,5 +1,9 @@
 # Changes
 
+## [3.15.3] - 2026-06-21
+
+* Add arbiter latency callback
+
 ## [3.15.2] - 2026-06-19
 
 * Improve signals handling
