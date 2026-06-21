@@ -21,11 +21,11 @@ on:
       serial_std_connect_iterations:
         description: std TcpStream after ServerStatus::Ready with --test-threads=1
         required: false
-        default: "1000"
+        default: "500"
       single_std_connect_iterations:
         description: one std TcpStream test after ServerStatus::Ready
         required: false
-        default: "5000"
+        default: "500"
       extended_ready_iterations:
         description: extended 30s ready wait control iterations
         required: false
@@ -42,7 +42,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: full
-  RUST_LOG_FILTER: ntex_rt=info,ntex_net::uring=trace,ntex_net::tokio=trace,ntex_io=trace,ntex_server=trace,ntex::client=trace,ntex::http=trace
+  RUST_LOG_FILTER: ntex_rt=info,ntex_net::uring=trace,ntex_net::tokio=trace,ntex_io=trace,ntex_server=debug,ntex::client=trace,ntex::http=trace
 
 jobs:
   stress:
@@ -53,8 +53,8 @@ jobs:
       CLIENT_ITERS: ${{ github.event.inputs.client_iterations || '5000' }}
       STD_CONNECT_ITERS: ${{ github.event.inputs.std_connect_iterations || '5000' }}
       TOKIO_STD_CONNECT_ITERS: ${{ github.event.inputs.tokio_std_connect_iterations || '100' }}
-      SERIAL_STD_CONNECT_ITERS: ${{ github.event.inputs.serial_std_connect_iterations || '1000' }}
-      SINGLE_STD_CONNECT_ITERS: ${{ github.event.inputs.single_std_connect_iterations || '5000' }}
+      SERIAL_STD_CONNECT_ITERS: ${{ github.event.inputs.serial_std_connect_iterations || '500' }}
+      SINGLE_STD_CONNECT_ITERS: ${{ github.event.inputs.single_std_connect_iterations || '500' }}
       EXTENDED_READY_ITERS: ${{ github.event.inputs.extended_ready_iterations || '500' }}
     steps:
       - uses: actions/checkout@v4
