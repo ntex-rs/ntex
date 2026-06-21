@@ -504,7 +504,8 @@ async fn ping_arbiters(sys: System, interval: Duration) {
                     Delay::new(SPIN).await;
                     if let Some(bt) = CAPTURED.lock().take() {
                         let bt = ntex_error::Backtrace::from(bt);
-                        if let Some(f) = ARB_CB {
+                        #[allow(static_mut_refs)]
+                        if let Some(f) = unsafe { ARB_CB.as_ref() } {
                             f(bt);
                         } else {
                             bt.resolver().resolve();
