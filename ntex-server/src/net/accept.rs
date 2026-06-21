@@ -41,8 +41,21 @@ impl AcceptNotify {
     }
 
     pub fn send(&self, cmd: AcceptorCommand) {
-        let _ = self.1.send(cmd);
-        let _ = self.0.notify();
+        let label = format!("{cmd:?}");
+        match self.1.send(cmd) {
+            Ok(()) => log::debug!("Accept notify sent {label} command"),
+            Err(err) => {
+                log::error!("Accept notify failed to send {label} command: {err:?}")
+            }
+        }
+        match self.0.notify() {
+            Ok(()) => log::debug!("Accept notify woke poller for {label} command"),
+            Err(err) => {
+                log::error!(
+                    "Accept notify failed to wake poller for {label} command: {err}"
+                )
+            }
+        }
     }
 }
 
@@ -248,6 +261,26 @@ impl Accept {
         }
 
         loop {
+            match self.process_cmd() {
+                Either::Left(()) => {}
+                Either::Right(rx) => {
+                    // cleanup
+                    for info in self.sockets.drain(..) {
+                        info.sock.remove_source();
+                    }
+                    log::info!("Accept loop {:?} has been stopped", self.name);
+
+                    if let Some(rx) = rx {
+                        if !self.testing {
+                            thread::sleep(EXIT_TIMEOUT);
+                        }
+                        let _ = rx.send(());
+                    }
+
+                    break;
+                }
+            }
+
             events.clear();
 
             if let Err(e) = self.poller.wait(&mut events, None) {
@@ -355,7 +388,7 @@ impl Accept {
             match self.rx.try_recv() {
                 Ok(cmd) => match cmd {
                     AcceptorCommand::Stop(rx) => {
-                        log::trace!(
+                        log::debug!(
                             "Accept loop {:?}: received Stop, backpressure={}, backlog={}",
                             self.name,
                             self.backpressure,
@@ -368,7 +401,7 @@ impl Accept {
                         break Either::Right(Some(rx));
                     }
                     AcceptorCommand::Terminate => {
-                        log::trace!(
+                        log::debug!(
                             "Accept loop {:?}: received Terminate, backpressure={}, backlog={}",
                             self.name,
                             self.backpressure,
@@ -379,7 +412,7 @@ impl Accept {
                         break Either::Right(None);
                     }
                     AcceptorCommand::Pause => {
-                        log::trace!(
+                        log::debug!(
                             "Accept loop {:?}: received Pause, backpressure={}, backlog={}",
                             self.name,
                             self.backpressure,
@@ -391,7 +424,7 @@ impl Accept {
                         }
                     }
                     AcceptorCommand::Resume => {
-                        log::trace!(
+                        log::debug!(
                             "Accept loop {:?}: received Resume, backpressure={}, backlog={}",
                             self.name,
                             self.backpressure,
