@@ -104,6 +104,7 @@ impl<T> Worker<T> {
                 match create(name2.clone(), rx1, rx2, factory, avail_tx).await {
                     Ok((svc, wrk)) => {
                         log::debug!("Server instance has been created in {name2:?}");
+                        log::trace!("{name2:?}: entering worker run loop");
                         run_worker(svc, wrk).await;
                     }
                     Err(e) => {
@@ -152,11 +153,17 @@ impl<T> Worker<T> {
         if self.failed.load(Ordering::Acquire) {
             WorkerStatus::Failed
         } else {
+            log::trace!("Worker {:?}: waiting for availability update", self.name);
             self.avail.wait_for_update().await;
             if self.avail.failed() {
                 self.failed.store(true, Ordering::Release);
             }
-            self.status()
+            let status = self.status();
+            log::trace!(
+                "Worker {:?}: availability update observed as {status:?}",
+                self.name
+            );
+            status
         }
     }
 
@@ -285,23 +292,28 @@ where
     F: ServiceFactory<T> + 'static,
 {
     loop {
+        log::trace!("{:?}: worker loop iteration", wrk.name);
         let mut recv = std::pin::pin!(wrk.rx.recv());
         let fut = poll_fn(|cx| {
             match svc.poll_ready(cx) {
                 Poll::Ready(Ok(())) => {
+                    log::trace!("{:?}: service readiness Ready(Ok)", wrk.name);
                     wrk.availability.set(true);
                 }
                 Poll::Ready(Err(err)) => {
+                    log::error!("{:?}: service readiness Ready(Err)", wrk.name);
                     wrk.availability.set(false);
                     return Poll::Ready(Err(err));
                 }
                 Poll::Pending => {
+                    log::trace!("{:?}: service readiness Pending", wrk.name);
                     wrk.availability.set(false);
                     return Poll::Pending;
                 }
             }
 
             if let Ok(item) = ready!(recv.as_mut().poll(cx)) {
+                log::trace!("{:?}: received item for service call", wrk.name);
                 let fut = svc.call(item);
                 spawn(async move {
                     let _ = fut.await;

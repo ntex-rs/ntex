@@ -18,6 +18,14 @@ on:
         description: std TcpStream after ServerStatus::Ready with ntex/tokio
         required: false
         default: "2000"
+      serial_std_connect_iterations:
+        description: std TcpStream after ServerStatus::Ready with --test-threads=1
+        required: false
+        default: "400"
+      single_std_connect_iterations:
+        description: one std TcpStream test after ServerStatus::Ready
+        required: false
+        default: "2000"
       extended_ready_iterations:
         description: extended 30s ready wait control iterations
         required: false
@@ -30,7 +38,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: full
-  RUST_LOG_FILTER: ntex_net::uring=trace,ntex_net::tokio=trace,ntex_io=trace,ntex_server=trace,ntex::client=trace,ntex::http=trace
+  RUST_LOG_FILTER: ntex_rt=info,ntex_net::uring=trace,ntex_net::tokio=trace,ntex_io=trace,ntex_server=trace,ntex::client=trace,ntex::http=trace
 
 jobs:
   stress:
@@ -41,6 +49,8 @@ jobs:
       CLIENT_ITERS: ${{ github.event.inputs.client_iterations || '2000' }}
       STD_CONNECT_ITERS: ${{ github.event.inputs.std_connect_iterations || '2000' }}
       TOKIO_STD_CONNECT_ITERS: ${{ github.event.inputs.tokio_std_connect_iterations || '2000' }}
+      SERIAL_STD_CONNECT_ITERS: ${{ github.event.inputs.serial_std_connect_iterations || '400' }}
+      SINGLE_STD_CONNECT_ITERS: ${{ github.event.inputs.single_std_connect_iterations || '2000' }}
       EXTENDED_READY_ITERS: ${{ github.event.inputs.extended_ready_iterations || '200' }}
     steps:
       - uses: actions/checkout@v4
@@ -177,6 +187,74 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Stress std TcpStream after ServerStatus::Ready, serial test threads
+        id: std_connect_serial
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ntex-ready-diagnostic-logs
+          for i in $(seq 1 "$SERIAL_STD_CONNECT_ITERS"); do
+            log="ntex-ready-diagnostic-logs/serial-std-connect-${i}.log"
+            echo "::group::serial std connect iteration ${i}/${SERIAL_STD_CONNECT_ITERS}"
+            set +e
+            timeout 120s env RUST_LOG="$RUST_LOG_FILTER" \
+              cargo test -p ntex --test ready_barrier_std_connect -- --nocapture --test-threads=1 \
+              >"$log" 2>&1
+            status=$?
+            set -e
+            if [ "$status" -ne 0 ]; then
+              {
+                echo "name=serial-std-connect"
+                echo "iteration=${i}"
+                echo "status=${status}"
+                echo "command=cargo test -p ntex --test ready_barrier_std_connect -- --nocapture --test-threads=1"
+                echo "rustc=$(rustc --version)"
+                echo "kernel=$(uname -a)"
+              } > ntex-ready-diagnostic-logs/failure-serial-std-connect.env
+              echo "::error::serial std connect failed on iteration ${i} with status ${status}"
+              tail -n 500 "$log"
+              echo "::endgroup::"
+              exit "$status"
+            fi
+            rm -f "$log"
+            echo "::endgroup::"
+          done
+
+      - name: Stress one std TcpStream test after ServerStatus::Ready
+        id: std_connect_single
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p ntex-ready-diagnostic-logs
+          for i in $(seq 1 "$SINGLE_STD_CONNECT_ITERS"); do
+            log="ntex-ready-diagnostic-logs/single-std-connect-${i}.log"
+            echo "::group::single std connect iteration ${i}/${SINGLE_STD_CONNECT_ITERS}"
+            set +e
+            timeout 120s env RUST_LOG="$RUST_LOG_FILTER" \
+              cargo test -p ntex --test ready_barrier_std_connect ready_barrier_std_connect_00 -- --nocapture \
+              >"$log" 2>&1
+            status=$?
+            set -e
+            if [ "$status" -ne 0 ]; then
+              {
+                echo "name=single-std-connect"
+                echo "iteration=${i}"
+                echo "status=${status}"
+                echo "command=cargo test -p ntex --test ready_barrier_std_connect ready_barrier_std_connect_00 -- --nocapture"
+                echo "rustc=$(rustc --version)"
+                echo "kernel=$(uname -a)"
+              } > ntex-ready-diagnostic-logs/failure-single-std-connect.env
+              echo "::error::single std connect failed on iteration ${i} with status ${status}"
+              tail -n 500 "$log"
+              echo "::endgroup::"
+              exit "$status"
+            fi
+            rm -f "$log"
+            echo "::endgroup::"
+          done
+
       - name: Stress ntex client after ServerStatus::Ready, 30s ready wait
         id: client_ready_extended
         if: always()
@@ -259,10 +337,14 @@ jobs:
           printf 'client ready outcome: %s\n' '${{ steps.client_ready.outcome }}'
           printf 'std connect outcome: %s\n' '${{ steps.std_connect.outcome }}'
           printf 'tokio std connect outcome: %s\n' '${{ steps.std_connect_tokio.outcome }}'
+          printf 'serial std connect outcome: %s\n' '${{ steps.std_connect_serial.outcome }}'
+          printf 'single std connect outcome: %s\n' '${{ steps.std_connect_single.outcome }}'
           printf 'client ready extended outcome: %s\n' '${{ steps.client_ready_extended.outcome }}'
           printf 'std connect extended outcome: %s\n' '${{ steps.std_connect_extended.outcome }}'
           test '${{ steps.client_ready.outcome }}' = success
           test '${{ steps.std_connect.outcome }}' = success
           test '${{ steps.std_connect_tokio.outcome }}' = success
+          test '${{ steps.std_connect_serial.outcome }}' = success
+          test '${{ steps.std_connect_single.outcome }}' = success
           test '${{ steps.client_ready_extended.outcome }}' = success
           test '${{ steps.std_connect_extended.outcome }}' = success

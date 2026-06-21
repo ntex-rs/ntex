@@ -228,6 +228,7 @@ impl Accept {
     }
 
     fn update_status(&mut self, st: ServerStatus) {
+        log::trace!("Accept loop {:?}: update status {st:?}", self.name);
         if let Some(ref mut hnd) = self.status_handler {
             (*hnd)(st);
         }
@@ -354,6 +355,12 @@ impl Accept {
             match self.rx.try_recv() {
                 Ok(cmd) => match cmd {
                     AcceptorCommand::Stop(rx) => {
+                        log::trace!(
+                            "Accept loop {:?}: received Stop, backpressure={}, backlog={}",
+                            self.name,
+                            self.backpressure,
+                            self.backlog.len()
+                        );
                         if !self.backpressure {
                             log::info!("Stopping accept loop {:?}", self.name);
                             self.backpressure(true);
@@ -361,17 +368,35 @@ impl Accept {
                         break Either::Right(Some(rx));
                     }
                     AcceptorCommand::Terminate => {
+                        log::trace!(
+                            "Accept loop {:?}: received Terminate, backpressure={}, backlog={}",
+                            self.name,
+                            self.backpressure,
+                            self.backlog.len()
+                        );
                         log::info!("Stopping accept loop {:?}", self.name);
                         self.backpressure(true);
                         break Either::Right(None);
                     }
                     AcceptorCommand::Pause => {
+                        log::trace!(
+                            "Accept loop {:?}: received Pause, backpressure={}, backlog={}",
+                            self.name,
+                            self.backpressure,
+                            self.backlog.len()
+                        );
                         if !self.backpressure {
                             log::info!("Pausing accept loop {:?}", self.name);
                             self.backpressure(true);
                         }
                     }
                     AcceptorCommand::Resume => {
+                        log::trace!(
+                            "Accept loop {:?}: received Resume, backpressure={}, backlog={}",
+                            self.name,
+                            self.backpressure,
+                            self.backlog.len()
+                        );
                         if self.backpressure {
                             log::info!("Resuming accept loop {:?}", self.name);
                             self.backpressure(false);
@@ -396,6 +421,13 @@ impl Accept {
     }
 
     fn backpressure(&mut self, on: bool) {
+        log::trace!(
+            "Accept loop {:?}: backpressure transition request current={} target={} backlog={}",
+            self.name,
+            self.backpressure,
+            on,
+            self.backlog.len()
+        );
         self.update_status(if on {
             ServerStatus::NotReady
         } else {
@@ -404,9 +436,17 @@ impl Accept {
 
         if self.backpressure && !on {
             // handle backlog
+            log::trace!(
+                "Accept loop {:?}: draining backlog before resume, len={}",
+                self.name,
+                self.backlog.len()
+            );
             while let Some(msg) = self.backlog.pop_front() {
                 if let Err(msg) = self.srv.process(msg) {
-                    log::trace!("Server is unavailable");
+                    log::trace!(
+                        "Accept loop {:?}: server unavailable while draining backlog",
+                        self.name
+                    );
                     self.backlog.push_front(msg);
                     return;
                 }
@@ -414,6 +454,10 @@ impl Accept {
 
             // re-enable acceptors
             self.backpressure = false;
+            log::trace!(
+                "Accept loop {:?}: backpressure disabled, re-enabling listeners",
+                self.name
+            );
             for (key, info) in self.sockets.iter().enumerate() {
                 if info.timeout.get().is_none() {
                     // socket with timeout will re-register itself after timeout
@@ -422,16 +466,32 @@ impl Accept {
                         info.addr
                     );
                     self.add_source(key);
+                    log::trace!(
+                        "Accept loop {:?}: listener {} registered after resume",
+                        self.name,
+                        info.addr
+                    );
                 }
             }
         } else if !self.backpressure && on {
             self.backpressure = true;
+            log::trace!(
+                "Accept loop {:?}: backpressure enabled, disabling listeners",
+                self.name
+            );
             for key in 0..self.sockets.len() {
                 // disable err timeout
                 let info = &mut self.sockets[key];
-                if info.timeout.take().is_none() {
-                    log::info!("Stopping socket listener on {}", info.addr);
+                let addr = if info.timeout.take().is_none() {
+                    let addr = info.addr.to_string();
+                    log::info!("Stopping socket listener on {addr}");
+                    Some(addr)
+                } else {
+                    None
+                };
+                if let Some(addr) = addr {
                     self.remove_source(key);
+                    log::trace!("Accept loop {:?}: listener {} disabled", self.name, addr);
                 }
             }
         }
@@ -442,16 +502,29 @@ impl Accept {
             if let Some(info) = self.sockets.get_mut(token) {
                 match info.sock.accept() {
                     Ok(Some(io)) => {
+                        log::trace!(
+                            "Accept loop {:?}: accepted connection on token {:?}: {io:?}",
+                            self.name,
+                            info.token
+                        );
                         let msg = Connection {
                             io,
                             token: info.token,
                         };
                         if let Err(msg) = self.srv.process(msg) {
-                            log::trace!("Server is unavailable");
+                            log::trace!(
+                                "Accept loop {:?}: server unavailable after accept, backlog={}",
+                                self.name,
+                                self.backlog.len()
+                            );
                             self.backlog.push_back(msg);
                             self.backpressure(true);
                             return false;
                         }
+                        log::trace!(
+                            "Accept loop {:?}: accepted connection dispatched",
+                            self.name
+                        );
                     }
                     Ok(None) => return true,
                     Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return true,

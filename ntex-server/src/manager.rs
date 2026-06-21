@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
-use async_channel::{Receiver, Sender, unbounded};
+use async_channel::{Receiver, Sender, TrySendError, unbounded};
 use core_affinity::CoreId;
 use ntex_rt::{System, signals::Signal};
 use ntex_util::future::join_all;
@@ -115,27 +115,69 @@ impl<F: ServerConfiguration> ServerManager<F> {
     }
 
     pub(crate) fn pause(&self) {
+        log::trace!("Manager {:?}: pause requested", self.0.cfg.name);
         self.0.shared.paused.store(true, Ordering::Release);
         self.0.factory.paused();
     }
 
     pub(crate) fn resume(&self) {
+        log::trace!("Manager {:?}: resume requested", self.0.cfg.name);
         self.0.shared.paused.store(false, Ordering::Release);
         self.0.factory.resumed();
     }
 
     fn available(&self, wrk: Worker<F::Item>) {
-        let _ = self
+        let name = wrk.name().to_string();
+        match self
             .0
             .cmd
-            .try_send(ServerCommand::Worker(Update::Available(wrk)));
+            .try_send(ServerCommand::Worker(Update::Available(wrk)))
+        {
+            Ok(()) => log::trace!(
+                "Manager {:?}: enqueued Available for {name:?}",
+                self.0.cfg.name
+            ),
+            Err(TrySendError::Full(_)) => {
+                log::error!(
+                    "Manager {:?}: command queue full for Available {name:?}",
+                    self.0.cfg.name
+                )
+            }
+            Err(TrySendError::Closed(_)) => {
+                log::error!(
+                    "Manager {:?}: command queue closed for Available {name:?}",
+                    self.0.cfg.name
+                )
+            }
+        }
     }
 
     fn unavailable(&self, wrk: Worker<F::Item>) {
-        let _ = self
+        let name = wrk.name().to_string();
+        match self
             .0
             .cmd
-            .try_send(ServerCommand::Worker(Update::Unavailable(wrk)));
+            .try_send(ServerCommand::Worker(Update::Unavailable(wrk)))
+        {
+            Ok(()) => {
+                log::trace!(
+                    "Manager {:?}: enqueued Unavailable for {name:?}",
+                    self.0.cfg.name
+                )
+            }
+            Err(TrySendError::Full(_)) => {
+                log::error!(
+                    "Manager {:?}: command queue full for Unavailable {name:?}",
+                    self.0.cfg.name
+                )
+            }
+            Err(TrySendError::Closed(_)) => {
+                log::error!(
+                    "Manager {:?}: command queue closed for Unavailable {name:?}",
+                    self.0.cfg.name
+                )
+            }
+        }
     }
 
     fn add_stop_notify(&self, tx: oneshot::Sender<()>) {
@@ -154,10 +196,16 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
         let mut wrk = Worker::start(name.clone(), mgr.factory(), cid);
 
         loop {
-            match wrk.status() {
+            let status = wrk.status();
+            log::trace!(
+                "Manager {:?}: observed {name:?} status {status:?}",
+                mgr.0.cfg.name
+            );
+            match status {
                 WorkerStatus::Available => mgr.available(wrk.clone()),
                 WorkerStatus::Unavailable => mgr.unavailable(wrk.clone()),
                 WorkerStatus::Failed => {
+                    log::error!("Manager {:?}: observed {name:?} failed", mgr.0.cfg.name);
                     mgr.unavailable(wrk);
                     sleep(RESTART_DELAY).await;
                     if mgr.stopping() {
@@ -166,7 +214,11 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                     wrk = Worker::start(name.clone(), mgr.factory(), cid);
                 }
             }
-            wrk.wait_for_status().await;
+            let status = wrk.wait_for_status().await;
+            log::trace!(
+                "Manager {:?}: wait_for_status woke for {name:?} with {status:?}",
+                mgr.0.cfg.name
+            );
         }
     });
 }
@@ -192,7 +244,11 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
         loop {
             if self.workers.is_empty() {
                 if !self.mgr.0.stopping.get() {
-                    log::error!("No workers");
+                    log::error!(
+                        "Manager {:?}: no workers, backlog before push {}",
+                        self.mgr.0.cfg.name,
+                        self.backlog.len()
+                    );
                     self.backlog.push_back(item);
                     self.mgr.pause();
                 }
@@ -203,6 +259,13 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             }
             match self.workers[self.next].send(item) {
                 Ok(()) => {
+                    log::trace!(
+                        "Manager {:?}: dispatched item to worker {:?}, workers={}, backlog={}",
+                        self.mgr.0.cfg.name,
+                        self.workers[self.next].name(),
+                        self.workers.len(),
+                        self.backlog.len()
+                    );
                     self.next = (self.next + 1) % self.workers.len();
                     break;
                 }
@@ -220,17 +283,41 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     fn update_workers(&mut self, upd: Update<F::Item>) {
         match upd {
             Update::Available(worker) => {
+                let name = worker.name().to_string();
+                let before = self.workers.len();
                 self.workers.push(worker);
                 self.workers.sort();
+                log::trace!(
+                    "Manager {:?}: worker {name:?} Available, workers {before}->{}, backlog={}",
+                    self.mgr.0.cfg.name,
+                    self.workers.len(),
+                    self.backlog.len()
+                );
                 if self.workers.len() == 1 {
+                    log::trace!(
+                        "Manager {:?}: first available worker {name:?}, resuming",
+                        self.mgr.0.cfg.name
+                    );
                     self.mgr.resume();
                 }
             }
             Update::Unavailable(worker) => {
+                let name = worker.name().to_string();
+                let before = self.workers.len();
                 if let Ok(idx) = self.workers.binary_search(&worker) {
                     self.workers.remove(idx);
                 }
+                log::trace!(
+                    "Manager {:?}: worker {name:?} Unavailable, workers {before}->{}, backlog={}",
+                    self.mgr.0.cfg.name,
+                    self.workers.len(),
+                    self.backlog.len()
+                );
                 if self.workers.is_empty() {
+                    log::trace!(
+                        "Manager {:?}: no available workers after {name:?}, pausing",
+                        self.mgr.0.cfg.name
+                    );
                     self.mgr.pause();
                 }
             }
@@ -240,6 +327,11 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             while let Some(item) = self.backlog.pop_front() {
                 // handle worker failure
                 if let Err(item) = self.workers[0].send(item) {
+                    log::trace!(
+                        "Manager {:?}: backlog dispatch to {:?} failed",
+                        self.mgr.0.cfg.name,
+                        self.workers[0].name()
+                    );
                     self.backlog.push_back(item);
                     self.workers.remove(0);
                     if self.workers.is_empty() {
@@ -327,16 +419,25 @@ async fn handle_cmd<F: ServerConfiguration>(
 
     loop {
         let Ok(item) = rx.recv().await else {
+            log::trace!("Manager command loop receiver closed");
             return;
         };
         match item {
             ServerCommand::Item(item) => state.process(item),
-            ServerCommand::Worker(upd) => state.update_workers(upd),
+            ServerCommand::Worker(upd) => {
+                log::trace!("Manager {:?}: received worker update", state.mgr.0.cfg.name);
+                state.update_workers(upd);
+            }
             ServerCommand::Pause(tx) => {
+                log::trace!("Manager {:?}: received Pause command", state.mgr.0.cfg.name);
                 state.mgr.pause();
                 let _ = tx.send(());
             }
             ServerCommand::Resume(tx) => {
+                log::trace!(
+                    "Manager {:?}: received Resume command",
+                    state.mgr.0.cfg.name
+                );
                 state.mgr.resume();
                 let _ = tx.send(());
             }

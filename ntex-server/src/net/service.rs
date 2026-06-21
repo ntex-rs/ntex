@@ -170,10 +170,18 @@ impl Service<Connection> for StreamServiceImpl {
     type Error = ();
 
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        log::trace!(
+            "StreamServiceImpl ready check start, services={}, conns_available={}",
+            self.services.len(),
+            self.conns.is_available()
+        );
         if !self.conns.is_available() {
+            log::trace!("StreamServiceImpl waiting for connection counter availability");
             self.conns.available().await;
+            log::trace!("StreamServiceImpl connection counter became available");
         }
         for (idx, svc) in self.services.iter().enumerate() {
+            log::trace!("StreamServiceImpl checking service idx {idx} readiness");
             if ctx.ready(svc).await.is_err() {
                 for (idx_, _, cfg) in self.tokens.values() {
                     if idx == *idx_ {
@@ -183,8 +191,10 @@ impl Service<Connection> for StreamServiceImpl {
                 }
                 return Err(());
             }
+            log::trace!("StreamServiceImpl service idx {idx} readiness ok");
         }
 
+        log::trace!("StreamServiceImpl ready check complete");
         Ok(())
     }
 
@@ -205,21 +215,32 @@ impl Service<Connection> for StreamServiceImpl {
     }
 
     async fn call(&self, con: Connection, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        log::trace!("StreamServiceImpl received connection: {con:?}");
         if let Some((idx, name, cfg)) = self.tokens.get(&con.token) {
             let mut io = con.io;
             if let Some(ref f) = self.on_accept {
+                log::trace!("{name}: running on_accept callback");
                 match f.run(name.clone(), io).await {
-                    Ok(st) => io = st,
-                    Err(()) => return Err(()),
+                    Ok(st) => {
+                        log::trace!("{name}: on_accept callback completed");
+                        io = st;
+                    }
+                    Err(()) => {
+                        log::error!("{name}: on_accept callback failed");
+                        return Err(());
+                    }
                 }
             }
 
             let stream = io.convert(cfg.clone()).map_err(|e| {
                 log::error!("Cannot convert to an async io stream: {e}");
             })?;
+            log::trace!("{name}: converted connection to async io stream");
 
             let guard = self.conns.get();
-            let _ = ctx.call(&self.services[*idx], stream).await;
+            log::trace!("{name}: calling service idx {idx}");
+            let result = ctx.call(&self.services[*idx], stream).await;
+            log::trace!("{name}: service idx {idx} completed with {result:?}");
             drop(guard);
             Ok(())
         } else {
