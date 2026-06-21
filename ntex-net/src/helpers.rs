@@ -60,12 +60,7 @@ impl<T> Queue<T> {
         unsafe { &mut *self.inner.get() }.pop_front()
     }
 
-    pub(crate) fn push_front(&self, item: T) {
-        // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
-        unsafe { &mut *self.inner.get() }.push_front(item);
-    }
-
-    pub(crate) fn push_back(&self, item: T) {
+    pub(crate) fn push(&self, item: T) {
         // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
         unsafe { &mut *self.inner.get() }.push_back(item);
     }

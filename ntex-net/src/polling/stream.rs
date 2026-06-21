@@ -227,7 +227,7 @@ impl StreamOpsInner {
             // (e.g. a filter generated data during read processing).
             // Delay the write until the streams slab is released,
             // dropping it would stall the connection.
-            self.delayed_feed.push_front(IdType::Write(id));
+            self.delayed_feed.push(IdType::Write(id));
         }
     }
 
@@ -383,7 +383,7 @@ impl Drop for StreamCtl {
             self.inner.drop_stream(self.id, &mut streams);
             self.inner.streams.set(Some(streams));
         } else {
-            self.inner.delayed_feed.push_back(IdType::Stream(self.id));
+            self.inner.delayed_feed.push(IdType::Stream(self.id));
         }
     }
 }
@@ -408,7 +408,7 @@ impl Drop for WeakStreamCtl {
             StreamOpsInner::drop_weak_stream(self.id, &mut streams);
             self.inner.streams.set(Some(streams));
         } else {
-            self.inner.delayed_feed.push_back(IdType::Weak(self.id));
+            self.inner.delayed_feed.push(IdType::Weak(self.id));
         }
     }
 }
