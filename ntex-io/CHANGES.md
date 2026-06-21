@@ -1,5 +1,9 @@
 # Changes
 
+## [3.13.1] - 2026-06-21
+
+* Handle disconnect during Io::read() call
+
 ## [3.13.0] - 2026-06-18
 
 * Refactor io callbacks management and add filter callbacks

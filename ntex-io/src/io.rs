@@ -397,6 +397,8 @@ impl<F> Io<F> {
     /// Reads bytes from this I/O stream into the specified buffer.
     ///
     /// If there is not enough data available, waits for incoming data.
+    /// Returns an error of kind [`io::ErrorKind::UnexpectedEof`] if the stream
+    /// is disconnected before `dst` is completely filled.
     pub async fn read(&self, dst: &mut [u8]) -> io::Result<()> {
         loop {
             let completed = self.with_read_buf(|buf| {
@@ -410,7 +412,10 @@ impl<F> Io<F> {
             if completed {
                 return Ok(());
             }
-            self.read_ready().await?;
+            // `read_ready` resolves with `None` once the io is closed/stopped.
+            if self.read_ready().await?.is_none() {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Disconnected"));
+            }
         }
     }
 
@@ -846,6 +851,28 @@ mod tests {
         server.st().flags.set_wr_backpressure();
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
+    }
+
+    #[ntex::test]
+    async fn test_read() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let server = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write(b"1234");
+        let mut buf: [u8; 4] = [0, 0, 0, 0];
+        server.read(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"1234");
+
+        // disconnect during read
+        let fut = ntex_rt::spawn(async move {
+            let mut buf: [u8; 4] = [0, 0, 0, 0];
+            server.read(&mut buf).await
+        });
+        client.close().await;
+        let err = fut.await.unwrap().err().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
     #[ntex::test]
