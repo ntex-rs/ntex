@@ -78,7 +78,7 @@ async fn one_round(name: &'static str) {
             .unwrap()
             .config(
                 "ready-barrier",
-                SharedCfg::new("READY-BARRIER-SRV")
+                SharedCfg::new(name)
                     .add(IoConfig::new())
                     .add(HttpServiceConfig::new())
                     .add(WebAppConfig::with(
@@ -96,7 +96,16 @@ async fn one_round(name: &'static str) {
     eprintln!("{name}: sending first request to {url}");
 
     let client = Client::new().await;
-    let response = client.get(url).send().await.unwrap();
+    let started = Instant::now();
+    let response = match client.get(url).send().await {
+        Ok(response) => response,
+        Err(err) => {
+            panic!(
+                "{name}: ntex client request failed after {:?}: {err:?}",
+                started.elapsed()
+            )
+        }
+    };
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.body().await.unwrap();

@@ -121,7 +121,7 @@ async fn one_round(name: &'static str) {
             .unwrap()
             .config(
                 "std-connect",
-                SharedCfg::new("STD-CONNECT-SRV")
+                SharedCfg::new(name)
                     .add(IoConfig::new())
                     .add(HttpServiceConfig::new())
                     .add(WebAppConfig::with(

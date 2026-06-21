@@ -85,7 +85,7 @@ impl<T> Worker<T> {
     {
         let (tx1, rx1) = unbounded();
         let (tx2, rx2) = unbounded();
-        let (avail, avail_tx) = WorkerAvailability::create();
+        let (avail, avail_tx) = WorkerAvailability::create(name.clone());
         let name2 = name.clone();
 
         Arbiter::with_name(name.clone()).handle().spawn(async move {
@@ -212,6 +212,7 @@ struct WorkerAvailabilityTx {
 
 #[derive(Debug)]
 struct Inner {
+    name: String,
     waker: AtomicWaker,
     updated: AtomicBool,
     available: AtomicBool,
@@ -219,8 +220,9 @@ struct Inner {
 }
 
 impl WorkerAvailability {
-    fn create() -> (Self, WorkerAvailabilityTx) {
+    fn create(name: String) -> (Self, WorkerAvailabilityTx) {
         let inner = Arc::new(Inner {
+            name,
             waker: AtomicWaker::new(),
             updated: AtomicBool::new(false),
             available: AtomicBool::new(false),
@@ -260,6 +262,10 @@ impl WorkerAvailabilityTx {
     fn set(&self, val: bool) {
         let old = self.inner.available.swap(val, Ordering::Release);
         if old != val {
+            log::debug!(
+                "Worker {:?}: availability transition {old}->{val}",
+                self.inner.name
+            );
             self.inner.updated.store(true, Ordering::Release);
             self.inner.waker.wake();
         }
@@ -268,6 +274,7 @@ impl WorkerAvailabilityTx {
 
 impl Drop for WorkerAvailabilityTx {
     fn drop(&mut self) {
+        log::debug!("Worker {:?}: availability sender dropped", self.inner.name);
         self.inner.failed.store(true, Ordering::Release);
         self.inner.updated.store(true, Ordering::Release);
         self.inner.available.store(false, Ordering::Release);

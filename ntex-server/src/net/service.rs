@@ -215,14 +215,14 @@ impl Service<Connection> for StreamServiceImpl {
     }
 
     async fn call(&self, con: Connection, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
-        log::trace!("StreamServiceImpl received connection: {con:?}");
+        log::debug!("StreamServiceImpl received connection: {con:?}");
         if let Some((idx, name, cfg)) = self.tokens.get(&con.token) {
             let mut io = con.io;
             if let Some(ref f) = self.on_accept {
-                log::trace!("{name}: running on_accept callback");
+                log::debug!("{name}/{}: running on_accept callback", cfg.tag());
                 match f.run(name.clone(), io).await {
                     Ok(st) => {
-                        log::trace!("{name}: on_accept callback completed");
+                        log::debug!("{name}/{}: on_accept callback completed", cfg.tag());
                         io = st;
                     }
                     Err(()) => {
@@ -235,12 +235,18 @@ impl Service<Connection> for StreamServiceImpl {
             let stream = io.convert(cfg.clone()).map_err(|e| {
                 log::error!("Cannot convert to an async io stream: {e}");
             })?;
-            log::trace!("{name}: converted connection to async io stream");
+            log::debug!(
+                "{name}/{}: converted connection to async io stream",
+                cfg.tag()
+            );
 
             let guard = self.conns.get();
-            log::trace!("{name}: calling service idx {idx}");
+            log::debug!("{name}/{}: calling service idx {idx}", cfg.tag());
             let result = ctx.call(&self.services[*idx], stream).await;
-            log::trace!("{name}: service idx {idx} completed with {result:?}");
+            log::debug!(
+                "{name}/{}: service idx {idx} completed with {result:?}",
+                cfg.tag()
+            );
             drop(guard);
             Ok(())
         } else {

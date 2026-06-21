@@ -115,13 +115,13 @@ impl<F: ServerConfiguration> ServerManager<F> {
     }
 
     pub(crate) fn pause(&self) {
-        log::trace!("Manager {:?}: pause requested", self.0.cfg.name);
+        log::debug!("Manager {:?}: pause requested", self.0.cfg.name);
         self.0.shared.paused.store(true, Ordering::Release);
         self.0.factory.paused();
     }
 
     pub(crate) fn resume(&self) {
-        log::trace!("Manager {:?}: resume requested", self.0.cfg.name);
+        log::debug!("Manager {:?}: resume requested", self.0.cfg.name);
         self.0.shared.paused.store(false, Ordering::Release);
         self.0.factory.resumed();
     }
@@ -133,7 +133,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
             .cmd
             .try_send(ServerCommand::Worker(Update::Available(wrk)))
         {
-            Ok(()) => log::trace!(
+            Ok(()) => log::debug!(
                 "Manager {:?}: enqueued Available for {name:?}",
                 self.0.cfg.name
             ),
@@ -160,7 +160,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
             .try_send(ServerCommand::Worker(Update::Unavailable(wrk)))
         {
             Ok(()) => {
-                log::trace!(
+                log::debug!(
                     "Manager {:?}: enqueued Unavailable for {name:?}",
                     self.0.cfg.name
                 )
@@ -197,7 +197,7 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
 
         loop {
             let status = wrk.status();
-            log::trace!(
+            log::debug!(
                 "Manager {:?}: observed {name:?} status {status:?}",
                 mgr.0.cfg.name
             );
@@ -215,7 +215,7 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                 }
             }
             let status = wrk.wait_for_status().await;
-            log::trace!(
+            log::debug!(
                 "Manager {:?}: wait_for_status woke for {name:?} with {status:?}",
                 mgr.0.cfg.name
             );
@@ -287,14 +287,14 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 let before = self.workers.len();
                 self.workers.push(worker);
                 self.workers.sort();
-                log::trace!(
+                log::debug!(
                     "Manager {:?}: worker {name:?} Available, workers {before}->{}, backlog={}",
                     self.mgr.0.cfg.name,
                     self.workers.len(),
                     self.backlog.len()
                 );
                 if self.workers.len() == 1 {
-                    log::trace!(
+                    log::debug!(
                         "Manager {:?}: first available worker {name:?}, resuming",
                         self.mgr.0.cfg.name
                     );
@@ -307,14 +307,14 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
                 if let Ok(idx) = self.workers.binary_search(&worker) {
                     self.workers.remove(idx);
                 }
-                log::trace!(
+                log::debug!(
                     "Manager {:?}: worker {name:?} Unavailable, workers {before}->{}, backlog={}",
                     self.mgr.0.cfg.name,
                     self.workers.len(),
                     self.backlog.len()
                 );
                 if self.workers.is_empty() {
-                    log::trace!(
+                    log::debug!(
                         "Manager {:?}: no available workers after {name:?}, pausing",
                         self.mgr.0.cfg.name
                     );
@@ -425,7 +425,7 @@ async fn handle_cmd<F: ServerConfiguration>(
         match item {
             ServerCommand::Item(item) => state.process(item),
             ServerCommand::Worker(upd) => {
-                log::trace!("Manager {:?}: received worker update", state.mgr.0.cfg.name);
+                log::debug!("Manager {:?}: received worker update", state.mgr.0.cfg.name);
                 state.update_workers(upd);
             }
             ServerCommand::Pause(tx) => {
