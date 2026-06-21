@@ -9,7 +9,7 @@ use ntex_io::Io;
 use ntex_io_uring::cqueue::{self, Entry as CEntry, more};
 use ntex_io_uring::opcode::{AsyncCancel, PollAdd};
 use ntex_io_uring::squeue::{Entry as SEntry, SubmissionQueue};
-use ntex_io_uring::{IoUring, Probe, types::Fd};
+use ntex_io_uring::{IoUring, Probe, types::CancelBuilder, types::Fd};
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
@@ -18,16 +18,16 @@ use super::{TcpStream, UnixStream, stream::StreamOps};
 use crate::channel::Receiver;
 
 pub trait Handler {
-    /// Operation is completed
+    /// Operation is completed.
     fn completed(&mut self, id: usize, flags: u32, result: io::Result<usize>);
 
-    /// Operation is canceled
+    /// Operation is canceled.
     fn canceled(&mut self, id: usize);
 
-    /// Driver turn is completed
+    /// The driver's turn has completed.
     fn tick(&mut self);
 
-    /// Cleanup before drop
+    /// Clean up the handle before dropping the driver.
     fn cleanup(&mut self);
 }
 
@@ -90,6 +90,15 @@ impl DriverApi {
                 .build()
                 .user_data(Driver::CANCEL);
         });
+    }
+
+    #[inline]
+    /// Attempt to sync cancel all requests.
+    pub fn cancel_all_sync(&self, fd: Fd) -> io::Result<()> {
+        self.inner
+            .ring
+            .submitter()
+            .register_sync_cancel(None, CancelBuilder::fd(fd).all())
     }
 
     /// Get whether a specific io-uring opcode is supported.
@@ -391,13 +400,13 @@ impl ntex_rt::Driver for Driver {
         let sq = ring.submission();
         let mut cq = unsafe { ring.completion_shared() };
         let submitter = ring.submitter();
-        loop {
+        let result = loop {
             self.poll_completions(&mut cq, sq);
 
             let more_tasks = match rt.poll() {
                 PollResult::Pending => false,
                 PollResult::PollAgain => true,
-                PollResult::Ready => return Ok(()),
+                PollResult::Ready => break Ok(()),
             };
             let more_changes = self.apply_changes(sq);
 
@@ -416,10 +425,19 @@ impl ntex_rt::Driver for Driver {
                     Some(libc::ETIME | libc::EBUSY | libc::EAGAIN | libc::EINTR) => {
                         log::info!("Ring submit interrupted, {e:?}");
                     }
-                    _ => return Err(e),
+                    _ => break Err(e),
                 }
             }
+        };
+
+        // cleanup handlers
+        if result.is_ok() {
+            for mut h in self.handlers.take().unwrap().into_iter() {
+                h.hnd.cleanup();
+            }
         }
+
+        result
     }
 
     /// Get notification handle
@@ -427,11 +445,7 @@ impl ntex_rt::Driver for Driver {
         Box::new(self.notifier.handle())
     }
 
-    fn clear(&self) {
-        for mut h in self.handlers.take().unwrap().into_iter() {
-            h.hnd.cleanup();
-        }
-    }
+    fn clear(&self) {}
 }
 
 #[derive(Debug)]

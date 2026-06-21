@@ -272,7 +272,7 @@ impl ntex_rt::Driver for Driver {
             Events::with_capacity(NonZeroUsize::new(self.capacity).unwrap())
         };
 
-        loop {
+        let result = loop {
             let result = rt.poll();
             let has_changes = !unsafe { (*self.changes.get()).is_empty() };
             if has_changes {
@@ -284,7 +284,7 @@ impl ntex_rt::Driver for Driver {
             let timeout = match result {
                 PollResult::Pending => None,
                 PollResult::PollAgain => Some(Duration::ZERO),
-                PollResult::Ready => return Ok(()),
+                PollResult::Ready => break Ok(()),
             };
             events.clear();
             self.poll.wait(&mut events, timeout)?;
@@ -303,7 +303,12 @@ impl ntex_rt::Driver for Driver {
                 h.tick();
             }
             self.handlers.set(Some(handlers));
+        };
+
+        for mut h in self.handlers.take().unwrap().into_iter() {
+            h.hnd.cleanup();
         }
+        result
     }
 
     /// Get notification handle
@@ -312,11 +317,7 @@ impl ntex_rt::Driver for Driver {
     }
 
     /// Clear handlers
-    fn clear(&self) {
-        for mut h in self.handlers.take().unwrap().into_iter() {
-            h.hnd.cleanup();
-        }
-    }
+    fn clear(&self) {}
 }
 
 #[derive(Clone, Debug)]
