@@ -247,15 +247,6 @@ impl Accept {
         }
 
         loop {
-            events.clear();
-
-            if let Err(e) = self.poller.wait(&mut events, None) {
-                assert!(
-                    e.kind() == io::ErrorKind::Interrupted,
-                    "Cannot wait for events in poller: {e}"
-                );
-            }
-
             for idx in 0..self.sockets.len() {
                 if self.sockets[idx].registered.get() {
                     let readd = self.accept(idx);
@@ -265,24 +256,29 @@ impl Accept {
                 }
             }
 
-            match self.process_cmd() {
-                Either::Left(()) => events.clear(),
-                Either::Right(rx) => {
-                    // cleanup
-                    for info in self.sockets.drain(..) {
-                        info.sock.remove_source();
-                    }
-                    log::info!("Accept loop {:?} has been stopped", self.name);
-
-                    if let Some(rx) = rx {
-                        if !self.testing {
-                            thread::sleep(EXIT_TIMEOUT);
-                        }
-                        let _ = rx.send(());
-                    }
-
-                    break;
+            if let Either::Right(rx) = self.process_cmd() {
+                // cleanup
+                for info in self.sockets.drain(..) {
+                    info.sock.remove_source();
                 }
+                log::info!("Accept loop {:?} has been stopped", self.name);
+
+                if let Some(rx) = rx {
+                    if !self.testing {
+                        thread::sleep(EXIT_TIMEOUT);
+                    }
+                    let _ = rx.send(());
+                }
+
+                break;
+            }
+
+            events.clear();
+            if let Err(e) = self.poller.wait(&mut events, None) {
+                assert!(
+                    e.kind() == io::ErrorKind::Interrupted,
+                    "Cannot wait for events in poller: {e}"
+                );
             }
         }
     }
