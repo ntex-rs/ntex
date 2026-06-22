@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.3] - 2026-06-22
+
+* Do not immediately retry ErrorKind::InvalidInput
+
 ## [3.10.2] - 2026-06-19
 
 * Do not delay server stop for testing mode
