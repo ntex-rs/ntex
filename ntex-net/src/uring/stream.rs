@@ -353,17 +353,15 @@ impl Handler for StreamOpsHandler {
 
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.storage.take() {
-            for (_, val) in v.streams {
-                if val.flags.contains(Flags::DROPPED_PRI) {
-                    mem::forget(val.io);
-                } else {
+            for (_, val) in v.streams.iter() {
+                if !val.flags.contains(Flags::DROPPED_PRI) {
                     log::trace!(
                         "{}: Unclosed sockets {:?}",
                         val.ctx.tag(),
                         val.io.peer_addr()
                     );
-                    let _ = self.inner.api.cancel_all_sync(val.fd());
                 }
+                let _ = self.inner.api.cancel_all_sync(val.fd());
             }
         }
         self.inner.delayed_feed.clear();

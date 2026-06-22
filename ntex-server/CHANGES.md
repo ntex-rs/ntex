@@ -4,6 +4,8 @@
 
 * Do not delay server stop for testing mode
 
+* Do not immediately retry ErrorKind::InvalidInput
+
 ## [3.10.1] - 2026-06-19
 
 * Fix server ready notification
