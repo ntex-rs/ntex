@@ -1,6 +1,6 @@
 # Changes
 
-## [3.10.0] - 2026-06-16
+## [3.10.0] - 2026-06-22
 
 * Allow to override `SharedCfg` test server and client configs #910
 
