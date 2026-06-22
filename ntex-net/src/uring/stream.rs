@@ -353,7 +353,7 @@ impl Handler for StreamOpsHandler {
 
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.storage.take() {
-            for (_, val) in v.streams.iter() {
+            for (_, val) in &v.streams {
                 if !val.flags.contains(Flags::DROPPED_PRI) {
                     log::trace!(
                         "{}: Unclosed sockets {:?}",
