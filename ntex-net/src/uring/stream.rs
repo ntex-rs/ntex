@@ -363,6 +363,7 @@ impl Handler for StreamOpsHandler {
                 }
                 let _ = self.inner.api.cancel_all_sync(val.fd());
             }
+            self.inner.storage.set(Some(v));
         }
         self.inner.delayed_feed.clear();
     }
