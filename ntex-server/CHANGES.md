@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.4] - 2026-06-22
+
+* Fix lost of wakes in accept loop, partial fix for #911
+
 ## [3.10.3] - 2026-06-22
 
 * Do not immediately retry ErrorKind::InvalidInput
