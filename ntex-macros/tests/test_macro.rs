@@ -1,5 +1,6 @@
 use futures::{Future, future};
 use ntex::http::{Method, StatusCode};
+use ntex::rt::{Arbiter, System};
 use ntex::web::{App, Error, HttpResponse, HttpResponseBuilder, test, types::Path};
 use ntex_macros::{
     web_connect, web_delete, web_get, web_head, web_options, web_patch, web_post, web_put,
@@ -70,6 +71,20 @@ async fn delete_param_test(_: Path<String>) -> HttpResponseBuilder {
 #[web_get("/test/{param}")]
 async fn get_param_test(_: Path<String>) -> HttpResponse {
     HttpResponse::Ok().finish()
+}
+
+#[ntex::main(ping_interval = 25)]
+async fn main_with_ping_interval() {
+    let arbiter = Arbiter::current().id();
+    ntex::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let recs = System::list_arbiter_pings(arbiter, |recs| recs.unwrap().clone());
+    assert!(!recs.is_empty());
+}
+
+#[test]
+fn test_main_ping_interval_arg() {
+    main_with_ping_interval();
 }
 
 #[ntex::test]
