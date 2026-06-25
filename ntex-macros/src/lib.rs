@@ -45,6 +45,9 @@ mod route;
 
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
+use syn::{Expr, ExprLit, Lit, LitInt, MetaNameValue, Token};
 
 /// Creates route handler with `GET` method guard.
 ///
@@ -186,14 +189,74 @@ pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     println!("Hello world");
 /// }
 /// ```
+///
+/// ## Attributes
+///
+/// - `ping_interval = N` - Sets arbiters ping interval in milliseconds for the created system.
+///   To disable pings set value to zero.
+///
+/// ```rust
+/// #[ntex::main(ping_interval = 250)]
+/// async fn main() {
+///     println!("Hello world");
+/// }
+/// ```
+struct MainArgs {
+    ping_interval: Option<LitInt>,
+}
+
+impl Parse for MainArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut args = MainArgs { ping_interval: None };
+        let params = Punctuated::<MetaNameValue, Token![,]>::parse_terminated(input)?;
+
+        for param in params {
+            if param.path.is_ident("ping_interval") {
+                if args.ping_interval.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        param.path,
+                        "duplicate `ping_interval` argument",
+                    ));
+                }
+
+                match param.value {
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Int(lit), ..
+                    }) => {
+                        args.ping_interval = Some(lit);
+                    }
+                    value => {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            "`ping_interval` value must be an integer literal",
+                        ));
+                    }
+                }
+            } else {
+                return Err(syn::Error::new_spanned(
+                    param.path,
+                    "unknown argument, expected `ping_interval`",
+                ));
+            }
+        }
+
+        Ok(args)
+    }
+}
+
 #[proc_macro_attribute]
-pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
+pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
+    let args = syn::parse_macro_input!(args as MainArgs);
     let mut input = syn::parse_macro_input!(item as syn::ItemFn);
     let attrs = &input.attrs;
     let vis = &input.vis;
     let sig = &mut input.sig;
     let body = &input.block;
     let name = &sig.ident;
+    let ping_interval = args
+        .ping_interval
+        .map(|interval| quote!(.ping_interval(#interval)))
+        .unwrap_or_default();
 
     if sig.asyncness.is_none() {
         return syn::Error::new_spanned(sig.fn_token, "only async fn is supported")
@@ -208,6 +271,7 @@ pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
         #vis #sig {
             ntex::rt::System::build()
                 .name(stringify!(#name))
+                #ping_interval
                 .build(ntex::rt::DefaultRuntime)
                 .block_on(async move { #body })
         }
