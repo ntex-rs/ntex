@@ -18,6 +18,8 @@ pub struct Builder {
     stack_size: usize,
     /// Arbiters ping interval
     ping_interval: usize,
+    /// Arbiter ping response threshold
+    ping_threshold: usize,
     /// Signal handling
     signals: bool,
     /// Thread pool config
@@ -33,7 +35,8 @@ impl Builder {
             name: "ntex".into(),
             stop_on_panic: false,
             stack_size: 0,
-            ping_interval: 1000,
+            ping_interval: 2000,
+            ping_threshold: 1000,
             signals: false,
             testing: false,
             pool_limit: 256,
@@ -61,6 +64,16 @@ impl Builder {
     }
 
     #[must_use]
+    /// Set signals handling.
+    ///
+    /// By default signal handling is disabled.
+    pub fn signals(mut self, eanbled: bool) -> Self {
+        self.signals = eanbled;
+        self
+    }
+
+    #[doc(hidden)]
+    #[must_use]
     /// Disable signal handling.
     ///
     /// By default signal handling is disabled.
@@ -69,6 +82,7 @@ impl Builder {
         self
     }
 
+    #[doc(hidden)]
     #[must_use]
     /// Enable signal handling.
     ///
@@ -88,10 +102,22 @@ impl Builder {
     #[must_use]
     /// Sets ping interval for spawned arbiters.
     ///
-    /// Interval is in milliseconds. By default 1000 milliseconds is set.
+    /// Interval is in milliseconds. By default 2000 milliseconds is set.
     /// To disable pings set value to zero.
     pub fn ping_interval(mut self, interval: usize) -> Self {
         self.ping_interval = interval;
+        self
+    }
+
+    #[must_use]
+    /// Sets the ping response threshold.
+    ///
+    /// If a response takes too long, an attempt is made to create a backtrace
+    /// for the busy arbiter.
+    ///
+    /// The interval is specified in milliseconds. The default is 1000 milliseconds.
+    pub fn ping_threshold(mut self, interval: usize) -> Self {
+        self.ping_threshold = interval;
         self
     }
 
@@ -132,6 +158,7 @@ impl Builder {
             stack_size: self.stack_size,
             stop_on_panic: self.stop_on_panic,
             ping_interval: self.ping_interval,
+            ping_threshold: self.ping_threshold,
             pool_limit: self.pool_limit,
             pool_recv_timeout: self.pool_recv_timeout,
             runner: Arc::new(runner),

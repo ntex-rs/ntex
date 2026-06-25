@@ -50,6 +50,8 @@ pub struct SystemConfig {
     pub(super) stack_size: usize,
     pub(super) stop_on_panic: bool,
     pub(super) ping_interval: usize,
+    #[allow(dead_code)]
+    pub(super) ping_threshold: usize,
     pub(super) pool_limit: usize,
     pub(super) pool_recv_timeout: Duration,
     pub(super) testing: bool,
@@ -371,7 +373,6 @@ struct SystemSupport {
     sys: System,
     stop: Option<oneshot::Sender<i32>>,
     commands: Receiver<SystemCommand>,
-    ping_interval: Duration,
 }
 
 impl SystemSupport {
@@ -380,12 +381,13 @@ impl SystemSupport {
             sys: sys.clone(),
             stop: Some(stop),
             commands: sys.0.receiver.clone(),
-            ping_interval: Duration::from_millis(sys.0.config.ping_interval as u64),
         }
     }
 
     async fn run(mut self) {
-        crate::spawn(ping_arbiters(self.sys.clone(), self.ping_interval));
+        if self.sys.0.config.ping_interval != 0 {
+            crate::spawn(ping_arbiters(self.sys.clone()));
+        }
 
         loop {
             match self.commands.recv().await {
@@ -421,10 +423,16 @@ pub struct PingRecord {
     pub rtt: Option<Duration>,
 }
 
-async fn ping_arbiters(sys: System, interval: Duration) {
+async fn ping_arbiters(sys: System) {
     let pings = Rc::new(RefCell::new(HashSet::default()));
+    let interval = Duration::from_millis(sys.0.config.ping_interval as u64);
+    #[cfg(target_os = "linux")]
+    let threshold = Duration::from_millis(sys.0.config.ping_threshold as u64);
 
     loop {
+        // interval between pings
+        Delay::new(interval).await;
+
         // send pings
         {
             pings.borrow_mut().clear();
@@ -465,15 +473,15 @@ async fn ping_arbiters(sys: System, interval: Duration) {
             }
         }
 
-        Delay::new(interval).await;
-
         // check pings
         #[cfg(target_os = "linux")]
         {
             const SPIN: Duration = Duration::from_micros(100);
 
-            let mut no_pongs = Vec::new();
+            // threshold
+            Delay::new(threshold).await;
 
+            let mut no_pongs = Vec::new();
             {
                 for arb in &sys.0.arbiters.lock().list {
                     let pong = pings.borrow_mut().remove(&arb.id());

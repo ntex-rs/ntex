@@ -73,7 +73,7 @@ async fn get_param_test(_: Path<String>) -> HttpResponse {
     HttpResponse::Ok().finish()
 }
 
-#[ntex::main(ping_interval = 25)]
+#[ntex::main(name = "test", signals = false, ping_interval = 25)]
 async fn main_with_ping_interval() {
     let arbiter = Arbiter::current().id();
     ntex::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -83,7 +83,7 @@ async fn main_with_ping_interval() {
 }
 
 #[test]
-fn test_main_ping_interval_arg() {
+fn test_main_with_args() {
     main_with_ping_interval();
 }
 

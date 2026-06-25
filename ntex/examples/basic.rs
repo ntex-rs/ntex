@@ -17,7 +17,7 @@ async fn no_params() -> &'static str {
     "Hello world!\r\n"
 }
 
-#[ntex::main]
+#[ntex::main(name = "basic")]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
