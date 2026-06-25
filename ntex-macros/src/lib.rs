@@ -207,7 +207,9 @@ struct MainArgs {
 
 impl Parse for MainArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut args = MainArgs { ping_interval: None };
+        let mut args = MainArgs {
+            ping_interval: None,
+        };
         let params = Punctuated::<MetaNameValue, Token![,]>::parse_terminated(input)?;
 
         for param in params {
