@@ -1,5 +1,12 @@
 # Changes
 
+## [3.15.4] - 2026-06-25
+
+* Disable arbiter pings is interval is set to 0
+
+* Add a separate ping `threshold` parameter, wait this amount of time before
+  checking the arbiter stack trace.
+
 ## [3.15.3] - 2026-06-21
 
 * Add arbiter latency callback

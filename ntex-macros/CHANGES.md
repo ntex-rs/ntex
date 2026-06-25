@@ -1,5 +1,9 @@
 # Changes
 
+## [3.3.0] - 2026-02-25
+
+* Add "name", "signals" and "ping_interval" parameters to `main` macro
+
 ## [3.2.0] - 2026-02-20
 
 * Upgrade to syn2
