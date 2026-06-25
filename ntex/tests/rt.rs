@@ -368,14 +368,16 @@ fn test_log_backtrace() {
         thread::spawn(move || {
             crate::System::build()
                 .stop_on_panic(true)
-                .enable_signals()
+                .signals(true)
+                .ping_interval(1000)
+                .ping_threshold(500)
                 .build(ntex::rt::DefaultRuntime)
                 .block_on(async move {
                     let (tx, rx) = oneshot::channel();
                     Arbiter::with_name("ttttt".to_string())
                         .handle()
                         .spawn(async {
-                            thread::sleep(Duration::from_secs(2));
+                            thread::sleep(Duration::from_secs(1));
                             let _ = tx.send(());
                         });
 

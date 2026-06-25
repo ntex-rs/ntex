@@ -50,6 +50,7 @@ pub struct SystemConfig {
     pub(super) stack_size: usize,
     pub(super) stop_on_panic: bool,
     pub(super) ping_interval: usize,
+    #[allow(dead_code)]
     pub(super) ping_threshold: usize,
     pub(super) pool_limit: usize,
     pub(super) pool_recv_timeout: Duration,
@@ -425,6 +426,7 @@ pub struct PingRecord {
 async fn ping_arbiters(sys: System) {
     let pings = Rc::new(RefCell::new(HashSet::default()));
     let interval = Duration::from_millis(sys.0.config.ping_interval as u64);
+    #[cfg(target_os = "linux")]
     let threshold = Duration::from_millis(sys.0.config.ping_threshold as u64);
 
     loop {
