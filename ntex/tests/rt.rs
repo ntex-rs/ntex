@@ -377,7 +377,7 @@ fn test_log_backtrace() {
                     Arbiter::with_name("ttttt".to_string())
                         .handle()
                         .spawn(async {
-                            thread::sleep(Duration::from_secs(1));
+                            thread::sleep(Duration::from_secs(2));
                             let _ = tx.send(());
                         });
 
