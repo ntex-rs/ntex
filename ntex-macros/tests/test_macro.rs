@@ -83,7 +83,6 @@ async fn main_with_ping_interval() {
 
 #[test]
 fn test_main_ping_interval_arg() {
-    MAIN_WITH_PING_CALLED.store(false, Ordering::Relaxed);
     main_with_ping_interval();
     assert!(MAIN_WITH_PING_CALLED.load(Ordering::Relaxed));
 }

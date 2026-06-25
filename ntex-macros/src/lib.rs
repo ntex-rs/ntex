@@ -192,7 +192,7 @@ pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// ## Attributes
 ///
-/// - `ping_interval = N` - Sets arbiters ping interval in milliseconds for the created system.
+/// - `ping_interval = N` - Sets arbiter ping interval in milliseconds for the created system.
 ///   To disable pings set value to zero.
 ///
 /// ```rust
