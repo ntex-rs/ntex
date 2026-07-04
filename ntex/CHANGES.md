@@ -1,5 +1,9 @@
 # Changes
 
+## [3.10.1] - 2026-07-04
+
+* Fix keep-alive handling if headers timeout is enabled
+
 ## [3.10.0] - 2026-06-22
 
 * Allow to override `SharedCfg` test server and client configs #910

@@ -652,25 +652,6 @@ where
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
-        } else if !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
-            && let Some(cfg) = self.config.headers_read_rate()
-        {
-            log::debug!(
-                "{}: Start headers read timer {:?}",
-                self.io.tag(),
-                cfg.timeout
-            );
-
-            // we got new data but not enough to parse single frame
-            // start read timer
-            self.flags
-                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
-            self.flags.insert(Flags::READ_HDRS_TIMEOUT);
-
-            self.read_consumed = 0;
-            self.read_remains = decoded.remains as u32;
-            self.read_max_timeout = cfg.max_timeout;
-            self.io.start_timer(cfg.timeout);
         } else if self.read_remains == 0 && decoded.remains == 0 {
             // no new data, start keep-alive timer
             if self.codec.keepalive() {
@@ -689,6 +670,23 @@ where
                 self.io.close();
                 return Some(self.ctl_keepalive(false));
             }
+        } else if let Some(cfg) = self.config.headers_read_rate() {
+            log::debug!(
+                "{}: Start headers read timer {:?}",
+                self.io.tag(),
+                cfg.timeout
+            );
+
+            // we got new data but not enough to parse single frame
+            // start read timer
+            self.flags
+                .remove(Flags::READ_KA_TIMEOUT | Flags::READ_PL_TIMEOUT);
+            self.flags.insert(Flags::READ_HDRS_TIMEOUT);
+
+            self.read_consumed = 0;
+            self.read_remains = decoded.remains as u32;
+            self.read_max_timeout = cfg.max_timeout;
+            self.io.start_timer(cfg.timeout);
         }
         None
     }
