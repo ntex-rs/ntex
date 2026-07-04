@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
+use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::{io, io::Read, io::Write, net};
 
 use futures_util::future::{self, FutureExt};
@@ -10,7 +10,7 @@ use ntex::http::{
     HttpService, HttpServiceConfig, KeepAlive, Method, Request, Response, StatusCode,
     Version,
 };
-use ntex::http::{body, h1::Control, test, test::server as test_server};
+use ntex::http::{body, h1, h1::Control, test, test::server as test_server};
 use ntex::time::{Millis, Seconds, sleep, timeout};
 use ntex::util::{Bytes, Ready};
 use ntex::{SharedCfg, channel::oneshot, rt, service::fn_service, web::error};
@@ -304,6 +304,44 @@ async fn test_http1_no_keepalive_during_response() {
     let mut data = vec![0; 1024];
     let _ = stream.read(&mut data);
     assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+}
+
+/// Keep-alive timeout after sending response
+#[ntex::test]
+async fn test_http1_keepalive_after_response() {
+    let ka = Arc::new(AtomicBool::new(false));
+    let ka2 = ka.clone();
+    let srv = test::server_with_config(
+        async move || {
+            let ka = ka2.clone();
+            HttpService::h1(|_| Ready::Ok::<_, io::Error>(Response::Ok().finish())).control(
+                fn_service(async move |req: Control<_, _>| {
+                    if let Control::Disconnect(h1::control::Reason::KeepAlive(_)) = &req {
+                        ka.store(true, Ordering::Release);
+                    }
+                    Ok::<_, std::convert::Infallible>(req.ack())
+                }),
+            )
+        },
+        SharedCfg::new("SRV").add(
+            HttpServiceConfig::new()
+                .set_headers_read_rate(Seconds(1), Seconds(2), 4)
+                .set_keepalive(1),
+        ),
+    )
+    .await;
+
+    let mut stream = net::TcpStream::connect(srv.addr()).unwrap();
+    let _ = stream.write_all(b"GET /test/tests/test HTTP/1.1\r\n\r\n");
+    let mut data = vec![0; 1024];
+    let _ = stream.read(&mut data);
+    assert_eq!(&data[..17], b"HTTP/1.1 200 OK\r\n");
+    sleep(Millis(1100)).await;
+
+    let mut data = vec![0; 1024];
+    let len = stream.read(&mut data).unwrap();
+    assert_eq!(len, 0);
+    assert!(ka.load(Ordering::Relaxed));
 }
 
 #[ntex::test]
