@@ -80,13 +80,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
         let len = src.len();
         let mut inner = self.inner.take().unwrap();
         let mut cache = BUF.with(|b| b.take().unwrap());
-
-        let total = inner.consumed + len;
-        if total >= inner.cfg.max_buf_size {
-            log::trace!("MAX_BUFFER_SIZE of data reached, closing");
-            BUF.with(move |b| b.set(Some(cache)));
-            return Err(DecodeError::TooLarge(total));
-        }
+        let mut pending = false;
 
         let result = loop {
             if let Some(ref mut val) = inner.val {
@@ -101,7 +95,10 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
                         self.hdrs.set(false);
                         Ok(Some((inner.val.take().unwrap(), pl)))
                     }
-                    Poll::Pending => Ok(None),
+                    Poll::Pending => {
+                        pending = true;
+                        Ok(None)
+                    }
                     Poll::Ready(Err(e)) => {
                         BUF.with(move |b| b.set(Some(cache)));
                         return Err(e);
@@ -120,12 +117,22 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
                     BUF.with(move |b| b.set(Some(cache)));
                     return Err(e);
                 }
-                Poll::Pending => break Ok(None),
+                Poll::Pending => {
+                    pending = true;
+                    break Ok(None);
+                }
             }
         };
 
-        BUF.with(move |b| b.set(Some(cache)));
         inner.consumed += len - src.len();
+
+        if pending && inner.consumed >= inner.cfg.max_buf_size {
+            log::trace!("MAX_BUFFER_SIZE of data reached, closing");
+            BUF.with(move |b| b.set(Some(cache)));
+            return Err(DecodeError::TooLarge(inner.consumed + src.len()));
+        }
+
+        BUF.with(move |b| b.set(Some(cache)));
         self.inner.set(Some(inner));
         result
     }
@@ -493,7 +500,6 @@ impl MessageType for ResponseHead {
                 }
             }
         }
-
         let mut length = state.payload_length();
 
         // Remove CL value if 0 now that all headers and HTTP/1.0 special cases are processed.
