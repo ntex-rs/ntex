@@ -126,7 +126,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
 
         inner.consumed += len - src.len();
 
-        if pending && inner.consumed >= inner.cfg.max_buf_size {
+        if pending && (inner.consumed + src.len()) >= inner.cfg.max_buf_size {
             log::trace!("MAX_BUFFER_SIZE of data reached, closing");
             BUF.with(move |b| b.set(Some(cache)));
             return Err(DecodeError::TooLarge(inner.consumed + src.len()));
