@@ -72,6 +72,7 @@ ntex-util = "3.6.1"
 
 ntex-polling = "3.10.0"
 ntex-io-uring = "0.7.120"
+ntex-httparse = "2.0.0"
 
 async-channel = "2"
 async-task = "4.5.0"
