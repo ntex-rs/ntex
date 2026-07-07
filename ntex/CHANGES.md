@@ -1,5 +1,9 @@
 # Changes
 
+## [3.11.0] - 2026-07-10
+
+* Replace httparse with ntex-httparse
+
 ## [3.10.1] - 2026-07-04
 
 * Fix keep-alive handling if headers timeout is enabled
