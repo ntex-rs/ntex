@@ -84,6 +84,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
         let total = inner.consumed + len;
         if total >= inner.cfg.max_buf_size {
             log::trace!("MAX_BUFFER_SIZE of data reached, closing");
+            BUF.with(move |b| b.set(Some(cache)));
             return Err(DecodeError::TooLarge(total));
         }
 
@@ -94,22 +95,30 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
                     &mut inner.st,
                     &mut cache,
                     inner.cfg.max_headers,
-                )? {
-                    Poll::Ready(pl) => {
+                ) {
+                    Poll::Ready(Ok(pl)) => {
                         inner.st = State::default();
                         self.hdrs.set(false);
                         Ok(Some((inner.val.take().unwrap(), pl)))
                     }
                     Poll::Pending => Ok(None),
+                    Poll::Ready(Err(e)) => {
+                        BUF.with(move |b| b.set(Some(cache)));
+                        return Err(e);
+                    }
                 };
             }
             if len > 0 {
                 self.hdrs.set(true);
             }
-            match T::decode(src, &mut cache)? {
-                Poll::Ready(val) => {
+            match T::decode(src, &mut cache) {
+                Poll::Ready(Ok(val)) => {
                     inner.st.version = val.msg_version();
                     inner.val = Some(val);
+                }
+                Poll::Ready(Err(e)) => {
+                    BUF.with(move |b| b.set(Some(cache)));
+                    return Err(e);
                 }
                 Poll::Pending => break Ok(None),
             }
