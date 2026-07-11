@@ -28,6 +28,7 @@ rust-version = "1.88"
 
 [workspace.lints.rust]
 async_fn_in_trait = { level = "allow", priority = -1 }
+unknown_lints = { level = "allow", priority = -1 }
 rust_2018_idioms = "deny"
 warnings = "deny"
 unreachable_pub = "deny"

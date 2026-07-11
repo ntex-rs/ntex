@@ -44,9 +44,10 @@ impl<T> Server<T> {
         if self.shared.paused.load(Ordering::Acquire) {
             Err(item)
         } else if let Err(e) = self.cmd.try_send(ServerCommand::Item(item)) {
-            match e.into_inner() {
-                ServerCommand::Item(item) => Err(item),
-                _ => panic!(),
+            if let ServerCommand::Item(item) = e.into_inner() {
+                Err(item)
+            } else {
+                panic!()
             }
         } else {
             Ok(())

@@ -1,6 +1,7 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
 #![deny(clippy::pedantic)]
 #![allow(
+    clippy::unused_async,
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc
