@@ -763,15 +763,15 @@ mod tests {
         assert_eq!(hdr.as_bytes(), b"upgrade");
         let hdr2 = HeaderValue::try_from(&ByteString::from("upgrade2")).unwrap();
 
-        assert!(hdr == hdr);
-        assert!(hdr == &hdr);
-        assert!(hdr == "upgrade");
-        assert!(hdr == "upgrade".to_string());
-        assert!(hdr == b"upgrade".as_ref());
-        assert!("upgrade" == hdr);
-        assert!("upgrade" == &hdr);
-        assert!("upgrade".to_string() == hdr);
-        assert!(b"upgrade".as_ref() == &hdr);
+        assert_eq!(hdr, hdr);
+        assert_eq!(hdr, &hdr);
+        assert_eq!(hdr, "upgrade");
+        assert_eq!(hdr, "upgrade".to_string());
+        assert_eq!(hdr, b"upgrade".as_ref());
+        assert_eq!("upgrade", hdr);
+        assert_eq!("upgrade", &hdr);
+        assert_eq!("upgrade".to_string(), hdr);
+        assert_eq!(b"upgrade".as_ref(), &hdr);
         assert!(hdr < hdr2);
         assert!(hdr < &hdr2);
         assert!(&hdr < &hdr2);
@@ -782,13 +782,13 @@ mod tests {
         assert!(hdr < "upgrade2".to_string());
         assert!(hdr < &b"upgrade2"[..]);
         assert!(hdr < b"upgrade2"[..]);
-        assert!(hdr != &b"upgrade2"[..]);
-        assert!(hdr != b"upgrade2"[..]);
+        assert_ne!(hdr, &b"upgrade2"[..]);
+        assert_ne!(hdr, b"upgrade2"[..]);
         assert!("upgrade2" > hdr);
         assert!("upgrade2" > &hdr);
         assert!("upgrade2".to_string() > hdr);
         assert!(b"upgrade2"[..] > hdr);
-        assert!("upgrade2"[..] != hdr);
+        assert_ne!("upgrade2"[..], hdr);
     }
 
     #[test]

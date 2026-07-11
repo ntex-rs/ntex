@@ -1,9 +1,10 @@
 //! An implementation of `WebSockets` base bytes streams
-use std::{cell::Cell, io, task::Poll};
+use std::{cell::Cell, future::Future, io, task::Poll};
 
 use crate::codec::{Decoder, Encoder};
 use crate::io::{Filter, FilterBuf, FilterLayer, Io, Layer};
 use crate::service::{Service, ServiceCtx};
+use crate::util::Ready;
 
 use super::{CloseCode, CloseReason, Codec, Frame, Item, Message};
 
@@ -168,11 +169,11 @@ impl<F: Filter> Service<Io<F>> for WsTransportService {
     type Response = Io<Layer<WsTransport, F>>;
     type Error = io::Error;
 
-    async fn call(
+    fn call(
         &self,
         io: Io<F>,
         _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        Ok(WsTransport::create(io, self.codec.clone()))
+    ) -> impl Future<Output = Result<Self::Response, Self::Error>> {
+        Ready::Ok(WsTransport::create(io, self.codec.clone()))
     }
 }

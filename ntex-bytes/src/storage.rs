@@ -1187,7 +1187,7 @@ mod tests {
         assert!(bv.is_empty());
         assert_eq!(bv.capacity(), 48);
         let p2 = unsafe { bv.storage.as_ptr() as usize };
-        assert!(p1 == p2);
+        assert_eq!(p1, p2);
     }
 
     #[test]

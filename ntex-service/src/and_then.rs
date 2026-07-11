@@ -88,6 +88,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use ntex::util::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};

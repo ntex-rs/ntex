@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(err.tag().unwrap(), &b"TAG"[..]);
 
         let err2: Error<TestError> = Error::new(TestError::Service("409 Error"), "TEST");
-        assert!(err != err2);
+        assert_ne!(err, err2);
         assert_eq!(err, TestError::Service("409 Error"));
 
         let err2 = err2.set_tag("TAG");
@@ -198,9 +198,9 @@ mod tests {
         let err2 = err2.set_service("SVC");
         assert_eq!(err, err2);
         let err2 = err2.map(|_| TestError::Disconnect);
-        assert!(err != err2);
+        assert_ne!(err, err2);
         let err2 = err2.forward(|_| TestError::Disconnect);
-        assert!(err != err2);
+        assert_ne!(err, err2);
 
         assert_eq!(TestError::Connect("").to_string(), "Connect err: ");
         assert_eq!(TestError::Disconnect.to_string(), "Disconnect");

@@ -1,11 +1,11 @@
-use std::{io, sync::Arc};
+use std::{future::Future, io, sync::Arc};
 
 use tls_rustls::ServerConfig;
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::services::Counter;
+use ntex_util::{future::Ready, services::Counter};
 
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 
@@ -36,9 +36,12 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for TlsAcceptor {
     type Service = TlsAcceptorService;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    fn create(
+        &self,
+        cfg: SharedCfg,
+    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            Ok(TlsAcceptorService {
+            Ready::Ok(TlsAcceptorService {
                 cfg: cfg.get(),
                 config: self.config.clone(),
                 conns: conns.clone(),

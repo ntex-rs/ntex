@@ -301,7 +301,7 @@ impl ResourceDef {
                 ),
             };
 
-            re = format!(r"{}(?P<{}>{})", re, &escape(name), pat);
+            re = format!(r"{}(?P<{}>{})", re, escape(name), pat);
 
             elems.push(PathElement::Var(name.to_string()));
 
@@ -726,7 +726,7 @@ mod tests {
             names: Vec::new(),
             tail: false,
         };
-        assert!(seg != seg2);
+        assert_ne!(seg, seg2);
         assert_eq!(seg2, seg2);
     }
 

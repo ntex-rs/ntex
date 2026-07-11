@@ -305,7 +305,7 @@ mod tests {
     fn flags() {
         assert!(format!("{:?}", Flags::new_stopped()).contains("IO_STOPPED"));
         assert!(format!("{:?}", FlagsKind::IO_STOPPED).contains("IO_STOPPED"));
-        assert!(FlagsKind::IO_STOPPED == FlagsKind::IO_STOPPED);
-        assert!(FlagsKind::IO_STOPPED != FlagsKind::IO_STOPPING);
+        assert_eq!(FlagsKind::IO_STOPPED, FlagsKind::IO_STOPPED);
+        assert_ne!(FlagsKind::IO_STOPPED, FlagsKind::IO_STOPPING);
     }
 }

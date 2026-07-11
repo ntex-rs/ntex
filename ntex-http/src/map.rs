@@ -76,10 +76,7 @@ impl Iterator for ValueIntoIter {
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.value {
             Value::One(_) => {
-                let val = std::mem::replace(
-                    &mut self.value,
-                    Value::Multi(VecDeque::with_capacity(0)),
-                );
+                let val = std::mem::replace(&mut self.value, Value::Multi(VecDeque::new()));
                 match val {
                     Value::One(val) => Some(val),
                     Value::Multi(_) => unreachable!(),

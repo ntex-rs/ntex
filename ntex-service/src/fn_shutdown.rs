@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt, marker::PhantomData};
+use std::{cell::Cell, fmt, future::Future, future::ready, marker::PhantomData};
 
 use crate::{Service, ServiceCtx, ServiceFactory};
 
@@ -58,13 +58,13 @@ where
     type InitError = ();
 
     #[inline]
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+    fn create(&self, _: C) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
         if let Some(f) = self.f_shutdown.take() {
             self.f_shutdown.set(Some(f.clone()));
-            Ok(FnShutdown {
+            ready(Ok(FnShutdown {
                 f_shutdown: Cell::new(Some(f)),
                 _t: PhantomData,
-            })
+            }))
         } else {
             panic!("FnShutdown was used already");
         }
@@ -86,8 +86,12 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Req, Err> {
-        Ok(req)
+    fn call(
+        &self,
+        req: Req,
+        _: ServiceCtx<'_, Self>,
+    ) -> impl Future<Output = Result<Req, Err>> {
+        ready(Ok(req))
     }
 }
 
