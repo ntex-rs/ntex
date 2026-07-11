@@ -80,7 +80,6 @@ impl<T: MessageType> Clone for MessageDecoder<T> {
 
 impl<T: MessageType> MessageDecoder<T> {
     fn decode_headers(
-        &self,
         src: &mut BytesMut,
         inner: &mut Inner<T>,
     ) -> Poll<Result<(), DecodeError>> {
@@ -159,7 +158,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
         }
 
         let result = if inner.val.is_some() {
-            match self.decode_headers(src, &mut inner) {
+            match MessageDecoder::<T>::decode_headers(src, &mut inner) {
                 Poll::Ready(Ok(())) => {
                     let mut val = inner.val.take().unwrap();
                     let len = inner.st.payload_length();
