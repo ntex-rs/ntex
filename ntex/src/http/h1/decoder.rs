@@ -19,6 +19,8 @@ pub(crate) struct MessageDecoder<T: MessageType> {
 struct Inner<T> {
     st: State,
     val: Option<T>,
+    hdr: httparse::Header,
+    hdr_st: httparse::State,
     cfg: Cfg<HttpServiceConfig>,
     consumed: usize,
 }
@@ -45,6 +47,8 @@ impl<T: MessageType> MessageDecoder<T> {
                 cfg,
                 st: State::default(),
                 val: None,
+                hdr: httparse::Header::default(),
+                hdr_st: httparse::State::default(),
                 consumed: 0,
             }))),
         }
@@ -64,11 +68,62 @@ impl<T: MessageType> Clone for MessageDecoder<T> {
                 st: State::default(),
                 val: None,
                 consumed: 0,
+                hdr: httparse::Header::default(),
+                hdr_st: httparse::State::default(),
                 cfg: inner.cfg.clone(),
             }))),
         };
         self.inner.set(Some(inner));
         val
+    }
+}
+
+impl<T: MessageType> MessageDecoder<T> {
+    fn decode_headers(
+        src: &mut BytesMut,
+        inner: &mut Inner<T>,
+    ) -> Poll<Result<(), DecodeError>> {
+        loop {
+            let result = match inner.hdr.parse_with_state(src, &mut inner.hdr_st)? {
+                Status::Complete(result) => result,
+                Status::Partial => return Poll::Pending,
+            };
+            match result {
+                HeaderParsed::Header(len) => {
+                    let buf = src.split_to(len);
+
+                    if inner.val.as_mut().unwrap().headers_mut().len()
+                        >= inner.cfg.max_headers
+                    {
+                        return Poll::Ready(Err(DecodeError::MaxHeaders));
+                    }
+                    let name = HeaderName::from_bytes(
+                        &buf[inner.hdr.name.start..inner.hdr.name.end],
+                    )
+                    .unwrap();
+
+                    // Unsafe: httparse checks header value for validity
+                    let value = unsafe {
+                        HeaderValue::from_shared_unchecked(
+                            buf.slice(inner.hdr.value.start..inner.hdr.value.end),
+                        )
+                    };
+
+                    inner.hdr_st = httparse::State::default();
+                    inner
+                        .val
+                        .as_mut()
+                        .unwrap()
+                        .set_header(&mut inner.st, name, value)?;
+                }
+                HeaderParsed::Eof(len) => {
+                    src.advance_to(len);
+                    inner.hdr_st = httparse::State::default();
+                    break;
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -78,61 +133,56 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
 
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let len = src.len();
-        let mut inner = self.inner.take().unwrap();
-        let mut cache = BUF.with(|b| b.take().unwrap());
         let mut pending = false;
+        let mut inner = self.inner.take().unwrap();
 
-        let result = loop {
-            if let Some(ref mut val) = inner.val {
-                break match val.decode_headers(
-                    src,
-                    &mut inner.st,
-                    &mut cache,
-                    inner.cfg.max_headers,
-                ) {
-                    Poll::Ready(Ok(pl)) => {
-                        inner.st = State::default();
-                        self.hdrs.set(false);
-                        Ok(Some((inner.val.take().unwrap(), pl)))
-                    }
-                    Poll::Pending => {
-                        pending = true;
-                        Ok(None)
-                    }
-                    Poll::Ready(Err(e)) => {
-                        BUF.with(move |b| b.set(Some(cache)));
-                        return Err(e);
-                    }
-                };
-            }
-            if len > 0 {
-                self.hdrs.set(true);
-            }
-            match T::decode(src, &mut cache) {
+        if len > 0 {
+            self.hdrs.set(true);
+        }
+        if inner.val.is_none() {
+            let mut cache = BUF.with(|b| b.take().unwrap());
+            let result = match T::decode(src, &mut cache) {
                 Poll::Ready(Ok(val)) => {
                     inner.st.version = val.msg_version();
                     inner.val = Some(val);
+                    Ok(())
                 }
-                Poll::Ready(Err(e)) => {
-                    BUF.with(move |b| b.set(Some(cache)));
-                    return Err(e);
+                Poll::Ready(Err(e)) => Err(e),
+                Poll::Pending => {
+                    pending = true;
+                    Ok(())
+                }
+            };
+            BUF.with(move |b| b.set(Some(cache)));
+            result?;
+        }
+
+        let result = if inner.val.is_some() {
+            match MessageDecoder::<T>::decode_headers(src, &mut inner) {
+                Poll::Ready(Ok(())) => {
+                    let mut val = inner.val.take().unwrap();
+                    let len = inner.st.payload_length();
+                    let pl = val.set_payload_length(&mut inner.st, len)?;
+                    inner.st = State::default();
+                    self.hdrs.set(false);
+                    Ok(Some((val, pl)))
                 }
                 Poll::Pending => {
                     pending = true;
-                    break Ok(None);
+                    Ok(None)
                 }
+                Poll::Ready(Err(e)) => Err(e),
             }
+        } else {
+            Ok(None)
         };
 
-        inner.consumed += len - src.len();
-
-        if pending && (inner.consumed + src.len()) >= inner.cfg.max_buf_size {
+        if pending && (inner.consumed + len) >= inner.cfg.max_buf_size {
             log::trace!("MAX_BUFFER_SIZE of data reached, closing");
-            BUF.with(move |b| b.set(Some(cache)));
-            return Err(DecodeError::TooLarge(inner.consumed + src.len()));
+            return Err(DecodeError::TooLarge(inner.consumed + len));
         }
 
-        BUF.with(move |b| b.set(Some(cache)));
+        inner.consumed += len - src.len();
         self.inner.set(Some(inner));
         result
     }
@@ -214,13 +264,11 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
         cache: &mut HeadersBuf,
     ) -> Poll<Result<Self, DecodeError>>;
 
-    fn decode_headers(
+    fn set_payload_length(
         &mut self,
-        src: &mut BytesMut,
-        state: &mut State,
-        cache: &mut HeadersBuf,
-        max_headers: usize,
-    ) -> Poll<Result<PayloadType, DecodeError>>;
+        st: &mut State,
+        length: PayloadLength,
+    ) -> Result<PayloadType, DecodeError>;
 
     fn set_header(
         &mut self,
@@ -344,47 +392,11 @@ impl MessageType for Request {
         }
     }
 
-    fn decode_headers(
+    fn set_payload_length(
         &mut self,
-        src: &mut BytesMut,
-        state: &mut State,
-        cache: &mut HeadersBuf,
-        max_headers: usize,
-    ) -> Poll<Result<PayloadType, DecodeError>> {
-        loop {
-            let result = match cache.hdr.parse(src)? {
-                Status::Complete(result) => result,
-                Status::Partial => return Poll::Pending,
-            };
-            match result {
-                HeaderParsed::Header(len) => {
-                    let buf = src.split_to(len);
-
-                    if self.headers().len() >= max_headers {
-                        return Poll::Ready(Err(DecodeError::MaxHeaders));
-                    }
-                    let name = HeaderName::from_bytes(
-                        &buf[cache.hdr.name.start..cache.hdr.name.end],
-                    )
-                    .unwrap();
-
-                    // Unsafe: httparse checks header value for valid utf-8
-                    let value = unsafe {
-                        HeaderValue::from_shared_unchecked(
-                            buf.slice(cache.hdr.value.start..cache.hdr.value.end),
-                        )
-                    };
-
-                    self.set_header(state, name, value)?;
-                }
-                HeaderParsed::Eof(len) => {
-                    src.advance_to(len);
-                    break;
-                }
-            }
-        }
-        let mut length = state.payload_length();
-
+        st: &mut State,
+        mut length: PayloadLength,
+    ) -> Result<PayloadType, DecodeError> {
         // disallow HTTP/1.0 POST requests that do not contain a Content-Length headers
         // see https://datatracker.ietf.org/doc/html/rfc1945#section-7.2.2
         if self.version() == Version::HTTP_10
@@ -392,13 +404,13 @@ impl MessageType for Request {
             && length.is_none()
         {
             log::trace!("no Content-Length specified for HTTP/1.0 POST request");
-            return Poll::Ready(Err(DecodeError::Header));
+            return Err(DecodeError::Header);
         }
 
-        if let Some(ctype) = state.ka {
+        if let Some(ctype) = st.ka {
             self.head_mut().set_connection_type(ctype);
         }
-        if state.flags.contains(Flags::EXPECT) {
+        if st.flags.contains(Flags::EXPECT) {
             self.head_mut().set_expect();
         }
 
@@ -427,7 +439,7 @@ impl MessageType for Request {
             }
         };
 
-        Poll::Ready(Ok(decoder))
+        Ok(decoder)
     }
 }
 
@@ -461,47 +473,11 @@ impl MessageType for ResponseHead {
         }
     }
 
-    fn decode_headers(
+    fn set_payload_length(
         &mut self,
-        src: &mut BytesMut,
-        state: &mut State,
-        cache: &mut HeadersBuf,
-        max_headers: usize,
-    ) -> Poll<Result<PayloadType, DecodeError>> {
-        loop {
-            let result = match cache.hdr.parse(src)? {
-                Status::Complete(result) => result,
-                Status::Partial => return Poll::Pending,
-            };
-            match result {
-                HeaderParsed::Header(len) => {
-                    let buf = src.split_to(len);
-
-                    if self.headers().len() >= max_headers {
-                        return Poll::Ready(Err(DecodeError::MaxHeaders));
-                    }
-                    let name = HeaderName::from_bytes(
-                        &buf[cache.hdr.name.start..cache.hdr.name.end],
-                    )
-                    .unwrap();
-
-                    // Unsafe: httparse checks header value for valid utf-8
-                    let value = unsafe {
-                        HeaderValue::from_shared_unchecked(
-                            buf.slice(cache.hdr.value.start..cache.hdr.value.end),
-                        )
-                    };
-
-                    self.set_header(state, name, value)?;
-                }
-                HeaderParsed::Eof(len) => {
-                    src.advance_to(len);
-                    break;
-                }
-            }
-        }
-        let mut length = state.payload_length();
-
+        st: &mut State,
+        mut length: PayloadLength,
+    ) -> Result<PayloadType, DecodeError> {
         // Remove CL value if 0 now that all headers and HTTP/1.0 special cases are processed.
         // Protects against some request smuggling attacks.
         // See https://github.com/actix/actix-web/issues/2767.
@@ -509,7 +485,7 @@ impl MessageType for ResponseHead {
             length = PayloadLength::None;
         }
 
-        if let Some(ka) = state.ka {
+        if let Some(ka) = st.ka {
             self.set_connection_type(ka);
         }
 
@@ -529,7 +505,7 @@ impl MessageType for ResponseHead {
             }
         };
 
-        Poll::Ready(Ok(decoder))
+        Ok(decoder)
     }
 }
 
@@ -594,7 +570,6 @@ thread_local! {
 pub(crate) struct HeadersBuf {
     req: httparse::Request,
     res: httparse::Response,
-    hdr: httparse::Header,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
