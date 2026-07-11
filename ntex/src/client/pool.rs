@@ -473,7 +473,7 @@ impl future::Future for OpenConnection {
             Err(err) => {
                 log::trace!(
                     "Failed to open client connection for {:?} with error {:?}",
-                    &this.key.authority,
+                    this.key.authority,
                     err
                 );
                 let _ = this.guard.take();
@@ -492,7 +492,7 @@ impl future::Future for OpenConnection {
                     // init http2 handshake
                     log::trace!(
                         "Connection for {:?} is established, start http2 handshake",
-                        &this.key.authority
+                        this.key.authority
                     );
                     let auth = if let Some(auth) = this.uri.authority() {
                         format!("{auth}").into()
@@ -516,7 +516,7 @@ impl future::Future for OpenConnection {
                         // waiter is gone, return connection to pool
                         log::trace!(
                             "Waiter for {:?} is gone while connecting to host",
-                            &this.key.authority
+                            this.key.authority
                         );
                     }
 
@@ -528,7 +528,7 @@ impl future::Future for OpenConnection {
                 } else {
                     log::trace!(
                         "Connection for {:?} is established, init http1 connection",
-                        &this.key.authority
+                        this.key.authority
                     );
                     let conn = Connection::new(
                         ConnectionType::H1(io),

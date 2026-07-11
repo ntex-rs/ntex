@@ -278,7 +278,7 @@ impl Future for MessageBody {
             }
         }
 
-        Pin::new(&mut this.fut.as_mut().unwrap()).poll(cx)
+        Pin::new(&mut *this.fut.as_mut().unwrap()).poll(cx)
     }
 }
 
@@ -384,7 +384,7 @@ where
             }
         }
 
-        let body = match Pin::new(&mut self.get_mut().fut.as_mut().unwrap()).poll(cx) {
+        let body = match Pin::new(&mut *self.get_mut().fut.as_mut().unwrap()).poll(cx) {
             Poll::Ready(result) => result?,
             Poll::Pending => return Poll::Pending,
         };

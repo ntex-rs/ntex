@@ -939,7 +939,7 @@ mod tests {
         b.clear();
         assert!(b.is_inline());
         assert!(b.is_empty());
-        assert!(b.len() == 0);
+        assert_eq!(b.len(), 0);
 
         let mut b = Bytes::from(LONG);
         b.advance_to(10);
@@ -949,7 +949,7 @@ mod tests {
         assert_eq!(&b, &LONG[20..]);
         b.clear();
         assert!(b.is_empty());
-        assert!(b.len() == 0);
+        assert_eq!(b.len(), 0);
 
         let mut b = Bytes::from(LONG);
         b.split_off(10);
@@ -966,7 +966,7 @@ mod tests {
 
         let mut b = Bytes::from(b"123");
         assert!(&b"12"[..] > &b);
-        assert!("123" == &b);
+        assert_eq!("123", &b);
         assert!("12" > &b);
         assert!("12" > b);
         assert_eq!(b.get_u8(), b'1');

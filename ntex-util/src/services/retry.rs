@@ -1,4 +1,6 @@
 #![allow(async_fn_in_trait)]
+use std::future::{Future, ready};
+
 use ntex_service::{Middleware, Service, ServiceCtx};
 
 /// Trait defines retry policy
@@ -111,8 +113,12 @@ where
     R: Clone,
     S: Service<R>,
 {
-    async fn retry(&mut self, _: &R, res: &Result<S::Response, S::Error>) -> bool {
-        if res.is_err() {
+    fn retry(
+        &mut self,
+        _: &R,
+        res: &Result<S::Response, S::Error>,
+    ) -> impl Future<Output = bool> {
+        let res = if res.is_err() {
             if self.0 == 0 {
                 false
             } else {
@@ -121,7 +127,8 @@ where
             }
         } else {
             false
-        }
+        };
+        ready(res)
     }
 
     fn clone_request(&self, req: &R) -> Option<R> {
@@ -131,6 +138,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unused_async_trait_impl)]
     use std::{cell::Cell, rc::Rc};
 
     use ntex_service::{Pipeline, apply, fn_factory};

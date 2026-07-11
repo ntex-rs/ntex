@@ -72,7 +72,7 @@ mod tests {
         assert_eq!(lazy(|cx| ch.poll_recv(cx)).await, Poll::Pending);
 
         assert!(ch.send(1).is_ok());
-        assert!(ch.send(2) == Err(2));
+        assert_eq!(ch.send(2), Err(2));
         assert_eq!(lazy(|cx| ch.poll_recv(cx)).await, Poll::Ready(1));
 
         assert!(ch.send(1).is_ok());

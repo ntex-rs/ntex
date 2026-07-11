@@ -217,6 +217,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use ntex::util::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
@@ -323,7 +324,7 @@ mod tests {
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{new_srv:?}");
 
-        assert!(Err == Err::from(()));
+        assert_eq!(Err, Err::from(()));
     }
 
     #[ntex::test]

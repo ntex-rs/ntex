@@ -92,6 +92,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unused_async_trait_impl)]
     use ntex::util::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
 

@@ -327,7 +327,7 @@ mod tests {
         let state = Io::from(server);
         let ctx = IoContext::new(state.get_ref());
         let _ = ctx.flags();
-        assert!(ctx.id() != Id::default());
+        assert_ne!(ctx.id(), Id::default());
         assert!(format!("{ctx:?}").contains("IoContext"));
     }
 }

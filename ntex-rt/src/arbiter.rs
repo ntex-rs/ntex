@@ -166,7 +166,7 @@ impl Arbiter {
                 log::info!("Arbiter {name3:?} has been stopped");
             })
             .unwrap_or_else(|err| {
-                panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
+                panic!("Cannot spawn an arbiter's thread {name:?}: {err:?}")
             });
 
         let arb = arb_hnd_rx.recv().expect("Could not start new arbiter");

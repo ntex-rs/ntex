@@ -627,6 +627,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering::Relaxed};
     use std::{cell::RefCell, io};

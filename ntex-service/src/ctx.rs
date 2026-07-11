@@ -254,7 +254,7 @@ impl<S: ?Sized, F: Future> Future for ReadyCall<'_, S, F> {
 }
 
 #[cfg(test)]
-#[allow(clippy::should_panic_without_expect)]
+#[allow(clippy::should_panic_without_expect, clippy::unused_async_trait_impl)]
 mod tests {
     use std::{cell::Cell, cell::RefCell, future::poll_fn};
 

@@ -1,3 +1,4 @@
+#![allow(clippy::unused_async_trait_impl)]
 use std::io;
 
 use crate::http::ResponseError;

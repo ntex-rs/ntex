@@ -1,10 +1,10 @@
-use std::{cell::RefCell, error::Error, fmt, io};
+use std::{cell::RefCell, error::Error, fmt, future::Future, io};
 
 use ntex_bytes::BytePages;
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{services::Counter, time};
+use ntex_util::{future::Ready, services::Counter, time};
 use tls_openssl::ssl;
 
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, openssl::SslFilter};
@@ -42,9 +42,12 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for SslAcceptor {
     type Service = SslAcceptorService;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    fn create(
+        &self,
+        cfg: SharedCfg,
+    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
-            Ok(SslAcceptorService {
+            Ready::Ok(SslAcceptorService {
                 acceptor: self.acceptor.clone(),
                 conns: conns.clone(),
                 cfg: cfg.get(),

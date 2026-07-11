@@ -751,14 +751,15 @@ mod tests {
     #[ntex::test]
     #[allow(clippy::eq_op)]
     async fn test_body_eq() {
-        assert!(Body::None == Body::None);
-        assert!(Body::None != Body::Empty);
-        assert!(Body::Empty == Body::Empty);
-        assert!(Body::Empty != Body::None);
-        assert!(
-            Body::Bytes(Bytes::from_static(b"1")) == Body::Bytes(Bytes::from_static(b"1"))
+        assert_eq!(Body::None, Body::None);
+        assert_ne!(Body::None, Body::Empty);
+        assert_eq!(Body::Empty, Body::Empty);
+        assert_ne!(Body::Empty, Body::None);
+        assert_eq!(
+            Body::Bytes(Bytes::from_static(b"1")),
+            Body::Bytes(Bytes::from_static(b"1"))
         );
-        assert!(Body::Bytes(Bytes::from_static(b"1")) != Body::None);
+        assert_ne!(Body::Bytes(Bytes::from_static(b"1")), Body::None);
     }
 
     #[ntex::test]
@@ -774,7 +775,7 @@ mod tests {
         assert!(format!("{st:?}").contains("BodyStream"));
         let body: Body = st.into();
         assert!(format!("{body:?}").contains("Body::Message(_)"));
-        assert!(body != Body::None);
+        assert_ne!(body, Body::None);
 
         let res = ResponseBody::new(body);
         assert!(res.as_ref().is_some());
@@ -788,7 +789,7 @@ mod tests {
         assert!(format!("{st:?}").contains("BoxedBodyStream"));
         let body: Body = st.into();
         assert!(format!("{body:?}").contains("Body::Message(_)"));
-        assert!(body != Body::None);
+        assert_ne!(body, Body::None);
 
         let res = ResponseBody::new(body);
         assert!(res.as_ref().is_some());
