@@ -203,7 +203,7 @@ impl Service<Connect> for ConnectionPool {
 
                 match rx.await {
                     Err(_) => Err(ConnectError::Disconnected(None)),
-                    Ok(res) => res,
+                    Ok(result) => result,
                 }
             }
             // pool is full, wait
@@ -216,7 +216,7 @@ impl Service<Connect> for ConnectionPool {
                 let rx = waiters.borrow_mut().wait_for(req);
                 match rx.await {
                     Err(_) => Err(ConnectError::Disconnected(None)),
-                    Ok(res) => res,
+                    Ok(result) => result,
                 }
             }
         }
