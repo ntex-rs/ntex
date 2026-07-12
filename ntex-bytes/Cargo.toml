@@ -28,7 +28,6 @@ bytes = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true, optional = true }
 simdutf8 = { workspace = true, optional = true }
-sptr = { workspace = true }
 backtrace = { workspace = true, optional = true }
 
 [dev-dependencies]

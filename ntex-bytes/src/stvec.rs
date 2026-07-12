@@ -2,7 +2,7 @@ use crate::alloc::alloc::{self, Layout, LayoutError};
 
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{self, AtomicU32};
-use std::{cell::Cell, mem, ptr, ptr::NonNull, slice};
+use std::{cell::Cell, mem, num::NonZeroUsize, ptr, ptr::NonNull, slice};
 
 use crate::{BytePageSize, storage::Storage};
 
@@ -152,7 +152,9 @@ impl StorageVec {
                 let inner = Storage {
                     ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
                     len: self.len(),
-                    offset: (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
+                    offset: NonZeroUsize::new_unchecked(
+                        (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
+                    ),
                 };
                 mem::forget(self);
                 inner
@@ -177,7 +179,9 @@ impl StorageVec {
                 Storage {
                     ptr: (self.0.as_ptr().cast::<u8>()).add(offset),
                     len: at,
-                    offset: (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
+                    offset: NonZeroUsize::new_unchecked(
+                        (offset << KIND_OFFSET_BITS) ^ KIND_VEC,
+                    ),
                 }
             };
             self.set_start(at as u32);

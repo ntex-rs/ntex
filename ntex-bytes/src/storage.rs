@@ -93,16 +93,14 @@
 //! Care is taken to minimize the need for synchronization. Most operations do
 //! not require any synchronization.
 //!
-use std::{cmp, mem, ptr, slice, sync::atomic::Ordering::Relaxed};
-
-use sptr::Strict;
+use std::{cmp, mem, num::NonZeroUsize, ptr, slice, sync::atomic::Ordering::Relaxed};
 
 use crate::{BytePageSize, info::Info, info::Kind, stext::StorageVTable, stvec};
 
 #[cfg(target_endian = "little")]
 #[repr(C)]
 pub(crate) struct Storage {
-    pub(crate) offset: usize,
+    pub(crate) offset: NonZeroUsize,
     pub(crate) ptr: *mut u8,
     pub(crate) len: usize,
 }
@@ -112,7 +110,7 @@ pub(crate) struct Storage {
 pub(crate) struct Storage {
     pub(crate) len: usize,
     pub(crate) ptr: *mut u8,
-    pub(crate) offset: usize,
+    pub(crate) offset: NonZeroUsize,
 }
 
 // Buffer storage strategy flags.
@@ -145,11 +143,12 @@ pub(crate) const INLINE_CAP: usize = 3 * 8 - 1;
 pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 
 // Inline storage
-// const PTR_INLINE: usize = KIND_INLINE;
+const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
 // Static storage
-// const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
+const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
 // Default offset
-const DEFAUILT_OFFSET: usize = (stvec::METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC;
+const DEFAUILT_OFFSET: NonZeroUsize =
+    NonZeroUsize::new((stvec::METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
 
 /*
  *
@@ -163,7 +162,7 @@ impl Storage {
         Storage {
             ptr: ptr::null_mut(),
             len: 0,
-            offset: KIND_INLINE,
+            offset: PTR_INLINE,
         }
     }
 
@@ -174,7 +173,7 @@ impl Storage {
         Storage {
             ptr,
             len: bytes.len(),
-            offset: KIND_STATIC,
+            offset: PTR_STATIC,
         }
     }
 
@@ -187,7 +186,7 @@ impl Storage {
         Storage {
             len,
             ptr: addr.cast_mut(),
-            offset: vtable.expose_addr(),
+            offset: unsafe { NonZeroUsize::new_unchecked(vtable.expose_provenance()) },
         }
     }
 
@@ -216,7 +215,7 @@ impl Storage {
         let mut st = Storage {
             ptr: ptr::null_mut(),
             len: 0,
-            offset: KIND_INLINE,
+            offset: PTR_INLINE,
         };
 
         let dst = st.inline_ptr();
@@ -298,7 +297,7 @@ impl Storage {
 
     #[inline]
     fn inline_len(&self) -> usize {
-        (self.offset & INLINE_LEN_MASK) >> KIND_OFFSET_BITS
+        (self.offset.get() & INLINE_LEN_MASK) >> KIND_OFFSET_BITS
     }
 
     #[inline]
@@ -410,7 +409,11 @@ impl Storage {
     #[inline]
     fn set_inline_len(&mut self, len: usize) {
         debug_assert!(len <= INLINE_CAP);
-        self.offset = self.offset & !INLINE_LEN_MASK | (len << KIND_OFFSET_BITS);
+        self.offset = unsafe {
+            NonZeroUsize::new_unchecked(
+                self.offset.get() & !INLINE_LEN_MASK | (len << KIND_OFFSET_BITS),
+            )
+        };
     }
 
     pub(crate) unsafe fn set_start(&mut self, start: usize) {
@@ -427,7 +430,7 @@ impl Storage {
                 // Updating the start of the view is setting `ptr` to point to the
                 // new start and updating the `len` field to reflect the new length
                 // of the view.
-                let offset = (self.offset >> KIND_OFFSET_BITS) + start;
+                let offset = (self.offset.get() >> KIND_OFFSET_BITS) + start;
 
                 self.ptr = (shared.cast::<u8>()).add(offset);
                 if self.len >= start {
@@ -436,7 +439,8 @@ impl Storage {
                     self.len = 0;
                 }
 
-                self.offset = (offset << KIND_OFFSET_BITS) ^ KIND_VEC;
+                self.offset =
+                    NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
             }
             KIND_INLINE => {
                 assert!(start <= INLINE_CAP);
@@ -558,7 +562,7 @@ impl Storage {
 
     #[inline]
     fn shared_vec(&self) -> *mut stvec::SharedVec {
-        let offset = self.offset >> KIND_OFFSET_BITS;
+        let offset = self.offset.get() >> KIND_OFFSET_BITS;
         #[allow(clippy::cast_ptr_alignment)]
         unsafe {
             self.ptr.sub(offset).cast::<stvec::SharedVec>()
@@ -567,7 +571,7 @@ impl Storage {
 
     #[inline]
     fn st_vtable(&self) -> *const StorageVTable {
-        ptr::with_exposed_provenance::<StorageVTable>(self.offset)
+        ptr::with_exposed_provenance::<StorageVTable>(self.offset.get())
     }
 
     #[inline]
@@ -615,7 +619,7 @@ impl Storage {
             }
         }
 
-        imp(self.offset)
+        imp(self.offset.get())
     }
 
     pub(crate) fn info(&self) -> Info {

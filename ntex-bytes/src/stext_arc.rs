@@ -12,9 +12,9 @@ fn len(_: *const u8, len: usize) -> usize {
     len
 }
 
-fn clone(addr: *const u8, len: usize) -> Option<(*const u8, usize)> {
+fn clone_str(addr: *const u8, len: usize) -> Option<(*const u8, usize)> {
     let slice_ptr: *const [u8] = ptr::slice_from_raw_parts(addr, len);
-    let str_ptr: *const str = slice_ptr as *const str;
+    let str_ptr = slice_ptr as *const str;
     let arc = unsafe { Arc::from_raw(str_ptr) };
     let arc2 = arc.clone();
     mem::forget(arc);
@@ -23,18 +23,18 @@ fn clone(addr: *const u8, len: usize) -> Option<(*const u8, usize)> {
     Some((addr, len))
 }
 
-fn drop1(addr: *const u8, len: usize) {
+fn drop_str(addr: *const u8, len: usize) {
     let slice_ptr: *const [u8] = ptr::slice_from_raw_parts(addr, len);
-    let str_ptr: *const str = slice_ptr as *const str;
+    let str_ptr = slice_ptr as *const str;
     let arc = unsafe { Arc::from_raw(str_ptr) };
     drop(arc);
 }
 
-const ARC_STR_VTABLE: StorageVTable = StorageVTable::new(as_ptr, len, clone, drop1);
+const ARC_STR_VTABLE: StorageVTable = StorageVTable::new(as_ptr, len, clone_str, drop_str);
 
 impl StorageExt for Arc<str> {
     fn create(self) -> (*const u8, usize, &'static StorageVTable) {
-        let ptr: *const [u8] = Arc::into_raw(self) as *const [u8];
+        let ptr = Arc::into_raw(self) as *const [u8];
 
         // Extract address and length
         let addr = ptr.cast::<()>().cast::<u8>();
