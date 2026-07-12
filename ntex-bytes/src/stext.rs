@@ -1,5 +1,6 @@
-use crate::{Bytes, storage::Storage};
+use crate::{ByteString, Bytes, storage::Storage};
 
+/// External storage type vtable
 #[derive(Debug)]
 pub struct StorageVTable {
     pub(crate) as_ptr: unsafe fn(*const u8, usize) -> *const u8,
@@ -24,8 +25,19 @@ impl StorageVTable {
     }
 }
 
+/// Types that could be used as external storage for Bytes
 pub trait StorageExt: Send + Sync {
     fn create(self) -> (*const u8, usize, &'static StorageVTable);
+}
+
+/// Type's `as_ptr` must return ptr to valid string.
+///
+/// # Safety
+/// Only valid str could implement this trait
+pub unsafe trait StorageExtStr: StorageExt + Sized {
+    fn create(self) -> (*const u8, usize, &'static StorageVTable) {
+        StorageExt::create(self)
+    }
 }
 
 impl Bytes {
@@ -34,6 +46,18 @@ impl Bytes {
 
         Bytes {
             storage: Storage::from_stext(addr, len, vtable),
+        }
+    }
+}
+
+impl ByteString {
+    pub fn from_ext<T: StorageExtStr>(val: T) -> ByteString {
+        let (addr, len, vtable) = StorageExtStr::create(val);
+
+        unsafe {
+            ByteString::from_bytes_unchecked(Bytes {
+                storage: Storage::from_stext(addr, len, vtable),
+            })
         }
     }
 }

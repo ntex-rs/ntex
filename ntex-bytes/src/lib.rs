@@ -79,7 +79,7 @@ mod stext_arc;
 pub use crate::bvec::BytesMut;
 pub use crate::bytes::Bytes;
 pub use crate::pages::{BytePage, BytePages};
-pub use crate::stext::{StorageExt, StorageVTable};
+pub use crate::stext::{StorageExt, StorageExtStr, StorageVTable};
 pub use crate::string::ByteString;
 
 #[doc(hidden)]

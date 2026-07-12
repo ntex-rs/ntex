@@ -1,6 +1,6 @@
 use std::{mem, ptr, sync::Arc};
 
-use crate::{StorageExt, StorageVTable};
+use crate::{StorageExt, StorageExtStr, StorageVTable};
 
 // ======== Impl for Arc<str> ========
 
@@ -43,11 +43,15 @@ impl StorageExt for Arc<str> {
     }
 }
 
+// # SAFETY
+// Implementation must contain valid string which Arc<str> does
+unsafe impl StorageExtStr for Arc<str> {}
+
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod tests {
     use super::*;
-    use crate::Bytes;
+    use crate::{ByteString, Bytes};
 
     #[test]
     fn test_arc_str() {
@@ -63,6 +67,13 @@ mod tests {
 
         drop(b2);
         assert_eq!(&b, b"test");
+        assert_eq!(Arc::strong_count(&test), 2);
+
+        drop(b);
+        assert_eq!(Arc::strong_count(&test), 1);
+
+        let b = ByteString::from_ext(test.clone());
+        assert_eq!(&b, "test");
         assert_eq!(Arc::strong_count(&test), 2);
 
         drop(b);
