@@ -21,29 +21,11 @@ pub(crate) struct SharedVec {
 pub(crate) struct StorageVec(pub(crate) NonNull<SharedVec>);
 
 // Buffer storage strategy flags.
-const KIND_EXT: usize = 0b00;
 const KIND_VEC: usize = 0b01;
-const KIND_INLINE: usize = 0b10;
-const KIND_STATIC: usize = 0b11;
-const KIND_MASK: usize = 0b11;
 const KIND_OFFSET_BITS: usize = 2;
 
 pub const METADATA_SIZE: usize = mem::size_of::<SharedVec>();
 const METADATA_SIZE_U32: u32 = METADATA_SIZE as u32;
-
-pub(crate) const MIN_CAPACITY: usize = 128 - crate::METADATA_SIZE;
-
-// Bit op constants for extracting the inline length value from the `ptr` field.
-const INLINE_LEN_MASK: usize = 0b1111_1100;
-
-// Byte offset from the start of `Storage` to where the inline buffer data
-// starts. On little endian platforms, the first byte of the struct is the
-// storage flag, so the data is shifted by a byte. On big endian systems, the
-// data starts at the beginning of the struct.
-#[cfg(target_endian = "little")]
-const INLINE_DATA_OFFSET: isize = 1;
-#[cfg(target_endian = "big")]
-const INLINE_DATA_OFFSET: isize = 0;
 
 // Inline buffer capacity. This is the size of `Storage` minus 1 byte for the
 // metadata.
@@ -51,14 +33,6 @@ const INLINE_DATA_OFFSET: isize = 0;
 pub(crate) const INLINE_CAP: usize = 3 * 8 - 1;
 #[cfg(target_pointer_width = "32")]
 pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
-
-// Inline storage
-const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
-// Static storage
-const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
-// Default offset
-const DEFAUILT_OFFSET: NonZeroUsize =
-    NonZeroUsize::new((METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
 
 impl StorageVec {
     /// Create new empty storage with specified capacity
@@ -535,11 +509,6 @@ pub(crate) fn abort() {
 mod tests {
     use super::*;
     use crate::*;
-
-    const LONG: &[u8] =
-        b"mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
-        mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb \
-        mary had a little lamb, little lamb, little lamb, little lamb, little lamb, little lamb";
 
     #[test]
     fn cached() {

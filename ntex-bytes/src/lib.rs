@@ -56,7 +56,6 @@
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation
 )]
-#![allow(dead_code)]
 
 extern crate alloc;
 
