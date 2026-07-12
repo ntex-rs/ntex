@@ -24,6 +24,9 @@ fn test_size() {
     assert_eq!(8, std::mem::size_of::<BytesMut>());
     assert_eq!(16, std::mem::size_of::<BytePages>());
     assert_eq!(32, std::mem::size_of::<BytePage>());
+    assert_eq!(16, std::mem::size_of::<std::sync::Arc<str>>());
+    assert_eq!(8, std::mem::size_of::<std::sync::Arc<String>>());
+    assert_eq!(16, std::mem::size_of::<&'static str>());
 
     let mut t = BytesMut::new();
     t.extend_from_slice(&b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"[..]);

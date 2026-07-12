@@ -1,5 +1,5 @@
 //! A UTF-8 encoded read-only string using Bytes as storage.
-use std::{borrow, fmt, hash, ops, slice, str};
+use std::{borrow, fmt, hash, ops, slice, str, sync::Arc};
 
 use crate::{Bytes, BytesMut};
 
@@ -266,6 +266,13 @@ impl<'a> From<borrow::Cow<'a, str>> for ByteString {
             borrow::Cow::Owned(s) => Self::from(s),
             borrow::Cow::Borrowed(s) => Self::from(s),
         }
+    }
+}
+
+impl From<Arc<str>> for ByteString {
+    #[inline]
+    fn from(value: Arc<str>) -> Self {
+        ByteString::from_ext(value)
     }
 }
 

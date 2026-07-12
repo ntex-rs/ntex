@@ -2,7 +2,7 @@
 use std::{borrow::Borrow, cell::Cell, cmp, collections::VecDeque, fmt, io, mem, ops, ptr};
 
 use crate::{BufMut, BytePageSize, ByteString, Bytes, BytesMut};
-use crate::{buf::UninitSlice, storage::StorageVec};
+use crate::{buf::UninitSlice, stvec::StorageVec};
 
 pub struct BytePages {
     st: Option<Box<Inner>>,
