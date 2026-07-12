@@ -93,14 +93,16 @@
 //! Care is taken to minimize the need for synchronization. Most operations do
 //! not require any synchronization.
 //!
-use std::{cmp, mem, num::NonZeroUsize, ptr, slice, sync::atomic::Ordering::Relaxed};
+use std::{cmp, mem, ptr, slice, sync::atomic::Ordering::Relaxed};
+
+use sptr::Strict;
 
 use crate::{BytePageSize, info::Info, info::Kind, stext::StorageVTable, stvec};
 
 #[cfg(target_endian = "little")]
 #[repr(C)]
 pub(crate) struct Storage {
-    pub(crate) offset: NonZeroUsize,
+    pub(crate) offset: usize,
     pub(crate) ptr: *mut u8,
     pub(crate) len: usize,
 }
@@ -110,7 +112,7 @@ pub(crate) struct Storage {
 pub(crate) struct Storage {
     pub(crate) len: usize,
     pub(crate) ptr: *mut u8,
-    pub(crate) offset: NonZeroUsize,
+    pub(crate) offset: usize,
 }
 
 // Buffer storage strategy flags.
@@ -143,12 +145,11 @@ pub(crate) const INLINE_CAP: usize = 3 * 8 - 1;
 pub(crate) const INLINE_CAP: usize = 3 * 4 - 1;
 
 // Inline storage
-const PTR_INLINE: NonZeroUsize = NonZeroUsize::new(KIND_INLINE).unwrap();
+// const PTR_INLINE: usize = KIND_INLINE;
 // Static storage
-const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
+// const PTR_STATIC: NonZeroUsize = NonZeroUsize::new(KIND_STATIC).unwrap();
 // Default offset
-const DEFAUILT_OFFSET: NonZeroUsize =
-    NonZeroUsize::new((stvec::METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC).unwrap();
+const DEFAUILT_OFFSET: usize = (stvec::METADATA_SIZE << KIND_OFFSET_BITS) ^ KIND_VEC;
 
 /*
  *
@@ -162,7 +163,7 @@ impl Storage {
         Storage {
             ptr: ptr::null_mut(),
             len: 0,
-            offset: PTR_INLINE,
+            offset: KIND_INLINE,
         }
     }
 
@@ -173,20 +174,20 @@ impl Storage {
         Storage {
             ptr,
             len: bytes.len(),
-            offset: PTR_STATIC,
+            offset: KIND_STATIC,
         }
     }
 
     #[inline]
     pub(crate) fn from_stext(
-        data1: usize,
-        data2: usize,
-        vtable: &'static StorageVTable,
+        addr: *const u8,
+        len: usize,
+        vtable: *const StorageVTable,
     ) -> Storage {
         Storage {
-            ptr: data1 as *mut u8,
-            len: data2,
-            offset: unsafe { NonZeroUsize::new_unchecked(ptr::from_ref(vtable) as usize) },
+            len,
+            ptr: addr.cast_mut(),
+            offset: vtable.expose_addr(),
         }
     }
 
@@ -215,7 +216,7 @@ impl Storage {
         let mut st = Storage {
             ptr: ptr::null_mut(),
             len: 0,
-            offset: PTR_INLINE,
+            offset: KIND_INLINE,
         };
 
         let dst = st.inline_ptr();
@@ -242,7 +243,7 @@ impl Storage {
         unsafe {
             match self.kind() {
                 KIND_INLINE => self.inline_ptr_ro(),
-                KIND_STEXT => (self.st_vtable().as_ptr)(self.st_data1(), self.st_data2()),
+                KIND_STEXT => ((*self.st_vtable()).as_ptr)(self.st_addr(), self.st_len()),
                 _ => self.ptr,
             }
         }
@@ -251,7 +252,7 @@ impl Storage {
     pub(crate) fn len(&self) -> usize {
         match self.kind() {
             KIND_STEXT => unsafe {
-                (self.st_vtable().len)(self.st_data1(), self.st_data2())
+                ((*self.st_vtable()).len)(self.st_addr(), self.st_len())
             },
             KIND_INLINE => self.inline_len(),
             _ => self.len,
@@ -266,10 +267,10 @@ impl Storage {
                     *self.inline_ptr_ro()
                 }
                 KIND_STEXT => {
-                    let vt = self.st_vtable();
-                    let len = (vt.len)(self.st_data1(), self.st_data2());
+                    let vt = &*self.st_vtable();
+                    let len = (vt.len)(self.st_addr(), self.st_len());
                     assert!(len >= 1);
-                    *(vt.as_ptr)(self.st_data1(), self.st_data2())
+                    *(vt.as_ptr)(self.st_addr(), self.st_len())
                 }
                 _ => {
                     assert!(self.len >= 1);
@@ -297,7 +298,7 @@ impl Storage {
 
     #[inline]
     fn inline_len(&self) -> usize {
-        (self.offset.get() & INLINE_LEN_MASK) >> KIND_OFFSET_BITS
+        (self.offset & INLINE_LEN_MASK) >> KIND_OFFSET_BITS
     }
 
     #[inline]
@@ -311,7 +312,7 @@ impl Storage {
         match kind {
             KIND_VEC => unsafe { (*self.shared_vec()).capacity() },
             KIND_STEXT => unsafe {
-                (self.st_vtable().len)(self.st_data1(), self.st_data2())
+                ((*self.st_vtable()).len)(self.st_addr(), self.st_len())
             },
             KIND_INLINE => INLINE_CAP,
             _ => self.len,
@@ -409,11 +410,7 @@ impl Storage {
     #[inline]
     fn set_inline_len(&mut self, len: usize) {
         debug_assert!(len <= INLINE_CAP);
-        self.offset = unsafe {
-            NonZeroUsize::new_unchecked(
-                self.offset.get() & !INLINE_LEN_MASK | (len << KIND_OFFSET_BITS),
-            )
-        };
+        self.offset = self.offset & !INLINE_LEN_MASK | (len << KIND_OFFSET_BITS);
     }
 
     pub(crate) unsafe fn set_start(&mut self, start: usize) {
@@ -430,7 +427,7 @@ impl Storage {
                 // Updating the start of the view is setting `ptr` to point to the
                 // new start and updating the `len` field to reflect the new length
                 // of the view.
-                let offset = (self.offset.get() >> KIND_OFFSET_BITS) + start;
+                let offset = (self.offset >> KIND_OFFSET_BITS) + start;
 
                 self.ptr = (shared.cast::<u8>()).add(offset);
                 if self.len >= start {
@@ -439,8 +436,7 @@ impl Storage {
                     self.len = 0;
                 }
 
-                self.offset =
-                    NonZeroUsize::new_unchecked((offset << KIND_OFFSET_BITS) ^ KIND_VEC);
+                self.offset = (offset << KIND_OFFSET_BITS) ^ KIND_VEC;
             }
             KIND_INLINE => {
                 assert!(start <= INLINE_CAP);
@@ -540,12 +536,16 @@ impl Storage {
             Storage { ..*self }
         } else {
             // ext storage
-            let (data1, data2) = (self.st_vtable().clone)(self.st_data1(), self.st_data2());
-
-            Storage {
-                ptr: data1 as *mut u8,
-                len: data2,
-                offset: self.offset,
+            if let Some((addr, len)) =
+                ((*self.st_vtable()).clone)(self.st_addr(), self.st_len())
+            {
+                Storage {
+                    len,
+                    ptr: addr.cast_mut(),
+                    offset: self.offset,
+                }
+            } else {
+                Storage::from_slice(self.as_ref())
             }
         }
     }
@@ -558,7 +558,7 @@ impl Storage {
 
     #[inline]
     fn shared_vec(&self) -> *mut stvec::SharedVec {
-        let offset = self.offset.get() >> KIND_OFFSET_BITS;
+        let offset = self.offset >> KIND_OFFSET_BITS;
         #[allow(clippy::cast_ptr_alignment)]
         unsafe {
             self.ptr.sub(offset).cast::<stvec::SharedVec>()
@@ -566,17 +566,17 @@ impl Storage {
     }
 
     #[inline]
-    fn st_vtable(&self) -> &StorageVTable {
-        unsafe { &*(self.offset.get() as *const StorageVTable) }
+    fn st_vtable(&self) -> *const StorageVTable {
+        ptr::with_exposed_provenance::<StorageVTable>(self.offset)
     }
 
     #[inline]
-    fn st_data1(&self) -> usize {
-        self.ptr as usize
+    fn st_addr(&self) -> *const u8 {
+        self.ptr.cast_const()
     }
 
     #[inline]
-    fn st_data2(&self) -> usize {
+    fn st_len(&self) -> usize {
         self.len
     }
 
@@ -615,7 +615,7 @@ impl Storage {
             }
         }
 
-        imp(self.offset.get())
+        imp(self.offset)
     }
 
     pub(crate) fn info(&self) -> Info {
@@ -661,7 +661,7 @@ impl Drop for Storage {
                 stvec::release_shared_vec(self.shared_vec());
             }
             KIND_STEXT => unsafe {
-                (self.st_vtable().drop)(self.st_data1(), self.st_data2());
+                ((*self.st_vtable()).drop)(self.st_addr(), self.st_len());
             },
             _ => {}
         }

@@ -51,10 +51,11 @@
 #![deny(clippy::pedantic)]
 #![allow(
     unsafe_op_in_unsafe_fn,
-    clippy::must_use_candidate,
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    clippy::must_use_candidate,
+    clippy::unnecessary_wraps
 )]
 
 extern crate alloc;
@@ -68,10 +69,12 @@ mod debug;
 mod hex;
 mod pages;
 mod serde;
-mod stext;
 mod storage;
 mod string;
 mod stvec;
+
+mod stext;
+mod stext_arc;
 
 pub use crate::bvec::BytesMut;
 pub use crate::bytes::Bytes;
