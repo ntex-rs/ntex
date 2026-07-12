@@ -56,6 +56,7 @@
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation
 )]
+#![allow(dead_code)]
 
 extern crate alloc;
 
@@ -68,16 +69,19 @@ mod debug;
 mod hex;
 mod pages;
 mod serde;
+mod stext;
 mod storage;
 mod string;
+mod stvec;
 
 pub use crate::bvec::BytesMut;
 pub use crate::bytes::Bytes;
 pub use crate::pages::{BytePage, BytePages};
+pub use crate::stext::{StorageExt, StorageVTable};
 pub use crate::string::ByteString;
 
 #[doc(hidden)]
-pub use crate::storage::METADATA_SIZE;
+pub use crate::stvec::METADATA_SIZE;
 
 #[doc(hidden)]
 #[deprecated]
@@ -98,6 +102,7 @@ pub mod info {
         Inline,
         Static,
         Vec,
+        StExt,
     }
 }
 
@@ -145,7 +150,7 @@ impl BytePageSize {
 ///
 /// Size is set for current thread
 pub fn set_pages_cache(size: usize) {
-    self::storage::set_pages_cache(size);
+    self::stvec::set_pages_cache(size);
 }
 
 #[cfg(test)]

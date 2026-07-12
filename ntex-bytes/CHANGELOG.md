@@ -1,5 +1,9 @@
 # Changes
 
+## [1.8.0] (2026-07-12)
+
+* Introduce external storage for Bytes and ByteString
+
 ## [1.7.2] (2026-06-12)
 
 * Do not allocate default buffer for ButePages
