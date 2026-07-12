@@ -51,7 +51,7 @@ unsafe impl StorageExtStr for Arc<str> {}
 #[allow(unused_must_use)]
 mod tests {
     use super::*;
-    use crate::{ByteString, Bytes};
+    use crate::{ByteString, Bytes, buf::Buf};
 
     #[test]
     fn test_arc_str() {
@@ -59,6 +59,7 @@ mod tests {
 
         let b = Bytes::from_ext(test.clone());
         assert_eq!(&b, b"test");
+        assert_eq!(b.storage.capacity(), 4);
         assert_eq!(Arc::strong_count(&test), 2);
 
         let b2 = b.clone();
@@ -77,6 +78,27 @@ mod tests {
         assert_eq!(Arc::strong_count(&test), 2);
 
         drop(b);
+        assert_eq!(Arc::strong_count(&test), 1);
+
+        let mut b = Bytes::from_ext(test.clone());
+        assert_eq!(Arc::strong_count(&test), 2);
+        assert_eq!(b.get_u8(), b't');
+        assert_eq!(&b, b"est");
+        assert_eq!(Arc::strong_count(&test), 1);
+
+        let mut b = Bytes::from_ext(test.clone());
+        b.truncate(2);
+        assert_eq!(&b, b"te");
+        assert_eq!(Arc::strong_count(&test), 1);
+
+        let mut b = Bytes::from_ext(test.clone());
+        unsafe { b.storage.set_start(2) };
+        assert_eq!(&b, b"st");
+        assert_eq!(Arc::strong_count(&test), 1);
+
+        let mut b = Bytes::from_ext(test.clone());
+        unsafe { b.storage.set_end(2) };
+        assert_eq!(&b, b"te");
         assert_eq!(Arc::strong_count(&test), 1);
     }
 }
