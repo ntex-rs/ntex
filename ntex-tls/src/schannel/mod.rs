@@ -520,8 +520,14 @@ impl FilterLayer for SchannelFilter {
 
     fn process_read_buf(&self, rb: &FilterBuf<'_>) -> io::Result<()> {
         let mut inner = self.inner.borrow_mut();
-        if inner.state != State::Streaming {
-            return Ok(());
+        if inner.state == State::Handshaking {
+            let state = rb.with_write_buffers(|_, dst| {
+                rb.with_read_src(|src| inner.ctx.handshake_step(src.as_mut(), dst))
+            })?;
+            if state == HandshakeState::NeedRead {
+                return Ok(());
+            }
+            inner.state = State::Streaming;
         }
 
         rb.with_read_buffers(|r_src, r_dst| {
@@ -560,16 +566,19 @@ impl FilterLayer for SchannelFilter {
 }
 
 impl SchannelFilter {
-    fn advance_handshake(&self, buf: &FilterBuf<'_>) -> io::Result<HandshakeState> {
+    fn start_handshake(&self, buf: &FilterBuf<'_>) -> io::Result<HandshakeState> {
         let mut inner = self.inner.borrow_mut();
         buf.with_write_buffers(|_, dst| {
-            let state =
-                buf.with_read_src(|src| inner.ctx.handshake_step(src.as_mut(), dst))?;
+            let state = inner.ctx.handshake_step(None, dst)?;
             if state == HandshakeState::Done {
                 inner.state = State::Streaming;
             }
             Ok(state)
         })
+    }
+
+    fn is_handshaking(&self) -> bool {
+        self.inner.borrow().state == State::Handshaking
     }
 }
 
@@ -586,17 +595,22 @@ pub async fn connect<F: Filter>(
     };
     let io = io.add_filter(filter);
 
+    let state = io.with_buf(|buf| io.filter().start_handshake(buf))??;
+    io.flush(false).await?;
+
+    if state == HandshakeState::Done {
+        return Ok(io);
+    }
+
     loop {
-        let state = io.with_buf(|buf| io.filter().advance_handshake(buf))??;
-        io.flush(false).await?;
-
-        if state == HandshakeState::Done {
-            return Ok(io);
-        }
-
         io.read_notify()
             .await?
             .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "disconnected"))?;
+        io.flush(false).await?;
+
+        if !io.filter().is_handshaking() {
+            return Ok(io);
+        }
     }
 }
 
