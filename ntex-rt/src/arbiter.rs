@@ -1,24 +1,24 @@
 #![allow(clippy::missing_panics_doc)]
-use std::any::{Any, TypeId};
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
-use std::{cell::RefCell, collections::HashMap, fmt, future::Future, pin::Pin, thread};
+use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
+use std::{any::Any, any::TypeId, cell::RefCell, fmt, pin::Pin, thread};
 
 use async_channel::{Receiver, Sender, unbounded};
+use parking_lot::Mutex;
 
-use crate::Handle;
-use crate::system::{FnExec, Id, System, SystemCommand};
+use crate::{Handle, HashMap, Id, System};
 
 thread_local!(
     static ADDR: RefCell<Option<Arbiter>> = const { RefCell::new(None) };
-    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> = RefCell::new(HashMap::new());
+    static STORAGE: RefCell<HashMap<TypeId, Box<dyn Any>>> =
+        RefCell::new(HashMap::default());
 );
 
-pub(super) static COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(super) static COUNT: AtomicUsize = AtomicUsize::new(99);
 
 pub(super) enum ArbiterCommand {
     Stop,
+    #[allow(dead_code)]
     Execute(Pin<Box<dyn Future<Output = ()> + Send>>),
-    ExecuteFn(Box<dyn FnExec>),
 }
 
 /// Arbiters provide an asynchronous execution environment for actors, functions
@@ -26,68 +26,56 @@ pub(super) enum ArbiterCommand {
 ///
 /// When an Arbiter is created, it spawns a new OS thread, and
 /// hosts an event loop. Some Arbiter functions execute on the current thread.
-pub struct Arbiter {
+pub struct Arbiter(pub(crate) Arc<ArbiterInner>);
+
+pub(crate) struct ArbiterInner {
     id: usize,
-    pub(crate) sys_id: usize,
     name: Arc<String>,
-    pub(crate) hnd: Option<Handle>,
+    sys_id: usize,
+    hnd: Option<Handle>,
     pub(crate) sender: Sender<ArbiterCommand>,
-    thread_handle: Option<thread::JoinHandle<()>>,
+    thread_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    running: AtomicBool,
+    #[cfg(target_os = "linux")]
+    tid: i32,
 }
 
 impl fmt::Debug for Arbiter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Arbiter({:?})", self.name.as_ref())
-    }
-}
-
-impl Default for Arbiter {
-    fn default() -> Arbiter {
-        Arbiter::new()
+        write!(f, "Arbiter({:?})", self.0.name.as_ref())
     }
 }
 
 impl Clone for Arbiter {
     fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            sys_id: self.sys_id,
-            name: self.name.clone(),
-            sender: self.sender.clone(),
-            hnd: self.hnd.clone(),
-            thread_handle: None,
-        }
+        Self(self.0.clone())
+    }
+}
+
+impl Default for Arbiter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl Arbiter {
     #[allow(clippy::borrowed_box)]
-    pub(super) fn new_system(sys: System, name: String) -> (Self, ArbiterController) {
+    pub(super) fn new_system(id: usize, name: String) -> (Self, ArbiterController) {
         let (tx, rx) = unbounded();
 
-        let arb = Arbiter::with_sender(sys.id().0, 0, Arc::new(name), tx);
+        let aid = COUNT.fetch_add(1, Ordering::Relaxed);
+        let arb = Arbiter::with_sender(id, aid, Arc::new(name), tx);
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
         (
             arb,
             ArbiterController {
-                sys,
                 rx,
+                sys: None,
                 stop: None,
             },
         )
-    }
-
-    pub(super) fn dummy() -> Self {
-        Arbiter {
-            id: 0,
-            hnd: None,
-            name: String::new().into(),
-            sys_id: 0,
-            sender: unbounded().0,
-            thread_handle: None,
-        }
     }
 
     /// Returns the current thread's arbiter's address
@@ -102,15 +90,9 @@ impl Arbiter {
         })
     }
 
-    pub(crate) fn set_current(&self) {
-        ADDR.with(|cell| {
-            *cell.borrow_mut() = Some(self.clone());
-        });
-    }
-
     /// Stop arbiter from continuing it's event loop.
     pub fn stop(&self) {
-        let _ = self.sender.try_send(ArbiterCommand::Stop);
+        let _ = self.0.sender.try_send(ArbiterCommand::Stop);
     }
 
     /// Spawn new thread and run runtime in spawned thread.
@@ -129,7 +111,6 @@ impl Arbiter {
         let name2 = Arc::new(name.clone());
         let config = sys.config();
         let (arb_tx, arb_rx) = unbounded();
-        let arb_tx2 = arb_tx.clone();
 
         let builder = if sys.config().stack_size > 0 {
             thread::Builder::new()
@@ -145,62 +126,52 @@ impl Arbiter {
 
         let handle = builder
             .spawn(move || {
-                log::info!("Starting {name2:?} arbiter");
+                let name3 = name2.clone();
+                log::info!("Starting {name3:?} arbiter");
 
                 let sys2 = sys.clone();
-                let sys3 = sys.clone();
                 let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
-                System::set_current(sys.clone());
-
                 crate::driver::block_on(config.runner.as_ref(), async move {
                     let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
+                    sys.register_arbiter(arb.clone());
                     arb_hnd_tx
-                        .send(arb.hnd.clone())
+                        .send(arb.clone())
                         .expect("Controller thread has gone");
 
                     // start arbiter controller
                     crate::spawn(
                         ArbiterController {
-                            sys,
+                            sys: None,
                             stop: Some(stop),
                             rx: arb_rx,
                         }
-                        .run(),
+                        .run(sys),
                     );
                     ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
 
-                    // register arbiter
-                    let _ = sys2
-                        .sys()
-                        .try_send(SystemCommand::RegisterArbiter(Id(id), arb));
-
                     // run loop
                     let _ = stop_rx.await;
+
+                    // mark as not running
+                    arb.0.running.store(false, Ordering::Relaxed);
                 });
 
                 // unregister arbiter
-                let _ = sys3
-                    .sys()
-                    .try_send(SystemCommand::UnregisterArbiter(Id(id)));
+                sys2.unregister_arbiter(Id(id));
 
                 remove_all_items();
+
+                log::info!("Arbiter {name3:?} has been stopped");
             })
             .unwrap_or_else(|err| {
-                panic!("Cannot spawn an arbiter's thread {:?}: {:?}", &name, err)
+                panic!("Cannot spawn an arbiter's thread {name:?}: {err:?}")
             });
 
-        let hnd = arb_hnd_rx.recv().expect("Could not start new arbiter");
-
-        Arbiter {
-            id,
-            hnd,
-            name,
-            sys_id: sys_id.0,
-            sender: arb_tx2,
-            thread_handle: Some(handle),
-        }
+        let arb = arb_hnd_rx.recv().expect("Could not start new arbiter");
+        *arb.0.thread_handle.lock() = Some(handle);
+        arb
     }
 
     fn with_sender(
@@ -218,138 +189,46 @@ impl Arbiter {
         #[cfg(all(not(feature = "compio"), not(feature = "tokio")))]
         let hnd = { Handle::current() };
 
-        Self {
+        Self(Arc::new(ArbiterInner {
             id,
             sys_id,
             name,
             sender,
             hnd: Some(hnd),
-            thread_handle: None,
-        }
+            thread_handle: Mutex::new(None),
+            running: AtomicBool::new(true),
+            #[cfg(target_os = "linux")]
+            #[allow(clippy::cast_possible_truncation)]
+            tid: unsafe { libc::syscall(libc::SYS_gettid) } as i32,
+        }))
     }
 
     /// Id of the arbiter
     pub fn id(&self) -> Id {
-        Id(self.id)
+        Id(self.0.id)
+    }
+
+    #[cfg(target_os = "linux")]
+    /// TID of the arbiter
+    pub(crate) fn tid(&self) -> i32 {
+        self.0.tid
     }
 
     /// Name of the arbiter
     pub fn name(&self) -> &str {
-        self.name.as_ref()
+        self.0.name.as_ref()
     }
 
     #[inline]
     /// Handle to a runtime
     pub fn handle(&self) -> &Handle {
-        self.hnd.as_ref().unwrap()
+        self.0.hnd.as_ref().unwrap()
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "3.8.0", note = "use `ntex_rt::spawn()`")]
-    /// Send a future to the Arbiter's thread, and spawn it.
-    pub fn spawn<F>(&self, future: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let _ = self
-            .sender
-            .try_send(ArbiterCommand::Execute(Box::pin(future)));
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.8.0", note = "use `ntex_rt::Handle::spawn()`")]
-    /// Send a function to the Arbiter's thread and spawns it's resulting future.
-    /// This can be used to spawn non-send futures on the arbiter thread.
-    pub fn spawn_with<F, R, O>(
-        &self,
-        f: F,
-    ) -> impl Future<Output = Result<O, oneshot::RecvError>> + Send + 'static
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Future<Output = O> + 'static,
-        O: Send + 'static,
-    {
-        let (tx, rx) = oneshot::async_channel();
-        let _ = self
-            .sender
-            .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
-                crate::spawn(async move {
-                    let _ = tx.send(f().await);
-                });
-            })));
-        rx
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.8.0", note = "use `ntex_rt::Handle::spawn()`")]
-    /// Send a function to the Arbiter's thread. This function will be executed asynchronously.
-    /// A future is created, and when resolved will contain the result of the function sent
-    /// to the Arbiters thread.
-    pub fn exec<F, R>(
-        &self,
-        f: F,
-    ) -> impl Future<Output = Result<R, oneshot::RecvError>> + Send + 'static
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        let (tx, rx) = oneshot::async_channel();
-        let _ = self
-            .sender
-            .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
-                let _ = tx.send(f());
-            })));
-        rx
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.8.0", note = "use `ntex_rt::Handle::spawn()`")]
-    /// Send a function to the Arbiter's thread, and execute it. Any result from the function
-    /// is discarded.
-    pub fn exec_fn<F>(&self, f: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        let _ = self
-            .sender
-            .try_send(ArbiterCommand::ExecuteFn(Box::new(move || {
-                f();
-            })));
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.8.0", note = "use `ntex_rt::set_item()`")]
-    /// Set item to current arbiter's storage
-    pub fn set_item<T: 'static>(item: T) {
-        set_item(item);
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.8.0", note = "use `ntex_rt::get_item()`")]
-    /// Check if arbiter storage contains item
-    pub fn contains_item<T: 'static>() -> bool {
-        STORAGE.with(move |cell| cell.borrow().get(&TypeId::of::<T>()).is_some())
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.8.0", note = "use `ntex_rt::get_item()`")]
-    /// Get a reference to a type previously inserted on this arbiter's storage
-    ///
-    /// # Panics
-    ///
-    /// Panics if item is not inserted
-    pub fn get_item<T: 'static, F, R>(f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        STORAGE.with(move |cell| {
-            let mut st = cell.borrow_mut();
-            let item = st
-                .get_mut(&TypeId::of::<T>())
-                .and_then(|boxed| (&mut **boxed as &mut (dyn Any + 'static)).downcast_mut())
-                .unwrap();
-            f(item)
-        })
+    #[inline]
+    /// Check if arbiter is running
+    pub fn is_running(&self) -> bool {
+        self.0.running.load(Ordering::Relaxed)
     }
 
     /// Get a type previously inserted to this runtime or create new one.
@@ -373,7 +252,7 @@ impl Arbiter {
 
     /// Wait for the event loop to stop by joining the underlying thread (if have Some).
     pub fn join(&mut self) -> thread::Result<()> {
-        if let Some(thread_handle) = self.thread_handle.take() {
+        if let Some(thread_handle) = self.0.thread_handle.lock().take() {
             thread_handle.join()
         } else {
             Ok(())
@@ -385,22 +264,24 @@ impl Eq for Arbiter {}
 
 impl PartialEq for Arbiter {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.sys_id == other.sys_id
+        self.0.id == other.0.id && self.0.sys_id == other.0.sys_id
     }
 }
 
 pub(crate) struct ArbiterController {
-    sys: System,
-    stop: Option<oneshot::Sender<i32>>,
+    sys: Option<System>,
     rx: Receiver<ArbiterCommand>,
+    stop: Option<oneshot::Sender<i32>>,
 }
 
 impl Drop for ArbiterController {
     fn drop(&mut self) {
         if thread::panicking() {
-            if self.sys.stop_on_panic() {
+            if let Some(sys) = self.sys.take()
+                && sys.stop_on_panic()
+            {
                 eprintln!("Panic in Arbiter thread, shutting down system.");
-                self.sys.stop_with_code(1);
+                sys.stop_with_code(1);
             } else {
                 eprintln!("Panic in Arbiter thread.");
             }
@@ -409,20 +290,17 @@ impl Drop for ArbiterController {
 }
 
 impl ArbiterController {
-    pub(super) async fn run(mut self) {
+    pub(super) async fn run(mut self, sys: System) {
+        self.sys = Some(sys);
         loop {
             match self.rx.recv().await {
                 Ok(ArbiterCommand::Stop) => {
                     if let Some(stop) = self.stop.take() {
                         let _ = stop.send(0);
                     }
-                    break;
                 }
                 Ok(ArbiterCommand::Execute(fut)) => {
                     crate::spawn(fut);
-                }
-                Ok(ArbiterCommand::ExecuteFn(f)) => {
-                    f.call_box();
                 }
                 Err(_) => break,
             }

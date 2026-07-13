@@ -62,7 +62,6 @@ impl Filter for Base {
         }
     }
 
-    #[inline]
     fn poll_read_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         let st = &self.0.0;
         if st.flags.is_closed() {
@@ -81,7 +80,6 @@ impl Filter for Base {
         }
     }
 
-    #[inline]
     fn poll_write_ready(&self, cx: &mut Context<'_>) -> Poll<Readiness> {
         if self.0.0.flags.is_closed() {
             Poll::Ready(Readiness::Terminate)

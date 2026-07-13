@@ -1,5 +1,17 @@
 # Changes
 
+## [3.11.0] - 2026-07-12
+
+* Replace httparse with ntex-httparse
+
+## [3.10.1] - 2026-07-04
+
+* Fix keep-alive handling if headers timeout is enabled
+
+## [3.10.0] - 2026-06-22
+
+* Allow to override `SharedCfg` test server and client configs #910
+
 ## [3.9.8] - 2026-06-11
 
 * Reset method of pooled `RequestHead` on release; ws client could send a recycled

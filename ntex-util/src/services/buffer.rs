@@ -300,6 +300,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unused_async_trait_impl)]
     use ntex_service::{Pipeline, apply, fn_factory};
     use std::{rc::Rc, time::Duration};
 

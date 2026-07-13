@@ -283,7 +283,9 @@ impl IoContext {
         // filters are shutdown and write task is paused
         if ready && st.flags.is_write_paused() && !st.flags.is_wr_send_scheduled() {
             st.filters_stopped();
-        } else if st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure() {
+        } else if !ready
+            && (st.flags.is_read_paused() || st.flags.is_read_ready_and_backpressure())
+        {
             // if read buffer is not consumed it is unlikely
             // that filter will properly complete shutdown
             st.filters_stopped();
@@ -325,7 +327,7 @@ mod tests {
         let state = Io::from(server);
         let ctx = IoContext::new(state.get_ref());
         let _ = ctx.flags();
-        assert!(ctx.id() != Id::default());
+        assert_ne!(ctx.id(), Id::default());
         assert!(format!("{ctx:?}").contains("IoContext"));
     }
 }

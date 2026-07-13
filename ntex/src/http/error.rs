@@ -143,6 +143,20 @@ impl From<httparse::Error> for DecodeError {
     }
 }
 
+impl From<ntex_httparse::Error> for DecodeError {
+    fn from(err: ntex_httparse::Error) -> DecodeError {
+        match err {
+            ntex_httparse::Error::HeaderName
+            | ntex_httparse::Error::HeaderValue
+            | ntex_httparse::Error::NewLine
+            | ntex_httparse::Error::Token => DecodeError::Header,
+            ntex_httparse::Error::Status => DecodeError::Status,
+            ntex_httparse::Error::TooManyHeaders => DecodeError::TooLarge(0),
+            ntex_httparse::Error::Version => DecodeError::Version,
+        }
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 /// A set of errors that can occur during payload parsing
 pub enum PayloadError {
@@ -327,7 +341,6 @@ mod tests {
     #[test]
     fn test_payload_error() {
         let err: PayloadError = io::Error::other("DecodeError").into();
-        println!("{err}");
         assert!(format!("{err}").contains("DecodeError"), "{err}");
 
         let err: PayloadError = BlockingError::Canceled.into();
@@ -365,5 +378,13 @@ mod tests {
         from!(httparse::Error::Token => DecodeError::Header);
         from!(httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
         from!(httparse::Error::Version => DecodeError::Version);
+        from!(ntex_httparse::Error::HeaderName => DecodeError::Header);
+        from!(ntex_httparse::Error::HeaderName => DecodeError::Header);
+        from!(ntex_httparse::Error::HeaderValue => DecodeError::Header);
+        from!(ntex_httparse::Error::NewLine => DecodeError::Header);
+        from!(ntex_httparse::Error::Status => DecodeError::Status);
+        from!(ntex_httparse::Error::Token => DecodeError::Header);
+        from!(ntex_httparse::Error::TooManyHeaders => DecodeError::TooLarge(0));
+        from!(ntex_httparse::Error::Version => DecodeError::Version);
     }
 }

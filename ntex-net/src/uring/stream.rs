@@ -9,6 +9,7 @@ use slab::Slab;
 use socket2::Socket;
 
 use super::driver::{Driver, DriverApi, Handler};
+use crate::helpers::Queue;
 
 #[derive(Clone)]
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
@@ -84,8 +85,7 @@ struct StreamOpsHandler {
 #[allow(clippy::box_collection)]
 struct StreamOpsInner {
     api: DriverApi,
-    delayed: Cell<bool>,
-    delayed_feed: Cell<Option<Box<Vec<IdType>>>>,
+    delayed_feed: Queue<IdType>,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
     pool: pool::Pool<io::Result<()>>,
     default_flags: Flags,
@@ -122,8 +122,7 @@ impl StreamOps {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     default_flags,
-                    delayed: Cell::new(false),
-                    delayed_feed: Cell::new(Some(Box::new(Vec::new()))),
+                    delayed_feed: Queue::new(),
                     pool: pool::new(),
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         ops,
@@ -354,19 +353,19 @@ impl Handler for StreamOpsHandler {
 
     fn cleanup(&mut self) {
         if let Some(v) = self.inner.storage.take() {
-            for (_, val) in v.streams {
-                if val.flags.contains(Flags::DROPPED_PRI) {
-                    mem::forget(val.io);
-                } else {
+            for (_, val) in &v.streams {
+                if !val.flags.contains(Flags::DROPPED_PRI) {
                     log::trace!(
                         "{}: Unclosed sockets {:?}",
                         val.ctx.tag(),
                         val.io.peer_addr()
                     );
                 }
+                let _ = self.inner.api.cancel_all_sync(val.fd());
             }
+            self.inner.storage.set(Some(v));
         }
-        self.inner.delayed_feed.take();
+        self.inner.delayed_feed.clear();
     }
 }
 
@@ -458,6 +457,28 @@ impl StreamOpsStorage {
             log::trace!("{}: Recv to pause ({:?})", item.tag(), item.fd());
         }
     }
+
+    fn drop_stream(&mut self, id: usize, api: &DriverApi) {
+        // Dropping while `StreamOps` handling event
+        let item = &mut self.streams[id];
+        log::trace!("{}: Close ({:?})", item.tag(), item.fd());
+
+        let entry = opcode::Close::new(item.fd()).build();
+        let op_id = self.add_operation(Operation::Close { id });
+        api.submit(op_id, entry);
+    }
+
+    fn drop_weak_stream(&mut self, id: usize) {
+        // Dropping while `StreamOps` handling event
+        let item = &mut self.streams[id];
+        if item.flags.contains(Flags::DROPPED_PRI) {
+            // io is closed already, remove from storage
+            let item = self.streams.remove(id);
+            mem::forget(item.io);
+        } else {
+            item.flags.insert(Flags::DROPPED_SEC);
+        }
+    }
 }
 
 impl StreamOpsInner {
@@ -471,58 +492,15 @@ impl StreamOpsInner {
         result
     }
 
-    fn drop_stream(&self, id: usize) {
-        // Dropping while `StreamOps` handling event
-        if let Some(mut storage) = self.storage.take() {
-            let item = &mut storage.streams[id];
-            log::trace!("{}: Close ({:?})", item.tag(), item.fd());
-
-            let entry = opcode::Close::new(item.fd()).build();
-            let op_id = storage.add_operation(Operation::Close { id });
-            self.api.submit(op_id, entry);
-            self.storage.set(Some(storage));
-        } else {
-            self.add_delayed_drop(IdType::Stream(id as u32));
-        }
-    }
-
-    fn drop_weak_stream(&self, id: usize) {
-        // Dropping while `StreamOps` handling event
-        if let Some(mut storage) = self.storage.take() {
-            let item = &mut storage.streams[id];
-            if item.flags.contains(Flags::DROPPED_PRI) {
-                // io is closed already, remove from storage
-                let item = storage.streams.remove(id);
-                mem::forget(item.io);
-            } else {
-                item.flags.insert(Flags::DROPPED_SEC);
-            }
-            self.storage.set(Some(storage));
-        } else {
-            self.add_delayed_drop(IdType::Weak(id as u32));
-        }
-    }
-
-    fn add_delayed_drop(&self, id: IdType) {
-        self.delayed.set(true);
-        if let Some(mut feed) = self.delayed_feed.take() {
-            feed.push(id);
-            self.delayed_feed.set(Some(feed));
-        }
-    }
-
     fn check_delayed_feed(&self) {
-        if self.delayed.get() {
-            self.delayed.set(false);
-            if let Some(mut feed) = self.delayed_feed.take() {
-                for id in feed.drain(..) {
-                    match id {
-                        IdType::Stream(id) => self.drop_stream(id as usize),
-                        IdType::Weak(id) => self.drop_weak_stream(id as usize),
-                    }
+        if let Some(mut storage) = self.storage.take() {
+            while let Some(id) = self.delayed_feed.pop() {
+                match id {
+                    IdType::Stream(id) => storage.drop_stream(id as usize, &self.api),
+                    IdType::Weak(id) => storage.drop_weak_stream(id as usize),
                 }
-                self.delayed_feed.set(Some(feed));
             }
+            self.storage.set(Some(storage));
         }
     }
 }
@@ -578,7 +556,12 @@ impl StreamCtl {
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        self.inner.drop_stream(self.id);
+        if let Some(mut storage) = self.inner.storage.take() {
+            storage.drop_stream(self.id, &self.inner.api);
+            self.inner.storage.set(Some(storage));
+        } else {
+            self.inner.delayed_feed.push(IdType::Stream(self.id as u32));
+        }
     }
 }
 
@@ -593,6 +576,11 @@ impl WeakStreamCtl {
 
 impl Drop for WeakStreamCtl {
     fn drop(&mut self) {
-        self.inner.drop_weak_stream(self.id);
+        if let Some(mut storage) = self.inner.storage.take() {
+            storage.drop_weak_stream(self.id);
+            self.inner.storage.set(Some(storage));
+        } else {
+            self.inner.delayed_feed.push(IdType::Weak(self.id as u32));
+        }
     }
 }

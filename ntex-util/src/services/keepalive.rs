@@ -1,7 +1,9 @@
+use std::future::Future;
 use std::{cell::Cell, convert::Infallible, fmt, marker, task::Context, task::Poll, time};
 
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 
+use crate::future::Ready;
 use crate::time::{Millis, Sleep, now, sleep};
 
 /// `KeepAlive` service factory
@@ -63,8 +65,8 @@ where
     type InitError = Infallible;
 
     #[inline]
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        Ok(KeepAliveService::new(self.ka, self.f.clone()))
+    fn create(&self, _: C) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
+        Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }
 
@@ -110,9 +112,16 @@ where
     type Response = R;
     type Error = E;
 
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    fn ready(
+        &self,
+        _: ServiceCtx<'_, Self>,
+    ) -> impl Future<Output = Result<(), Self::Error>> {
         let expire = self.expire.get() + time::Duration::from(self.dur);
-        if expire <= now() { Err((self.f)()) } else { Ok(()) }
+        if expire <= now() {
+            Ready::Err((self.f)())
+        } else {
+            Ready::Ok(())
+        }
     }
 
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
@@ -135,9 +144,9 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: R, _: ServiceCtx<'_, Self>) -> Result<R, E> {
+    fn call(&self, req: R, _: ServiceCtx<'_, Self>) -> impl Future<Output = Result<R, E>> {
         self.expire.set(now());
-        Ok(req)
+        Ready::Ok(req)
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "3.14.1"
+version = "3.15.4"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -36,12 +36,15 @@ neon = []
 ntex-error = { workspace = true }
 ntex-service = { workspace = true }
 
+atomic-waker = { workspace = true }
 async-channel = { workspace = true }
 async-task = { workspace = true }
+backtrace = { workspace = true }
 crossbeam-queue = { workspace = true }
 crossbeam-channel = { workspace = true }
 foldhash = { workspace = true }
 futures-timer = { workspace = true }
+libc = { workspace = true }
 log = { workspace = true }
 oneshot = { workspace = true }
 parking_lot = { workspace = true }
@@ -51,6 +54,12 @@ swap-buffer-queue = { workspace = true }
 compio-driver = { workspace = true, optional = true }
 compio-runtime = { workspace = true, optional = true }
 tok-io = { workspace = true, features = ["rt", "net"], optional = true }
+
+[target.'cfg(target_family = "unix")'.dependencies]
+signal-hook = { workspace = true }
+
+[target.'cfg(target_family = "windows")'.dependencies]
+ctrlc = { workspace = true }
 
 [dev-dependencies]
 ntex = { workspace = true }

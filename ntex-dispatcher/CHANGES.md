@@ -1,5 +1,9 @@
 # Changes
 
+## [3.2.1] - 2026-06-15
+
+* Send `Control::WBackPressureEnabled` control message only once per back-pressure
+
 ## [3.2.0] - 2026-05-08
 
 * Do not use deprecated methods

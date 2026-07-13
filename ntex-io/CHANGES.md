@@ -1,5 +1,21 @@
 # Changes
 
+## [3.13.1] - 2026-06-21
+
+* Handle disconnect during Io::read() call
+
+## [3.13.0] - 2026-06-18
+
+* Refactor io callbacks management and add filter callbacks
+
+## [3.12.4] - 2026-06-16
+
+* Add IoRef::with_write_dst_buf() helper method
+
+## [3.12.3] - 2026-06-15
+
+* Do not abort the write-buffer flush during graceful shutdown when filter shutdown has completed but read backpressure is active; this dropped a buffered response tail
+
 ## [3.12.2] - 2026-05-22
 
 * Do not use invalid io while adding new filter

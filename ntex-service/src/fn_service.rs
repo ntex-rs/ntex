@@ -1,4 +1,4 @@
-use std::{fmt, marker::PhantomData};
+use std::{fmt, future::Future, future::ready, marker::PhantomData};
 
 use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
@@ -213,11 +213,14 @@ where
     type InitError = ();
 
     #[inline]
-    async fn create(&self, _: Cfg) -> Result<Self::Service, Self::InitError> {
-        Ok(FnService {
+    fn create(
+        &self,
+        _: Cfg,
+    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
+        ready(Ok(FnService {
             f: self.f.clone(),
             _t: PhantomData,
-        })
+        }))
     }
 }
 

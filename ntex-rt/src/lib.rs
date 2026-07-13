@@ -11,6 +11,7 @@ mod builder;
 mod driver;
 mod handle;
 mod pool;
+pub mod signals;
 mod system;
 mod task;
 
@@ -53,3 +54,7 @@ pub use self::rt_compio::*;
 
 #[cfg(all(not(feature = "tokio"), not(feature = "compio")))]
 pub use self::rt_default::*;
+
+pub(crate) type HashMap<K, V> =
+    std::collections::HashMap<K, V, foldhash::fast::RandomState>;
+pub(crate) type HashSet<V> = std::collections::HashSet<V, foldhash::fast::RandomState>;

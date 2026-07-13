@@ -54,13 +54,6 @@ impl Stack {
         );
     }
 
-    fn with_first<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&Buffer) -> R,
-    {
-        f(&self.buffers[0])
-    }
-
     fn with_last<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&Buffer) -> R,
@@ -68,11 +61,18 @@ impl Stack {
         f(&self.buffers[self.buffers.len() - 2])
     }
 
+    pub(crate) fn with_read_src<F, R>(&self, io: &IoRef, f: F) -> R
+    where
+        F: FnOnce(&mut BytesMut) -> R,
+    {
+        self.with_last(|buf| buf.with_read(io, f))
+    }
+
     pub(crate) fn with_read_dst<F, R>(&self, io: &IoRef, f: F) -> R
     where
         F: FnOnce(&mut BytesMut) -> R,
     {
-        self.with_first(|buf| buf.with_read(io, f))
+        self.buffers[0].with_read(io, f)
     }
 
     pub(crate) fn write_buf_size(&self) -> usize {
@@ -152,11 +152,54 @@ impl Stack {
                 notify: false,
             },
         };
+        io.with_callbacks(|cb| cb.before_processing(io));
         let result = io.filter().process_read_buf(&mut ctx);
+        io.with_callbacks(|cb| cb.after_processing(io));
+
         result.map(|()| ctx.st)
     }
 
+    pub(crate) fn process_read_buf_no_cb(
+        &self,
+        io: &IoRef,
+        nbytes: usize,
+    ) -> io::Result<FilterUpdates> {
+        let mut ctx = FilterCtx {
+            io,
+            nbytes,
+            idx: 0,
+            stack: self,
+            st: FilterUpdates {
+                wants_write: false,
+                notify: false,
+            },
+        };
+        io.filter().process_read_buf(&mut ctx).map(|()| ctx.st)
+    }
+
     pub(crate) fn process_write_buf(&self, io: &IoRef) -> io::Result<()> {
+        if self.buffers[0].is_write_empty() {
+            Ok(())
+        } else {
+            let mut ctx = FilterCtx {
+                io,
+                idx: 0,
+                nbytes: 0,
+                stack: self,
+                st: FilterUpdates {
+                    wants_write: true,
+                    notify: false,
+                },
+            };
+            io.with_callbacks(|cb| cb.before_processing(io));
+            let res = io.filter().process_write_buf(&mut ctx);
+            io.with_callbacks(|cb| cb.after_processing(io));
+
+            res
+        }
+    }
+
+    pub(crate) fn process_write_buf_no_cb(&self, io: &IoRef) -> io::Result<()> {
         if self.buffers[0].is_write_empty() {
             Ok(())
         } else {
@@ -185,12 +228,20 @@ impl Stack {
                 notify: false,
             },
         };
-        io.filter().process_write_buf(&mut ctx)
+        io.with_callbacks(|cb| cb.before_processing(io));
+        let res = io.filter().process_write_buf(&mut ctx);
+        io.with_callbacks(|cb| cb.after_processing(io));
+
+        res
     }
 
     pub(crate) fn process_shutdown(&self, io: &IoRef) -> io::Result<Poll<()>> {
         self.process_write_buf(io)?;
-        self.with_filter(io, |ctx| io.filter().shutdown(ctx))
+        io.with_callbacks(|cb| cb.before_processing(io));
+        let res = self.with_filter(io, |ctx| io.filter().shutdown(ctx));
+        io.with_callbacks(|cb| cb.after_processing(io));
+
+        res
     }
 }
 

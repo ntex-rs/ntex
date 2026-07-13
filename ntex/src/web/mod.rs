@@ -61,6 +61,7 @@
 //! * `compress` - enables content encoding compression support
 //! * `openssl` - enables ssl support via `openssl` crate
 //! * `rustls` - enables ssl support via `rustls` crate
+#![allow(clippy::unused_async_trait_impl)]
 mod app;
 mod app_service;
 mod config;

@@ -3,15 +3,14 @@ use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 use async_channel::{Receiver, Sender, unbounded};
 use core_affinity::CoreId;
-use ntex_rt::System;
+use ntex_rt::{System, signals::Signal};
 use ntex_util::future::join_all;
 use ntex_util::time::{Millis, sleep, timeout};
 
 use crate::server::ServerShared;
-use crate::signals::Signal;
 use crate::{Server, ServerConfiguration, Worker, WorkerId, WorkerPool, WorkerStatus};
 
-const STOP_DELAY: Millis = Millis(500);
+const STOP_DELAY: Millis = Millis(250);
 const RESTART_DELAY: Millis = Millis(250);
 
 #[derive(Clone)]
@@ -86,8 +85,19 @@ impl<F: ServerConfiguration> ServerManager<F> {
         let srv = Server::new(tx, shared);
 
         // handle signals
-        if !no_signals {
-            crate::signals::start(srv.clone());
+        if no_signals {
+            System::current().disable_signals();
+        } else {
+            System::current().enable_signals();
+
+            let srv2 = srv.clone();
+            ntex_rt::spawn(async move {
+                while let Ok(sigs) = ntex_rt::signals::signal().await {
+                    for sig in sigs.as_ref() {
+                        srv2.signal(*sig);
+                    }
+                }
+            });
         }
 
         srv
@@ -242,6 +252,11 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
     }
 
     async fn stop(&mut self, graceful: bool, completion: Option<oneshot::Sender<()>>) {
+        log::info!(
+            "Stopping {:?} server, graceful({graceful})",
+            self.mgr.0.cfg.name
+        );
+
         self.mgr.0.stopping.set(true);
 
         // stop server
@@ -263,21 +278,34 @@ impl<F: ServerConfiguration> HandleCmdState<F> {
             }
         }
 
-        // notify sender
-        if let Some(tx) = completion {
-            let _ = tx.send(());
+        if !System::current().testing() {
+            sleep(STOP_DELAY).await;
         }
+        log::info!("All worker are stopped in {:?} server", self.mgr.0.cfg.name);
 
+        // notify Server instance
         let notify = std::mem::take(&mut *self.mgr.0.stop_notify.borrow_mut());
         for tx in notify {
             let _ = tx.send(());
         }
-        sleep(STOP_DELAY).await;
 
-        // stop system if server was spawned
+        // notify sender
+        log::trace!(
+            "Notify caller {} of {:?} server",
+            completion.is_some(),
+            self.mgr.0.cfg.name
+        );
+        if let Some(tx) = completion {
+            let _ = tx.send(());
+        }
+
+        // stop system
         if self.mgr.0.cfg.stop_runtime {
+            log::trace!("Stopping ntex system, {:?} server", self.mgr.0.cfg.name);
             System::current().stop();
         }
+
+        log::info!("Server {:?} has been stopped", self.mgr.0.cfg.name);
     }
 }
 

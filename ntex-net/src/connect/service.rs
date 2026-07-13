@@ -1,29 +1,29 @@
-use std::{collections::VecDeque, io, marker::PhantomData, net::SocketAddr};
+use std::{collections::VecDeque, future::Future, io, marker, net::SocketAddr};
 
 use ntex_error::Error;
 use ntex_io::{Io, IoConfig, types};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
-use ntex_util::{future::Either, time::timeout_checked};
+use ntex_util::{future::Either, future::Ready, time::timeout_checked};
 
 use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
 
 #[derive(Copy, Clone, Debug)]
 /// Basic tcp stream connector
-pub struct Connector<T>(PhantomData<T>);
+pub struct Connector<T>(marker::PhantomData<T>);
 
 #[derive(Clone, Debug)]
 /// Basic tcp stream connector
 pub struct ConnectorService<T> {
     cfg: Cfg<IoConfig>,
     shared: SharedCfg,
-    _t: PhantomData<T>,
+    _t: marker::PhantomData<T>,
 }
 
 impl<T> Connector<T> {
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
-        Connector(PhantomData)
+        Connector(marker::PhantomData)
     }
 }
 
@@ -46,7 +46,7 @@ impl<T> ConnectorService<T> {
         ConnectorService {
             cfg: cfg.get(),
             shared: cfg,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -99,8 +99,11 @@ impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
     type Service = ConnectorService<T>;
     type InitError = ConnectServiceError;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        Ok(ConnectorService::with(cfg))
+    fn create(
+        &self,
+        cfg: SharedCfg,
+    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
+        Ready::Ok(ConnectorService::with(cfg))
     }
 }
 
@@ -119,20 +122,20 @@ impl<T: Address> Service<Connect<T>> for ConnectorService<T> {
 
 #[derive(Copy, Clone, Debug)]
 /// Basic tcp stream connector
-pub struct Connector2<T>(PhantomData<T>);
+pub struct Connector2<T>(marker::PhantomData<T>);
 
 #[derive(Clone, Debug)]
 /// Basic tcp stream connector
 pub struct ConnectorService2<T> {
     cfg: Cfg<IoConfig>,
     shared: SharedCfg,
-    _t: PhantomData<T>,
+    _t: marker::PhantomData<T>,
 }
 
 impl<T> Connector2<T> {
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
-        Connector2(PhantomData)
+        Connector2(marker::PhantomData)
     }
 }
 
@@ -155,7 +158,7 @@ impl<T> ConnectorService2<T> {
         ConnectorService2 {
             cfg: cfg.get(),
             shared: cfg,
-            _t: PhantomData,
+            _t: marker::PhantomData,
         }
     }
 }
@@ -205,8 +208,11 @@ impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector2<T> {
     type Service = ConnectorService2<T>;
     type InitError = ConnectServiceError;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        Ok(ConnectorService2::with(cfg))
+    fn create(
+        &self,
+        cfg: SharedCfg,
+    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
+        Ready::Ok(ConnectorService2::with(cfg))
     }
 }
 

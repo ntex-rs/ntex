@@ -693,19 +693,22 @@ where
             .unwrap()
             .config(
                 "test",
-                SharedCfg::new("WEB-SRV")
-                    .add(IoConfig::new())
-                    .add(HttpServiceConfig::new().set_headers_read_rate(
-                        ctimeout,
-                        Seconds::ZERO,
-                        256,
-                    ))
-                    .add(WebAppConfig::with(
-                        &name,
-                        secure,
-                        local_addr,
-                        format!("{local_addr}"),
-                    )),
+                cfg.srv_cfg.clone().unwrap_or_else(|| {
+                    SharedCfg::new("WEB-SRV")
+                        .add(IoConfig::new())
+                        .add(HttpServiceConfig::new().set_headers_read_rate(
+                            ctimeout,
+                            Seconds::ZERO,
+                            256,
+                        ))
+                        .add(WebAppConfig::with(
+                            &name,
+                            secure,
+                            local_addr,
+                            format!("{local_addr}"),
+                        ))
+                        .into()
+                }),
             )
             .run();
 
@@ -716,15 +719,17 @@ where
     let (system, server, addr) = rx.recv().unwrap();
     sleep(Millis(25)).await;
 
-    let cfg: SharedCfg = SharedCfg::new("TEST-CLIENT")
-        .add(IoConfig::new().set_connect_timeout(Millis(90_000)))
-        .add(ntex_tls::TlsConfig::new().set_handshake_timeout(Seconds(5)))
-        .add(
-            ntex_h2::ServiceConfig::new()
-                .set_max_header_list_size(256 * 1024)
-                .set_max_header_continuation_frames(96),
-        )
-        .into();
+    let cfg = cfg.client_cfg.clone().unwrap_or_else(|| {
+        SharedCfg::new("TEST-CLIENT")
+            .add(IoConfig::new().set_connect_timeout(Millis(90_000)))
+            .add(ntex_tls::TlsConfig::new().set_handshake_timeout(Seconds(5)))
+            .add(
+                ntex_h2::ServiceConfig::new()
+                    .set_max_header_list_size(256 * 1024)
+                    .set_max_header_continuation_frames(96),
+            )
+            .into()
+    });
 
     let client = {
         let connector = {
@@ -773,6 +778,8 @@ pub struct TestServerConfig {
     client_timeout: Seconds,
     port: u16,
     listener: Option<net::TcpListener>,
+    srv_cfg: Option<SharedCfg>,
+    client_cfg: Option<SharedCfg>,
 }
 
 #[derive(Clone, Debug)]
@@ -826,6 +833,8 @@ impl TestServerConfig {
             client_timeout: Seconds(5),
             port: 0,
             listener: None,
+            srv_cfg: None,
+            client_cfg: None,
         }
     }
 
@@ -876,6 +885,20 @@ impl TestServerConfig {
     #[must_use]
     pub fn listener(mut self, listener: net::TcpListener) -> Self {
         self.listener = Some(listener);
+        self
+    }
+
+    #[must_use]
+    /// Use custom `SharedCfg` for test server.
+    pub fn server_cfg(mut self, cfg: SharedCfg) -> Self {
+        self.srv_cfg = Some(cfg);
+        self
+    }
+
+    #[must_use]
+    /// Use custom `SharedCfg` for client.
+    pub fn client_cfg(mut self, cfg: SharedCfg) -> Self {
+        self.client_cfg = Some(cfg);
         self
     }
 }

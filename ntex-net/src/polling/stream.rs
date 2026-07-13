@@ -8,6 +8,7 @@ use slab::Slab;
 use socket2::Socket;
 
 use super::{Driver, DriverApi, Event, Handler};
+use crate::helpers::Queue;
 
 const MAX_WRITE_SIZE: usize = 64 * 1024;
 const MAX_WRITE_ITEMS: usize = 16;
@@ -35,6 +36,7 @@ bitflags::bitflags! {
 enum IdType {
     Stream(u32),
     Weak(u32),
+    Write(u32),
 }
 
 #[derive(Debug)]
@@ -52,8 +54,7 @@ struct StreamOpsHandler {
 
 struct StreamOpsInner {
     api: DriverApi,
-    delayed_drop: Cell<bool>,
-    delayed_feed: Cell<Option<Vec<IdType>>>,
+    delayed_feed: Queue<IdType>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
 }
 
@@ -65,8 +66,7 @@ impl StreamOps {
             driver.register(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
-                    delayed_drop: Cell::new(false),
-                    delayed_feed: Cell::new(Some(Vec::new())),
+                    delayed_feed: Queue::new(),
                     streams: Cell::new(Some(Box::new(Slab::new()))),
                 });
                 inner = Some(ops.clone());
@@ -200,7 +200,7 @@ impl Handler for StreamOpsHandler {
                 }
             }
         }
-        self.inner.delayed_feed.take();
+        self.inner.delayed_feed.clear();
     }
 }
 
@@ -215,80 +215,82 @@ impl StreamOpsInner {
         result
     }
 
-    fn drop_stream(&self, id: u32) {
-        // Dropping while `StreamOps` handling event
+    /// Initiate write operation for the stream
+    fn write_stream(&self, id: u32) {
         if let Some(mut streams) = self.streams.take() {
-            let idx = id as usize;
-            let item = &mut streams[idx];
+            if let Some(item) = streams.get_mut(id as usize) {
+                item.write();
+            }
+            self.streams.set(Some(streams));
+        } else {
+            // Write is initiated while `StreamOps` is handling an event
+            // (e.g. a filter generated data during read processing).
+            // Delay the write until the streams slab is released,
+            // dropping it would stall the connection.
+            self.delayed_feed.push(IdType::Write(id));
+        }
+    }
+
+    fn drop_stream(&self, id: u32, streams: &mut Slab<StreamItem>) {
+        // Dropping while `StreamOps` handling event
+        let idx = id as usize;
+        let item = &mut streams[idx];
+        let fd = item.fd();
+        log::trace!("{}: {fd:?}-Close flags: {:?}", item.tag(), item.flags);
+
+        if !item.ctx.is_stopped() {
+            item.ctx.stop(None);
+        }
+        self.api.detach(fd, id);
+
+        if item.flags.contains(Flags::DROPPED_SEC) {
+            let item = streams.remove(idx);
+            ntex_rt::spawn_blocking(move || {
+                if let Err(err) = syscall!(libc::close(fd)) {
+                    log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
+                }
+            });
+            mem::forget(item.io);
+        } else {
+            item.flags.insert(Flags::DROPPED_PRI);
+        }
+    }
+
+    fn drop_weak_stream(id: u32, streams: &mut Slab<StreamItem>) {
+        // Dropping while `StreamOps` handling event
+        let idx = id as usize;
+        let item = &mut streams[idx];
+
+        if item.flags.contains(Flags::DROPPED_PRI) {
+            let item = streams.remove(idx);
             let fd = item.fd();
-            log::trace!("{}: {fd:?}-Close flags: {:?}", item.tag(), item.flags);
-
-            if !item.ctx.is_stopped() {
-                item.ctx.stop(None);
-            }
-            self.api.detach(fd, id);
-
-            if item.flags.contains(Flags::DROPPED_SEC) {
-                let item = streams.remove(idx);
-                ntex_rt::spawn_blocking(move || {
-                    if let Err(err) = syscall!(libc::close(fd)) {
-                        log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
-                    }
-                });
-                mem::forget(item.io);
-            } else {
-                item.flags.insert(Flags::DROPPED_PRI);
-            }
-            self.streams.set(Some(streams));
+            ntex_rt::spawn_blocking(move || {
+                if let Err(err) = syscall!(libc::close(fd)) {
+                    log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
+                }
+            });
+            mem::forget(item.io);
         } else {
-            self.add_delayed_drop(IdType::Stream(id));
-        }
-    }
-
-    fn drop_weak_stream(&self, id: u32) {
-        // Dropping while `StreamOps` handling event
-        if let Some(mut streams) = self.streams.take() {
-            let idx = id as usize;
-            let item = &mut streams[idx];
-
-            if item.flags.contains(Flags::DROPPED_PRI) {
-                let item = streams.remove(idx);
-                let fd = item.fd();
-                ntex_rt::spawn_blocking(move || {
-                    if let Err(err) = syscall!(libc::close(fd)) {
-                        log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
-                    }
-                });
-                mem::forget(item.io);
-            } else {
-                item.flags.insert(Flags::DROPPED_SEC);
-            }
-            self.streams.set(Some(streams));
-        } else {
-            self.add_delayed_drop(IdType::Weak(id));
-        }
-    }
-
-    fn add_delayed_drop(&self, id: IdType) {
-        self.delayed_drop.set(true);
-        if let Some(mut feed) = self.delayed_feed.take() {
-            feed.push(id);
-            self.delayed_feed.set(Some(feed));
+            item.flags.insert(Flags::DROPPED_SEC);
         }
     }
 
     fn check_delayed_feed(&self) {
-        if self.delayed_drop.get() {
-            self.delayed_drop.set(false);
-            if let Some(mut feed) = self.delayed_feed.take() {
-                for id in feed.drain(..) {
-                    match id {
-                        IdType::Stream(id) => self.drop_stream(id),
-                        IdType::Weak(id) => self.drop_weak_stream(id),
+        if let Some(mut streams) = self.streams.take() {
+            while let Some(id) = self.delayed_feed.pop() {
+                match id {
+                    IdType::Stream(id) => self.drop_stream(id, &mut streams),
+                    IdType::Weak(id) => StreamOpsInner::drop_weak_stream(id, &mut streams),
+                    IdType::Write(id) => {
+                        if let Some(item) = streams.get_mut(id as usize)
+                            && !item.ctx.is_stopped()
+                        {
+                            item.write();
+                        }
                     }
                 }
-                self.delayed_feed.set(Some(feed));
             }
+            self.streams.set(Some(streams));
         }
     }
 
@@ -377,7 +379,12 @@ impl StreamCtl {
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        self.inner.drop_stream(self.id);
+        if let Some(mut streams) = self.inner.streams.take() {
+            self.inner.drop_stream(self.id, &mut streams);
+            self.inner.streams.set(Some(streams));
+        } else {
+            self.inner.delayed_feed.push(IdType::Stream(self.id));
+        }
     }
 }
 
@@ -389,17 +396,20 @@ impl WeakStreamCtl {
         self.inner.with(|streams| f(&streams[self.id as usize].io))
     }
 
-    pub(super) fn with<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut StreamItem) -> R,
-    {
-        self.inner.with(|streams| f(&mut streams[self.id as usize]))
+    /// Initiate write operation for the stream
+    pub(super) fn write(&self) {
+        self.inner.write_stream(self.id);
     }
 }
 
 impl Drop for WeakStreamCtl {
     fn drop(&mut self) {
-        self.inner.drop_weak_stream(self.id);
+        if let Some(mut streams) = self.inner.streams.take() {
+            StreamOpsInner::drop_weak_stream(self.id, &mut streams);
+            self.inner.streams.set(Some(streams));
+        } else {
+            self.inner.delayed_feed.push(IdType::Weak(self.id));
+        }
     }
 }
 
@@ -410,10 +420,6 @@ impl StreamItem {
 
     fn tag(&self) -> &'static str {
         self.ctx.tag()
-    }
-
-    pub(super) fn write_direct(&mut self) {
-        self.write();
     }
 
     fn write(&mut self) -> IoTaskStatus {

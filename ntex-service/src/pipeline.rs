@@ -498,6 +498,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unused_async_trait_impl)]
 mod tests {
     use std::{cell::Cell, future::poll_fn, rc::Rc};
 

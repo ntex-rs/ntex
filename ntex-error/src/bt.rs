@@ -35,7 +35,7 @@ pub fn set_backtrace_start_alt(file: &'static str, line: u32) {
 /// This structure can be used to capture a backtrace at various
 /// points in a program and later used to inspect what the backtrace
 /// was at that time.
-pub struct Backtrace(Arc<BacktraceInner>);
+pub struct Backtrace(Arc<BacktraceRaw>);
 
 #[derive(Debug)]
 /// Backtrace resolver.
@@ -47,20 +47,21 @@ pub struct Backtrace(Arc<BacktraceInner>);
 /// **Note:** Once resolution is complete, control must return to the
 /// originating thread to ensure caching is performed correctly.
 pub struct BacktraceResolver {
-    bt: Arc<BacktraceInner>,
+    bt: Arc<BacktraceRaw>,
     repr: Option<Arc<str>>,
     resolved: bool,
     frames: HashMap<usize, Arc<BacktraceFrame>>,
 }
 
 #[derive(Debug)]
-struct BacktraceInner {
+/// Representation of a backtrace.
+pub struct BacktraceRaw {
     id: u64,
     frames: [Option<Frame>; 80],
     location: &'static Location<'static>,
 }
 
-impl Backtrace {
+impl BacktraceRaw {
     /// Create new backtrace
     pub fn new(location: &'static Location<'static>) -> Self {
         let mut st = foldhash::fast::FixedState::default().build_hasher();
@@ -76,11 +77,24 @@ impl Backtrace {
         });
         let id = st.finish();
 
-        Self(Arc::new(BacktraceInner {
+        BacktraceRaw {
             id,
             frames,
             location,
-        }))
+        }
+    }
+}
+
+impl From<BacktraceRaw> for Backtrace {
+    fn from(bt: BacktraceRaw) -> Backtrace {
+        Backtrace(Arc::new(bt))
+    }
+}
+
+impl Backtrace {
+    /// Create new backtrace
+    pub fn new(location: &'static Location<'static>) -> Self {
+        Self(Arc::new(BacktraceRaw::new(location)))
     }
 
     /// Backtrace repr

@@ -41,10 +41,11 @@
 
 extern crate proc_macro;
 
-mod route;
-
 use proc_macro::TokenStream;
 use quote::quote;
+
+mod route;
+mod sys;
 
 /// Creates route handler with `GET` method guard.
 ///
@@ -186,8 +187,23 @@ pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     println!("Hello world");
 /// }
 /// ```
+///
+/// ## Attributes
+///
+/// - `name = "..."` - Sets system name.
+/// - `signals = true/false` - Enable/disable signals handling.
+/// - `ping_interval = N` - Sets arbiter ping interval in milliseconds for the created system.
+///   To disable pings set value to zero.
+///
+/// ```rust
+/// #[ntex::main(ping_interval = 250)]
+/// async fn main() {
+///     println!("Hello world");
+/// }
+/// ```
 #[proc_macro_attribute]
-pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
+pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
+    let args = syn::parse_macro_input!(args as sys::MainArgs);
     let mut input = syn::parse_macro_input!(item as syn::ItemFn);
     let attrs = &input.attrs;
     let vis = &input.vis;
@@ -203,11 +219,13 @@ pub fn rt_main(_: TokenStream, item: TokenStream) -> TokenStream {
 
     sig.asyncness = None;
 
+    let config = args.gen_sys_config(name);
+
     (quote! {
         #(#attrs)*
         #vis #sig {
             ntex::rt::System::build()
-                .name(stringify!(#name))
+                #config
                 .build(ntex::rt::DefaultRuntime)
                 .block_on(async move { #body })
         }

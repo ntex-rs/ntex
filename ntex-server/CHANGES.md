@@ -1,5 +1,27 @@
 # Changes
 
+## [3.10.4] - 2026-06-22
+
+* Fix lost of wakes in accept loop, partial fix for #911
+
+## [3.10.3] - 2026-06-22
+
+* Do not immediately retry ErrorKind::InvalidInput
+
+## [3.10.2] - 2026-06-19
+
+* Do not delay server stop for testing mode
+
+## [3.10.1] - 2026-06-19
+
+* Fix server ready notification
+
+* Better signals handling
+
+## [3.10.0] - 2026-06-15
+
+* Move signals management to ntex-rt
+
 ## [3.9.0] - 2026-02-17
 
 * Use new ntex-rt api

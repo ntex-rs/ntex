@@ -18,6 +18,10 @@ pub struct Builder {
     stack_size: usize,
     /// Arbiters ping interval
     ping_interval: usize,
+    /// Arbiter ping response threshold
+    ping_threshold: usize,
+    /// Signal handling
+    signals: bool,
     /// Thread pool config
     pool_limit: usize,
     pool_recv_timeout: time::Duration,
@@ -31,7 +35,9 @@ impl Builder {
             name: "ntex".into(),
             stop_on_panic: false,
             stack_size: 0,
-            ping_interval: 1000,
+            ping_interval: 2000,
+            ping_threshold: 1000,
+            signals: false,
             testing: false,
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_secs(60),
@@ -58,6 +64,35 @@ impl Builder {
     }
 
     #[must_use]
+    /// Set signals handling.
+    ///
+    /// By default signal handling is disabled.
+    pub fn signals(mut self, eanbled: bool) -> Self {
+        self.signals = eanbled;
+        self
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    /// Disable signal handling.
+    ///
+    /// By default signal handling is disabled.
+    pub fn disable_signals(mut self) -> Self {
+        self.signals = false;
+        self
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    /// Enable signal handling.
+    ///
+    /// By default signal handling is enabled.
+    pub fn enable_signals(mut self) -> Self {
+        self.signals = true;
+        self
+    }
+
+    #[must_use]
     /// Sets the size of the stack (in bytes) for the new thread.
     pub fn stack_size(mut self, size: usize) -> Self {
         self.stack_size = size;
@@ -67,10 +102,22 @@ impl Builder {
     #[must_use]
     /// Sets ping interval for spawned arbiters.
     ///
-    /// Interval is in milliseconds. By default 5000 milliseconds is set.
+    /// Interval is in milliseconds. By default 2000 milliseconds is set.
     /// To disable pings set value to zero.
     pub fn ping_interval(mut self, interval: usize) -> Self {
         self.ping_interval = interval;
+        self
+    }
+
+    #[must_use]
+    /// Sets the ping response threshold.
+    ///
+    /// If a response takes too long, an attempt is made to create a backtrace
+    /// for the busy arbiter.
+    ///
+    /// The interval is specified in milliseconds. The default is 1000 milliseconds.
+    pub fn ping_threshold(mut self, interval: usize) -> Self {
+        self.ping_threshold = interval;
         self
     }
 
@@ -86,6 +133,7 @@ impl Builder {
     /// Mark system as testing
     pub fn testing(mut self) -> Self {
         self.testing = true;
+        self.signals = false;
         self
     }
 
@@ -110,6 +158,7 @@ impl Builder {
             stack_size: self.stack_size,
             stop_on_panic: self.stop_on_panic,
             ping_interval: self.ping_interval,
+            ping_threshold: self.ping_threshold,
             pool_limit: self.pool_limit,
             pool_recv_timeout: self.pool_recv_timeout,
             runner: Arc::new(runner),
@@ -122,12 +171,12 @@ impl Builder {
     /// This method panics if it can not create runtime
     pub fn build_with(self, config: SystemConfig) -> SystemRunner {
         let runner = config.runner.clone();
-        let system = System::construct(config);
 
         // init system arbiter and run configuration method
         SystemRunner {
-            system,
+            config,
             runner,
+            signals: self.signals,
             _t: PhantomData,
         }
     }
@@ -136,17 +185,13 @@ impl Builder {
 /// Helper object that runs System's event loop
 #[must_use = "SystemRunner must be run"]
 pub struct SystemRunner {
-    system: System,
+    config: SystemConfig,
     runner: Arc<dyn Runner>,
+    signals: bool,
     _t: PhantomData<Rc<()>>,
 }
 
 impl SystemRunner {
-    /// Get current system.
-    pub fn system(&self) -> System {
-        self.system.clone()
-    }
-
     /// This function will start event loop and will finish once the
     /// `System::stop()` function is called.
     pub fn run_until_stop(self) -> io::Result<()> {
@@ -159,15 +204,21 @@ impl SystemRunner {
     where
         F: FnOnce() -> io::Result<()> + 'static,
     {
-        log::info!("Starting {:?} system", self.system.name());
+        log::info!("Starting {:?} system", self.config.name);
 
         let SystemRunner {
-            mut system, runner, ..
+            config,
+            runner,
+            signals,
+            ..
         } = self;
 
         // run loop
         crate::driver::block_on(runner.as_ref(), async move {
-            let stop = system.start();
+            let (system, stop) = System::start(config);
+            if signals {
+                system.enable_signals();
+            }
 
             f()?;
 
@@ -191,12 +242,17 @@ impl SystemRunner {
         R: 'static,
     {
         let SystemRunner {
-            mut system, runner, ..
+            config,
+            runner,
+            signals,
+            ..
         } = self;
 
         crate::driver::block_on(runner.as_ref(), async move {
-            let stop = system.start();
-            drop(stop);
+            let (system, _) = System::start(config);
+            if signals {
+                system.enable_signals();
+            }
 
             let loc = current_location();
             ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
@@ -211,13 +267,12 @@ impl SystemRunner {
         F: Future<Output = R> + 'static,
         R: 'static,
     {
-        let SystemRunner { mut system, .. } = self;
+        let SystemRunner { config, .. } = self;
 
         // run loop
         tok_io::task::LocalSet::new()
             .run_until(async move {
-                let stop = system.start();
-                drop(stop);
+                _ = System::start(config);
 
                 let loc = current_location();
                 ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
@@ -235,7 +290,7 @@ pub(crate) fn current_location() -> &'static panic::Location<'static> {
 impl fmt::Debug for SystemRunner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SystemRunner")
-            .field("system", &self.system)
+            .field("config", &self.config)
             .finish()
     }
 }

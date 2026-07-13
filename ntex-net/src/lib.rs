@@ -143,7 +143,6 @@ impl Runner for DefaultRuntime {
                         ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
                     } else {
-                        driver.clear();
                         ntex_rt::remove_all_items();
                     }
                 });
@@ -164,7 +163,6 @@ impl Runner for DefaultRuntime {
                         ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
                     } else {
-                        driver.clear();
                         ntex_rt::remove_all_items();
                     }
                 });
@@ -196,7 +194,6 @@ impl Runner for DefaultRuntime {
                         ntex_rt::remove_all_items();
                         panic::resume_unwind(err);
                     } else {
-                        driver.clear();
                         ntex_rt::remove_all_items();
                     }
                 });

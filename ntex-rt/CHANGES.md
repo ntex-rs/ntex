@@ -1,5 +1,24 @@
 # Changes
 
+## [3.15.4] - 2026-06-25
+
+* Disable arbiter pings is interval is set to 0
+
+* Add a separate ping `threshold` parameter, wait this amount of time before
+  checking the arbiter stack trace.
+
+## [3.15.3] - 2026-06-21
+
+* Add arbiter latency callback
+
+## [3.15.2] - 2026-06-19
+
+* Improve signals handling
+
+## [3.15.0] - 2026-06-15
+
+* Try to log stacktraces for arbiters in tight loop
+
 ## [3.14.0] - 2026-05-11
 
 * Add System::get_value() API for system-wide storage access.

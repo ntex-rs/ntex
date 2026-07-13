@@ -2,7 +2,7 @@
 use std::{borrow::Borrow, cell::Cell, cmp, collections::VecDeque, fmt, io, mem, ops, ptr};
 
 use crate::{BufMut, BytePageSize, ByteString, Bytes, BytesMut};
-use crate::{buf::UninitSlice, storage::StorageVec};
+use crate::{buf::UninitSlice, stvec::StorageVec};
 
 pub struct BytePages {
     st: Option<Box<Inner>>,
@@ -63,10 +63,12 @@ impl BytePages {
         pages.push_back(page);
 
         #[cfg(feature = "overuse")]
-        if pages.len() > 128 {
-            let bt = backtrace::Backtrace::new();
-            log::warn!("Number of pages {}\n{bt:?}", pages.len());
-            println!("{bt:?}");
+        if pages.len() == 128 {
+            log::debug!(
+                "Number of pages {}\n{:?}",
+                pages.len(),
+                backtrace::Backtrace::new()
+            );
         }
     }
 
@@ -125,10 +127,12 @@ impl BytePages {
                 pages.push_back(p);
 
                 #[cfg(feature = "overuse")]
-                if pages.len() > 128 {
-                    let bt = backtrace::Backtrace::new();
-                    log::warn!("Number of pages {}\n{bt:?}", pages.len());
-                    println!("{bt:?}");
+                if pages.len() == 128 {
+                    log::debug!(
+                        "Number of pages {}\n{:?}",
+                        pages.len(),
+                        backtrace::Backtrace::new()
+                    );
                 }
             }
         }

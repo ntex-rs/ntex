@@ -16,6 +16,7 @@ use crate::filterptr::FilterPtr;
 use crate::flags::Flags;
 use crate::ops::{Id, IoManager, TimerHandle};
 use crate::seal::{IoBoxed, Sealed};
+use crate::utils::Extensions;
 use crate::{Decoded, FilterLayer, Handle, IoStatusUpdate, IoStream, RecvError};
 
 /// Interface object to the underlying I/O stream
@@ -37,8 +38,7 @@ pub(crate) struct IoState {
     pub(super) handle: Cell<Option<Box<dyn Handle>>>,
     pub(super) timeout: Cell<TimerHandle>,
     pub(super) shutdown_timeout: Cell<Option<Sleep>>,
-    #[allow(clippy::box_collection)]
-    pub(super) on_disconnect: Cell<Option<Box<Vec<LocalWaker>>>>,
+    pub(super) extensions: Extensions,
 }
 
 impl IoState {
@@ -62,11 +62,7 @@ impl IoState {
     }
 
     pub(super) fn notify_disconnect(&self) {
-        if let Some(on_disconnect) = self.on_disconnect.take() {
-            for item in on_disconnect.into_iter() {
-                item.wake();
-            }
-        }
+        self.extensions.notify_disconnect();
     }
 
     /// Get the current I/O error.
@@ -203,7 +199,7 @@ impl Io {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             shutdown_timeout: Cell::new(None),
-            on_disconnect: Cell::new(None),
+            extensions: Extensions::default(),
         });
         inner.filter.set(Base::new(IoRef(inner.clone())));
 
@@ -240,7 +236,7 @@ impl IoRef {
             handle: Cell::new(None),
             timeout: Cell::new(TimerHandle::default()),
             shutdown_timeout: Cell::new(None),
-            on_disconnect: Cell::new(None),
+            extensions: Extensions::default(),
         }))
     }
 }
@@ -314,9 +310,11 @@ impl<F: Filter> Io<F> {
     where
         U: FilterLayer,
     {
+        self.with_callbacks(|cb| cb.before_processing(&self));
+
         // Write buffer processing may be delayed,
         // call the filter chain to process pending writes
-        if let Err(e) = self.st().buffer.process_write_buf(&self) {
+        if let Err(e) = self.st().buffer.process_write_buf_no_cb(&self) {
             self.st().terminate_connection(Some(e));
         }
 
@@ -336,9 +334,11 @@ impl<F: Filter> Io<F> {
         let io = Io(UnsafeCell::new(state), marker::PhantomData);
 
         // push read data into new filter
-        if let Err(e) = io.st().buffer.process_read_buf(&io, 0) {
+        if let Err(e) = io.st().buffer.process_read_buf_no_cb(&io, 0) {
             io.st().terminate_connection(Some(e));
         }
+        io.with_callbacks(|cb| cb.after_processing(&io));
+
         io
     }
 
@@ -348,6 +348,8 @@ impl<F: Filter> Io<F> {
         U: FnOnce(F) -> R,
         R: Filter,
     {
+        self.with_callbacks(|cb| cb.before_processing(&self));
+
         // Write buffer processing may be delayed,
         // call the filter chain to process pending writes
         if let Err(e) = self.st().buffer.process_write_buf(&self) {
@@ -357,7 +359,9 @@ impl<F: Filter> Io<F> {
         let state = self.take_io_ref();
         state.0.filter.map_filter::<F, U, R>(f);
 
-        Io(UnsafeCell::new(state), marker::PhantomData)
+        let io = Io(UnsafeCell::new(state), marker::PhantomData);
+        io.with_callbacks(|cb| cb.after_processing(&io));
+        io
     }
 }
 
@@ -393,6 +397,8 @@ impl<F> Io<F> {
     /// Reads bytes from this I/O stream into the specified buffer.
     ///
     /// If there is not enough data available, waits for incoming data.
+    /// Returns an error of kind [`io::ErrorKind::UnexpectedEof`] if the stream
+    /// is disconnected before `dst` is completely filled.
     pub async fn read(&self, dst: &mut [u8]) -> io::Result<()> {
         loop {
             let completed = self.with_read_buf(|buf| {
@@ -406,7 +412,10 @@ impl<F> Io<F> {
             if completed {
                 return Ok(());
             }
-            self.read_ready().await?;
+            // `read_ready` resolves with `None` once the io is closed/stopped.
+            if self.read_ready().await?.is_none() {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Disconnected"));
+            }
         }
     }
 
@@ -765,17 +774,7 @@ impl OnDisconnect {
         let token = if disconnected {
             usize::MAX
         } else {
-            let mut on_disconnect = inner.on_disconnect.take();
-            let token = if let Some(ref mut on_disconnect) = on_disconnect {
-                let token = on_disconnect.len();
-                on_disconnect.push(LocalWaker::default());
-                token
-            } else {
-                on_disconnect = Some(Box::new(vec![LocalWaker::default()]));
-                0
-            };
-            inner.on_disconnect.set(on_disconnect);
-            token
+            inner.extensions.register_disconnect()
         };
         Self { token, inner }
     }
@@ -785,12 +784,10 @@ impl OnDisconnect {
     pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<()> {
         if self.token == usize::MAX || self.inner.flags.is_stopping() {
             Poll::Ready(())
-        } else if let Some(on_disconnect) = self.inner.on_disconnect.take() {
-            on_disconnect[self.token].register(cx.waker());
-            self.inner.on_disconnect.set(Some(on_disconnect));
-            Poll::Pending
         } else {
-            Poll::Ready(())
+            self.inner
+                .extensions
+                .poll_disconnect(self.token, cx.waker())
         }
     }
 }
@@ -854,6 +851,28 @@ mod tests {
         server.st().flags.set_wr_backpressure();
         let item = server.recv(&BytesCodec).await.ok().unwrap().unwrap();
         assert_eq!(item, TEXT);
+    }
+
+    #[ntex::test]
+    async fn test_read() {
+        let (client, server) = IoTest::create();
+        client.remote_buffer_cap(1024);
+
+        let server = Io::new(server, SharedCfg::new("SRV"));
+
+        client.write(b"1234");
+        let mut buf: [u8; 4] = [0, 0, 0, 0];
+        server.read(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"1234");
+
+        // disconnect during read
+        let fut = ntex_rt::spawn(async move {
+            let mut buf: [u8; 4] = [0, 0, 0, 0];
+            server.read(&mut buf).await
+        });
+        client.close().await;
+        let err = fut.await.unwrap().err().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
     #[ntex::test]
@@ -1317,6 +1336,60 @@ mod tests {
             Poll::Ready(Ok(()))
         ));
         assert!(!io.flags().is_wr_backpressure());
+    }
+
+    #[ntex::test]
+    async fn shutdown_flushes_write_buf_with_read_backpressure() {
+        // Graceful shutdown must flush the pending write buffer even if
+        // the peer keeps sending data (read backpressure is enabled).
+        let (client, server) = IoTest::create();
+        // remote side does not accept any data yet, write task stalls
+        client.remote_buffer_cap(0);
+
+        let io = Io::new(
+            server,
+            SharedCfg::new("SRV").add(
+                IoConfig::default()
+                    .set_read_buf(8, 4, 16)
+                    .set_disconnect_timeout(ntex_util::time::Seconds(2)),
+            ),
+        );
+
+        // queue response data; remote is stalled so it stays in the write buffer
+        io.encode_slice(b"response-tail").unwrap();
+        sleep(Millis(50)).await;
+        assert_eq!(io.st().buffer.write_buf_size(), 13);
+
+        // peer keeps sending, crossing the read high watermark,
+        // read task gets paused with back-pressure enabled
+        client.write("0123456789");
+        sleep(Millis(50)).await;
+        assert!(io.flags().is_read_paused());
+        assert!(io.flags().is_rd_backpressure());
+        assert_eq!(io.st().buffer.write_buf_size(), 13);
+
+        // start graceful shutdown while the write buffer is not empty
+        io.close();
+        sleep(Millis(50)).await;
+
+        // peer starts draining the connection
+        client.remote_buffer_cap(1024);
+
+        // all previously queued data must be written before io stream is closed.
+        // Without the fix graceful shutdown completes immediately (read is paused
+        // with back-pressure), dropping the buffered write data, so the read here
+        // returns nothing instead of the queued response tail.
+        let data = ntex_util::time::timeout(Millis(2000), client.read())
+            .await
+            .expect("write buffer was dropped during shutdown")
+            .unwrap();
+        assert_eq!(&data[..], b"response-tail");
+
+        // the connection still closes gracefully afterwards (within the
+        // disconnect timeout) instead of hanging
+        ntex_util::time::timeout(Millis(4000), io.on_disconnect())
+            .await
+            .expect("io stream did not disconnect after flush");
     }
 
     #[ntex::test]

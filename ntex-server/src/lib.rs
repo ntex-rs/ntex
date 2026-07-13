@@ -1,5 +1,6 @@
 #![deny(clippy::pedantic)]
 #![allow(
+    clippy::unused_async,
     clippy::clone_on_copy,
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
@@ -12,13 +13,14 @@ mod manager;
 pub mod net;
 mod pool;
 mod server;
-mod signals;
 mod wrk;
 
 pub use self::pool::WorkerPool;
 pub use self::server::Server;
-pub use self::signals::{Signal, signal};
 pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
+
+#[deprecated(since = "3.10.0", note = "use ntex_rt::signals")]
+pub use ntex_rt::signals::{Signal, signal};
 
 /// Worker id
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

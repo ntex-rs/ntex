@@ -356,29 +356,29 @@ impl ServerBuilder {
 
     /// Starts processing incoming connections and return server controller.
     pub fn run(self) -> Server<Connection> {
-        if self.sockets.is_empty() {
-            panic!("Server should have at least one bound socket");
-        } else {
-            let srv = StreamServer::new(
-                self.accept.notify(),
-                self.services,
-                self.on_worker_start,
-                self.on_accept,
-            );
-            let svc = self.pool.run(srv);
+        assert!(
+            !self.sockets.is_empty(),
+            "Server should have at least one bound socket"
+        );
+        let srv = StreamServer::new(
+            self.accept.notify(),
+            self.services,
+            self.on_worker_start,
+            self.on_accept,
+        );
+        let svc = self.pool.run(srv);
 
-            let sockets = self
-                .sockets
-                .into_iter()
-                .map(|sock| {
-                    log::info!("Starting \"{}\" service on {}", sock.1, sock.2);
-                    (sock.0, sock.2)
-                })
-                .collect();
-            self.accept.start(sockets, svc.clone());
+        let sockets = self
+            .sockets
+            .into_iter()
+            .map(|sock| {
+                log::info!("Starting \"{}\" service on {}", sock.1, sock.2);
+                (sock.0, sock.2)
+            })
+            .collect();
+        self.accept.start(sockets, svc.clone());
 
-            svc
-        }
+        svc
     }
 }
 

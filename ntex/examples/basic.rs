@@ -17,7 +17,7 @@ async fn no_params() -> &'static str {
     "Hello world!\r\n"
 }
 
-#[ntex::main]
+#[ntex::main(name = "basic")]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
             .service(web::resource("/test1.html").to(|| async { "Test\r\n" }))
     })
     .bind("0.0.0.0:8081")?
-    .workers(4)
+    .workers(1)
     .config(
         ntex::SharedCfg::new("MY-SERVER")
             .add(http::HttpServiceConfig::new().set_keepalive(http::KeepAlive::Disabled)),

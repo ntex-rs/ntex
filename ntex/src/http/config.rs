@@ -144,7 +144,7 @@ impl HttpServiceConfig {
     ///
     /// To disable timeout set value to 0.
     ///
-    /// By default keep-alive timeout is set to 30 seconds.
+    /// By default keep-alive timeout is set to 5 seconds.
     pub fn set_keepalive_timeout(mut self, timeout: Seconds) -> Self {
         self.keep_alive = timeout;
         self.ka_enabled = !timeout.is_zero();

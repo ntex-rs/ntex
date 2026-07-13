@@ -652,7 +652,29 @@ where
         } else if self.flags.contains(Flags::READ_HDRS_TIMEOUT) {
             // received new data but not enough for parsing complete frame
             self.read_remains = decoded.remains as u32;
-        } else if !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
+        } else if self.read_remains == 0
+            && decoded.remains == 0
+            && !self.codec.is_reading_hdrs()
+        {
+            // no new data, start keep-alive timer
+            if self.codec.keepalive() {
+                if !self.flags.contains(Flags::READ_KA_TIMEOUT)
+                    && self.config.keep_alive_enabled()
+                {
+                    log::debug!(
+                        "{}: Start keep-alive timer {:?}",
+                        self.io.tag(),
+                        self.config.keep_alive()
+                    );
+                    self.flags.insert(Flags::READ_KA_TIMEOUT);
+                    self.io.start_timer(self.config.keep_alive());
+                }
+            } else {
+                self.io.close();
+                return Some(self.ctl_keepalive(false));
+            }
+        } else if self.codec.is_reading_hdrs()
+            && !self.flags.contains(Flags::READ_HDRS_TIMEOUT)
             && let Some(cfg) = self.config.headers_read_rate()
         {
             log::debug!(
@@ -671,24 +693,6 @@ where
             self.read_remains = decoded.remains as u32;
             self.read_max_timeout = cfg.max_timeout;
             self.io.start_timer(cfg.timeout);
-        } else if self.read_remains == 0 && decoded.remains == 0 {
-            // no new data, start keep-alive timer
-            if self.codec.keepalive() {
-                if !self.flags.contains(Flags::READ_KA_TIMEOUT)
-                    && self.config.keep_alive_enabled()
-                {
-                    log::debug!(
-                        "{}: Start keep-alive timer {:?}",
-                        self.io.tag(),
-                        self.config.keep_alive()
-                    );
-                    self.flags.insert(Flags::READ_KA_TIMEOUT);
-                    self.io.start_timer(self.config.keep_alive());
-                }
-            } else {
-                self.io.close();
-                return Some(self.ctl_keepalive(false));
-            }
         }
         None
     }
