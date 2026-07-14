@@ -1,5 +1,9 @@
 # Changes
 
+## [3.15.5] - 2026-07-14
+
+* `remove_all_items()` no longer holds refcell for duration of removal.
+
 ## [3.15.4] - 2026-06-25
 
 * Disable arbiter pings is interval is set to 0

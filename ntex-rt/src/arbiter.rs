@@ -343,6 +343,15 @@ where
 
 /// Remove all items from storage.
 pub fn remove_all_items() {
-    STORAGE.with(move |cell| cell.borrow_mut().clear());
+    STORAGE.with(move |cell| {
+        loop {
+            let mut items = cell.borrow_mut();
+            let Some(item) = items.drain().next() else {
+                break;
+            };
+            drop(items);
+            drop(item);
+        }
+    });
     System::remove_current();
 }
