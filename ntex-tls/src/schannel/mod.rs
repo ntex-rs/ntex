@@ -307,7 +307,8 @@ impl Context {
 
         let header_len = sizes.cbHeader as usize;
         let trailer_len = sizes.cbTrailer as usize;
-        let mut frame = vec![0u8; header_len + len + trailer_len];
+        let mut frame = BytesMut::with_capacity(header_len + len + trailer_len);
+        frame.resize(header_len + len + trailer_len, 0);
         frame[header_len..header_len + len].copy_from_slice(&src[..len]);
 
         let mut bufs = [
@@ -346,7 +347,8 @@ impl Context {
             .expect("TLS header length fits usize")
             + usize::try_from(bufs[1].cbBuffer).expect("TLS data length fits usize")
             + usize::try_from(bufs[2].cbBuffer).expect("TLS trailer length fits usize");
-        dst.put_slice(&frame[..tls_len]);
+        frame.truncate(tls_len);
+        dst.append(frame);
         Ok(len)
     }
 
