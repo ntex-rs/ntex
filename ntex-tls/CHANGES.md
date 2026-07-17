@@ -1,5 +1,9 @@
 # Changes
 
+## [3.8.0] - 2026-07-17
+
+* Add `schannel` support #904
+
 ## [3.7.0] - 2026-06-18
 
 * Add `.connect()` methods for openssl connectors
