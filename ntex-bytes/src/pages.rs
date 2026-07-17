@@ -510,8 +510,16 @@ impl BytePage {
         }
     }
 
-    /// Return a raw pointer to data.
-    pub fn as_ptr(&self) -> *const u8 {
+    #[inline]
+    /// Returns a raw pointer to the data.
+    ///
+    /// # Safety
+    ///
+    /// One of the possible page storage types is `Bytes`.
+    /// A `Bytes` value may store its data inline, in which case `as_ptr()` returns
+    /// a pointer into the `Bytes` object itself. Moving the `BytePage` may
+    /// therefore invalidate the returned pointer.
+    pub unsafe fn as_ptr(&self) -> *const u8 {
         unsafe {
             match &self.inner {
                 StorageType::Bytes(b) => b.storage.as_ptr(),
@@ -784,102 +792,104 @@ mod tests {
 
     #[test]
     fn pages() {
-        // pages
-        let mut pages = BytePages::new(BytePageSize::Size8);
-        assert!(pages.is_empty());
-        assert_eq!(pages.len(), 0);
-        assert_eq!(pages.num_pages(), 0);
-        pages.extend_from_slice(b"b");
-        assert_eq!(pages.len(), 1);
-        assert_eq!(pages.num_pages(), 1);
-        pages.extend_from_slice("a".repeat(9 * 1024).as_bytes());
-        assert_eq!(pages.len(), 9217);
-        assert_eq!(pages.num_pages(), 2);
-        assert!(!pages.is_empty());
+        unsafe {
+            // pages
+            let mut pages = BytePages::new(BytePageSize::Size8);
+            assert!(pages.is_empty());
+            assert_eq!(pages.len(), 0);
+            assert_eq!(pages.num_pages(), 0);
+            pages.extend_from_slice(b"b");
+            assert_eq!(pages.len(), 1);
+            assert_eq!(pages.num_pages(), 1);
+            pages.extend_from_slice("a".repeat(9 * 1024).as_bytes());
+            assert_eq!(pages.len(), 9217);
+            assert_eq!(pages.num_pages(), 2);
+            assert!(!pages.is_empty());
 
-        let mut pgs = BytePages::new(BytePageSize::Size8);
-        pgs.put_i8(b'a' as i8);
-        let p = pgs.take().unwrap();
-        assert_eq!(p.len(), 1);
-        assert_eq!(p.as_ref(), b"a");
+            let mut pgs = BytePages::new(BytePageSize::Size8);
+            pgs.put_i8(b'a' as i8);
+            let p = pgs.take().unwrap();
+            assert_eq!(p.len(), 1);
+            assert_eq!(p.as_ref(), b"a");
 
-        pgs.extend_from_slice("a".repeat(8 * 1024 - 1).as_bytes());
-        assert_eq!(pgs.num_pages(), 1);
-        pgs.put_u8(b'a');
-        assert_eq!(pgs.num_pages(), 1);
-        assert!(pgs.current.is_none());
+            pgs.extend_from_slice("a".repeat(8 * 1024 - 1).as_bytes());
+            assert_eq!(pgs.num_pages(), 1);
+            pgs.put_u8(b'a');
+            assert_eq!(pgs.num_pages(), 1);
+            assert!(pgs.current.is_none());
 
-        pgs.put_u8(b'a');
-        assert_eq!(pgs.num_pages(), 2);
+            pgs.put_u8(b'a');
+            assert_eq!(pgs.num_pages(), 2);
 
-        pgs.append(Bytes::copy_from_slice("a".repeat(8 * 1024).as_bytes()));
-        assert_eq!(pgs.num_pages(), 3);
-        assert!(pgs.current.is_none());
+            pgs.append(Bytes::copy_from_slice("a".repeat(8 * 1024).as_bytes()));
+            assert_eq!(pgs.num_pages(), 3);
+            assert!(pgs.current.is_none());
 
-        // page
-        let p = pages.take().unwrap();
-        assert_eq!(p.len(), 8192);
-        let p = pages.take().unwrap();
-        assert_eq!(p.len(), 1025);
-        assert!(!p.is_empty());
-        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
-        assert_eq!(p.as_ref(), "a".repeat(1025).as_bytes());
-        assert!(pages.take().is_none());
+            // page
+            let p = pages.take().unwrap();
+            assert_eq!(p.len(), 8192);
+            let p = pages.take().unwrap();
+            assert_eq!(p.len(), 1025);
+            assert!(!p.is_empty());
+            assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+            assert_eq!(p.as_ref(), "a".repeat(1025).as_bytes());
+            assert!(pages.take().is_none());
 
-        let p = BytePage::from(Bytes::copy_from_slice(b"123"));
-        assert_eq!(p.len(), 3);
-        assert!(!p.is_empty());
-        assert_eq!(p.as_ref(), b"123");
-        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+            let p = BytePage::from(Bytes::copy_from_slice(b"123"));
+            assert_eq!(p.len(), 3);
+            assert!(!p.is_empty());
+            assert_eq!(p.as_ref(), b"123");
+            assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
 
-        let p = BytePage::from(&b"123"[..]);
-        assert_eq!(p.len(), 3);
-        assert!(!p.is_empty());
-        assert_eq!(p.as_ref(), b"123");
-        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+            let p = BytePage::from(&b"123"[..]);
+            assert_eq!(p.len(), 3);
+            assert!(!p.is_empty());
+            assert_eq!(p.as_ref(), b"123");
+            assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
 
-        let p = BytePage::from(b"123");
-        assert_eq!(p.len(), 3);
-        assert!(!p.is_empty());
-        assert_eq!(p.as_ref(), b"123");
-        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+            let p = BytePage::from(b"123");
+            assert_eq!(p.len(), 3);
+            assert!(!p.is_empty());
+            assert_eq!(p.as_ref(), b"123");
+            assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
 
-        let p = BytePage::from("123");
-        assert_eq!(p.len(), 3);
-        assert!(!p.is_empty());
-        assert_eq!(p.as_ref(), b"123");
-        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
-        assert_eq!(p.freeze(), b"123");
+            let p = BytePage::from("123");
+            assert_eq!(p.len(), 3);
+            assert!(!p.is_empty());
+            assert_eq!(p.as_ref(), b"123");
+            assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+            assert_eq!(p.freeze(), b"123");
 
-        let p = BytePage::from(vec![b'1', b'2', b'3']);
-        assert_eq!(p.len(), 3);
-        assert!(!p.is_empty());
-        assert_eq!(p.as_ref(), b"123");
-        assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
-        assert_eq!(p.freeze(), b"123");
+            let p = BytePage::from(vec![b'1', b'2', b'3']);
+            assert_eq!(p.len(), 3);
+            assert!(!p.is_empty());
+            assert_eq!(p.as_ref(), b"123");
+            assert_eq!(p.as_ref().as_ptr(), p.as_ptr());
+            assert_eq!(p.freeze(), b"123");
 
-        let mut p = BytePage::from(vec![b'1', b'2', b'3']);
-        p.advance_to(1);
-        assert_eq!(p.len(), 2);
-        assert!(!p.is_empty());
-        assert_eq!(p.as_ref(), b"23");
+            let mut p = BytePage::from(vec![b'1', b'2', b'3']);
+            p.advance_to(1);
+            assert_eq!(p.len(), 2);
+            assert!(!p.is_empty());
+            assert_eq!(p.as_ref(), b"23");
 
-        // debug
-        let mut pages = BytePages::new(BytePageSize::Size8);
-        pages.extend_from_slice(b"b");
-        assert_eq!(format!("{pages:?}"), "BytePages(b\"b\")");
-        let p = pages.take().unwrap();
-        assert_eq!(p.as_ref(), b"b");
+            // debug
+            let mut pages = BytePages::new(BytePageSize::Size8);
+            pages.extend_from_slice(b"b");
+            assert_eq!(format!("{pages:?}"), "BytePages(b\"b\")");
+            let p = pages.take().unwrap();
+            assert_eq!(p.as_ref(), b"b");
 
-        let mut pages = BytePages::new(BytePageSize::Size8);
-        pages.extend_from_slice(b"a");
-        pages.append(Bytes::copy_from_slice(b"123"));
-        pages.pages_mut().push_back(p);
-        assert_eq!(format!("{pages:?}"), "BytePages(b\"b\", b\"a123\")");
+            let mut pages = BytePages::new(BytePageSize::Size8);
+            pages.extend_from_slice(b"a");
+            pages.append(Bytes::copy_from_slice(b"123"));
+            pages.pages_mut().push_back(p);
+            assert_eq!(format!("{pages:?}"), "BytePages(b\"b\", b\"a123\")");
 
-        assert_eq!(pages.len(), 5);
-        pages.clear();
-        assert_eq!(pages.len(), 0);
+            assert_eq!(pages.len(), 5);
+            pages.clear();
+            assert_eq!(pages.len(), 0);
+        }
     }
 
     #[test]

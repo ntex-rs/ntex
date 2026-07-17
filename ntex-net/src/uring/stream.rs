@@ -225,7 +225,6 @@ impl Handler for StreamOpsHandler {
         self.inner.with(|st| {
             match st.ops[user_data].take().unwrap() {
                 Operation::Recv { id, mut buf, } => {
-
                     if let Some(item) = st.streams.get_mut(id) {
                         #[cfg(feature = "trace")]
                         log::trace!(
@@ -419,14 +418,21 @@ impl StreamOpsStorage {
                     #[cfg(feature = "trace")]
                     log::trace!("{}: Snd({id}) size:{:?}", item.ctx.tag(), buf.len());
 
-                    let buf_ptr = buf.as_ptr();
-                    let buf_len = buf.len() as u32;
                     let op_id = self.ops.insert(Some(Operation::Send {
                         id,
                         buf,
                         result: None,
                     })) as u32;
                     item.wr_op = NonZeroU32::new(op_id);
+
+                    let (buf_ptr, buf_len) = if let Some(Operation::Send { buf, .. }) =
+                        &self.ops[op_id as usize]
+                    {
+                        // Safety. `buf` is stored in `self.ops` which is heap.
+                        (unsafe { buf.as_ptr() }, buf.len() as u32)
+                    } else {
+                        unreachable!()
+                    };
 
                     api.submit_inline(op_id, move |entry| {
                         if item.flags.contains(Flags::NO_ZC) || buf_len <= ZC_SIZE {

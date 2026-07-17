@@ -1,5 +1,9 @@
 # Changes
 
+## [1.9.0] (2026-07-17)
+
+* Mark `BytePage::as_ptr()` as `unsafe`, as it has additional requirements that make it unsafe
+
 ## [1.8.0] (2026-07-12)
 
 * Introduce external storage for Bytes and ByteString
