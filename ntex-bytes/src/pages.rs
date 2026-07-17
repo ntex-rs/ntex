@@ -510,8 +510,16 @@ impl BytePage {
         }
     }
 
-    /// Return a raw pointer to data.
-    pub fn as_ptr(&self) -> *const u8 {
+    #[inline]
+    /// Returns a raw pointer to the data.
+    ///
+    /// # Safety
+    ///
+    /// One of the possible page storage types is `Bytes`.
+    /// A `Bytes` value may store its data inline, in which case `as_ptr()` returns
+    /// a pointer into the `Bytes` object itself. Moving the `BytePage` may
+    /// therefore invalidate the returned pointer.
+    pub unsafe fn as_ptr(&self) -> *const u8 {
         unsafe {
             match &self.inner {
                 StorageType::Bytes(b) => b.storage.as_ptr(),

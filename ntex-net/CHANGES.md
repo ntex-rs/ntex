@@ -1,5 +1,9 @@
 # Changes
 
+## [3.13.1] - 2026-07-17
+
+* io-ring driver could use invalid BytePage pointer #932
+
 ## [3.13.0] - 2026-06-21
 
 * Cleanup io-uring requests before drop
