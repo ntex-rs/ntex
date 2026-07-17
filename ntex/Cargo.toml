@@ -133,3 +133,6 @@ tls_openssl = { workspace = true }
 tls_rustls = { workspace = true, features = ["ring", "std"] }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+ntex-tls = { workspace = true, features = ["schannel"] }

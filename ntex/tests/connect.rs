@@ -173,6 +173,77 @@ async fn test_openssl_read_before_error() {
     assert!(io.recv(&BytesCodec).await.unwrap().is_none());
 }
 
+#[cfg(all(windows, feature = "openssl"))]
+#[ntex::test]
+async fn test_schannel_string() {
+    use ntex::{io::types::HttpProtocol, server::openssl};
+    use ntex_tls::schannel::{ClientConfig, PeerCert, TlsConnector, TlsConnector2};
+    use tls_openssl::x509::X509;
+
+    let srv = test_server(async || {
+        chain_factory(openssl::SslAcceptor::new(ssl_acceptor())).and_then(
+            fn_service(|io: Io<_>| async move {
+                let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+                io.send(item, &BytesCodec).await.unwrap();
+                Ok::<_, Box<dyn std::error::Error>>(())
+            })
+            .map_init_err(|_| ()),
+        )
+    });
+
+    let config = ClientConfig::new().danger_accept_invalid_certs(true);
+
+    // schannel connector
+    let conn = Pipeline::new(
+        TlsConnector::with_config(config.clone())
+            .create(SharedCfg::new("CLIENT").into())
+            .await
+            .unwrap(),
+    );
+    let addr = format!("localhost:{}", srv.addr().port());
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    assert_eq!(
+        io.query::<HttpProtocol>().get().unwrap(),
+        HttpProtocol::Http1
+    );
+    let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
+    assert_eq!(
+        io.query::<PeerCert>().as_ref().unwrap().0,
+        cert.to_der().unwrap()
+    );
+    io.send(Bytes::from_static(b"test"), &BytesCodec)
+        .await
+        .unwrap();
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+    assert_eq!(item, Bytes::from_static(b"test"));
+
+    // schannel connector 2
+    let conn = Pipeline::new(
+        TlsConnector2::with_config(config)
+            .create(SharedCfg::default())
+            .await
+            .unwrap(),
+    );
+    let addr = format!("localhost:{}", srv.addr().port());
+    let io = conn.call(addr.into()).await.unwrap();
+    assert_eq!(io.query::<PeerAddr>().get().unwrap(), srv.addr().into());
+    assert_eq!(
+        io.query::<HttpProtocol>().get().unwrap(),
+        HttpProtocol::Http1
+    );
+    let cert = X509::from_pem(include_bytes!("cert.pem")).unwrap();
+    assert_eq!(
+        io.query::<PeerCert>().as_ref().unwrap().0,
+        cert.to_der().unwrap()
+    );
+    io.send(Bytes::from_static(b"test"), &BytesCodec)
+        .await
+        .unwrap();
+    let item = io.recv(&BytesCodec).await.unwrap().unwrap();
+    assert_eq!(item, Bytes::from_static(b"test"));
+}
+
 #[cfg(feature = "rustls")]
 #[ntex::test]
 async fn test_rustls_string() {
