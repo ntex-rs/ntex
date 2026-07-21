@@ -252,19 +252,23 @@ impl System {
         f(&self.0.arbiters.lock().list)
     }
 
-    /// Retrieves a list of last pings records for specified arbiter
+    /// Retrieves a list of last pings records for each worker.
     ///
     /// This method should be called from the thread where the system has been initialized,
     /// typically the "main" thread.
-    pub fn list_arbiter_pings<F, R>(id: Id, f: F) -> R
+    pub fn list_arbiter_pings<F>(mut f: F)
     where
-        F: FnOnce(Option<&VecDeque<PingRecord>>) -> R,
+        F: FnMut(&Arbiter, &mut VecDeque<PingRecord>),
     {
         PINGS.with(|pings| {
-            if let Some(recs) = pings.borrow().get(&id) {
-                f(Some(recs))
-            } else {
-                f(None)
+            let mut p = pings.borrow_mut();
+            let sys = System::current();
+            let arbiters = sys.0.arbiters.lock();
+
+            for (id, recs) in &mut *p {
+                if let Some(arb) = arbiters.all.get(id) {
+                    f(arb, recs);
+                }
             }
         })
     }

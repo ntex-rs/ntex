@@ -1,5 +1,9 @@
 # Changes
 
+## [3.15.6] - 2026-07-21
+
+* Fix System::list_arbiter_pings() api
+
 ## [3.15.5] - 2026-07-14
 
 * `remove_all_items()` no longer holds refcell for duration of removal.
