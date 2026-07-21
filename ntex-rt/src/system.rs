@@ -495,7 +495,7 @@ async fn ping_arbiters(sys: System) {
                 }
             }
 
-            if !crate::signals::is_registered() {
+            if !crate::signals::is_enabled() {
                 continue;
             }
 
