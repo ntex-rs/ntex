@@ -42,6 +42,11 @@ pub fn signal() -> oneshot::AsyncReceiver<Arc<[Signal]>> {
     rx
 }
 
+/// Check if signal handling is enabled.
+pub fn is_enabled() -> bool {
+    unsafe { CUR_SYS.is_some() }
+}
+
 fn register_system(sys: &System) -> bool {
     unsafe {
         if CUR_SYS.is_some() {

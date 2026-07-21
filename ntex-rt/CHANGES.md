@@ -1,5 +1,9 @@
 # Changes
 
+## [3.15.7] - 2026-07-21
+
+* Do not log tight loop stacktrace if signals handler is not installed
+
 ## [3.15.6] - 2026-07-21
 
 * Fix System::list_arbiter_pings() api

@@ -495,6 +495,10 @@ async fn ping_arbiters(sys: System) {
                 }
             }
 
+            if !crate::signals::is_enabled() {
+                continue;
+            }
+
             for arb in no_pongs {
                 // no response from arbiter
                 log::error!("Arbiter {}({:?}) did not return pong", arb.name(), arb.id());
@@ -502,30 +506,39 @@ async fn ping_arbiters(sys: System) {
                 // send tgkill to thread id to capture backtrace
                 *CAPTURED.lock() = None;
                 EXPECTED_TID.store(arb.tid(), Ordering::Release);
-                unsafe {
+                let result = unsafe {
                     libc::syscall(
                         libc::SYS_tgkill,
                         libc::getpid(),
                         arb.tid(),
                         libc::SIGUSR2,
-                    );
-                }
+                    )
+                };
 
-                // Spin
-                for _ in 0..1000 {
-                    Delay::new(SPIN).await;
-                    if let Some(bt) = CAPTURED.lock().take() {
-                        let bt = ntex_error::Backtrace::from(bt);
-                        #[allow(static_mut_refs)]
-                        if let Some(f) = unsafe { ARB_CB.as_ref() } {
-                            f(bt);
-                        } else {
-                            bt.resolver().resolve();
-                            log::error!(
-                                "Worker does not returned pong within {interval:?} time.\n{bt:?}"
-                            );
+                if result == -1 {
+                    log::error!(
+                        "Unsable to send SIGUSR2 to arbiter {}({:?}): {}",
+                        arb.name(),
+                        arb.id(),
+                        std::io::Error::last_os_error()
+                    );
+                } else {
+                    // Spin
+                    for _ in 0..1000 {
+                        Delay::new(SPIN).await;
+                        if let Some(bt) = CAPTURED.lock().take() {
+                            let bt = ntex_error::Backtrace::from(bt);
+                            #[allow(static_mut_refs)]
+                            if let Some(f) = unsafe { ARB_CB.as_ref() } {
+                                f(bt);
+                            } else {
+                                bt.resolver().resolve();
+                                log::error!(
+                                    "Worker does not returned pong within {interval:?} time.\n{bt:?}"
+                                );
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }
