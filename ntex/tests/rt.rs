@@ -138,11 +138,7 @@ fn test_block_on() {
     let (tx, rx) = mpsc::channel();
     sys.handle().spawn(async move {
         ntex::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let recs = System::list_arbiter_pings(Arbiter::current().id(), |recs| {
-            recs.unwrap().clone()
-        });
-        let _ = tx.send(recs);
+        System::list_arbiter_pings(|_, recs| tx.send(recs.clone()).unwrap());
     });
     let recs = rx.recv().unwrap();
 
