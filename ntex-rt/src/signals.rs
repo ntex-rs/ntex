@@ -59,6 +59,11 @@ fn register_system(sys: &System) -> bool {
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn is_registered() -> bool {
+    unsafe { CUR_SYS.is_some() }
+}
+
 fn unregister_system(sys: &System) -> bool {
     unsafe {
         if let Some(cur) = CUR_SYS.take() {
