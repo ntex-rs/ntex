@@ -270,7 +270,7 @@ impl System {
                     f(arb, recs);
                 }
             }
-        })
+        });
     }
 
     #[cfg(target_os = "linux")]
