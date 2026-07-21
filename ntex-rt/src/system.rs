@@ -512,7 +512,7 @@ async fn ping_arbiters(sys: System) {
                         libc::getpid(),
                         arb.tid(),
                         libc::SIGUSR2,
-                    );
+                    )
                 };
 
                 if result == -1 {
