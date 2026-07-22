@@ -178,9 +178,9 @@ pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Create a route handler with `QUERY` method guard.
-/// 
+///
 /// Syntax: `#[query("path"[, attributes])]`
-/// 
+///
 /// Attributes are the same as in [query](attr.query.html)
 #[proc_macro_attribute]
 pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {

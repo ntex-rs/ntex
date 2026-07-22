@@ -887,14 +887,13 @@ async fn test_query_method() {
     let srv = test::server(|| async {
         App::new().route(
             "/query",
-            web::query()
-                .to(|mut payload: web::types::Payload| async move {
-                    let mut bytes = BytesMut::new();
-                    while let Some(item) = ntex::util::stream_recv(&mut payload).await {
-                        bytes.extend_from_slice(&item.unwrap());
-                    }
-                    bytes
-                }),
+            web::query().to(|mut payload: web::types::Payload| async move {
+                let mut bytes = BytesMut::new();
+                while let Some(item) = ntex::util::stream_recv(&mut payload).await {
+                    bytes.extend_from_slice(&item.unwrap());
+                }
+                bytes
+            }),
         )
     })
     .await;
