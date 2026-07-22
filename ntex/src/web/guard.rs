@@ -311,6 +311,11 @@ pub fn Trace() -> MethodGuard {
     MethodGuard(Method::TRACE)
 }
 
+/// Predicate to match *QUERY* http method
+pub fn Query() -> MethodGuard {
+    MethodGuard(Method::QUERY)
+}
+
 /// Predicate to match specified http method
 pub fn Method(method: Method) -> MethodGuard {
     MethodGuard(method)
@@ -572,6 +577,12 @@ mod tests {
         assert!(Trace().check(r.head()));
         assert!(!Trace().check(req.head()));
         assert!(format!("{:?}", Trace()).contains("MethodGuard(TRACE)"));
+
+        let r = TestRequest::default()
+            .method(Method::QUERY)
+            .to_http_request();
+        assert!(Query().check(r.head()));
+        assert!(!Query().check(req.head()));
     }
 
     #[test]

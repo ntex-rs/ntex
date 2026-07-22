@@ -879,3 +879,34 @@ async fn untruncated_host_header() {
 
     assert_eq!(received, format!("localhost:{port}"));
 }
+
+/// Test the newly added QUERY method.
+#[ntex::test]
+async fn test_query_method() {
+    use ntex::util::BytesMut;
+    let srv = test::server(|| async {
+        App::new().route(
+            "/query",
+            web::query()
+                .to(|mut payload: web::types::Payload| async move {
+                    let mut bytes = BytesMut::new();
+                    while let Some(item) = ntex::util::stream_recv(&mut payload).await {
+                        bytes.extend_from_slice(&item.unwrap());
+                    }
+                    bytes
+                }),
+        )
+    })
+    .await;
+
+    let test_body = Bytes::from_static(b"SuperBody");
+
+    let resp = srv
+        .query("/query")
+        .send_body(test_body.clone())
+        .await
+        .unwrap();
+    let body = resp.body().await.unwrap();
+
+    assert_eq!(test_body, body);
+}

@@ -181,6 +181,15 @@ impl Client {
         self.request(Method::DELETE, url)
     }
 
+    /// Contruct HTTP *QUERY* request.
+    pub fn query<U>(&self, url: U) -> ClientRequest
+    where
+        Uri: TryFrom<U>,
+        <Uri as TryFrom<U>>::Error: Into<HttpError>,
+    {
+        self.request(Method::QUERY, url)
+    }
+
     /// Construct HTTP *OPTIONS* request.
     pub fn options<U>(&self, url: U) -> ClientRequest
     where
