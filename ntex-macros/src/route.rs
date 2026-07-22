@@ -14,6 +14,7 @@ pub enum MethodType {
     Options,
     Trace,
     Patch,
+    Query,
 }
 
 impl MethodType {
@@ -28,6 +29,7 @@ impl MethodType {
             MethodType::Options => "Options",
             MethodType::Trace => "Trace",
             MethodType::Patch => "Patch",
+            MethodType::Query => "Query",
         }
     }
 }

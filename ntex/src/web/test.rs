@@ -967,6 +967,11 @@ impl TestServer {
         self.client.options(self.url(path.as_ref()).as_str())
     }
 
+    /// Create `QUERY` request
+    pub fn query<S: AsRef<str>>(&self, path: S) -> ClientRequest {
+        self.client.query(self.url(path.as_ref()).as_str())
+    }
+
     /// Connect to test http server
     pub fn request<S: AsRef<str>>(&self, method: Method, path: S) -> ClientRequest {
         self.client.request(method, path.as_ref())

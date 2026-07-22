@@ -177,6 +177,20 @@ pub fn web_patch(args: TokenStream, input: TokenStream) -> TokenStream {
     gen_code.generate()
 }
 
+/// Create a route handler with `QUERY` method guard.
+///
+/// Syntax: `#[query("path"[, attributes])]`
+///
+/// Attributes are the same as in [query](attr.query.html)
+#[proc_macro_attribute]
+pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
+    let gen_code = match route::Route::new(args, input, route::MethodType::Query) {
+        Ok(gen_code) => gen_code,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    gen_code.generate()
+}
+
 /// Marks async function to be executed by ntex system.
 ///
 /// ## Usage
