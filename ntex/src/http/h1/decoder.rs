@@ -164,6 +164,7 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
                     let len = inner.st.payload_length();
                     let pl = val.set_payload_length(&mut inner.st, len)?;
                     inner.st = State::default();
+                    inner.consumed = 0;
                     self.hdrs.set(false);
                     Ok(Some((val, pl)))
                 }
