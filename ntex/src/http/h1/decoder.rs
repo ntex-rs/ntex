@@ -178,12 +178,13 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
             Ok(None)
         };
 
-        if pending && (inner.consumed + len) >= inner.cfg.max_buf_size {
-            log::trace!("MAX_BUFFER_SIZE of data reached, closing");
-            return Err(DecodeError::TooLarge(inner.consumed + len));
+        if pending {
+            inner.consumed += len - src.len();
+            if inner.consumed >= inner.cfg.max_buf_size {
+                log::trace!("MAX_BUFFER_SIZE of data reached, closing");
+                return Err(DecodeError::TooLarge(inner.consumed));
+            }
         }
-
-        inner.consumed += len - src.len();
         self.inner.set(Some(inner));
         result
     }
@@ -866,8 +867,8 @@ impl ChunkedState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::HttpMessage;
-    use crate::http::header::SET_COOKIE;
+    use crate::http::{HttpMessage, header::SET_COOKIE};
+    use crate::service::cfg::SharedCfg;
 
     impl PayloadType {
         fn unwrap(self) -> PayloadDecoder {
@@ -1662,5 +1663,50 @@ mod tests {
 
         let chunk = pl.decode(&mut buf).unwrap().unwrap();
         assert_eq!(chunk, PayloadItem::Chunk(Bytes::from_static(b"0\r\n")));
+    }
+
+    #[test]
+    fn test_max_headers() {
+        const TEXT: &str = "GET /test HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 3\r\n\
+             Test-header: ****\r\n";
+
+        let mut buf = BytesMut::from(TEXT);
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_buf_size(10))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let err = reader.decode(&mut buf).err().unwrap();
+        assert_eq!(err, DecodeError::TooLarge(77));
+
+        const TEXT_2: &str = "GET /test HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 3\r\n\
+             Test-header: ****\r\n\
+             \r\n";
+
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_buf_size(100))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        // decode one message
+        let mut buf = BytesMut::from(TEXT_2);
+        let res = reader.decode(&mut buf);
+        assert!(res.is_ok());
+
+        // decode second message, same decoder
+        let mut buf = BytesMut::from(TEXT);
+        let res = reader.decode(&mut buf);
+        assert!(res.is_ok());
+
+        // MAX HEADERS
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_headers(1))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(TEXT);
+        let err = reader.decode(&mut buf).err().unwrap();
+        assert_eq!(err, DecodeError::MaxHeaders);
     }
 }
