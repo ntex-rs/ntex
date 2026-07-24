@@ -179,11 +179,11 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
         };
 
         if pending {
-            inner.consumed += len - src.len();
-            if inner.consumed >= inner.cfg.max_buf_size {
+            if (inner.consumed + len) >= inner.cfg.max_buf_size {
                 log::trace!("MAX_BUFFER_SIZE of data reached, closing");
-                return Err(DecodeError::TooLarge(inner.consumed));
+                return Err(DecodeError::TooLarge(inner.consumed + len));
             }
+            inner.consumed += len - src.len();
         }
         self.inner.set(Some(inner));
         result

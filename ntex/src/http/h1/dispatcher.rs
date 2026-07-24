@@ -1078,11 +1078,13 @@ mod tests {
             Box::pin(async { Ok::<_, io::Error>(Response::Ok().finish()) })
         });
         h1.inner.io.set_config(
-            SharedCfg::new("TEST").add(
-                nio::IoConfig::new()
-                    .set_read_buf(15 * 1024, 1024, 16)
-                    .set_write_buf(15 * 1024, 1024, 16),
-            ),
+            SharedCfg::new("TEST")
+                .add(
+                    nio::IoConfig::new()
+                        .set_read_buf(15 * 1024, 1024, 16)
+                        .set_write_buf(15 * 1024, 1024, 16),
+                )
+                .add(HttpServiceConfig::new().set_max_buf_size(32 * 1024)),
         );
 
         let mut decoder = ClientCodec::new(true, SharedCfg::default().get());
