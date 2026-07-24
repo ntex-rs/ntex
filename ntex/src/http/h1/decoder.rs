@@ -637,9 +637,6 @@ enum Kind {
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum ChunkedState {
     Size,
-    SizeLws,
-    Extension,
-    SizeLf,
     Body,
     BodyCr,
     BodyLf,
@@ -733,80 +730,27 @@ impl ChunkedState {
         buf: &mut Option<Bytes>,
     ) -> Poll<Result<ChunkedState, DecodeError>> {
         match self {
-            ChunkedState::Size => ChunkedState::read_size(body, size),
-            ChunkedState::SizeLws => ChunkedState::read_size_lws(body),
-            ChunkedState::Extension => ChunkedState::read_extension(body),
-            ChunkedState::SizeLf => ChunkedState::read_size_lf(body, size),
+            ChunkedState::Size => match httparse::parse_chunk_size(body) {
+                Ok(httparse::Status::Complete((pos, sz))) => {
+                    body.advance_to(pos);
+                    *size = sz;
+                    if sz > 0 {
+                        Poll::Ready(Ok(ChunkedState::Body))
+                    } else {
+                        Poll::Ready(Ok(ChunkedState::EndCr))
+                    }
+                }
+                Ok(httparse::Status::Partial) => Poll::Pending,
+                Err(_) => Poll::Ready(Err(DecodeError::InvalidInput(
+                    "Invalid chunk size line: Invalid Size",
+                ))),
+            },
             ChunkedState::Body => ChunkedState::read_body(body, size, buf),
             ChunkedState::BodyCr => ChunkedState::read_body_cr(body),
             ChunkedState::BodyLf => ChunkedState::read_body_lf(body),
             ChunkedState::EndCr => ChunkedState::read_end_cr(body),
             ChunkedState::EndLf => ChunkedState::read_end_lf(body),
             ChunkedState::End => Poll::Ready(Ok(ChunkedState::End)),
-        }
-    }
-
-    fn read_size(
-        rdr: &mut BytesMut,
-        size: &mut u64,
-    ) -> Poll<Result<ChunkedState, DecodeError>> {
-        let rem = match byte!(rdr) {
-            b @ b'0'..=b'9' => b - b'0',
-            b @ b'a'..=b'f' => b + 10 - b'a',
-            b @ b'A'..=b'F' => b + 10 - b'A',
-            b'\t' | b' ' => return Poll::Ready(Ok(ChunkedState::SizeLws)),
-            b';' => return Poll::Ready(Ok(ChunkedState::Extension)),
-            b'\r' => return Poll::Ready(Ok(ChunkedState::SizeLf)),
-            _ => {
-                return Poll::Ready(Err(DecodeError::InvalidInput(
-                    "Invalid chunk size line: Invalid Size",
-                )));
-            }
-        };
-
-        if let Some(n) = size.checked_mul(16) {
-            *size = n;
-            *size += u64::from(rem);
-
-            Poll::Ready(Ok(ChunkedState::Size))
-        } else {
-            log::trace!("chunk size would overflow u64");
-            Poll::Ready(Err(DecodeError::InvalidInput(
-                "Invalid chunk size line: Size is too big",
-            )))
-        }
-    }
-
-    fn read_size_lws(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
-        log::trace!("read_size_lws");
-        match byte!(rdr) {
-            // LWS can follow the chunk size, but no more digits can come
-            b'\t' | b' ' => Poll::Ready(Ok(ChunkedState::SizeLws)),
-            b';' => Poll::Ready(Ok(ChunkedState::Extension)),
-            b'\r' => Poll::Ready(Ok(ChunkedState::SizeLf)),
-            _ => Poll::Ready(Err(DecodeError::InvalidInput(
-                "Invalid chunk size linear white space",
-            ))),
-        }
-    }
-    fn read_extension(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
-        match byte!(rdr) {
-            b'\r' => Poll::Ready(Ok(ChunkedState::SizeLf)),
-            // strictly 0x20 (space) should be disallowed but we don't parse quoted strings here
-            0x00..=0x08 | 0x0a..=0x1f | 0x7f => Poll::Ready(Err(
-                DecodeError::InvalidInput("Invalid character in chunk extension"),
-            )),
-            _ => Poll::Ready(Ok(ChunkedState::Extension)), // no supported extensions
-        }
-    }
-    fn read_size_lf(
-        rdr: &mut BytesMut,
-        size: &mut u64,
-    ) -> Poll<Result<ChunkedState, DecodeError>> {
-        match byte!(rdr) {
-            b'\n' if *size > 0 => Poll::Ready(Ok(ChunkedState::Body)),
-            b'\n' if *size == 0 => Poll::Ready(Ok(ChunkedState::EndCr)),
-            _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk size LF"))),
         }
     }
 
@@ -844,18 +788,21 @@ impl ChunkedState {
             _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk body CR"))),
         }
     }
+
     fn read_body_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\n' => Poll::Ready(Ok(ChunkedState::Size)),
             _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk body LF"))),
         }
     }
+
     fn read_end_cr(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\r' => Poll::Ready(Ok(ChunkedState::EndLf)),
             _ => Poll::Ready(Err(DecodeError::InvalidInput("Invalid chunk end CR"))),
         }
     }
+
     fn read_end_lf(rdr: &mut BytesMut) -> Poll<Result<ChunkedState, DecodeError>> {
         match byte!(rdr) {
             b'\n' => Poll::Ready(Ok(ChunkedState::End)),
