@@ -291,7 +291,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                     return Err(DecodeError::Header);
                 }
                 Ok(s) => {
-                    if let Ok(len) = s.parse::<u64>() {
+                    if let Ok(len) = atoi_simd::parse::<u64, true, true>(s.as_bytes()) {
                         // accept 0 lengths here and remove them in `decode` after all
                         // headers have been processed to prevent request smuggling issues
                         st.content_length = Some(len);
@@ -324,6 +324,11 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                 } else {
                     return Err(DecodeError::Header);
                 }
+            }
+            header::TRANSFER_ENCODING if st.version == Version::HTTP_10 => {
+                return Err(DecodeError::InvalidInput(
+                    "Transfer-Encoding is not supported by HTTP/1.0",
+                ));
             }
             // connection keep-alive state
             header::CONNECTION => {
@@ -954,6 +959,12 @@ mod tests {
         assert_eq!(*req.method(), Method::GET);
         assert_eq!(req.path(), "/test3");
         assert_eq!(req.uri().query(), Some("test=1"));
+
+        // transfer-encoding is not supported for http1.0
+        let mut buf = BytesMut::from(
+            "GET /test3?test=1 HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n",
+        );
+        expect_parse_err!(&mut buf);
     }
 
     #[test]
@@ -1493,7 +1504,7 @@ mod tests {
 
     #[test]
     fn test_transfer_encoding_http10() {
-        // in HTTP/1.0 transfer encoding is ignored and must therefore contain a CL header
+        // in HTTP/1.0 transfer encoding is not supported
 
         let mut buf = BytesMut::from(
             "POST / HTTP/1.0\r\n\
@@ -1511,7 +1522,7 @@ mod tests {
 
     #[test]
     fn test_content_length_and_te_http10() {
-        // in HTTP/1.0 transfer encoding is simply ignored so it's fine to have both
+        // in HTTP/1.0 transfer encoding is not supported
 
         let mut buf = BytesMut::from(
             "GET / HTTP/1.0\r\n\
@@ -1522,7 +1533,7 @@ mod tests {
             000",
         );
 
-        parse_ready!(&mut buf);
+        expect_parse_err!(&mut buf);
     }
 
     #[test]

@@ -4,7 +4,9 @@
 
 * Replace httparse with ntex-httparse
 
-* Use transfer-encoding size parsing from ntex-httparse #945
+* Use transfer-encoding size parsing from ntex-httparse #944
+
+* Trasfer-encoding is not supported by HTTP/1.0 #945
 
 ## [3.10.1] - 2026-07-04
 

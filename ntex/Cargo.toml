@@ -89,6 +89,7 @@ ntex-io = { workspace = true }
 ntex-net = { workspace = true }
 ntex-tls = { workspace = true }
 
+atoi_simd = { workspace = true }
 base64 = { workspace = true }
 bitflags = { workspace = true }
 derive_more = { workspace = true, features = ["debug"] }
