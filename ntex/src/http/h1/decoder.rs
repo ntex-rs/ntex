@@ -325,6 +325,11 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                     return Err(DecodeError::Header);
                 }
             }
+            header::TRANSFER_ENCODING if st.version == Version::HTTP_10 => {
+                return Err(DecodeError::InvalidInput(
+                    "Transfer-Encoding is not supported by HTTP/1.0",
+                ));
+            }
             // connection keep-alive state
             header::CONNECTION => {
                 st.ka = if let Ok(val) = value.to_str() {
@@ -954,6 +959,12 @@ mod tests {
         assert_eq!(*req.method(), Method::GET);
         assert_eq!(req.path(), "/test3");
         assert_eq!(req.uri().query(), Some("test=1"));
+
+        // transfer-encoding is not supported for http1.0
+        let mut buf = BytesMut::from(
+            "GET /test3?test=1 HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n",
+        );
+        expect_parse_err!(&mut buf);
     }
 
     #[test]
