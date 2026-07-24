@@ -1504,7 +1504,7 @@ mod tests {
 
     #[test]
     fn test_transfer_encoding_http10() {
-        // in HTTP/1.0 transfer encoding is ignored and must therefore contain a CL header
+        // in HTTP/1.0 transfer encoding is not supported
 
         let mut buf = BytesMut::from(
             "POST / HTTP/1.0\r\n\
@@ -1522,7 +1522,7 @@ mod tests {
 
     #[test]
     fn test_content_length_and_te_http10() {
-        // in HTTP/1.0 transfer encoding is simply ignored so it's fine to have both
+        // in HTTP/1.0 transfer encoding is not supported
 
         let mut buf = BytesMut::from(
             "GET / HTTP/1.0\r\n\
@@ -1533,7 +1533,7 @@ mod tests {
             000",
         );
 
-        parse_ready!(&mut buf);
+        expect_parse_err!(&mut buf);
     }
 
     #[test]
