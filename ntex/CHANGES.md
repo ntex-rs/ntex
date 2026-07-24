@@ -4,6 +4,8 @@
 
 * Replace httparse with ntex-httparse
 
+* Use transfer-encoding size parsing from ntex-httparse #945
+
 ## [3.10.1] - 2026-07-04
 
 * Fix keep-alive handling if headers timeout is enabled
