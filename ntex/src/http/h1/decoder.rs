@@ -1672,6 +1672,12 @@ mod tests {
              Content-Length: 3\r\n\
              Test-header: ****\r\n";
 
+        const TEXT_2: &str = "GET /test HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 3\r\n\
+             Test-header: ****\r\n\
+             \r\n";
+
         let mut buf = BytesMut::from(TEXT);
         let cfg: SharedCfg = SharedCfg::new("test")
             .add(HttpServiceConfig::new().set_max_buf_size(10))
@@ -1679,12 +1685,6 @@ mod tests {
         let reader = MessageDecoder::<Request>::new(cfg.get());
         let err = reader.decode(&mut buf).err().unwrap();
         assert_eq!(err, DecodeError::TooLarge(77));
-
-        const TEXT_2: &str = "GET /test HTTP/1.1\r\n\
-             Host: example.com\r\n\
-             Content-Length: 3\r\n\
-             Test-header: ****\r\n\
-             \r\n";
 
         let cfg: SharedCfg = SharedCfg::new("test")
             .add(HttpServiceConfig::new().set_max_buf_size(100))
