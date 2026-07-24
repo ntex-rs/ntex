@@ -83,7 +83,7 @@ impl Clone for EncodeError {
 }
 
 /// A set of errors that can occur during parsing HTTP streams
-#[derive(thiserror::Error, Copy, Clone, Debug)]
+#[derive(thiserror::Error, Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DecodeError {
     /// An invalid `Method`, such as `GE.T`.
     #[error("Invalid Method specified")]

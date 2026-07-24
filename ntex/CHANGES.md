@@ -1,6 +1,6 @@
 # Changes
 
-## [3.11.0] - 2026-07-12
+## [3.11.0] - 2026-07-24
 
 * Replace httparse with ntex-httparse
 
