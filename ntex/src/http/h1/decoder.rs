@@ -291,7 +291,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
                     return Err(DecodeError::Header);
                 }
                 Ok(s) => {
-                    if let Ok(len) = s.parse::<u64>() {
+                    if let Ok(len) = atoi_simd::parse::<u64, true, true>(s.as_bytes()) {
                         // accept 0 lengths here and remove them in `decode` after all
                         // headers have been processed to prevent request smuggling issues
                         st.content_length = Some(len);
