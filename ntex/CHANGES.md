@@ -1,5 +1,14 @@
 # Changes
 
+## [3.11.1] - 2026-0x-xx
+
+* Enforce `max_buf_size` for complete message heads; previously the limit was only
+  checked while a message head was still partial, so a head that fit in a single
+  read could exceed it
+
+* Respond with "431 Request Header Fields Too Large" instead of "400 Bad Request"
+  when a message head exceeds `max_buf_size`
+
 ## [3.11.0] - 2026-07-24
 
 * Replace httparse with ntex-httparse

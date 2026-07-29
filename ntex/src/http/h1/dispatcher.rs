@@ -1105,7 +1105,10 @@ mod tests {
         assert!(h1.inner.io.is_closed());
 
         let mut buf = BytesMut::from(&client.read().await.unwrap()[..]);
-        assert_eq!(load(&mut decoder, &mut buf).status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            load(&mut decoder, &mut buf).status,
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
+        );
     }
 
     #[crate::rt_test]

@@ -160,6 +160,11 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
         let result = if inner.val.is_some() {
             match MessageDecoder::<T>::decode_headers(src, &mut inner) {
                 Poll::Ready(Ok(())) => {
+                    let consumed = inner.consumed + (len - src.len());
+                    if consumed >= inner.cfg.max_buf_size {
+                        log::trace!("MAX_BUFFER_SIZE of data reached, closing");
+                        return Err(DecodeError::TooLarge(consumed));
+                    }
                     let mut val = inner.val.take().unwrap();
                     let len = inner.st.payload_length();
                     let pl = val.set_payload_length(&mut inner.st, len)?;
@@ -1666,5 +1671,42 @@ mod tests {
         let mut buf = BytesMut::from(TEXT);
         let err = reader.decode(&mut buf).err().unwrap();
         assert_eq!(err, DecodeError::MaxHeaders);
+    }
+
+    #[test]
+    fn test_max_buf_size_complete_message() {
+        const TEXT: &str = "GET /test HTTP/1.1\r\n\
+             Host: example.com\r\n\
+             Content-Length: 3\r\n\
+             Test-header: ****\r\n\
+             \r\n";
+
+        // whole message head is available in one buffer
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_buf_size(10))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(TEXT);
+        let err = reader.decode(&mut buf).err().unwrap();
+        assert_eq!(err, DecodeError::TooLarge(79));
+
+        // message head completes on the second read
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_buf_size(78))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(&TEXT[..77]);
+        assert!(reader.decode(&mut buf).unwrap().is_none());
+        buf.extend_from_slice(&TEXT.as_bytes()[77..]);
+        let err = reader.decode(&mut buf).err().unwrap();
+        assert_eq!(err, DecodeError::TooLarge(79));
+
+        // message head size is within the limit
+        let cfg: SharedCfg = SharedCfg::new("test")
+            .add(HttpServiceConfig::new().set_max_buf_size(100))
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let mut buf = BytesMut::from(TEXT);
+        assert!(reader.decode(&mut buf).unwrap().is_some());
     }
 }
