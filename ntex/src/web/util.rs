@@ -190,6 +190,24 @@ pub fn head<Err: ErrorRenderer>() -> Route<Err> {
     method(Method::HEAD)
 }
 
+/// Create *route* with `QUERY` method guard.
+///
+/// ```rust
+/// use ntex::web;
+///
+/// let app = web::App::new().service(
+///     web::resource("/{project_id}")
+///         .route(web::query().to(|| async { web::HttpResponse::Ok() }))
+/// );
+/// ```
+///
+/// In the above example, one `QUERY` route gets added:
+///  * `/{project_id}`
+///
+pub fn query<Err: ErrorRenderer>() -> Route<Err> {
+    method(Method::QUERY)
+}
+
 /// Create *route* and add method guard.
 ///
 /// ```rust
