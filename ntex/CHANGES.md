@@ -1,6 +1,8 @@
 # Changes
 
-## [3.11.1] - 2026-0x-xx
+## [3.12.0] - 2026-07-30
+
+* Add support for *QUERY* http method #943
 
 * Enforce `max_buf_size` for complete message heads; previously the limit was only
   checked while a message head was still partial, so a head that fit in a single

@@ -133,7 +133,6 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
 
     fn decode(&self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let len = src.len();
-        let mut pending = false;
         let mut inner = self.inner.take().unwrap();
 
         if len > 0 {
@@ -148,47 +147,38 @@ impl<T: MessageType> Decoder for MessageDecoder<T> {
                     Ok(())
                 }
                 Poll::Ready(Err(e)) => Err(e),
-                Poll::Pending => {
-                    pending = true;
-                    Ok(())
-                }
+                Poll::Pending => Ok(()),
             };
             BUF.with(move |b| b.set(Some(cache)));
             result?;
         }
 
-        let result = if inner.val.is_some() {
+        let (result, buf_size) = if inner.val.is_some() {
             match MessageDecoder::<T>::decode_headers(src, &mut inner) {
                 Poll::Ready(Ok(())) => {
-                    let consumed = inner.consumed + (len - src.len());
-                    if consumed >= inner.cfg.max_buf_size {
-                        log::trace!("MAX_BUFFER_SIZE of data reached, closing");
-                        return Err(DecodeError::TooLarge(consumed));
-                    }
                     let mut val = inner.val.take().unwrap();
-                    let len = inner.st.payload_length();
-                    let pl = val.set_payload_length(&mut inner.st, len)?;
+                    let pl_len = inner.st.payload_length();
+                    let pl = val.set_payload_length(&mut inner.st, pl_len)?;
+                    let consumed = inner.consumed + len - src.len();
                     inner.st = State::default();
                     inner.consumed = 0;
                     self.hdrs.set(false);
-                    Ok(Some((val, pl)))
+                    (Ok(Some((val, pl))), consumed)
                 }
                 Poll::Pending => {
-                    pending = true;
-                    Ok(None)
+                    let buf_size = inner.consumed + len;
+                    inner.consumed = buf_size - src.len();
+                    (Ok(None), buf_size)
                 }
-                Poll::Ready(Err(e)) => Err(e),
+                Poll::Ready(Err(e)) => (Err(e), 0),
             }
         } else {
-            Ok(None)
+            (Ok(None), len)
         };
 
-        if pending {
-            if (inner.consumed + len) >= inner.cfg.max_buf_size {
-                log::trace!("MAX_BUFFER_SIZE of data reached, closing");
-                return Err(DecodeError::TooLarge(inner.consumed + len));
-            }
-            inner.consumed += len - src.len();
+        if buf_size >= inner.cfg.max_buf_size {
+            log::trace!("MAX_BUFFER_SIZE of data reached, closing");
+            return Err(DecodeError::TooLarge(buf_size));
         }
         self.inner.set(Some(inner));
         result

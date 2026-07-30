@@ -54,21 +54,21 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
-ntex = "3.10.1"
+ntex = "3.12.0"
 ntex-bytes = "1.9.0"
 ntex-codec = "1.2.1"
 ntex-error = "2.3.0"
-ntex-h2 = "3.12.0"
+ntex-h2 = "3.13.0"
 ntex-http = "1.2.0"
 ntex-dispatcher = "3.2.1"
 ntex-io = "3.13.1"
 ntex-net = "3.13.1"
 ntex-macros = "3.3.0"
 ntex-router = "1.0.0"
-ntex-rt = "3.15.6"
+ntex-rt = "3.15.7"
 ntex-server = "3.10.4"
 ntex-service = "4.6.0"
-ntex-tls = "3.7.0"
+ntex-tls = "3.8.0"
 ntex-util = "3.6.1"
 
 ntex-polling = "3.10.0"
@@ -96,15 +96,15 @@ derive_more = "2.0.1"
 encoding_rs = "0.8"
 env_logger = { version = "0.11", default-features = false }
 foldhash = "0.2.0"
-futures = "0.3.31"
-futures-core = { version = "0.3.31", default-features = false, features = ["alloc"] }
-futures-util = { version = "0.3.31", default-features = false, features = ["alloc"] }
+futures = "0.3.33"
+futures-core = { version = "0.3.33", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3.33", default-features = false, features = ["alloc"] }
 futures-timer = "3.0"
 http = "1.5.0"
 httparse = "1.10.1"
 httpdate = "1.0"
 itoa = "1.0.18"
-libc = "0.2.164"
+libc = "0.2.189"
 log = "0.4"
 mime = "0.3"
 oneshot = { version = "0.2.1", features = ["std", "async"] }
@@ -139,7 +139,7 @@ socket2 = "0.6.1"
 swap-buffer-queue = "0.2.1"
 variadics_please = "1.1"
 windows-sys = "0.52.0"
-time = "0.3.47"
+time = "0.3.54"
 thiserror = "2"
 tok-io = { version = "1", package = "tokio", default-features = false }
 webpki-roots = "1.0"
