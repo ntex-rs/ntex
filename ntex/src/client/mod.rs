@@ -181,7 +181,7 @@ impl Client {
         self.request(Method::DELETE, url)
     }
 
-    /// Contruct HTTP *QUERY* request.
+    /// Construct HTTP *QUERY* request.
     pub fn query<U>(&self, url: U) -> ClientRequest
     where
         Uri: TryFrom<U>,
