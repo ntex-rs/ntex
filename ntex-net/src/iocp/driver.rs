@@ -1,7 +1,6 @@
 use std::cell::{Cell, UnsafeCell};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-use std::os::windows::net::UnixStream as OsUnixStream;
+// use std::os::windows::net::UnixStream as OsUnixStream;
 use std::{cmp, collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc};
 
 use windows_sys::Win32::System::IO::OVERLAPPED;
@@ -11,8 +10,9 @@ use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
 
+use super::{Overlapped, port::Port};
 // use super::{TcpStream, UnixStream, stream::StreamOps};
-// use crate::channel::Receiver;
+use crate::channel::Receiver;
 
 pub trait Handler {
     /// Operation is completed.
@@ -27,13 +27,13 @@ pub trait Handler {
 
 pub struct DriverApi {
     hnd: u32,
-    notifier: Notify,
+    reactor: Reactor,
 }
 
 impl DriverApi {
     /// Attach file descriptor.
-    pub fn attach(&mut self, fd: RawFd) -> io::Result<()> {
-        self.notifier.attach(fd)
+    pub fn attach(&mut self, fd: RawHandle) -> io::Result<()> {
+        self.reactor.attach(fd)
     }
 
     /// Get overlapped.
@@ -43,13 +43,13 @@ impl DriverApi {
 
     #[inline]
     /// Attempt to cancel an already issued operation.
-    pub fn cancel(&self, fd: RawFd) {}
+    pub fn cancel(&self, fd: RawHandle) {}
 }
 
 /// Low-level driver of io-uring.
 pub struct Driver {
-    hid: Cell<u64>,
-    notifier: Notify,
+    hid: Cell<u32>,
+    reactor: Reactor,
     #[allow(clippy::box_collection)]
     handlers: Cell<Option<Box<Vec<HandlerItem>>>>,
 }
@@ -73,7 +73,7 @@ impl Driver {
     pub fn new() -> io::Result<Self> {
         Ok(Self {
             hid: Cell::new(0),
-            notifier: Notify::new(Port::new()?),
+            reactor: Reactor::new(Port::new()?),
             handlers: Cell::new(Some(Box::new(Vec::new()))),
         })
     }
@@ -93,7 +93,7 @@ impl Driver {
         handlers.push(HandlerItem {
             hnd: f(DriverApi {
                 hnd,
-                notifier: self.notifier.clone(),
+                reactor: self.reactor.clone(),
             }),
             modified: false,
         });
@@ -102,9 +102,9 @@ impl Driver {
     }
 }
 
-impl AsRawFd for Driver {
-    fn as_raw_fd(&self) -> RawFd {
-        self.notifier.0.port.as_raw_fd()
+impl AsRawHandle for Driver {
+    fn as_raw_handle(&self) -> RawHandle {
+        self.reactor.0.port.as_raw_handle()
     }
 }
 
@@ -134,25 +134,25 @@ impl ntex_rt::Driver for Driver {
 
     /// Get notification handle
     fn handle(&self) -> Box<dyn Notify> {
-        Box::new(self.notifier.handle())
+        Box::new(self.reactor.handle())
     }
 }
 
 #[derive(Debug)]
-struct Notify(Arc<NotifyInner>);
+struct Reactor(Arc<ReactorInner>);
 
 #[derive(Debug)]
-struct NotifyInner {
+struct ReactorInner {
     port: Port,
     overlapped: Overlapped,
     awake: AwakeFlag,
 }
 
-impl Notify {
+impl Reactor {
     fn new(port: Port) -> Self {
-        Self(Arc::new(NotifyInner {
+        Self(Arc::new(ReactorInner {
             port,
-            overlapped,
+            overlapped: Overlapped::new(0, 0),
             awake: AwakeFlag::new(),
         }))
     }
@@ -165,28 +165,33 @@ impl Notify {
         self.0.awake.reset()
     }
 
-    fn handle(&self) -> NotifyHandle {
-        NotifyHandle(self.0.clone())
+    fn handle(&self) -> ReactorHandle {
+        ReactorHandle {
+            inner: self.0.clone(),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 /// A notify handle to the driver.
-pub(crate) struct NotifyHandle {
-    inner: Arc<NotifyInner>,
+pub(crate) struct ReactorHandle {
+    inner: Arc<ReactorInner>,
 }
 
-impl NotifyHandle {
-    pub(crate) fn new(inner: Arc<NotifyInner>) -> Self {
+impl ReactorHandle {
+    pub(crate) fn new(inner: Arc<ReactorInner>) -> Self {
         Self { inner }
     }
 }
 
-impl Notify for NotifyHandle {
+unsafe impl Send for ReactorHandle {}
+unsafe impl Sync for ReactorHandle {}
+
+impl Notify for ReactorHandle {
     /// Notify the driver.
     fn notify(&self) -> io::Result<()> {
-        if !self.0.awake.wake() {
-            self.0.port.post_raw(&self.0.overlapped).ok();
+        if !self.inner.awake.wake() {
+            self.inner.port.post_raw(&self.inner.overlapped).ok();
         }
         Ok(())
     }
@@ -196,7 +201,7 @@ impl fmt::Debug for Driver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Driver")
             .field("hid", &self.hid)
-            .field("notifier", &self.notifier)
+            .field("reactor", &self.reactor)
             .finish()
     }
 }

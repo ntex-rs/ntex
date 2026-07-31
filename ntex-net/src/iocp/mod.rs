@@ -1,3 +1,6 @@
+#![allow(dead_code, unused_imports, unused_variables)]
+use std::fmt;
+
 use socket2::Socket;
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
