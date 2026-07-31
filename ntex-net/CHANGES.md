@@ -181,6 +181,8 @@
 
 * Produce io::ErrorKind::WriteZero for backend impl
 
+* Update compio to 0.19
+
 ## [4.0.1] - 2026-09-18
 
 * Api docs improvements

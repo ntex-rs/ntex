@@ -17,6 +17,8 @@
 
 * Fix process abort when arbiter storage is accessed during thread-local destruction
 
+* Update compio to 0.19
+
 ## [3.17.3] - 2026-09-18
 
 * Api docs improvements
