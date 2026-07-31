@@ -1,5 +1,9 @@
 # Changes
 
+## [3.4.0] - 2026-07-31
+
+* Update to syn v3
+
 ## [3.3.0] - 2026-02-25
 
 * Add "name", "signals" and "ping_interval" parameters to `main` macro
