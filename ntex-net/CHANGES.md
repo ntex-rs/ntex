@@ -1,5 +1,9 @@
 # Changes
 
+## [3.14.0] - 2026-07-31
+
+* Update compio to 0.19
+
 ## [3.13.1] - 2026-07-17
 
 * io-ring driver could use invalid BytePage pointer #932

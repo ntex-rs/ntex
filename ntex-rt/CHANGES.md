@@ -1,5 +1,9 @@
 # Changes
 
+## [3.16.0] - 2026-07-31
+
+* Update compio to 0.19
+
 ## [3.15.7] - 2026-07-21
 
 * Do not log tight loop stacktrace if signals handler is not installed
