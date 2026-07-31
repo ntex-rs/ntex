@@ -1,5 +1,7 @@
 # Changes
 
+* Add windows IOCP driver
+
 ## [3.13.1] - 2026-07-17
 
 * io-ring driver could use invalid BytePage pointer #932

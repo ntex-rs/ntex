@@ -23,6 +23,9 @@ pub mod polling;
 #[cfg(target_os = "linux")]
 pub mod uring;
 
+#[cfg(windows)]
+pub mod iocp;
+
 #[cfg(unix)]
 mod helpers;
 
