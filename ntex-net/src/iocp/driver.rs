@@ -4,6 +4,26 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::{cmp, collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc};
 
 use windows_sys::Win32::System::IO::OVERLAPPED;
+use windows_sys::Win32::{
+    Foundation::{
+        ERROR_BAD_COMMAND, ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE,
+        ERROR_MORE_DATA, ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
+        ERROR_PIPE_NOT_CONNECTED, FACILITY_NTWIN32, INVALID_HANDLE_VALUE, NTSTATUS,
+        RtlNtStatusToDosError, STATUS_SUCCESS,
+    },
+    Storage::FileSystem::SetFileCompletionNotificationModes,
+    System::{
+        IO::{
+            CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED_ENTRY,
+            PostQueuedCompletionStatus,
+        },
+        SystemServices::ERROR_SEVERITY_ERROR,
+        Threading::INFINITE,
+        WindowsProgramming::{
+            FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, FILE_SKIP_SET_EVENT_ON_HANDLE,
+        },
+    },
+};
 
 use ntex_io::Io;
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
@@ -143,18 +163,42 @@ struct Reactor(Arc<ReactorInner>);
 
 #[derive(Debug)]
 struct ReactorInner {
-    port: Port,
+    port: OwnedHandle,
     overlapped: Overlapped,
     awake: AwakeFlag,
 }
 
 impl Reactor {
-    fn new(port: Port) -> Self {
+    fn new(port: Port) -> io::Result<Self> {
+        let port = unsafe {
+            let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1);
+            if port.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            OwnedHandle::from_raw_handle(port)
+        };
+        log::trace!("New iocp handle: {port:?}");
+
         Self(Arc::new(ReactorInner {
             port,
             overlapped: Overlapped::new(0, 0),
             awake: AwakeFlag::new(),
         }))
+    }
+
+    fn attach(&self, fd: RawHandle) -> io::Result<()> {
+        syscall!(
+            BOOL,
+            CreateIoCompletionPort(fd, self.port.as_raw_handle(), 0, 0) as isize
+        )?;
+        syscall!(
+            BOOL,
+            SetFileCompletionNotificationModes(
+                fd,
+                (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE) as _
+            )
+        )?;
+        Ok(())
     }
 
     fn set_awake(&self) {
