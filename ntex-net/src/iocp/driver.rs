@@ -1,15 +1,13 @@
-use std::cell::{Cell, UnsafeCell};
+use std::cell::Cell;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 // use std::os::windows::net::UnixStream as OsUnixStream;
-use std::{cmp, collections::VecDeque, fmt, io, mem, net, ptr, rc::Rc, sync::Arc};
+use std::{fmt, io, net, ptr, sync::Arc};
 
-use windows_sys::Win32::System::IO::OVERLAPPED;
 use windows_sys::Win32::{
     Foundation::{
-        ERROR_BAD_COMMAND, ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE,
-        ERROR_MORE_DATA, ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
-        ERROR_PIPE_NOT_CONNECTED, FACILITY_NTWIN32, INVALID_HANDLE_VALUE, NTSTATUS,
-        RtlNtStatusToDosError, STATUS_SUCCESS,
+        ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA,
+        ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
+        ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS, RtlNtStatusToDosError,
     },
     Storage::FileSystem::SetFileCompletionNotificationModes,
     System::{
@@ -17,7 +15,6 @@ use windows_sys::Win32::{
             CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED_ENTRY,
             PostQueuedCompletionStatus,
         },
-        SystemServices::ERROR_SEVERITY_ERROR,
         Threading::INFINITE,
         WindowsProgramming::{
             FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, FILE_SKIP_SET_EVENT_ON_HANDLE,
@@ -28,18 +25,15 @@ use windows_sys::Win32::{
 use ntex_io::Io;
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
-use socket2::{Protocol, SockAddr, Socket, Type};
+// use socket2::{Protocol, SockAddr, Socket, Type};
 
-use super::{Overlapped, port::Port};
+use super::Overlapped;
 // use super::{TcpStream, UnixStream, stream::StreamOps};
 use crate::channel::Receiver;
 
 pub trait Handler {
     /// Operation is completed.
-    fn completed(&mut self, id: u32);
-
-    /// The driver's turn has completed.
-    fn tick(&mut self);
+    fn completed(&mut self, id: u32, result: io::Result<usize>);
 
     /// Clean up the handle before dropping the driver.
     fn cleanup(&mut self);
@@ -63,7 +57,7 @@ impl DriverApi {
 
     #[inline]
     /// Attempt to cancel an already issued operation.
-    pub fn cancel(&self, fd: RawHandle) {}
+    pub fn cancel(&self, _h: RawHandle) {}
 }
 
 /// Low-level driver of io-uring.
@@ -71,21 +65,7 @@ pub struct Driver {
     hid: Cell<u32>,
     reactor: Reactor,
     #[allow(clippy::box_collection)]
-    handlers: Cell<Option<Box<Vec<HandlerItem>>>>,
-}
-
-struct HandlerItem {
-    hnd: Box<dyn Handler>,
-    modified: bool,
-}
-
-impl HandlerItem {
-    fn tick(&mut self) {
-        if self.modified {
-            self.modified = false;
-            self.hnd.tick();
-        }
-    }
+    handlers: Cell<Option<Box<Vec<Box<dyn Handler>>>>>,
 }
 
 impl Driver {
@@ -93,8 +73,8 @@ impl Driver {
     pub fn new() -> io::Result<Self> {
         Ok(Self {
             hid: Cell::new(0),
-            reactor: Reactor::new(Port::new()?),
-            handlers: Cell::new(Some(Box::new(Vec::new()))),
+            reactor: Reactor::new()?,
+            handlers: Cell::new(Some(Box::new(vec![Box::new(Dummy)]))),
         })
     }
 
@@ -110,13 +90,10 @@ impl Driver {
     {
         let hnd = self.hid.get() + 1;
         let mut handlers = self.handlers.take().unwrap_or_default();
-        handlers.push(HandlerItem {
-            hnd: f(DriverApi {
-                hnd,
-                reactor: self.reactor.clone(),
-            }),
-            modified: false,
-        });
+        handlers.push(f(DriverApi {
+            hnd,
+            reactor: self.reactor.clone(),
+        }));
         self.handlers.set(Some(handlers));
         self.hid.set(hnd);
     }
@@ -129,27 +106,56 @@ impl AsRawHandle for Driver {
 }
 
 impl crate::Reactor for Driver {
-    fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
+    fn tcp_connect(&self, _addr: net::SocketAddr, _cfg: SharedCfg) -> Receiver<Io> {
         todo!()
     }
 
-    fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> Receiver<Io> {
+    fn unix_connect(&self, _addr: std::path::PathBuf, _cfg: SharedCfg) -> Receiver<Io> {
         todo!()
     }
 
-    fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
+    fn from_tcp_stream(&self, _stream: net::TcpStream, _cfg: SharedCfg) -> io::Result<Io> {
         todo!()
     }
 
-    fn from_unix_stream(&self, stream: OsUnixStream, cfg: SharedCfg) -> io::Result<Io> {
-        todo!()
-    }
+    //fn from_unix_stream(&self, stream: OsUnixStream, cfg: SharedCfg) -> io::Result<Io> {
+    //todo!()
+    //}
 }
 
 impl ntex_rt::Driver for Driver {
     /// Poll the driver and handle completed operations.
     fn run(&self, rt: &Runtime) -> io::Result<()> {
-        todo!()
+        let mut events: [OVERLAPPED_ENTRY; 1024] = [OVERLAPPED_ENTRY::default(); 1024];
+        let mut recv_count = 0;
+
+        let result = loop {
+            syscall!(
+                BOOL,
+                GetQueuedCompletionStatusEx(
+                    self.reactor.0.port.as_raw_handle() as _,
+                    events.as_mut_ptr().cast(),
+                    1024,
+                    &mut recv_count,
+                    INFINITE,
+                    0
+                )
+            )?;
+            log::trace!("recv_count: {recv_count}");
+
+            self.poll_completions(&events[..recv_count as usize]);
+
+            let _more_tasks = match rt.poll() {
+                PollResult::Pending => false,
+                PollResult::PollAgain => true,
+                PollResult::Ready => break Ok(()),
+            };
+        };
+
+        for mut h in self.handlers.take().unwrap().into_iter() {
+            h.cleanup();
+        }
+        result
     }
 
     /// Get notification handle
@@ -158,18 +164,51 @@ impl ntex_rt::Driver for Driver {
     }
 }
 
-#[derive(Debug)]
+impl Driver {
+    /// Handle ring completions, forward changes to specific handler
+    fn poll_completions(&self, events: &[OVERLAPPED_ENTRY]) {
+        let mut handlers = self.handlers.take().unwrap();
+        for entry in events {
+            let overlapped_ptr: *mut Overlapped = entry.lpOverlapped.cast();
+            let overlapped = unsafe { &*overlapped_ptr };
+            if overlapped.hnd == 0 {
+                continue;
+            }
+
+            let status = overlapped.base.Internal as NTSTATUS;
+            let result = if status >= 0 {
+                Ok(overlapped.base.InternalHigh)
+            } else {
+                let error = unsafe { RtlNtStatusToDosError(status) };
+                match error {
+                    ERROR_IO_INCOMPLETE
+                    | ERROR_NETNAME_DELETED
+                    | ERROR_HANDLE_EOF
+                    | ERROR_BROKEN_PIPE
+                    | ERROR_PIPE_CONNECTED
+                    | ERROR_PIPE_NOT_CONNECTED
+                    | ERROR_NO_DATA
+                    | ERROR_MORE_DATA => Ok(0),
+                    _ => Err(io::Error::from_raw_os_error(error as _)),
+                }
+            };
+            handlers[overlapped.hnd as usize].completed(overlapped.udata, result);
+        }
+        self.handlers.set(Some(handlers));
+    }
+}
+
+#[derive(Clone, Debug)]
 struct Reactor(Arc<ReactorInner>);
 
 #[derive(Debug)]
 struct ReactorInner {
     port: OwnedHandle,
     overlapped: Overlapped,
-    awake: AwakeFlag,
 }
 
 impl Reactor {
-    fn new(port: Port) -> io::Result<Self> {
+    fn new() -> io::Result<Self> {
         let port = unsafe {
             let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1);
             if port.is_null() {
@@ -177,36 +216,27 @@ impl Reactor {
             }
             OwnedHandle::from_raw_handle(port)
         };
-        log::trace!("New iocp handle: {port:?}");
+        log::trace!("New iocp reactor: {port:?}");
 
-        Self(Arc::new(ReactorInner {
+        Ok(Self(Arc::new(ReactorInner {
             port,
             overlapped: Overlapped::new(0, 0),
-            awake: AwakeFlag::new(),
-        }))
+        })))
     }
 
-    fn attach(&self, fd: RawHandle) -> io::Result<()> {
+    fn attach(&self, h: RawHandle) -> io::Result<()> {
         syscall!(
             BOOL,
-            CreateIoCompletionPort(fd, self.port.as_raw_handle(), 0, 0) as isize
+            CreateIoCompletionPort(h, self.0.port.as_raw_handle(), 0, 0) as isize
         )?;
         syscall!(
             BOOL,
             SetFileCompletionNotificationModes(
-                fd,
+                h,
                 (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE) as _
             )
         )?;
         Ok(())
-    }
-
-    fn set_awake(&self) {
-        self.0.awake.set();
-    }
-
-    fn reset(&self) -> bool {
-        self.0.awake.reset()
     }
 
     fn handle(&self) -> ReactorHandle {
@@ -222,21 +252,21 @@ pub(crate) struct ReactorHandle {
     inner: Arc<ReactorInner>,
 }
 
-impl ReactorHandle {
-    pub(crate) fn new(inner: Arc<ReactorInner>) -> Self {
-        Self { inner }
-    }
-}
-
 unsafe impl Send for ReactorHandle {}
 unsafe impl Sync for ReactorHandle {}
 
 impl Notify for ReactorHandle {
     /// Notify the driver.
     fn notify(&self) -> io::Result<()> {
-        if !self.inner.awake.wake() {
-            self.inner.port.post_raw(&self.inner.overlapped).ok();
-        }
+        syscall!(
+            BOOL,
+            PostQueuedCompletionStatus(
+                self.inner.port.as_raw_handle() as _,
+                0,
+                0,
+                self.inner.overlapped.as_overlapped().cast()
+            )
+        )?;
         Ok(())
     }
 }
@@ -254,4 +284,12 @@ impl fmt::Debug for DriverApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DriverApi").field("hnd", &self.hnd).finish()
     }
+}
+
+struct Dummy;
+
+impl Handler for Dummy {
+    fn completed(&mut self, _: u32, _: io::Result<usize>) {}
+
+    fn cleanup(&mut self) {}
 }

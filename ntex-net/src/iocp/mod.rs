@@ -1,4 +1,3 @@
-#![allow(dead_code, unused_imports, unused_variables)]
 use std::fmt;
 
 use socket2::Socket;
@@ -6,7 +5,6 @@ use windows_sys::Win32::System::IO::OVERLAPPED;
 
 //pub(crate) mod connect;
 mod driver;
-mod port;
 //mod io;
 //mod stream;
 

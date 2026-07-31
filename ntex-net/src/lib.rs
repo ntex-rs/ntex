@@ -129,6 +129,25 @@ impl Runner for DefaultRuntime {
             });
         }
 
+        #[cfg(all(windows, not(feature = "tokio"), not(feature = "compio")))]
+        {
+            let driver = crate::iocp::Driver::new().expect("Cannot construct driver");
+            let driver: Box<dyn Reactor> = Box::new(driver);
+
+            CURRENT_DRIVER.set(&driver, || {
+                let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    let rt = ntex_rt::Runtime::new(driver.handle());
+                    rt.block_on(fut, &*driver);
+                }));
+                if let Err(err) = res {
+                    ntex_rt::remove_all_items();
+                    panic::resume_unwind(err);
+                } else {
+                    ntex_rt::remove_all_items();
+                }
+            });
+        }
+
         #[cfg(all(unix, not(feature = "tokio"), not(feature = "compio")))]
         {
             #[cfg(feature = "neon-polling")]
