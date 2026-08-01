@@ -58,7 +58,6 @@ impl ReadOperation {
     }
 
     pub(crate) fn pause(&mut self, closing: bool) -> bool {
-        println!("Pausing - closing:{closing} flags:{:?}", self.flags);
         if self.flags.contains(Flags::WAITING) {
             if let Err(err) = syscall!(
                 BOOL,
@@ -359,7 +358,7 @@ fn winapi_result() -> Poll<io::Result<()>> {
     }
 }
 
-fn win32_result(res: i32) -> Poll<io::Result<()>> {
+pub(crate) fn win32_result(res: i32) -> Poll<io::Result<()>> {
     if res == 0 {
         winapi_result()
     } else {

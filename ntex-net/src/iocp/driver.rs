@@ -24,8 +24,7 @@ use windows_sys::Win32::{
 use ntex_io::Io;
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
-//use socket2::{Protocol, SockAddr, Socket, Type};
-use socket2::Socket;
+use socket2::{Protocol, SockAddr, Socket, Type};
 
 use super::Overlapped;
 use super::{TcpStream, stream::StreamOps};
@@ -106,12 +105,30 @@ impl AsRawHandle for Driver {
 }
 
 impl crate::Reactor for Driver {
-    fn tcp_connect(&self, _addr: net::SocketAddr, _cfg: SharedCfg) -> Receiver<Io> {
-        todo!()
+    fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
+        let addr = SockAddr::from(addr);
+        let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))
+            .map(move |sock| (addr, sock));
+
+        match result {
+            Err(err) => Receiver::new(Err(err)),
+            Ok((addr, sock)) => {
+                super::connect::ConnectOps::get(self).connect(sock, addr, cfg)
+            }
+        }
     }
 
-    fn unix_connect(&self, _addr: std::path::PathBuf, _cfg: SharedCfg) -> Receiver<Io> {
-        todo!()
+    fn unix_connect(&self, addr: std::path::PathBuf, cfg: SharedCfg) -> Receiver<Io> {
+        let result = SockAddr::unix(addr).and_then(|addr| {
+            Socket::new(addr.domain(), Type::STREAM, None).map(move |sock| (addr, sock))
+        });
+
+        match result {
+            Err(err) => Receiver::new(Err(err)),
+            Ok((addr, sock)) => {
+                super::connect::ConnectOps::get(self).connect(sock, addr, cfg)
+            }
+        }
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {

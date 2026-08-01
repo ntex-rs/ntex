@@ -3,7 +3,7 @@ use std::fmt;
 use socket2::Socket;
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
-//pub(crate) mod connect;
+mod connect;
 mod driver;
 mod io;
 mod ops;
