@@ -28,7 +28,7 @@ use ntex_service::cfg::SharedCfg;
 // use socket2::{Protocol, SockAddr, Socket, Type};
 
 use super::Overlapped;
-// use super::{TcpStream, UnixStream, stream::StreamOps};
+use super::{TcpStream, UnixStream, stream::StreamOps};
 use crate::channel::Receiver;
 
 pub trait Handler {
@@ -115,12 +115,16 @@ impl crate::Reactor for Driver {
     }
 
     fn from_tcp_stream(&self, _stream: net::TcpStream, _cfg: SharedCfg) -> io::Result<Io> {
-        todo!()
-    }
+        stream.set_nodelay(true)?;
 
-    //fn from_unix_stream(&self, stream: OsUnixStream, cfg: SharedCfg) -> io::Result<Io> {
-    //todo!()
-    //}
+        Ok(Io::new(
+            TcpStream(
+                crate::helpers::prep_socket(Socket::from(stream))?,
+                StreamOps::get(self),
+            ),
+            cfg,
+        ))
+    }
 }
 
 impl ntex_rt::Driver for Driver {
