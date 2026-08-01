@@ -1,8 +1,9 @@
-use std::{cell::UnsafeCell, collections::VecDeque, io, marker::PhantomData, net, rc::Rc};
+use std::{cell::UnsafeCell, collections::VecDeque, marker::PhantomData, net, rc::Rc};
 
 use socket2::Socket;
 
-pub(crate) fn prep_socket(sock: Socket) -> io::Result<Socket> {
+#[cfg(unix)]
+pub(crate) fn prep_socket(sock: Socket) -> std::io::Result<Socket> {
     #[cfg(not(any(
         target_os = "android",
         target_os = "dragonfly",

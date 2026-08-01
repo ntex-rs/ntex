@@ -6,6 +6,7 @@ use windows_sys::Win32::System::IO::OVERLAPPED;
 //pub(crate) mod connect;
 mod driver;
 mod io;
+mod ops;
 mod stream;
 
 pub use self::driver::{Driver, DriverApi, Handler};
@@ -35,8 +36,12 @@ impl Overlapped {
         }
     }
 
-    pub fn as_overlapped(&self) -> *const OVERLAPPED {
-        &self.base
+    pub fn as_overlapped(&self) -> *mut OVERLAPPED {
+        (&raw const self.base).cast_mut()
+    }
+
+    pub fn user_data(&self) -> u32 {
+        self.udata
     }
 }
 

@@ -1,7 +1,5 @@
-use std::cell::Cell;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-// use std::os::windows::net::UnixStream as OsUnixStream;
-use std::{fmt, io, net, ptr, sync::Arc};
+use std::{cell::Cell, fmt, io, net, ptr, sync::Arc};
 
 use windows_sys::Win32::{
     Foundation::{
@@ -25,15 +23,16 @@ use windows_sys::Win32::{
 use ntex_io::Io;
 use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
-// use socket2::{Protocol, SockAddr, Socket, Type};
+//use socket2::{Protocol, SockAddr, Socket, Type};
+use socket2::Socket;
 
 use super::Overlapped;
-use super::{TcpStream, UnixStream, stream::StreamOps};
+use super::{TcpStream, stream::StreamOps};
 use crate::channel::Receiver;
 
 pub trait Handler {
     /// Operation is completed.
-    fn completed(&mut self, id: u32, result: io::Result<usize>);
+    fn completed(&mut self, udata: u32, result: io::Result<usize>, optr: *mut Overlapped);
 
     /// Clean up the handle before dropping the driver.
     fn cleanup(&mut self);
@@ -45,13 +44,13 @@ pub struct DriverApi {
 }
 
 impl DriverApi {
-    /// Attach file descriptor.
-    pub fn attach(&mut self, fd: RawHandle) -> io::Result<()> {
-        self.reactor.attach(fd)
+    /// Attach handle
+    pub fn attach(&self, hnd: RawHandle) -> io::Result<()> {
+        self.reactor.attach(hnd)
     }
 
     /// Get overlapped.
-    pub fn overlapped(&mut self, id: u32) -> Overlapped {
+    pub fn overlapped(&self, id: u32) -> Overlapped {
         Overlapped::new(self.hnd, id)
     }
 
@@ -114,14 +113,9 @@ impl crate::Reactor for Driver {
         todo!()
     }
 
-    fn from_tcp_stream(&self, _stream: net::TcpStream, _cfg: SharedCfg) -> io::Result<Io> {
-        stream.set_nodelay(true)?;
-
+    fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
         Ok(Io::new(
-            TcpStream(
-                crate::helpers::prep_socket(Socket::from(stream))?,
-                StreamOps::get(self),
-            ),
+            TcpStream(Socket::from(stream), StreamOps::get(self)),
             cfg,
         ))
     }
@@ -137,15 +131,14 @@ impl ntex_rt::Driver for Driver {
             syscall!(
                 BOOL,
                 GetQueuedCompletionStatusEx(
-                    self.reactor.0.port.as_raw_handle() as _,
+                    self.reactor.0.port.as_raw_handle().cast(),
                     events.as_mut_ptr().cast(),
                     1024,
-                    &mut recv_count,
+                    &raw mut recv_count,
                     INFINITE,
                     0
                 )
             )?;
-            log::trace!("recv_count: {recv_count}");
 
             self.poll_completions(&events[..recv_count as usize]);
 
@@ -193,10 +186,14 @@ impl Driver {
                     | ERROR_PIPE_NOT_CONNECTED
                     | ERROR_NO_DATA
                     | ERROR_MORE_DATA => Ok(0),
-                    _ => Err(io::Error::from_raw_os_error(error as _)),
+                    _ => Err(io::Error::from_raw_os_error(error.cast_signed())),
                 }
             };
-            handlers[overlapped.hnd as usize].completed(overlapped.udata, result);
+            handlers[overlapped.hnd as usize].completed(
+                overlapped.udata,
+                result,
+                overlapped_ptr,
+            );
         }
         self.handlers.set(Some(handlers));
     }
@@ -256,8 +253,8 @@ pub(crate) struct ReactorHandle {
     inner: Arc<ReactorInner>,
 }
 
-unsafe impl Send for ReactorHandle {}
-unsafe impl Sync for ReactorHandle {}
+unsafe impl Send for ReactorInner {}
+unsafe impl Sync for ReactorInner {}
 
 impl Notify for ReactorHandle {
     /// Notify the driver.
@@ -265,7 +262,7 @@ impl Notify for ReactorHandle {
         syscall!(
             BOOL,
             PostQueuedCompletionStatus(
-                self.inner.port.as_raw_handle() as _,
+                self.inner.port.as_raw_handle().cast(),
                 0,
                 0,
                 self.inner.overlapped.as_overlapped().cast()
@@ -293,7 +290,7 @@ impl fmt::Debug for DriverApi {
 struct Dummy;
 
 impl Handler for Dummy {
-    fn completed(&mut self, _: u32, _: io::Result<usize>) {}
+    fn completed(&mut self, _: u32, _: io::Result<usize>, _: *mut Overlapped) {}
 
     fn cleanup(&mut self) {}
 }

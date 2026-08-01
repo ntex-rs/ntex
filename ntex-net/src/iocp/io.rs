@@ -8,7 +8,7 @@ use super::stream::{StreamCtl, WeakStreamCtl};
 impl ntex_io::IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let Self(io, ops) = self;
-        let (ctl, ctl2) = ops.register(io, ctx.clone(), true);
+        let (ctl, ctl2) = ops.register(io, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
         Box::new(HandleWrapper(ctl2))
@@ -18,7 +18,7 @@ impl ntex_io::IoStream for super::TcpStream {
 impl ntex_io::IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
         let Self(io, ops) = self;
-        let (ctl, ctl2) = ops.register(io, ctx.clone(), false);
+        let (ctl, ctl2) = ops.register(io, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
         Box::new(HandleWrapper(ctl2))
@@ -68,19 +68,19 @@ async fn run(ctl: StreamCtl, ctx: IoContext) {
 fn poll_readiness(ctl: &StreamCtl, ctx: &IoContext, cx: &mut Context<'_>) -> Poll<Status> {
     let read = match ctx.poll_read_ready(cx) {
         Poll::Ready(Readiness::Ready) => {
-            ctl.resume_read();
+            ctl.read();
             Poll::Pending
         }
         Poll::Ready(Readiness::Shutdown | Readiness::Terminate) => Poll::Ready(()),
         Poll::Pending => {
-            ctl.pause_read();
+            ctl.pause();
             Poll::Pending
         }
     };
 
     let write = match ctx.poll_write_ready(cx) {
         Poll::Ready(Readiness::Ready) => {
-            ctl.resume_write();
+            ctl.write();
             Poll::Pending
         }
         Poll::Ready(Readiness::Shutdown) => Poll::Ready(Status::Shutdown),
