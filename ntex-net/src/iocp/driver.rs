@@ -63,7 +63,7 @@ impl DriverApi {
 pub struct Driver {
     hid: Cell<u32>,
     reactor: Reactor,
-    #[allow(clippy::box_collection)]
+    #[allow(clippy::box_collection, clippy::type_complexity)]
     handlers: Cell<Option<Box<Vec<Box<dyn Handler>>>>>,
 }
 
@@ -124,7 +124,7 @@ impl crate::Reactor for Driver {
 impl ntex_rt::Driver for Driver {
     /// Poll the driver and handle completed operations.
     fn run(&self, rt: &Runtime) -> io::Result<()> {
-        let mut events: [OVERLAPPED_ENTRY; 1024] = [OVERLAPPED_ENTRY::default(); 1024];
+        let mut events = [OVERLAPPED_ENTRY::default(); 512];
         let mut recv_count = 0;
 
         let result = loop {
@@ -133,7 +133,7 @@ impl ntex_rt::Driver for Driver {
                 GetQueuedCompletionStatusEx(
                     self.reactor.0.port.as_raw_handle().cast(),
                     events.as_mut_ptr().cast(),
-                    1024,
+                    512,
                     &raw mut recv_count,
                     INFINITE,
                     0
@@ -172,6 +172,7 @@ impl Driver {
                 continue;
             }
 
+            #[allow(clippy::cast_possible_wrap)]
             let status = overlapped.base.Internal as NTSTATUS;
             let result = if status >= 0 {
                 Ok(overlapped.base.InternalHigh)

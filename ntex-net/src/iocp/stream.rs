@@ -119,12 +119,6 @@ impl Handler for StreamOpsHandler {
     fn cleanup(&mut self) {}
 }
 
-impl StreamOpsStorage {
-    fn write(&self, _id: usize, _api: &DriverApi) {}
-
-    fn pause(&self, _id: usize, _api: &DriverApi) {}
-}
-
 impl StreamOpsInner {
     fn with<F, R>(&self, f: F) -> R
     where
@@ -148,6 +142,7 @@ impl StreamItem {
 }
 
 impl StreamCtl {
+    #[allow(clippy::unused_async)]
     pub(crate) async fn shutdown(&self) -> io::Result<()> {
         println!("shutdown");
         Ok(())
@@ -162,11 +157,19 @@ impl StreamCtl {
     }
 
     pub(crate) fn write(&self) {
-        self.inner.with(|st| st.write(self.id, &self.inner.api));
+        self.inner.with(|st| {
+            if let Some(item) = st.streams.get_mut(self.id) {
+                item.wr_op.write();
+            }
+        });
     }
 
     pub(crate) fn pause(&self) {
-        self.inner.with(|st| st.pause(self.id, &self.inner.api));
+        self.inner.with(|st| {
+            if let Some(item) = st.streams.get_mut(self.id) {
+                item.rd_op.pause();
+            }
+        });
     }
 }
 
