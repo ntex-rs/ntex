@@ -1,11 +1,11 @@
-use std::os::windows::io::{AsRawSocket, RawSocket};
-use std::{cell::Cell, io, rc::Rc};
+use std::{cell::Cell, io, os::windows::io::AsRawSocket, rc::Rc};
 
 use ntex_io::IoContext;
-use ntex_rt::Arbiter;
-use ntex_util::channel::pool;
+use ntex_rt::{Arbiter, syscall};
+use ntex_util::{channel::pool, future::Either};
 use slab::Slab;
 use socket2::Socket;
+use windows_sys::Win32::Networking::WinSock::closesocket;
 
 use super::{Driver, DriverApi, Handler, Overlapped, ops};
 
@@ -32,6 +32,8 @@ struct StreamItem {
     io: Socket,
     rd_op: ops::ReadOperation,
     wr_op: ops::WriteOperation,
+    closed: bool,
+    close: Option<pool::Sender<io::Result<()>>>,
 }
 
 struct StreamOpsHandler {
@@ -91,7 +93,13 @@ impl StreamOps {
         // write op
         let wr_op = ops::WriteOperation::new(id, sock, ctx, &self.0.api);
 
-        entry.insert(Box::new(StreamItem { io, rd_op, wr_op }));
+        entry.insert(Box::new(StreamItem {
+            io,
+            rd_op,
+            wr_op,
+            close: None,
+            closed: false,
+        }));
         self.0.storage.set(Some(storage));
 
         (
@@ -112,8 +120,30 @@ impl Handler for StreamOpsHandler {
         match udata {
             ops::RD_OP => ops::ReadOperation::completed(res, optr),
             ops::WR_OP => ops::WriteOperation::completed(res, optr),
-            _ => log::warn!("Unknown operation: {udata}"),
+            _ => {
+                log::warn!("Unknown operation: {udata}");
+                None
+            }
         }
+        .and_then(|id| {
+            self.inner.with(|st| {
+                if let Some(item) = st.streams.get_mut(id) {
+                    if !item.closed && item.rd_op.pause(true) && item.wr_op.pause() {
+                        if let Some(tx) = item.close.take() {
+                            item.closed = true;
+                            let _ = tx.send(Ok(()));
+                            let io = item.io.as_raw_socket();
+                            #[cfg(feature = "trace")]
+                            log::trace!("{}: CloseWait({:?})", item.rd_op.tag(), io);
+                            ntex_rt::spawn_blocking(move || {
+                                syscall!(SOCKET, closesocket(io as _))
+                            });
+                        }
+                    }
+                }
+            });
+            Some(())
+        });
     }
 
     fn cleanup(&mut self) {}
@@ -131,21 +161,46 @@ impl StreamOpsInner {
     }
 }
 
-impl StreamItem {
-    fn tag(&self) -> &'static str {
-        self.rd_op.tag()
-    }
-
-    fn socket(&self) -> RawSocket {
-        self.io.as_raw_socket()
-    }
-}
-
 impl StreamCtl {
-    #[allow(clippy::unused_async)]
     pub(crate) async fn shutdown(&self) -> io::Result<()> {
-        println!("shutdown");
-        Ok(())
+        let result = self.inner.with(|st| {
+            if let Some(item) = st.streams.get_mut(self.id) {
+                if item.closed {
+                    None
+                } else if item.rd_op.pause(true) && item.wr_op.pause() {
+                    // no outstanding ops
+                    item.closed = true;
+                    Some(Either::Left((item.rd_op.tag(), item.io.as_raw_socket())))
+                } else {
+                    let (tx, rx) = self.inner.pool.channel();
+                    item.close = Some(tx);
+                    Some(Either::Right(rx))
+                }
+            } else {
+                None
+            }
+        });
+
+        match result {
+            Some(Either::Left((_tag, io))) => {
+                #[cfg(feature = "trace")]
+                log::trace!("{_tag}: Close({io:?})");
+                return ntex_rt::spawn_blocking(move || {
+                    syscall!(SOCKET, closesocket(io as _)).map(|_| ())
+                })
+                .await
+                .map_err(|e| io::Error::other(e))
+                .and_then(|res| res);
+            }
+            Some(Either::Right(rx)) => rx
+                .await
+                .map_err(|_| io::Error::other("Unexpected"))
+                .and_then(|res| res),
+            None => {
+                println!("shutdown");
+                Ok(())
+            }
+        }
     }
 
     pub(crate) fn read(&self) {
@@ -167,7 +222,7 @@ impl StreamCtl {
     pub(crate) fn pause(&self) {
         self.inner.with(|st| {
             if let Some(item) = st.streams.get_mut(self.id) {
-                item.rd_op.pause();
+                item.rd_op.pause(false);
             }
         });
     }

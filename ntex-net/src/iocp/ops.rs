@@ -22,6 +22,14 @@ pub(crate) const RD_OP: u32 = 1;
 pub(crate) const WR_OP: u32 = 2;
 const MAX_WRITE_BUFS: usize = 16;
 
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug)]
+    struct Flags: u8 {
+        const WAITING     = 0b0000_0001;
+        const CLOSING     = 0b0000_0010;
+    }
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub(crate) struct ReadOperation {
@@ -30,7 +38,7 @@ pub(crate) struct ReadOperation {
     io: RawSocket,
     ctx: IoContext,
     buf: Option<BytesMut>,
-    waiting: bool,
+    flags: Flags,
 }
 
 impl ReadOperation {
@@ -41,7 +49,7 @@ impl ReadOperation {
             io,
             ctx,
             buf: None,
-            waiting: false,
+            flags: Flags::empty(),
         }
     }
 
@@ -49,23 +57,33 @@ impl ReadOperation {
         self.ctx.tag()
     }
 
-    pub(crate) fn pause(&mut self) {
-        if self.waiting
-            && let Err(err) = syscall!(
+    pub(crate) fn pause(&mut self, closing: bool) -> bool {
+        println!("Pausing - closing:{closing} flags:{:?}", self.flags);
+        if self.flags.contains(Flags::WAITING) {
+            if let Err(err) = syscall!(
                 BOOL,
                 CancelIoEx(self.io as _, self.overlapped.as_overlapped())
-            )
-        {
-            let e = err.raw_os_error();
-            if e != Some(ERROR_NOT_FOUND as _) && e != Some(ERROR_OPERATION_ABORTED as _) {
-                self.ctx
-                    .update_read_status(self.buf.take().unwrap(), Err(err));
+            ) {
+                let e = err.raw_os_error();
+                if e != Some(ERROR_NOT_FOUND as _)
+                    && e != Some(ERROR_OPERATION_ABORTED as _)
+                {
+                    self.ctx
+                        .update_read_status(self.buf.take().unwrap(), Err(err));
+                    return true;
+                }
             }
+            if closing {
+                self.flags.insert(Flags::CLOSING);
+            }
+            false
+        } else {
+            true
         }
     }
 
     pub(crate) fn read(&mut self) {
-        if !self.waiting {
+        if !self.flags.contains(Flags::WAITING) {
             #[cfg(feature = "trace")]
             log::trace!("{}: Rcv({})", self.ctx.tag(), self.io);
 
@@ -99,7 +117,7 @@ impl ReadOperation {
                     Poll::Ready(Err(err)) => self.ctx.update_read_status(buf, Err(err)),
                     Poll::Pending => {
                         self.buf = Some(buf);
-                        self.waiting = true;
+                        self.flags.insert(Flags::WAITING);
                         return;
                     }
                 };
@@ -111,10 +129,13 @@ impl ReadOperation {
         }
     }
 
-    pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) {
+    pub(crate) fn completed(
+        res: io::Result<usize>,
+        optr: *mut Overlapped,
+    ) -> Option<usize> {
         let rd_optr: *mut ReadOperation = optr.cast();
         let rd = unsafe { &mut *rd_optr };
-        rd.waiting = false;
+        rd.flags.remove(Flags::WAITING);
 
         #[cfg(feature = "trace")]
         log::trace!("{}: RcvDone({}) {res:?}", rd.ctx.tag(), rd.io);
@@ -128,9 +149,18 @@ impl ReadOperation {
                 }
                 Err(err) => rd.ctx.update_read_status(buf, Err(err)),
             };
-            if st == IoTaskStatus::Io {
-                rd.read();
+            if rd.flags.contains(Flags::CLOSING) {
+                Some(rd.id)
+            } else {
+                if st == IoTaskStatus::Io {
+                    rd.read();
+                }
+                None
             }
+        } else if rd.flags.contains(Flags::CLOSING) {
+            Some(rd.id)
+        } else {
+            None
         }
     }
 }
@@ -142,7 +172,7 @@ pub(crate) struct WriteOperation {
     id: usize, // idx for StreamItem
     io: RawSocket,
     ctx: IoContext,
-    waiting: bool,
+    flags: Flags,
     pages: [Option<BytePage>; MAX_WRITE_BUFS],
 }
 
@@ -153,14 +183,34 @@ impl WriteOperation {
             id,
             io,
             ctx,
-            waiting: false,
+            flags: Flags::empty(),
             pages: [const { None }; MAX_WRITE_BUFS],
+        }
+    }
+
+    pub(crate) fn pause(&mut self) -> bool {
+        if self.flags.contains(Flags::WAITING) {
+            if let Err(err) = syscall!(
+                BOOL,
+                CancelIoEx(self.io as _, self.overlapped.as_overlapped())
+            ) {
+                let e = err.raw_os_error();
+                if e != Some(ERROR_NOT_FOUND as _)
+                    && e != Some(ERROR_OPERATION_ABORTED as _)
+                {
+                    return true;
+                }
+            }
+            self.flags.insert(Flags::CLOSING);
+            false
+        } else {
+            true
         }
     }
 
     pub(crate) fn write(&mut self) {
         loop {
-            if self.waiting {
+            if self.flags.contains(Flags::WAITING) {
                 return;
             }
             let st = self.ctx.with_write_buf(|wrt| {
@@ -229,7 +279,7 @@ impl WriteOperation {
                             Err(err)
                         }
                         Poll::Pending => {
-                            self.waiting = true;
+                            self.flags.insert(Flags::WAITING);
                             Ok(false)
                         }
                     }
@@ -244,14 +294,17 @@ impl WriteOperation {
         }
     }
 
-    pub(crate) fn completed(res: io::Result<usize>, optr: *mut Overlapped) {
+    pub(crate) fn completed(
+        res: io::Result<usize>,
+        optr: *mut Overlapped,
+    ) -> Option<usize> {
         let wr_optr: *mut WriteOperation = optr.cast();
         let wr = unsafe { &mut *wr_optr };
 
         #[cfg(feature = "trace")]
         log::trace!("{}: WrtDone({}) {res:?}", wr.ctx.tag(), wr.io);
 
-        wr.waiting = false;
+        wr.flags.remove(Flags::WAITING);
 
         let st = match res {
             Ok(mut sent) => {
@@ -278,8 +331,13 @@ impl WriteOperation {
             }
         });
 
-        if wr.ctx.update_write_status(st) == IoTaskStatus::Io {
-            wr.write();
+        if wr.flags.contains(Flags::CLOSING) {
+            Some(wr.id)
+        } else {
+            if wr.ctx.update_write_status(st) == IoTaskStatus::Io {
+                wr.write();
+            }
+            None
         }
     }
 }

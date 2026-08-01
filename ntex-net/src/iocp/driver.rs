@@ -4,8 +4,9 @@ use std::{cell::Cell, fmt, io, net, ptr, sync::Arc};
 use windows_sys::Win32::{
     Foundation::{
         ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA,
-        ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
-        ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS, RtlNtStatusToDosError,
+        ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_OPERATION_ABORTED,
+        ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS,
+        RtlNtStatusToDosError,
     },
     Storage::FileSystem::SetFileCompletionNotificationModes,
     System::{
@@ -180,6 +181,7 @@ impl Driver {
                 let error = unsafe { RtlNtStatusToDosError(status) };
                 match error {
                     ERROR_IO_INCOMPLETE
+                    | ERROR_OPERATION_ABORTED
                     | ERROR_NETNAME_DELETED
                     | ERROR_HANDLE_EOF
                     | ERROR_BROKEN_PIPE
