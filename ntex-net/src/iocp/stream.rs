@@ -4,7 +4,7 @@ use ntex_io::IoContext;
 use ntex_rt::{Arbiter, syscall};
 use ntex_util::{channel::pool, future::Either};
 use slab::Slab;
-use socket2::Socket;
+use socket2::{SockAddr, Socket};
 use windows_sys::Win32::Networking::WinSock;
 
 use super::{Driver, DriverApi, Handler, Overlapped, ops};
@@ -36,6 +36,7 @@ bitflags::bitflags! {
 struct StreamItem {
     io: Socket,
     flags: Flags,
+    addr: SockAddr,
     rd_op: ops::ReadOperation,
     wr_op: ops::WriteOperation,
     close: Option<pool::Sender<io::Result<()>>>,
@@ -84,10 +85,20 @@ impl StreamOps {
         })
     }
 
-    pub(crate) fn register(self, io: Socket, ctx: IoContext) -> (StreamCtl, WeakStreamCtl) {
+    pub(crate) fn register(
+        self,
+        io: Socket,
+        addr: SockAddr,
+        ctx: IoContext,
+    ) -> (StreamCtl, WeakStreamCtl) {
         let sock = io.as_raw_socket();
         #[cfg(feature = "trace")]
-        log::trace!("{}: Registered({:?})", ctx.tag(), sock);
+        log::trace!(
+            "{}: Registered({:?}) {:?}",
+            ctx.tag(),
+            sock,
+            addr.as_socket()
+        );
 
         let mut storage = self.0.storage.take().unwrap();
         let entry = storage.streams.vacant_entry();
@@ -103,6 +114,7 @@ impl StreamOps {
             io,
             rd_op,
             wr_op,
+            addr,
             close: None,
             flags: Flags::empty(),
         }));
@@ -326,11 +338,8 @@ impl Drop for StreamCtl {
 }
 
 impl WeakStreamCtl {
-    pub(crate) fn with_io<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&Socket) -> R,
-    {
-        self.inner.with(|st| f(&st.streams[self.id].io))
+    pub(crate) fn peer_addr(&self) -> SockAddr {
+        self.inner.with(|st| st.streams[self.id].addr.clone())
     }
 }
 

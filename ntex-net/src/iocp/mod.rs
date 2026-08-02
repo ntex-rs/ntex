@@ -1,6 +1,6 @@
 use std::fmt;
 
-use socket2::Socket;
+use socket2::{SockAddr, Socket};
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
 mod connect;
@@ -12,10 +12,10 @@ mod stream;
 pub use self::driver::{Driver, DriverApi, Handler};
 
 /// Tcp stream wrapper for neon `TcpStream`
-struct TcpStream(Socket, stream::StreamOps);
+struct TcpStream(Socket, SockAddr, stream::StreamOps);
 
 /// Tcp stream wrapper for neon `UnixStream`
-struct UnixStream(Socket, stream::StreamOps);
+struct UnixStream(Socket, SockAddr, stream::StreamOps);
 
 /// The overlapped struct for IOCP ops.
 #[repr(C)]

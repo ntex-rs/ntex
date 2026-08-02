@@ -7,8 +7,8 @@ use super::stream::{StreamCtl, WeakStreamCtl};
 
 impl ntex_io::IoStream for super::TcpStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
-        let Self(io, ops) = self;
-        let (ctl, ctl2) = ops.register(io, ctx.clone());
+        let Self(io, addr, ops) = self;
+        let (ctl, ctl2) = ops.register(io, addr, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
         Box::new(HandleWrapper(ctl2))
@@ -17,8 +17,8 @@ impl ntex_io::IoStream for super::TcpStream {
 
 impl ntex_io::IoStream for super::UnixStream {
     fn start(self, ctx: IoContext) -> Box<dyn Handle> {
-        let Self(io, ops) = self;
-        let (ctl, ctl2) = ops.register(io, ctx.clone());
+        let Self(io, addr, ops) = self;
+        let (ctl, ctl2) = ops.register(io, addr, ctx.clone());
         spawn(async move { run(ctl, ctx).await });
 
         Box::new(HandleWrapper(ctl2))
@@ -30,8 +30,8 @@ struct HandleWrapper(WeakStreamCtl);
 impl Handle for HandleWrapper {
     fn query(&self, id: any::TypeId) -> Option<Box<dyn any::Any>> {
         if id == any::TypeId::of::<types::PeerAddr>() {
-            let addr = self.0.with_io(|io| io.peer_addr().ok());
-            if let Some(addr) = addr.and_then(|addr| addr.as_socket()) {
+            let addr = self.0.peer_addr();
+            if let Some(addr) = addr.as_socket() {
                 return Some(Box::new(types::PeerAddr(addr)));
             }
         }

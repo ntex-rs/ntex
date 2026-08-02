@@ -132,10 +132,11 @@ impl crate::Reactor for Driver {
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
+        let addr = stream.peer_addr()?;
         self.reactor.attach(stream.as_raw_socket() as _)?;
 
         Ok(Io::new(
-            TcpStream(Socket::from(stream), StreamOps::get(self)),
+            TcpStream(Socket::from(stream), addr.into(), StreamOps::get(self)),
             cfg,
         ))
     }
@@ -165,10 +166,10 @@ impl ntex_rt::Driver for Driver {
                     0
                 )
             );
-            if let Err(err) = result {
-                if err.raw_os_error() != Some(WAIT_TIMEOUT as _) {
-                    return Err(err);
-                }
+            if let Err(err) = result
+                && err.raw_os_error() != Some(WAIT_TIMEOUT.cast_signed())
+            {
+                return Err(err);
             }
 
             self.poll_completions(&events[..recv_count as usize]);

@@ -128,10 +128,9 @@ impl ReadOperation {
                     }
                     if self.ctx.update_read_status(buf, Ok(size as usize))
                         == IoTaskStatus::Io
+                        && size != 0
                     {
-                        if size != 0 {
-                            continue;
-                        }
+                        continue;
                     }
                 }
                 Poll::Ready(Err(err)) => {
@@ -378,9 +377,8 @@ impl WriteOperation {
     }
 }
 
-fn winapi_result() -> Poll<io::Result<()>> {
+pub(crate) fn winapi_result() -> Poll<io::Result<()>> {
     let error = unsafe { GetLastError() };
-    assert_ne!(error, 0);
     match error {
         ERROR_IO_PENDING => Poll::Pending,
         ERROR_IO_INCOMPLETE

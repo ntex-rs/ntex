@@ -123,12 +123,12 @@ impl ConnectOps {
                 Poll::Ready(Ok(())) => {
                     if op.addr.domain() == Domain::UNIX {
                         let _ = op.sender.send(Ok(Io::new(
-                            UnixStream(op.sock, self.0.streams.clone()),
+                            UnixStream(op.sock, op.addr, self.0.streams.clone()),
                             op.cfg,
                         )));
                     } else {
                         let _ = op.sender.send(Ok(Io::new(
-                            TcpStream(op.sock, self.0.streams.clone()),
+                            TcpStream(op.sock, op.addr, self.0.streams.clone()),
                             op.cfg,
                         )));
                     }
@@ -146,16 +146,23 @@ impl ConnectOps {
 impl Handler for ConnectOpsHandler {
     fn completed(&mut self, idx: u32, res: io::Result<usize>, _: *mut Overlapped) {
         if let Some(op) = self.inner.ops.borrow_mut().try_remove(idx as usize) {
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: Connected({}) {res:?}",
+                op.cfg.tag(),
+                op.sock.as_raw_socket(),
+            );
+
             match res {
                 Ok(_) => {
                     if op.addr.domain() == Domain::UNIX {
                         let _ = op.sender.send(Ok(Io::new(
-                            UnixStream(op.sock, self.inner.streams.clone()),
+                            UnixStream(op.sock, op.addr, self.inner.streams.clone()),
                             op.cfg,
                         )));
                     } else {
                         let _ = op.sender.send(Ok(Io::new(
-                            TcpStream(op.sock, self.inner.streams.clone()),
+                            TcpStream(op.sock, op.addr, self.inner.streams.clone()),
                             op.cfg,
                         )));
                     }
