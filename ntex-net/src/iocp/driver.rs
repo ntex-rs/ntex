@@ -34,8 +34,11 @@ pub trait Handler {
     /// Operation is completed.
     fn completed(&mut self, udata: u32, result: io::Result<usize>, optr: *mut Overlapped);
 
+    /// Driver turn is completed
+    fn tick(&mut self) {}
+
     /// Clean up the handle before dropping the driver.
-    fn cleanup(&mut self);
+    fn cleanup(&mut self) {}
 }
 
 pub struct DriverApi {
@@ -144,6 +147,12 @@ impl ntex_rt::Driver for Driver {
         let mut recv_count = 0;
 
         let result = loop {
+            let timeout = match rt.poll() {
+                PollResult::Pending => INFINITE,
+                PollResult::PollAgain => 0,
+                PollResult::Ready => break Ok(()),
+            };
+
             syscall!(
                 BOOL,
                 GetQueuedCompletionStatusEx(
@@ -151,18 +160,12 @@ impl ntex_rt::Driver for Driver {
                     events.as_mut_ptr().cast(),
                     512,
                     &raw mut recv_count,
-                    INFINITE,
+                    timeout,
                     0
                 )
             )?;
 
             self.poll_completions(&events[..recv_count as usize]);
-
-            let _more_tasks = match rt.poll() {
-                PollResult::Pending => false,
-                PollResult::PollAgain => true,
-                PollResult::Ready => break Ok(()),
-            };
         };
 
         for mut h in self.handlers.take().unwrap().into_iter() {
@@ -211,6 +214,9 @@ impl Driver {
                 result,
                 overlapped_ptr,
             );
+        }
+        for hnd in handlers.iter_mut() {
+            hnd.tick();
         }
         self.handlers.set(Some(handlers));
     }

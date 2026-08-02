@@ -1,4 +1,3 @@
-#[cfg(unix)]
 use std::{cell::UnsafeCell, collections::VecDeque, marker::PhantomData, rc::Rc};
 
 use socket2::Socket;
@@ -38,20 +37,23 @@ pub(crate) fn close_socket(sock: Socket) {
     }));
 }
 
-#[cfg(unix)]
 #[derive(Default)]
 pub(crate) struct Queue<T> {
     inner: UnsafeCell<VecDeque<T>>,
     _t: PhantomData<Rc<()>>,
 }
 
-#[cfg(unix)]
 impl<T> Queue<T> {
     pub(crate) fn new() -> Self {
         Self {
             inner: UnsafeCell::new(VecDeque::default()),
             _t: PhantomData,
         }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
+        unsafe { &*self.inner.get() }.is_empty()
     }
 
     pub(crate) fn clear(&self) {

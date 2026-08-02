@@ -34,7 +34,7 @@ impl Builder {
         Builder {
             name: "ntex".into(),
             stop_on_panic: false,
-            stack_size: 8 * 1024 * 1024,
+            stack_size: 0,
             ping_interval: 2000,
             ping_threshold: 1000,
             signals: false,
@@ -94,8 +94,6 @@ impl Builder {
 
     #[must_use]
     /// Sets the size of the stack (in bytes) for the new worker thread.
-    ///
-    /// By default stack size is 8Mb.
     pub fn stack_size(mut self, size: usize) -> Self {
         self.stack_size = size;
         self

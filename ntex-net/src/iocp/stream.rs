@@ -8,6 +8,7 @@ use socket2::Socket;
 use windows_sys::Win32::Networking::WinSock;
 
 use super::{Driver, DriverApi, Handler, Overlapped, ops};
+use crate::helpers::Queue;
 
 #[derive(Clone)]
 pub(crate) struct StreamOps(Rc<StreamOpsInner>);
@@ -44,10 +45,16 @@ struct StreamOpsHandler {
     inner: Rc<StreamOpsInner>,
 }
 
+enum IdType {
+    Stream(u32),
+    Weak(u32),
+}
+
 #[allow(clippy::box_collection)]
 struct StreamOpsInner {
     api: DriverApi,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
+    delayed_feed: Queue<IdType>,
     pool: pool::Pool<io::Result<()>>,
 }
 
@@ -67,6 +74,7 @@ impl StreamOps {
                     storage: Cell::new(Some(Box::new(StreamOpsStorage {
                         streams: Slab::new(),
                     }))),
+                    delayed_feed: Queue::new(),
                 });
                 inner = Some(ops.clone());
                 Box::new(StreamOpsHandler { inner: ops })
@@ -147,7 +155,13 @@ impl Handler for StreamOpsHandler {
         }
     }
 
-    fn cleanup(&mut self) {}
+    fn tick(&mut self) {
+        self.inner.check_delayed_feed();
+    }
+
+    fn cleanup(&mut self) {
+        self.inner.delayed_feed.clear();
+    }
 }
 
 impl StreamOpsInner {
@@ -159,6 +173,20 @@ impl StreamOpsInner {
         let result = f(&mut storage);
         self.storage.set(Some(storage));
         result
+    }
+
+    fn check_delayed_feed(&self) {
+        if !self.delayed_feed.is_empty()
+            && let Some(mut storage) = self.storage.take()
+        {
+            while let Some(id) = self.delayed_feed.pop() {
+                match id {
+                    IdType::Stream(id) => storage.drop_stream(id as usize),
+                    IdType::Weak(id) => storage.drop_weak_stream(id as usize),
+                }
+            }
+            self.storage.set(Some(storage));
+        }
     }
 }
 
@@ -288,9 +316,12 @@ impl StreamOpsStorage {
 
 impl Drop for StreamCtl {
     fn drop(&mut self) {
-        let mut storage = self.inner.storage.take().unwrap();
-        storage.drop_stream(self.id);
-        self.inner.storage.set(Some(storage));
+        if let Some(mut storage) = self.inner.storage.take() {
+            storage.drop_stream(self.id);
+            self.inner.storage.set(Some(storage));
+        } else {
+            self.inner.delayed_feed.push(IdType::Stream(self.id as u32));
+        }
     }
 }
 
@@ -305,8 +336,11 @@ impl WeakStreamCtl {
 
 impl Drop for WeakStreamCtl {
     fn drop(&mut self) {
-        let mut storage = self.inner.storage.take().unwrap();
-        storage.drop_weak_stream(self.id);
-        self.inner.storage.set(Some(storage));
+        if let Some(mut storage) = self.inner.storage.take() {
+            storage.drop_weak_stream(self.id);
+            self.inner.storage.set(Some(storage));
+        } else {
+            self.inner.delayed_feed.push(IdType::Weak(self.id as u32));
+        }
     }
 }

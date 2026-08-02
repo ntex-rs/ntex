@@ -118,20 +118,20 @@ impl ReadOperation {
                 )
             };
 
-            // If no error occurs and the send operation has completed immediately,
-            // WSARecv returns zero.
-            if result == 0 && size == 0 {
-                return;
-            }
-
             match winsock_result(result) {
                 Poll::Ready(Ok(())) => {
-                    // SAFETY: windows tells us how many bytes it read
-                    unsafe { buf.advance_mut(size as usize) };
+                    if size == 0 {
+                        self.ctx.stop(None);
+                    } else {
+                        // SAFETY: windows tells us how many bytes it read
+                        unsafe { buf.advance_mut(size as usize) };
+                    }
                     if self.ctx.update_read_status(buf, Ok(size as usize))
                         == IoTaskStatus::Io
                     {
-                        continue;
+                        if size != 0 {
+                            continue;
+                        }
                     }
                 }
                 Poll::Ready(Err(err)) => {
@@ -278,15 +278,13 @@ impl WriteOperation {
                             None,
                         )
                     };
-                    // If no error occurs and the send operation has completed immediately,
-                    // WSASend returns zero.
-                    if result == 0 && sent == 0 {
-                        return Ok(false);
-                    }
 
                     match winsock_result(result) {
                         Poll::Ready(Ok(())) => {
                             let mut sent = sent as usize;
+                            if sent == 0 {
+                                self.ctx.stop(None);
+                            }
                             // remove written bytes
                             for page in self.pages[..num].iter_mut().flatten() {
                                 let len = cmp::min(page.len(), sent);
@@ -343,6 +341,9 @@ impl WriteOperation {
 
         let st = match res {
             Ok(mut sent) => {
+                if sent == 0 {
+                    wr.ctx.stop(None);
+                }
                 // remove written bytes
                 for page in wr.pages[..].iter_mut().flatten() {
                     let len = cmp::min(page.len(), sent);

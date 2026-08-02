@@ -276,7 +276,9 @@ impl StreamOpsInner {
     }
 
     fn check_delayed_feed(&self) {
-        if let Some(mut streams) = self.streams.take() {
+        if !self.delayed_feed.is_empty()
+            && let Some(mut streams) = self.streams.take()
+        {
             while let Some(id) = self.delayed_feed.pop() {
                 match id {
                     IdType::Stream(id) => self.drop_stream(id, &mut streams),
