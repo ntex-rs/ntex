@@ -186,13 +186,14 @@ impl StreamCtl {
             Some(Either::Left((_tag, io))) => {
                 #[cfg(feature = "trace")]
                 log::trace!("{_tag}: Close({io:?})");
-                ntex_rt::spawn_blocking(move || {
+                ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
                     syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
                     syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
-                })
+                }))
                 .await
                 .map_err(io::Error::other)
-                .and_then(|res| res)
+                    .and_then(|res| res.map_err(io::Error::other))
+                    .and_then(|res| res)
             }
             Some(Either::Right(rx)) => rx
                 .await

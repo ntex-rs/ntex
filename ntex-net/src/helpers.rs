@@ -32,10 +32,10 @@ pub(crate) fn prep_socket(sock: Socket) -> std::io::Result<Socket> {
 }
 
 pub(crate) fn close_socket(sock: Socket) {
-    ntex_rt::spawn_blocking(move || {
+    ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
         let _ = sock.shutdown(std::net::Shutdown::Both);
         drop(sock);
-    });
+    }));
 }
 
 #[cfg(unix)]
