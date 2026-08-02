@@ -283,7 +283,7 @@ pub(crate) struct ReactorHandle {
     inner: Arc<ReactorInner>,
 }
 
-/// SAFETY: ReactorInner holds iocp port handle which is thread safe
+/// SAFETY: `ReactorInner` holds iocp port handle which is thread safe
 unsafe impl Send for ReactorInner {}
 unsafe impl Sync for ReactorInner {}
 
