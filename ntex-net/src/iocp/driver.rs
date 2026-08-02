@@ -1,4 +1,6 @@
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::io::{
+    AsRawHandle, AsRawSocket, FromRawHandle, OwnedHandle, RawHandle,
+};
 use std::{cell::Cell, fmt, io, net, ptr, sync::Arc};
 
 use windows_sys::Win32::{
@@ -127,6 +129,8 @@ impl crate::Reactor for Driver {
     }
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
+        self.reactor.attach(stream.as_raw_socket() as _)?;
+
         Ok(Io::new(
             TcpStream(Socket::from(stream), StreamOps::get(self)),
             cfg,

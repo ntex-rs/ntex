@@ -1,27 +1,12 @@
-#![allow(unused_imports, unused_variables)]
 use std::os::windows::io::{AsRawSocket, RawSocket};
 use std::{cell::RefCell, io, mem, net, ptr, rc::Rc, task::Poll};
-
-use windows_sys::{
-    Win32::{
-        Foundation::{
-            ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING,
-            ERROR_MORE_DATA, ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_NOT_FOUND,
-            ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError,
-        },
-        Networking::WinSock::{
-            LPFN_CONNECTEX, SIO_GET_EXTENSION_FUNCTION_POINTER, WSAID_CONNECTEX, WSAIoctl,
-        },
-        System::IO::{CancelIoEx, OVERLAPPED},
-    },
-    core::GUID,
-};
 
 use ntex_io::Io;
 use ntex_rt::{Arbiter, syscall};
 use ntex_service::cfg::SharedCfg;
 use slab::Slab;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use windows_sys::{Win32::Networking::WinSock, core::GUID};
 
 use super::{
     Driver, DriverApi, Handler, Overlapped, TcpStream, UnixStream, ops, stream::StreamOps,
@@ -50,7 +35,7 @@ struct ConnectOpsInner {
     streams: StreamOps,
     ops: Operations,
     dummy: Socket,
-    connect: LPFN_CONNECTEX,
+    connect: WinSock::LPFN_CONNECTEX,
 }
 
 impl ConnectOps {
@@ -62,7 +47,7 @@ impl ConnectOps {
             driver.register(|api| {
                 let dummy = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
                     .expect("Cannot create socket");
-                let connect = get_wsa_fn(dummy.as_raw_socket(), WSAID_CONNECTEX)
+                let connect = get_wsa_fn(dummy.as_raw_socket(), WinSock::WSAID_CONNECTEX)
                     .expect("Cannot get ConnectEx function");
 
                 let ops = Rc::new(ConnectOpsInner {
@@ -193,9 +178,9 @@ fn get_wsa_fn<F>(sock: RawSocket, fguid: GUID) -> io::Result<Option<F>> {
     let mut returned = 0;
     syscall!(
         SOCKET,
-        WSAIoctl(
+        WinSock::WSAIoctl(
             sock as _,
-            SIO_GET_EXTENSION_FUNCTION_POINTER,
+            WinSock::SIO_GET_EXTENSION_FUNCTION_POINTER,
             ptr::addr_of!(fguid).cast(),
             mem::size_of_val(&fguid) as _,
             ptr::addr_of_mut!(fptr).cast(),

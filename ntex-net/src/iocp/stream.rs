@@ -74,14 +74,8 @@ impl StreamOps {
 
     pub(crate) fn register(self, io: Socket, ctx: IoContext) -> (StreamCtl, WeakStreamCtl) {
         let sock = io.as_raw_socket();
-        if let Err(e) = self.0.api.attach(sock as _) {
-            #[cfg(feature = "trace")]
-            log::trace!("{}: Register failed({:?} {e:?})", ctx.tag(), io);
-            ctx.update_write_status(Err(e));
-        } else {
-            #[cfg(feature = "trace")]
-            log::trace!("{}: Registered({:?})", ctx.tag(), sock);
-        }
+        #[cfg(feature = "trace")]
+        log::trace!("{}: Registered({:?})", ctx.tag(), sock);
 
         let mut storage = self.0.storage.take().unwrap();
         let entry = storage.streams.vacant_entry();

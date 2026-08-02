@@ -82,49 +82,53 @@ impl ReadOperation {
     }
 
     pub(crate) fn read(&mut self) {
-        if !self.flags.contains(Flags::WAITING) {
-            #[cfg(feature = "trace")]
-            log::trace!("{}: Rcv({})", self.ctx.tag(), self.io);
+        if self.flags.contains(Flags::WAITING) {
+            return;
+        }
 
-            loop {
-                let mut buf = self.ctx.get_read_buf();
-                let s = buf.chunk_mut();
-                let lpbufs = [WSABUF {
-                    len: s.len() as u32,
-                    buf: s.as_mut_ptr(),
-                }];
-                let mut size = 0;
-                let mut flags = 0;
-                let result = unsafe {
-                    WSARecv(
-                        self.io as _,
-                        ptr::from_ref(&lpbufs[0]),
-                        1,
-                        &raw mut size,
-                        &raw mut flags,
-                        self.overlapped.as_overlapped(),
-                        None,
-                    )
-                };
+        #[cfg(feature = "trace")]
+        log::trace!("{}: Rcv({})", self.ctx.tag(), self.io);
 
-                let st = match winsock_result(result) {
-                    Poll::Ready(Ok(())) => {
-                        // SAFETY: windows tells us how many bytes it read
-                        unsafe { buf.advance_mut(size as usize) };
-                        self.ctx.update_read_status(buf, Ok(size as usize))
+        loop {
+            let mut buf = self.ctx.get_read_buf();
+            let s = buf.chunk_mut();
+            let lpbufs = [WSABUF {
+                len: s.len() as u32,
+                buf: s.as_mut_ptr(),
+            }];
+            let mut size = 0;
+            let mut flags = 0;
+            let result = unsafe {
+                WSARecv(
+                    self.io as _,
+                    ptr::from_ref(&lpbufs[0]),
+                    1,
+                    &raw mut size,
+                    &raw mut flags,
+                    self.overlapped.as_overlapped(),
+                    None,
+                )
+            };
+
+            match winsock_result(result) {
+                Poll::Ready(Ok(())) => {
+                    // SAFETY: windows tells us how many bytes it read
+                    unsafe { buf.advance_mut(size as usize) };
+                    if self.ctx.update_read_status(buf, Ok(size as usize))
+                        == IoTaskStatus::Io
+                    {
+                        continue;
                     }
-                    Poll::Ready(Err(err)) => self.ctx.update_read_status(buf, Err(err)),
-                    Poll::Pending => {
-                        self.buf = Some(buf);
-                        self.flags.insert(Flags::WAITING);
-                        return;
-                    }
-                };
-
-                if st != IoTaskStatus::Io {
-                    break;
+                }
+                Poll::Ready(Err(err)) => {
+                    self.ctx.update_read_status(buf, Err(err));
+                }
+                Poll::Pending => {
+                    self.buf = Some(buf);
+                    self.flags.insert(Flags::WAITING);
                 }
             }
+            break;
         }
     }
 
