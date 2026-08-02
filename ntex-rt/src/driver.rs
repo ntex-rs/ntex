@@ -9,6 +9,7 @@ pub type BlockFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 pub enum DriverType {
     Poll,
     IoUring,
+    Iocp,
 }
 
 impl DriverType {
@@ -16,6 +17,7 @@ impl DriverType {
         match self {
             DriverType::Poll => "polling",
             DriverType::IoUring => "io-uring",
+            DriverType::Iocp => "iocp",
         }
     }
 

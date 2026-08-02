@@ -74,6 +74,11 @@ jobs:
           Get-ChildItem C:\vcpkg\installed\x64-windows\bin
           Get-ChildItem C:\vcpkg\installed\x64-windows\lib
 
+      - name: Run tests (neon-iocp)
+        timeout-minutes: 10
+        run: |
+          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/neon-iocp,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+
       - name: Run tests (tokio)
         timeout-minutes: 10
         run: |
@@ -83,8 +88,3 @@ jobs:
         timeout-minutes: 10
         run: |
           cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
-
-      #- name: Run tests (neon)
-      #  timeout-minutes: 10
-      #  run: |
-      #    cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer

@@ -444,8 +444,6 @@ impl ntex_rt::Driver for Driver {
     fn handle(&self) -> Box<dyn Notify> {
         Box::new(self.notifier.handle())
     }
-
-    fn clear(&self) {}
 }
 
 #[derive(Debug)]

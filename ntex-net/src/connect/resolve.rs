@@ -29,7 +29,7 @@ pub(crate) async fn lookup<T: Address>(
         match fut.await {
             Ok(Ok(ips)) => {
                 let port = req.port();
-                req = req.set_addrs(ips.map(|mut ip| {
+                req = req.set_addrs(ips.rev().map(|mut ip| {
                     ip.set_port(port);
                     ip
                 }));

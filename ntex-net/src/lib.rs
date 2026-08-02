@@ -23,7 +23,10 @@ pub mod polling;
 #[cfg(target_os = "linux")]
 pub mod uring;
 
-#[cfg(unix)]
+#[cfg(windows)]
+pub mod iocp;
+
+#[cfg(any(unix, windows))]
 mod helpers;
 
 #[cfg(feature = "tokio")]
@@ -123,6 +126,25 @@ impl Runner for DefaultRuntime {
             CURRENT_DRIVER.set(&driver, || {
                 crate::compio::block_on(fut);
                 ntex_rt::remove_all_items();
+            });
+        }
+
+        #[cfg(all(windows, not(feature = "tokio"), not(feature = "compio")))]
+        {
+            let driver = crate::iocp::Driver::new().expect("Cannot construct driver");
+            let driver: Box<dyn Reactor> = Box::new(driver);
+
+            CURRENT_DRIVER.set(&driver, || {
+                let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    let rt = ntex_rt::Runtime::new(driver.handle());
+                    rt.block_on(fut, &*driver);
+                }));
+                if let Err(err) = res {
+                    ntex_rt::remove_all_items();
+                    panic::resume_unwind(err);
+                } else {
+                    ntex_rt::remove_all_items();
+                }
             });
         }
 

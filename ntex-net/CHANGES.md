@@ -1,5 +1,9 @@
 # Changes
 
+## [3.14.0] - 2026-08-12
+
+* Add windows IOCP driver (neon-iocp)
+
 ## [3.13.1] - 2026-07-17
 
 * io-ring driver could use invalid BytePage pointer #932

@@ -93,7 +93,7 @@ impl Builder {
     }
 
     #[must_use]
-    /// Sets the size of the stack (in bytes) for the new thread.
+    /// Sets the size of the stack (in bytes) for the new worker thread.
     pub fn stack_size(mut self, size: usize) -> Self {
         self.stack_size = size;
         self

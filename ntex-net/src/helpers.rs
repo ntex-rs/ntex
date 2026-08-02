@@ -1,8 +1,9 @@
-use std::{cell::UnsafeCell, collections::VecDeque, io, marker::PhantomData, net, rc::Rc};
+use std::{cell::UnsafeCell, collections::VecDeque, marker::PhantomData, rc::Rc};
 
 use socket2::Socket;
 
-pub(crate) fn prep_socket(sock: Socket) -> io::Result<Socket> {
+#[cfg(unix)]
+pub(crate) fn prep_socket(sock: Socket) -> std::io::Result<Socket> {
     #[cfg(not(any(
         target_os = "android",
         target_os = "dragonfly",
@@ -30,10 +31,10 @@ pub(crate) fn prep_socket(sock: Socket) -> io::Result<Socket> {
 }
 
 pub(crate) fn close_socket(sock: Socket) {
-    ntex_rt::spawn_blocking(move || {
-        let _ = sock.shutdown(net::Shutdown::Both);
+    ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
+        let _ = sock.shutdown(std::net::Shutdown::Both);
         drop(sock);
-    });
+    }));
 }
 
 #[derive(Default)]
@@ -48,6 +49,11 @@ impl<T> Queue<T> {
             inner: UnsafeCell::new(VecDeque::default()),
             _t: PhantomData,
         }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        // SAFETY: Queue is !Sync and it does not allow to hold refs into inner
+        unsafe { &*self.inner.get() }.is_empty()
     }
 
     pub(crate) fn clear(&self) {

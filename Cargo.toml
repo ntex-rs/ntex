@@ -139,7 +139,7 @@ socket2 = "0.6.1"
 swap-buffer-queue = "0.2.1"
 syn = "3.0"
 variadics_please = "1.1"
-windows-sys = "0.52.0"
+windows-sys = "0.61.0"
 time = "0.3.54"
 thiserror = "2"
 tok-io = { version = "1", package = "tokio", default-features = false }

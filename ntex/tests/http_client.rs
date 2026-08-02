@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
-    cell::RefCell, collections::HashMap, io, io::Read, io::Write, rc::Rc, sync::Arc,
+    cell::RefCell, collections::HashMap, io, io::Read, io::Write, net, rc::Rc, sync::Arc,
 };
 
 use coo_kie::Cookie;
@@ -696,15 +696,16 @@ async fn client_read_until_eof() {
                 log::debug!("Reading request");
                 let res = stream.read(&mut b).unwrap();
                 log::debug!("Read {res:?}");
-                let res = stream
-                    .write_all(b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!");
-                log::debug!("Sent {res:?}");
+                const S: &[u8] = b"HTTP/1.0 200 OK\r\nconnection: close\r\n\r\nwelcome!";
+                let res = stream.write_all(S);
+                log::debug!("Sent {res:?} cnt:{}", S.len());
+                let _ = stream.shutdown(net::Shutdown::Both);
             } else {
                 break;
             }
         }
     });
-    sleep(Millis(500)).await;
+    sleep(Millis(250)).await;
 
     // client request
     let req = Client::builder()

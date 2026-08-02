@@ -245,11 +245,11 @@ impl StreamOpsInner {
 
         if item.flags.contains(Flags::DROPPED_SEC) {
             let item = streams.remove(idx);
-            ntex_rt::spawn_blocking(move || {
+            ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
                 if let Err(err) = syscall!(libc::close(fd)) {
                     log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
                 }
-            });
+            }));
             mem::forget(item.io);
         } else {
             item.flags.insert(Flags::DROPPED_PRI);
@@ -264,11 +264,11 @@ impl StreamOpsInner {
         if item.flags.contains(Flags::DROPPED_PRI) {
             let item = streams.remove(idx);
             let fd = item.fd();
-            ntex_rt::spawn_blocking(move || {
+            ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
                 if let Err(err) = syscall!(libc::close(fd)) {
                     log::error!("Cannot close file descriptor ({fd:?}), {err:?}");
                 }
-            });
+            }));
             mem::forget(item.io);
         } else {
             item.flags.insert(Flags::DROPPED_SEC);
@@ -276,7 +276,9 @@ impl StreamOpsInner {
     }
 
     fn check_delayed_feed(&self) {
-        if let Some(mut streams) = self.streams.take() {
+        if !self.delayed_feed.is_empty()
+            && let Some(mut streams) = self.streams.take()
+        {
             while let Some(id) = self.delayed_feed.pop() {
                 match id {
                     IdType::Stream(id) => self.drop_stream(id, &mut streams),
@@ -362,13 +364,14 @@ impl StreamCtl {
             .with(|streams| {
                 let item = &mut streams[self.id as usize];
                 let fd = item.fd();
-                ntex_rt::spawn_blocking(move || {
+                ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
                     syscall!(libc::shutdown(fd, libc::SHUT_RDWR)).map(|_| ())
-                })
+                }))
             })
             .await
             .map_err(io::Error::other)
             .and_then(|res| res.map_err(io::Error::other))
+            .and_then(|res| res)
     }
 
     /// Modify poll interest for the stream

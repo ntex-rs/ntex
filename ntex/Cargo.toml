@@ -63,6 +63,9 @@ neon-polling = ["ntex-net/neon-polling"]
 # neon io-uring runtime
 neon-uring = ["ntex-net/neon-uring"]
 
+# neon iocp runtime
+neon-iocp = ["ntex-net/neon-iocp"]
+
 # websocket support
 ws = ["dep:sha1"]
 
