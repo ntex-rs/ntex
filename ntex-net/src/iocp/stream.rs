@@ -117,33 +117,30 @@ impl StreamOps {
 
 impl Handler for StreamOpsHandler {
     fn completed(&mut self, udata: u32, res: io::Result<usize>, optr: *mut Overlapped) {
-        match udata {
+        if let Some(id) = match udata {
             ops::RD_OP => ops::ReadOperation::completed(res, optr),
             ops::WR_OP => ops::WriteOperation::completed(res, optr),
             _ => {
                 log::warn!("Unknown operation: {udata}");
                 None
             }
-        }
-        .and_then(|id| {
+        } {
             self.inner.with(|st| {
-                if let Some(item) = st.streams.get_mut(id) {
-                    if !item.closed && item.rd_op.pause(true) && item.wr_op.pause() {
-                        if let Some(tx) = item.close.take() {
-                            item.closed = true;
-                            let _ = tx.send(Ok(()));
-                            let io = item.io.as_raw_socket();
-                            #[cfg(feature = "trace")]
-                            log::trace!("{}: CloseWait({:?})", item.rd_op.tag(), io);
-                            ntex_rt::spawn_blocking(move || {
-                                syscall!(SOCKET, closesocket(io as _))
-                            });
-                        }
-                    }
+                if let Some(item) = st.streams.get_mut(id)
+                    && !item.closed
+                    && item.rd_op.pause(true)
+                    && item.wr_op.pause()
+                    && let Some(tx) = item.close.take()
+                {
+                    item.closed = true;
+                    let _ = tx.send(Ok(()));
+                    let io = item.io.as_raw_socket();
+                    #[cfg(feature = "trace")]
+                    log::trace!("{}: CloseWait({:?})", item.rd_op.tag(), io);
+                    ntex_rt::spawn_blocking(move || syscall!(SOCKET, closesocket(io as _)));
                 }
             });
-            Some(())
-        });
+        }
     }
 
     fn cleanup(&mut self) {}
@@ -185,12 +182,12 @@ impl StreamCtl {
             Some(Either::Left((_tag, io))) => {
                 #[cfg(feature = "trace")]
                 log::trace!("{_tag}: Close({io:?})");
-                return ntex_rt::spawn_blocking(move || {
+                ntex_rt::spawn_blocking(move || {
                     syscall!(SOCKET, closesocket(io as _)).map(|_| ())
                 })
                 .await
-                .map_err(|e| io::Error::other(e))
-                .and_then(|res| res);
+                .map_err(io::Error::other)
+                .and_then(|res| res)
             }
             Some(Either::Right(rx)) => rx
                 .await

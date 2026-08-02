@@ -26,8 +26,7 @@ use ntex_rt::{DriverType, Notify, PollResult, Runtime, syscall};
 use ntex_service::cfg::SharedCfg;
 use socket2::{Protocol, SockAddr, Socket, Type};
 
-use super::Overlapped;
-use super::{TcpStream, stream::StreamOps};
+use super::{Overlapped, TcpStream, connect, stream::StreamOps};
 use crate::channel::Receiver;
 
 pub trait Handler {
@@ -112,9 +111,7 @@ impl crate::Reactor for Driver {
 
         match result {
             Err(err) => Receiver::new(Err(err)),
-            Ok((addr, sock)) => {
-                super::connect::ConnectOps::get(self).connect(sock, addr, cfg)
-            }
+            Ok((addr, sock)) => connect::ConnectOps::get(self).connect(sock, addr, cfg),
         }
     }
 
@@ -125,9 +122,7 @@ impl crate::Reactor for Driver {
 
         match result {
             Err(err) => Receiver::new(Err(err)),
-            Ok((addr, sock)) => {
-                super::connect::ConnectOps::get(self).connect(sock, addr, cfg)
-            }
+            Ok((addr, sock)) => connect::ConnectOps::get(self).connect(sock, addr, cfg),
         }
     }
 
