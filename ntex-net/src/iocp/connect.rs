@@ -34,7 +34,6 @@ struct ConnectOpsInner {
     api: DriverApi,
     streams: StreamOps,
     ops: Operations,
-    dummy: Socket,
     connect: WinSock::LPFN_CONNECTEX,
 }
 
@@ -53,7 +52,6 @@ impl ConnectOps {
                 let ops = Rc::new(ConnectOpsInner {
                     api,
                     streams,
-                    dummy,
                     connect,
                     ops: RefCell::new(Slab::new()),
                 });

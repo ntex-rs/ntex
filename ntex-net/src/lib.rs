@@ -1,7 +1,6 @@
 //! Utility for async runtime abstraction
 #![deny(clippy::pedantic)]
 #![allow(
-    dead_code,
     clippy::clone_on_copy,
     clippy::cast_possible_truncation,
     clippy::missing_fields_in_debug,

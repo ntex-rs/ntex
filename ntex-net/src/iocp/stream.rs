@@ -1,11 +1,11 @@
-use std::{cell::Cell, io, os::windows::io::AsRawSocket, rc::Rc};
+use std::{cell::Cell, io, mem, os::windows::io::AsRawSocket, rc::Rc};
 
 use ntex_io::IoContext;
 use ntex_rt::{Arbiter, syscall};
 use ntex_util::{channel::pool, future::Either};
 use slab::Slab;
 use socket2::Socket;
-use windows_sys::Win32::Networking::WinSock::closesocket;
+use windows_sys::Win32::Networking::WinSock;
 
 use super::{Driver, DriverApi, Handler, Overlapped, ops};
 
@@ -22,17 +22,21 @@ pub(crate) struct WeakStreamCtl {
     inner: Rc<StreamOpsInner>,
 }
 
-enum IdType {
-    Stream(u32),
-    Weak(u32),
+bitflags::bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+    struct Flags: u8 {
+        const CLOSED       = 0b0010_0000;
+        const DROPPED_PRI  = 0b0100_0000;
+        const DROPPED_SEC  = 0b1000_0000;
+    }
 }
 
 #[derive(Debug)]
 struct StreamItem {
     io: Socket,
+    flags: Flags,
     rd_op: ops::ReadOperation,
     wr_op: ops::WriteOperation,
-    closed: bool,
     close: Option<pool::Sender<io::Result<()>>>,
 }
 
@@ -92,7 +96,7 @@ impl StreamOps {
             rd_op,
             wr_op,
             close: None,
-            closed: false,
+            flags: Flags::empty(),
         }));
         self.0.storage.set(Some(storage));
 
@@ -121,17 +125,20 @@ impl Handler for StreamOpsHandler {
         } {
             self.inner.with(|st| {
                 if let Some(item) = st.streams.get_mut(id)
-                    && !item.closed
+                    && !item.flags.contains(Flags::CLOSED)
                     && item.rd_op.pause(true)
                     && item.wr_op.pause()
                     && let Some(tx) = item.close.take()
                 {
-                    item.closed = true;
+                    item.flags.insert(Flags::CLOSED);
                     let _ = tx.send(Ok(()));
-                    let io = item.io.as_raw_socket();
+                    let io = item.io.as_raw_socket() as _;
                     #[cfg(feature = "trace")]
                     log::trace!("{}: CloseWait({:?})", item.rd_op.tag(), io);
-                    ntex_rt::spawn_blocking(move || syscall!(SOCKET, closesocket(io as _)));
+                    ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
+                        let _ = syscall!(SOCKET, WinSock::shutdown(io, 2));
+                        let _ = syscall!(SOCKET, WinSock::closesocket(io));
+                    }));
                 }
             });
         }
@@ -156,12 +163,15 @@ impl StreamCtl {
     pub(crate) async fn shutdown(&self) -> io::Result<()> {
         let result = self.inner.with(|st| {
             if let Some(item) = st.streams.get_mut(self.id) {
-                if item.closed {
+                if item.flags.contains(Flags::CLOSED) {
                     None
                 } else if item.rd_op.pause(true) && item.wr_op.pause() {
                     // no outstanding ops
-                    item.closed = true;
-                    Some(Either::Left((item.rd_op.tag(), item.io.as_raw_socket())))
+                    item.flags.insert(Flags::CLOSED);
+                    Some(Either::Left((
+                        item.rd_op.tag(),
+                        item.io.as_raw_socket() as _,
+                    )))
                 } else {
                     let (tx, rx) = self.inner.pool.channel();
                     item.close = Some(tx);
@@ -177,7 +187,8 @@ impl StreamCtl {
                 #[cfg(feature = "trace")]
                 log::trace!("{_tag}: Close({io:?})");
                 ntex_rt::spawn_blocking(move || {
-                    syscall!(SOCKET, closesocket(io as _)).map(|_| ())
+                    syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
+                    syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
                 })
                 .await
                 .map_err(io::Error::other)
@@ -187,10 +198,7 @@ impl StreamCtl {
                 .await
                 .map_err(|_| io::Error::other("Unexpected"))
                 .and_then(|res| res),
-            None => {
-                println!("shutdown");
-                Ok(())
-            }
+            None => Ok(()),
         }
     }
 
@@ -219,8 +227,67 @@ impl StreamCtl {
     }
 }
 
+impl StreamOpsStorage {
+    fn drop_stream(&mut self, id: usize) {
+        // Dropping while `StreamOps` handling event
+        let item = &mut self.streams[id];
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: DropStream ({:?}) f:{:?}",
+            item.rd_op.tag(),
+            item.io.as_raw_socket(),
+            item.flags,
+        );
+
+        if item.flags.contains(Flags::DROPPED_SEC) {
+            let item = self.streams.remove(id);
+            if !item.flags.contains(Flags::CLOSED) {
+                let io = item.io.as_raw_socket() as _;
+                ntex_rt::spawn_blocking(move || {
+                    syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
+                    syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
+                });
+            }
+            mem::forget(item.io);
+        } else {
+            item.flags.insert(Flags::DROPPED_PRI);
+        }
+    }
+
+    fn drop_weak_stream(&mut self, id: usize) {
+        // Dropping while `StreamOps` handling event
+        let item = &mut self.streams[id];
+        #[cfg(feature = "trace")]
+        log::trace!(
+            "{}: DropStreamSec ({:?}) f:{:?}",
+            item.rd_op.tag(),
+            item.io.as_raw_socket(),
+            item.flags,
+        );
+
+        if item.flags.contains(Flags::DROPPED_PRI) {
+            // io is closed already, remove from storage
+            let item = self.streams.remove(id);
+            if !item.flags.contains(Flags::CLOSED) {
+                let io = item.io.as_raw_socket() as _;
+                ntex_rt::spawn_blocking(move || {
+                    syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
+                    syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
+                });
+            }
+            mem::forget(item.io);
+        } else {
+            item.flags.insert(Flags::DROPPED_SEC);
+        }
+    }
+}
+
 impl Drop for StreamCtl {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        let mut storage = self.inner.storage.take().unwrap();
+        storage.drop_stream(self.id);
+        self.inner.storage.set(Some(storage));
+    }
 }
 
 impl WeakStreamCtl {
@@ -233,5 +300,9 @@ impl WeakStreamCtl {
 }
 
 impl Drop for WeakStreamCtl {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        let mut storage = self.inner.storage.take().unwrap();
+        storage.drop_weak_stream(self.id);
+        self.inner.storage.set(Some(storage));
+    }
 }

@@ -1,4 +1,5 @@
-use std::{cell::UnsafeCell, collections::VecDeque, marker::PhantomData, net, rc::Rc};
+#[cfg(unix)]
+use std::{cell::UnsafeCell, collections::VecDeque, marker::PhantomData, rc::Rc};
 
 use socket2::Socket;
 
@@ -32,17 +33,19 @@ pub(crate) fn prep_socket(sock: Socket) -> std::io::Result<Socket> {
 
 pub(crate) fn close_socket(sock: Socket) {
     ntex_rt::spawn_blocking(move || {
-        let _ = sock.shutdown(net::Shutdown::Both);
+        let _ = sock.shutdown(std::net::Shutdown::Both);
         drop(sock);
     });
 }
 
+#[cfg(unix)]
 #[derive(Default)]
 pub(crate) struct Queue<T> {
     inner: UnsafeCell<VecDeque<T>>,
     _t: PhantomData<Rc<()>>,
 }
 
+#[cfg(unix)]
 impl<T> Queue<T> {
     pub(crate) fn new() -> Self {
         Self {
