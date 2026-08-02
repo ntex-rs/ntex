@@ -132,12 +132,15 @@ impl Handler for StreamOpsHandler {
                 {
                     item.flags.insert(Flags::CLOSED);
                     let _ = tx.send(Ok(()));
+                    let _tag = item.rd_op.tag();
                     let io = item.io.as_raw_socket() as _;
                     #[cfg(feature = "trace")]
-                    log::trace!("{}: CloseWait({:?})", item.rd_op.tag(), io);
+                    log::trace!("{_tag}: CloseWait({:?})", io);
                     ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
                         let _ = syscall!(SOCKET, WinSock::shutdown(io, 2));
                         let _ = syscall!(SOCKET, WinSock::closesocket(io));
+                        #[cfg(feature = "trace")]
+                        log::trace!("{_tag}: WaitClosed({:?})", io);
                     }));
                 }
             });

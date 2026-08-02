@@ -59,6 +59,14 @@ impl ReadOperation {
 
     pub(crate) fn pause(&mut self, closing: bool) -> bool {
         if self.flags.contains(Flags::WAITING) {
+            #[cfg(feature = "trace")]
+            log::trace!(
+                "{}: RcvPause({}) closing:{closing} flags:{:?}",
+                self.ctx.tag(),
+                self.io,
+                self.flags
+            );
+
             if let Err(err) = syscall!(
                 BOOL,
                 CancelIoEx(self.io as _, self.overlapped.as_overlapped())
@@ -113,7 +121,7 @@ impl ReadOperation {
             // If no error occurs and the send operation has completed immediately,
             // WSARecv returns zero.
             if result == 0 && size == 0 {
-                return
+                return;
             }
 
             match winsock_result(result) {
@@ -144,17 +152,30 @@ impl ReadOperation {
     ) -> Option<usize> {
         let rd_optr: *mut ReadOperation = optr.cast();
         let rd = unsafe { &mut *rd_optr };
-        rd.flags.remove(Flags::WAITING);
 
         #[cfg(feature = "trace")]
-        log::trace!("{}: RcvDone({}) {res:?}", rd.ctx.tag(), rd.io);
+        log::trace!(
+            "{}: RcvDone({}) {res:?} {:?}",
+            rd.ctx.tag(),
+            rd.io,
+            rd.flags
+        );
+
+        rd.flags.remove(Flags::WAITING);
 
         if let Some(mut buf) = rd.buf.take() {
             let st = match res {
                 Ok(size) => {
-                    // SAFETY: windows tells us how many bytes it read
-                    unsafe { buf.advance_mut(size) };
+                    if size == 0 {
+                        rd.ctx.stop(None);
+                    } else {
+                        // SAFETY: windows tells us how many bytes it read
+                        unsafe { buf.advance_mut(size) };
+                    }
                     rd.ctx.update_read_status(buf, Ok(size))
+                }
+                Err(err) if err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as _) => {
+                    rd.ctx.update_read_status(buf, Ok(0))
                 }
                 Err(err) => rd.ctx.update_read_status(buf, Err(err)),
             };
@@ -260,7 +281,7 @@ impl WriteOperation {
                     // If no error occurs and the send operation has completed immediately,
                     // WSASend returns zero.
                     if result == 0 && sent == 0 {
-                        return Ok(false)
+                        return Ok(false);
                     }
 
                     match winsock_result(result) {
