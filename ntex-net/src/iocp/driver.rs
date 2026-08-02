@@ -8,6 +8,7 @@ use windows_sys::Win32::{
         ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_MORE_DATA,
         ERROR_NETNAME_DELETED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED,
         ERROR_PIPE_NOT_CONNECTED, INVALID_HANDLE_VALUE, NTSTATUS, RtlNtStatusToDosError,
+        WAIT_TIMEOUT,
     },
     Storage::FileSystem::SetFileCompletionNotificationModes,
     System::{
@@ -153,7 +154,7 @@ impl ntex_rt::Driver for Driver {
                 PollResult::Ready => break Ok(()),
             };
 
-            syscall!(
+            let result = syscall!(
                 BOOL,
                 GetQueuedCompletionStatusEx(
                     self.reactor.0.port.as_raw_handle().cast(),
@@ -163,7 +164,12 @@ impl ntex_rt::Driver for Driver {
                     timeout,
                     0
                 )
-            )?;
+            );
+            if let Err(err) = result {
+                if err.raw_os_error() != Some(WAIT_TIMEOUT as _) {
+                    return Err(err);
+                }
+            }
 
             self.poll_completions(&events[..recv_count as usize]);
         };
