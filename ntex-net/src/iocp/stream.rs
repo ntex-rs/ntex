@@ -192,8 +192,8 @@ impl StreamCtl {
                 }))
                 .await
                 .map_err(io::Error::other)
-                    .and_then(|res| res.map_err(io::Error::other))
-                    .and_then(|res| res)
+                .and_then(|res| res.map_err(io::Error::other))
+                .and_then(|res| res)
             }
             Some(Either::Right(rx)) => rx
                 .await

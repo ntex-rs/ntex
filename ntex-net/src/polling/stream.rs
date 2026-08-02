@@ -369,6 +369,7 @@ impl StreamCtl {
             .await
             .map_err(io::Error::other)
             .and_then(|res| res.map_err(io::Error::other))
+            .and_then(|res| res)
     }
 
     /// Modify poll interest for the stream
