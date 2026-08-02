@@ -110,6 +110,12 @@ impl ReadOperation {
                 )
             };
 
+            // If no error occurs and the send operation has completed immediately,
+            // WSARecv returns zero.
+            if result == 0 && size == 0 {
+                return
+            }
+
             match winsock_result(result) {
                 Poll::Ready(Ok(())) => {
                     // SAFETY: windows tells us how many bytes it read
@@ -251,6 +257,11 @@ impl WriteOperation {
                             None,
                         )
                     };
+                    // If no error occurs and the send operation has completed immediately,
+                    // WSASend returns zero.
+                    if result == 0 && sent == 0 {
+                        return Ok(false)
+                    }
 
                     match winsock_result(result) {
                         Poll::Ready(Ok(())) => {
