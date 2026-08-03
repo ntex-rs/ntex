@@ -1,6 +1,6 @@
 # Changes
 
-## [3.14.0] - 2026-08-12
+## [3.14.0] - 2026-08-03
 
 * Add windows IOCP driver (neon-iocp)
 

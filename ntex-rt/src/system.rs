@@ -303,9 +303,10 @@ impl System {
         self.0.config.testing()
     }
 
-    /// Spawns a blocking task in a new thread, and wait for it
+    /// Spawns a blocking task on a new thread and waits for it to complete.
     ///
-    /// The task will not be cancelled even if the future is dropped.
+    /// If the returned future is dropped, the blocking task is cancelled.
+    /// Call `detach` to allow the task to continue running in the background.
     pub fn spawn_blocking<F, R>(&self, f: F) -> BlockingResult<R>
     where
         F: FnOnce() -> R + Send + 'static,

@@ -5,6 +5,22 @@ use std::{any::Any, fmt, future::Future, panic, pin::Pin, thread, time::Duration
 
 use crossbeam_channel::{Receiver, Select, Sender, TrySendError, bounded, unbounded};
 
+/// Spawns a blocking task on a new thread and waits for it to complete.
+///
+/// If the returned future is dropped, the blocking task is cancelled.
+/// Call `detach` to allow the task to continue running in the background.
+pub fn spawn_blocking<F, R>(f: F) -> BlockingResult<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    if let Some(sys) = crate::System::try_current() {
+        sys.spawn_blocking(f)
+    } else {
+        ThreadPool::execute_inplace(f)
+    }
+}
+
 /// An error that may be emitted when all worker threads are busy.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BlockingError;
@@ -20,6 +36,16 @@ impl fmt::Display for BlockingError {
 #[derive(Debug)]
 pub struct BlockingResult<T> {
     rx: oneshot::AsyncReceiver<Result<T, Box<dyn Any + Send>>>,
+}
+
+impl<T: 'static> BlockingResult<T> {
+    /// Detaches the task to let it keep running in the background
+    pub fn detach(self) {
+        crate::spawn(async move {
+            let _ = self.await;
+        })
+        .detach();
+    }
 }
 
 type BoxedDispatchable = Box<dyn Dispatchable + Send>;

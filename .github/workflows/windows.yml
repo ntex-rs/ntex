@@ -77,7 +77,7 @@ jobs:
       - name: Run tests (neon-iocp)
         timeout-minutes: 10
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/neon-iocp,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/neon-iocp,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws"
 
       - name: Run tests (tokio)
         timeout-minutes: 10
