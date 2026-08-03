@@ -161,7 +161,9 @@ impl Arbiter {
                 // unregister arbiter
                 sys2.unregister_arbiter(Id(id));
 
-                remove_all_items();
+                unsafe {
+                    remove_all_items();
+                }
 
                 log::info!("Arbiter {name3:?} has been stopped");
             })
@@ -329,20 +331,29 @@ where
     F: FnOnce(&T) -> R,
 {
     STORAGE.with(move |cell| {
-        let mut st = cell.borrow_mut();
-        if let Some(boxed) = st.get(&TypeId::of::<T>()) {
-            f(boxed.downcast_ref().unwrap())
-        } else {
-            let item = T::default();
-            let result = f(&item);
-            st.insert(TypeId::of::<T>(), Box::new(item));
-            result
-        }
+        // SAFETY: value of T is stored in heap, manipulation
+        // with STORAGE are not affected location of T
+        let val: &T = unsafe {
+            let mut st = cell.borrow_mut();
+            if let Some(boxed) = st.get(&TypeId::of::<T>()) {
+                std::mem::transmute::<&T, &T>(boxed.downcast_ref::<T>().unwrap())
+            } else {
+                st.insert(TypeId::of::<T>(), Box::new(T::default()));
+                let boxed = st.get(&TypeId::of::<T>()).unwrap();
+                std::mem::transmute::<&T, &T>(boxed.downcast_ref::<T>().unwrap())
+            }
+        };
+        f(val)
     })
 }
 
+#[doc(hidden)]
 /// Remove all items from storage.
-pub fn remove_all_items() {
+///
+/// # Safety
+///
+/// Must ensure that all outstading calls to `with_item` are completed.
+pub unsafe fn remove_all_items() {
     STORAGE.with(move |cell| {
         loop {
             let mut items = cell.borrow_mut();

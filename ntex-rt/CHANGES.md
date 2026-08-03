@@ -4,6 +4,8 @@
 
 * Allow to detach spawn blocking future
 
+* Do not panic with BorrowMut in Arbiter::with_item()
+
 ## [3.15.7] - 2026-07-21
 
 * Do not log tight loop stacktrace if signals handler is not installed
