@@ -156,12 +156,13 @@ impl Handler for StreamOpsHandler {
                     let io = item.io.as_raw_socket() as _;
                     #[cfg(feature = "trace")]
                     log::trace!("{_tag}: CloseWait({:?})", io);
-                    ntex_rt::spawn(ntex_rt::spawn_blocking(move || {
+                    ntex_rt::spawn_blocking(move || {
                         let _ = syscall!(SOCKET, WinSock::shutdown(io, 2));
                         let _ = syscall!(SOCKET, WinSock::closesocket(io));
                         #[cfg(feature = "trace")]
                         log::trace!("{_tag}: WaitClosed({:?})", io);
-                    }));
+                    })
+                    .detach();
                 }
             });
         }
@@ -290,7 +291,8 @@ impl StreamOpsStorage {
                 ntex_rt::spawn_blocking(move || {
                     syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
                     syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
-                });
+                })
+                .detach();
             }
             mem::forget(item.io);
         } else {
@@ -317,7 +319,8 @@ impl StreamOpsStorage {
                 ntex_rt::spawn_blocking(move || {
                     syscall!(SOCKET, WinSock::shutdown(io, 2)).map(|_| ())?;
                     syscall!(SOCKET, WinSock::closesocket(io)).map(|_| ())
-                });
+                })
+                .detach();
             }
             mem::forget(item.io);
         } else {

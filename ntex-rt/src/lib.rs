@@ -1,9 +1,9 @@
 //! A runtime implementation that runs everything on the current thread.
 #![deny(clippy::pedantic)]
 #![allow(
+    clippy::missing_errors_doc,
     clippy::missing_fields_in_debug,
-    clippy::must_use_candidate,
-    clippy::missing_errors_doc
+    clippy::must_use_candidate
 )]
 
 mod arbiter;
@@ -26,25 +26,10 @@ pub mod rt_tokio;
 pub use self::arbiter::{Arbiter, get_item, remove_all_items, set_item, with_item};
 pub use self::builder::{Builder, SystemRunner};
 pub use self::driver::{BlockFuture, Driver, DriverType, Notify, PollResult, Runner};
-pub use self::pool::{BlockingError, BlockingResult, ThreadPool};
+pub use self::pool::{BlockingError, BlockingResult, ThreadPool, spawn_blocking};
 pub use self::rt::{Runtime, RuntimeBuilder};
 pub use self::system::{Id, PingRecord, System};
 pub use self::task::{task_callbacks, task_opt_callbacks};
-
-/// Spawns a blocking task in a new thread, and wait for it.
-///
-/// The task will not be cancelled even if the future is dropped.
-pub fn spawn_blocking<F, R>(f: F) -> BlockingResult<R>
-where
-    F: FnOnce() -> R + Send + 'static,
-    R: Send + 'static,
-{
-    if let Some(sys) = System::try_current() {
-        sys.spawn_blocking(f)
-    } else {
-        ThreadPool::execute_inplace(f)
-    }
-}
 
 #[cfg(feature = "tokio")]
 pub use self::rt_tokio::*;
