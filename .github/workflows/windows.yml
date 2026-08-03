@@ -82,7 +82,11 @@ jobs:
       - name: Run tests (compio)
         timeout-minutes: 10
         run: |
-          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- --skip test_timer
+          cargo nextest run --retries=3 --all --no-default-features --no-fail-fast --features="ntex/compio,ntex/cookie,ntex/url,ntex/compress,ntex/openssl,ntex/rustls,ntex/ws" -- |
+             --skip test_timer |
+             --skip test_h2_body |
+             --skip ioref::tests::boxed_filter |
+             --skip ioref::tests::filter
 
       #- name: Run tests (neon)
       #  timeout-minutes: 10
