@@ -107,7 +107,7 @@ scoped_tls::scoped_thread_local!(static CURRENT_DRIVER: Box<dyn Reactor>);
 pub struct DefaultRuntime;
 
 impl Runner for DefaultRuntime {
-    #[allow(unused_variables)]
+    #[allow(unused_variables, clippy::too_many_lines)]
     fn block_on(&self, fut: BlockFuture) {
         #[cfg(feature = "tokio")]
         {
@@ -115,7 +115,9 @@ impl Runner for DefaultRuntime {
 
             CURRENT_DRIVER.set(&driver, || {
                 crate::tokio::block_on(fut);
-                ntex_rt::remove_all_items();
+                unsafe {
+                    ntex_rt::remove_all_items();
+                }
             });
         }
 
@@ -125,7 +127,9 @@ impl Runner for DefaultRuntime {
 
             CURRENT_DRIVER.set(&driver, || {
                 crate::compio::block_on(fut);
-                ntex_rt::remove_all_items();
+                unsafe {
+                    ntex_rt::remove_all_items();
+                }
             });
         }
 
@@ -139,11 +143,13 @@ impl Runner for DefaultRuntime {
                     let rt = ntex_rt::Runtime::new(driver.handle());
                     rt.block_on(fut, &*driver);
                 }));
-                if let Err(err) = res {
-                    ntex_rt::remove_all_items();
-                    panic::resume_unwind(err);
-                } else {
-                    ntex_rt::remove_all_items();
+                unsafe {
+                    if let Err(err) = res {
+                        ntex_rt::remove_all_items();
+                        panic::resume_unwind(err);
+                    } else {
+                        ntex_rt::remove_all_items();
+                    }
                 }
             });
         }
@@ -161,11 +167,13 @@ impl Runner for DefaultRuntime {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
                     }));
-                    if let Err(err) = res {
-                        ntex_rt::remove_all_items();
-                        panic::resume_unwind(err);
-                    } else {
-                        ntex_rt::remove_all_items();
+                    unsafe {
+                        if let Err(err) = res {
+                            ntex_rt::remove_all_items();
+                            panic::resume_unwind(err);
+                        } else {
+                            ntex_rt::remove_all_items();
+                        }
                     }
                 });
             }
@@ -181,11 +189,13 @@ impl Runner for DefaultRuntime {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
                     }));
-                    if let Err(err) = res {
-                        ntex_rt::remove_all_items();
-                        panic::resume_unwind(err);
-                    } else {
-                        ntex_rt::remove_all_items();
+                    unsafe {
+                        if let Err(err) = res {
+                            ntex_rt::remove_all_items();
+                            panic::resume_unwind(err);
+                        } else {
+                            ntex_rt::remove_all_items();
+                        }
                     }
                 });
             }
@@ -212,11 +222,13 @@ impl Runner for DefaultRuntime {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
                     }));
-                    if let Err(err) = res {
-                        ntex_rt::remove_all_items();
-                        panic::resume_unwind(err);
-                    } else {
-                        ntex_rt::remove_all_items();
+                    unsafe {
+                        if let Err(err) = res {
+                            ntex_rt::remove_all_items();
+                            panic::resume_unwind(err);
+                        } else {
+                            ntex_rt::remove_all_items();
+                        }
                     }
                 });
             }
