@@ -142,7 +142,7 @@ impl RequestHead {
     }
 
     /// Read the origin of each message header name.
-    pub fn header_name_origins(&self) -> &[(HeaderName, ByteString)] {
+    pub fn header_names(&self) -> &[(HeaderName, ByteString)] {
         &self.names
     }
 
@@ -288,7 +288,7 @@ impl ResponseHead {
     }
 
     /// Read the origin of each message header name.
-    pub fn header_name_origins(&self) -> &[(HeaderName, ByteString)] {
+    pub fn header_names(&self) -> &[(HeaderName, ByteString)] {
         &self.names
     }
 
