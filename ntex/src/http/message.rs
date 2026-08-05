@@ -2,9 +2,10 @@ use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 
 use bitflags::bitflags;
 
-use crate::http::{Method, StatusCode, Uri, Version, h1::Codec, header::HeaderMap};
+use crate::http::header::{HeaderMap, HeaderName};
+use crate::http::{Method, StatusCode, Uri, Version, h1::Codec};
 use crate::io::{IoBoxed, IoRef, types};
-use crate::util::Extensions;
+use crate::util::{ByteString, Extensions};
 
 /// Represents various types of connection
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -80,6 +81,7 @@ pub struct RequestHead {
     pub extensions: RefCell<Extensions>,
     pub(crate) io: CurrentIo,
     pub(crate) flags: Flags,
+    pub(crate) names: Vec<(HeaderName, ByteString)>,
 }
 
 impl Default for RequestHead {
@@ -92,6 +94,7 @@ impl Default for RequestHead {
             version: Version::HTTP_11,
             headers: HeaderMap::with_capacity(16),
             flags: Flags::empty(),
+            names: Vec::default(),
             extensions: RefCell::new(Extensions::new()),
         }
     }
@@ -103,6 +106,7 @@ impl Head for RequestHead {
         self.flags = Flags::empty();
         self.version = Version::HTTP_11;
         self.headers.clear();
+        self.names.clear();
         self.extensions.get_mut().clear();
     }
 
@@ -135,6 +139,11 @@ impl RequestHead {
     /// Mutable reference to the message headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.headers
+    }
+
+    /// Read the origin of each message header name.
+    pub fn header_names(&self) -> &[(HeaderName, ByteString)] {
+        &self.names
     }
 
     #[inline]
@@ -234,6 +243,7 @@ pub struct ResponseHead {
     pub reason: Option<&'static str>,
     pub(crate) io: CurrentIo,
     pub(crate) extensions: RefCell<Extensions>,
+    pub(crate) names: Vec<(HeaderName, ByteString)>,
     flags: Flags,
 }
 
@@ -248,6 +258,7 @@ impl ResponseHead {
             reason: None,
             flags: Flags::empty(),
             io: CurrentIo::None,
+            names: Vec::default(),
             extensions: RefCell::new(Extensions::new()),
         }
     }
@@ -274,6 +285,11 @@ impl ResponseHead {
     /// Mutable reference to the message headers.
     pub fn headers_mut(&mut self) -> &mut HeaderMap {
         &mut self.headers
+    }
+
+    /// Read the origin of each message header name.
+    pub fn header_names(&self) -> &[(HeaderName, ByteString)] {
+        &self.names
     }
 
     #[inline]
@@ -367,6 +383,7 @@ impl Head for ResponseHead {
         self.headers.clear();
         self.io = CurrentIo::None;
         self.flags = Flags::empty();
+        self.names.clear();
         self.extensions.get_mut().clear();
     }
 

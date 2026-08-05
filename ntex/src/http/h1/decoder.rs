@@ -7,7 +7,7 @@ use ntex_httparse::{self as httparse, HeaderParsed, Status};
 use crate::http::config::HttpServiceConfig;
 use crate::http::message::{ConnectionType, ResponseHead};
 use crate::http::{error::DecodeError, header::HeaderMap, request::Request};
-use crate::util::{Bytes, BytesMut};
+use crate::util::{ByteString, Bytes, BytesMut};
 use crate::{codec::Decoder, service::cfg::Cfg};
 
 /// Incoming message decoder
@@ -102,7 +102,21 @@ impl<T: MessageType> MessageDecoder<T> {
                     )
                     .unwrap();
 
-                    // Unsafe: httparse checks header value for validity
+                    // SAFETY: ntex-httparse checks header name validity
+                    if inner.cfg.header_name_origin {
+                        let origin = unsafe {
+                            ByteString::from_bytes_unchecked(
+                                buf.slice(inner.hdr.name.start..inner.hdr.name.end),
+                            )
+                        };
+                        inner
+                            .val
+                            .as_mut()
+                            .unwrap()
+                            .set_header_name(name.clone(), origin);
+                    }
+
+                    // SAFETY: ntex-httparse checks header value for validity
                     let value = unsafe {
                         HeaderValue::from_shared_unchecked(
                             buf.slice(inner.hdr.value.start..inner.hdr.value.end),
@@ -267,6 +281,8 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
         length: PayloadLength,
     ) -> Result<PayloadType, DecodeError>;
 
+    fn set_header_name(&mut self, name: HeaderName, origin: ByteString);
+
     fn set_header(
         &mut self,
         st: &mut State,
@@ -394,6 +410,10 @@ impl MessageType for Request {
         }
     }
 
+    fn set_header_name(&mut self, name: HeaderName, origin: ByteString) {
+        self.head_mut().names.push((name, origin));
+    }
+
     fn set_payload_length(
         &mut self,
         st: &mut State,
@@ -473,6 +493,10 @@ impl MessageType for ResponseHead {
             }
             Status::Partial => Poll::Pending,
         }
+    }
+
+    fn set_header_name(&mut self, name: HeaderName, origin: ByteString) {
+        self.names.push((name, origin));
     }
 
     fn set_payload_length(
@@ -814,7 +838,7 @@ impl ChunkedState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::{HttpMessage, header::SET_COOKIE};
+    use crate::http::{HttpMessage, header, header::SET_COOKIE};
     use crate::service::cfg::SharedCfg;
 
     impl PayloadType {
@@ -912,6 +936,59 @@ mod tests {
         assert_eq!(req.version(), Version::HTTP_11);
         assert_eq!(*req.method(), Method::PUT);
         assert_eq!(req.path(), "/test");
+    }
+
+    #[test]
+    fn parse_header_name_origins() {
+        // request
+        let mut buf = BytesMut::from(
+            "GET /test2 HTTP/1.0\r\n\
+            Test: 123\r\n\
+            Content-Length: 0\r\n\
+            \r\n",
+        );
+
+        let reader = MessageDecoder::<Request>::new(Cfg::default());
+        let (req, _) = reader.decode(&mut buf.clone()).unwrap().unwrap();
+        assert_eq!(req.head().header_names().len(), 0);
+
+        let cfg: SharedCfg = SharedCfg::new("dbg")
+            .add(HttpServiceConfig::default().set_header_name_origin())
+            .into();
+        let reader = MessageDecoder::<Request>::new(cfg.get());
+        let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(
+            req.head().header_names()[0].0,
+            HeaderName::try_from("test").unwrap()
+        );
+        assert_eq!(req.head().header_names()[0].1, "Test");
+        assert_eq!(req.head().header_names()[1].0, header::CONTENT_LENGTH);
+        assert_eq!(req.head().header_names()[1].1, "Content-Length");
+
+        // response
+        let mut buf = BytesMut::from(
+            "HTTP/1.0 200 Ok\r\n\
+            Test: 123\r\n\
+            Content-Length: 0\r\n\
+            \r\n",
+        );
+
+        let reader = MessageDecoder::<ResponseHead>::new(Cfg::default());
+        let (res, _) = reader.decode(&mut buf.clone()).unwrap().unwrap();
+        assert_eq!(res.header_names().len(), 0);
+
+        let cfg: SharedCfg = SharedCfg::new("dbg")
+            .add(HttpServiceConfig::default().set_header_name_origin())
+            .into();
+        let reader = MessageDecoder::<ResponseHead>::new(cfg.get());
+        let (res, _) = reader.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(
+            res.header_names()[0].0,
+            HeaderName::try_from("test").unwrap()
+        );
+        assert_eq!(res.header_names()[0].1, "Test");
+        assert_eq!(res.header_names()[1].0, header::CONTENT_LENGTH);
+        assert_eq!(res.header_names()[1].1, "Content-Length");
     }
 
     #[test]

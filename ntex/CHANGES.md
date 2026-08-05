@@ -1,5 +1,9 @@
 # Changes
 
+## [3.12.1] - 2026-08-05
+
+* Allow storing the original header name strings.
+
 ## [3.12.0] - 2026-07-30
 
 * Add support for *QUERY* http method #943
