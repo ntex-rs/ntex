@@ -42,6 +42,7 @@ impl From<Option<usize>> for KeepAlive {
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
+    pub(super) header_name_origin: bool,
     pub(super) max_headers: usize,
     pub(super) max_buf_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
@@ -93,6 +94,7 @@ impl HttpServiceConfig {
             }),
             max_headers: 96,
             max_buf_size: 64 * 1024,
+            header_name_origin: false,
             payload_read_rate: None,
             config: CfgContext::default(),
         }
@@ -173,6 +175,15 @@ impl HttpServiceConfig {
             rate.timeout = timeout;
             self.headers_read_rate = Some(rate);
         }
+        self
+    }
+
+    #[must_use]
+    /// Enable storing the original header name strings.
+    ///
+    /// By default, original header names are not stored.
+    pub fn set_header_name_origin(mut self) -> Self {
+        self.header_name_origin = true;
         self
     }
 
