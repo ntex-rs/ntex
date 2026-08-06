@@ -292,7 +292,7 @@ impl WriteOperation {
                                     let len = cmp::min(p.len(), sent);
                                     p.advance_to(len);
                                     if p.is_empty() {
-                                        p.take();
+                                        page.take();
                                     }
                                     sent -= len;
                                     if sent != 0 {
@@ -321,7 +321,7 @@ impl WriteOperation {
                             Err(err)
                         }
                         Poll::Pending => {
-                            self.pages_num = num;
+                            self.pages_num = num as u8;
                             self.flags.insert(Flags::WAITING);
                             Ok(false)
                         }
@@ -347,7 +347,7 @@ impl WriteOperation {
         #[cfg(feature = "trace")]
         log::trace!("{}: WrtDone({}) {res:?}", wr.ctx.tag(), wr.io);
 
-        let num = wr.page_num as usize;
+        let num = wr.pages_num as usize;
         wr.flags.remove(Flags::WAITING);
 
         let st = match res {
@@ -377,11 +377,11 @@ impl WriteOperation {
 
         // return unwritten data back to buffer
         wr.ctx.with_write_buf(|wrt| {
-            for p in wr.pages[...num].iter_mut().rev() {
+            for p in wr.pages[..num].iter_mut().rev() {
                 if let Some(page) = p.take() {
                     wrt.prepend(page);
                 } else {
-                    break
+                    break;
                 }
             }
         });
