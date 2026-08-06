@@ -216,7 +216,7 @@ pub fn hash_key(key: &[u8]) -> Result<String, HandshakeError> {
     if key.len() > 32 {
         return Err(HandshakeError::BadWebsocketKey);
     }
-    let mut input = [0; 72];
+    let mut input = [0; 192];
     let klen = key.len();
     let len = klen + 36;
     input[..klen].copy_from_slice(key);
