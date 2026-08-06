@@ -465,13 +465,11 @@ async fn ping_arbiters(sys: System) {
                         pings.borrow_mut().insert(id);
 
                         PINGS.with(|pings| {
-                            pings
-                                .borrow_mut()
-                                .get_mut(&id)
-                                .unwrap()
-                                .front_mut()
-                                .unwrap()
-                                .rtt = Some(start.elapsed());
+                            if let Some(recs) = pings.borrow_mut().get_mut(&id)
+                                && let Some(rec) = recs.front_mut()
+                            {
+                                rec.rtt = Some(start.elapsed());
+                            }
                         });
                     }
                 });
@@ -489,7 +487,7 @@ async fn ping_arbiters(sys: System) {
             let mut no_pongs = Vec::new();
             {
                 for arb in &sys.0.arbiters.lock().list {
-                    let pong = pings.borrow_mut().remove(&arb.id());
+                    let pong = pings.borrow_mut().get(&arb.id());
                     if !pong {
                         no_pongs.push(arb.clone());
                     }
