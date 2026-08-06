@@ -2,6 +2,8 @@ use std::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
+use super::error::HandshakeError;
+
 /// Operation codes as part of rfc6455.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpCode {
@@ -200,22 +202,110 @@ impl<T: Into<String>> From<(CloseCode, T)> for CloseReason {
     }
 }
 
-static WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+// SHA-1 hashing algorithm initial hash values.
+const H0: u32 = 0x6745_2301;
+const H1: u32 = 0xEFCD_AB89;
+const H2: u32 = 0x98BA_DCFE;
+const H3: u32 = 0x1032_5476;
+const H4: u32 = 0xC3D2_E1F0;
+const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-// TODO: hash is always same size, we don't need String
-pub fn hash_key(key: &[u8]) -> String {
-    use sha1::Digest;
-    let mut hasher = sha1::Sha1::new();
+#[allow(clippy::many_single_char_names)]
+/// Computes the SHA-1 hash of the input key
+pub fn hash_key(key: &[u8]) -> Result<String, HandshakeError> {
+    if key.len() > 32 {
+        return Err(HandshakeError::BadWebsocketKey);
+    }
+    let mut input = [0; 192];
+    let klen = key.len();
+    let len = klen + 36;
+    input[..klen].copy_from_slice(key);
+    input[klen..len].copy_from_slice(WS_GUID.as_bytes());
 
-    hasher.update(key);
-    hasher.update(WS_GUID.as_bytes());
+    // Initialize variables to the SHA-1's initial hash values.
+    let (mut h0, mut h1, mut h2, mut h3, mut h4) = (H0, H1, H2, H3, H4);
+    let (mut a, mut b, mut c, mut d, mut e);
 
-    base64.encode(&hasher.finalize()[..])
+    // Pad the key
+    let msg = pad_message(len, &mut input);
+
+    // Process each 512-bit chunk of the padded message.
+    for chunk in msg.chunks(64) {
+        // Get the message schedule
+        let mut schedule = [0u32; 80];
+        for (i, block) in chunk.chunks(4).enumerate() {
+            schedule[i] = u32::from_be_bytes(block.try_into().unwrap());
+        }
+        for i in 16..80 {
+            schedule[i] =
+                schedule[i - 3] ^ schedule[i - 8] ^ schedule[i - 14] ^ schedule[i - 16];
+            schedule[i] = schedule[i].rotate_left(1);
+        }
+
+        a = h0;
+        b = h1;
+        c = h2;
+        d = h3;
+        e = h4;
+
+        // Main loop of the SHA-1 algorithm
+        for (i, sch) in schedule.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*sch);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+
+        // Add the compressed chunk to the current hash value.
+        h0 = h0.wrapping_add(a);
+        h1 = h1.wrapping_add(b);
+        h2 = h2.wrapping_add(c);
+        h3 = h3.wrapping_add(d);
+        h4 = h4.wrapping_add(e);
+    }
+
+    let mut hash = [0u8; 20];
+    hash[0..4].copy_from_slice(&h0.to_be_bytes());
+    hash[4..8].copy_from_slice(&h1.to_be_bytes());
+    hash[8..12].copy_from_slice(&h2.to_be_bytes());
+    hash[12..16].copy_from_slice(&h3.to_be_bytes());
+    hash[16..20].copy_from_slice(&h4.to_be_bytes());
+
+    Ok(base64.encode(hash))
+}
+
+fn pad_message(len: usize, input: &mut [u8]) -> &[u8] {
+    let mut cur = len + 1;
+    let bit_length = len as u64 * 8;
+
+    input[len] = 0x80;
+    while (cur * 8) % 512 != 448 {
+        input[cur] = 0;
+        cur += 1;
+    }
+    let orig_len = &bit_length.to_be_bytes();
+    let total = cur + orig_len.len();
+    input[cur..total].copy_from_slice(orig_len);
+    &input[..total]
 }
 
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, dead_code)]
-mod test {
+mod tests {
     use super::*;
 
     macro_rules! opcode_into {
@@ -278,7 +368,7 @@ mod test {
 
     #[test]
     fn test_hash_key() {
-        let hash = hash_key(b"hello actix-web");
+        let hash = hash_key(b"hello actix-web").unwrap();
         assert_eq!(&hash, "cR1dlyUUJKp0s/Bel25u5TgvC3E=");
     }
 

@@ -74,13 +74,13 @@ pub fn verify_handshake(req: &RequestHead) -> Result<(), HandshakeError> {
 pub fn handshake_response(req: &RequestHead) -> ResponseBuilder {
     let key = {
         let key = req.headers().get(header::SEC_WEBSOCKET_KEY).unwrap();
-        crate::ws::hash_key(key.as_ref())
+        crate::ws::hash_key(key.as_ref()).unwrap_or_else(|_| String::new())
     };
 
     Response::build(StatusCode::SWITCHING_PROTOCOLS)
         .upgrade("websocket")
         .header(header::TRANSFER_ENCODING, "chunked")
-        .header(header::SEC_WEBSOCKET_ACCEPT, key.as_str())
+        .header(header::SEC_WEBSOCKET_ACCEPT, key)
         .take()
 }
 

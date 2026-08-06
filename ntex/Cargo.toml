@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.12.2"
+version = "3.12.3"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -67,7 +67,7 @@ neon-uring = ["ntex-net/neon-uring"]
 neon-iocp = ["ntex-net/neon-iocp"]
 
 # websocket support
-ws = ["dep:sha1"]
+ws = []
 
 # disable [ntex::test] logging configuration
 no-test-logging = []
@@ -100,7 +100,6 @@ log = { workspace = true }
 pin-project-lite = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
-sha1 = { workspace = true, optional = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
 nanorand = { workspace = true }
