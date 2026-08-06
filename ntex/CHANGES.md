@@ -1,5 +1,9 @@
 # Changes
 
+## [3.12.3] - 2026-08-06
+
+* Remove sha1 dependency
+
 ## [3.12.2] - 2026-08-06
 
 * Allow to get raw headers items

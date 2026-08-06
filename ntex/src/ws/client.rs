@@ -230,7 +230,9 @@ where
         }
 
         if let Some(hdr_key) = response.headers.get(&header::SEC_WEBSOCKET_ACCEPT) {
-            let encoded = ws::hash_key(key.as_ref());
+            let encoded = ws::hash_key(key.as_ref()).map_err(|_| {
+                WsClientError::InvalidChallengeResponse(String::new(), hdr_key.clone())
+            })?;
             if hdr_key.as_bytes() != encoded.as_bytes() {
                 log::trace!(
                     "{tag}: Invalid challenge response: expected: {encoded} received: {key:?}"
