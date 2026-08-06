@@ -203,6 +203,7 @@ pub(crate) struct WriteOperation {
     ctx: IoContext,
     flags: Flags,
     pages: [Option<BytePage>; MAX_WRITE_BUFS],
+    pages_num: u8,
 }
 
 impl WriteOperation {
@@ -214,6 +215,7 @@ impl WriteOperation {
             ctx,
             flags: Flags::empty(),
             pages: [const { None }; MAX_WRITE_BUFS],
+            pages_num: 0,
         }
     }
 
@@ -285,18 +287,26 @@ impl WriteOperation {
                                 self.ctx.stop(None);
                             }
                             // remove written bytes
-                            for page in self.pages[..num].iter_mut().flatten() {
-                                let len = cmp::min(page.len(), sent);
-                                page.advance_to(len);
-                                sent -= len;
-                                if sent == 0 {
-                                    break;
+                            for page in self.pages[..num].iter_mut() {
+                                if let Some(p) = page {
+                                    let len = cmp::min(p.len(), sent);
+                                    p.advance_to(len);
+                                    if p.is_empty() {
+                                        page.take();
+                                    }
+                                    sent -= len;
+                                    if sent != 0 {
+                                        continue;
+                                    }
                                 }
+                                break;
                             }
                             // return unwritten data back to buffer
                             for p in self.pages[..num].iter_mut().rev() {
                                 if let Some(page) = p.take() {
                                     wrt.prepend(page);
+                                } else {
+                                    break;
                                 }
                             }
                             Ok(true)
@@ -311,6 +321,7 @@ impl WriteOperation {
                             Err(err)
                         }
                         Poll::Pending => {
+                            self.pages_num = num as u8;
                             self.flags.insert(Flags::WAITING);
                             Ok(false)
                         }
@@ -336,6 +347,7 @@ impl WriteOperation {
         #[cfg(feature = "trace")]
         log::trace!("{}: WrtDone({}) {res:?}", wr.ctx.tag(), wr.io);
 
+        let num = wr.pages_num as usize;
         wr.flags.remove(Flags::WAITING);
 
         let st = match res {
@@ -344,13 +356,19 @@ impl WriteOperation {
                     wr.ctx.stop(None);
                 }
                 // remove written bytes
-                for page in wr.pages[..].iter_mut().flatten() {
-                    let len = cmp::min(page.len(), sent);
-                    page.advance_to(len);
-                    sent -= len;
-                    if sent == 0 {
-                        break;
+                for page in wr.pages[..num].iter_mut() {
+                    if let Some(p) = page {
+                        let len = cmp::min(p.len(), sent);
+                        p.advance_to(len);
+                        if p.is_empty() {
+                            page.take();
+                        }
+                        sent -= len;
+                        if sent != 0 {
+                            continue;
+                        }
                     }
+                    break;
                 }
                 Ok(true)
             }
@@ -359,9 +377,11 @@ impl WriteOperation {
 
         // return unwritten data back to buffer
         wr.ctx.with_write_buf(|wrt| {
-            for p in wr.pages[..].iter_mut().rev() {
+            for p in wr.pages[..num].iter_mut().rev() {
                 if let Some(page) = p.take() {
                     wrt.prepend(page);
+                } else {
+                    break;
                 }
             }
         });

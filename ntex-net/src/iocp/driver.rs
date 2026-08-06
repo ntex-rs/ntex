@@ -49,8 +49,8 @@ pub struct DriverApi {
 
 impl DriverApi {
     /// Attach handle
-    pub fn attach(&self, hnd: RawHandle) -> io::Result<()> {
-        self.reactor.attach(hnd)
+    pub fn attach(&self, hnd: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
+        self.reactor.attach(hnd, skip_iocp_on_success)
     }
 
     /// Get overlapped.
@@ -133,7 +133,7 @@ impl crate::Reactor for Driver {
 
     fn from_tcp_stream(&self, stream: net::TcpStream, cfg: SharedCfg) -> io::Result<Io> {
         let addr = stream.peer_addr()?;
-        self.reactor.attach(stream.as_raw_socket() as _)?;
+        self.reactor.attach(stream.as_raw_socket() as _, true)?;
 
         Ok(Io::new(
             TcpStream(Socket::from(stream), addr.into(), StreamOps::get(self)),
@@ -166,13 +166,15 @@ impl ntex_rt::Driver for Driver {
                     0
                 )
             );
-            if let Err(err) = result
-                && err.raw_os_error() != Some(WAIT_TIMEOUT.cast_signed())
-            {
-                return Err(err);
-            }
 
-            self.poll_completions(&events[..recv_count as usize]);
+            match result {
+                Err(err) => {
+                    if err.raw_os_error() != Some(WAIT_TIMEOUT.cast_signed()) {
+                        break Err(err);
+                    }
+                }
+                Ok(_) => self.poll_completions(&events[..recv_count as usize]),
+            }
         };
 
         for mut h in self.handlers.take().unwrap().into_iter() {
@@ -255,18 +257,21 @@ impl Reactor {
         })))
     }
 
-    fn attach(&self, h: RawHandle) -> io::Result<()> {
+    fn attach(&self, h: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         syscall!(
             BOOL,
             CreateIoCompletionPort(h, self.0.port.as_raw_handle(), 0, 0) as isize
         )?;
-        syscall!(
-            BOOL,
-            SetFileCompletionNotificationModes(
-                h,
-                (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE) as _
-            )
-        )?;
+        if skip_iocp_on_success {
+            syscall!(
+                BOOL,
+                SetFileCompletionNotificationModes(
+                    h,
+                    (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE)
+                        as _
+                )
+            )?;
+        }
         Ok(())
     }
 
