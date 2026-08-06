@@ -2,6 +2,8 @@ use std::fmt;
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
+use super::error::HandshakeError;
+
 /// Operation codes as part of rfc6455.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpCode {
@@ -201,23 +203,24 @@ impl<T: Into<String>> From<(CloseCode, T)> for CloseReason {
 }
 
 // SHA-1 hashing algorithm initial hash values.
-const H0: u32 = 0x67452301;
-const H1: u32 = 0xEFCDAB89;
-const H2: u32 = 0x98BADCFE;
-const H3: u32 = 0x10325476;
-const H4: u32 = 0xC3D2E1F0;
+const H0: u32 = 0x6745_2301;
+const H1: u32 = 0xEFCD_AB89;
+const H2: u32 = 0x98BA_DCFE;
+const H3: u32 = 0x1032_5476;
+const H4: u32 = 0xC3D2_E1F0;
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+#[allow(clippy::many_single_char_names)]
 /// Computes the SHA-1 hash of the input key
-pub fn hash_key(key: &[u8]) -> Result<String, ()> {
+pub fn hash_key(key: &[u8]) -> Result<String, HandshakeError> {
     if key.len() > 32 {
-        return Err(());
+        return Err(HandshakeError::BadWebsocketKey);
     }
     let mut input = [0; 72];
-    let l = key.len();
-    let len = l + 36;
-    input[..l].copy_from_slice(key);
-    input[l..len].copy_from_slice(WS_GUID.as_bytes());
+    let klen = key.len();
+    let len = klen + 36;
+    input[..klen].copy_from_slice(key);
+    input[klen..len].copy_from_slice(WS_GUID.as_bytes());
 
     // Initialize variables to the SHA-1's initial hash values.
     let (mut h0, mut h1, mut h2, mut h3, mut h4) = (H0, H1, H2, H3, H4);
@@ -246,12 +249,12 @@ pub fn hash_key(key: &[u8]) -> Result<String, ()> {
         e = h4;
 
         // Main loop of the SHA-1 algorithm
-        for i in 0..80 {
+        for (i, sch) in schedule.iter().enumerate() {
             let (f, k) = match i {
-                0..=19 => ((b & c) | ((!b) & d), 0x5A827999),
-                20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
-                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
-                _ => (b ^ c ^ d, 0xCA62C1D6),
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
             };
 
             let temp = a
@@ -259,7 +262,7 @@ pub fn hash_key(key: &[u8]) -> Result<String, ()> {
                 .wrapping_add(f)
                 .wrapping_add(e)
                 .wrapping_add(k)
-                .wrapping_add(schedule[i]);
+                .wrapping_add(*sch);
             e = d;
             d = c;
             c = b.rotate_left(30);
@@ -282,7 +285,7 @@ pub fn hash_key(key: &[u8]) -> Result<String, ()> {
     hash[12..16].copy_from_slice(&h3.to_be_bytes());
     hash[16..20].copy_from_slice(&h4.to_be_bytes());
 
-    Ok(base64.encode(&hash))
+    Ok(base64.encode(hash))
 }
 
 fn pad_message(len: usize, input: &mut [u8]) -> &[u8] {
