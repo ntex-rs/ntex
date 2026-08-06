@@ -42,7 +42,7 @@ impl From<Option<usize>> for KeepAlive {
 pub struct HttpServiceConfig {
     pub(super) keep_alive: Seconds,
     pub(super) ka_enabled: bool,
-    pub(super) header_name_origin: bool,
+    pub(super) headers_vec: bool,
     pub(super) max_headers: usize,
     pub(super) max_buf_size: usize,
     pub(super) headers_read_rate: Option<FrameReadRate>,
@@ -94,7 +94,7 @@ impl HttpServiceConfig {
             }),
             max_headers: 96,
             max_buf_size: 64 * 1024,
-            header_name_origin: false,
+            headers_vec: false,
             payload_read_rate: None,
             config: CfgContext::default(),
         }
@@ -179,11 +179,11 @@ impl HttpServiceConfig {
     }
 
     #[must_use]
-    /// Enable storing the original header name strings.
+    /// Enable storing the headers in vector.
     ///
-    /// By default, original header names are not stored.
-    pub fn set_header_name_origin(mut self) -> Self {
-        self.header_name_origin = true;
+    /// By default, headers are not stored in vector.
+    pub fn set_enable_headers_vec(mut self) -> Self {
+        self.headers_vec = true;
         self
     }
 

@@ -2,10 +2,10 @@ use std::{cell::Ref, cell::RefCell, cell::RefMut, fmt, net, rc::Rc};
 
 use bitflags::bitflags;
 
-use crate::http::header::{HeaderMap, HeaderName};
-use crate::http::{Method, StatusCode, Uri, Version, h1::Codec};
+use crate::http::header::HeaderMap;
+use crate::http::{HeaderItem, Method, StatusCode, Uri, Version, h1::Codec};
 use crate::io::{IoBoxed, IoRef, types};
-use crate::util::{ByteString, Extensions};
+use crate::util::Extensions;
 
 /// Represents various types of connection
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -78,10 +78,10 @@ pub struct RequestHead {
     pub method: Method,
     pub version: Version,
     pub headers: HeaderMap,
+    pub headers_vec: Vec<HeaderItem>,
     pub extensions: RefCell<Extensions>,
     pub(crate) io: CurrentIo,
     pub(crate) flags: Flags,
-    pub(crate) names: Vec<(HeaderName, ByteString)>,
 }
 
 impl Default for RequestHead {
@@ -93,8 +93,8 @@ impl Default for RequestHead {
             method: Method::default(),
             version: Version::HTTP_11,
             headers: HeaderMap::with_capacity(16),
+            headers_vec: Vec::default(),
             flags: Flags::empty(),
-            names: Vec::default(),
             extensions: RefCell::new(Extensions::new()),
         }
     }
@@ -106,7 +106,7 @@ impl Head for RequestHead {
         self.flags = Flags::empty();
         self.version = Version::HTTP_11;
         self.headers.clear();
-        self.names.clear();
+        self.headers_vec.clear();
         self.extensions.get_mut().clear();
     }
 
@@ -141,9 +141,9 @@ impl RequestHead {
         &mut self.headers
     }
 
-    /// Read the origin of each message header name.
-    pub fn header_names(&self) -> &[(HeaderName, ByteString)] {
-        &self.names
+    /// Returns the header items.
+    pub fn headers_vec(&self) -> &[HeaderItem] {
+        &self.headers_vec
     }
 
     #[inline]
@@ -240,10 +240,10 @@ pub struct ResponseHead {
     pub version: Version,
     pub status: StatusCode,
     pub headers: HeaderMap,
+    pub headers_vec: Vec<HeaderItem>,
     pub reason: Option<&'static str>,
     pub(crate) io: CurrentIo,
     pub(crate) extensions: RefCell<Extensions>,
-    pub(crate) names: Vec<(HeaderName, ByteString)>,
     flags: Flags,
 }
 
@@ -255,10 +255,10 @@ impl ResponseHead {
             status,
             version,
             headers: HeaderMap::with_capacity(12),
+            headers_vec: Vec::default(),
             reason: None,
             flags: Flags::empty(),
             io: CurrentIo::None,
-            names: Vec::default(),
             extensions: RefCell::new(Extensions::new()),
         }
     }
@@ -287,9 +287,9 @@ impl ResponseHead {
         &mut self.headers
     }
 
-    /// Read the origin of each message header name.
-    pub fn header_names(&self) -> &[(HeaderName, ByteString)] {
-        &self.names
+    /// Returns the header items.
+    pub fn headers_vec(&self) -> &[HeaderItem] {
+        &self.headers_vec
     }
 
     #[inline]
@@ -381,9 +381,9 @@ impl Head for ResponseHead {
     fn clear(&mut self) {
         self.reason = None;
         self.headers.clear();
+        self.headers_vec.clear();
         self.io = CurrentIo::None;
         self.flags = Flags::empty();
-        self.names.clear();
         self.extensions.get_mut().clear();
     }
 
