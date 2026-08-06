@@ -87,7 +87,7 @@ impl ConnectOps {
             ))
         }
         .and_then(|baddr| sock.bind(&baddr))
-        .and_then(|()| self.0.api.attach(sock.as_raw_socket() as _));
+        .and_then(|()| self.0.api.attach(sock.as_raw_socket().cast(), true));
 
         if let Err(err) = result {
             Receiver::new(Err(err))
