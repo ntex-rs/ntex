@@ -173,7 +173,7 @@ impl ntex_rt::Driver for Driver {
                         break Err(err);
                     }
                 }
-                Ok(()) => self.poll_completions(&events[..recv_count as usize]),
+                Ok(_) => self.poll_completions(&events[..recv_count as usize]),
             }
         };
 
@@ -268,7 +268,7 @@ impl Reactor {
                 SetFileCompletionNotificationModes(
                     h,
                     (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS | FILE_SKIP_SET_EVENT_ON_HANDLE)
-                        .cast()
+                        as _
                 )
             )?;
         }
