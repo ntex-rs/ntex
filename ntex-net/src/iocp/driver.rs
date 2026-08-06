@@ -166,13 +166,15 @@ impl ntex_rt::Driver for Driver {
                     0
                 )
             );
-            if let Err(err) = result
-                && err.raw_os_error() != Some(WAIT_TIMEOUT.cast_signed())
-            {
-                return Err(err);
-            }
 
-            self.poll_completions(&events[..recv_count as usize]);
+            match result {
+                Err(err) => {
+                    if err.raw_os_error() != Some(WAIT_TIMEOUT.cast_signed()) {
+                        break Err(err);
+                    }
+                }
+                Ok(()) => self.poll_completions(&events[..recv_count as usize]),
+            }
         };
 
         for mut h in self.handlers.take().unwrap().into_iter() {
