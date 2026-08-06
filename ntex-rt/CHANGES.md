@@ -1,5 +1,9 @@
 # Changes
 
+## [3.16.1] - 2026-08-06
+
+* Fix panic in arbiters pings
+
 ## [3.16.0] - 2026-08-03
 
 * Allow to detach spawn blocking future
