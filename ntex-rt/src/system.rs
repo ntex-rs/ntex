@@ -429,7 +429,7 @@ pub struct PingRecord {
 }
 
 async fn ping_arbiters(sys: System) {
-    let pings = Rc::new(RefCell::new(HashSet::default()));
+    let arbs = Rc::new(RefCell::new(HashSet::default()));
     let interval = Duration::from_millis(sys.0.config.ping_interval as u64);
     #[cfg(target_os = "linux")]
     let threshold = Duration::from_millis(sys.0.config.ping_threshold as u64);
@@ -440,14 +440,14 @@ async fn ping_arbiters(sys: System) {
 
         // send pings
         {
-            pings.borrow_mut().clear();
+            arbs.borrow_mut().clear();
 
             let start = Instant::now();
             let arbiters = sys.0.arbiters.lock();
 
             for arb in &arbiters.list {
                 let id = arb.id();
-                let pings = pings.clone();
+                let arbs = arbs.clone();
                 let fut = arb.handle().spawn(async move {
                     yield_to().await;
                 });
@@ -462,7 +462,7 @@ async fn ping_arbiters(sys: System) {
 
                 crate::spawn(async move {
                     if fut.await.is_ok() {
-                        pings.borrow_mut().insert(id);
+                        arbs.borrow_mut().insert(id);
 
                         PINGS.with(|pings| {
                             if let Some(recs) = pings.borrow_mut().get_mut(&id)
@@ -487,7 +487,7 @@ async fn ping_arbiters(sys: System) {
             let mut no_pongs = Vec::new();
             {
                 for arb in &sys.0.arbiters.lock().list {
-                    let pong = pings.borrow_mut().get(&arb.id());
+                    let pong = arbs.borrow_mut().remove(&arb.id());
                     if !pong {
                         no_pongs.push(arb.clone());
                     }
