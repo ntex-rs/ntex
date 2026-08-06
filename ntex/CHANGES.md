@@ -1,5 +1,9 @@
 # Changes
 
+## [3.12.2] - 2026-08-06
+
+* Allow to get raw headers items
+
 ## [3.12.1] - 2026-08-05
 
 * Allow storing the original header name strings.

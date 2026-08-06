@@ -6,7 +6,7 @@ use ntex_httparse::{self as httparse, HeaderParsed, Status};
 
 use crate::http::config::HttpServiceConfig;
 use crate::http::message::{ConnectionType, ResponseHead};
-use crate::http::{error::DecodeError, header::HeaderMap, request::Request};
+use crate::http::{HeaderItem, error::DecodeError, header::HeaderMap, request::Request};
 use crate::util::{ByteString, Bytes, BytesMut};
 use crate::{codec::Decoder, service::cfg::Cfg};
 
@@ -102,26 +102,26 @@ impl<T: MessageType> MessageDecoder<T> {
                     )
                     .unwrap();
 
-                    // SAFETY: ntex-httparse checks header name validity
-                    if inner.cfg.header_name_origin {
-                        let origin = unsafe {
-                            ByteString::from_bytes_unchecked(
-                                buf.slice(inner.hdr.name.start..inner.hdr.name.end),
-                            )
-                        };
-                        inner
-                            .val
-                            .as_mut()
-                            .unwrap()
-                            .set_header_name(name.clone(), origin);
-                    }
-
                     // SAFETY: ntex-httparse checks header value for validity
                     let value = unsafe {
                         HeaderValue::from_shared_unchecked(
                             buf.slice(inner.hdr.value.start..inner.hdr.value.end),
                         )
                     };
+
+                    // SAFETY: ntex-httparse checks header name validity
+                    if inner.cfg.headers_vec {
+                        let origin = unsafe {
+                            ByteString::from_bytes_unchecked(
+                                buf.slice(inner.hdr.name.start..inner.hdr.name.end),
+                            )
+                        };
+                        inner.val.as_mut().unwrap().set_headers_item(HeaderItem {
+                            origin,
+                            name: name.clone(),
+                            value: value.clone(),
+                        });
+                    }
 
                     inner.hdr_st = httparse::State::default();
                     inner
@@ -281,7 +281,7 @@ pub(crate) trait MessageType: fmt::Debug + Sized {
         length: PayloadLength,
     ) -> Result<PayloadType, DecodeError>;
 
-    fn set_header_name(&mut self, name: HeaderName, origin: ByteString);
+    fn set_headers_item(&mut self, item: HeaderItem);
 
     fn set_header(
         &mut self,
@@ -410,8 +410,8 @@ impl MessageType for Request {
         }
     }
 
-    fn set_header_name(&mut self, name: HeaderName, origin: ByteString) {
-        self.head_mut().names.push((name, origin));
+    fn set_headers_item(&mut self, item: HeaderItem) {
+        self.head_mut().headers_vec.push(item);
     }
 
     fn set_payload_length(
@@ -495,8 +495,8 @@ impl MessageType for ResponseHead {
         }
     }
 
-    fn set_header_name(&mut self, name: HeaderName, origin: ByteString) {
-        self.names.push((name, origin));
+    fn set_headers_item(&mut self, item: HeaderItem) {
+        self.headers_vec.push(item);
     }
 
     fn set_payload_length(
@@ -950,45 +950,49 @@ mod tests {
 
         let reader = MessageDecoder::<Request>::new(Cfg::default());
         let (req, _) = reader.decode(&mut buf.clone()).unwrap().unwrap();
-        assert_eq!(req.head().header_names().len(), 0);
+        assert_eq!(req.head().headers_vec().len(), 0);
 
         let cfg: SharedCfg = SharedCfg::new("dbg")
-            .add(HttpServiceConfig::default().set_header_name_origin())
+            .add(HttpServiceConfig::default().set_enable_headers_vec())
             .into();
         let reader = MessageDecoder::<Request>::new(cfg.get());
         let (req, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(
-            req.head().header_names()[0].0,
+            req.head().headers_vec()[0].name,
             HeaderName::try_from("test").unwrap()
         );
-        assert_eq!(req.head().header_names()[0].1, "Test");
-        assert_eq!(req.head().header_names()[1].0, header::CONTENT_LENGTH);
-        assert_eq!(req.head().header_names()[1].1, "Content-Length");
+        assert_eq!(req.head().headers_vec()[0].origin, "Test");
+        assert_eq!(req.head().headers_vec()[1].name, header::CONTENT_LENGTH);
+        assert_eq!(req.head().headers_vec()[1].origin, "Content-Length");
 
         // response
         let mut buf = BytesMut::from(
             "HTTP/1.0 200 Ok\r\n\
-            Test: 123\r\n\
+            TEST: 123\r\n\
             Content-Length: 0\r\n\
+            tesT: 456\r\n\
             \r\n",
         );
 
         let reader = MessageDecoder::<ResponseHead>::new(Cfg::default());
         let (res, _) = reader.decode(&mut buf.clone()).unwrap().unwrap();
-        assert_eq!(res.header_names().len(), 0);
+        assert_eq!(res.headers_vec().len(), 0);
 
         let cfg: SharedCfg = SharedCfg::new("dbg")
-            .add(HttpServiceConfig::default().set_header_name_origin())
+            .add(HttpServiceConfig::default().set_enable_headers_vec())
             .into();
         let reader = MessageDecoder::<ResponseHead>::new(cfg.get());
         let (res, _) = reader.decode(&mut buf).unwrap().unwrap();
         assert_eq!(
-            res.header_names()[0].0,
+            res.headers_vec()[0].name,
             HeaderName::try_from("test").unwrap()
         );
-        assert_eq!(res.header_names()[0].1, "Test");
-        assert_eq!(res.header_names()[1].0, header::CONTENT_LENGTH);
-        assert_eq!(res.header_names()[1].1, "Content-Length");
+        assert_eq!(res.headers_vec()[0].origin, "TEST");
+        assert_eq!(res.headers_vec()[0].value, "123");
+        assert_eq!(res.headers_vec()[1].name, header::CONTENT_LENGTH);
+        assert_eq!(res.headers_vec()[1].origin, "Content-Length");
+        assert_eq!(res.headers_vec()[2].origin, "tesT");
+        assert_eq!(res.headers_vec()[2].value, "456");
     }
 
     #[test]

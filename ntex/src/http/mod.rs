@@ -31,3 +31,11 @@ pub use crate::io::types::HttpProtocol;
 // re-exports
 pub use ntex_http::uri::{self, Uri};
 pub use ntex_http::{HeaderMap, Method, StatusCode, Version, body, header};
+
+/// Header item
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct HeaderItem {
+    pub name: header::HeaderName,
+    pub origin: crate::util::ByteString,
+    pub value: header::HeaderValue,
+}
