@@ -113,24 +113,14 @@ impl Runner for DefaultRuntime {
         {
             let driver: Box<dyn Reactor> = Box::new(self::tokio::TokioDriver);
 
-            CURRENT_DRIVER.set(&driver, || {
-                crate::tokio::block_on(fut);
-                unsafe {
-                    ntex_rt::remove_all_items();
-                }
-            });
+            CURRENT_DRIVER.set(&driver, || crate::tokio::block_on(fut));
         }
 
         #[cfg(all(feature = "compio", not(feature = "tokio")))]
         {
             let driver: Box<dyn Reactor> = Box::new(self::compio::CompioDriver);
 
-            CURRENT_DRIVER.set(&driver, || {
-                crate::compio::block_on(fut);
-                unsafe {
-                    ntex_rt::remove_all_items();
-                }
-            });
+            CURRENT_DRIVER.set(&driver, || crate::compio::block_on(fut));
         }
 
         #[cfg(all(windows, not(feature = "tokio"), not(feature = "compio")))]
@@ -139,18 +129,10 @@ impl Runner for DefaultRuntime {
             let driver: Box<dyn Reactor> = Box::new(driver);
 
             CURRENT_DRIVER.set(&driver, || {
-                let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                     let rt = ntex_rt::Runtime::new(driver.handle());
                     rt.block_on(fut, &*driver);
                 }));
-                unsafe {
-                    if let Err(err) = res {
-                        ntex_rt::remove_all_items();
-                        panic::resume_unwind(err);
-                    } else {
-                        ntex_rt::remove_all_items();
-                    }
-                }
             });
         }
 
@@ -163,18 +145,10 @@ impl Runner for DefaultRuntime {
                 let driver: Box<dyn Reactor> = Box::new(driver);
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
                     }));
-                    unsafe {
-                        if let Err(err) = res {
-                            ntex_rt::remove_all_items();
-                            panic::resume_unwind(err);
-                        } else {
-                            ntex_rt::remove_all_items();
-                        }
-                    }
                 });
             }
 
@@ -185,18 +159,10 @@ impl Runner for DefaultRuntime {
                 let driver: Box<dyn Reactor> = Box::new(driver);
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
                     }));
-                    unsafe {
-                        if let Err(err) = res {
-                            ntex_rt::remove_all_items();
-                            panic::resume_unwind(err);
-                        } else {
-                            ntex_rt::remove_all_items();
-                        }
-                    }
                 });
             }
 
@@ -218,18 +184,10 @@ impl Runner for DefaultRuntime {
                 );
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let res = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
                     }));
-                    unsafe {
-                        if let Err(err) = res {
-                            ntex_rt::remove_all_items();
-                            panic::resume_unwind(err);
-                        } else {
-                            ntex_rt::remove_all_items();
-                        }
-                    }
                 });
             }
         }

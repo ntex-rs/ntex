@@ -106,7 +106,7 @@ macro_rules! syscall {
 }
 
 /// Execute a future with custom `block_on` method and wait for result
-pub(super) fn block_on<F, R>(run: &dyn Runner, fut: F) -> R
+pub(super) fn block_on<F, R>(run: &dyn Runner, fut: F) -> Option<R>
 where
     F: Future<Output = R> + 'static,
     R: 'static,
@@ -120,5 +120,5 @@ where
         let r = fut.await;
         *result_inner.borrow_mut() = Some(r);
     }));
-    result.borrow_mut().take().unwrap()
+    result.borrow_mut().take()
 }

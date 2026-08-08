@@ -150,6 +150,15 @@ where
     }
 
     #[must_use]
+    /// Stop server when one of worker panics.
+    ///
+    /// By default "stop on panic" is disabled.
+    pub fn stop_on_panic(mut self) -> Self {
+        self.builder = self.builder.stop_on_panic();
+        self
+    }
+
+    #[must_use]
     /// Disable signal handling.
     ///
     /// By default signal handling is enabled.
@@ -177,6 +186,16 @@ where
     /// By default affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
         self.builder = self.builder.enable_affinity();
+        self
+    }
+
+    #[must_use]
+    /// Graceful shutdown
+    ///
+    /// Graceful shutdown on SIGTERM, SIGSEGV, SIGQUIT.
+    /// By default graceful shutdown is disable.
+    pub fn graceful_shutdown(mut self) -> Self {
+        self.builder = self.builder.graceful_shutdown();
         self
     }
 

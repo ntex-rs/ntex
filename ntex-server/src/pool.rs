@@ -4,6 +4,7 @@ use crate::{Server, ServerConfiguration};
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Millis = Millis::from_secs(30);
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 /// Server builder
 pub struct WorkerPool {
@@ -11,6 +12,8 @@ pub struct WorkerPool {
     pub(crate) name: String,
     pub(crate) no_signals: bool,
     pub(crate) stop_runtime: bool,
+    pub(crate) stop_on_panic: bool,
+    pub(crate) graceful_shutdown: bool,
     pub(crate) shutdown_timeout: Millis,
     pub(crate) affinity: bool,
 }
@@ -35,6 +38,8 @@ impl WorkerPool {
             name: "ntex".to_string(),
             no_signals: false,
             stop_runtime: false,
+            stop_on_panic: false,
+            graceful_shutdown: false,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             affinity: false,
         }
@@ -69,11 +74,30 @@ impl WorkerPool {
     }
 
     #[must_use]
+    /// Stop server when one of worker panics.
+    ///
+    /// By default "stop on panic" is disabled.
+    pub fn stop_on_panic(mut self) -> Self {
+        self.stop_on_panic = true;
+        self
+    }
+
+    #[must_use]
     /// Disable signal handling.
     ///
     /// By default signal handling is enabled.
     pub fn disable_signals(mut self) -> Self {
         self.no_signals = true;
+        self
+    }
+
+    #[must_use]
+    /// Graceful shutdown
+    ///
+    /// Graceful shutdown on SIGTERM, SIGSEGV, SIGQUIT.
+    /// By default graceful shutdown is disable.
+    pub fn graceful_shutdown(mut self) -> Self {
+        self.graceful_shutdown = true;
         self
     }
 

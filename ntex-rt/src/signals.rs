@@ -25,6 +25,8 @@ pub enum Signal {
     Term,
     /// SIGQUIT
     Quit,
+    /// SIGSEGV
+    Segv,
 }
 
 /// Register signal handler.
@@ -104,9 +106,45 @@ static mut SIG_HANDLERS: [Option<signal_hook::SigId>; 10] = [None; 10];
 #[cfg(target_family = "unix")]
 /// Register signal handler.
 pub(crate) fn start(sys: &System) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+
     if register_system(sys) {
+        use nix::sys::signal;
         use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR2};
         use signal_hook::low_level::register;
+
+        ONCE.call_once(|| {
+            // Use u128 for alignment.
+            let buf = Vec::leak(vec![0u128; 4096]);
+            let stack = libc::stack_t {
+                ss_sp: buf.as_ptr() as *mut libc::c_void,
+                ss_flags: 0,
+                ss_size: std::mem::size_of_val(buf),
+            };
+            let mut old = libc::stack_t {
+                ss_sp: std::ptr::null_mut(),
+                ss_flags: 0,
+                ss_size: 0,
+            };
+            let result = unsafe { libc::sigaltstack(&raw const stack, &raw mut old) };
+            if result != 0 {
+                log::error!("Cannot set signal stack");
+            }
+
+            let sig_action = signal::SigAction::new(
+                signal::SigHandler::Handler(sig_segv),
+                signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+                signal::SigSet::empty(),
+            );
+            unsafe {
+                if signal::sigaction(signal::SIGSEGV, &sig_action).is_err() {
+                    log::error!("Cannot install signal handler for SIGSEGV");
+                }
+                if signal::sigaction(signal::SIGABRT, &sig_action).is_err() {
+                    log::error!("Cannot install signal handler for SIGABRT");
+                }
+            }
+        });
 
         for (idx, s, sig) in [
             (0, SIGHUP, Signal::Hup),
@@ -200,4 +238,13 @@ async fn signals(rx: oneshot::AsyncReceiver<()>) {
         }
     })
     .await;
+}
+
+#[cfg(target_family = "unix")]
+extern "C" fn sig_segv(v: i32) {
+    eprintln!(
+        "{v:?} == Stack Overflow:\n{:?}",
+        backtrace::Backtrace::new()
+    );
+    handle_signal(Signal::Segv);
 }

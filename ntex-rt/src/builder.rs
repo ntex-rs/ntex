@@ -12,8 +12,8 @@ use crate::system::{System, SystemConfig};
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
     name: String,
-    /// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
-    stop_on_panic: bool,
+    ///// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
+    //stop_on_panic: bool,
     /// New thread stack size
     stack_size: usize,
     /// Arbiters ping interval
@@ -33,7 +33,6 @@ impl Builder {
     pub(super) fn new() -> Self {
         Builder {
             name: "ntex".into(),
-            stop_on_panic: false,
             stack_size: 0,
             ping_interval: 2000,
             ping_threshold: 1000,
@@ -51,6 +50,8 @@ impl Builder {
         self
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.17.0")]
     #[must_use]
     /// Sets the option `stop_on_panic`
     ///
@@ -58,8 +59,7 @@ impl Builder {
     /// uncaught panic is thrown from a worker thread.
     ///
     /// Defaults is set to false.
-    pub fn stop_on_panic(mut self, stop_on_panic: bool) -> Self {
-        self.stop_on_panic = stop_on_panic;
+    pub fn stop_on_panic(self, _: bool) -> Self {
         self
     }
 
@@ -156,7 +156,6 @@ impl Builder {
             name: self.name.clone(),
             testing: self.testing,
             stack_size: self.stack_size,
-            stop_on_panic: self.stop_on_panic,
             ping_interval: self.ping_interval,
             ping_threshold: self.ping_threshold,
             pool_limit: self.pool_limit,
@@ -233,8 +232,10 @@ impl SystemRunner {
                 Err(_) => Err(io::Error::other("Closed")),
             }
         })
+        .ok_or_else(|| io::Error::other("Worker thread paniced"))?
     }
 
+    #[allow(clippy::missing_panics_doc)]
     /// Execute a future and wait for result.
     pub fn block_on<F, R>(self, fut: F) -> R
     where
@@ -258,6 +259,7 @@ impl SystemRunner {
             ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
             fut.await
         })
+        .unwrap()
     }
 
     #[cfg(feature = "tokio")]

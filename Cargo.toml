@@ -54,7 +54,7 @@ ntex-macros = { path = "ntex-macros" }
 ntex-util = { path = "ntex-util" }
 
 [workspace.dependencies]
-ntex = "3.12.2"
+ntex = "3.13.0"
 ntex-bytes = "1.9.0"
 ntex-codec = "1.2.1"
 ntex-error = "2.3.0"
@@ -62,11 +62,11 @@ ntex-h2 = "3.13.0"
 ntex-http = "1.2.0"
 ntex-dispatcher = "3.2.1"
 ntex-io = "3.13.1"
-ntex-net = "3.14.0"
-ntex-macros = "3.3.0"
+ntex-net = "3.14.2"
+ntex-macros = "3.4.0"
 ntex-router = "1.0.0"
-ntex-rt = "3.16.1"
-ntex-server = "3.10.4"
+ntex-rt = "3.17.0"
+ntex-server = "3.11.0"
 ntex-service = "4.6.0"
 ntex-tls = "3.8.0"
 ntex-util = "3.6.1"
@@ -107,6 +107,7 @@ itoa = "1.0.18"
 libc = "0.2.189"
 log = "0.4"
 mime = "0.3"
+nix = "0.31.3"
 oneshot = { version = "0.2.1", features = ["std", "async"] }
 openssl = "0.10"
 tls_openssl = { version = "0.10", package = "openssl" }

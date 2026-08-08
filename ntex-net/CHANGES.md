@@ -1,5 +1,9 @@
 # Changes
 
+## [3.14.2] - 2026-08-09
+
+* Do not unwind reactor panics, forward handling to arbiter
+
 ## [3.14.1] - 2026-08-06
 
 * IOCP driver cleanups

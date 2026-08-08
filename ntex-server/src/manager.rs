@@ -158,6 +158,12 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                 WorkerStatus::Available => mgr.available(wrk.clone()),
                 WorkerStatus::Unavailable => mgr.unavailable(wrk.clone()),
                 WorkerStatus::Failed => {
+                    if mgr.0.cfg.stop_on_panic {
+                        log::info!("Worker failed, shutting down server");
+                        let graceful = mgr.0.cfg.graceful_shutdown;
+                        HandleCmdState::new(mgr).stop(graceful, None).await;
+                        return;
+                    }
                     mgr.unavailable(wrk);
                     sleep(RESTART_DELAY).await;
                     if mgr.stopping() {
@@ -359,12 +365,17 @@ async fn handle_cmd<F: ServerConfiguration>(
                     }
                     Signal::Term => {
                         log::info!("SIGTERM received, stopping");
-                        state.stop(true, None).await;
+                        state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
                         return;
                     }
                     Signal::Quit => {
                         log::info!("SIGQUIT received, exiting");
-                        state.stop(false, None).await;
+                        state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
+                        return;
+                    }
+                    Signal::Segv => {
+                        log::info!("SIGSEGV received, exiting");
+                        state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
                         return;
                     }
                     Signal::Hup => (),
