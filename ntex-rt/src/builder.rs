@@ -231,6 +231,10 @@ impl SystemRunner {
             }
         });
 
+        unsafe {
+            remove_all_items();
+        }
+
         match result {
             Ok(v) => v,
             Err(e) => panic::resume_unwind(e),
@@ -262,6 +266,10 @@ impl SystemRunner {
             fut.await
         });
 
+        unsafe {
+            remove_all_items();
+        }
+
         match res {
             Ok(v) => v,
             Err(e) => panic::resume_unwind(e),
@@ -278,7 +286,7 @@ impl SystemRunner {
         let SystemRunner { config, .. } = self;
 
         // run loop
-        tok_io::task::LocalSet::new()
+        let result = tok_io::task::LocalSet::new()
             .run_until(async move {
                 _ = System::start(config);
 
@@ -286,7 +294,12 @@ impl SystemRunner {
                 ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
                 fut.await
             })
-            .await
+            .await;
+
+        unsafe {
+            remove_all_items();
+        }
+        result
     }
 }
 
