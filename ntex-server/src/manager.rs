@@ -159,7 +159,9 @@ fn start_worker<F: ServerConfiguration>(mgr: ServerManager<F>, cid: Option<CoreI
                 WorkerStatus::Unavailable => mgr.unavailable(wrk.clone()),
                 WorkerStatus::Failed => {
                     if mgr.0.cfg.stop_on_panic {
-                        log::info!("Worker failed, shutting down server");
+                        log::info!(
+                            "Worker failed. `stop-on-panic` is enabled; shutting down the server."
+                        );
                         let graceful = mgr.0.cfg.graceful_shutdown;
                         HandleCmdState::new(mgr).stop(graceful, None).await;
                         return;

@@ -12,8 +12,6 @@ use crate::system::{System, SystemConfig};
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
     name: String,
-    ///// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
-    //stop_on_panic: bool,
     /// New thread stack size
     stack_size: usize,
     /// Arbiters ping interval
@@ -235,7 +233,7 @@ impl SystemRunner {
 
         match result {
             Ok(v) => v,
-            Err(e) => std::panic::resume_unwind(e),
+            Err(e) => panic::resume_unwind(e),
         }
     }
 
@@ -266,7 +264,7 @@ impl SystemRunner {
 
         match res {
             Ok(v) => v,
-            Err(e) => std::panic::resume_unwind(e),
+            Err(e) => panic::resume_unwind(e),
         }
     }
 
