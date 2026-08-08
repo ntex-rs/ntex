@@ -241,10 +241,7 @@ async fn signals(rx: oneshot::AsyncReceiver<()>) {
 }
 
 #[cfg(target_family = "unix")]
-extern "C" fn sig_segv(v: i32) {
-    eprintln!(
-        "{v:?} == Stack Overflow:\n{:?}",
-        backtrace::Backtrace::new()
-    );
+extern "C" fn sig_segv(_: i32) {
+    eprintln!("Stack Overflow:\n{:?}", backtrace::Backtrace::new());
     handle_signal(Signal::Segv);
 }
