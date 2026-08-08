@@ -232,7 +232,7 @@ impl SystemRunner {
         });
 
         unsafe {
-            remove_all_items();
+            crate::remove_all_items();
         }
 
         match result {
@@ -267,7 +267,7 @@ impl SystemRunner {
         });
 
         unsafe {
-            remove_all_items();
+            crate::remove_all_items();
         }
 
         match res {
@@ -297,7 +297,7 @@ impl SystemRunner {
             .await;
 
         unsafe {
-            remove_all_items();
+            crate::remove_all_items();
         }
         result
     }
