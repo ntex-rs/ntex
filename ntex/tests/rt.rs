@@ -99,12 +99,16 @@ fn test_block_on() {
     struct Custom;
 
     impl ntex::rt::Runner for Custom {
-        fn block_on(&self, fut: ntex::rt::BlockFuture) {
+        fn block_on(
+            &self,
+            fut: ntex::rt::BlockFuture,
+        ) -> Result<(), Box<dyn std::any::Any + Send + 'static>> {
             let rt = ntex::rt::tokio::internal::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
             ntex::rt::tokio::internal::task::LocalSet::new().block_on(&rt, fut);
+            Ok(())
         }
     }
 

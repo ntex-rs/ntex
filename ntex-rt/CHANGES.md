@@ -1,5 +1,11 @@
 # Changes
 
+## [3.17.0] - 2026-08-09
+
+* Better handling for worker panics
+
+* Add Arbiter::on_close() callback
+
 ## [3.16.1] - 2026-08-06
 
 * Fix panic in arbiters pings

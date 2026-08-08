@@ -1,6 +1,6 @@
 #![allow(clippy::missing_panics_doc)]
 use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
-use std::{any::Any, any::TypeId, cell::RefCell, fmt, pin::Pin, thread};
+use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, thread};
 
 use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
@@ -28,6 +28,8 @@ pub(super) enum ArbiterCommand {
 /// hosts an event loop. Some Arbiter functions execute on the current thread.
 pub struct Arbiter(pub(crate) Arc<ArbiterInner>);
 
+type OnCloseStorage = Arc<Mutex<Vec<Box<dyn Fn() + Send + Sync>>>>;
+
 pub(crate) struct ArbiterInner {
     id: usize,
     name: Arc<String>,
@@ -35,6 +37,7 @@ pub(crate) struct ArbiterInner {
     hnd: Option<Handle>,
     pub(crate) sender: Sender<ArbiterCommand>,
     thread_handle: Mutex<Option<thread::JoinHandle<()>>>,
+    on_stop: OnCloseStorage,
     running: AtomicBool,
     #[cfg(target_os = "linux")]
     tid: i32,
@@ -64,7 +67,7 @@ impl Arbiter {
         let (tx, rx) = unbounded();
 
         let aid = COUNT.fetch_add(1, Ordering::Relaxed);
-        let arb = Arbiter::with_sender(id, aid, Arc::new(name), tx);
+        let arb = Arbiter::with_sender(id, aid, Arc::new(name), tx, Arc::default());
         ADDR.with(|cell| *cell.borrow_mut() = Some(arb.clone()));
         STORAGE.with(|cell| cell.borrow_mut().clear());
 
@@ -133,8 +136,11 @@ impl Arbiter {
                 let (stop, stop_rx) = oneshot::channel();
                 STORAGE.with(|cell| cell.borrow_mut().clear());
 
-                crate::driver::block_on(config.runner.as_ref(), async move {
-                    let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx);
+                let on_stop = Arc::new(Mutex::new(Vec::new()));
+                let on_stop2 = on_stop.clone();
+
+                let result = crate::driver::block_on(config.runner.as_ref(), async move {
+                    let arb = Arbiter::with_sender(sys_id.0, id, name2, arb_tx, on_stop);
                     sys.register_arbiter(arb.clone());
                     arb_hnd_tx
                         .send(arb.clone())
@@ -158,14 +164,22 @@ impl Arbiter {
                     arb.0.running.store(false, Ordering::Relaxed);
                 });
 
+                let on_stop = mem::take(&mut *on_stop2.lock());
+                for f in on_stop {
+                    f();
+                }
+
                 // unregister arbiter
                 sys2.unregister_arbiter(Id(id));
-
                 unsafe {
                     remove_all_items();
                 }
 
-                log::info!("Arbiter {name3:?} has been stopped");
+                if let Err(e) = result {
+                    log::error!("Arbiter {name3:?} has panicked.");
+                    panic::resume_unwind(e);
+                }
+                log::info!("Arbiter {name3:?} has stopped");
             })
             .unwrap_or_else(|err| {
                 panic!("Cannot spawn an arbiter's thread {name:?}: {err:?}")
@@ -181,6 +195,7 @@ impl Arbiter {
         id: usize,
         name: Arc<String>,
         sender: Sender<ArbiterCommand>,
+        on_stop: OnCloseStorage,
     ) -> Self {
         #[cfg(feature = "tokio")]
         let hnd = { Handle::new(sender.clone()) };
@@ -196,6 +211,7 @@ impl Arbiter {
             sys_id,
             name,
             sender,
+            on_stop,
             hnd: Some(hnd),
             thread_handle: Mutex::new(None),
             running: AtomicBool::new(true),
@@ -252,6 +268,16 @@ impl Arbiter {
         })
     }
 
+    #[must_use]
+    /// Add "on-stop" callback.
+    pub fn on_stop<F>(self, f: F) -> Self
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.0.on_stop.lock().push(Box::new(f));
+        self
+    }
+
     /// Wait for the event loop to stop by joining the underlying thread (if have Some).
     pub fn join(&mut self) -> thread::Result<()> {
         if let Some(thread_handle) = self.0.thread_handle.lock().take() {
@@ -274,21 +300,6 @@ pub(crate) struct ArbiterController {
     sys: Option<System>,
     rx: Receiver<ArbiterCommand>,
     stop: Option<oneshot::Sender<i32>>,
-}
-
-impl Drop for ArbiterController {
-    fn drop(&mut self) {
-        if thread::panicking() {
-            if let Some(sys) = self.sys.take()
-                && sys.stop_on_panic()
-            {
-                eprintln!("Panic in Arbiter thread, shutting down system.");
-                sys.stop_with_code(1);
-            } else {
-                eprintln!("Panic in Arbiter thread.");
-            }
-        }
-    }
 }
 
 impl ArbiterController {

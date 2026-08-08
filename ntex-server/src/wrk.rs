@@ -40,7 +40,6 @@ pub struct Worker<T> {
     tx1: Sender<T>,
     tx2: Sender<Shutdown>,
     avail: WorkerAvailability,
-    failed: Arc<AtomicBool>,
 }
 
 impl<T> cmp::Ord for Worker<T> {
@@ -87,40 +86,50 @@ impl<T> Worker<T> {
         let (tx2, rx2) = unbounded();
         let (avail, avail_tx) = WorkerAvailability::create();
         let name2 = name.clone();
+        let inner = avail.inner.clone();
 
-        Arbiter::with_name(name.clone()).handle().spawn(async move {
-            if let Some(cid) = cid
-                && core_affinity::set_for_current(cid)
-            {
-                log::info!("Set affinity to {cid:?} for worker {name2:?}");
-            }
-
-            spawn(async move {
-                log::info!("Starting worker {name2:?}");
-
-                log::debug!("Creating server instance in {name2:?}");
-                let factory = cfg.create().await;
-
-                match create(name2.clone(), rx1, rx2, factory, avail_tx).await {
-                    Ok((svc, wrk)) => {
-                        log::debug!("Server instance has been created in {name2:?}");
-                        run_worker(svc, wrk).await;
-                    }
-                    Err(e) => {
-                        log::error!("Cannot start worker {name2:?}: {e:?}");
-                    }
-                }
-                Arbiter::current().stop();
-            });
-        });
-
-        Worker {
+        let worker = Worker {
             tx1,
             tx2,
-            name,
             avail,
-            failed: Arc::new(AtomicBool::new(false)),
-        }
+            name: name.clone(),
+        };
+
+        Arbiter::with_name(name)
+            .on_stop(move || {
+                inner.failed.store(true, Ordering::Release);
+                inner.updated.store(true, Ordering::Release);
+                inner.available.store(false, Ordering::Release);
+                inner.waker.wake();
+            })
+            .handle()
+            .spawn(async move {
+                if let Some(cid) = cid
+                    && core_affinity::set_for_current(cid)
+                {
+                    log::info!("Set affinity to {cid:?} for worker {name2:?}");
+                }
+
+                spawn(async move {
+                    log::info!("Starting worker {name2:?}");
+
+                    log::debug!("Creating server instance in {name2:?}");
+                    let factory = cfg.create().await;
+
+                    match create(name2.clone(), rx1, rx2, factory, avail_tx).await {
+                        Ok((svc, wrk)) => {
+                            log::debug!("Server instance has been created in {name2:?}");
+                            run_worker(svc, wrk).await;
+                        }
+                        Err(e) => {
+                            log::error!("Cannot start worker {name2:?}: {e:?}");
+                        }
+                    }
+                    Arbiter::current().stop();
+                });
+            });
+
+        worker
     }
 
     /// Worker name
@@ -138,7 +147,7 @@ impl<T> Worker<T> {
 
     /// Check worker status.
     pub fn status(&self) -> WorkerStatus {
-        if self.failed.load(Ordering::Acquire) {
+        if self.avail.failed() {
             WorkerStatus::Failed
         } else if self.avail.available() {
             WorkerStatus::Available
@@ -149,13 +158,10 @@ impl<T> Worker<T> {
 
     /// Wait for worker status updates
     pub async fn wait_for_status(&mut self) -> WorkerStatus {
-        if self.failed.load(Ordering::Acquire) {
+        if self.avail.failed() {
             WorkerStatus::Failed
         } else {
             self.avail.wait_for_update().await;
-            if self.avail.failed() {
-                self.failed.store(true, Ordering::Release);
-            }
             self.status()
         }
     }
@@ -177,7 +183,6 @@ impl<T> Clone for Worker<T> {
             tx2: self.tx2.clone(),
             name: self.name.clone(),
             avail: self.avail.clone(),
-            failed: self.failed.clone(),
         }
     }
 }

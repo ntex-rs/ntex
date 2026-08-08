@@ -357,3 +357,38 @@ fn test_on_accept() {
     sys.stop();
     let _ = h.join();
 }
+
+#[cfg(not(any(feature = "tokio", feature = "compio")))]
+#[test]
+fn test_stop_on_panic() {
+    let addr = TestServer::unused_addr();
+    let (tx, rx) = mpsc::channel();
+    let h = thread::spawn(move || {
+        let sys = ntex::rt::System::new("test", ntex::rt::DefaultRuntime);
+        sys.block_on(async move {
+            let _ = build()
+                .stop_on_panic()
+                .graceful_shutdown()
+                .workers(1)
+                .disable_signals()
+                .bind("test", addr, async move |_| {
+                    #[allow(unreachable_code)]
+                    fn_service(async move |_| {
+                        panic!("test");
+                        Ok::<_, ()>(())
+                    })
+                })
+                .unwrap()
+                .run()
+                .await;
+            let _ = tx.send("test");
+        });
+    });
+
+    thread::sleep(time::Duration::from_millis(300));
+    assert!(net::TcpStream::connect(addr).is_ok());
+
+    let res = rx.recv().unwrap();
+    assert_eq!(res, "test");
+    let _ = h.join();
+}

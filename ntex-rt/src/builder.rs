@@ -12,8 +12,6 @@ use crate::system::{System, SystemConfig};
 pub struct Builder {
     /// Name of the System. Defaults to "ntex" if unset.
     name: String,
-    /// Whether the Arbiter will stop the whole System on uncaught panic. Defaults to false.
-    stop_on_panic: bool,
     /// New thread stack size
     stack_size: usize,
     /// Arbiters ping interval
@@ -33,7 +31,6 @@ impl Builder {
     pub(super) fn new() -> Self {
         Builder {
             name: "ntex".into(),
-            stop_on_panic: false,
             stack_size: 0,
             ping_interval: 2000,
             ping_threshold: 1000,
@@ -51,6 +48,8 @@ impl Builder {
         self
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.17.0")]
     #[must_use]
     /// Sets the option `stop_on_panic`
     ///
@@ -58,15 +57,14 @@ impl Builder {
     /// uncaught panic is thrown from a worker thread.
     ///
     /// Defaults is set to false.
-    pub fn stop_on_panic(mut self, stop_on_panic: bool) -> Self {
-        self.stop_on_panic = stop_on_panic;
+    pub fn stop_on_panic(self, _: bool) -> Self {
         self
     }
 
     #[must_use]
     /// Set signals handling.
     ///
-    /// By default signal handling is disabled.
+    /// By default, signal handling is disabled.
     pub fn signals(mut self, eanbled: bool) -> Self {
         self.signals = eanbled;
         self
@@ -76,7 +74,7 @@ impl Builder {
     #[must_use]
     /// Disable signal handling.
     ///
-    /// By default signal handling is disabled.
+    /// By default, signal handling is disabled.
     pub fn disable_signals(mut self) -> Self {
         self.signals = false;
         self
@@ -86,7 +84,7 @@ impl Builder {
     #[must_use]
     /// Enable signal handling.
     ///
-    /// By default signal handling is enabled.
+    /// By default, signal handling is enabled.
     pub fn enable_signals(mut self) -> Self {
         self.signals = true;
         self
@@ -156,7 +154,6 @@ impl Builder {
             name: self.name.clone(),
             testing: self.testing,
             stack_size: self.stack_size,
-            stop_on_panic: self.stop_on_panic,
             ping_interval: self.ping_interval,
             ping_threshold: self.ping_threshold,
             pool_limit: self.pool_limit,
@@ -214,7 +211,7 @@ impl SystemRunner {
         } = self;
 
         // run loop
-        crate::driver::block_on(runner.as_ref(), async move {
+        crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, stop) = System::start(config);
             if signals {
                 system.enable_signals();
@@ -235,6 +232,7 @@ impl SystemRunner {
         })
     }
 
+    #[allow(clippy::missing_panics_doc)]
     /// Execute a future and wait for result.
     pub fn block_on<F, R>(self, fut: F) -> R
     where
@@ -248,7 +246,7 @@ impl SystemRunner {
             ..
         } = self;
 
-        crate::driver::block_on(runner.as_ref(), async move {
+        crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, _) = System::start(config);
             if signals {
                 system.enable_signals();
@@ -270,7 +268,7 @@ impl SystemRunner {
         let SystemRunner { config, .. } = self;
 
         // run loop
-        tok_io::task::LocalSet::new()
+        let result = tok_io::task::LocalSet::new()
             .run_until(async move {
                 _ = System::start(config);
 
@@ -278,7 +276,12 @@ impl SystemRunner {
                 ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
                 fut.await
             })
-            .await
+            .await;
+
+        unsafe {
+            crate::remove_all_items();
+        }
+        result
     }
 }
 

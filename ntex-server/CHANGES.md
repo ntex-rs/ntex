@@ -1,5 +1,11 @@
 # Changes
 
+## [3.11.0] - 2026-08-09
+
+* Stop server when one of worker panics (stop_on_panic)
+
+* Allow to enable graceful shutdown for signals
+
 ## [3.10.4] - 2026-06-22
 
 * Fix lost of wakes in accept loop, partial fix for #911

@@ -1,5 +1,11 @@
 # Changes
 
+## [3.13.0] - 2026-08-09
+
+* Stop server when one of worker panics (stop_on_panic)
+
+* Allow to enable graceful shutdown for signals
+
 ## [3.12.3] - 2026-08-06
 
 * Remove sha1 dependency

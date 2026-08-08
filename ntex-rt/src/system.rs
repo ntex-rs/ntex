@@ -48,7 +48,6 @@ struct SystemInner {
 pub struct SystemConfig {
     pub(super) name: String,
     pub(super) stack_size: usize,
-    pub(super) stop_on_panic: bool,
     pub(super) ping_interval: usize,
     #[allow(dead_code)]
     pub(super) ping_threshold: usize,
@@ -203,12 +202,14 @@ impl System {
         let _ = self.0.sender.try_send(SystemCommand::Exit(code));
     }
 
+    #[doc(hidden)]
+    #[deprecated(since = "3.17.0")]
     /// Return status of `stop_on_panic` option
     ///
     /// It controls whether the System is stopped when an
     /// uncaught panic is thrown from a worker thread.
     pub fn stop_on_panic(&self) -> bool {
-        self.0.config.stop_on_panic
+        false
     }
 
     /// Return status of `signals` option
@@ -363,7 +364,6 @@ impl fmt::Debug for SystemConfig {
             .field("name", &self.name)
             .field("testing", &self.testing)
             .field("stack_size", &self.stack_size)
-            .field("stop_on_panic", &self.stop_on_panic)
             .finish()
     }
 }

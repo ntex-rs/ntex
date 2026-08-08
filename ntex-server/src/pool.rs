@@ -4,6 +4,7 @@ use crate::{Server, ServerConfiguration};
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Millis = Millis::from_secs(30);
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 /// Server builder
 pub struct WorkerPool {
@@ -11,6 +12,8 @@ pub struct WorkerPool {
     pub(crate) name: String,
     pub(crate) no_signals: bool,
     pub(crate) stop_runtime: bool,
+    pub(crate) stop_on_panic: bool,
+    pub(crate) graceful_shutdown: bool,
     pub(crate) shutdown_timeout: Millis,
     pub(crate) affinity: bool,
 }
@@ -35,6 +38,8 @@ impl WorkerPool {
             name: "ntex".to_string(),
             no_signals: false,
             stop_runtime: false,
+            stop_on_panic: false,
+            graceful_shutdown: false,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             affinity: false,
         }
@@ -69,31 +74,50 @@ impl WorkerPool {
     }
 
     #[must_use]
+    /// Stops the server when one of the workers panics.
+    ///
+    /// By default, "stop on panic" is disabled.
+    pub fn stop_on_panic(mut self) -> Self {
+        self.stop_on_panic = true;
+        self
+    }
+
+    #[must_use]
     /// Disable signal handling.
     ///
-    /// By default signal handling is enabled.
+    /// By default, signal handling is enabled.
     pub fn disable_signals(mut self) -> Self {
         self.no_signals = true;
         self
     }
 
     #[must_use]
-    /// Timeout for graceful workers shutdown.
+    /// Graceful shutdown.
+    ///
+    /// Gracefully shuts down on SIGTERM, SIGSEGV, or SIGQUIT.
+    /// By default, graceful shutdown is disabled.
+    pub fn graceful_shutdown(mut self) -> Self {
+        self.graceful_shutdown = true;
+        self
+    }
+
+    #[must_use]
+    /// Timeout for graceful worker shutdown.
     ///
     /// After receiving a stop signal, workers have this much time to finish
-    /// serving requests. Workers still alive after the timeout are force
-    /// dropped.
+    /// serving requests. Workers that are still alive after the timeout are
+    /// forcefully dropped.
     ///
-    /// By default shutdown timeout sets to 30 seconds.
+    /// By default, the shutdown timeout is set to 30 seconds.
     pub fn shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.shutdown_timeout = timeout.into();
         self
     }
 
     #[must_use]
-    /// Enable core affinity
+    /// Enable cpu affinity.
     ///
-    /// By default affinity is disabled.
+    /// By default, affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
         self.affinity = true;
         self

@@ -1,6 +1,6 @@
 [package]
 name = "ntex-rt"
-version = "3.16.1"
+version = "3.17.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex runtime"
 keywords = ["network", "framework", "async", "futures"]
@@ -46,6 +46,7 @@ foldhash = { workspace = true }
 futures-timer = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
+nix = { workspace = true, features = ["signal"] }
 oneshot = { workspace = true }
 parking_lot = { workspace = true }
 scoped-tls = { workspace = true }
