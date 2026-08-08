@@ -108,7 +108,7 @@ pub struct DefaultRuntime;
 
 impl Runner for DefaultRuntime {
     #[allow(unused_variables, clippy::too_many_lines)]
-    fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send + 'static>> {
+    fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>> {
         #[cfg(feature = "tokio")]
         {
             let driver: Box<dyn Reactor> = Box::new(self::tokio::TokioDriver);

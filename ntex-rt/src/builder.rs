@@ -211,7 +211,7 @@ impl SystemRunner {
         } = self;
 
         // run loop
-        let result = crate::driver::block_on(runner.as_ref(), async move {
+        crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, stop) = System::start(config);
             if signals {
                 system.enable_signals();
@@ -229,16 +229,7 @@ impl SystemRunner {
                 }
                 Err(_) => Err(io::Error::other("Closed")),
             }
-        });
-
-        unsafe {
-            crate::remove_all_items();
-        }
-
-        match result {
-            Ok(v) => v,
-            Err(e) => panic::resume_unwind(e),
-        }
+        })
     }
 
     #[allow(clippy::missing_panics_doc)]
@@ -255,7 +246,7 @@ impl SystemRunner {
             ..
         } = self;
 
-        let res = crate::driver::block_on(runner.as_ref(), async move {
+        crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, _) = System::start(config);
             if signals {
                 system.enable_signals();
@@ -264,16 +255,7 @@ impl SystemRunner {
             let loc = current_location();
             ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
             fut.await
-        });
-
-        unsafe {
-            crate::remove_all_items();
-        }
-
-        match res {
-            Ok(v) => v,
-            Err(e) => panic::resume_unwind(e),
-        }
+        })
     }
 
     #[cfg(feature = "tokio")]

@@ -58,8 +58,8 @@ log = { workspace = true }
 libc = { workspace = true }
 slab = { workspace = true }
 socket2 = { workspace = true, features = ["all"] }
-thiserror = { workspace = true }
 scoped-tls = { workspace = true }
+thiserror = { workspace = true }
 
 compio-buf = { workspace = true, optional = true }
 compio-io = { workspace = true, optional = true }

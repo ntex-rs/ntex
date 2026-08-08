@@ -1,5 +1,5 @@
 //! The platform-specified driver.
-use std::{any::Any, cell::RefCell, fmt, io, pin::Pin, rc::Rc};
+use std::{any::Any, cell::RefCell, fmt, io, panic, pin::Pin, rc::Rc};
 
 use crate::rt::Runtime;
 
@@ -27,7 +27,7 @@ impl DriverType {
 }
 
 pub trait Runner: Send + Sync + 'static {
-    fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send + 'static>>;
+    fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>>;
 }
 
 pub trait Driver: 'static {
@@ -106,10 +106,7 @@ macro_rules! syscall {
 }
 
 /// Execute a future with custom `block_on` method and wait for result
-pub(super) fn block_on<F, R>(
-    run: &dyn Runner,
-    fut: F,
-) -> Result<R, Box<dyn Any + Send + 'static>>
+pub(super) fn block_on<F, R>(run: &dyn Runner, fut: F) -> Result<R, Box<dyn Any + Send>>
 where
     F: Future<Output = R> + 'static,
     R: 'static,
@@ -123,5 +120,20 @@ where
         let r = fut.await;
         *result_inner.borrow_mut() = Some(r);
     }))?;
+
+    unsafe {
+        crate::remove_all_items();
+    }
     Ok(result.borrow_mut().take().unwrap())
+}
+
+pub(super) fn block_on_panic<F, R>(run: &dyn Runner, fut: F) -> R
+where
+    F: Future<Output = R> + 'static,
+    R: 'static,
+{
+    match block_on(run, fut) {
+        Ok(v) => v,
+        Err(e) => panic::resume_unwind(e),
+    }
 }

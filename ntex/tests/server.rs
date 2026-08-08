@@ -358,6 +358,7 @@ fn test_on_accept() {
     let _ = h.join();
 }
 
+#[cfg(not(any(feature = "tokio", feature = "compio")))]
 #[test]
 fn test_stop_on_panic() {
     let addr = TestServer::unused_addr();
