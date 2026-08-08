@@ -1,4 +1,3 @@
-#![allow(unreachable_code, dead_code)]
 use ntex::http;
 use ntex::web::{self, App, HttpRequest, HttpResponse, HttpServer, middleware};
 
@@ -15,15 +14,7 @@ async fn index_async(req: HttpRequest) -> &'static str {
 
 #[web::get("/")]
 async fn no_params() -> &'static str {
-    //test();
-    panic!("test");
     "Hello world!\r\n"
-}
-
-#[allow(unconditional_recursion)]
-fn test() {
-    let _t = [0; 512];
-    test();
 }
 
 #[ntex::main(name = "basic", signals = true)]
@@ -49,8 +40,6 @@ async fn main() -> std::io::Result<()> {
     })
     .bind("0.0.0.0:8081")?
     .workers(1)
-    .stop_on_panic()
-    .graceful_shutdown()
     .config(
         ntex::SharedCfg::new("MY-SERVER")
             .add(http::HttpServiceConfig::new().set_keepalive(http::KeepAlive::Disabled)),
