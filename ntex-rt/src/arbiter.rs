@@ -1,6 +1,6 @@
 #![allow(clippy::missing_panics_doc)]
 use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
-use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, pin::Pin, thread};
+use std::{any::Any, any::TypeId, cell::RefCell, fmt, mem, panic, pin::Pin, thread};
 
 use async_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
@@ -175,12 +175,11 @@ impl Arbiter {
                     remove_all_items();
                 }
 
-                if result.is_some() {
-                    log::info!("Arbiter {name3:?} has been stopped");
-                } else {
-                    log::error!("Arbiter {name3:?} has been panic");
-                    std::panic::resume_unwind(Box::new("Panic in arbiter"));
+                if let Err(e) = result {
+                    log::error!("Arbiter {name3:?} has panicked.");
+                    panic::resume_unwind(e);
                 }
+                log::info!("Arbiter {name3:?} has stopped");
             })
             .unwrap_or_else(|err| {
                 panic!("Cannot spawn an arbiter's thread {name:?}: {err:?}")

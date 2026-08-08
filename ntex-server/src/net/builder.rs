@@ -133,9 +133,9 @@ impl ServerBuilder {
     }
 
     #[must_use]
-    /// Stop server when one of worker panics.
+    /// Stops the server when one of the workers panics.
     ///
-    /// By default "stop on panic" is disabled.
+    /// By default, "stop on panic" is disabled.
     pub fn stop_on_panic(mut self) -> Self {
         self.pool = self.pool.stop_on_panic();
         self
@@ -144,48 +144,48 @@ impl ServerBuilder {
     #[must_use]
     /// Disable signal handling.
     ///
-    /// By default signal handling is enabled.
+    /// By default, signal handling is enabled.
     pub fn disable_signals(mut self) -> Self {
         self.pool = self.pool.disable_signals();
         self
     }
 
     #[must_use]
-    /// Enable cpu affinity
+    /// Enable cpu affinity.
     ///
-    /// By default affinity is disabled.
+    /// By default, affinity is disabled.
     pub fn enable_affinity(mut self) -> Self {
         self.pool = self.pool.enable_affinity();
         self
     }
 
     #[must_use]
-    /// Graceful shutdown
+    /// Graceful shutdown.
     ///
-    /// Graceful shutdown on SIGTERM, SIGSEGV, SIGQUIT.
-    /// By default graceful shutdown is disable.
+    /// Gracefully shuts down on SIGTERM, SIGSEGV, or SIGQUIT.
+    /// By default, graceful shutdown is disabled.
     pub fn graceful_shutdown(mut self) -> Self {
         self.pool = self.pool.graceful_shutdown();
         self
     }
 
     #[must_use]
-    /// Timeout for graceful workers shutdown.
+    /// Timeout for graceful worker shutdown.
     ///
     /// After receiving a stop signal, workers have this much time to finish
-    /// serving requests. Workers still alive after the timeout are force
-    /// dropped.
+    /// serving requests. Workers that are still alive after the timeout are
+    /// forcefully dropped.
     ///
-    /// By default shutdown timeout sets to 30 seconds.
+    /// By default, the shutdown timeout is set to 30 seconds.
     pub fn shutdown_timeout<T: Into<Millis>>(mut self, timeout: T) -> Self {
         self.pool = self.pool.shutdown_timeout(timeout);
         self
     }
 
     #[must_use]
-    /// Set server status handler.
+    /// Sets the server status handler.
     ///
-    /// Server calls this handler on every inner status update.
+    /// The server calls this handler on every internal status update.
     pub fn status_handler<F>(mut self, handler: F) -> Self
     where
         F: FnMut(ServerStatus) + Send + 'static,

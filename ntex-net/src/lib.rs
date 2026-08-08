@@ -8,7 +8,7 @@
     clippy::missing_errors_doc,
     clippy::missing_panics_doc
 )]
-use std::{io, net, net::SocketAddr, panic};
+use std::{any::Any, io, net, net::SocketAddr, panic};
 
 use ntex_io::Io;
 use ntex_rt::{BlockFuture, Driver, Runner};
@@ -108,12 +108,13 @@ pub struct DefaultRuntime;
 
 impl Runner for DefaultRuntime {
     #[allow(unused_variables, clippy::too_many_lines)]
-    fn block_on(&self, fut: BlockFuture) {
+    fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send + 'static>> {
         #[cfg(feature = "tokio")]
         {
             let driver: Box<dyn Reactor> = Box::new(self::tokio::TokioDriver);
 
             CURRENT_DRIVER.set(&driver, || crate::tokio::block_on(fut));
+            Ok(())
         }
 
         #[cfg(all(feature = "compio", not(feature = "tokio")))]
@@ -121,6 +122,7 @@ impl Runner for DefaultRuntime {
             let driver: Box<dyn Reactor> = Box::new(self::compio::CompioDriver);
 
             CURRENT_DRIVER.set(&driver, || crate::compio::block_on(fut));
+            Ok(())
         }
 
         #[cfg(all(windows, not(feature = "tokio"), not(feature = "compio")))]
@@ -129,11 +131,11 @@ impl Runner for DefaultRuntime {
             let driver: Box<dyn Reactor> = Box::new(driver);
 
             CURRENT_DRIVER.set(&driver, || {
-                let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                panic::catch_unwind(panic::AssertUnwindSafe(|| {
                     let rt = ntex_rt::Runtime::new(driver.handle());
                     rt.block_on(fut, &*driver);
-                }));
-            });
+                }))
+            })
         }
 
         #[cfg(all(unix, not(feature = "tokio"), not(feature = "compio")))]
@@ -145,11 +147,11 @@ impl Runner for DefaultRuntime {
                 let driver: Box<dyn Reactor> = Box::new(driver);
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
-                    }));
-                });
+                    }))
+                })
             }
 
             #[cfg(all(target_os = "linux", feature = "neon-uring"))]
@@ -159,11 +161,11 @@ impl Runner for DefaultRuntime {
                 let driver: Box<dyn Reactor> = Box::new(driver);
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
-                    }));
-                });
+                    }))
+                })
             }
 
             #[cfg(all(not(feature = "neon-uring"), not(feature = "neon-polling")))]
@@ -184,11 +186,11 @@ impl Runner for DefaultRuntime {
                 );
 
                 CURRENT_DRIVER.set(&driver, || {
-                    let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
-                    }));
-                });
+                    }))
+                })
             }
         }
     }

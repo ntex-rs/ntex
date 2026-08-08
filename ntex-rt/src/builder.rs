@@ -66,7 +66,7 @@ impl Builder {
     #[must_use]
     /// Set signals handling.
     ///
-    /// By default signal handling is disabled.
+    /// By default, signal handling is disabled.
     pub fn signals(mut self, eanbled: bool) -> Self {
         self.signals = eanbled;
         self
@@ -76,7 +76,7 @@ impl Builder {
     #[must_use]
     /// Disable signal handling.
     ///
-    /// By default signal handling is disabled.
+    /// By default, signal handling is disabled.
     pub fn disable_signals(mut self) -> Self {
         self.signals = false;
         self
@@ -86,7 +86,7 @@ impl Builder {
     #[must_use]
     /// Enable signal handling.
     ///
-    /// By default signal handling is enabled.
+    /// By default, signal handling is enabled.
     pub fn enable_signals(mut self) -> Self {
         self.signals = true;
         self
@@ -213,7 +213,7 @@ impl SystemRunner {
         } = self;
 
         // run loop
-        crate::driver::block_on(runner.as_ref(), async move {
+        let result = crate::driver::block_on(runner.as_ref(), async move {
             let (system, stop) = System::start(config);
             if signals {
                 system.enable_signals();
@@ -231,8 +231,12 @@ impl SystemRunner {
                 }
                 Err(_) => Err(io::Error::other("Closed")),
             }
-        })
-        .ok_or_else(|| io::Error::other("Worker thread paniced"))?
+        });
+
+        match result {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 
     #[allow(clippy::missing_panics_doc)]
@@ -249,7 +253,7 @@ impl SystemRunner {
             ..
         } = self;
 
-        crate::driver::block_on(runner.as_ref(), async move {
+        let res = crate::driver::block_on(runner.as_ref(), async move {
             let (system, _) = System::start(config);
             if signals {
                 system.enable_signals();
@@ -258,8 +262,12 @@ impl SystemRunner {
             let loc = current_location();
             ntex_error::set_backtrace_start(loc.file(), loc.line() + 2);
             fut.await
-        })
-        .unwrap()
+        });
+
+        match res {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 
     #[cfg(feature = "tokio")]
