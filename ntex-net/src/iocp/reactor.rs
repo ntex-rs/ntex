@@ -159,7 +159,7 @@ impl ntex_rt::Driver for Reactor {
             let result = syscall!(
                 BOOL,
                 GetQueuedCompletionStatusEx(
-                    self.reactor.0.port.as_raw_handle().cast(),
+                    self.reactor.port.as_raw_handle().cast(),
                     events.as_mut_ptr().cast(),
                     512,
                     &raw mut recv_count,
@@ -186,7 +186,9 @@ impl ntex_rt::Driver for Reactor {
 
     /// Get notification handle
     fn handle(&self) -> Box<dyn Notify> {
-        Box::new(self.reactor.handle())
+        Box::new(ReactorHandle {
+            inner: self.reactor.clone(),
+        })
     }
 }
 
