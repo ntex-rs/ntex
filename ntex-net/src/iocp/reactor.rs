@@ -45,7 +45,7 @@ pub trait Handler {
 /// IOCP reactor api.
 pub struct ReactorApi {
     hnd: u32,
-    reactor: Reactor,
+    reactor: Arc<ReactorInner>,
 }
 
 impl ReactorApi {
@@ -105,7 +105,7 @@ impl Reactor {
 
 impl AsRawHandle for Reactor {
     fn as_raw_handle(&self) -> RawHandle {
-        self.reactor.0.port.as_raw_handle()
+        self.reactor.port.as_raw_handle()
     }
 }
 

@@ -39,7 +39,7 @@ struct ConnectOpsInner {
 
 impl ConnectOps {
     pub(crate) fn get(reactor: &Reactor) -> Self {
-        let streams = StreamOps::get(driver);
+        let streams = StreamOps::get(reactor);
 
         Arbiter::get_value(move || {
             let mut inner = None;

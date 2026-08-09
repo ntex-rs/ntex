@@ -16,7 +16,7 @@ use ntex_bytes::{BufMut, BytePage, BytesMut};
 use ntex_io::{IoContext, IoTaskStatus};
 use ntex_rt::syscall;
 
-use super::{DriverApi, Overlapped};
+use super::{Overlapped, ReactorApi};
 
 pub(crate) const RD_OP: u32 = 1;
 pub(crate) const WR_OP: u32 = 2;
@@ -42,7 +42,7 @@ pub(crate) struct ReadOperation {
 }
 
 impl ReadOperation {
-    pub(crate) fn new(id: usize, io: RawSocket, ctx: IoContext, api: &DriverApi) -> Self {
+    pub(crate) fn new(id: usize, io: RawSocket, ctx: IoContext, api: &ReactorApi) -> Self {
         Self {
             overlapped: api.overlapped(RD_OP),
             id,
@@ -207,7 +207,7 @@ pub(crate) struct WriteOperation {
 }
 
 impl WriteOperation {
-    pub(crate) fn new(id: usize, io: RawSocket, ctx: IoContext, api: &DriverApi) -> Self {
+    pub(crate) fn new(id: usize, io: RawSocket, ctx: IoContext, api: &ReactorApi) -> Self {
         Self {
             overlapped: api.overlapped(WR_OP),
             id,
