@@ -11,7 +11,7 @@ pub mod internal {
     pub use tok_io::*;
 }
 
-use crate::channel;
+use crate::channel::{self, Receiver};
 
 mod io;
 
@@ -22,7 +22,9 @@ pub(crate) struct TcpStream(tok_io::net::TcpStream);
 #[cfg(unix)]
 pub(crate) struct UnixStream(tok_io::net::UnixStream);
 
-pub(crate) struct TokioDriver;
+/// ntex reactor based on tokio runtime
+#[derive(Copy, Clone, Debug)]
+pub struct Reactor;
 
 /// Runs the provided future, blocking the current thread until the future
 /// completes.
@@ -42,7 +44,7 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
     }
 }
 
-impl ntex_rt::Driver for TokioDriver {
+impl ntex_rt::Driver for Reactor {
     fn run(&self, _: &ntex_rt::Runtime) -> std::io::Result<()> {
         panic!("Not supported")
     }
@@ -54,8 +56,8 @@ impl ntex_rt::Driver for TokioDriver {
     fn clear(&self) {}
 }
 
-impl crate::Reactor for TokioDriver {
-    fn tcp_connect(&self, addr: SocketAddr, cfg: SharedCfg) -> channel::Receiver<Io> {
+impl crate::Reactor for Reactor {
+    fn tcp_connect(&self, addr: SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let (tx, rx) = channel::create();
         ntex_rt::spawn(async move {
             let result = async {
@@ -70,7 +72,7 @@ impl crate::Reactor for TokioDriver {
         rx
     }
 
-    fn unix_connect(&self, addr: PathBuf, cfg: SharedCfg) -> channel::Receiver<Io> {
+    fn unix_connect(&self, addr: PathBuf, cfg: SharedCfg) -> Receiver<Io> {
         #[cfg(unix)]
         {
             let (tx, rx) = channel::create();
@@ -88,7 +90,7 @@ impl crate::Reactor for TokioDriver {
 
         #[cfg(not(unix))]
         {
-            crate::channel::Receiver::new(Err(std::io::Error::other(
+            Receiver::new(Err(std::io::Error::other(
                 "Unix domain sockets are not supported",
             )))
         }

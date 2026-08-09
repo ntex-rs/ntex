@@ -102,7 +102,7 @@ fn test_block_on() {
         fn block_on(
             &self,
             fut: ntex::rt::BlockFuture,
-        ) -> Result<(), Box<dyn std::any::Any + Send + 'static>> {
+        ) -> Result<(), Box<dyn std::any::Any + Send>> {
             let rt = ntex::rt::tokio::internal::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()

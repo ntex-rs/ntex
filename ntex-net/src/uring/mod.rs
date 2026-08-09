@@ -1,11 +1,11 @@
 use socket2::Socket;
 
-pub(crate) mod connect;
-mod driver;
+mod connect;
 mod io;
+mod reactor;
 mod stream;
 
-pub use self::driver::{Driver, DriverApi, Handler};
+pub use self::reactor::{Handler, Reactor, ReactorApi};
 
 /// Tcp stream wrapper for neon `TcpStream`
 struct TcpStream(Socket, stream::StreamOps);

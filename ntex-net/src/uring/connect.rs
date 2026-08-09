@@ -7,7 +7,7 @@ use ntex_service::cfg::SharedCfg;
 use slab::Slab;
 use socket2::{Domain, SockAddr, Socket};
 
-use super::{Driver, DriverApi, Handler, TcpStream, UnixStream, stream::StreamOps};
+use super::{Handler, Reactor, ReactorApi, TcpStream, UnixStream, stream::StreamOps};
 use crate::channel::{self, Receiver, Sender};
 
 #[derive(Clone)]
@@ -20,18 +20,18 @@ struct ConnectOpsHandler {
 type Operations = RefCell<Slab<(Box<SockAddr>, Socket, Sender<Io>, SharedCfg)>>;
 
 struct ConnectOpsInner {
-    api: DriverApi,
+    api: ReactorApi,
     streams: StreamOps,
     ops: Operations,
 }
 
 impl ConnectOps {
-    pub(crate) fn get(driver: &Driver) -> Self {
-        let streams = StreamOps::get(driver);
+    pub(crate) fn get(reactor: &Reactor) -> Self {
+        let streams = StreamOps::get(reactor);
 
         Arbiter::get_value(move || {
             let mut inner = None;
-            driver.register(|api| {
+            reactor.register(|api| {
                 assert!(
                     api.is_supported(opcode::Connect::CODE),
                     "opcode::Connect is required for io-uring support"

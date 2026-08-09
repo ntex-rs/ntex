@@ -8,7 +8,7 @@ use ntex_util::channel::pool;
 use slab::Slab;
 use socket2::Socket;
 
-use super::driver::{Driver, DriverApi, Handler};
+use super::reactor::{Handler, Reactor, ReactorApi};
 use crate::helpers::Queue;
 
 #[derive(Clone)]
@@ -84,7 +84,7 @@ struct StreamOpsHandler {
 
 #[allow(clippy::box_collection)]
 struct StreamOpsInner {
-    api: DriverApi,
+    api: ReactorApi,
     delayed_feed: Queue<IdType>,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
     pool: pool::Pool<io::Result<()>>,
@@ -98,10 +98,10 @@ struct StreamOpsStorage {
 
 impl StreamOps {
     /// Get `StreamOps` instance from the current runtime, or create new one
-    pub(crate) fn get(driver: &Driver) -> Self {
+    pub(crate) fn get(reactor: &Reactor) -> Self {
         Arbiter::get_value(|| {
             let mut inner = None;
-            driver.register(|api| {
+            reactor.register(|api| {
                 let default_flags = if api.is_supported(opcode::SendZc::CODE) {
                     Flags::empty()
                 } else {
@@ -254,7 +254,7 @@ impl Handler for StreamOpsHandler {
                                 // In case of disconnect, sock_nonempty is set to true.
                                 // First completion contains data, second Recv(0)
                                 // Before receiving Recv(0), POLLRDHUP is triggered
-                                // Driver must read all recv() call before handling
+                                // Reactor must read all recv() call before handling
                                 // disconnects
                                 item.flags.insert(Flags::RD_MORE);
                                 st.recv_more(id, buf, &self.inner.api);
@@ -369,7 +369,7 @@ impl Handler for StreamOpsHandler {
 }
 
 impl StreamOpsStorage {
-    fn recv(&mut self, id: usize, poll_first: bool, api: &DriverApi) {
+    fn recv(&mut self, id: usize, poll_first: bool, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
             if item.rd_op.is_none() {
                 #[cfg(feature = "trace")]
@@ -394,7 +394,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &DriverApi) {
+    fn recv_more(&mut self, id: usize, mut buf: BytesMut, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
             item.ctx.resize_read_buf(&mut buf);
 
@@ -410,7 +410,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn send(&mut self, id: usize, api: &DriverApi) {
+    fn send(&mut self, id: usize, api: &ReactorApi) {
         if let Some(item) = self.streams.get_mut(id) {
             if item.wr_op.is_none() {
                 let page = item.ctx.with_write_buf(BytePages::take);
@@ -453,7 +453,7 @@ impl StreamOpsStorage {
         self.ops.insert(Some(op)) as u32
     }
 
-    fn pause_read(&mut self, id: usize, api: &DriverApi) {
+    fn pause_read(&mut self, id: usize, api: &ReactorApi) {
         let item = &mut self.streams[id];
         if let Some(rd_op) = item.rd_op
             && !item.flags.contains(Flags::RD_CANCELING)
@@ -464,7 +464,7 @@ impl StreamOpsStorage {
         }
     }
 
-    fn drop_stream(&mut self, id: usize, api: &DriverApi) {
+    fn drop_stream(&mut self, id: usize, api: &ReactorApi) {
         // Dropping while `StreamOps` handling event
         let item = &mut self.streams[id];
         log::trace!("{}: Close ({:?})", item.tag(), item.fd());

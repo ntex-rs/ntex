@@ -4,12 +4,12 @@ use socket2::{SockAddr, Socket};
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
 mod connect;
-mod driver;
 mod io;
 mod ops;
+mod reactor;
 mod stream;
 
-pub use self::driver::{Driver, DriverApi, Handler};
+pub use self::reactor::{Handler, Reactor, ReactorApi};
 
 /// Tcp stream wrapper for neon `TcpStream`
 struct TcpStream(Socket, SockAddr, stream::StreamOps);

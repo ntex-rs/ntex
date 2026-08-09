@@ -6,7 +6,9 @@ use ntex_service::cfg::SharedCfg;
 use slab::Slab;
 use socket2::{SockAddr, Socket};
 
-use super::{Driver, DriverApi, Event, Handler, TcpStream, UnixStream, stream::StreamOps};
+use super::{
+    Event, Handler, Reactor, ReactorApi, TcpStream, UnixStream, stream::StreamOps,
+};
 use crate::channel::{self, Receiver, Sender};
 
 #[derive(Clone)]
@@ -24,7 +26,7 @@ struct Item {
 }
 
 struct ConnectOpsInner {
-    api: DriverApi,
+    api: ReactorApi,
     streams: StreamOps,
     connects: RefCell<Slab<Item>>,
 }
@@ -36,7 +38,7 @@ impl Item {
 }
 
 impl ConnectOps {
-    pub(crate) fn get(driver: &Driver) -> Self {
+    pub(crate) fn get(driver: &Reactor) -> Self {
         let streams = StreamOps::get(driver);
 
         Arbiter::get_value(move || {
