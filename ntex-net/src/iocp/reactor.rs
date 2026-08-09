@@ -35,19 +35,20 @@ pub trait Handler {
     /// Operation is completed.
     fn completed(&mut self, udata: u32, result: io::Result<usize>, optr: *mut Overlapped);
 
-    /// Driver turn is completed
+    /// Reactor turn is completed
     fn tick(&mut self) {}
 
     /// Clean up the handle before dropping the driver.
     fn cleanup(&mut self) {}
 }
 
-pub struct DriverApi {
+/// IOCP reactor api.
+pub struct ReactorApi {
     hnd: u32,
-    reactor: Reactor,
+    reactor: Arc<ReactorInner>,
 }
 
-impl DriverApi {
+impl ReactorApi {
     /// Attach handle
     pub fn attach(&self, hnd: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         self.reactor.attach(hnd, skip_iocp_on_success)
@@ -63,20 +64,20 @@ impl DriverApi {
     pub fn cancel(&self, _h: RawHandle) {}
 }
 
-/// Low-level driver of io-uring.
-pub struct Driver {
+/// IOCP reactor.
+pub struct Reactor {
     hid: Cell<u32>,
-    reactor: Reactor,
+    reactor: Arc<ReactorInner>,
     #[allow(clippy::box_collection, clippy::type_complexity)]
     handlers: Cell<Option<Box<Vec<Box<dyn Handler>>>>>,
 }
 
-impl Driver {
+impl Reactor {
     /// Create iocp driver
     pub fn new() -> io::Result<Self> {
         Ok(Self {
             hid: Cell::new(0),
-            reactor: Reactor::new()?,
+            reactor: Arc::new(ReactorInner::new()?),
             handlers: Cell::new(Some(Box::new(vec![Box::new(Dummy)]))),
         })
     }
@@ -89,11 +90,11 @@ impl Driver {
     /// Register updates handler
     pub fn register<F>(&self, f: F)
     where
-        F: FnOnce(DriverApi) -> Box<dyn Handler>,
+        F: FnOnce(ReactorApi) -> Box<dyn Handler>,
     {
         let hnd = self.hid.get() + 1;
         let mut handlers = self.handlers.take().unwrap_or_default();
-        handlers.push(f(DriverApi {
+        handlers.push(f(ReactorApi {
             hnd,
             reactor: self.reactor.clone(),
         }));
@@ -102,13 +103,13 @@ impl Driver {
     }
 }
 
-impl AsRawHandle for Driver {
+impl AsRawHandle for Reactor {
     fn as_raw_handle(&self) -> RawHandle {
-        self.reactor.0.port.as_raw_handle()
+        self.reactor.port.as_raw_handle()
     }
 }
 
-impl crate::Reactor for Driver {
+impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
         let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))
@@ -142,7 +143,7 @@ impl crate::Reactor for Driver {
     }
 }
 
-impl ntex_rt::Driver for Driver {
+impl ntex_rt::Driver for Reactor {
     /// Poll the driver and handle completed operations.
     fn run(&self, rt: &Runtime) -> io::Result<()> {
         let mut events = [OVERLAPPED_ENTRY::default(); 512];
@@ -158,7 +159,7 @@ impl ntex_rt::Driver for Driver {
             let result = syscall!(
                 BOOL,
                 GetQueuedCompletionStatusEx(
-                    self.reactor.0.port.as_raw_handle().cast(),
+                    self.reactor.port.as_raw_handle().cast(),
                     events.as_mut_ptr().cast(),
                     512,
                     &raw mut recv_count,
@@ -185,11 +186,13 @@ impl ntex_rt::Driver for Driver {
 
     /// Get notification handle
     fn handle(&self) -> Box<dyn Notify> {
-        Box::new(self.reactor.handle())
+        Box::new(ReactorHandle {
+            inner: self.reactor.clone(),
+        })
     }
 }
 
-impl Driver {
+impl Reactor {
     /// Handle ring completions, forward changes to specific handler
     fn poll_completions(&self, events: &[OVERLAPPED_ENTRY]) {
         let mut handlers = self.handlers.take().unwrap();
@@ -231,16 +234,13 @@ impl Driver {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Reactor(Arc<ReactorInner>);
-
 #[derive(Debug)]
 struct ReactorInner {
     port: OwnedHandle,
     overlapped: Overlapped,
 }
 
-impl Reactor {
+impl ReactorInner {
     fn new() -> io::Result<Self> {
         let port = unsafe {
             let port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1);
@@ -251,16 +251,16 @@ impl Reactor {
         };
         log::trace!("New iocp reactor: {port:?}");
 
-        Ok(Self(Arc::new(ReactorInner {
+        Ok(ReactorInner {
             port,
             overlapped: Overlapped::new(0, 0),
-        })))
+        })
     }
 
     fn attach(&self, h: RawHandle, skip_iocp_on_success: bool) -> io::Result<()> {
         syscall!(
             BOOL,
-            CreateIoCompletionPort(h, self.0.port.as_raw_handle(), 0, 0) as isize
+            CreateIoCompletionPort(h, self.port.as_raw_handle(), 0, 0) as isize
         )?;
         if skip_iocp_on_success {
             syscall!(
@@ -273,12 +273,6 @@ impl Reactor {
             )?;
         }
         Ok(())
-    }
-
-    fn handle(&self) -> ReactorHandle {
-        ReactorHandle {
-            inner: self.0.clone(),
-        }
     }
 }
 
@@ -308,18 +302,20 @@ impl Notify for ReactorHandle {
     }
 }
 
-impl fmt::Debug for Driver {
+impl fmt::Debug for Reactor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Driver")
+        f.debug_struct("Reactor")
             .field("hid", &self.hid)
             .field("reactor", &self.reactor)
             .finish()
     }
 }
 
-impl fmt::Debug for DriverApi {
+impl fmt::Debug for ReactorApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DriverApi").field("hnd", &self.hnd).finish()
+        f.debug_struct("ReactorApi")
+            .field("hnd", &self.hnd)
+            .finish()
     }
 }
 

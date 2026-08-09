@@ -37,14 +37,15 @@ enum Change {
 }
 
 #[derive(Debug)]
-pub struct DriverApi {
+/// Polling reactor api.
+pub struct ReactorApi {
     id: usize,
     batch: u64,
     poll: Arc<Poller>,
     changes: Rc<UnsafeCell<VecDeque<Change>>>,
 }
 
-impl DriverApi {
+impl ReactorApi {
     /// Attach an fd to the driver.
     ///
     /// `fd` must be attached to the driver before using register/unregister
@@ -105,8 +106,10 @@ impl DriverApi {
     }
 }
 
-/// Low-level driver of polling.
-pub struct Driver {
+/// Polling reactor.
+///
+/// Uses `epoll` or `kqueue`, depending on the platform.
+pub struct Reactor {
     poll: Arc<Poller>,
     capacity: usize,
     changes: Rc<UnsafeCell<VecDeque<Change>>>,
@@ -129,13 +132,13 @@ impl HandlerItem {
     }
 }
 
-impl Driver {
+impl Reactor {
     const BATCH: u64 = 48;
     const BATCH_MASK: u64 = 0xFFFF_0000_0000_0000;
     const DATA_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
     pub fn new() -> io::Result<Self> {
-        Driver::with_capacity(2048)
+        Reactor::with_capacity(2048)
     }
 
     pub fn with_capacity(io_queue_capacity: u32) -> io::Result<Self> {
@@ -150,7 +153,7 @@ impl Driver {
         })
     }
 
-    /// Driver type
+    /// Reactor type
     pub const fn tp(&self) -> DriverType {
         DriverType::Poll
     }
@@ -158,7 +161,7 @@ impl Driver {
     /// Register updates handler
     pub fn register<F>(&self, f: F)
     where
-        F: FnOnce(DriverApi) -> Box<dyn Handler>,
+        F: FnOnce(ReactorApi) -> Box<dyn Handler>,
     {
         let id = self.hid.get();
         let mut handlers = self
@@ -166,7 +169,7 @@ impl Driver {
             .take()
             .expect("Cannot register handler during event handling");
 
-        let api = DriverApi {
+        let api = ReactorApi {
             id: id as usize,
             batch: id << Self::BATCH,
             poll: self.poll.clone(),
@@ -193,15 +196,15 @@ impl Driver {
     }
 }
 
-impl AsRawFd for Driver {
+impl AsRawFd for Reactor {
     fn as_raw_fd(&self) -> RawFd {
         self.poll.as_raw_fd()
     }
 }
 
-impl fmt::Debug for Driver {
+impl fmt::Debug for Reactor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Driver")
+        f.debug_struct("Reactor")
             .field("poll", &self.poll)
             .field("capacity", &self.capacity)
             .field("hid", &self.hid)
@@ -209,7 +212,7 @@ impl fmt::Debug for Driver {
     }
 }
 
-impl crate::Reactor for Driver {
+impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
         let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))
@@ -263,7 +266,7 @@ impl crate::Reactor for Driver {
     }
 }
 
-impl ntex_rt::Driver for Driver {
+impl ntex_rt::Driver for Reactor {
     /// Poll the driver and handle completed entries.
     fn run(&self, rt: &Runtime) -> io::Result<()> {
         let mut events = if self.capacity == 0 {

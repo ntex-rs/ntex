@@ -3,7 +3,7 @@ use std::{any::Any, cell::RefCell, fmt, io, panic, pin::Pin, rc::Rc};
 
 use crate::rt::Runtime;
 
-pub type BlockFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
+pub type BlockFuture = Pin<Box<dyn Future<Output = ()>>>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DriverType {

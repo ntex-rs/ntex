@@ -33,7 +33,7 @@ mod helpers;
 pub mod tokio;
 
 #[cfg(feature = "compio")]
-mod compio;
+pub mod compio;
 
 #[allow(clippy::wrong_self_convention)]
 pub trait Reactor: Driver {
@@ -101,9 +101,28 @@ fn with_current<T, F: FnOnce(&dyn Reactor) -> T>(f: F) -> T {
     }
 }
 
+#[allow(clippy::borrowed_box)]
+/// Sets the current reactor and runs the provided closure.
+pub fn with_reactor<R, F: FnOnce() -> R>(r: &Box<dyn Reactor>, f: F) -> R {
+    #[cold]
+    fn reactor_is_set() -> ! {
+        panic!("reactor is already set");
+    }
+
+    if CURRENT_DRIVER.is_set() {
+        reactor_is_set()
+    } else {
+        CURRENT_DRIVER.set(r, f)
+    }
+}
+
 scoped_tls::scoped_thread_local!(static CURRENT_DRIVER: Box<dyn Reactor>);
 
-#[derive(Debug)]
+/// The default runtime.
+///
+/// Automatically selects the runtime implementation based on the
+/// configured features and the platform on which it runs.
+#[derive(Copy, Clone, Debug)]
 pub struct DefaultRuntime;
 
 impl Runner for DefaultRuntime {
@@ -111,26 +130,26 @@ impl Runner for DefaultRuntime {
     fn block_on(&self, fut: BlockFuture) -> Result<(), Box<dyn Any + Send>> {
         #[cfg(feature = "tokio")]
         {
-            let driver: Box<dyn Reactor> = Box::new(self::tokio::TokioDriver);
+            let driver: Box<dyn Reactor> = Box::new(self::tokio::Reactor);
 
-            CURRENT_DRIVER.set(&driver, || crate::tokio::block_on(fut));
+            with_reactor(&driver, || crate::tokio::block_on(fut));
             Ok(())
         }
 
         #[cfg(all(feature = "compio", not(feature = "tokio")))]
         {
-            let driver: Box<dyn Reactor> = Box::new(self::compio::CompioDriver);
+            let driver: Box<dyn Reactor> = Box::new(self::compio::Reactor);
 
-            CURRENT_DRIVER.set(&driver, || crate::compio::block_on(fut));
+            with_reactor(&driver, || crate::compio::block_on(fut));
             Ok(())
         }
 
         #[cfg(all(windows, not(feature = "tokio"), not(feature = "compio")))]
         {
-            let driver = crate::iocp::Driver::new().expect("Cannot construct driver");
-            let driver: Box<dyn Reactor> = Box::new(driver);
+            let driver: Box<dyn Reactor> =
+                Box::new(crate::iocp::Reactor::new().expect("Cannot construct driver"));
 
-            CURRENT_DRIVER.set(&driver, || {
+            with_reactor(&driver, || {
                 panic::catch_unwind(panic::AssertUnwindSafe(|| {
                     let rt = ntex_rt::Runtime::new(driver.handle());
                     rt.block_on(fut, &*driver);
@@ -142,11 +161,12 @@ impl Runner for DefaultRuntime {
         {
             #[cfg(feature = "neon-polling")]
             {
-                let driver =
-                    crate::polling::Driver::new().expect("Cannot construct driver");
-                let driver: Box<dyn Reactor> = Box::new(driver);
+                let driver: Box<dyn Reactor> = Box::new(
+                    crate::polling::Reactor::new()
+                        .expect("Cannot construct polling reactor"),
+                );
 
-                CURRENT_DRIVER.set(&driver, || {
+                with_reactor(&driver, || {
                     panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
@@ -156,11 +176,12 @@ impl Runner for DefaultRuntime {
 
             #[cfg(all(target_os = "linux", feature = "neon-uring"))]
             {
-                let driver =
-                    crate::uring::Driver::new(2048).expect("Cannot construct driver");
-                let driver: Box<dyn Reactor> = Box::new(driver);
+                let driver: Box<dyn Reactor> = Box::new(
+                    crate::uring::Reactor::new(2048)
+                        .expect("Cannot construct io-uring reactor"),
+                );
 
-                CURRENT_DRIVER.set(&driver, || {
+                with_reactor(&driver, || {
                     panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);
@@ -172,20 +193,22 @@ impl Runner for DefaultRuntime {
             {
                 #[cfg(target_os = "linux")]
                 let driver: Box<dyn Reactor> =
-                    if let Ok(driver) = crate::uring::Driver::new(2048) {
-                        Box::new(driver)
+                    if let Ok(reactor) = crate::uring::Reactor::new(2048) {
+                        Box::new(reactor)
                     } else {
                         Box::new(
-                            crate::polling::Driver::new().expect("Cannot construct driver"),
+                            crate::polling::Reactor::new()
+                                .expect("Cannot construct io-uring reactor"),
                         )
                     };
 
                 #[cfg(not(target_os = "linux"))]
                 let driver: Box<dyn Reactor> = Box::new(
-                    crate::polling::Driver::new().expect("Cannot construct driver"),
+                    crate::polling::Reactor::new()
+                        .expect("Cannot construct polling reactor"),
                 );
 
-                CURRENT_DRIVER.set(&driver, || {
+                with_reactor(&driver, || {
                     panic::catch_unwind(panic::AssertUnwindSafe(|| {
                         let rt = ntex_rt::Runtime::new(driver.handle());
                         rt.block_on(fut, &*driver);

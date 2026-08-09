@@ -31,12 +31,13 @@ pub trait Handler {
     fn cleanup(&mut self);
 }
 
-pub struct DriverApi {
+/// Api for io-uring reactor.
+pub struct ReactorApi {
     batch: u64,
-    inner: Rc<DriverInner>,
+    inner: Rc<ReactorInner>,
 }
 
-impl DriverApi {
+impl ReactorApi {
     #[inline]
     /// Check if kernel ver 6.1 or greater
     pub fn is_new(&self) -> bool {
@@ -88,7 +89,7 @@ impl DriverApi {
         self.submit_inner(|en| {
             *en = AsyncCancel::new(u64::from(id) | self.batch)
                 .build()
-                .user_data(Driver::CANCEL);
+                .user_data(Reactor::CANCEL);
         });
     }
 
@@ -107,14 +108,14 @@ impl DriverApi {
     }
 }
 
-/// Low-level driver of io-uring.
-pub struct Driver {
+/// io-uring reactor.
+pub struct Reactor {
     fd: RawFd,
     hid: Cell<u64>,
     notifier: Notifier,
     #[allow(clippy::box_collection)]
     handlers: Cell<Option<Box<Vec<HandlerItem>>>>,
-    inner: Rc<DriverInner>,
+    inner: Rc<ReactorInner>,
 }
 
 struct HandlerItem {
@@ -139,14 +140,14 @@ bitflags::bitflags! {
     }
 }
 
-struct DriverInner {
+struct ReactorInner {
     probe: Probe,
     flags: Cell<Flags>,
     ring: IoUring<SEntry, CEntry>,
     changes: UnsafeCell<VecDeque<mem::MaybeUninit<SEntry>>>,
 }
 
-impl Driver {
+impl Reactor {
     const NOTIFY: u64 = u64::MAX;
     const CANCEL: u64 = u64::MAX - 1;
     const BATCH: u64 = 48;
@@ -193,7 +194,7 @@ impl Driver {
         }
 
         let fd = ring.as_raw_fd();
-        let inner = Rc::new(DriverInner {
+        let inner = Rc::new(ReactorInner {
             ring,
             probe,
             flags: Cell::new(if new { Flags::NEW } else { Flags::empty() }),
@@ -217,12 +218,12 @@ impl Driver {
     /// Register updates handler
     pub fn register<F>(&self, f: F)
     where
-        F: FnOnce(DriverApi) -> Box<dyn Handler>,
+        F: FnOnce(ReactorApi) -> Box<dyn Handler>,
     {
         let id = self.hid.get();
         let mut handlers = self.handlers.take().unwrap_or_default();
         handlers.push(HandlerItem {
-            hnd: f(DriverApi {
+            hnd: f(ReactorApi {
                 batch: id << Self::BATCH,
                 inner: self.inner.clone(),
             }),
@@ -333,13 +334,13 @@ impl Driver {
     }
 }
 
-impl AsRawFd for Driver {
+impl AsRawFd for Reactor {
     fn as_raw_fd(&self) -> RawFd {
         self.fd
     }
 }
 
-impl crate::Reactor for Driver {
+impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let addr = SockAddr::from(addr);
         let result = Socket::new(addr.domain(), Type::STREAM, Some(Protocol::TCP))
@@ -393,7 +394,7 @@ impl crate::Reactor for Driver {
     }
 }
 
-impl ntex_rt::Driver for Driver {
+impl ntex_rt::Driver for Reactor {
     /// Poll the driver and handle completed operations.
     fn run(&self, rt: &Runtime) -> io::Result<()> {
         let ring = &self.inner.ring;
@@ -518,9 +519,9 @@ impl Notify for NotifyHandle {
     }
 }
 
-impl fmt::Debug for Driver {
+impl fmt::Debug for Reactor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Driver")
+        f.debug_struct("Reactor")
             .field("fd", &self.fd)
             .field("hid", &self.hid)
             .field("nodifier", &self.notifier)
@@ -528,9 +529,9 @@ impl fmt::Debug for Driver {
     }
 }
 
-impl fmt::Debug for DriverApi {
+impl fmt::Debug for ReactorApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DriverApi")
+        f.debug_struct("ReactorApi")
             .field("batch", &self.batch)
             .finish()
     }

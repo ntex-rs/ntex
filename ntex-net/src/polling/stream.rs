@@ -7,7 +7,7 @@ use ntex_rt::{Arbiter, syscall};
 use slab::Slab;
 use socket2::Socket;
 
-use super::{Driver, DriverApi, Event, Handler};
+use super::{Event, Handler, Reactor, ReactorApi};
 use crate::helpers::Queue;
 
 const MAX_WRITE_SIZE: usize = 64 * 1024;
@@ -53,14 +53,14 @@ struct StreamOpsHandler {
 }
 
 struct StreamOpsInner {
-    api: DriverApi,
+    api: ReactorApi,
     delayed_feed: Queue<IdType>,
     streams: Cell<Option<Box<Slab<StreamItem>>>>,
 }
 
 impl StreamOps {
     /// Get `StreamOps` instance from the current runtime, or create new one
-    pub(crate) fn get(driver: &Driver) -> Self {
+    pub(crate) fn get(driver: &Reactor) -> Self {
         Arbiter::get_value(|| {
             let mut inner = None;
             driver.register(|api| {

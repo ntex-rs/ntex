@@ -7,7 +7,7 @@ use slab::Slab;
 use socket2::{SockAddr, Socket};
 use windows_sys::Win32::Networking::WinSock;
 
-use super::{Driver, DriverApi, Handler, Overlapped, ops};
+use super::{Handler, Overlapped, Reactor, ReactorApi, ops};
 use crate::helpers::Queue;
 
 #[derive(Clone)]
@@ -53,7 +53,7 @@ enum IdType {
 
 #[allow(clippy::box_collection)]
 struct StreamOpsInner {
-    api: DriverApi,
+    api: ReactorApi,
     storage: Cell<Option<Box<StreamOpsStorage>>>,
     delayed_feed: Queue<IdType>,
     pool: pool::Pool<io::Result<()>>,
@@ -65,10 +65,10 @@ struct StreamOpsStorage {
 
 impl StreamOps {
     /// Get `StreamOps` instance from the current runtime, or create new one
-    pub(crate) fn get(driver: &Driver) -> Self {
+    pub(crate) fn get(reactor: &Reactor) -> Self {
         Arbiter::get_value(|| {
             let mut inner = None;
-            driver.register(|api| {
+            reactor.register(|api| {
                 let ops = Rc::new(StreamOpsInner {
                     api,
                     pool: pool::new(),

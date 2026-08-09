@@ -11,9 +11,9 @@ use crate::{driver::Driver, driver::Notify, driver::PollResult, handle::JoinHand
 scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
 
 #[derive(Debug)]
-/// The async runtime for ntex
+/// The async runtime for ntex.
 ///
-/// It is a thread local runtime, and cannot be sent to other threads.
+/// This is a thread-local runtime and cannot be sent to other threads.
 pub struct Runtime {
     stop: Cell<bool>,
     queue: Arc<RunnableQueue>,
@@ -87,7 +87,7 @@ impl Runtime {
         JoinHandle::new(task)
     }
 
-    /// Poll runtime and run active tasks
+    /// Poll runtime and run active tasks.
     pub fn poll(&self) -> PollResult {
         if self.stop.get() {
             PollResult::Ready
@@ -98,13 +98,13 @@ impl Runtime {
         }
     }
 
-    /// Runs the provided future
+    /// Runs the provided future.
     ///
-    /// Blocking the current thread until the future completes
+    /// Blocks the current thread until the future completes.
     ///
     /// # Panics
     ///
-    /// Call may panic if driver fails to run provided future
+    /// Panics if the driver fails to run the provided future.
     pub fn block_on<F: Future>(&self, future: F, driver: &dyn Driver) -> F::Output {
         self.stop.set(false);
 

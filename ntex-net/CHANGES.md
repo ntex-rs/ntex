@@ -1,6 +1,6 @@
 # Changes
 
-## [3.14.2] - 2026-08-09
+## [3.15.0] - 2026-08-09
 
 * Do not unwind reactor panics, forward handling to arbiter
 

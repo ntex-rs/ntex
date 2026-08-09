@@ -9,7 +9,7 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use windows_sys::{Win32::Networking::WinSock, core::GUID};
 
 use super::{
-    Driver, DriverApi, Handler, Overlapped, TcpStream, UnixStream, ops, stream::StreamOps,
+    Handler, Overlapped, Reactor, ReactorApi, TcpStream, UnixStream, ops, stream::StreamOps,
 };
 use crate::channel::{self, Receiver, Sender};
 
@@ -31,19 +31,19 @@ struct ConnectOp {
 type Operations = RefCell<Slab<Box<ConnectOp>>>;
 
 struct ConnectOpsInner {
-    api: DriverApi,
+    api: ReactorApi,
     streams: StreamOps,
     ops: Operations,
     connect: WinSock::LPFN_CONNECTEX,
 }
 
 impl ConnectOps {
-    pub(crate) fn get(driver: &Driver) -> Self {
-        let streams = StreamOps::get(driver);
+    pub(crate) fn get(reactor: &Reactor) -> Self {
+        let streams = StreamOps::get(reactor);
 
         Arbiter::get_value(move || {
             let mut inner = None;
-            driver.register(|api| {
+            reactor.register(|api| {
                 let dummy = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
                     .expect("Cannot create socket");
                 let connect = get_wsa_fn(dummy.as_raw_socket(), WinSock::WSAID_CONNECTEX)

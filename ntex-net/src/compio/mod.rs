@@ -27,9 +27,11 @@ pub(crate) fn block_on<F: Future<Output = ()>>(fut: F) {
     rt.block_on(fut);
 }
 
-pub(crate) struct CompioDriver;
+#[derive(Copy, Clone, Debug)]
+/// ntex reactor based on compio runtime
+pub struct Reactor;
 
-impl ntex_rt::Driver for CompioDriver {
+impl ntex_rt::Driver for Reactor {
     fn run(&self, _: &ntex_rt::Runtime) -> std::io::Result<()> {
         panic!("Not supported")
     }
@@ -41,7 +43,7 @@ impl ntex_rt::Driver for CompioDriver {
     fn clear(&self) {}
 }
 
-impl crate::Reactor for CompioDriver {
+impl crate::Reactor for Reactor {
     fn tcp_connect(&self, addr: std::net::SocketAddr, cfg: SharedCfg) -> Receiver<Io> {
         let (tx, rx) = channel::create();
         ntex_rt::spawn(async move {
