@@ -101,6 +101,7 @@ fn with_current<T, F: FnOnce(&dyn Reactor) -> T>(f: F) -> T {
     }
 }
 
+#[allow(clippy::borrowed_box)]
 /// Sets the current reactor and runs the provided closure.
 pub fn with_reactor<R, F: FnOnce() -> R>(r: &Box<dyn Reactor>, f: F) -> R {
     #[cold]
@@ -111,7 +112,7 @@ pub fn with_reactor<R, F: FnOnce() -> R>(r: &Box<dyn Reactor>, f: F) -> R {
     if CURRENT_DRIVER.is_set() {
         reactor_is_set()
     } else {
-        CURRENT_DRIVER.set(r, || f())
+        CURRENT_DRIVER.set(r, f)
     }
 }
 
