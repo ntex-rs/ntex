@@ -8,6 +8,7 @@ pub(crate) struct MainArgs {
     name: Option<LitStr>,
     signals: Option<LitBool>,
     ping_interval: Option<LitInt>,
+    rt: Option<syn::Path>,
 }
 
 impl MainArgs {
@@ -33,11 +34,19 @@ impl MainArgs {
             #sys_signals
         }
     }
+
+    pub(crate) fn gen_sys_rt(&mut self) -> TokenStream {
+        self.rt
+            .take()
+            .map(|runner| quote!(#runner))
+            .unwrap_or_else(|| quote!(ntex::rt::DefaultRuntime))
+    }
 }
 
 impl Parse for MainArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut args = MainArgs {
+            rt: None,
             name: None,
             signals: None,
             ping_interval: None,
@@ -109,10 +118,29 @@ impl Parse for MainArgs {
                         ));
                     }
                 }
+            } else if param.path.is_ident("rt") {
+                if args.rt.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        param.path,
+                        "duplicate `rt` argument",
+                    ));
+                }
+
+                match param.value {
+                    Expr::Path(syn::ExprPath { path, .. }) => {
+                        args.rt = Some(path);
+                    }
+                    value => {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            "`rt` value must be a type",
+                        ));
+                    }
+                }
             } else {
                 return Err(syn::Error::new_spanned(
                     param.path,
-                    "unknown argument, expected `name or ping_interval`",
+                    "unknown argument, expected `name, ping_interval, signals or rt`",
                 ));
             }
         }

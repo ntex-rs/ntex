@@ -208,6 +208,7 @@ pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `signals = true/false` - Enable/disable signals handling.
 /// - `ping_interval = N` - Sets arbiter ping interval in milliseconds for the created system.
 ///   To disable pings set value to zero.
+/// - `rt = ..` - Sets system runtime type, it must implements Runner trait
 ///
 /// ```rust
 /// #[ntex::main(ping_interval = 250)]
@@ -217,7 +218,7 @@ pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
-    let args = syn::parse_macro_input!(args as sys::MainArgs);
+    let mut args = syn::parse_macro_input!(args as sys::MainArgs);
     let mut input = syn::parse_macro_input!(item as syn::ItemFn);
     let attrs = &input.attrs;
     let vis = &input.vis;
@@ -233,6 +234,7 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
 
     sig.asyncness = None;
 
+    let runner = args.gen_sys_rt();
     let config = args.gen_sys_config(name);
 
     (quote! {
@@ -240,7 +242,7 @@ pub fn rt_main(args: TokenStream, item: TokenStream) -> TokenStream {
         #vis #sig {
             ntex::rt::System::build()
                 #config
-                .build(ntex::rt::DefaultRuntime)
+                .build( #runner )
                 .block_on(async move { #body })
         }
     })
