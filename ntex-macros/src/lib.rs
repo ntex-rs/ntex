@@ -206,6 +206,7 @@ pub fn web_query(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// - `name = "..."` - Sets system name.
 /// - `signals = true/false` - Enable/disable signals handling.
+/// - `panic_handling = true/false` - Enable/disable panic handling.
 /// - `ping_interval = N` - Sets arbiter ping interval in milliseconds for the created system.
 ///   To disable pings set value to zero.
 /// - `rt = ..` - Sets system runtime type, it must implements Runner trait

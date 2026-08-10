@@ -8,6 +8,7 @@ pub(crate) struct MainArgs {
     name: Option<LitStr>,
     signals: Option<LitBool>,
     ping_interval: Option<LitInt>,
+    panic_handling: Option<LitBool>,
     rt: Option<syn::Path>,
 }
 
@@ -28,10 +29,16 @@ impl MainArgs {
             .map(|signals| quote!(.signals(#signals)))
             .unwrap_or_default();
 
+        let sys_panics = self
+            .panic_handling
+            .map(|panics| quote!(.panic_handling(#panics)))
+            .unwrap_or_default();
+
         quote! {
             #sys_name
             #sys_ping_interval
             #sys_signals
+            #sys_panics
         }
     }
 
@@ -49,6 +56,7 @@ impl Parse for MainArgs {
             rt: None,
             name: None,
             signals: None,
+            panic_handling: None,
             ping_interval: None,
         };
         let params = Punctuated::<MetaNameValue, Token![,]>::parse_terminated(input)?;
@@ -94,6 +102,28 @@ impl Parse for MainArgs {
                         return Err(syn::Error::new_spanned(
                             value,
                             "`signals` value must be an bool literal",
+                        ));
+                    }
+                }
+            } else if param.path.is_ident("panic_handling") {
+                if args.panic_handling.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        param.path,
+                        "duplicate `panic_handling` argument",
+                    ));
+                }
+
+                match param.value {
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Bool(lit),
+                        ..
+                    }) => {
+                        args.panic_handling = Some(lit);
+                    }
+                    value => {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            "`panic_handling` value must be an bool literal",
                         ));
                     }
                 }

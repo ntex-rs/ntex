@@ -58,12 +58,17 @@ pub struct BacktraceResolver {
 pub struct BacktraceRaw {
     id: u64,
     frames: [Option<Frame>; 80],
-    location: &'static Location<'static>,
+    location: &'static str,
 }
 
 impl BacktraceRaw {
     /// Create new backtrace
     pub fn new(location: &'static Location<'static>) -> Self {
+        Self::with_filename(location.file())
+    }
+
+    /// Create new backtrace with filename location
+    pub fn with_filename(location: &'static str) -> Self {
         let mut st = foldhash::fast::FixedState::default().build_hasher();
         let mut idx = 0;
         let mut frames: [Option<Frame>; 80] = [const { None }; 80];
@@ -95,6 +100,11 @@ impl Backtrace {
     /// Create new backtrace
     pub fn new(location: &'static Location<'static>) -> Self {
         Self(Arc::new(BacktraceRaw::new(location)))
+    }
+
+    /// Create new backtrace with filename location
+    pub fn with_filename(location: &'static str) -> Self {
+        Self(Arc::new(BacktraceRaw::with_filename(location)))
     }
 
     /// Backtrace repr
@@ -237,14 +247,14 @@ impl Drop for BacktraceResolver {
     }
 }
 
-fn find_loc(loc: &Location<'_>, frames: &mut [Option<&BacktraceFrame>]) {
+fn find_loc(loc: &str, frames: &mut [Option<&BacktraceFrame>]) {
     let mut idx = 0;
 
     'outter: for (i, frm) in frames.iter().enumerate() {
         if let Some(f) = frm {
             for sym in f.symbols() {
                 if let Some(fname) = sym.filename()
-                    && fname.ends_with(loc.file())
+                    && fname.ends_with(loc)
                 {
                     idx = i;
                     break 'outter;

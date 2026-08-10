@@ -3,7 +3,7 @@ use std::{cell::Cell, cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 use async_channel::{Receiver, Sender, unbounded};
 use core_affinity::CoreId;
-use ntex_rt::{System, signals::Signal};
+use ntex_rt::{System, signals::PanicSource, signals::Signal};
 use ntex_util::future::join_all;
 use ntex_util::time::{Millis, sleep, timeout};
 
@@ -94,7 +94,7 @@ impl<F: ServerConfiguration> ServerManager<F> {
             ntex_rt::spawn(async move {
                 while let Ok(sigs) = ntex_rt::signals::signal().await {
                     for sig in sigs.as_ref() {
-                        srv2.signal(*sig);
+                        srv2.signal(sig.clone());
                     }
                 }
             });
@@ -375,8 +375,13 @@ async fn handle_cmd<F: ServerConfiguration>(
                         state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
                         return;
                     }
-                    Signal::Segv => {
-                        log::info!("SIGSEGV received, exiting");
+                    Signal::Panic(PanicSource::Sig(s)) => {
+                        log::info!("{s} received, exiting");
+                        state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
+                        return;
+                    }
+                    Signal::Panic(PanicSource::App(s, _)) => {
+                        log::info!("Application paniced exiting, {s}");
                         state.stop(state.mgr.0.cfg.graceful_shutdown, None).await;
                         return;
                     }
