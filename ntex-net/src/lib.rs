@@ -111,9 +111,8 @@ pub fn with_reactor<R, F: FnOnce() -> R>(r: &Box<dyn Reactor>, f: F) -> R {
 
     if CURRENT_DRIVER.is_set() {
         reactor_is_set()
-    } else {
-        CURRENT_DRIVER.set(r, f)
     }
+    CURRENT_DRIVER.set(r, f)
 }
 
 scoped_tls::scoped_thread_local!(static CURRENT_DRIVER: Box<dyn Reactor>);

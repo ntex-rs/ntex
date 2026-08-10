@@ -1,5 +1,9 @@
 # Changes
 
+## [3.5.0] - 2026-08-10
+
+* Add "rt" parameter to main, `runner` parameter for rt::Builder::build() method
+
 ## [3.4.0] - 2026-07-31
 
 * Update to syn v3
