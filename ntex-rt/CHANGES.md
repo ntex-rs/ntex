@@ -1,5 +1,9 @@
 # Changes
 
+## [3.17.1] - 2026-08-10
+
+* Add panic handling support
+
 ## [3.17.0] - 2026-08-09
 
 * Better handling for worker panics

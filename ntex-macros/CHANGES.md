@@ -2,6 +2,10 @@
 
 ## [3.5.0] - 2026-08-10
 
+* Add "panic_handling" parameters to `main` macro
+
+## [3.5.0] - 2026-08-10
+
 * Add "rt" parameter to main, `runner` parameter for rt::Builder::build() method
 
 ## [3.4.0] - 2026-07-31

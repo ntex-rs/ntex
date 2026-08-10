@@ -1,7 +1,6 @@
 use std::{fmt, future::Future, io, marker::PhantomData, panic, rc::Rc, sync::Arc, time};
 
-use crate::driver::Runner;
-use crate::system::{System, SystemConfig};
+use crate::{driver::Runner, signals, system::System, system::SystemConfig};
 
 #[derive(Debug, Clone)]
 /// Builder struct for a ntex runtime.
@@ -20,6 +19,8 @@ pub struct Builder {
     ping_threshold: usize,
     /// Signal handling
     signals: bool,
+    /// Panic handling
+    panics: bool,
     /// Thread pool config
     pool_limit: usize,
     pool_recv_timeout: time::Duration,
@@ -35,6 +36,7 @@ impl Builder {
             ping_interval: 2000,
             ping_threshold: 1000,
             signals: false,
+            panics: false,
             testing: false,
             pool_limit: 256,
             pool_recv_timeout: time::Duration::from_secs(60),
@@ -67,6 +69,17 @@ impl Builder {
     /// By default, signal handling is disabled.
     pub fn signals(mut self, eanbled: bool) -> Self {
         self.signals = eanbled;
+        self
+    }
+
+    #[must_use]
+    /// Enables panic handling.
+    ///
+    /// When panic handling is enabled, the application can receive
+    /// `Signal::Panic(PanicReason::Panic(..))` signals.
+    /// By default, panic handling is disabled.
+    pub fn panic_handling(mut self, eanbled: bool) -> Self {
+        self.panics = eanbled;
         self
     }
 
@@ -132,6 +145,7 @@ impl Builder {
     pub fn testing(mut self) -> Self {
         self.testing = true;
         self.signals = false;
+        self.panics = false;
         self
     }
 
@@ -174,6 +188,7 @@ impl Builder {
             config,
             runner,
             signals: self.signals,
+            panics: self.panics,
             _t: PhantomData,
         }
     }
@@ -185,6 +200,7 @@ pub struct SystemRunner {
     config: SystemConfig,
     runner: Arc<dyn Runner>,
     signals: bool,
+    panics: bool,
     _t: PhantomData<Rc<()>>,
 }
 
@@ -207,8 +223,13 @@ impl SystemRunner {
             config,
             runner,
             signals,
+            panics,
             ..
         } = self;
+
+        if panics {
+            signals::enable_panic_handling();
+        }
 
         // run loop
         crate::driver::block_on_panic(runner.as_ref(), async move {
@@ -243,8 +264,13 @@ impl SystemRunner {
             config,
             runner,
             signals,
+            panics,
             ..
         } = self;
+
+        if panics {
+            signals::enable_panic_handling();
+        }
 
         crate::driver::block_on_panic(runner.as_ref(), async move {
             let (system, _) = System::start(config);

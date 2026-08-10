@@ -1,7 +1,8 @@
 #![allow(static_mut_refs)]
-use std::{cell::RefCell, future::poll_fn, sync::Arc, task::Poll};
+use std::{cell::RefCell, future::poll_fn, panic, sync::Arc, task::Poll};
 
 use atomic_waker::AtomicWaker;
+use ntex_error::Backtrace;
 
 use crate::System;
 
@@ -11,11 +12,11 @@ thread_local! {
 }
 
 static mut CUR_SYS: Option<System> = None;
-static mut SIGS: [Option<Signal>; 10] = [None; 10];
+static mut SIGS: [Option<Signal>; 10] = [const { None }; 10];
 static HND_WAKER: AtomicWaker = AtomicWaker::new();
 
 /// Different types of process signals
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Signal {
     /// SIGHUP
     Hup,
@@ -25,8 +26,17 @@ pub enum Signal {
     Term,
     /// SIGQUIT
     Quit,
-    /// SIGSEGV
-    Segv,
+    /// Application panic
+    Panic(PanicSource),
+}
+
+/// Different types of panics
+#[derive(Clone, Debug)]
+pub enum PanicSource {
+    /// SIGSEGV or SIGABRT is received
+    Sig(&'static str),
+    /// Application panic
+    App(Arc<str>, Backtrace),
 }
 
 /// Register signal handler.
@@ -153,10 +163,13 @@ pub(crate) fn start(sys: &System) {
             (3, SIGQUIT, Signal::Quit),
         ] {
             unsafe {
-                match register(s, move || handle_signal(sig)) {
+                let sig2 = sig.clone();
+                match register(s, move || handle_signal(sig.clone())) {
                     Ok(s) => SIG_HANDLERS[idx] = Some(s),
                     Err(e) => {
-                        log::error!("Cannot install signal handler for {sig:?} with {e:?}");
+                        log::error!(
+                            "Cannot install signal handler for {sig2:?} with {e:?}"
+                        );
                     }
                 }
             }
@@ -241,7 +254,33 @@ async fn signals(rx: oneshot::AsyncReceiver<()>) {
 }
 
 #[cfg(target_family = "unix")]
-extern "C" fn sig_segv(_: i32) {
-    eprintln!("Stack Overflow:\n{:?}", backtrace::Backtrace::new());
-    handle_signal(Signal::Segv);
+extern "C" fn sig_segv(v: i32) {
+    if v == 6 {
+        eprintln!("SIGABRT Received:\n{:?}", backtrace::Backtrace::new());
+        handle_signal(Signal::Panic(PanicSource::Sig("SIGABRT")));
+    } else {
+        eprintln!("SIGSEGV Received:\n{:?}", backtrace::Backtrace::new());
+        handle_signal(Signal::Panic(PanicSource::Sig("SIGSEGV")));
+    }
+}
+
+pub(crate) fn enable_panic_handling() {
+    panic::set_hook(Box::new(|panic_info| {
+        let info: Arc<str> = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            Arc::from(s.to_string())
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            Arc::from(s.clone())
+        } else {
+            Arc::from("panic")
+        };
+        let bt = if let Some(loc) = panic_info.location() {
+            let s = Box::new(loc.file().to_string());
+            let filename = Box::leak(s);
+            Backtrace::with_filename(filename)
+        } else {
+            Backtrace::new(panic::Location::caller())
+        };
+
+        handle_signal(Signal::Panic(PanicSource::App(info, bt)));
+    }));
 }

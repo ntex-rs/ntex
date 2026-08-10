@@ -4,7 +4,8 @@ use std::{future::Future, io, sync::Arc, thread};
 
 use async_task::Runnable;
 use crossbeam_queue::SegQueue;
-use swap_buffer_queue::{Queue, buffer::ArrayBuffer, error::TryEnqueueError};
+use swap_buffer_queue::error::{TryDequeueError, TryEnqueueError};
+use swap_buffer_queue::{Queue, buffer::ArrayBuffer};
 
 use crate::{driver::Driver, driver::Notify, driver::PollResult, handle::JoinHandle};
 
@@ -79,10 +80,11 @@ impl Runtime {
     /// The caller should ensure the captured lifetime is long enough.
     pub unsafe fn spawn_unchecked<F: Future>(&self, future: F) -> JoinHandle<F::Output> {
         let queue = self.queue.clone();
-        let schedule = move |runnable| {
-            queue.schedule(runnable);
+        let (runnable, task) = unsafe {
+            async_task::spawn_unchecked(future, move |runnable| {
+                queue.schedule(runnable);
+            })
         };
-        let (runnable, task) = unsafe { async_task::spawn_unchecked(future, schedule) };
         runnable.schedule();
         JoinHandle::new(task)
     }
@@ -219,35 +221,45 @@ impl RunnableQueue {
     }
 
     fn run(&self) -> bool {
-        for _ in 0..self.event_interval {
-            let task = unsafe { (*self.local_queue.get()).pop_front() };
-            if let Some(task) = task {
-                task.run();
-            } else {
-                break;
+        let local_queue = {
+            let q = unsafe { &mut *self.local_queue.get() };
+            for _ in 0..self.event_interval {
+                if let Some(task) = q.pop_front() {
+                    task.run();
+                } else {
+                    break;
+                }
             }
-        }
+            !q.is_empty()
+        };
 
-        if let Ok(buf) = self.sync_fixed_queue.try_dequeue() {
-            for task in buf {
-                task.run();
+        let sync_queue_fixed = match self.sync_fixed_queue.try_dequeue() {
+            Ok(buf) => {
+                for task in buf {
+                    task.run();
+                }
+                false
             }
-        }
+            Err(TryDequeueError::Empty | TryDequeueError::Closed) => false,
+            Err(_) => true,
+        };
 
-        for _ in 0..self.event_interval {
+        let mut idx = self.event_interval;
+        let sync_queue = loop {
+            idx -= 1;
+            if idx == 0 {
+                break true;
+            }
             if !self.sync_queue.is_empty()
                 && let Some(task) = self.sync_queue.pop()
             {
                 task.run();
-                continue;
+            } else {
+                break false;
             }
-            break;
-        }
+        };
 
-        let more_tasks = !unsafe { (*self.local_queue.get()).is_empty() }
-            || !self.sync_fixed_queue.is_empty()
-            || !self.sync_queue.is_empty();
-
+        let more_tasks = local_queue || sync_queue_fixed || sync_queue;
         if !more_tasks {
             self.idle.set(true);
         }

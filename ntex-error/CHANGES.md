@@ -1,5 +1,9 @@
 # Changes
 
+## [2.4.0] - 2026-08-10
+
+* Add Backtrace::with_filename() ctor
+
 ## [2.3.0] - 2026-06-15
 
 * Export BacktraceRaw type
