@@ -63,7 +63,7 @@ where
     type InitError = Err;
 
     #[inline]
-    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.a.create(cfg).await.map_err(|e| (self.f)(e))
     }
 }

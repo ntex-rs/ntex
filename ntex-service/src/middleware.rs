@@ -95,7 +95,7 @@ pub trait Middleware<Svc, Cfg = ()> {
     type Service;
 
     /// Creates and returns a new middleware service.
-    fn create(&self, service: Svc, cfg: Cfg) -> Self::Service;
+    fn create(&self, service: Svc, cfg: &Cfg) -> Self::Service;
 
     /// Creates a service factory that instantiates a service and applies
     /// the current middleware to it.
@@ -107,7 +107,6 @@ pub trait Middleware<Svc, Cfg = ()> {
     ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac>, St, Req>
     where
         Fac: ServiceFactory<St, Req, Service = Svc, InitCfg = Cfg>,
-        Cfg: Clone,
         Self: Sized,
         Self::Service: Service<St = St, Req = Req>,
     {
@@ -121,7 +120,7 @@ where
 {
     type Service = M::Service;
 
-    fn create(&self, service: Svc, cfg: Cfg) -> M::Service {
+    fn create(&self, service: Svc, cfg: &Cfg) -> M::Service {
         self.as_ref().create(service, cfg)
     }
 }
@@ -158,7 +157,6 @@ where
 impl<M, Fac, St, Req> ServiceFactory<St, Req> for ApplyMiddleware<M, Fac>
 where
     Fac: ServiceFactory<St, Req>,
-    Fac::InitCfg: Clone,
     M: Middleware<Fac::Service, Fac::InitCfg>,
     M::Service: Service<St = St, Req = Req>,
 {
@@ -170,8 +168,8 @@ where
     type InitError = Fac::InitError;
 
     #[inline]
-    async fn create(&self, cfg: Fac::InitCfg) -> Result<Self::Service, Self::InitError> {
-        Ok(self.0.0.create(self.0.1.create(cfg.clone()).await?, cfg))
+    async fn create(&self, cfg: &Fac::InitCfg) -> Result<Self::Service, Self::InitError> {
+        Ok(self.0.0.create(self.0.1.create(cfg).await?, cfg))
     }
 }
 
@@ -185,7 +183,7 @@ impl<S, Cfg> Middleware<S, Cfg> for Identity {
     type Service = S;
 
     #[inline]
-    fn create(&self, service: S, _: Cfg) -> Self::Service {
+    fn create(&self, service: S, _: &Cfg) -> Self::Service {
         service
     }
 }
@@ -207,13 +205,11 @@ impl<S, Inner, Outer, C> Middleware<S, C> for Stack<Inner, Outer>
 where
     Inner: Middleware<S, C>,
     Outer: Middleware<Inner::Service, C>,
-    C: Clone,
 {
     type Service = Outer::Service;
 
-    fn create(&self, service: S, cfg: C) -> Self::Service {
-        self.outer
-            .create(self.inner.create(service, cfg.clone()), cfg)
+    fn create(&self, service: S, cfg: &C) -> Self::Service {
+        self.outer.create(self.inner.create(service, cfg), cfg)
     }
 }
 
@@ -261,7 +257,7 @@ where
 {
     type Service = Apply<T, F, In, Out, Err>;
 
-    fn create(&self, service: T, _: C) -> Self::Service {
+    fn create(&self, service: T, _: &C) -> Self::Service {
         Apply::new(service, self.f.clone())
     }
 }
@@ -280,7 +276,7 @@ mod tests {
     impl<S, C> Middleware<S, C> for Mw {
         type Service = Srv<S>;
 
-        fn create(&self, service: S, _: C) -> Self::Service {
+        fn create(&self, service: S, _: &C) -> Self::Service {
             self.0.set(self.0.get() + 1);
             Srv(service, self.0.clone())
         }
@@ -390,7 +386,7 @@ mod tests {
         let pl = Pipeline::new(Middleware::create(
             &mw,
             fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
-            (),
+            &(),
         ));
         let res = pl.call(10, &()).await;
         assert!(res.is_ok());
@@ -413,7 +409,7 @@ mod tests {
         let _ = format!("{mw:?}");
 
         let svc = Pipeline::new(
-            mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), ()),
+            mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), &()),
         );
 
         let res = svc.call("test", &()).await;

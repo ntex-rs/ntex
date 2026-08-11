@@ -77,7 +77,6 @@ where
             InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
-    A::InitCfg: Clone,
 {
     type Res = B::Res;
     type Error = A::Error;
@@ -86,9 +85,9 @@ where
     type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
-    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Then {
-            svc1: self.svc1.create(cfg.clone()).await?,
+            svc1: self.svc1.create(cfg).await?,
             svc2: self.svc2.create(cfg).await?,
         })
     }
@@ -221,7 +220,7 @@ mod tests {
                 async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }
             }))
             .clone();
-        let srv = factory.pipeline(()).await.unwrap();
+        let srv = factory.pipeline(&()).await.unwrap();
         let res = srv.call(Ok("srv1"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));

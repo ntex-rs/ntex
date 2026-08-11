@@ -4,6 +4,8 @@
 
 * Add shared state management
 
+* Use config ref for service factory creation
+
 ## [4.6.0] - 2026-03-05
 
 * Add `service` name to `SharedCfg`

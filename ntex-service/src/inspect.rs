@@ -195,7 +195,7 @@ where
     type InitError = S::InitError;
 
     #[inline]
-    async fn create(&self, cfg: S::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &S::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.s.create(cfg).await.map(|svc| Inspect {
             svc,
             f: self.f.clone(),
@@ -254,7 +254,7 @@ where
     type InitError = S::InitError;
 
     #[inline]
-    async fn create(&self, cfg: S::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &S::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.s.create(cfg).await.map(|svc| InspectErr {
             svc,
             f: self.f.clone(),
@@ -365,7 +365,7 @@ mod tests {
         }))
         .inspect(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
-        let srv = new_srv.pipeline(()).await.unwrap();
+        let srv = new_srv.pipeline(&()).await.unwrap();
         let res = srv.call((), &()).await;
         assert!(res.is_ok());
         let _ = format!("{new_srv:?}");
@@ -383,7 +383,7 @@ mod tests {
         }))
         .inspect_err(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
-        let srv = new_srv.pipeline(()).await.unwrap();
+        let srv = new_srv.pipeline(&()).await.unwrap();
         let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());

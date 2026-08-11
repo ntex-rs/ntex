@@ -211,7 +211,7 @@ where
     type InitError = T::InitError;
 
     #[inline]
-    async fn create(&self, cfg: T::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &T::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.service.create(cfg).await.map(|service| Apply {
             service,
             f: self.f.clone(),
@@ -321,7 +321,7 @@ mod tests {
             .clone(),
         );
 
-        let srv = new_srv.pipeline(()).await.unwrap();
+        let srv = new_srv.pipeline(&()).await.unwrap();
 
         assert_eq!(srv.ready(&()).await, Ok::<_, Err>(()));
 
@@ -342,7 +342,7 @@ mod tests {
             })
             .clone();
 
-        let srv = new_srv.pipeline(()).await.unwrap();
+        let srv = new_srv.pipeline(&()).await.unwrap();
 
         assert_eq!(srv.ready(&()).await, Ok::<_, Err>(()));
 

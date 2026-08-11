@@ -10,7 +10,7 @@ pub fn map_config<T, S, R, U, F, C>(factory: U, f: F) -> MapConfig<T, F, C>
 where
     T: ServiceFactory<R, S>,
     U: IntoServiceFactory<T, R, S>,
-    F: Fn(C) -> T::InitCfg,
+    F: Fn(&C) -> T::InitCfg,
 {
     MapConfig::new(factory.into_factory(), f)
 }
@@ -71,7 +71,7 @@ where
 impl<A, F, C, S, R> ServiceFactory<S, R> for MapConfig<A, F, C>
 where
     A: ServiceFactory<S, R>,
-    F: Fn(C) -> A::InitCfg,
+    F: Fn(&C) -> A::InitCfg,
 {
     type Res = A::Res;
     type Error = A::Error;
@@ -80,8 +80,8 @@ where
     type InitCfg = C;
     type InitError = A::InitError;
 
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.a.create((self.f)(cfg)).await
+    async fn create(&self, cfg: &C) -> Result<Self::Service, Self::InitError> {
+        self.a.create(&(self.f)(cfg)).await
     }
 }
 
@@ -113,8 +113,8 @@ where
     type InitCfg = C;
     type InitError = A::InitError;
 
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        self.factory.create(()).await
+    async fn create(&self, _: &C) -> Result<Self::Service, Self::InitError> {
+        self.factory.create(&()).await
     }
 }
 

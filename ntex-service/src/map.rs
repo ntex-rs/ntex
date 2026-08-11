@@ -139,7 +139,7 @@ where
     type InitError = A::InitError;
 
     #[inline]
-    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Map {
             service: self.a.create(cfg).await?,
             f: self.f.clone(),
@@ -223,7 +223,7 @@ mod tests {
         let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv::default()) })
             .map(|()| "ok")
             .clone();
-        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
@@ -237,7 +237,7 @@ mod tests {
             crate::chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
                 .map(|()| "ok")
                 .clone();
-        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));

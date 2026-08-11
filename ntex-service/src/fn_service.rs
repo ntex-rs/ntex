@@ -37,7 +37,7 @@ where
 ///     });
 ///
 ///     // construct new service
-///     let srv = factory.pipeline(()).await?;
+///     let srv = factory.pipeline(&()).await?;
 ///
 ///     // now we can use `div` service
 ///     let result = srv.call((10, 20), &()).await?;
@@ -88,7 +88,7 @@ where
 /// ```
 pub fn fn_factory_with_config<F, Cfg, Srv, Err>(f: F) -> FnServiceConfig<F, Cfg, Srv, Err>
 where
-    F: AsyncFn(Cfg) -> Result<Srv, Err>,
+    F: AsyncFn(&Cfg) -> Result<Srv, Err>,
     Srv: Service,
 {
     FnServiceConfig { f, _t: PhantomData }
@@ -218,7 +218,7 @@ where
     #[inline]
     fn create(
         &self,
-        _: Cfg,
+        _: &Cfg,
     ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
         ready(Ok(FnService {
             f: self.f.clone(),
@@ -230,7 +230,7 @@ where
 /// `ServiceFactory` for a `AsyncFn(Cfg) -> Result<Srv, Err>` function
 pub struct FnServiceConfig<F, Cfg, Srv, Err>
 where
-    F: AsyncFn(Cfg) -> Result<Srv, Err>,
+    F: AsyncFn(&Cfg) -> Result<Srv, Err>,
     Srv: Service,
 {
     f: F,
@@ -239,7 +239,7 @@ where
 
 impl<F, Cfg, Srv, Err> Clone for FnServiceConfig<F, Cfg, Srv, Err>
 where
-    F: AsyncFn(Cfg) -> Result<Srv, Err> + Clone,
+    F: AsyncFn(&Cfg) -> Result<Srv, Err> + Clone,
     Srv: Service,
 {
     #[inline]
@@ -253,7 +253,7 @@ where
 
 impl<F, Cfg, Srv, Err> fmt::Debug for FnServiceConfig<F, Cfg, Srv, Err>
 where
-    F: AsyncFn(Cfg) -> Result<Srv, Err>,
+    F: AsyncFn(&Cfg) -> Result<Srv, Err>,
     Srv: Service,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -266,7 +266,7 @@ where
 impl<F, Cfg, Srv, St, Req, Err> ServiceFactory<St, Req>
     for FnServiceConfig<F, Cfg, Srv, Err>
 where
-    F: AsyncFn(Cfg) -> Result<Srv, Err>,
+    F: AsyncFn(&Cfg) -> Result<Srv, Err>,
     Srv: Service<St = St, Req = Req>,
 {
     type Res = Srv::Res;
@@ -277,7 +277,7 @@ where
     type InitError = Err;
 
     #[inline]
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
         (self.f)(cfg).await
     }
 }
@@ -315,7 +315,7 @@ where
     type InitError = E;
 
     #[inline]
-    async fn create(&self, _: C) -> Result<S, E> {
+    async fn create(&self, _: &C) -> Result<S, E> {
         (self.f)().await
     }
 }
@@ -356,7 +356,7 @@ mod tests {
         let new_srv = fn_service(async |()| Ok::<_, ()>("srv")).clone();
         let _ = format!("{new_srv:?}");
 
-        let srv = Pipeline::new(new_srv.create(()).await.unwrap()).bind(());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap()).bind(());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());
@@ -377,7 +377,7 @@ mod tests {
         let new_srv = fn_service(|()| async { Ok::<_, ()>("srv") }).clone();
         let _ = format!("{new_srv:?}");
 
-        let srv = Pipeline::new(new_srv.create(()).await.unwrap()).bind(());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap()).bind(());
         let res = srv.call(()).await;
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
         assert!(res.is_ok());

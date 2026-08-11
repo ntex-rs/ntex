@@ -351,7 +351,7 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     /// Create and return a new service value asynchronously and wrap into a container
     pub async fn pipeline(
         &self,
-        cfg: Fac::InitCfg,
+        cfg: &Fac::InitCfg,
     ) -> Result<Pipeline<Fac::Service>, Fac::InitError>
     where
         Self: Sized,
@@ -393,7 +393,7 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceFactory<St, Req>
     type InitError = Fac::InitError;
 
     #[inline]
-    async fn create(&self, cfg: Fac::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Fac::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.factory.create(cfg).await
     }
 }

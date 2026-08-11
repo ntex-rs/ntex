@@ -78,7 +78,6 @@ where
             InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
-    B::InitCfg: Clone,
 {
     type Res = B::Res;
     type Error = A::Error;
@@ -88,9 +87,9 @@ where
     type InitError = A::InitError;
 
     #[inline]
-    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(AndThen {
-            svc1: self.svc1.create(cfg.clone()).await?,
+            svc1: self.svc1.create(cfg).await?,
             svc2: self.svc2.create(cfg).await?,
         })
     }
@@ -227,7 +226,7 @@ mod tests {
         }))
         .clone();
 
-        let srv = new_srv.pipeline(()).await.unwrap();
+        let srv = new_srv.pipeline(&()).await.unwrap();
         let res = srv.call("srv1", &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));

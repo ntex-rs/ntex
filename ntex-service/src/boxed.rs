@@ -37,8 +37,8 @@ impl<St, Req, Res, Err> fmt::Debug for BoxService<St, Req, Res, Err> {
     }
 }
 
-impl<Cfg, St, Req, Res, Err, InitError> fmt::Debug
-    for BoxServiceFactory<Cfg, St, Req, Res, Err, InitError>
+impl<St, Req, Res, Err, Cfg, InitError> fmt::Debug
+    for BoxServiceFactory<St, Req, Res, Err, Cfg, InitError>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BoxServiceFactory").finish()
@@ -125,7 +125,7 @@ trait ServiceFactoryObj<St, Req, Cfg> {
 
     fn create<'a>(
         &'a self,
-        cfg: Cfg,
+        cfg: &'a Cfg,
     ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitError>
     where
         Cfg: 'a,
@@ -146,7 +146,7 @@ where
     #[inline]
     fn create<'a>(
         &'a self,
-        cfg: Cfg,
+        cfg: &'a Cfg,
     ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitError>
     where
         Cfg: 'a,
@@ -202,7 +202,7 @@ where
     type InitError = InitError;
 
     #[inline]
-    async fn create(&self, cfg: InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &InitCfg) -> Result<Self::Service, Self::InitError> {
         self.0.create(cfg).await
     }
 }

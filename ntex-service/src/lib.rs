@@ -212,13 +212,13 @@ pub trait ServiceFactory<St, Req> {
     type InitError;
 
     /// Creates a new service asynchronously and returns it.
-    async fn create(&self, cfg: Self::InitCfg) -> Result<Self::Service, Self::InitError>;
+    async fn create(&self, cfg: &Self::InitCfg) -> Result<Self::Service, Self::InitError>;
 
     #[inline]
     /// Asynchronously creates a new service and wraps it in a container.
     async fn pipeline(
         &self,
-        cfg: Self::InitCfg,
+        cfg: &Self::InitCfg,
     ) -> Result<Pipeline<Self::Service>, Self::InitError>
     where
         Self: Sized,
@@ -365,7 +365,7 @@ where
     type InitCfg = S::InitCfg;
     type InitError = S::InitError;
 
-    async fn create(&self, cfg: S::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &S::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.as_ref().create(cfg).await
     }
 }

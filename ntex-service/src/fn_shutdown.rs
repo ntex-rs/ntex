@@ -61,7 +61,7 @@ where
     #[inline]
     fn create(
         &self,
-        _: Cfg,
+        _: &Cfg,
     ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
         if let Some(f) = self.f_shutdown.take() {
             self.f_shutdown.set(Some(f.clone()));
@@ -121,7 +121,7 @@ mod tests {
         let pipe = chain_factory(srv)
             .and_then(on_shutdown)
             .clone()
-            .pipeline(())
+            .pipeline(&())
             .await
             .unwrap();
 
@@ -151,11 +151,11 @@ mod tests {
             is_called2.set(true);
         });
 
-        let pipe = chain_factory(on_shutdown).pipeline(()).await.unwrap();
+        let pipe = chain_factory(on_shutdown).pipeline(&()).await.unwrap();
         pipe.shutdown().await;
         assert!(is_called.get());
         assert!(!pipe.is_shutdown());
 
-        let _factory = pipe.get_ref().create(()).await;
+        let _factory = pipe.get_ref().create(&()).await;
     }
 }

@@ -155,7 +155,7 @@ where
     type InitError = A::InitError;
 
     #[inline]
-    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.a.create(cfg).await.map(|service| MapErr {
             service,
             f: self.f.clone(),
@@ -239,7 +239,7 @@ mod tests {
             fn_factory(|| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
                 .map_err(|()| "error")
                 .clone();
-        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -253,7 +253,7 @@ mod tests {
         }))
         .map_err(|()| "error")
         .clone();
-        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
         let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
