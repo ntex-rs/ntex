@@ -74,8 +74,8 @@ where
     F: Fn(C) -> C2,
 {
     type St = A::St;
-    type Response = A::Response;
-    type Error = A::Error;
+    type Res = A::Res;
+    type Err = A::Err;
 
     type Service = A::Service;
     type InitError = A::InitError;
@@ -103,8 +103,8 @@ where
     A: ServiceFactory<R>,
 {
     type St = A::St;
-    type Response = A::Response;
-    type Error = A::Error;
+    type Res = A::Res;
+    type Err = A::Err;
 
     type Service = A::Service;
     type InitError = A::InitError;

@@ -125,8 +125,8 @@ where
 {
     type St = ();
     type Req = Req;
-    type Response = Res;
-    type Error = Err;
+    type Res = Res;
+    type Err = Err;
 
     #[inline]
     async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
@@ -194,8 +194,8 @@ where
 {
     type St = ();
     type Req = Req;
-    type Response = Res;
-    type Error = Err;
+    type Res = Res;
+    type Err = Err;
 
     #[inline]
     async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
@@ -209,8 +209,8 @@ where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
     type St = ();
-    type Response = Res;
-    type Error = Err;
+    type Res = Res;
+    type Err = Err;
 
     type Service = FnService<F, Req>;
     type InitError = ();
@@ -280,8 +280,8 @@ where
     Srv: Service<Req = Req>,
 {
     type St = Srv::St;
-    type Response = Srv::Response;
-    type Error = Srv::Error;
+    type Res = Srv::Res;
+    type Err = Srv::Err;
 
     type Service = Srv;
     type InitError = Err;
@@ -318,8 +318,8 @@ where
     C: 'static,
 {
     type St = S::St;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
     type Service = S;
     type InitError = E;
 

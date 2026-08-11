@@ -1,4 +1,6 @@
-use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc, task::Context, task::Poll};
+use std::{
+    cell, fmt, future::Future, marker, pin::Pin, ptr, rc::Rc, task::Context, task::Poll,
+};
 
 use crate::{IntoService, Service, ServiceCtx, ctx::WaitersRef};
 
@@ -41,7 +43,7 @@ impl<S> Pipeline<S> {
 
     #[inline]
     /// Returns when the pipeline is able to process requests.
-    pub async fn ready(&self, st: &S::St) -> Result<(), S::Error>
+    pub async fn ready(&self, st: &S::St) -> Result<(), S::Err>
     where
         S: Service,
     {
@@ -53,7 +55,7 @@ impl<S> Pipeline<S> {
     #[inline]
     /// Wait for service readiness and then create future object
     /// that resolves to service result.
-    pub async fn call(&self, req: S::Req, st: &S::St) -> Result<S::Response, S::Error>
+    pub async fn call(&self, req: S::Req, st: &S::St) -> Result<S::Res, S::Err>
     where
         S: Service,
     {
@@ -115,7 +117,7 @@ impl<S> Pipeline<S> {
     }
 
     #[inline]
-    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error>
+    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Err>
     where
         S: Service,
     {
@@ -185,20 +187,20 @@ where
 {
     type St = S::St;
     type Req = S::Req;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
 
     #[inline]
     async fn call(
         &self,
         req: S::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Err> {
         self.inner.call(req, ctx.st()).await
     }
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
         self.inner.ready(ctx.st()).await
     }
 
@@ -208,7 +210,7 @@ where
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Err> {
         self.inner.poll(cx)
     }
 }
@@ -247,7 +249,7 @@ where
 {
     pl: Pipeline<S>,
     state: Rc<S::St>,
-    st: cell::UnsafeCell<State<S::Error>>,
+    st: cell::UnsafeCell<State<S::Err>>,
 }
 
 enum State<E> {
@@ -281,7 +283,7 @@ where
     }
 
     #[inline]
-    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
+    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Err> {
         self.pl.poll(cx)
     }
 
@@ -291,7 +293,7 @@ where
     /// # Panics
     ///
     /// Call panics if `.poll_shutdown()` was called before.
-    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Err>> {
         let st = unsafe { &mut *self.st.get() };
 
         match st {
@@ -300,7 +302,7 @@ where
                 // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
                 // `self` is alive
                 let pl: &'static Pipeline<S> = unsafe { std::mem::transmute(&self.pl) };
-                let state: &'static S::St = unsafe { std::mem::transmute(&self.state) };
+                let state: &'static S::St = unsafe { &*ptr::from_ref(self.state.as_ref()) };
                 let fut = Box::pin(CheckReadiness {
                     pl,
                     state,
@@ -421,7 +423,7 @@ pub struct PipelineCall<S>
 where
     S: Service,
 {
-    fut: Call<S::Response, S::Error>,
+    fut: Call<S::Res, S::Err>,
 }
 
 type Call<R, E> = Pin<Box<dyn Future<Output = Result<R, E>> + 'static>>;
@@ -430,7 +432,7 @@ impl<S> Future for PipelineCall<S>
 where
     S: Service,
 {
-    type Output = Result<S::Response, S::Error>;
+    type Output = Result<S::Res, S::Err>;
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -450,7 +452,7 @@ where
 fn ready<S>(
     pl: &'static Pipeline<S>,
     st: &S::St,
-) -> impl Future<Output = Result<(), S::Error>>
+) -> impl Future<Output = Result<(), S::Err>>
 where
     S: Service,
 {
@@ -486,9 +488,9 @@ impl<S, F, Fut> Future for CheckReadiness<S, F, Fut>
 where
     S: Service,
     F: Fn(&'static Pipeline<S>, &'static S::St) -> Fut,
-    Fut: Future<Output = Result<(), S::Error>>,
+    Fut: Future<Output = Result<(), S::Err>>,
 {
-    type Output = Result<(), S::Error>;
+    type Output = Result<(), S::Err>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut();
@@ -522,10 +524,10 @@ mod tests {
     impl Service for Srv {
         type St = ();
         type Req = ();
-        type Response = ();
-        type Error = ();
+        type Res = ();
+        type Err = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
             Ok(())
         }
 

@@ -14,7 +14,7 @@ where
     T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
     U: IntoService<T>,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     crate::chain(Apply::new(service.into_service(), f))
 }
@@ -28,7 +28,7 @@ where
     T: ServiceFactory<Req, Cfg>,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
     U: IntoServiceFactory<T, Req, Cfg>,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     crate::chain_factory(ApplyFactory::new(service.into_factory(), f))
 }
@@ -41,10 +41,10 @@ pub struct ApplyCtx<'a, S: Service> {
     st: &'a S::St,
 }
 
-impl<'a, S: Service> ApplyCtx<'a, S> {
+impl<S: Service> ApplyCtx<'_, S> {
     #[inline]
     /// Wait for service readiness and then call service.
-    pub async fn call(&self, req: S::Req) -> Result<S::Response, S::Error>
+    pub async fn call(&self, req: S::Req) -> Result<S::Res, S::Err>
     where
         S: Service,
     {
@@ -66,7 +66,7 @@ impl<T, F, In, Out, Err> Apply<T, F, In, Out, Err>
 where
     T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     pub(crate) fn new(service: T, f: F) -> Self {
         Apply {
@@ -107,12 +107,12 @@ impl<T, F, In, Out, Err> Service for Apply<T, F, In, Out, Err>
 where
     T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     type St = T::St;
     type Req = In;
-    type Response = Out;
-    type Error = Err;
+    type Res = Out;
+    type Err = Err;
 
     #[inline]
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Err> {
@@ -124,7 +124,7 @@ where
         &self,
         req: In,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Err> {
         let (idx, waiters, st) = ctx.inner();
 
         let ctx = ApplyCtx {
@@ -155,7 +155,7 @@ impl<T, Req, Cfg, F, In, Out, Err> ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     /// Create new `ApplyNewService` new service instance
     pub(crate) fn new(service: T, f: F) -> Self {
@@ -171,7 +171,7 @@ impl<T, Req, Cfg, F, In, Out, Err> Clone for ApplyFactory<T, Req, Cfg, F, In, Ou
 where
     T: ServiceFactory<Req, Cfg> + Clone,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -186,7 +186,7 @@ impl<T, Req, Cfg, F, In, Out, Err> fmt::Debug for ApplyFactory<T, Req, Cfg, F, I
 where
     T: ServiceFactory<Req, Cfg> + fmt::Debug,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApplyFactory")
@@ -201,11 +201,11 @@ impl<T, Req, Cfg, F, In, Out, Err> ServiceFactory<In, Cfg>
 where
     T: ServiceFactory<Req, Cfg>,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     type St = T::St;
-    type Response = Out;
-    type Error = Err;
+    type Res = Out;
+    type Err = Err;
 
     type Service = Apply<T::Service, F, In, Out, Err>;
     type InitError = T::InitError;
@@ -235,14 +235,14 @@ mod tests {
     impl Service for Srv {
         type St = ();
         type Req = ();
-        type Response = ();
-        type Error = ();
+        type Res = ();
+        type Err = ();
 
         async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
+        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Err> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }

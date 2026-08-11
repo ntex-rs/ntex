@@ -20,20 +20,20 @@ impl<A, B> AndThen<A, B> {
 impl<A, B> Service for AndThen<A, B>
 where
     A: Service,
-    B: Service<Req = A::Response, St = A::St, Error = A::Error>,
+    B: Service<Req = A::Res, St = A::St, Err = A::Err>,
 {
     type St = A::St;
     type Req = A::Req;
-    type Response = B::Response;
-    type Error = A::Error;
+    type Res = B::Res;
+    type Err = A::Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
     #[inline]
-    fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Err> {
         self.svc1.poll(cx)?;
         self.svc2.poll(cx)
     }
@@ -44,11 +44,7 @@ where
     }
 
     #[inline]
-    async fn call(
-        &self,
-        req: A::Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<B::Response, A::Error> {
+    async fn call(&self, req: A::Req, ctx: ServiceCtx<'_, Self>) -> Result<B::Res, A::Err> {
         let result = ctx.call(&self.svc1, req).await?;
         ctx.call(&self.svc2, result).await
     }
@@ -71,18 +67,12 @@ impl<A, B> AndThenFactory<A, B> {
 impl<A, B, Req, Cfg> ServiceFactory<Req, Cfg> for AndThenFactory<A, B>
 where
     A: ServiceFactory<Req, Cfg>,
-    B: ServiceFactory<
-            A::Response,
-            Cfg,
-            St = A::St,
-            Error = A::Error,
-            InitError = A::InitError,
-        >,
+    B: ServiceFactory<A::Res, Cfg, St = A::St, Err = A::Err, InitError = A::InitError>,
     Cfg: Clone,
 {
     type St = A::St;
-    type Response = B::Response;
-    type Error = A::Error;
+    type Res = B::Res;
+    type Err = A::Err;
 
     type Service = AndThen<A::Service, B::Service>;
     type InitError = A::InitError;
@@ -110,15 +100,15 @@ mod tests {
     impl Service for Srv1 {
         type St = ();
         type Req = &'static str;
-        type Response = &'static str;
-        type Error = ();
+        type Res = &'static str;
+        type Err = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
+        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Err> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -127,7 +117,7 @@ mod tests {
             &self,
             req: &'static str,
             _: ServiceCtx<'_, Self>,
-        ) -> Result<Self::Response, ()> {
+        ) -> Result<Self::Res, ()> {
             Ok(req)
         }
 
@@ -142,15 +132,15 @@ mod tests {
     impl Service for Srv2 {
         type St = ();
         type Req = &'static str;
-        type Response = (&'static str, &'static str);
-        type Error = ();
+        type Res = (&'static str, &'static str);
+        type Err = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
+        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Err> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -159,7 +149,7 @@ mod tests {
             &self,
             req: &'static str,
             _: ServiceCtx<'_, Self>,
-        ) -> Result<Self::Response, ()> {
+        ) -> Result<Self::Res, ()> {
             Ok((req, "srv2"))
         }
 

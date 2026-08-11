@@ -13,7 +13,7 @@ impl<S, F> Inspect<S, F> {
     pub(crate) fn new(svc: S, f: F) -> Self
     where
         S: Service,
-        F: Fn(&S::Response),
+        F: Fn(&S::Res),
     {
         Self { svc, f }
     }
@@ -48,19 +48,15 @@ where
 impl<S, F> Service for Inspect<S, F>
 where
     S: Service,
-    F: Fn(&S::Response),
+    F: Fn(&S::Res),
 {
     type St = S::St;
     type Req = S::Req;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
 
     #[inline]
-    async fn call(
-        &self,
-        req: S::Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<S::Response, S::Error> {
+    async fn call(&self, req: S::Req, ctx: ServiceCtx<'_, Self>) -> Result<S::Res, S::Err> {
         ctx.call(&self.svc, req).await.inspect(&self.f)
     }
 
@@ -80,7 +76,7 @@ impl<S, F> InspectErr<S, F> {
     pub(crate) fn new(svc: S, f: F) -> Self
     where
         S: Service,
-        F: Fn(&S::Error),
+        F: Fn(&S::Err),
     {
         Self { svc, f }
     }
@@ -115,29 +111,25 @@ where
 impl<S, F> Service for InspectErr<S, F>
 where
     S: Service,
-    F: Fn(&S::Error),
+    F: Fn(&S::Err),
 {
     type St = S::St;
     type Req = S::Req;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
         ctx.ready(&self.svc).await.inspect_err(&self.f)
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Err> {
         self.svc.poll(cx).inspect_err(&self.f)
     }
 
     #[inline]
-    async fn call(
-        &self,
-        req: S::Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<S::Response, S::Error> {
+    async fn call(&self, req: S::Req, ctx: ServiceCtx<'_, Self>) -> Result<S::Res, S::Err> {
         ctx.call(&self.svc, req).await.inspect_err(&self.f)
     }
 
@@ -185,11 +177,11 @@ where
 impl<S, F, R, C> ServiceFactory<R, C> for InspectFactory<S, F>
 where
     S: ServiceFactory<R, C>,
-    F: Fn(&S::Response) + Clone,
+    F: Fn(&S::Res) + Clone,
 {
     type St = S::St;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
 
     type Service = Inspect<S::Service, F>;
     type InitError = S::InitError;
@@ -244,11 +236,11 @@ where
 impl<S, F, R, C> ServiceFactory<R, C> for InspectErrFactory<S, F>
 where
     S: ServiceFactory<R, C>,
-    F: Fn(&S::Error) + Clone,
+    F: Fn(&S::Err) + Clone,
 {
     type St = S::St;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
 
     type Service = InspectErr<S::Service, F>;
     type InitError = S::InitError;
@@ -276,10 +268,10 @@ mod tests {
     impl Service for Srv {
         type St = ();
         type Req = ();
-        type Response = ();
-        type Error = ();
+        type Res = ();
+        type Err = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
             if self.1 { Err(()) } else { Ok(()) }
         }
 

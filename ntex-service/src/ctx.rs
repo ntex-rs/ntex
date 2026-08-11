@@ -152,7 +152,7 @@ impl<'a, S: Service> ServiceCtx<'a, S> {
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<T>(&self, svc: &'a T) -> Result<(), T::Error>
+    pub async fn ready<T>(&self, svc: &'a T) -> Result<(), T::Err>
     where
         T: Service,
         T::St: FromSt<S::St>,
@@ -179,7 +179,7 @@ impl<'a, S: Service> ServiceCtx<'a, S> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub async fn call<T>(&self, svc: &'a T, req: T::Req) -> Result<T::Response, T::Error>
+    pub async fn call<T>(&self, svc: &'a T, req: T::Req) -> Result<T::Res, T::Err>
     where
         T: Service,
         T::St: FromSt<S::St>,
@@ -210,11 +210,7 @@ impl<'a, S: Service> ServiceCtx<'a, S> {
 
     #[inline]
     /// Call service, do not check service readiness
-    pub async fn call_nowait<T>(
-        &self,
-        svc: &'a T,
-        req: T::Req,
-    ) -> Result<T::Response, T::Error>
+    pub async fn call_nowait<T>(&self, svc: &'a T, req: T::Req) -> Result<T::Res, T::Err>
     where
         T: Service,
         T::St: FromSt<S::St>,
@@ -303,10 +299,10 @@ mod tests {
     impl Service for Srv {
         type St = ();
         type Req = &'static str;
-        type Response = &'static str;
-        type Error = ();
+        type Res = &'static str;
+        type Err = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())
@@ -316,7 +312,7 @@ mod tests {
             &self,
             req: &'static str,
             ctx: ServiceCtx<'_, Self>,
-        ) -> Result<Self::Response, Self::Error> {
+        ) -> Result<Self::Res, Self::Err> {
             let _ = format!("{ctx:?}");
             let _ = format!("{:?}", ctx.id());
             #[allow(clippy::clone_on_copy)]

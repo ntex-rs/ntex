@@ -1,20 +1,21 @@
+#![allow(clippy::type_complexity)]
 use std::{fmt, future::Future, pin::Pin, task::Context};
 
 use crate::ctx::{ServiceCtx, WaitersRef};
 
 type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 pub struct BoxService<Req, St, Res, Err>(
-    Box<dyn ServiceObj<St = St, Req = Req, Response = Res, Error = Err>>,
+    Box<dyn ServiceObj<St = St, Req = Req, Res = Res, Err = Err>>,
 );
-pub struct BoxServiceFactory<Cfg, Req, St, Res, Err, InitErr>(
+pub struct BoxServiceFactory<Cfg, Req, St, Res, Err, InitError>(
     Box<
         dyn ServiceFactoryObj<
                 Req,
                 Cfg,
                 St = St,
-                Response = Res,
-                Error = Err,
-                InitError = InitErr,
+                Res = Res,
+                Err = Err,
+                InitError = InitError,
             >,
     >,
 );
@@ -22,7 +23,7 @@ pub struct BoxServiceFactory<Cfg, Req, St, Res, Err, InitErr>(
 /// Creates a boxed service factory.
 pub fn factory<F, R, C>(
     factory: F,
-) -> BoxServiceFactory<C, R, F::St, F::Response, F::Error, F::InitError>
+) -> BoxServiceFactory<C, R, F::St, F::Res, F::Err, F::InitError>
 where
     R: 'static,
     C: 'static,
@@ -33,7 +34,7 @@ where
 }
 
 /// Creates a boxed service.
-pub fn service<S>(service: S) -> BoxService<S::Req, S::St, S::Response, S::Error>
+pub fn service<S>(service: S) -> BoxService<S::Req, S::St, S::Res, S::Err>
 where
     S: crate::Service + 'static,
 {
@@ -46,8 +47,8 @@ impl<Req, St, Res, Err> fmt::Debug for BoxService<Req, St, Res, Err> {
     }
 }
 
-impl<Cfg, Req, St, Res, Err, InitErr> fmt::Debug
-    for BoxServiceFactory<Cfg, Req, St, Res, Err, InitErr>
+impl<Cfg, Req, St, Res, Err, InitError> fmt::Debug
+    for BoxServiceFactory<Cfg, Req, St, Res, Err, InitError>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BoxServiceFactory").finish()
@@ -57,15 +58,15 @@ impl<Cfg, Req, St, Res, Err, InitErr> fmt::Debug
 trait ServiceObj {
     type St;
     type Req;
-    type Response;
-    type Error;
+    type Res;
+    type Err;
 
     fn ready<'a>(
         &'a self,
         idx: u32,
         waiters: &'a WaitersRef,
         st: &'a Self::St,
-    ) -> BoxFuture<'a, (), Self::Error>;
+    ) -> BoxFuture<'a, (), Self::Err>;
 
     fn call<'a>(
         &'a self,
@@ -73,11 +74,11 @@ trait ServiceObj {
         idx: u32,
         waiters: &'a WaitersRef,
         st: &'a Self::St,
-    ) -> BoxFuture<'a, Self::Response, Self::Error>;
+    ) -> BoxFuture<'a, Self::Res, Self::Err>;
 
     fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
 
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error>;
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Err>;
 }
 
 impl<S> ServiceObj for S
@@ -86,8 +87,8 @@ where
 {
     type St = S::St;
     type Req = S::Req;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
 
     #[inline]
     fn ready<'a>(
@@ -95,7 +96,7 @@ where
         idx: u32,
         waiters: &'a WaitersRef,
         st: &'a S::St,
-    ) -> BoxFuture<'a, (), Self::Error> {
+    ) -> BoxFuture<'a, (), Self::Err> {
         Box::pin(
             async move { ServiceCtx::<'a, S>::new(idx, waiters, st).ready(self).await },
         )
@@ -113,7 +114,7 @@ where
         idx: u32,
         waiters: &'a WaitersRef,
         st: &'a S::St,
-    ) -> BoxFuture<'a, Self::Response, Self::Error> {
+    ) -> BoxFuture<'a, Self::Res, Self::Err> {
         Box::pin(async move {
             ServiceCtx::<'a, S>::new(idx, waiters, st)
                 .call_nowait(self, req)
@@ -122,25 +123,21 @@ where
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Err> {
         crate::Service::poll(self, cx)
     }
 }
 
 trait ServiceFactoryObj<Req, Cfg> {
     type St;
-    type Response;
-    type Error;
+    type Res;
+    type Err;
     type InitError;
 
     fn create<'a>(
         &'a self,
         cfg: Cfg,
-    ) -> BoxFuture<
-        'a,
-        BoxService<Req, Self::St, Self::Response, Self::Error>,
-        Self::InitError,
-    >
+    ) -> BoxFuture<'a, BoxService<Req, Self::St, Self::Res, Self::Err>, Self::InitError>
     where
         Cfg: 'a;
 }
@@ -153,19 +150,15 @@ where
     F::Service: 'static,
 {
     type St = F::St;
-    type Response = F::Response;
-    type Error = F::Error;
+    type Res = F::Res;
+    type Err = F::Err;
     type InitError = F::InitError;
 
     #[inline]
     fn create<'a>(
         &'a self,
         cfg: Cfg,
-    ) -> BoxFuture<
-        'a,
-        BoxService<Req, Self::St, Self::Response, Self::Error>,
-        Self::InitError,
-    >
+    ) -> BoxFuture<'a, BoxService<Req, Self::St, Self::Res, Self::Err>, Self::InitError>
     where
         Cfg: 'a,
     {
@@ -180,11 +173,11 @@ where
 {
     type St = St;
     type Req = Req;
-    type Response = Res;
-    type Error = Err;
+    type Res = Res;
+    type Err = Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
         let (idx, waiters, _) = ctx.inner();
         self.0.ready(idx, waiters, ctx.st()).await
     }
@@ -201,22 +194,22 @@ where
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Err> {
         self.0.poll(cx)
     }
 }
 
-impl<C, Req, St, Res, Err, InitErr> crate::ServiceFactory<Req, C>
-    for BoxServiceFactory<C, Req, St, Res, Err, InitErr>
+impl<C, Req, St, Res, Err, InitError> crate::ServiceFactory<Req, C>
+    for BoxServiceFactory<C, Req, St, Res, Err, InitError>
 where
     Req: 'static,
 {
     type St = St;
-    type Response = Res;
-    type Error = Err;
+    type Res = Res;
+    type Err = Err;
 
     type Service = BoxService<Req, St, Res, Err>;
-    type InitError = InitErr;
+    type InitError = InitError;
 
     #[inline]
     async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {

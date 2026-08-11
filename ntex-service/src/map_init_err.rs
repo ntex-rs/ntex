@@ -2,7 +2,7 @@ use std::{fmt, marker::PhantomData};
 
 use super::ServiceFactory;
 
-/// `MapInitErr` service combinator
+/// `MapInitError` service combinator
 pub struct MapInitErr<A, R, C, F, E> {
     a: A,
     f: F,
@@ -56,8 +56,8 @@ where
     F: Fn(A::InitError) -> E + Clone,
 {
     type St = A::St;
-    type Response = A::Response;
-    type Error = A::Error;
+    type Res = A::Res;
+    type Err = A::Err;
 
     type Service = A::Service;
     type InitError = E;

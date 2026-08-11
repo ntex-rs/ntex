@@ -47,14 +47,14 @@ where
 /// {
 ///     type St = S::St;
 ///     type Req = S::Req;
-///     type Response = S::Response;
-///     type Error = TimeoutError<S::Error>;
+///     type Res = S::Res;
+///     type Err = TimeoutError<S::Err>;
 ///
-///     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+///     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
 ///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
 ///     }
 ///
-///     async fn call(&self, req: S::Req, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
+///     async fn call(&self, req: S::Req, ctx: ServiceCtx<'_, Self>) -> Result<Self::Res, Self::Err> {
 ///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
 ///             Either::Left(_) => Err(TimeoutError::Timeout),
 ///             Either::Right(res) => res.map_err(TimeoutError::Service),
@@ -163,8 +163,8 @@ where
     Cfg: Clone,
 {
     type St = <M::Service as Service>::St;
-    type Response = <M::Service as Service>::Response;
-    type Error = <M::Service as Service>::Error;
+    type Res = <M::Service as Service>::Res;
+    type Err = <M::Service as Service>::Err;
 
     type Service = M::Service;
     type InitError = Fac::InitError;
@@ -257,7 +257,7 @@ impl<T, C, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, F, In, Out, Err
 where
     T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    Err: From<T::Err>,
 {
     type Service = Apply<T, F, In, Out, Err>;
 
@@ -289,13 +289,13 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv<S>(S, Rc<Cell<usize>>);
 
-    impl<S: Service<St = ()>> Service for Srv<S> {
-        type St = ();
+    impl<S: Service> Service for Srv<S> {
+        type St = S::St;
         type Req = S::Req;
-        type Response = S::Response;
-        type Error = S::Error;
+        type Res = S::Res;
+        type Err = S::Err;
 
-        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
             ctx.ready(&self.0).await
         }
 
@@ -303,7 +303,7 @@ mod tests {
             &self,
             req: S::Req,
             ctx: ServiceCtx<'_, Self>,
-        ) -> Result<S::Response, S::Error> {
+        ) -> Result<S::Res, S::Err> {
             ctx.call(&self.0, req).await
         }
 

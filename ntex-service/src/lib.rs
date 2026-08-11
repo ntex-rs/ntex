@@ -80,10 +80,10 @@ pub use self::st::{FromSt, FromStResult};
 /// impl Service for MyService {
 ///     type St = ();
 ///     type Req = u8;
-///     type Response = u64;
-///     type Error = Infallible;
+///     type Res = u64;
+///     type Err = Infallible;
 ///
-///     async fn call(&self, req: u8, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
+///     async fn call(&self, req: u8, ctx: ServiceCtx<'_, Self>) -> Result<Self::Res, Self::Err> {
 ///         Ok(req as u64)
 ///     }
 /// }
@@ -106,10 +106,10 @@ pub trait Service {
     type Req;
 
     /// Responses given by the service.
-    type Response;
+    type Res;
 
     /// Errors produced by the service when checking readiness or executing call.
-    type Error;
+    type Err;
 
     /// Processes a request and returns the response asynchronously.
     ///
@@ -121,7 +121,7 @@ pub trait Service {
         &self,
         req: Self::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error>;
+    ) -> Result<Self::Res, Self::Err>;
 
     #[inline]
     /// Returns when the service is ready to process requests.
@@ -132,7 +132,7 @@ pub trait Service {
     ///
     /// **Note:** Pipeline readiness is maintained across all services in the pipeline.
     /// The pipeline can process requests only if every service in the pipeline is ready.
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
         Ok(())
     }
 
@@ -147,7 +147,7 @@ pub trait Service {
     ///
     /// The service may perform asynchronous computations or
     /// maintain asynchronous state during polling.
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Err> {
         Ok(())
     }
 
@@ -162,7 +162,7 @@ pub trait Service {
     fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Res>>
     where
         Self: Sized,
-        F: Fn(Self::Response) -> Res,
+        F: Fn(Self::Res) -> Res,
     {
         chain(dev::Map::new(self, f))
     }
@@ -178,7 +178,7 @@ pub trait Service {
     fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>>
     where
         Self: Sized,
-        F: Fn(Self::Error) -> E,
+        F: Fn(Self::Err) -> E,
     {
         chain(dev::MapErr::new(self, f))
     }
@@ -200,13 +200,13 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     type St;
 
     /// Responses given by the created services.
-    type Response;
+    type Res;
 
     /// Errors produced by the created services.
-    type Error;
+    type Err;
 
     /// The type of `Service` produced by this factory.
-    type Service: Service<Req = Req, St = Self::St, Response = Self::Response, Error = Self::Error>;
+    type Service: Service<Req = Req, St = Self::St, Res = Self::Res, Err = Self::Err>;
 
     /// Possible errors encountered during service construction.
     type InitError;
@@ -231,7 +231,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, Req, Res, Cfg>, Req, Cfg>
     where
         Self: Sized,
-        F: Fn(Self::Response) -> Res + Clone,
+        F: Fn(Self::Res) -> Res + Clone,
     {
         chain_factory(dev::MapFactory::new(self, f))
     }
@@ -245,7 +245,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, Req, Cfg, F, E>, Req, Cfg>
     where
         Self: Sized,
-        F: Fn(Self::Error) -> E + Clone,
+        F: Fn(Self::Err) -> E + Clone,
     {
         chain_factory(dev::MapErrFactory::new(self, f))
     }
@@ -267,14 +267,7 @@ pub trait ServiceFactory<Req, Cfg = ()> {
     /// Creates a boxed service factory.
     fn boxed(
         self,
-    ) -> boxed::BoxServiceFactory<
-        Cfg,
-        Req,
-        Self::St,
-        Self::Response,
-        Self::Error,
-        Self::InitError,
-    >
+    ) -> boxed::BoxServiceFactory<Cfg, Req, Self::St, Self::Res, Self::Err, Self::InitError>
     where
         Cfg: 'static,
         Req: 'static,
@@ -290,16 +283,16 @@ where
 {
     type St = S::St;
     type Req = S::Req;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Err> {
         ctx.ready(&**self).await
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Err> {
         (**self).poll(cx)
     }
 
@@ -313,7 +306,7 @@ where
         &self,
         req: S::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Err> {
         ctx.call_nowait(&**self, req).await
     }
 }
@@ -324,11 +317,11 @@ where
 {
     type St = S::St;
     type Req = S::Req;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Err> {
         ctx.ready(&**self).await
     }
 
@@ -342,12 +335,12 @@ where
         &self,
         request: Self::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Err> {
         ctx.call_nowait(&**self, request).await
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Err> {
         (**self).poll(cx)
     }
 }
@@ -357,8 +350,8 @@ where
     S: ServiceFactory<Req, Cfg>,
 {
     type St = S::St;
-    type Response = S::Response;
-    type Error = S::Error;
+    type Res = S::Res;
+    type Err = S::Err;
     type Service = S::Service;
     type InitError = S::InitError;
 

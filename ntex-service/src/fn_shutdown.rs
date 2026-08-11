@@ -53,8 +53,8 @@ where
     F: AsyncFnOnce() + Clone,
 {
     type St = ();
-    type Response = Req;
-    type Error = Err;
+    type Res = Req;
+    type Err = Err;
     type Service = FnShutdown<Req, Err, F>;
     type InitError = ();
 
@@ -78,8 +78,8 @@ where
 {
     type St = ();
     type Req = Req;
-    type Response = Req;
-    type Error = Err;
+    type Res = Req;
+    type Err = Err;
 
     #[inline]
     async fn shutdown(&self) {

@@ -16,7 +16,7 @@ impl<A, F, Res> Map<A, F, Res> {
     pub(crate) fn new(service: A, f: F) -> Self
     where
         A: Service,
-        F: Fn(A::Response) -> Res,
+        F: Fn(A::Res) -> Res,
     {
         Self {
             service,
@@ -56,12 +56,12 @@ where
 impl<A, F, Res> Service for Map<A, F, Res>
 where
     A: Service,
-    F: Fn(A::Response) -> Res,
+    F: Fn(A::Res) -> Res,
 {
     type St = A::St;
     type Req = A::Req;
-    type Response = Res;
-    type Error = A::Error;
+    type Res = Res;
+    type Err = A::Err;
 
     crate::forward_ready!(service);
     crate::forward_poll!(service);
@@ -72,7 +72,7 @@ where
         &self,
         req: Self::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Err> {
         ctx.call(&self.service, req).await.map(|r| (self.f)(r))
     }
 }
@@ -87,7 +87,7 @@ pub struct MapFactory<A, F, Req, Res, Cfg> {
 impl<A, F, Req, Res, Cfg> MapFactory<A, F, Req, Res, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
-    F: Fn(A::Response) -> Res,
+    F: Fn(A::Res) -> Res,
 {
     /// Create new `Map` new service instance
     pub(crate) fn new(a: A, f: F) -> Self {
@@ -129,11 +129,11 @@ where
 impl<A, F, Req, Res, Cfg> ServiceFactory<Req, Cfg> for MapFactory<A, F, Req, Res, Cfg>
 where
     A: ServiceFactory<Req, Cfg>,
-    F: Fn(A::Response) -> Res + Clone,
+    F: Fn(A::Res) -> Res + Clone,
 {
     type St = A::St;
-    type Response = Res;
-    type Error = A::Error;
+    type Res = Res;
+    type Err = A::Err;
 
     type Service = Map<A::Service, F, Res>;
     type InitError = A::InitError;
@@ -161,10 +161,10 @@ mod tests {
     impl Service for Srv {
         type St = ();
         type Req = ();
-        type Response = ();
-        type Error = ();
+        type Res = ();
+        type Err = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
             Ok(())
         }
 
