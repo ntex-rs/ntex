@@ -33,11 +33,11 @@ pub(crate) async fn ready<S, A, B>(
     svc1: &A,
     svc2: &B,
     ctx: ServiceCtx<'_, S>,
-) -> Result<(), A::Err>
+) -> Result<(), A::Error>
 where
     S: Service,
     A: Service,
-    B: Service<Err = A::Err>,
+    B: Service<Error = A::Error>,
     A::St: FromSt<S::St>,
     B::St: FromSt<S::St>,
 {

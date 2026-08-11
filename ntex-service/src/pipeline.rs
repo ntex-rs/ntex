@@ -43,7 +43,7 @@ impl<S> Pipeline<S> {
 
     #[inline]
     /// Returns when the pipeline is able to process requests.
-    pub async fn ready(&self, st: &S::St) -> Result<(), S::Err>
+    pub async fn ready(&self, st: &S::St) -> Result<(), S::Error>
     where
         S: Service,
     {
@@ -55,7 +55,7 @@ impl<S> Pipeline<S> {
     #[inline]
     /// Wait for service readiness and then create future object
     /// that resolves to service result.
-    pub async fn call(&self, req: S::Req, st: &S::St) -> Result<S::Res, S::Err>
+    pub async fn call(&self, req: S::Req, st: &S::St) -> Result<S::Res, S::Error>
     where
         S: Service,
     {
@@ -117,7 +117,7 @@ impl<S> Pipeline<S> {
     }
 
     #[inline]
-    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Err>
+    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error>
     where
         S: Service,
     {
@@ -188,19 +188,19 @@ where
     type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
-    type Err = S::Err;
+    type Error = S::Error;
 
     #[inline]
     async fn call(
         &self,
         req: S::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Res, Self::Err> {
+    ) -> Result<Self::Res, Self::Error> {
         self.inner.call(req, ctx.st()).await
     }
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         self.inner.ready(ctx.st()).await
     }
 
@@ -210,7 +210,7 @@ where
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Err> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         self.inner.poll(cx)
     }
 }
@@ -249,7 +249,7 @@ where
 {
     pl: Pipeline<S>,
     state: Rc<S::St>,
-    st: cell::UnsafeCell<State<S::Err>>,
+    st: cell::UnsafeCell<State<S::Error>>,
 }
 
 enum State<E> {
@@ -283,7 +283,7 @@ where
     }
 
     #[inline]
-    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Err> {
+    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error> {
         self.pl.poll(cx)
     }
 
@@ -293,7 +293,7 @@ where
     /// # Panics
     ///
     /// Call panics if `.poll_shutdown()` was called before.
-    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Err>> {
+    pub fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
         let st = unsafe { &mut *self.st.get() };
 
         match st {
@@ -423,7 +423,7 @@ pub struct PipelineCall<S>
 where
     S: Service,
 {
-    fut: Call<S::Res, S::Err>,
+    fut: Call<S::Res, S::Error>,
 }
 
 type Call<R, E> = Pin<Box<dyn Future<Output = Result<R, E>> + 'static>>;
@@ -432,7 +432,7 @@ impl<S> Future for PipelineCall<S>
 where
     S: Service,
 {
-    type Output = Result<S::Res, S::Err>;
+    type Output = Result<S::Res, S::Error>;
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -452,7 +452,7 @@ where
 fn ready<S>(
     pl: &'static Pipeline<S>,
     st: &S::St,
-) -> impl Future<Output = Result<(), S::Err>>
+) -> impl Future<Output = Result<(), S::Error>>
 where
     S: Service,
 {
@@ -488,9 +488,9 @@ impl<S, F, Fut> Future for CheckReadiness<S, F, Fut>
 where
     S: Service,
     F: Fn(&'static Pipeline<S>, &'static S::St) -> Fut,
-    Fut: Future<Output = Result<(), S::Err>>,
+    Fut: Future<Output = Result<(), S::Error>>,
 {
-    type Output = Result<(), S::Err>;
+    type Output = Result<(), S::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut();
@@ -525,9 +525,9 @@ mod tests {
         type St = ();
         type Req = ();
         type Res = ();
-        type Err = ();
+        type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 

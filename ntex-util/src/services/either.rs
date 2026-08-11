@@ -54,13 +54,15 @@ where
     SFRight: ServiceFactory<
             R,
             C,
-            Response = SFLeft::Response,
+            Res = SFLeft::Res,
+            Err = SFLeft::Err,
             InitError = SFLeft::InitError,
-            Error = SFLeft::Error,
         >,
 {
-    type Response = SFLeft::Response;
-    type Error = SFLeft::Error;
+    type St = SFLeft::St;
+    type Req = SFLeft::Req;
+    type Res = SFLeft::Res;
+    type Err = SFLeft::Err;
     type InitError = SFLeft::InitError;
     type Service = EitherService<SFLeft::Service, SFRight::Service>;
 
@@ -106,12 +108,15 @@ impl<SLeft, SRight> fmt::Debug for EitherService<SLeft, SRight> {
     }
 }
 
-impl<Req, SLeft, SRight> Service<Req> for EitherService<SLeft, SRight>
+impl<SLeft, SRight> Service for EitherService<SLeft, SRight>
 where
-    SLeft: Service<Req>,
-    SRight: Service<Req, Response = SLeft::Response, Error = SLeft::Error>,
+    SLeft: Service,
+    SRight:
+        Service<St = SLeft::St, Req = SLeft::Req, Res = SLeft::Res, Error = SLeft::Error>,
 {
-    type Response = SLeft::Response;
+    type St = SLeft::St;
+    type Req = SLeft::Req;
+    type Res = SLeft::Res;
     type Error = SLeft::Error;
 
     #[inline]
@@ -133,9 +138,9 @@ where
     #[inline]
     async fn call(
         &self,
-        req: Req,
+        req: Self::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.call(svc, req).await,
             Either::Right(ref svc) => ctx.call(svc, req).await,

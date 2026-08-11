@@ -17,7 +17,7 @@ impl<A, F, E> MapErr<A, F, E> {
     pub(crate) fn new(service: A, f: F) -> Self
     where
         A: Service,
-        F: Fn(A::Err) -> E,
+        F: Fn(A::Error) -> E,
     {
         Self {
             service,
@@ -57,20 +57,20 @@ where
 impl<A, F, E> Service for MapErr<A, F, E>
 where
     A: Service,
-    F: Fn(A::Err) -> E,
+    F: Fn(A::Error) -> E,
 {
     type St = A::St;
     type Req = A::Req;
     type Res = A::Res;
-    type Err = E;
+    type Error = E;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         ctx.ready(&self.service).await.map_err(&self.f)
     }
 
     #[inline]
-    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Err> {
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         self.service.poll(cx).map_err(&self.f)
     }
 
@@ -79,7 +79,7 @@ where
         &self,
         req: A::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Res, Self::Err> {
+    ) -> Result<Self::Res, Self::Error> {
         ctx.call(&self.service, req).await.map_err(|e| (self.f)(e))
     }
 
@@ -90,20 +90,20 @@ where
 /// service's error.
 ///
 /// This is created by the `NewServiceExt::map_err` method.
-pub struct MapErrFactory<A, R, C, F, E>
+pub struct MapErrFactory<A, S, R, C, F, E>
 where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::Err) -> E + Clone,
+    A: ServiceFactory<S, R, C>,
+    F: Fn(A::Error) -> E + Clone,
 {
     a: A,
     f: F,
-    e: PhantomData<fn(R, C) -> E>,
+    e: PhantomData<fn(S, R, C) -> E>,
 }
 
-impl<A, R, C, F, E> MapErrFactory<A, R, C, F, E>
+impl<A, S, R, C, F, E> MapErrFactory<A, S, R, C, F, E>
 where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::Err) -> E + Clone,
+    A: ServiceFactory<S, R, C>,
+    F: Fn(A::Error) -> E + Clone,
 {
     /// Create new `MapErr` new service instance
     pub(crate) fn new(a: A, f: F) -> Self {
@@ -115,10 +115,10 @@ where
     }
 }
 
-impl<A, R, C, F, E> Clone for MapErrFactory<A, R, C, F, E>
+impl<A, S, R, C, F, E> Clone for MapErrFactory<A, S, R, C, F, E>
 where
-    A: ServiceFactory<R, C> + Clone,
-    F: Fn(A::Err) -> E + Clone,
+    A: ServiceFactory<S, R, C> + Clone,
+    F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -129,10 +129,10 @@ where
     }
 }
 
-impl<A, R, C, F, E> fmt::Debug for MapErrFactory<A, R, C, F, E>
+impl<A, S, R, C, F, E> fmt::Debug for MapErrFactory<A, S, R, C, F, E>
 where
-    A: ServiceFactory<R, C> + fmt::Debug,
-    F: Fn(A::Err) -> E + Clone,
+    A: ServiceFactory<S, R, C> + fmt::Debug,
+    F: Fn(A::Error) -> E + Clone,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MapErrFactory")
@@ -142,14 +142,13 @@ where
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapErrFactory<A, R, C, F, E>
+impl<A, S, R, C, F, E> ServiceFactory<S, R, C> for MapErrFactory<A, S, R, C, F, E>
 where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::Err) -> E + Clone,
+    A: ServiceFactory<S, R, C>,
+    F: Fn(A::Error) -> E + Clone,
 {
-    type St = A::St;
     type Res = A::Res;
-    type Err = E;
+    type Error = E;
 
     type Service = MapErr<A::Service, F, E>;
     type InitError = A::InitError;
@@ -179,9 +178,9 @@ mod tests {
         type St = ();
         type Req = ();
         type Res = ();
-        type Err = ();
+        type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             if self.0 { Err(()) } else { Ok(()) }
         }
 

@@ -6,20 +6,20 @@ use super::{IntoServiceFactory, ServiceFactory};
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<T, R, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2>
+pub fn map_config<T, S, R, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2>
 where
-    T: ServiceFactory<R, C2>,
-    U: IntoServiceFactory<T, R, C2>,
+    T: ServiceFactory<S, R, C2>,
+    U: IntoServiceFactory<T, S, R, C2>,
     F: Fn(C) -> C2,
 {
     MapConfig::new(factory.into_factory(), f)
 }
 
 /// Replace config with unit
-pub fn unit_config<T, R, U>(factory: U) -> UnitConfig<T>
+pub fn unit_config<T, S, R, U>(factory: U) -> UnitConfig<T>
 where
-    T: ServiceFactory<R>,
-    U: IntoServiceFactory<T, R>,
+    T: ServiceFactory<S, R>,
+    U: IntoServiceFactory<T, S, R>,
 {
     UnitConfig::new(factory.into_factory())
 }
@@ -68,14 +68,13 @@ where
     }
 }
 
-impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2>
+impl<A, F, S, R, C, C2> ServiceFactory<S, R, C> for MapConfig<A, F, C, C2>
 where
-    A: ServiceFactory<R, C2>,
+    A: ServiceFactory<S, R, C2>,
     F: Fn(C) -> C2,
 {
-    type St = A::St;
     type Res = A::Res;
-    type Err = A::Err;
+    type Error = A::Error;
 
     type Service = A::Service;
     type InitError = A::InitError;
@@ -98,13 +97,12 @@ impl<A> UnitConfig<A> {
     }
 }
 
-impl<A, R, C> ServiceFactory<R, C> for UnitConfig<A>
+impl<A, S, R, C> ServiceFactory<S, R, C> for UnitConfig<A>
 where
-    A: ServiceFactory<R>,
+    A: ServiceFactory<S, R>,
 {
-    type St = A::St;
     type Res = A::Res;
-    type Err = A::Err;
+    type Error = A::Error;
 
     type Service = A::Service;
     type InitError = A::InitError;

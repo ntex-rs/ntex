@@ -4,14 +4,14 @@ use crate::dev::{Apply, ApplyCtx, ServiceChainFactory};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply middleware to a service.
-pub fn apply<M, S, R, C, U>(
+pub fn apply<M, S, St, R, C, U>(
     mw: M,
     factory: U,
-) -> ServiceChainFactory<ApplyMiddleware<M, S, C>, R, C>
+) -> ServiceChainFactory<ApplyMiddleware<M, S, C>, St, R, C>
 where
-    S: ServiceFactory<R, C>,
+    S: ServiceFactory<St, R, C>,
     M: Middleware<S::Service, C>,
-    U: IntoServiceFactory<S, R, C>,
+    U: IntoServiceFactory<S, St, R, C>,
 {
     ServiceChainFactory {
         factory: ApplyMiddleware::new(mw, factory.into_factory()),
@@ -48,13 +48,13 @@ where
 ///     type St = S::St;
 ///     type Req = S::Req;
 ///     type Res = S::Res;
-///     type Err = TimeoutError<S::Err>;
+///     type Error = TimeoutError<S::Error>;
 ///
-///     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+///     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
 ///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
 ///     }
 ///
-///     async fn call(&self, req: S::Req, ctx: ServiceCtx<'_, Self>) -> Result<Self::Res, Self::Err> {
+///     async fn call(&self, req: S::Req, ctx: ServiceCtx<'_, Self>) -> Result<Self::Res, Self::Error> {
 ///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
 ///             Either::Left(_) => Err(TimeoutError::Timeout),
 ///             Either::Right(res) => res.map_err(TimeoutError::Service),
@@ -101,15 +101,15 @@ pub trait Middleware<Svc, Cfg = ()> {
     /// the current middleware to it.
     ///
     /// This is equivalent to `apply(self, factory)`.
-    fn apply<Fac, Req>(
+    fn apply<Fac, St, Req>(
         self,
         factory: Fac,
-    ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac, Cfg>, Req, Cfg>
+    ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac, Cfg>, St, Req, Cfg>
     where
-        Fac: ServiceFactory<Req, Cfg, Service = Svc>,
+        Fac: ServiceFactory<St, Req, Service = Svc, InitCfg = Cfg>,
         Cfg: Clone,
         Self: Sized,
-        Self::Service: Service<Req = Req>,
+        Self::Service: Service<St = St, Req = Req>,
     {
         crate::chain_factory(ApplyMiddleware::new(self, factory))
     }
@@ -155,16 +155,15 @@ where
     }
 }
 
-impl<M, Fac, Req, Cfg> ServiceFactory<Req, Cfg> for ApplyMiddleware<M, Fac, Cfg>
+impl<M, Fac, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for ApplyMiddleware<M, Fac, Cfg>
 where
-    Fac: ServiceFactory<Req, Cfg>,
+    Fac: ServiceFactory<St, Req, Cfg>,
     M: Middleware<Fac::Service, Cfg>,
-    M::Service: Service<Req = Req>,
+    M::Service: Service<St = St, Req = Req>,
     Cfg: Clone,
 {
-    type St = <M::Service as Service>::St;
     type Res = <M::Service as Service>::Res;
-    type Err = <M::Service as Service>::Err;
+    type Error = <M::Service as Service>::Error;
 
     type Service = M::Service;
     type InitError = Fac::InitError;
@@ -257,7 +256,7 @@ impl<T, C, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, F, In, Out, Err
 where
     T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err> + Clone,
-    Err: From<T::Err>,
+    Err: From<T::Error>,
 {
     type Service = Apply<T, F, In, Out, Err>;
 
@@ -293,9 +292,9 @@ mod tests {
         type St = S::St;
         type Req = S::Req;
         type Res = S::Res;
-        type Err = S::Err;
+        type Error = S::Error;
 
-        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             ctx.ready(&self.0).await
         }
 
@@ -303,7 +302,7 @@ mod tests {
             &self,
             req: S::Req,
             ctx: ServiceCtx<'_, Self>,
-        ) -> Result<S::Res, S::Err> {
+        ) -> Result<S::Res, S::Error> {
             ctx.call(&self.0, req).await
         }
 

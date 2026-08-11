@@ -6,7 +6,7 @@ pub mod keepalive;
 pub mod onerequest;
 pub mod retry;
 pub mod timeout;
-pub mod variant;
+// pub mod variant;
 
 #[doc(hidden)]
 pub mod counter;

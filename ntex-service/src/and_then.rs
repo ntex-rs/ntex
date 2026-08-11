@@ -20,20 +20,20 @@ impl<A, B> AndThen<A, B> {
 impl<A, B> Service for AndThen<A, B>
 where
     A: Service,
-    B: Service<Req = A::Res, St = A::St, Err = A::Err>,
+    B: Service<Req = A::Res, St = A::St, Error = A::Error>,
 {
     type St = A::St;
     type Req = A::Req;
     type Res = B::Res;
-    type Err = A::Err;
+    type Error = A::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
     #[inline]
-    fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Err> {
+    fn poll(&self, cx: &mut std::task::Context<'_>) -> Result<(), Self::Error> {
         self.svc1.poll(cx)?;
         self.svc2.poll(cx)
     }
@@ -44,7 +44,11 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: A::Req, ctx: ServiceCtx<'_, Self>) -> Result<B::Res, A::Err> {
+    async fn call(
+        &self,
+        req: A::Req,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<B::Res, A::Error> {
         let result = ctx.call(&self.svc1, req).await?;
         ctx.call(&self.svc2, result).await
     }
@@ -64,15 +68,14 @@ impl<A, B> AndThenFactory<A, B> {
     }
 }
 
-impl<A, B, Req, Cfg> ServiceFactory<Req, Cfg> for AndThenFactory<A, B>
+impl<A, B, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for AndThenFactory<A, B>
 where
-    A: ServiceFactory<Req, Cfg>,
-    B: ServiceFactory<A::Res, Cfg, St = A::St, Err = A::Err, InitError = A::InitError>,
+    A: ServiceFactory<St, Req, Cfg>,
+    B: ServiceFactory<St, A::Res, Cfg, Error = A::Error, InitError = A::InitError>,
     Cfg: Clone,
 {
-    type St = A::St;
     type Res = B::Res;
-    type Err = A::Err;
+    type Error = A::Error;
 
     type Service = AndThen<A::Service, B::Service>;
     type InitError = A::InitError;
@@ -101,14 +104,14 @@ mod tests {
         type St = ();
         type Req = &'static str;
         type Res = &'static str;
-        type Err = ();
+        type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Err> {
+        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -133,14 +136,14 @@ mod tests {
         type St = ();
         type Req = &'static str;
         type Res = (&'static str, &'static str);
-        type Err = ();
+        type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
 
-        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Err> {
+        fn poll(&self, _: &mut Context<'_>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }

@@ -61,7 +61,7 @@ where
     type St = A::St;
     type Req = A::Req;
     type Res = Res;
-    type Err = A::Err;
+    type Error = A::Error;
 
     crate::forward_ready!(service);
     crate::forward_poll!(service);
@@ -72,21 +72,21 @@ where
         &self,
         req: Self::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Res, Self::Err> {
+    ) -> Result<Self::Res, Self::Error> {
         ctx.call(&self.service, req).await.map(|r| (self.f)(r))
     }
 }
 
 /// `MapNewService` new service combinator
-pub struct MapFactory<A, F, Req, Res, Cfg> {
+pub struct MapFactory<A, F, St, Req, Res, Cfg> {
     a: A,
     f: F,
-    r: PhantomData<fn(Req, Cfg) -> Res>,
+    r: PhantomData<fn(St, Req, Cfg) -> Res>,
 }
 
-impl<A, F, Req, Res, Cfg> MapFactory<A, F, Req, Res, Cfg>
+impl<A, F, St, Req, Res, Cfg> MapFactory<A, F, St, Req, Res, Cfg>
 where
-    A: ServiceFactory<Req, Cfg>,
+    A: ServiceFactory<St, Req, Cfg>,
     F: Fn(A::Res) -> Res,
 {
     /// Create new `Map` new service instance
@@ -99,7 +99,7 @@ where
     }
 }
 
-impl<A, F, Req, Res, Cfg> Clone for MapFactory<A, F, Req, Res, Cfg>
+impl<A, F, St, Req, Res, Cfg> Clone for MapFactory<A, F, St, Req, Res, Cfg>
 where
     A: Clone,
     F: Clone,
@@ -114,7 +114,7 @@ where
     }
 }
 
-impl<A, F, Req, Res, Cfg> fmt::Debug for MapFactory<A, F, Req, Res, Cfg>
+impl<A, F, St, Req, Res, Cfg> fmt::Debug for MapFactory<A, F, St, Req, Res, Cfg>
 where
     A: fmt::Debug,
 {
@@ -126,14 +126,14 @@ where
     }
 }
 
-impl<A, F, Req, Res, Cfg> ServiceFactory<Req, Cfg> for MapFactory<A, F, Req, Res, Cfg>
+impl<A, F, St, Req, Res, Cfg> ServiceFactory<St, Req, Cfg>
+    for MapFactory<A, F, St, Req, Res, Cfg>
 where
-    A: ServiceFactory<Req, Cfg>,
+    A: ServiceFactory<St, Req, Cfg>,
     F: Fn(A::Res) -> Res + Clone,
 {
-    type St = A::St;
     type Res = Res;
-    type Err = A::Err;
+    type Error = A::Error;
 
     type Service = Map<A::Service, F, Res>;
     type InitError = A::InitError;
@@ -162,9 +162,9 @@ mod tests {
         type St = ();
         type Req = ();
         type Res = ();
-        type Err = ();
+        type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 

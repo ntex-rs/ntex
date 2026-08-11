@@ -30,9 +30,9 @@ pub struct OneRequestService<S> {
 }
 
 impl<S> OneRequestService<S> {
-    pub fn new<R>(service: S) -> Self
+    pub fn new(service: S) -> Self
     where
-        S: Service<R>,
+        S: Service,
     {
         Self {
             service,
@@ -42,15 +42,17 @@ impl<S> OneRequestService<S> {
     }
 }
 
-impl<T, R> Service<R> for OneRequestService<T>
+impl<T> Service for OneRequestService<T>
 where
-    T: Service<R>,
+    T: Service,
 {
-    type Response = T::Response;
-    type Error = T::Error;
+    type St = T::St;
+    type Req = T::Req;
+    type Res = T::Res;
+    type Err = T::Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
         if !self.ready.get() {
             poll_fn(|cx| {
                 self.waker.register(cx.waker());
@@ -66,11 +68,7 @@ where
     }
 
     #[inline]
-    async fn call(
-        &self,
-        req: R,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    async fn call(&self, req: T::Req, ctx: ServiceCtx<'_, Self>) -> Result<T::Res, T::Err> {
         self.ready.set(false);
 
         let result = ctx.call(&self.service, req).await;

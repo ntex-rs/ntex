@@ -104,10 +104,10 @@ pub struct TimeoutService<S> {
 }
 
 impl<S> TimeoutService<S> {
-    pub fn new<T, R>(timeout: T, service: S) -> Self
+    pub fn new<T>(timeout: T, service: S) -> Self
     where
         T: Into<Millis>,
-        S: Service<R>,
+        S: Service,
     {
         TimeoutService {
             service,
@@ -116,24 +116,26 @@ impl<S> TimeoutService<S> {
     }
 }
 
-impl<S, R> Service<R> for TimeoutService<S>
+impl<S> Service for TimeoutService<S>
 where
-    S: Service<R>,
+    S: Service,
 {
-    type Response = S::Response;
-    type Error = TimeoutError<S::Error>;
+    type St = S::St;
+    type Req = S::Req;
+    type Res = S::Res;
+    type Err = TimeoutError<S::Error>;
 
     async fn call(
         &self,
-        request: R,
+        req: S::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Err> {
         if self.timeout.is_zero() {
             ctx.call(&self.service, request)
                 .await
                 .map_err(TimeoutError::Service)
         } else {
-            match select(sleep(self.timeout), ctx.call(&self.service, request)).await {
+            match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
                 Either::Left(()) => Err(TimeoutError::Timeout),
                 Either::Right(res) => res.map_err(TimeoutError::Service),
             }
@@ -165,9 +167,11 @@ mod tests {
         }
     }
 
-    impl Service<()> for SleepService {
-        type Response = ();
-        type Error = SrvError;
+    impl Service for SleepService {
+        type St = ();
+        type Req = ();
+        type Res = ();
+        type Err = SrvError;
 
         async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), SrvError> {
             crate::time::sleep(self.0).await;

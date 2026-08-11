@@ -4,10 +4,10 @@ use std::future::{Future, ready};
 use ntex_service::{Middleware, Service, ServiceCtx};
 
 /// Trait defines retry policy
-pub trait Policy<Req, S: Service<Req>>: Sized + Clone {
-    async fn retry(&mut self, req: &Req, res: &Result<S::Response, S::Error>) -> bool;
+pub trait Policy<S: Service>: Sized + Clone {
+    async fn retry(&mut self, req: &S::Req, res: &Result<S::Res, S::Err>) -> bool;
 
-    fn clone_request(&self, req: &Req) -> Option<Req>;
+    fn clone_request(&self, req: &S::Req) -> Option<S::Req>;
 }
 
 #[derive(Clone, Debug)]
@@ -52,12 +52,13 @@ impl<P, S> RetryService<P, S> {
     }
 }
 
-impl<P, S, R> Service<R> for RetryService<P, S>
+impl<P, S> Service for RetryService<P, S>
 where
-    P: Policy<R, S>,
-    S: Service<R>,
+    P: Policy<S>,
+    S: Service,
 {
-    type Response = S::Response;
+    type Req = S::Req;
+    type Res = S::Res;
     type Error = S::Error;
 
     ntex_service::forward_poll!(service);
@@ -66,19 +67,19 @@ where
 
     async fn call(
         &self,
-        mut request: R,
+        mut req: S::Req,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<S::Response, S::Error> {
         let mut policy = self.policy.clone();
         let mut cloned = policy.clone_request(&request);
 
         loop {
-            let result = ctx.call(&self.service, request).await;
+            let result = ctx.call(&self.service, req).await;
 
-            cloned = if let Some(req) = cloned.take() {
-                if policy.retry(&req, &result).await {
-                    request = req;
-                    policy.clone_request(&request)
+            cloned = if let Some(r) = cloned.take() {
+                if policy.retry(&r, &result).await {
+                    req = r;
+                    policy.clone_request(&req)
                 } else {
                     return result;
                 }
@@ -108,15 +109,15 @@ impl Default for DefaultRetryPolicy {
     }
 }
 
-impl<R, S> Policy<R, S> for DefaultRetryPolicy
+impl<S> Policy<S> for DefaultRetryPolicy
 where
-    R: Clone,
-    S: Service<R>,
+    S: Service,
+    S::Req: Clone,
 {
     fn retry(
         &mut self,
-        _: &R,
-        res: &Result<S::Response, S::Error>,
+        _: &S::Req,
+        res: &Result<S::Res, S::Err>,
     ) -> impl Future<Output = bool> {
         let res = if res.is_err() {
             if self.0 == 0 {
@@ -131,7 +132,7 @@ where
         ready(res)
     }
 
-    fn clone_request(&self, req: &R) -> Option<R> {
+    fn clone_request(&self, req: &S::Req) -> Option<S::Req> {
         Some(req.clone())
     }
 }

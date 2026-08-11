@@ -3,16 +3,16 @@ use std::{fmt, marker::PhantomData};
 use super::ServiceFactory;
 
 /// `MapInitError` service combinator
-pub struct MapInitErr<A, R, C, F, E> {
+pub struct MapInitErr<A, St, Req, Cfg, F, Err> {
     a: A,
     f: F,
-    e: PhantomData<fn(R, C) -> E>,
+    e: PhantomData<fn(St, Req, Cfg) -> Err>,
 }
 
-impl<A, R, C, F, E> MapInitErr<A, R, C, F, E>
+impl<A, St, Req, Cfg, F, Err> MapInitErr<A, St, Req, Cfg, F, Err>
 where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E,
+    A: ServiceFactory<St, Req, Cfg>,
+    F: Fn(A::InitError) -> Err,
 {
     /// Create new `MapInitErr` combinator
     pub(crate) fn new(a: A, f: F) -> Self {
@@ -24,7 +24,7 @@ where
     }
 }
 
-impl<A, R, C, F, E> Clone for MapInitErr<A, R, C, F, E>
+impl<A, St, Req, Cfg, F, Err> Clone for MapInitErr<A, St, Req, Cfg, F, Err>
 where
     A: Clone,
     F: Clone,
@@ -38,7 +38,7 @@ where
     }
 }
 
-impl<A, R, C, F, E> fmt::Debug for MapInitErr<A, R, C, F, E>
+impl<A, St, Req, Cfg, F, Err> fmt::Debug for MapInitErr<A, St, Req, Cfg, F, Err>
 where
     A: fmt::Debug,
 {
@@ -50,20 +50,20 @@ where
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapInitErr<A, R, C, F, E>
+impl<A, St, Req, Cfg, F, Err> ServiceFactory<St, Req, Cfg>
+    for MapInitErr<A, St, Req, Cfg, F, Err>
 where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E + Clone,
+    A: ServiceFactory<St, Req, Cfg>,
+    F: Fn(A::InitError) -> Err + Clone,
 {
-    type St = A::St;
     type Res = A::Res;
-    type Err = A::Err;
+    type Error = A::Error;
 
     type Service = A::Service;
-    type InitError = E;
+    type InitError = Err;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
         self.a.create(cfg).await.map_err(|e| (self.f)(e))
     }
 }

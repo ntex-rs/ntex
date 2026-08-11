@@ -30,13 +30,7 @@ where
     /// Convert to a Variant with two request types
     pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<A, AC, B, AR, BR>
     where
-        B: ServiceFactory<
-                BR,
-                AC,
-                Response = A::Response,
-                Error = A::Error,
-                InitError = A::InitError,
-            >,
+        B: ServiceFactory<BR, AC, Res = A::Res, Error = A::Error, InitError = A::InitError>,
         F: IntoServiceFactory<B, BR, AC>,
     {
         VariantFactory2 {
@@ -68,7 +62,7 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
             /// Convert to a Variant with more request types
             pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<V1, V1C, $($T,)+ $name, V1R, $($R,)+ $r_name>
             where $name: ServiceFactory<$r_name, V1C,
-                    Response = V1::Response,
+                    Res = V1::Res,
                     Error = V1::Error,
                     InitError = V1::InitError>,
                   F: IntoServiceFactory<$name, $r_name, V1C>,
@@ -120,10 +114,10 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     impl<V1, $($T,)+ V1R, $($R,)+> Service<$enum_type<V1R, $($R,)+>> for $srv_type<V1, $($T,)+ V1R, $($R,)+>
     where
         V1: Service<V1R>,
-        $($T: Service<$R, Response = V1::Response, Error = V1::Error>),+
+        $($T: Service<$R, Res = V1::Res, Err = V1::Err>),+
     {
-        type Response = V1::Response;
-        type Error = V1::Error;
+        type Res = V1::Res;
+        type Err = V1::Err;
 
         async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
             use std::{future::Future, pin::Pin};
@@ -161,7 +155,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             $(self.$T.shutdown().await;)+
         }
 
-        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
+        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: ServiceCtx<'_, Self>) -> Result<Self::Res, Self::Error> {
             match req {
                 $enum_type::V1(req) => ctx.call(&self.V1, req).await,
                 $($enum_type::$T(req) => ctx.call(&self.$T, req).await,)+
@@ -199,9 +193,9 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
     where
         V1: ServiceFactory<V1R, V1C>,
         V1C: Clone,
-        $($T: ServiceFactory< $R, V1C, Response = V1::Response, Error = V1::Error, InitError = V1::InitError>),+
+        $($T: ServiceFactory< $R, V1C, Res = V1::Res, Error = V1::Error, InitError = V1::InitError>),+
     {
-        type Response = V1::Response;
+        type Res = V1::Res;
         type Error = V1::Error;
         type Service = $srv_type<V1::Service, $($T::Service,)+ V1R, $($R,)+>;
         type InitError = V1::InitError;
@@ -256,7 +250,7 @@ mod tests {
     struct Srv1;
 
     impl Service<()> for Srv1 {
-        type Response = usize;
+        type Res = usize;
         type Error = ();
 
         async fn ready(&self, _c: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
@@ -274,7 +268,7 @@ mod tests {
     struct Srv2;
 
     impl Service<()> for Srv2 {
-        type Response = usize;
+        type Res = usize;
         type Error = ();
 
         async fn ready(&self, _c: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
@@ -317,7 +311,7 @@ mod tests {
         struct Srv5;
 
         impl Service<()> for Srv5 {
-            type Response = usize;
+            type Res = usize;
             type Error = ();
             async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
                 time::sleep(time::Millis(50)).await;
