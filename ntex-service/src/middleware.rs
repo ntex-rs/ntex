@@ -7,11 +7,11 @@ use crate::{IntoServiceFactory, Service, ServiceFactory};
 pub fn apply<M, S, St, Req, U>(
     mw: M,
     factory: U,
-) -> ServiceChainFactory<ApplyMiddleware<M, S>, Req, St>
+) -> ServiceChainFactory<ApplyMiddleware<M, S>, St, Req>
 where
-    S: ServiceFactory<Req, St>,
+    S: ServiceFactory<St, Req>,
     M: Middleware<S::Service, S::InitCfg>,
-    U: IntoServiceFactory<S, Req, St>,
+    U: IntoServiceFactory<S, St, Req>,
 {
     ServiceChainFactory {
         factory: ApplyMiddleware::new(mw, factory.into_factory()),
@@ -104,9 +104,9 @@ pub trait Middleware<Svc, Cfg = ()> {
     fn apply<Fac, St, Req>(
         self,
         factory: Fac,
-    ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac>, Req, St>
+    ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac>, St, Req>
     where
-        Fac: ServiceFactory<Req, St, Service = Svc, InitCfg = Cfg>,
+        Fac: ServiceFactory<St, Req, Service = Svc, InitCfg = Cfg>,
         Cfg: Clone,
         Self: Sized,
         Self::Service: Service<St = St, Req = Req>,
@@ -155,9 +155,9 @@ where
     }
 }
 
-impl<M, Fac, St, Req> ServiceFactory<Req, St> for ApplyMiddleware<M, Fac>
+impl<M, Fac, St, Req> ServiceFactory<St, Req> for ApplyMiddleware<M, Fac>
 where
-    Fac: ServiceFactory<Req, St>,
+    Fac: ServiceFactory<St, Req>,
     Fac::InitCfg: Clone,
     M: Middleware<Fac::Service, Fac::InitCfg>,
     M::Service: Service<St = St, Req = Req>,

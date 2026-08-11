@@ -86,7 +86,7 @@ pub struct MapFactory<A, F, St, Req, Res> {
 
 impl<A, F, St, Req, Res> MapFactory<A, F, St, Req, Res>
 where
-    A: ServiceFactory<Req, St>,
+    A: ServiceFactory<St, Req>,
     F: Fn(A::Res) -> Res,
 {
     /// Create new `Map` new service instance
@@ -126,9 +126,9 @@ where
     }
 }
 
-impl<A, F, St, Req, Res> ServiceFactory<Req, St> for MapFactory<A, F, St, Req, Res>
+impl<A, F, St, Req, Res> ServiceFactory<St, Req> for MapFactory<A, F, St, Req, Res>
 where
-    A: ServiceFactory<Req, St>,
+    A: ServiceFactory<St, Req>,
     F: Fn(A::Res) -> Res + Clone,
 {
     type Res = Res;

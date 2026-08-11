@@ -195,7 +195,7 @@ pub trait Service {
 ///
 /// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
 /// to reduce boilerplate.
-pub trait ServiceFactory<Req, St = ()> {
+pub trait ServiceFactory<St, Req> {
     /// Responses given by the created services.
     type Res;
 
@@ -231,7 +231,7 @@ pub trait ServiceFactory<Req, St = ()> {
     fn map<F, Res>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, St, Req, Res>, Req, St>
+    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, St, Req, Res>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::Res) -> Res + Clone,
@@ -245,7 +245,7 @@ pub trait ServiceFactory<Req, St = ()> {
     fn map_err<F, E>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, St, Req, F, E>, Req, St>
+    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, St, Req, F, E>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
@@ -259,7 +259,7 @@ pub trait ServiceFactory<Req, St = ()> {
     fn map_init_err<F, E>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, St, Req, F, E>, Req, St>
+    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, St, Req, F, E>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
@@ -355,9 +355,9 @@ where
     }
 }
 
-impl<S, St, Req> ServiceFactory<Req, St> for Rc<S>
+impl<S, St, Req> ServiceFactory<St, Req> for Rc<S>
 where
-    S: ServiceFactory<Req, St>,
+    S: ServiceFactory<St, Req>,
 {
     type Res = S::Res;
     type Error = S::Error;
@@ -380,9 +380,9 @@ where
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
-pub trait IntoServiceFactory<T, Req, St>
+pub trait IntoServiceFactory<T, St, Req>
 where
-    T: ServiceFactory<Req, St>,
+    T: ServiceFactory<St, Req>,
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> T;
@@ -398,9 +398,9 @@ where
     }
 }
 
-impl<T, Req, St> IntoServiceFactory<T, Req, St> for T
+impl<T, Req, St> IntoServiceFactory<T, St, Req> for T
 where
-    T: ServiceFactory<Req, St>,
+    T: ServiceFactory<St, Req>,
 {
     #[inline]
     fn into_factory(self) -> T {

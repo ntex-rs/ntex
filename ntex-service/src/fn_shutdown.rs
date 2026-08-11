@@ -48,7 +48,7 @@ impl<Req, Err, F, Cfg> fmt::Debug for FnShutdown<Req, Err, F, Cfg> {
     }
 }
 
-impl<Req, Err, F, Cfg> ServiceFactory<Req> for FnShutdown<Req, Err, F, Cfg>
+impl<Req, Err, F, Cfg> ServiceFactory<(), Req> for FnShutdown<Req, Err, F, Cfg>
 where
     F: AsyncFnOnce() + Clone,
 {

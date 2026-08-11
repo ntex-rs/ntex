@@ -92,7 +92,7 @@ where
 /// This is created by the `NewServiceExt::map_err` method.
 pub struct MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<R, S>,
+    A: ServiceFactory<S, R>,
     F: Fn(A::Error) -> E + Clone,
 {
     a: A,
@@ -102,7 +102,7 @@ where
 
 impl<A, S, R, F, E> MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<R, S>,
+    A: ServiceFactory<S, R>,
     F: Fn(A::Error) -> E + Clone,
 {
     /// Create new `MapErr` new service instance
@@ -117,7 +117,7 @@ where
 
 impl<A, S, R, F, E> Clone for MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<R, S> + Clone,
+    A: ServiceFactory<S, R> + Clone,
     F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
@@ -131,7 +131,7 @@ where
 
 impl<A, S, R, F, E> fmt::Debug for MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<R, S> + fmt::Debug,
+    A: ServiceFactory<S, R> + fmt::Debug,
     F: Fn(A::Error) -> E + Clone,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -142,9 +142,9 @@ where
     }
 }
 
-impl<A, S, R, F, E> ServiceFactory<R, S> for MapErrFactory<A, S, R, F, E>
+impl<A, S, R, F, E> ServiceFactory<S, R> for MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<R, S>,
+    A: ServiceFactory<S, R>,
     F: Fn(A::Error) -> E + Clone,
 {
     type Res = A::Res;

@@ -203,7 +203,8 @@ where
     }
 }
 
-impl<F, Req, Res, Err, Cfg> ServiceFactory<Req> for FnServiceFactory<F, Req, Res, Err, Cfg>
+impl<F, Req, Res, Err, Cfg> ServiceFactory<(), Req>
+    for FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
@@ -262,7 +263,7 @@ where
     }
 }
 
-impl<F, Cfg, Srv, St, Req, Err> ServiceFactory<Req, St>
+impl<F, Cfg, Srv, St, Req, Err> ServiceFactory<St, Req>
     for FnServiceConfig<F, Cfg, Srv, Err>
 where
     F: AsyncFn(Cfg) -> Result<Srv, Err>,
@@ -301,7 +302,7 @@ where
     }
 }
 
-impl<F, S, St, Req, E, C> ServiceFactory<Req, St> for FnServiceNoConfig<F, S, E, C>
+impl<F, S, St, Req, E, C> ServiceFactory<St, Req> for FnServiceNoConfig<F, S, E, C>
 where
     F: AsyncFn() -> Result<S, E>,
     S: Service<St = St, Req = Req>,

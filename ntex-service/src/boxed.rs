@@ -18,7 +18,7 @@ pub fn factory<F, St, Req>(
 where
     St: 'static,
     Req: 'static,
-    F: crate::ServiceFactory<Req, St> + 'static,
+    F: crate::ServiceFactory<St, Req> + 'static,
 {
     BoxServiceFactory(Box::new(factory))
 }
@@ -136,7 +136,7 @@ impl<F, St, Req, Cfg> ServiceFactoryObj<St, Req, Cfg> for F
 where
     Cfg: 'static,
     Req: 'static,
-    F: crate::ServiceFactory<Req, St, InitCfg = Cfg>,
+    F: crate::ServiceFactory<St, Req, InitCfg = Cfg>,
     F::Service: 'static,
 {
     type Res = F::Res;
@@ -189,7 +189,7 @@ where
     }
 }
 
-impl<St, Req, Res, Err, InitCfg, InitError> crate::ServiceFactory<Req, St>
+impl<St, Req, Res, Err, InitCfg, InitError> crate::ServiceFactory<St, Req>
     for BoxServiceFactory<St, Req, Res, Err, InitCfg, InitError>
 where
     Req: 'static,
