@@ -73,6 +73,7 @@ where
     A: ServiceFactory<R, C2>,
     F: Fn(C) -> C2,
 {
+    type St = A::St;
     type Response = A::Response;
     type Error = A::Error;
 
@@ -101,6 +102,7 @@ impl<A, R, C> ServiceFactory<R, C> for UnitConfig<A>
 where
     A: ServiceFactory<R>,
 {
+    type St = A::St;
     type Response = A::Response;
     type Error = A::Error;
 
@@ -136,7 +138,7 @@ mod tests {
         assert_eq!(item.get(), 11);
         let _ = format!("{factory:?}");
 
-        assert_eq!(svc.call(1).await.unwrap(), 1);
+        assert_eq!(svc.call(1, &()).await.unwrap(), 1);
     }
 
     #[ntex::test]
@@ -146,6 +148,6 @@ mod tests {
             .pipeline(&10)
             .await
             .unwrap();
-        assert_eq!(svc.call(1).await.unwrap(), 1);
+        assert_eq!(svc.call(1, &()).await.unwrap(), 1);
     }
 }

@@ -13,14 +13,13 @@ use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
-pub fn chain<Svc, Req, F>(service: F) -> ServiceChain<Svc, Req>
+pub fn chain<Svc, F>(service: F) -> ServiceChain<Svc>
 where
-    Svc: Service<Req>,
-    F: IntoService<Svc, Req>,
+    Svc: Service,
+    F: IntoService<Svc>,
 {
     ServiceChain {
         service: service.into_service(),
-        _t: PhantomData,
     }
 }
 
@@ -37,12 +36,11 @@ where
 }
 
 /// Chain builder - chain allows to compose multiple service into one service.
-pub struct ServiceChain<Svc, Req> {
+pub struct ServiceChain<Svc> {
     service: Svc,
-    _t: PhantomData<Req>,
 }
 
-impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
+impl<Svc: Service> ServiceChain<Svc> {
     /// Call another service after call to this one has resolved successfully.
     ///
     /// This function can be used to chain two services together and ensure that
@@ -52,29 +50,27 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     ///
     /// Note that this function consumes the receiving service and returns a
     /// wrapped version of it.
-    pub fn and_then<Next, F>(self, service: F) -> ServiceChain<AndThen<Svc, Next>, Req>
+    pub fn and_then<Next, F>(self, service: F) -> ServiceChain<AndThen<Svc, Next>>
     where
         Self: Sized,
-        F: IntoService<Next, Svc::Response>,
-        Next: Service<Svc::Response, Error = Svc::Error>,
+        F: IntoService<Next>,
+        Next: Service<Req = Svc::Response, Error = Svc::Error>,
     {
         ServiceChain {
             service: AndThen::new(self.service, service.into_service()),
-            _t: PhantomData,
         }
     }
 
     /// Chain on a computation for when a call to the service finished,
     /// passing the result of the call to the next service `U`.
-    pub fn then<Next, F>(self, service: F) -> ServiceChain<Then<Svc, Next>, Req>
+    pub fn then<Next, F>(self, service: F) -> ServiceChain<Then<Svc, Next>>
     where
         Self: Sized,
-        F: IntoService<Next, Result<Svc::Response, Svc::Error>>,
-        Next: Service<Result<Svc::Response, Svc::Error>, Error = Svc::Error>,
+        F: IntoService<Next>,
+        Next: Service<Req = Result<Svc::Response, Svc::Error>, Error = Svc::Error>,
     {
         ServiceChain {
             service: Then::new(self.service, service.into_service()),
-            _t: PhantomData,
         }
     }
 
@@ -83,14 +79,13 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     ///
     /// This function is similar to the `Option::map` or `Iterator::map` where
     /// it will change the type of the underlying service.
-    pub fn map<F, Res>(self, f: F) -> ServiceChain<Map<Svc, F, Req, Res>, Req>
+    pub fn map<F, Res>(self, f: F) -> ServiceChain<Map<Svc, F, Res>>
     where
         Self: Sized,
         F: Fn(Svc::Response) -> Res,
     {
         ServiceChain {
             service: Map::new(self.service, f),
-            _t: PhantomData,
         }
     }
 
@@ -99,42 +94,39 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     /// This function is similar to the `Result::map_err` where it will change
     /// the error type of the underlying service. This is useful for example to
     /// ensure that services have the same error type.
-    pub fn map_err<F, Err>(self, f: F) -> ServiceChain<MapErr<Svc, F, Err>, Req>
+    pub fn map_err<F, Err>(self, f: F) -> ServiceChain<MapErr<Svc, F, Err>>
     where
         Self: Sized,
         F: Fn(Svc::Error) -> Err,
     {
         ServiceChain {
             service: MapErr::new(self.service, f),
-            _t: PhantomData,
         }
     }
 
     /// Calls a function with a reference to the contained value if Ok.
     ///
     /// Returns the original result.
-    pub fn inspect<F>(self, f: F) -> ServiceChain<Inspect<Svc, F>, Req>
+    pub fn inspect<F>(self, f: F) -> ServiceChain<Inspect<Svc, F>>
     where
         Self: Sized,
         F: Fn(&Svc::Response),
     {
         ServiceChain {
             service: Inspect::new(self.service, f),
-            _t: PhantomData,
         }
     }
 
     /// Calls a function with a reference to the contained value if Err.
     ///
     /// Returns the original result.
-    pub fn inspect_err<F>(self, f: F) -> ServiceChain<InspectErr<Svc, F>, Req>
+    pub fn inspect_err<F>(self, f: F) -> ServiceChain<InspectErr<Svc, F>>
     where
         Self: Sized,
         F: Fn(&Svc::Error),
     {
         ServiceChain {
             service: InspectErr::new(self.service, f),
-            _t: PhantomData,
         }
     }
 
@@ -144,10 +136,10 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     pub fn apply_fn<F, In, Out, Err>(
         self,
         f: F,
-    ) -> ServiceChain<Apply<Svc, Req, F, In, Out, Err>, In>
+    ) -> ServiceChain<Apply<Svc, F, In, Out, Err>>
     where
         F: AsyncFn(In, &ApplyCtx<'_, Svc>) -> Result<Out, Err>,
-        Svc: Service<Req>,
+        Svc: Service,
         Err: From<Svc::Error>,
     {
         crate::apply_fn(self.service, f)
@@ -159,19 +151,18 @@ impl<Svc: Service<Req>, Req> ServiceChain<Svc, Req> {
     }
 }
 
-impl<Svc, Req> Clone for ServiceChain<Svc, Req>
+impl<Svc> Clone for ServiceChain<Svc>
 where
     Svc: Clone,
 {
     fn clone(&self) -> Self {
         ServiceChain {
             service: self.service.clone(),
-            _t: PhantomData,
         }
     }
 }
 
-impl<Svc, Req> fmt::Debug for ServiceChain<Svc, Req>
+impl<Svc> fmt::Debug for ServiceChain<Svc>
 where
     Svc: fmt::Debug,
 {
@@ -182,7 +173,9 @@ where
     }
 }
 
-impl<Svc: Service<Req>, Req> Service<Req> for ServiceChain<Svc, Req> {
+impl<Svc: Service> Service for ServiceChain<Svc> {
+    type St = Svc::St;
+    type Req = Svc::Req;
     type Response = Svc::Response;
     type Error = Svc::Error;
 
@@ -193,7 +186,7 @@ impl<Svc: Service<Req>, Req> Service<Req> for ServiceChain<Svc, Req> {
     #[inline]
     async fn call(
         &self,
-        req: Req,
+        req: Svc::Req,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         ctx.call(&self.service, req).await
@@ -384,6 +377,7 @@ where
 impl<Fac: ServiceFactory<Req, C>, Req, C> ServiceFactory<Req, C>
     for ServiceChainFactory<Fac, Req, C>
 {
+    type St = Fac::St;
     type Response = Fac::Response;
     type Error = Fac::Error;
     type Service = Fac::Service;

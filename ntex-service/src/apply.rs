@@ -6,14 +6,14 @@ use crate::dev::{ServiceChain, ServiceChainFactory};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
 /// Apply transform function to a service.
-pub fn apply_fn<T, Req, F, In, Out, Err, U>(
+pub fn apply_fn<T, F, In, Out, Err, U>(
     service: U,
     f: F,
-) -> ServiceChain<Apply<T, Req, F, In, Out, Err>, In>
+) -> ServiceChain<Apply<T, F, In, Out, Err>>
 where
-    T: Service<Req>,
+    T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
-    U: IntoService<T, Req>,
+    U: IntoService<T>,
     Err: From<T::Error>,
 {
     crate::chain(Apply::new(service.into_service(), f))
@@ -34,21 +34,21 @@ where
 }
 
 #[derive(Debug)]
-pub struct ApplyCtx<'a, S> {
+pub struct ApplyCtx<'a, S: Service> {
     idx: u32,
     waiters: &'a WaitersRef,
     service: &'a S,
+    st: &'a S::St,
 }
 
-impl<'a, S> ApplyCtx<'a, S> {
+impl<'a, S: Service> ApplyCtx<'a, S> {
     #[inline]
     /// Wait for service readiness and then call service.
-    pub async fn call<R>(&self, req: R) -> Result<S::Response, S::Error>
+    pub async fn call(&self, req: S::Req) -> Result<S::Response, S::Error>
     where
-        S: Service<R>,
-        R: 'a,
+        S: Service,
     {
-        let ctx = ServiceCtx::new(self.idx, self.waiters);
+        let ctx = ServiceCtx::new(self.idx, self.waiters, self.st);
 
         self.service.ready(ctx).await?;
         self.service.call(req, ctx).await
@@ -56,15 +56,15 @@ impl<'a, S> ApplyCtx<'a, S> {
 }
 
 /// `Apply` service combinator
-pub struct Apply<T, Req, F, In, Out, Err> {
+pub struct Apply<T, F, In, Out, Err> {
     service: T,
     f: F,
-    r: marker::PhantomData<fn(Req) -> (In, Out, Err)>,
+    r: marker::PhantomData<fn() -> (In, Out, Err)>,
 }
 
-impl<T, Req, F, In, Out, Err> Apply<T, Req, F, In, Out, Err>
+impl<T, F, In, Out, Err> Apply<T, F, In, Out, Err>
 where
-    T: Service<Req>,
+    T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
     Err: From<T::Error>,
 {
@@ -77,7 +77,7 @@ where
     }
 }
 
-impl<T, Req, F, In, Out, Err> Clone for Apply<T, Req, F, In, Out, Err>
+impl<T, F, In, Out, Err> Clone for Apply<T, F, In, Out, Err>
 where
     T: Clone,
     F: Clone,
@@ -91,7 +91,7 @@ where
     }
 }
 
-impl<T, Req, F, In, Out, Err> fmt::Debug for Apply<T, Req, F, In, Out, Err>
+impl<T, F, In, Out, Err> fmt::Debug for Apply<T, F, In, Out, Err>
 where
     T: fmt::Debug,
 {
@@ -103,12 +103,14 @@ where
     }
 }
 
-impl<T, Req, F, In, Out, Err> Service<In> for Apply<T, Req, F, In, Out, Err>
+impl<T, F, In, Out, Err> Service for Apply<T, F, In, Out, Err>
 where
-    T: Service<Req>,
+    T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
     Err: From<T::Error>,
 {
+    type St = T::St;
+    type Req = In;
     type Response = Out;
     type Error = Err;
 
@@ -123,11 +125,12 @@ where
         req: In,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        let (idx, waiters) = ctx.inner();
+        let (idx, waiters, st) = ctx.inner();
 
         let ctx = ApplyCtx {
             idx,
             waiters,
+            st,
             service: &self.service,
         };
         (self.f)(req, &ctx).await
@@ -200,10 +203,11 @@ where
     F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
+    type St = T::St;
     type Response = Out;
     type Error = Err;
 
-    type Service = Apply<T::Service, Req, F, In, Out, Err>;
+    type Service = Apply<T::Service, F, In, Out, Err>;
     type InitError = T::InitError;
 
     #[inline]
@@ -228,7 +232,9 @@ mod tests {
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
 
-    impl Service<()> for Srv {
+    impl Service for Srv {
+        type St = ();
+        type Req = ();
         type Response = ();
         type Error = ();
 
@@ -267,7 +273,7 @@ mod tests {
         )
         .into_pipeline();
 
-        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+        assert_eq!(srv.ready(&()).await, Ok::<_, Err>(()));
 
         lazy(|cx| srv.poll(cx)).await.unwrap();
         assert_eq!(cnt_sht.get(), 1);
@@ -275,7 +281,7 @@ mod tests {
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
 
-        let res = srv.call("srv").await;
+        let res = srv.call("srv", &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
     }
@@ -291,12 +297,12 @@ mod tests {
             .clone()
             .into_pipeline();
 
-        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+        assert_eq!(srv.ready(&()).await, Ok::<_, Err>(()));
 
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
 
-        let res = srv.call("srv").await;
+        let res = srv.call("srv", &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{srv:?}");
@@ -317,9 +323,9 @@ mod tests {
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
-        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+        assert_eq!(srv.ready(&()).await, Ok::<_, Err>(()));
 
-        let res = srv.call("srv").await;
+        let res = srv.call("srv", &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{new_srv:?}");
@@ -338,9 +344,9 @@ mod tests {
 
         let srv = new_srv.pipeline(&()).await.unwrap();
 
-        assert_eq!(srv.ready().await, Ok::<_, Err>(()));
+        assert_eq!(srv.ready(&()).await, Ok::<_, Err>(()));
 
-        let res = srv.call("srv").await;
+        let res = srv.call("srv", &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv", ()));
         let _ = format!("{new_srv:?}");

@@ -55,6 +55,7 @@ where
     A: ServiceFactory<R, C>,
     F: Fn(A::InitError) -> E + Clone,
 {
+    type St = A::St;
     type Response = A::Response;
     type Error = A::Error;
 

@@ -1,5 +1,9 @@
 # Changes
 
+## [5.0.0] - 2026-08-12
+
+* Add shared state management
+
 ## [4.6.0] - 2026-03-05
 
 * Add `service` name to `SharedCfg`

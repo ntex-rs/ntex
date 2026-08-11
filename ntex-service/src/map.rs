@@ -5,17 +5,17 @@ use super::{Service, ServiceCtx, ServiceFactory};
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
 /// This is created by the `ServiceExt::map` method.
-pub struct Map<A, F, Req, Res> {
+pub struct Map<A, F, Res> {
     service: A,
     f: F,
-    _t: PhantomData<fn(Req) -> Res>,
+    _t: PhantomData<fn() -> Res>,
 }
 
-impl<A, F, Req, Res> Map<A, F, Req, Res> {
+impl<A, F, Res> Map<A, F, Res> {
     /// Create new `Map` combinator
     pub(crate) fn new(service: A, f: F) -> Self
     where
-        A: Service<Req>,
+        A: Service,
         F: Fn(A::Response) -> Res,
     {
         Self {
@@ -26,7 +26,7 @@ impl<A, F, Req, Res> Map<A, F, Req, Res> {
     }
 }
 
-impl<A, F, Req, Res> Clone for Map<A, F, Req, Res>
+impl<A, F, Res> Clone for Map<A, F, Res>
 where
     A: Clone,
     F: Clone,
@@ -41,7 +41,7 @@ where
     }
 }
 
-impl<A, F, Req, Res> fmt::Debug for Map<A, F, Req, Res>
+impl<A, F, Res> fmt::Debug for Map<A, F, Res>
 where
     A: fmt::Debug,
 {
@@ -53,11 +53,13 @@ where
     }
 }
 
-impl<A, F, Req, Res> Service<Req> for Map<A, F, Req, Res>
+impl<A, F, Res> Service for Map<A, F, Res>
 where
-    A: Service<Req>,
+    A: Service,
     F: Fn(A::Response) -> Res,
 {
+    type St = A::St;
+    type Req = A::Req;
     type Response = Res;
     type Error = A::Error;
 
@@ -68,7 +70,7 @@ where
     #[inline]
     async fn call(
         &self,
-        req: Req,
+        req: Self::Req,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         ctx.call(&self.service, req).await.map(|r| (self.f)(r))
@@ -129,10 +131,11 @@ where
     A: ServiceFactory<Req, Cfg>,
     F: Fn(A::Response) -> Res + Clone,
 {
+    type St = A::St;
     type Response = Res;
     type Error = A::Error;
 
-    type Service = Map<A::Service, F, Req, Res>;
+    type Service = Map<A::Service, F, Res>;
     type InitError = A::InitError;
 
     #[inline]
@@ -155,7 +158,9 @@ mod tests {
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
 
-    impl Service<()> for Srv {
+    impl Service for Srv {
+        type St = ();
+        type Req = ();
         type Response = ();
         type Error = ();
 
@@ -176,11 +181,11 @@ mod tests {
     async fn test_service() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = Pipeline::new(Srv(cnt_sht.clone()).map(|()| "ok").clone());
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -190,11 +195,11 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let svc = Srv(cnt_sht.clone()).map(|()| "ok");
         let srv = Pipeline::new(&svc);
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -205,11 +210,11 @@ mod tests {
     #[ntex::test]
     async fn test_pipeline() {
         let srv = Pipeline::new(crate::chain(Srv::default()).map(|()| "ok").clone());
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
     }
 
@@ -219,7 +224,7 @@ mod tests {
             .map(|()| "ok")
             .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
 
@@ -233,7 +238,7 @@ mod tests {
                 .map(|()| "ok")
                 .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
 

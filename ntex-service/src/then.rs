@@ -17,11 +17,13 @@ impl<A, B> Then<A, B> {
     }
 }
 
-impl<A, B, R> Service<R> for Then<A, B>
+impl<A, B> Service for Then<A, B>
 where
-    A: Service<R>,
-    B: Service<Result<A::Response, A::Error>, Error = A::Error>,
+    A: Service,
+    B: Service<Req = Result<A::Response, A::Error>, St = A::St, Error = A::Error>,
 {
+    type St = A::St;
+    type Req = A::Req;
     type Response = B::Response;
     type Error = B::Error;
 
@@ -44,7 +46,7 @@ where
     #[inline]
     async fn call(
         &self,
-        req: R,
+        req: A::Req,
         ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
         ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
@@ -71,11 +73,13 @@ where
     B: ServiceFactory<
             Result<A::Response, A::Error>,
             C,
+            St = A::St,
             Error = A::Error,
             InitError = A::InitError,
         >,
     C: Clone,
 {
+    type St = A::St;
     type Response = B::Response;
     type Error = A::Error;
 
@@ -101,7 +105,9 @@ mod tests {
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service<Result<&'static str, &'static str>> for Srv1 {
+    impl Service for Srv1 {
+        type St = ();
+        type Req = Result<&'static str, &'static str>;
         type Response = &'static str;
         type Error = ();
 
@@ -134,7 +140,9 @@ mod tests {
     #[derive(Clone)]
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service<Result<&'static str, ()>> for Srv2 {
+    impl Service for Srv2 {
+        type St = ();
+        type Req = Result<&'static str, ()>;
         type Response = (&'static str, &'static str);
         type Error = ();
 
@@ -171,7 +179,7 @@ mod tests {
         let srv = chain(Srv1(cnt.clone(), cnt_sht.clone()))
             .then(Srv2(cnt.clone(), cnt_sht.clone()))
             .into_pipeline();
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
 
@@ -190,11 +198,11 @@ mod tests {
             .clone()
             .into_pipeline();
 
-        let res = srv.call(Ok("srv1")).await;
+        let res = srv.call(Ok("srv1"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));
 
-        let res = srv.call(Err("srv")).await;
+        let res = srv.call(Err("srv"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv2", "err"));
     }
@@ -214,11 +222,11 @@ mod tests {
             }))
             .clone();
         let srv = factory.pipeline(&()).await.unwrap();
-        let res = srv.call(Ok("srv1")).await;
+        let res = srv.call(Ok("srv1"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));
 
-        let res = srv.call(Err("srv")).await;
+        let res = srv.call(Err("srv"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv2", "err"));
     }

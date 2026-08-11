@@ -52,6 +52,7 @@ impl<Req, Err, C, F> ServiceFactory<Req, C> for FnShutdown<Req, Err, F>
 where
     F: AsyncFnOnce() + Clone,
 {
+    type St = ();
     type Response = Req;
     type Error = Err;
     type Service = FnShutdown<Req, Err, F>;
@@ -71,10 +72,12 @@ where
     }
 }
 
-impl<Req, Err, F> Service<Req> for FnShutdown<Req, Err, F>
+impl<Req, Err, F> Service for FnShutdown<Req, Err, F>
 where
     F: AsyncFnOnce(),
 {
+    type St = ();
+    type Req = Req;
     type Response = Req;
     type Error = Err;
 
@@ -119,8 +122,8 @@ mod tests {
             .await
             .unwrap();
 
-        let res = pipe.call(()).await;
-        assert_eq!(pipe.ready().await, Ok(()));
+        let res = pipe.call((), &()).await;
+        assert_eq!(pipe.ready(&()).await, Ok(()));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "pipe");
         assert!(!pipe.is_shutdown());
@@ -128,7 +131,7 @@ mod tests {
         assert!(is_called.get());
         assert!(!pipe.is_shutdown());
 
-        let pipe = pipe.bind();
+        let pipe = pipe.bind(());
         poll_fn(|cx| pipe.poll_shutdown(cx)).await;
         assert!(pipe.is_shutdown());
 

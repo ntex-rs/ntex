@@ -10,9 +10,9 @@ pub struct Inspect<S, F> {
 
 impl<S, F> Inspect<S, F> {
     /// Create new `Inspect` service combinator.
-    pub(crate) fn new<R>(svc: S, f: F) -> Self
+    pub(crate) fn new(svc: S, f: F) -> Self
     where
-        S: Service<R>,
+        S: Service,
         F: Fn(&S::Response),
     {
         Self { svc, f }
@@ -45,17 +45,23 @@ where
     }
 }
 
-impl<S, F, R> Service<R> for Inspect<S, F>
+impl<S, F> Service for Inspect<S, F>
 where
-    S: Service<R>,
+    S: Service,
     F: Fn(&S::Response),
 {
+    type St = S::St;
+    type Req = S::Req;
     type Response = S::Response;
     type Error = S::Error;
 
     #[inline]
-    async fn call(&self, r: R, ctx: ServiceCtx<'_, Self>) -> Result<S::Response, S::Error> {
-        ctx.call(&self.svc, r).await.inspect(&self.f)
+    async fn call(
+        &self,
+        req: S::Req,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<S::Response, S::Error> {
+        ctx.call(&self.svc, req).await.inspect(&self.f)
     }
 
     crate::forward_ready!(svc);
@@ -71,9 +77,9 @@ pub struct InspectErr<S, F> {
 
 impl<S, F> InspectErr<S, F> {
     /// Create new `InspectErr` service combinator.
-    pub(crate) fn new<R>(svc: S, f: F) -> Self
+    pub(crate) fn new(svc: S, f: F) -> Self
     where
-        S: Service<R>,
+        S: Service,
         F: Fn(&S::Error),
     {
         Self { svc, f }
@@ -106,11 +112,13 @@ where
     }
 }
 
-impl<S, F, R> Service<R> for InspectErr<S, F>
+impl<S, F> Service for InspectErr<S, F>
 where
-    S: Service<R>,
+    S: Service,
     F: Fn(&S::Error),
 {
+    type St = S::St;
+    type Req = S::Req;
     type Response = S::Response;
     type Error = S::Error;
 
@@ -125,8 +133,12 @@ where
     }
 
     #[inline]
-    async fn call(&self, r: R, ctx: ServiceCtx<'_, Self>) -> Result<S::Response, S::Error> {
-        ctx.call(&self.svc, r).await.inspect_err(&self.f)
+    async fn call(
+        &self,
+        req: S::Req,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<S::Response, S::Error> {
+        ctx.call(&self.svc, req).await.inspect_err(&self.f)
     }
 
     crate::forward_shutdown!(svc);
@@ -175,6 +187,7 @@ where
     S: ServiceFactory<R, C>,
     F: Fn(&S::Response) + Clone,
 {
+    type St = S::St;
     type Response = S::Response;
     type Error = S::Error;
 
@@ -233,6 +246,7 @@ where
     S: ServiceFactory<R, C>,
     F: Fn(&S::Error) + Clone,
 {
+    type St = S::St;
     type Response = S::Response;
     type Error = S::Error;
 
@@ -259,7 +273,9 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv(bool, bool, Rc<Cell<usize>>);
 
-    impl Service<()> for Srv {
+    impl Service for Srv {
+        type St = ();
+        type Req = ();
         type Response = ();
         type Error = ();
 
@@ -283,7 +299,7 @@ mod tests {
         let srv = chain(Srv(false, false, cnt.clone()))
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .into_pipeline();
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -297,7 +313,7 @@ mod tests {
         let srv = chain(Srv(true, true, cnt.clone()))
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .into_pipeline();
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Err(()));
 
         srv.shutdown().await;
@@ -312,7 +328,7 @@ mod tests {
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
             .into_pipeline();
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
 
         let _ = format!("{srv:?}");
@@ -329,7 +345,7 @@ mod tests {
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
             .into_pipeline();
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());
 
@@ -350,7 +366,7 @@ mod tests {
         .inspect(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
         let srv = new_srv.pipeline(&()).await.unwrap();
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         let _ = format!("{new_srv:?}");
         srv.shutdown().await;
@@ -368,7 +384,7 @@ mod tests {
         .inspect_err(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
         let srv = new_srv.pipeline(&()).await.unwrap();
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());
         let _ = format!("{new_srv:?}");

@@ -41,11 +41,11 @@ impl<S> Pipeline<S> {
 
     #[inline]
     /// Returns when the pipeline is able to process requests.
-    pub async fn ready<R>(&self) -> Result<(), S::Error>
+    pub async fn ready(&self, st: &S::St) -> Result<(), S::Error>
     where
-        S: Service<R>,
+        S: Service,
     {
-        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
+        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref(), st)
             .ready(&self.state.svc)
             .await
     }
@@ -53,11 +53,11 @@ impl<S> Pipeline<S> {
     #[inline]
     /// Wait for service readiness and then create future object
     /// that resolves to service result.
-    pub async fn call<R>(&self, req: R) -> Result<S::Response, S::Error>
+    pub async fn call(&self, req: S::Req, st: &S::St) -> Result<S::Response, S::Error>
     where
-        S: Service<R>,
+        S: Service,
     {
-        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref())
+        ServiceCtx::<'_, S>::new(self.index, self.state.waiters_ref(), st)
             .call(&self.state.svc, req)
             .await
     }
@@ -65,16 +65,15 @@ impl<S> Pipeline<S> {
     #[inline]
     /// Wait for service readiness and then create future object
     /// that resolves to service result.
-    pub fn call_static<R>(&self, req: R) -> PipelineCall<S, R>
+    pub fn call_static(&self, req: S::Req, st: S::St) -> PipelineCall<S>
     where
-        S: Service<R> + 'static,
-        R: 'static,
+        S: Service + 'static,
     {
         let pl = self.clone();
 
         PipelineCall {
             fut: Box::pin(async move {
-                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref(), &st)
                     .call(&pl.state.svc, req)
                     .await
             }),
@@ -85,16 +84,15 @@ impl<S> Pipeline<S> {
     /// Call service and create future object that resolves to service result.
     ///
     /// Note, this call does not check service readiness.
-    pub fn call_nowait<R>(&self, req: R) -> PipelineCall<S, R>
+    pub fn call_nowait(&self, req: S::Req, st: S::St) -> PipelineCall<S>
     where
-        S: Service<R> + 'static,
-        R: 'static,
+        S: Service + 'static,
     {
         let pl = self.clone();
 
         PipelineCall {
             fut: Box::pin(async move {
-                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref(), &st)
                     .call_nowait(&pl.state.svc, req)
                     .await
             }),
@@ -109,29 +107,29 @@ impl<S> Pipeline<S> {
 
     #[inline]
     /// Shutdown enclosed service.
-    pub async fn shutdown<R>(&self)
+    pub async fn shutdown(&self)
     where
-        S: Service<R>,
+        S: Service,
     {
         self.state.svc.shutdown().await;
     }
 
     #[inline]
-    pub fn poll<R>(&self, cx: &mut Context<'_>) -> Result<(), S::Error>
+    pub fn poll(&self, cx: &mut Context<'_>) -> Result<(), S::Error>
     where
-        S: Service<R>,
+        S: Service,
     {
         self.state.svc.poll(cx)
     }
 
     #[inline]
     /// Get current pipeline.
-    pub fn bind<R>(self) -> PipelineBinding<S, R>
+    pub fn bind(self, st: S::St) -> PipelineBinding<S>
     where
-        S: Service<R> + 'static,
-        R: 'static,
+        S: Service + 'static,
+        S::St: 'static,
     {
-        PipelineBinding::new(self)
+        PipelineBinding::new(self, st)
     }
 }
 
@@ -181,25 +179,27 @@ impl<S> PipelineSvc<S> {
     }
 }
 
-impl<S, Req> Service<Req> for PipelineSvc<S>
+impl<S> Service for PipelineSvc<S>
 where
-    S: Service<Req>,
+    S: Service,
 {
+    type St = S::St;
+    type Req = S::Req;
     type Response = S::Response;
     type Error = S::Error;
 
     #[inline]
     async fn call(
         &self,
-        req: Req,
-        _: ServiceCtx<'_, Self>,
+        req: S::Req,
+        ctx: ServiceCtx<'_, Self>,
     ) -> Result<Self::Response, Self::Error> {
-        self.inner.call(req).await
+        self.inner.call(req, ctx.st()).await
     }
 
     #[inline]
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        self.inner.ready().await
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        self.inner.ready(ctx.st()).await
     }
 
     #[inline]
@@ -230,9 +230,9 @@ impl<S> Clone for PipelineSvc<S> {
     }
 }
 
-impl<S, R> IntoService<PipelineSvc<S>, R> for Pipeline<S>
+impl<S> IntoService<PipelineSvc<S>> for Pipeline<S>
 where
-    S: Service<R>,
+    S: Service,
 {
     #[inline]
     fn into_service(self) -> PipelineSvc<S> {
@@ -241,11 +241,12 @@ where
 }
 
 /// Bound container for a service.
-pub struct PipelineBinding<S, R>
+pub struct PipelineBinding<S>
 where
-    S: Service<R>,
+    S: Service,
 {
     pl: Pipeline<S>,
+    state: Rc<S::St>,
     st: cell::UnsafeCell<State<S::Error>>,
 }
 
@@ -255,14 +256,14 @@ enum State<E> {
     Shutdown(Pin<Box<dyn Future<Output = ()> + 'static>>),
 }
 
-impl<S, R> PipelineBinding<S, R>
+impl<S> PipelineBinding<S>
 where
-    S: Service<R> + 'static,
-    R: 'static,
+    S: Service + 'static,
 {
-    fn new(pl: Pipeline<S>) -> Self {
+    fn new(pl: Pipeline<S>, state: S::St) -> Self {
         PipelineBinding {
             pl,
+            state: Rc::new(state),
             st: cell::UnsafeCell::new(State::New),
         }
     }
@@ -299,11 +300,12 @@ where
                 // Pipeline::svc is heap allocated(Rc<S>), and it is being kept alive until
                 // `self` is alive
                 let pl: &'static Pipeline<S> = unsafe { std::mem::transmute(&self.pl) };
+                let state: &'static S::St = unsafe { std::mem::transmute(&self.state) };
                 let fut = Box::pin(CheckReadiness {
-                    fut: None,
-                    f: ready,
-                    _t: marker::PhantomData,
                     pl,
+                    state,
+                    f: ready,
+                    fut: None,
                 });
                 *st = State::Readiness(fut);
                 self.poll_ready(cx)
@@ -335,12 +337,13 @@ where
     #[inline]
     /// Wait for service readiness and then create future object
     /// that resolves to service result.
-    pub fn call(&self, req: R) -> PipelineCall<S, R> {
+    pub fn call(&self, req: S::Req) -> PipelineCall<S> {
         let pl = self.pl.clone();
+        let state = self.state.clone();
 
         PipelineCall {
             fut: Box::pin(async move {
-                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref(), &state)
                     .call(&pl.state.svc, req)
                     .await
             }),
@@ -351,12 +354,13 @@ where
     /// Call service and create future object that resolves to service result.
     ///
     /// Note, this call does not check service readiness.
-    pub fn call_nowait(&self, req: R) -> PipelineCall<S, R> {
+    pub fn call_nowait(&self, req: S::Req) -> PipelineCall<S> {
         let pl = self.pl.clone();
+        let state = self.state.clone();
 
         PipelineCall {
             fut: Box::pin(async move {
-                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref())
+                ServiceCtx::<S>::new(pl.index, pl.state.waiters_ref(), &state)
                     .call_nowait(&pl.state.svc, req)
                     .await
             }),
@@ -376,31 +380,33 @@ where
     }
 }
 
-impl<S, R> Drop for PipelineBinding<S, R>
+impl<S> Drop for PipelineBinding<S>
 where
-    S: Service<R>,
+    S: Service,
 {
     fn drop(&mut self) {
         self.st = cell::UnsafeCell::new(State::New);
     }
 }
 
-impl<S, R> Clone for PipelineBinding<S, R>
+impl<S> Clone for PipelineBinding<S>
 where
-    S: Service<R>,
+    S: Service,
+    S::St: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
         Self {
             pl: self.pl.clone(),
+            state: self.state.clone(),
             st: cell::UnsafeCell::new(State::New),
         }
     }
 }
 
-impl<S, R> fmt::Debug for PipelineBinding<S, R>
+impl<S> fmt::Debug for PipelineBinding<S>
 where
-    S: Service<R> + fmt::Debug,
+    S: Service + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PipelineBinding")
@@ -411,19 +417,18 @@ where
 
 #[must_use = "futures do nothing unless polled"]
 /// Pipeline call future
-pub struct PipelineCall<S, R>
+pub struct PipelineCall<S>
 where
-    S: Service<R>,
-    R: 'static,
+    S: Service,
 {
     fut: Call<S::Response, S::Error>,
 }
 
 type Call<R, E> = Pin<Box<dyn Future<Output = Result<R, E>> + 'static>>;
 
-impl<S, R> Future for PipelineCall<S, R>
+impl<S> Future for PipelineCall<S>
 where
-    S: Service<R>,
+    S: Service,
 {
     type Output = Result<S::Response, S::Error>;
 
@@ -433,35 +438,42 @@ where
     }
 }
 
-impl<S, R> fmt::Debug for PipelineCall<S, R>
+impl<S> fmt::Debug for PipelineCall<S>
 where
-    S: Service<R>,
+    S: Service,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PipelineCall").finish()
     }
 }
 
-fn ready<S, R>(pl: &'static Pipeline<S>) -> impl Future<Output = Result<(), S::Error>>
+fn ready<S>(
+    pl: &'static Pipeline<S>,
+    st: &S::St,
+) -> impl Future<Output = Result<(), S::Error>>
 where
-    S: Service<R>,
-    R: 'static,
+    S: Service,
 {
-    pl.state
-        .svc
-        .ready(ServiceCtx::<'_, S>::new(pl.index, pl.state.waiters_ref()))
+    pl.state.svc.ready(ServiceCtx::<'_, S>::new(
+        pl.index,
+        pl.state.waiters_ref(),
+        st,
+    ))
 }
 
-struct CheckReadiness<S: Service<R> + 'static, R, F, Fut> {
+struct CheckReadiness<S, F, Fut>
+where
+    S: Service + 'static,
+{
     f: F,
     fut: Option<Fut>,
     pl: &'static Pipeline<S>,
-    _t: marker::PhantomData<R>,
+    state: &'static S::St,
 }
 
-impl<S: Service<R>, R, F, Fut> Unpin for CheckReadiness<S, R, F, Fut> {}
+impl<S: Service, F, Fut> Unpin for CheckReadiness<S, F, Fut> {}
 
-impl<S: Service<R>, R, F, Fut> Drop for CheckReadiness<S, R, F, Fut> {
+impl<S: Service, F, Fut> Drop for CheckReadiness<S, F, Fut> {
     fn drop(&mut self) {
         // future got dropped during polling, we must notify other waiters
         if self.fut.is_some() {
@@ -470,10 +482,10 @@ impl<S: Service<R>, R, F, Fut> Drop for CheckReadiness<S, R, F, Fut> {
     }
 }
 
-impl<S, R, F, Fut> Future for CheckReadiness<S, R, F, Fut>
+impl<S, F, Fut> Future for CheckReadiness<S, F, Fut>
 where
-    S: Service<R>,
-    F: Fn(&'static Pipeline<S>) -> Fut,
+    S: Service,
+    F: Fn(&'static Pipeline<S>, &'static S::St) -> Fut,
     Fut: Future<Output = Result<(), S::Error>>,
 {
     type Output = Result<(), S::Error>;
@@ -485,7 +497,7 @@ where
 
         this.pl.state.waiters.run(this.pl.index, cx, |cx| {
             if this.fut.is_none() {
-                this.fut = Some((this.f)(this.pl));
+                this.fut = Some((this.f)(this.pl, this.state));
             }
             let fut = this.fut.as_mut().unwrap();
             let result = unsafe { Pin::new_unchecked(fut) }.poll(cx);
@@ -507,7 +519,9 @@ mod tests {
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
 
-    impl Service<()> for Srv {
+    impl Service for Srv {
+        type St = ();
+        type Req = ();
         type Response = ();
         type Error = ();
 
@@ -532,11 +546,11 @@ mod tests {
                 .into_service()
                 .clone(),
         );
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -546,11 +560,11 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let svc = Srv(cnt_sht.clone()).map(|()| "ok");
         let srv = Pipeline::new(PipelineSvc::from(&svc));
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
 
         let res = poll_fn(|cx| Poll::Ready(srv.poll(cx))).await;

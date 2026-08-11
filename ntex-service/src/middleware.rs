@@ -41,10 +41,12 @@ where
 ///    Timeout,
 /// }
 ///
-/// impl<S, R> Service<R> for Timeout<S>
+/// impl<S> Service for Timeout<S>
 /// where
-///     S: Service<R>,
+///     S: Service,
 /// {
+///     type St = S::St;
+///     type Req = S::Req;
 ///     type Response = S::Response;
 ///     type Error = TimeoutError<S::Error>;
 ///
@@ -52,7 +54,7 @@ where
 ///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
 ///     }
 ///
-///     async fn call(&self, req: R, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
+///     async fn call(&self, req: S::Req, ctx: ServiceCtx<'_, Self>) -> Result<Self::Response, Self::Error> {
 ///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
 ///             Either::Left(_) => Err(TimeoutError::Timeout),
 ///             Either::Right(res) => res.map_err(TimeoutError::Service),
@@ -107,7 +109,7 @@ pub trait Middleware<Svc, Cfg = ()> {
         Fac: ServiceFactory<Req, Cfg, Service = Svc>,
         Cfg: Clone,
         Self: Sized,
-        Self::Service: Service<Req>,
+        Self::Service: Service<Req = Req>,
     {
         crate::chain_factory(ApplyMiddleware::new(self, factory))
     }
@@ -157,11 +159,12 @@ impl<M, Fac, Req, Cfg> ServiceFactory<Req, Cfg> for ApplyMiddleware<M, Fac, Cfg>
 where
     Fac: ServiceFactory<Req, Cfg>,
     M: Middleware<Fac::Service, Cfg>,
-    M::Service: Service<Req>,
+    M::Service: Service<Req = Req>,
     Cfg: Clone,
 {
-    type Response = <M::Service as Service<Req>>::Response;
-    type Error = <M::Service as Service<Req>>::Error;
+    type St = <M::Service as Service>::St;
+    type Response = <M::Service as Service>::Response;
+    type Error = <M::Service as Service>::Error;
 
     type Service = M::Service;
     type InitError = Fac::InitError;
@@ -216,7 +219,7 @@ where
 
 #[doc(hidden)]
 /// Service factory that produces `middleware` from `Fn`.
-pub fn fn_layer<T, Req, F, In, Out, Err>(f: F) -> FnMiddleware<T, Req, F, In, Out, Err>
+pub fn fn_layer<T, F, In, Out, Err>(f: F) -> FnMiddleware<T, F, In, Out, Err>
 where
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err> + Clone,
 {
@@ -225,12 +228,12 @@ where
 
 #[allow(clippy::type_complexity)]
 /// `FnMiddleware` service combinator
-pub struct FnMiddleware<T, Req, F, In, Out, Err> {
+pub struct FnMiddleware<T, F, In, Out, Err> {
     f: F,
-    r: PhantomData<fn(T, Req) -> (In, Out, Err)>,
+    r: PhantomData<fn(T) -> (In, Out, Err)>,
 }
 
-impl<T, Req, F, In, Out, Err> Clone for FnMiddleware<T, Req, F, In, Out, Err>
+impl<T, F, In, Out, Err> Clone for FnMiddleware<T, F, In, Out, Err>
 where
     F: Clone,
 {
@@ -242,7 +245,7 @@ where
     }
 }
 
-impl<T, Req, F, In, Out, Err> fmt::Debug for FnMiddleware<T, Req, F, In, Out, Err> {
+impl<T, F, In, Out, Err> fmt::Debug for FnMiddleware<T, F, In, Out, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnMiddleware")
             .field("layer", &std::any::type_name::<F>())
@@ -250,13 +253,13 @@ impl<T, Req, F, In, Out, Err> fmt::Debug for FnMiddleware<T, Req, F, In, Out, Er
     }
 }
 
-impl<T, C, R, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, R, F, In, Out, Err>
+impl<T, C, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, F, In, Out, Err>
 where
-    T: Service<R>,
+    T: Service,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
-    type Service = Apply<T, R, F, In, Out, Err>;
+    type Service = Apply<T, F, In, Out, Err>;
 
     fn create(&self, service: T, _: C) -> Self::Service {
         Apply::new(service, self.f.clone())
@@ -272,21 +275,23 @@ mod tests {
     use crate::{Pipeline, ServiceCtx, fn_service};
 
     #[derive(Debug, Clone)]
-    struct Mw<R>(PhantomData<R>, Rc<Cell<usize>>);
+    struct Mw(Rc<Cell<usize>>);
 
-    impl<S, R, C> Middleware<S, C> for Mw<R> {
-        type Service = Srv<S, R>;
+    impl<S, C> Middleware<S, C> for Mw {
+        type Service = Srv<S>;
 
         fn create(&self, service: S, _: C) -> Self::Service {
-            self.1.set(self.1.get() + 1);
-            Srv(service, PhantomData, self.1.clone())
+            self.0.set(self.0.get() + 1);
+            Srv(service, self.0.clone())
         }
     }
 
     #[derive(Debug, Clone)]
-    struct Srv<S, R>(S, PhantomData<R>, Rc<Cell<usize>>);
+    struct Srv<S>(S, Rc<Cell<usize>>);
 
-    impl<S: Service<R>, R> Service<R> for Srv<S, R> {
+    impl<S: Service<St = ()>> Service for Srv<S> {
+        type St = ();
+        type Req = S::Req;
         type Response = S::Response;
         type Error = S::Error;
 
@@ -296,14 +301,14 @@ mod tests {
 
         async fn call(
             &self,
-            req: R,
+            req: S::Req,
             ctx: ServiceCtx<'_, Self>,
         ) -> Result<S::Response, S::Error> {
             ctx.call(&self.0, req).await
         }
 
         async fn shutdown(&self) {
-            self.2.set(self.2.get() + 1);
+            self.1.set(self.1.get() + 1);
         }
     }
 
@@ -311,49 +316,49 @@ mod tests {
     async fn middleware() {
         let cnt_sht = Rc::new(Cell::new(0));
         let factory = apply(
-            Rc::new(Mw(PhantomData, cnt_sht.clone()).clone()),
+            Rc::new(Mw(cnt_sht.clone()).clone()),
             fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
         )
         .clone();
 
         let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
-        let res = srv.call(10).await;
+        let res = srv.call(10, &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{factory:?} {srv:?}");
 
-        assert_eq!(srv.ready().await, Ok(()));
+        assert_eq!(srv.ready(&()).await, Ok(()));
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
 
         let factory =
             crate::chain_factory(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-                .apply(Rc::new(Mw(PhantomData, Rc::new(Cell::new(0))).clone()))
+                .apply(Rc::new(Mw(Rc::new(Cell::new(0))).clone()))
                 .clone();
 
         let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
-        let res = srv.call(10).await;
+        let res = srv.call(10, &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{factory:?} {srv:?}");
 
-        assert_eq!(srv.ready().await, Ok(()));
+        assert_eq!(srv.ready(&()).await, Ok(()));
     }
 
     #[ntex::test]
     async fn middleware_apply() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let factory = Mw(PhantomData, cnt_sht.clone())
+        let factory = Mw(cnt_sht.clone())
             .apply(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
             .boxed();
 
         let srv = factory.pipeline(&()).await.unwrap();
-        let res = srv.call(10).await;
+        let res = srv.call(10, &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{factory:?} {srv:?}");
 
-        assert_eq!(srv.ready().await, Ok(()));
+        assert_eq!(srv.ready(&()).await, Ok(()));
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
     }
@@ -363,15 +368,15 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let factory =
             crate::chain_factory(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-                .apply(Mw(PhantomData, cnt_sht.clone()).clone());
+                .apply(Mw(cnt_sht.clone()).clone());
 
         let srv = Pipeline::new(factory.create(&()).await.unwrap().clone());
-        let res = srv.call(10).await;
+        let res = srv.call(10, &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
         let _ = format!("{factory:?} {srv:?}");
 
-        assert_eq!(srv.ready().await, Ok(()));
+        assert_eq!(srv.ready(&()).await, Ok(()));
         srv.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
     }
@@ -379,7 +384,7 @@ mod tests {
     #[ntex::test]
     async fn stack() {
         let cnt_sht = Rc::new(Cell::new(0));
-        let mw = Stack::new(Identity, Mw(PhantomData, cnt_sht.clone()));
+        let mw = Stack::new(Identity, Mw(cnt_sht.clone()));
         let _ = format!("{mw:?}");
 
         let pl = Pipeline::new(Middleware::create(
@@ -387,10 +392,10 @@ mod tests {
             fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }),
             (),
         ));
-        let res = pl.call(10).await;
+        let res = pl.call(10, &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 20);
-        assert_eq!(pl.ready().await, Ok(()));
+        assert_eq!(pl.ready(&()).await, Ok(()));
         pl.shutdown().await;
         assert_eq!(cnt_sht.get(), 2);
     }
@@ -411,12 +416,12 @@ mod tests {
             mw.create(fn_service(async move |i: usize| Ok::<_, ()>(i * 2)), ()),
         );
 
-        let res = svc.call("test").await;
+        let res = svc.call("test", &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("test", 2));
         let _ = format!("{svc:?}");
 
-        assert_eq!(svc.ready().await, Ok(()));
+        assert_eq!(svc.ready(&()).await, Ok(()));
         svc.shutdown().await;
         assert_eq!(cnt_sht.get(), 1);
     }
