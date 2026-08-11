@@ -182,19 +182,20 @@ where
     }
 }
 
-impl<S, F, St, R, C> ServiceFactory<St, R, C> for InspectFactory<S, F>
+impl<S, F, St, R> ServiceFactory<St, R> for InspectFactory<S, F>
 where
-    S: ServiceFactory<St, R, C>,
+    S: ServiceFactory<St, R>,
     F: Fn(&S::Res) + Clone,
 {
     type Res = S::Res;
     type Error = S::Error;
 
     type Service = Inspect<S::Service, F>;
+    type InitCfg = S::InitCfg;
     type InitError = S::InitError;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: S::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.s.create(cfg).await.map(|svc| Inspect {
             svc,
             f: self.f.clone(),
@@ -240,19 +241,20 @@ where
     }
 }
 
-impl<S, F, St, R, C> ServiceFactory<St, R, C> for InspectErrFactory<S, F>
+impl<S, F, St, R> ServiceFactory<St, R> for InspectErrFactory<S, F>
 where
-    S: ServiceFactory<St, R, C>,
+    S: ServiceFactory<St, R>,
     F: Fn(&S::Error) + Clone,
 {
     type Res = S::Res;
     type Error = S::Error;
 
     type Service = InspectErr<S::Service, F>;
+    type InitCfg = S::InitCfg;
     type InitError = S::InitError;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: S::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.s.create(cfg).await.map(|svc| InspectErr {
             svc,
             f: self.f.clone(),
@@ -363,7 +365,7 @@ mod tests {
         }))
         .inspect(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(()).await.unwrap();
         let res = srv.call((), &()).await;
         assert!(res.is_ok());
         let _ = format!("{new_srv:?}");
@@ -381,7 +383,7 @@ mod tests {
         }))
         .inspect_err(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(()).await.unwrap();
         let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());

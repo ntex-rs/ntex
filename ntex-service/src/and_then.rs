@@ -68,20 +68,27 @@ impl<A, B> AndThenFactory<A, B> {
     }
 }
 
-impl<A, B, St, Req, Cfg> ServiceFactory<St, Req, Cfg> for AndThenFactory<A, B>
+impl<A, B, St, Req> ServiceFactory<Req, St> for AndThenFactory<A, B>
 where
-    A: ServiceFactory<St, Req, Cfg>,
-    B: ServiceFactory<St, A::Res, Cfg, Error = A::Error, InitError = A::InitError>,
-    Cfg: Clone,
+    A: ServiceFactory<Req, St>,
+    B: ServiceFactory<
+            A::Res,
+            St,
+            Error = A::Error,
+            InitCfg = A::InitCfg,
+            InitError = A::InitError,
+        >,
+    B::InitCfg: Clone,
 {
     type Res = B::Res;
     type Error = A::Error;
 
     type Service = AndThen<A::Service, B::Service>;
+    type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
     #[inline]
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(AndThen {
             svc1: self.svc1.create(cfg.clone()).await?,
             svc2: self.svc2.create(cfg).await?,
@@ -220,7 +227,7 @@ mod tests {
         }))
         .clone();
 
-        let srv = new_srv.pipeline(&()).await.unwrap();
+        let srv = new_srv.pipeline(()).await.unwrap();
         let res = srv.call("srv1", &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "srv2"));

@@ -78,15 +78,15 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub struct MapFactory<A, F, St, Req, Res, Cfg> {
+pub struct MapFactory<A, F, St, Req, Res> {
     a: A,
     f: F,
-    r: PhantomData<fn(St, Req, Cfg) -> Res>,
+    r: PhantomData<fn(St, Req) -> Res>,
 }
 
-impl<A, F, St, Req, Res, Cfg> MapFactory<A, F, St, Req, Res, Cfg>
+impl<A, F, St, Req, Res> MapFactory<A, F, St, Req, Res>
 where
-    A: ServiceFactory<St, Req, Cfg>,
+    A: ServiceFactory<Req, St>,
     F: Fn(A::Res) -> Res,
 {
     /// Create new `Map` new service instance
@@ -99,7 +99,7 @@ where
     }
 }
 
-impl<A, F, St, Req, Res, Cfg> Clone for MapFactory<A, F, St, Req, Res, Cfg>
+impl<A, F, St, Req, Res> Clone for MapFactory<A, F, St, Req, Res>
 where
     A: Clone,
     F: Clone,
@@ -114,7 +114,7 @@ where
     }
 }
 
-impl<A, F, St, Req, Res, Cfg> fmt::Debug for MapFactory<A, F, St, Req, Res, Cfg>
+impl<A, F, St, Req, Res> fmt::Debug for MapFactory<A, F, St, Req, Res>
 where
     A: fmt::Debug,
 {
@@ -126,20 +126,20 @@ where
     }
 }
 
-impl<A, F, St, Req, Res, Cfg> ServiceFactory<St, Req, Cfg>
-    for MapFactory<A, F, St, Req, Res, Cfg>
+impl<A, F, St, Req, Res> ServiceFactory<Req, St> for MapFactory<A, F, St, Req, Res>
 where
-    A: ServiceFactory<St, Req, Cfg>,
+    A: ServiceFactory<Req, St>,
     F: Fn(A::Res) -> Res + Clone,
 {
     type Res = Res;
     type Error = A::Error;
 
     type Service = Map<A::Service, F, Res>;
+    type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
     #[inline]
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Map {
             service: self.a.create(cfg).await?,
             f: self.f.clone(),
@@ -223,7 +223,7 @@ mod tests {
         let new_srv = fn_factory(|| async { Ok::<_, ()>(Srv::default()) })
             .map(|()| "ok")
             .clone();
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
         let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
@@ -237,7 +237,7 @@ mod tests {
             crate::chain_factory(fn_factory(|| async { Ok::<_, ()>(Srv::default()) }))
                 .map(|()| "ok")
                 .clone();
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
         let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));

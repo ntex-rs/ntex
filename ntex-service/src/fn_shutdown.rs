@@ -4,19 +4,19 @@ use crate::{Service, ServiceCtx, ServiceFactory};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
-pub fn fn_shutdown<St, Req, Err, F>(f: F) -> FnShutdown<St, Req, Err, F>
+pub fn fn_shutdown<Req, Err, F, Cfg>(f: F) -> FnShutdown<Req, Err, F, Cfg>
 where
     F: AsyncFnOnce(),
 {
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<St, Req, Err, F> {
+pub struct FnShutdown<Req, Err, F, Cfg = ()> {
     f_shutdown: Cell<Option<F>>,
-    _t: PhantomData<(St, Req, Err)>,
+    _t: PhantomData<(Req, Err, Cfg)>,
 }
 
-impl<St, Req, Err, F> FnShutdown<St, Req, Err, F> {
+impl<Req, Err, F, Cfg> FnShutdown<Req, Err, F, Cfg> {
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
@@ -25,7 +25,7 @@ impl<St, Req, Err, F> FnShutdown<St, Req, Err, F> {
     }
 }
 
-impl<St, Req, Err, F> Clone for FnShutdown<St, Req, Err, F>
+impl<Req, Err, F, Cfg> Clone for FnShutdown<Req, Err, F, Cfg>
 where
     F: Clone,
 {
@@ -40,7 +40,7 @@ where
     }
 }
 
-impl<St, Req, Err, F> fmt::Debug for FnShutdown<St, Req, Err, F> {
+impl<Req, Err, F, Cfg> fmt::Debug for FnShutdown<Req, Err, F, Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnShutdown")
             .field("fn", &std::any::type_name::<F>())
@@ -48,17 +48,21 @@ impl<St, Req, Err, F> fmt::Debug for FnShutdown<St, Req, Err, F> {
     }
 }
 
-impl<St, Req, Err, C, F> ServiceFactory<St, Req, C> for FnShutdown<St, Req, Err, F>
+impl<Req, Err, F, Cfg> ServiceFactory<Req> for FnShutdown<Req, Err, F, Cfg>
 where
     F: AsyncFnOnce() + Clone,
 {
     type Res = Req;
     type Error = Err;
-    type Service = FnShutdown<St, Req, Err, F>;
+    type Service = FnShutdown<Req, Err, F>;
+    type InitCfg = Cfg;
     type InitError = ();
 
     #[inline]
-    fn create(&self, _: C) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
+    fn create(
+        &self,
+        _: Cfg,
+    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
         if let Some(f) = self.f_shutdown.take() {
             self.f_shutdown.set(Some(f.clone()));
             ready(Ok(FnShutdown {
@@ -71,11 +75,11 @@ where
     }
 }
 
-impl<St, Req, Err, F> Service for FnShutdown<St, Req, Err, F>
+impl<Req, Err, F> Service for FnShutdown<Req, Err, F>
 where
     F: AsyncFnOnce(),
 {
-    type St = St;
+    type St = ();
     type Req = Req;
     type Res = Req;
     type Error = Err;
@@ -143,7 +147,7 @@ mod tests {
     async fn test_fn_shutdown_panic() {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
-        let on_shutdown = fn_shutdown::<(), (), _>(async move || {
+        let on_shutdown = fn_shutdown::<(), (), _, _>(async move || {
             is_called2.set(true);
         });
 

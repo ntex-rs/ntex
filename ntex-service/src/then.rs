@@ -67,25 +67,26 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, S, R, C> ServiceFactory<S, R, C> for ThenFactory<A, B>
+impl<A, B, S, R> ServiceFactory<R, S> for ThenFactory<A, B>
 where
-    A: ServiceFactory<S, R, C>,
+    A: ServiceFactory<R, S>,
     B: ServiceFactory<
-            S,
             Result<A::Res, A::Error>,
-            C,
+            S,
             Error = A::Error,
+            InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
-    C: Clone,
+    A::InitCfg: Clone,
 {
     type Res = B::Res;
     type Error = A::Error;
 
     type Service = Then<A::Service, B::Service>;
+    type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Then {
             svc1: self.svc1.create(cfg.clone()).await?,
             svc2: self.svc2.create(cfg).await?,
@@ -220,7 +221,7 @@ mod tests {
                 async move { Ok(Srv2(cnt.clone(), Rc::new(Cell::new(0)))) }
             }))
             .clone();
-        let srv = factory.pipeline(&()).await.unwrap();
+        let srv = factory.pipeline(()).await.unwrap();
         let res = srv.call(Ok("srv1"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));

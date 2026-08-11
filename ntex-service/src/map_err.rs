@@ -90,19 +90,19 @@ where
 /// service's error.
 ///
 /// This is created by the `NewServiceExt::map_err` method.
-pub struct MapErrFactory<A, S, R, C, F, E>
+pub struct MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<S, R, C>,
+    A: ServiceFactory<R, S>,
     F: Fn(A::Error) -> E + Clone,
 {
     a: A,
     f: F,
-    e: PhantomData<fn(S, R, C) -> E>,
+    e: PhantomData<fn(S, R) -> E>,
 }
 
-impl<A, S, R, C, F, E> MapErrFactory<A, S, R, C, F, E>
+impl<A, S, R, F, E> MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<S, R, C>,
+    A: ServiceFactory<R, S>,
     F: Fn(A::Error) -> E + Clone,
 {
     /// Create new `MapErr` new service instance
@@ -115,9 +115,9 @@ where
     }
 }
 
-impl<A, S, R, C, F, E> Clone for MapErrFactory<A, S, R, C, F, E>
+impl<A, S, R, F, E> Clone for MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<S, R, C> + Clone,
+    A: ServiceFactory<R, S> + Clone,
     F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
@@ -129,9 +129,9 @@ where
     }
 }
 
-impl<A, S, R, C, F, E> fmt::Debug for MapErrFactory<A, S, R, C, F, E>
+impl<A, S, R, F, E> fmt::Debug for MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<S, R, C> + fmt::Debug,
+    A: ServiceFactory<R, S> + fmt::Debug,
     F: Fn(A::Error) -> E + Clone,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -142,19 +142,20 @@ where
     }
 }
 
-impl<A, S, R, C, F, E> ServiceFactory<S, R, C> for MapErrFactory<A, S, R, C, F, E>
+impl<A, S, R, F, E> ServiceFactory<R, S> for MapErrFactory<A, S, R, F, E>
 where
-    A: ServiceFactory<S, R, C>,
+    A: ServiceFactory<R, S>,
     F: Fn(A::Error) -> E + Clone,
 {
     type Res = A::Res;
     type Error = E;
 
     type Service = MapErr<A::Service, F, E>;
+    type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: A::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.a.create(cfg).await.map(|service| MapErr {
             service,
             f: self.f.clone(),
@@ -238,7 +239,7 @@ mod tests {
             fn_factory(|| async { Ok::<_, ()>(Srv(false, Rc::new(Cell::new(0)))) })
                 .map_err(|()| "error")
                 .clone();
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
         let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
@@ -252,7 +253,7 @@ mod tests {
         }))
         .map_err(|()| "error")
         .clone();
-        let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
+        let srv = Pipeline::new(new_srv.create(()).await.unwrap());
         let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), "error");
