@@ -1,4 +1,4 @@
-use std::{future::Future, io, sync::Arc};
+use std::{future::Future, io, marker::PhantomData, sync::Arc};
 
 use tls_rustls::ServerConfig;
 
@@ -30,21 +30,23 @@ impl From<ServerConfig> for TlsAcceptor {
     }
 }
 
-impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for TlsAcceptor {
-    type Response = Io<Layer<TlsServerFilter, F>>;
+impl<F: Filter, St> ServiceFactory<St, Io<F>> for TlsAcceptor {
+    type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
-    type Service = TlsAcceptorService;
+    type Service = TlsAcceptorService<F, St>;
+    type InitCfg = SharedCfg;
     type InitError = ();
 
     fn create(
         &self,
-        cfg: SharedCfg,
+        cfg: &SharedCfg,
     ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ready::Ok(TlsAcceptorService {
                 cfg: cfg.get(),
                 config: self.config.clone(),
                 conns: conns.clone(),
+                _t: PhantomData,
             })
         })
     }
@@ -52,14 +54,17 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for TlsAcceptor {
 
 #[derive(Debug)]
 /// `RusTLS` based `Acceptor` service
-pub struct TlsAcceptorService {
+pub struct TlsAcceptorService<F, St> {
     cfg: Cfg<TlsConfig>,
     config: Arc<ServerConfig>,
     conns: Counter,
+    _t: PhantomData<(F, St)>,
 }
 
-impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
-    type Response = Io<Layer<TlsServerFilter, F>>;
+impl<F: Filter, St> Service for TlsAcceptorService<F, St> {
+    type St = St;
+    type Req = Io<F>;
+    type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
 
     async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
@@ -73,7 +78,7 @@ impl<F: Filter> Service<Io<F>> for TlsAcceptorService {
         &self,
         io: Io<F>,
         _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Error> {
         let _guard = self.conns.get();
         super::TlsServerFilter::create(
             io,

@@ -5,7 +5,7 @@ use ntex_service::{Middleware, Service, ServiceCtx};
 
 /// Trait defines retry policy
 pub trait Policy<S: Service>: Sized + Clone {
-    async fn retry(&mut self, req: &S::Req, res: &Result<S::Res, S::Err>) -> bool;
+    async fn retry(&mut self, req: &S::Req, res: &Result<S::Res, S::Error>) -> bool;
 
     fn clone_request(&self, req: &S::Req) -> Option<S::Req>;
 }
@@ -37,7 +37,7 @@ impl<P> Retry<P> {
 impl<P: Clone, S, C> Middleware<S, C> for Retry<P> {
     type Service = RetryService<P, S>;
 
-    fn create(&self, service: S, _: C) -> Self::Service {
+    fn create(&self, service: S, _: &C) -> Self::Service {
         RetryService {
             service,
             policy: self.policy.clone(),
@@ -57,6 +57,7 @@ where
     P: Policy<S>,
     S: Service,
 {
+    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
@@ -69,9 +70,9 @@ where
         &self,
         mut req: S::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<S::Response, S::Error> {
+    ) -> Result<S::Res, S::Error> {
         let mut policy = self.policy.clone();
-        let mut cloned = policy.clone_request(&request);
+        let mut cloned = policy.clone_request(&req);
 
         loop {
             let result = ctx.call(&self.service, req).await;
@@ -117,7 +118,7 @@ where
     fn retry(
         &mut self,
         _: &S::Req,
-        res: &Result<S::Res, S::Err>,
+        res: &Result<S::Res, S::Error>,
     ) -> impl Future<Output = bool> {
         let res = if res.is_err() {
             if self.0 == 0 {

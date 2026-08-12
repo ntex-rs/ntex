@@ -46,28 +46,31 @@ impl<ChooseFn, SFLeft, SFRight> fmt::Debug
     }
 }
 
-impl<R, C, ChooseFn, SFLeft, SFRight> ServiceFactory<R, C>
+impl<St, Req, ChooseFn, SFLeft, SFRight> ServiceFactory<St, Req>
     for EitherServiceFactory<ChooseFn, SFLeft, SFRight>
 where
-    ChooseFn: Fn(&C) -> bool,
-    SFLeft: ServiceFactory<R, C>,
+    ChooseFn: Fn(&SFLeft::InitCfg) -> bool,
+    SFLeft: ServiceFactory<St, Req>,
     SFRight: ServiceFactory<
-            R,
-            C,
+            St,
+            Req,
             Res = SFLeft::Res,
-            Err = SFLeft::Err,
+            Error = SFLeft::Error,
+            InitCfg = SFLeft::InitCfg,
             InitError = SFLeft::InitError,
         >,
 {
-    type St = SFLeft::St;
-    type Req = SFLeft::Req;
     type Res = SFLeft::Res;
-    type Err = SFLeft::Err;
+    type Error = SFLeft::Error;
+    type InitCfg = SFLeft::InitCfg;
     type InitError = SFLeft::InitError;
     type Service = EitherService<SFLeft::Service, SFRight::Service>;
 
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        let choose_left = (self.choose_left_fn)(&cfg);
+    async fn create(
+        &self,
+        cfg: &SFLeft::InitCfg,
+    ) -> Result<Self::Service, Self::InitError> {
+        let choose_left = (self.choose_left_fn)(cfg);
 
         if choose_left {
             let svc = self.left.create(cfg).await?;

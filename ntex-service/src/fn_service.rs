@@ -4,7 +4,9 @@ use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory
 
 #[inline]
 /// Create `ServiceFactory` for function
-pub fn fn_service<F, Req, Res, Err, Cfg>(f: F) -> FnServiceFactory<F, Req, Res, Err, Cfg>
+pub fn fn_service<F, Req, Res, Err, Cfg, St>(
+    f: F,
+) -> FnServiceFactory<F, Req, Res, Err, Cfg, St>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {

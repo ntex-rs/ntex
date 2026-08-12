@@ -27,7 +27,7 @@ impl Default for InFlight {
 impl<S, C> Middleware<S, C> for InFlight {
     type Service = InFlightService<S>;
 
-    fn create(&self, service: S, _: C) -> Self::Service {
+    fn create(&self, service: S, _: &C) -> Self::Service {
         InFlightService {
             service,
             count: Counter::new(self.max_inflight),
@@ -42,9 +42,9 @@ pub struct InFlightService<S> {
 }
 
 impl<S> InFlightService<S> {
-    pub fn new<R>(max: usize, service: S) -> Self
+    pub fn new(max: usize, service: S) -> Self
     where
-        S: Service<R>,
+        S: Service,
     {
         Self {
             service,
@@ -60,10 +60,10 @@ where
     type St = T::St;
     type Req = T::Req;
     type Res = T::Res;
-    type Err = T::Err;
+    type Error = T::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         if self.count.is_available() {
             ctx.ready(&self.service).await
         } else {
@@ -74,7 +74,11 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: T::Req, ctx: ServiceCtx<'_, Self>) -> Result<T::Res, T::Err> {
+    async fn call(
+        &self,
+        req: T::Req,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<T::Res, T::Error> {
         ctx.ready(self).await?;
         let _guard = self.count.get();
         ctx.call(&self.service, req).await

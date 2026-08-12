@@ -19,15 +19,3 @@ impl<T: Service, U: Service<St = T::St>> FromSt<T> for U {
         FromStResult::Ref(st)
     }
 }
-
-// pub struct TestAny;
-
-// impl Service for TestAny {
-// }
-
-// impl<T: Service> FromSt<T> for TestAny {
-//     #[inline]
-//     fn from_state(_: &T::St) -> FromStResult<'_, TestAny> {
-//         FromStResult::Owned(TestAny)
-//     }
-// }

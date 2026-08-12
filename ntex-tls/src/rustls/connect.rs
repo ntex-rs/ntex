@@ -2,7 +2,7 @@ use std::{fmt, io, sync::Arc};
 
 use ntex_error::Error;
 use ntex_io::{Io, Layer};
-use ntex_net::connect::{Address, Connect, ConnectError, Connector, Connector2};
+use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::{Service, ServiceCtx, ServiceFactory, cfg::Cfg, cfg::SharedCfg};
 use ntex_util::time::timeout_checked;
 use tls_rustls::{ClientConfig, pki_types::ServerName};
@@ -16,7 +16,7 @@ pub struct TlsConnector<S> {
 }
 
 #[derive(Clone, Debug)]
-pub struct TlsConnectorService<S> {
+pub struct TlsConnectorService<S: Service<St = St>, St> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     config: Arc<ClientConfig>,
@@ -63,18 +63,25 @@ impl<S: fmt::Debug> fmt::Debug for TlsConnector<S> {
     }
 }
 
-impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for TlsConnector<S>
+impl<A, S, St> ServiceFactory<St, Connect<A>> for TlsConnector<S>
 where
     A: Address,
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
+    S: ServiceFactory<
+            St,
+            Connect<A>,
+            Res = Io,
+            Error = Error<ConnectError>,
+            InitCfg = SharedCfg,
+        >,
 {
-    type Response = Io<Layer<TlsClientFilter>>;
-    type Error = ConnectError;
-    type Service = TlsConnectorService<S::Service>;
+    type Res = Io<Layer<TlsClientFilter>>;
+    type Error = Error<ConnectError>;
+    type Service = TlsConnectorService<S::Service, St>;
+    type InitCfg = SharedCfg;
     type InitError = S::InitError;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg.clone()).await?;
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
+        let svc = self.connector.create(cfg).await?;
 
         Ok(TlsConnectorService {
             svc,
@@ -84,129 +91,13 @@ where
     }
 }
 
-impl<A: Address, S> Service<Connect<A>> for TlsConnectorService<S>
+impl<A: Address, S, St> Service for TlsConnectorService<S, St>
 where
-    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
+    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type Response = Io<Layer<TlsClientFilter>>;
-    type Error = ConnectError;
-
-    ntex_service::forward_ready!(svc);
-    ntex_service::forward_poll!(svc);
-    ntex_service::forward_shutdown!(svc);
-
-    async fn call(
-        &self,
-        req: Connect<A>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        let host = req.host().split(':').next().unwrap().to_owned();
-
-        let io = ctx.call(&self.svc, req).await?;
-        let tag = io.tag();
-        log::trace!("{tag}: TLS Handshake start for: {host:?}");
-
-        let config = self.config.clone();
-        let host = ServerName::try_from(host).map_err(io::Error::other)?;
-
-        let connect_fut = TlsClientFilter::create(io, config, host.clone());
-        match timeout_checked(self.cfg.handshake_timeout(), connect_fut).await {
-            Ok(Ok(io)) => {
-                log::trace!("{tag}: TLS Handshake success: {host:?}");
-                Ok(io)
-            }
-            Ok(Err(e)) => {
-                log::trace!("{tag}: TLS Handshake error: {e:?}");
-                Err(e.into())
-            }
-            Err(()) => {
-                log::trace!("{tag}: TLS Handshake timeout");
-                Err(io::Error::new(io::ErrorKind::TimedOut, "SSL Handshake timeout").into())
-            }
-        }
-    }
-}
-
-/// Rustls connector factory
-pub struct TlsConnector2<S> {
-    connector: S,
-    config: Arc<ClientConfig>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TlsConnectorService2<S> {
-    svc: S,
-    cfg: Cfg<TlsConfig>,
-    config: Arc<ClientConfig>,
-}
-
-impl<A: Address> From<Arc<ClientConfig>> for TlsConnector2<Connector2<A>> {
-    fn from(config: Arc<ClientConfig>) -> Self {
-        TlsConnector2 {
-            config,
-            connector: Connector2::default(),
-        }
-    }
-}
-
-impl<'a, A: Address> From<&'a Arc<ClientConfig>> for TlsConnector2<Connector2<A>> {
-    fn from(config: &'a Arc<ClientConfig>) -> Self {
-        TlsConnector2 {
-            config: config.clone(),
-            connector: Connector2::default(),
-        }
-    }
-}
-
-impl<A: Address> TlsConnector2<Connector2<A>> {
-    pub fn new(config: ClientConfig) -> Self {
-        TlsConnector2::from(Arc::new(config))
-    }
-}
-
-impl<S: Clone> Clone for TlsConnector2<S> {
-    fn clone(&self) -> Self {
-        Self {
-            config: self.config.clone(),
-            connector: self.connector.clone(),
-        }
-    }
-}
-
-impl<S: fmt::Debug> fmt::Debug for TlsConnector2<S> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TlsConnector(rustls)")
-            .field("connector", &self.connector)
-            .finish()
-    }
-}
-
-impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for TlsConnector2<S>
-where
-    A: Address,
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = Error<ConnectError>>,
-{
-    type Response = Io<Layer<TlsClientFilter>>;
-    type Error = Error<ConnectError>;
-    type Service = TlsConnectorService2<S::Service>;
-    type InitError = S::InitError;
-
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg.clone()).await?;
-
-        Ok(TlsConnectorService2 {
-            svc,
-            cfg: cfg.get(),
-            config: self.config.clone(),
-        })
-    }
-}
-
-impl<A: Address, S> Service<Connect<A>> for TlsConnectorService2<S>
-where
-    S: Service<Connect<A>, Response = Io, Error = Error<ConnectError>>,
-{
-    type Response = Io<Layer<TlsClientFilter>>;
+    type St = St;
+    type Req = Connect<A>;
+    type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
 
     ntex_service::forward_ready!(svc);
@@ -217,7 +108,7 @@ where
         &self,
         req: Connect<A>,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Error> {
         let host = req.host().split(':').next().unwrap().to_owned();
 
         let io = ctx.call(&self.svc, req).await?;

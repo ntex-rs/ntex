@@ -10,7 +10,7 @@ use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService, OnAccept, OnWorkerStart};
 use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
 
-pub(super) type BoxService = boxed::BoxService<Io, (), ()>;
+pub(super) type BoxService = boxed::BoxService<(), Io, (), ()>;
 
 /// Net streaming server
 pub struct StreamServer {
@@ -115,18 +115,19 @@ impl fmt::Debug for StreamService {
     }
 }
 
-impl ServiceFactory<Connection> for StreamService {
-    type Response = ();
+impl ServiceFactory<(), Connection> for StreamService {
+    type Res = ();
     type Error = ();
     type Service = StreamServiceImpl;
+    type InitCfg = ();
     type InitError = ();
 
-    async fn create(&self, _r: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _r: &()) -> Result<Self::Service, Self::InitError> {
         let mut tokens = HashMap::default();
         let mut services = Vec::new();
 
         for info in &self.services {
-            if let Ok(svc) = info.factory.create(info.config.clone()).await {
+            if let Ok(svc) = info.factory.create(&info.config).await {
                 log::trace!("Constructed server service for {:?}", info.tokens);
                 services.push(svc);
                 let idx = services.len() - 1;
@@ -165,8 +166,10 @@ impl fmt::Debug for StreamServiceImpl {
     }
 }
 
-impl Service<Connection> for StreamServiceImpl {
-    type Response = ();
+impl Service for StreamServiceImpl {
+    type St = ();
+    type Req = Connection;
+    type Res = ();
     type Error = ();
 
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {

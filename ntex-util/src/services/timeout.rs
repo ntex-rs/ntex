@@ -88,7 +88,7 @@ impl Clone for Timeout {
 impl<S, C> Middleware<S, C> for Timeout {
     type Service = TimeoutService<S>;
 
-    fn create(&self, service: S, _: C) -> Self::Service {
+    fn create(&self, service: S, _: &C) -> Self::Service {
         TimeoutService {
             service,
             timeout: self.timeout,
@@ -123,15 +123,15 @@ where
     type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
-    type Err = TimeoutError<S::Error>;
+    type Error = TimeoutError<S::Error>;
 
     async fn call(
         &self,
         req: S::Req,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Res, Self::Err> {
+    ) -> Result<Self::Res, Self::Error> {
         if self.timeout.is_zero() {
-            ctx.call(&self.service, request)
+            ctx.call(&self.service, req)
                 .await
                 .map_err(TimeoutError::Service)
         } else {

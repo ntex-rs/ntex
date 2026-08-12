@@ -13,7 +13,7 @@ pub struct OneRequest;
 impl<S, C> Middleware<S, C> for OneRequest {
     type Service = OneRequestService<S>;
 
-    fn create(&self, service: S, _: C) -> Self::Service {
+    fn create(&self, service: S, _: &C) -> Self::Service {
         OneRequestService {
             service,
             ready: Cell::new(true),
@@ -49,10 +49,10 @@ where
     type St = T::St;
     type Req = T::Req;
     type Res = T::Res;
-    type Err = T::Err;
+    type Error = T::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Err> {
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
         if !self.ready.get() {
             poll_fn(|cx| {
                 self.waker.register(cx.waker());
@@ -68,7 +68,11 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: T::Req, ctx: ServiceCtx<'_, Self>) -> Result<T::Res, T::Err> {
+    async fn call(
+        &self,
+        req: T::Req,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<T::Res, T::Error> {
         self.ready.set(false);
 
         let result = ctx.call(&self.service, req).await;

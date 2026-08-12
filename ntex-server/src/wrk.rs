@@ -7,7 +7,7 @@ use atomic_waker::AtomicWaker;
 use core_affinity::CoreId;
 
 use ntex_rt::{Arbiter, spawn};
-use ntex_service::{Pipeline, PipelineBinding, Service, ServiceFactory};
+use ntex_service::{Pipeline, PipelineBinding, ServiceFactory};
 use ntex_util::future::{Either, Stream, select, stream_recv};
 use ntex_util::time::{Millis, sleep, timeout_checked};
 
@@ -16,14 +16,14 @@ use crate::ServerConfiguration;
 const STOP_TIMEOUT: Millis = Millis(3000);
 
 #[derive(Debug)]
-/// Shutdown worker
+/// Shutdown worker command.
 struct Shutdown {
     timeout: Millis,
     result: oneshot::Sender<bool>,
 }
 
 #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-/// Worker status
+/// Worker status.
 pub enum WorkerStatus {
     Available,
     #[default]
@@ -32,14 +32,135 @@ pub enum WorkerStatus {
 }
 
 #[derive(Debug)]
-/// Server worker
+/// Server worker.
 ///
 /// Worker accepts message via unbounded channel and starts processing.
 pub struct Worker<T> {
     name: String,
-    tx1: Sender<T>,
-    tx2: Sender<Shutdown>,
+    reqs: Sender<T>,
+    stop: Sender<Shutdown>,
     avail: WorkerAvailability,
+}
+
+#[derive(Debug)]
+/// Stop worker process.
+///
+/// Stop future resolves when worker completes processing
+/// incoming items and stop arbiter
+pub struct WorkerStop(oneshot::AsyncReceiver<bool>);
+
+impl<T> Worker<T> {
+    /// Start worker.
+    pub fn start<F>(name: String, cfg: F, cid: Option<CoreId>) -> Worker<T>
+    where
+        T: Send + 'static,
+        F: ServerConfiguration<Item = T>,
+    {
+        let (reqs, r_rx) = unbounded();
+        let (stop, s_rx) = unbounded();
+        let (avail, a_tx) = WorkerAvailability::create();
+        let n = name.clone();
+        let inner = avail.inner.clone();
+
+        let worker = Worker {
+            reqs,
+            avail,
+            stop,
+            name: name.clone(),
+        };
+
+        Arbiter::with_name(name)
+            .on_stop(move || {
+                inner.failed.store(true, Ordering::Release);
+                inner.updated.store(true, Ordering::Release);
+                inner.available.store(false, Ordering::Release);
+                inner.waker.wake();
+            })
+            .handle()
+            .spawn(async move {
+                log::info!("Starting worker {n:?}");
+                if let Some(cid) = cid
+                    && core_affinity::set_for_current(cid)
+                {
+                    log::info!("Set affinity to {cid:?} for worker {n:?}");
+                }
+
+                spawn(async move {
+                    match cfg.create().await {
+                        Ok(f) => {
+                            match ServiceRunner::create(&n, f, r_rx, s_rx, a_tx).await {
+                                Ok(wrk) => {
+                                    log::debug!(
+                                        "Server instance has been created in {n:?}"
+                                    );
+                                    wrk.run().await;
+                                }
+                                Err(_) => {
+                                    log::error!("Cannot start worker {n:?}")
+                                }
+                            }
+                        }
+                        Err(e) => log::error!("Cannot start worker {n:?}: {e:?}"),
+                    };
+
+                    Arbiter::current().stop();
+                });
+            });
+
+        worker
+    }
+
+    /// Worker name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[inline]
+    /// Sends a message to the worker.
+    ///
+    /// Returns `Ok` if the worker accepts the message.
+    /// Otherwise, returns the message as `Err`.
+    pub fn send(&self, msg: T) -> Result<(), T> {
+        self.reqs.try_send(msg).map_err(TrySendError::into_inner)
+    }
+
+    /// Check worker status.
+    pub fn status(&self) -> WorkerStatus {
+        if self.avail.failed() {
+            WorkerStatus::Failed
+        } else if self.avail.available() {
+            WorkerStatus::Available
+        } else {
+            WorkerStatus::Unavailable
+        }
+    }
+
+    /// Wait for worker status updates.
+    pub async fn wait_for_status(&mut self) -> WorkerStatus {
+        if self.avail.failed() {
+            WorkerStatus::Failed
+        } else {
+            self.avail.wait_for_update().await;
+            self.status()
+        }
+    }
+
+    /// Stop the worker.
+    ///
+    /// If the timeout is zero, forcefully shut down the worker.
+    pub fn stop(&self, timeout: Millis) -> WorkerStop {
+        let (result, rx) = oneshot::async_channel();
+        let _ = self.stop.try_send(Shutdown { timeout, result });
+        WorkerStop(rx)
+    }
+}
+
+impl<T> Eq for Worker<T> {}
+
+impl<T> PartialEq for Worker<T> {
+    fn eq(&self, other: &Worker<T>) -> bool {
+        self.name == other.name
+    }
 }
 
 impl<T> cmp::Ord for Worker<T> {
@@ -60,128 +181,12 @@ impl<T> hash::Hash for Worker<T> {
     }
 }
 
-impl<T> Eq for Worker<T> {}
-
-impl<T> PartialEq for Worker<T> {
-    fn eq(&self, other: &Worker<T>) -> bool {
-        self.name == other.name
-    }
-}
-
-#[derive(Debug)]
-/// Stop worker process
-///
-/// Stop future resolves when worker completes processing
-/// incoming items and stop arbiter
-pub struct WorkerStop(oneshot::AsyncReceiver<bool>);
-
-impl<T> Worker<T> {
-    /// Start worker.
-    pub fn start<F>(name: String, cfg: F, cid: Option<CoreId>) -> Worker<T>
-    where
-        T: Send + 'static,
-        F: ServerConfiguration<Item = T>,
-    {
-        let (tx1, rx1) = unbounded();
-        let (tx2, rx2) = unbounded();
-        let (avail, avail_tx) = WorkerAvailability::create();
-        let name2 = name.clone();
-        let inner = avail.inner.clone();
-
-        let worker = Worker {
-            tx1,
-            tx2,
-            avail,
-            name: name.clone(),
-        };
-
-        Arbiter::with_name(name)
-            .on_stop(move || {
-                inner.failed.store(true, Ordering::Release);
-                inner.updated.store(true, Ordering::Release);
-                inner.available.store(false, Ordering::Release);
-                inner.waker.wake();
-            })
-            .handle()
-            .spawn(async move {
-                if let Some(cid) = cid
-                    && core_affinity::set_for_current(cid)
-                {
-                    log::info!("Set affinity to {cid:?} for worker {name2:?}");
-                }
-
-                spawn(async move {
-                    log::info!("Starting worker {name2:?}");
-
-                    log::debug!("Creating server instance in {name2:?}");
-                    let factory = cfg.create().await;
-
-                    match create(name2.clone(), rx1, rx2, factory, avail_tx).await {
-                        Ok((svc, wrk)) => {
-                            log::debug!("Server instance has been created in {name2:?}");
-                            run_worker(svc, wrk).await;
-                        }
-                        Err(e) => {
-                            log::error!("Cannot start worker {name2:?}: {e:?}");
-                        }
-                    }
-                    Arbiter::current().stop();
-                });
-            });
-
-        worker
-    }
-
-    /// Worker name
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Send message to the worker.
-    ///
-    /// Returns `Ok` if message got accepted by the worker.
-    /// Otherwise return message back as `Err`
-    pub fn send(&self, msg: T) -> Result<(), T> {
-        self.tx1.try_send(msg).map_err(TrySendError::into_inner)
-    }
-
-    /// Check worker status.
-    pub fn status(&self) -> WorkerStatus {
-        if self.avail.failed() {
-            WorkerStatus::Failed
-        } else if self.avail.available() {
-            WorkerStatus::Available
-        } else {
-            WorkerStatus::Unavailable
-        }
-    }
-
-    /// Wait for worker status updates
-    pub async fn wait_for_status(&mut self) -> WorkerStatus {
-        if self.avail.failed() {
-            WorkerStatus::Failed
-        } else {
-            self.avail.wait_for_update().await;
-            self.status()
-        }
-    }
-
-    /// Stop worker.
-    ///
-    /// If timeout value is zero, force shutdown worker
-    pub fn stop(&self, timeout: Millis) -> WorkerStop {
-        let (result, rx) = oneshot::async_channel();
-        let _ = self.tx2.try_send(Shutdown { timeout, result });
-        WorkerStop(rx)
-    }
-}
-
 impl<T> Clone for Worker<T> {
     fn clone(&self) -> Self {
         Worker {
-            tx1: self.tx1.clone(),
-            tx2: self.tx2.clone(),
             name: self.name.clone(),
+            reqs: self.reqs.clone(),
+            stop: self.stop.clone(),
             avail: self.avail.clone(),
         }
     }
@@ -272,138 +277,126 @@ impl Drop for WorkerAvailabilityTx {
     }
 }
 
-/// Service worker
+/// Service runner.
 ///
-/// Worker accepts message via unbounded channel and starts processing.
-struct WorkerSt<T, F: ServiceFactory<T>> {
+/// The runner receives messages through an unbounded channel and processes them.
+struct ServiceRunner<F: ServiceFactory<(), Req>, Req> {
     name: String,
-    rx: Receiver<T>,
-    stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     factory: F,
+    svc: PipelineBinding<F::Service>,
+    reqs: Receiver<Req>,
+    stop: Pin<Box<dyn Stream<Item = Shutdown>>>,
     availability: WorkerAvailabilityTx,
 }
 
-async fn run_worker<T, F>(mut svc: PipelineBinding<F::Service, T>, mut wrk: WorkerSt<T, F>)
+impl<F, Req> ServiceRunner<F, Req>
 where
-    T: Send + 'static,
-    F: ServiceFactory<T> + 'static,
+    Req: Send + 'static,
+    F: ServiceFactory<(), Req, InitCfg = ()> + 'static,
 {
-    loop {
-        let mut recv = std::pin::pin!(wrk.rx.recv());
-        let fut = poll_fn(|cx| {
-            match svc.poll_ready(cx) {
-                Poll::Ready(Ok(())) => {
-                    wrk.availability.set(true);
-                }
-                Poll::Ready(Err(err)) => {
-                    wrk.availability.set(false);
-                    return Poll::Ready(Err(err));
-                }
-                Poll::Pending => {
-                    wrk.availability.set(false);
-                    return Poll::Pending;
-                }
+    async fn create(
+        name: &String,
+        factory: F,
+        reqs: Receiver<Req>,
+        stop: Receiver<Shutdown>,
+        availability: WorkerAvailabilityTx,
+    ) -> Result<Self, ()> {
+        availability.set(false);
+        let mut stop = Box::pin(stop);
+
+        let svc = match select(factory.create(&()), stream_recv(&mut stop)).await {
+            Either::Left(Ok(svc)) => Pipeline::new(svc).bind_default(),
+            Either::Right(Some(Shutdown { result, .. })) => {
+                log::trace!("Shutdown uninitialized worker");
+                let _ = result.send(false);
+                return Err(());
             }
+            Either::Left(Err(_)) | Either::Right(None) => return Err(()),
+        };
+        availability.set(true);
 
-            if let Ok(item) = ready!(recv.as_mut().poll(cx)) {
-                let fut = svc.call(item);
-                spawn(async move {
-                    let _ = fut.await;
-                });
-                Poll::Ready(Ok::<_, F::Error>(true))
-            } else {
-                log::error!("Server is gone");
-                Poll::Ready(Ok(false))
-            }
-        });
-
-        match select(fut, stream_recv(&mut wrk.stop)).await {
-            Either::Left(Ok(true)) => continue,
-            Either::Left(Err(_)) => {
-                ntex_rt::spawn(async move {
-                    svc.shutdown().await;
-                });
-            }
-            Either::Right(Some(Shutdown { timeout, result })) => {
-                wrk.availability.set(false);
-
-                let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
-
-                stop_svc(&wrk.name, svc, timeout, Some(result)).await;
-                return;
-            }
-            Either::Left(Ok(false)) | Either::Right(None) => {
-                wrk.availability.set(false);
-                stop_svc(&wrk.name, svc, STOP_TIMEOUT, None).await;
-                return;
-            }
-        }
-
-        // re-create service
-        loop {
-            match select(wrk.factory.create(()), stream_recv(&mut wrk.stop)).await {
-                Either::Left(Ok(service)) => {
-                    svc = Pipeline::new(service).bind();
-                    break;
-                }
-                Either::Left(Err(_)) => sleep(Millis::ONE_SEC).await,
-                Either::Right(_) => return,
-            }
-        }
-    }
-}
-
-async fn stop_svc<T, F>(
-    name: &str,
-    svc: PipelineBinding<F, T>,
-    timeout: Millis,
-    result: Option<oneshot::Sender<bool>>,
-) where
-    T: Send + 'static,
-    F: Service<T> + 'static,
-{
-    let res = timeout_checked(timeout, svc.shutdown()).await;
-    if let Some(result) = result {
-        let _ = result.send(res.is_ok());
-    }
-
-    log::info!("Worker {name:?} has been stopped");
-}
-
-async fn create<T, F>(
-    name: String,
-    rx: Receiver<T>,
-    stop: Receiver<Shutdown>,
-    factory: Result<F, ()>,
-    availability: WorkerAvailabilityTx,
-) -> Result<(PipelineBinding<F::Service, T>, WorkerSt<T, F>), ()>
-where
-    T: Send + 'static,
-    F: ServiceFactory<T> + 'static,
-{
-    availability.set(false);
-    let factory = factory?;
-    let mut stop = Box::pin(stop);
-
-    let svc = match select(factory.create(()), stream_recv(&mut stop)).await {
-        Either::Left(Ok(svc)) => Pipeline::new(svc).bind(),
-        Either::Right(Some(Shutdown { result, .. })) => {
-            log::trace!("Shutdown uninitialized worker");
-            let _ = result.send(false);
-            return Err(());
-        }
-        Either::Left(Err(_)) | Either::Right(None) => return Err(()),
-    };
-    availability.set(true);
-
-    Ok((
-        svc,
-        WorkerSt {
-            name,
-            rx,
+        Ok(ServiceRunner {
             factory,
+            svc,
+            reqs,
+            stop,
             availability,
-            stop: Box::pin(stop),
-        },
-    ))
+            name: name.clone(),
+        })
+    }
+
+    async fn run(mut self) {
+        loop {
+            let mut recv = std::pin::pin!(self.reqs.recv());
+            let fut = poll_fn(|cx| {
+                match self.svc.poll_ready(cx) {
+                    Poll::Ready(Ok(())) => {
+                        self.availability.set(true);
+                    }
+                    Poll::Ready(Err(err)) => {
+                        self.availability.set(false);
+                        return Poll::Ready(Err(err));
+                    }
+                    Poll::Pending => {
+                        self.availability.set(false);
+                        return Poll::Pending;
+                    }
+                }
+
+                if let Ok(item) = ready!(recv.as_mut().poll(cx)) {
+                    let fut = self.svc.call(item);
+                    spawn(async move {
+                        let _ = fut.await;
+                    });
+                    Poll::Ready(Ok::<_, F::Error>(true))
+                } else {
+                    log::error!("Server is gone");
+                    Poll::Ready(Ok(false))
+                }
+            });
+
+            match select(fut, stream_recv(&mut self.stop)).await {
+                Either::Left(Ok(true)) => continue,
+                Either::Left(Err(_)) => {
+                    ntex_rt::spawn(async move {
+                        self.svc.shutdown().await;
+                    });
+                }
+                Either::Right(Some(Shutdown { timeout, result })) => {
+                    self.availability.set(false);
+
+                    let timeout = if timeout.is_zero() { STOP_TIMEOUT } else { timeout };
+
+                    self.stop(timeout, Some(result)).await;
+                    return;
+                }
+                Either::Left(Ok(false)) | Either::Right(None) => {
+                    self.availability.set(false);
+                    self.stop(STOP_TIMEOUT, None).await;
+                    return;
+                }
+            }
+
+            // re-create service
+            loop {
+                match select(self.factory.create(&()), stream_recv(&mut self.stop)).await {
+                    Either::Left(Ok(service)) => {
+                        self.svc = Pipeline::new(service).bind_default();
+                        break;
+                    }
+                    Either::Left(Err(_)) => sleep(Millis::ONE_SEC).await,
+                    Either::Right(_) => return,
+                }
+            }
+        }
+    }
+
+    async fn stop(&self, timeout: Millis, result: Option<oneshot::Sender<bool>>) {
+        let res = timeout_checked(timeout, self.svc.shutdown()).await;
+        if let Some(result) = result {
+            let _ = result.send(res.is_ok());
+        }
+
+        log::info!("Worker {:?} has been stopped", self.name);
+    }
 }

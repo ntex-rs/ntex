@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ntex-util/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 
 [lib]
 name = "ntex_util"
@@ -22,8 +22,7 @@ workspace = true
 [dependencies]
 ntex-bytes = { workspace = true }
 ntex-error = { workspace = true }
-#ntex-service = { workspace = true }
-ntex-service = "5.0"
+ntex-service = { workspace = true }
 ntex-rt = { workspace = true }
 
 foldhash = { workspace = true }

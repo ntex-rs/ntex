@@ -6,7 +6,7 @@ use ntex_util::future::BoxFuture;
 
 use super::{Config, Token, socket::Stream};
 
-pub(super) type BoxServerService = boxed::BoxServiceFactory<SharedCfg, Io, (), (), ()>;
+pub(super) type BoxServerService = boxed::BoxServiceFactory<(), Io, (), (), SharedCfg, ()>;
 pub(super) type FactoryServiceType = Box<dyn FactoryService>;
 
 #[derive(Debug)]
@@ -38,7 +38,7 @@ struct Factory {
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
 where
-    S: ServiceFactory<Io, SharedCfg> + 'static,
+    S: ServiceFactory<(), Io, InitCfg = SharedCfg> + 'static,
 {
     boxed::factory(ServerServiceFactory {
         name: Arc::from(name),
@@ -53,7 +53,7 @@ pub(crate) fn create_factory_service<F, R>(
 ) -> FactoryServiceType
 where
     F: AsyncFn(Config) -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedCfg> + 'static,
+    R: ServiceFactory<(), Io, InitCfg = SharedCfg> + 'static,
 {
     let name: Arc<str> = Arc::from(name);
 
@@ -142,16 +142,17 @@ struct ServerServiceFactory<S> {
     factory: S,
 }
 
-impl<S> ServiceFactory<Io, SharedCfg> for ServerServiceFactory<S>
+impl<S> ServiceFactory<(), Io> for ServerServiceFactory<S>
 where
-    S: ServiceFactory<Io, SharedCfg>,
+    S: ServiceFactory<(), Io, InitCfg = SharedCfg>,
 {
-    type Response = ();
+    type Res = ();
     type Error = ();
     type Service = ServerService<S::Service>;
+    type InitCfg = SharedCfg;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         self.factory
             .create(cfg)
             .await
@@ -164,11 +165,13 @@ struct ServerService<S> {
     inner: S,
 }
 
-impl<S> Service<Io> for ServerService<S>
+impl<S> Service for ServerService<S>
 where
-    S: Service<Io>,
+    S: Service<Req = Io>,
 {
-    type Response = ();
+    type St = S::St;
+    type Req = Io;
+    type Res = ();
     type Error = ();
 
     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {

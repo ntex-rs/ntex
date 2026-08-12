@@ -2,7 +2,7 @@ use std::io;
 
 use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
-use ntex_net::connect::{Address, Connect, ConnectError, Connector, Connector2};
+use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::cfg::{Cfg, SharedCfg};
 use ntex_service::{Service, ServiceCtx, ServiceFactory};
 use ntex_util::time::timeout_checked;
@@ -18,14 +18,14 @@ pub struct SslConnector<S> {
 }
 
 #[derive(Clone, Debug)]
-pub struct SslConnectorService<S> {
+pub struct SslConnectorService<S: Service<St = St>, St> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     openssl: OpensslConnector,
 }
 
 impl<A: Address> SslConnector<Connector<A>> {
-    /// Construct new `SslConnector` factory.
+    /// Construct new `SslConnector` factory
     pub fn new(connector: OpensslConnector) -> Self {
         SslConnector {
             openssl: connector,
@@ -34,17 +34,24 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector<S>
+impl<A: Address, S, St> ServiceFactory<St, Connect<A>> for SslConnector<S>
 where
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
+    S: ServiceFactory<
+            St,
+            Connect<A>,
+            Res = Io,
+            Error = Error<ConnectError>,
+            InitCfg = SharedCfg,
+        >,
 {
-    type Response = Io<Layer<SslFilter>>;
-    type Error = ConnectError;
-    type Service = SslConnectorService<S::Service>;
+    type Res = Io<Layer<SslFilter>>;
+    type Error = Error<ConnectError>;
+    type Service = SslConnectorService<S::Service, St>;
+    type InitCfg = SharedCfg;
     type InitError = S::InitError;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg.clone()).await?;
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
+        let svc = self.connector.create(cfg).await?;
 
         Ok(SslConnectorService {
             svc,
@@ -54,114 +61,7 @@ where
     }
 }
 
-impl<S> SslConnectorService<S> {
-    /// Establish a TLS connection on top of an existing I/O stream.
-    pub async fn connect<F: Filter>(
-        &self,
-        io: Io<F>,
-        host: &str,
-    ) -> Result<Io<Layer<SslFilter, F>>, ConnectError> {
-        let tag = io.tag();
-        log::trace!("{tag}: SSL Handshake start for: {host:?}");
-
-        match self.openssl.configure() {
-            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e).into()),
-            Ok(config) => {
-                let ssl = config
-                    .into_ssl(host)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-
-                match timeout_checked(self.cfg.handshake_timeout(), connect_io(io, ssl))
-                    .await
-                {
-                    Ok(Ok(io)) => {
-                        log::trace!("{tag}: SSL Handshake success: {host:?}");
-                        Ok(io)
-                    }
-                    Ok(Err(e)) => {
-                        log::trace!("{tag}: SSL Handshake error: {e:?}");
-                        Err(e.into())
-                    }
-                    Err(()) => {
-                        log::trace!("{tag}: SSL Handshake timeout");
-                        Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "SSL Handshake timeout",
-                        )
-                        .into())
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<A: Address, S> Service<Connect<A>> for SslConnectorService<S>
-where
-    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
-{
-    type Response = Io<Layer<SslFilter>>;
-    type Error = ConnectError;
-
-    ntex_service::forward_ready!(svc);
-    ntex_service::forward_poll!(svc);
-    ntex_service::forward_shutdown!(svc);
-
-    async fn call(
-        &self,
-        message: Connect<A>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        let host = message.host().split(':').next().unwrap().to_string();
-        let io = ctx.call(&self.svc, message).await?;
-        self.connect(io, &host).await
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SslConnector2<S> {
-    connector: S,
-    openssl: OpensslConnector,
-}
-
-#[derive(Clone, Debug)]
-pub struct SslConnectorService2<S> {
-    svc: S,
-    cfg: Cfg<TlsConfig>,
-    openssl: OpensslConnector,
-}
-
-impl<A: Address> SslConnector2<Connector2<A>> {
-    /// Construct new `SslConnector2` factory
-    pub fn new(connector: OpensslConnector) -> Self {
-        SslConnector2 {
-            openssl: connector,
-            connector: Connector2::default(),
-        }
-    }
-}
-
-impl<A: Address, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector2<S>
-where
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = Error<ConnectError>>,
-{
-    type Response = Io<Layer<SslFilter>>;
-    type Error = Error<ConnectError>;
-    type Service = SslConnectorService2<S::Service>;
-    type InitError = S::InitError;
-
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg.clone()).await?;
-
-        Ok(SslConnectorService2 {
-            svc,
-            cfg: cfg.get(),
-            openssl: self.openssl.clone(),
-        })
-    }
-}
-
-impl<S> SslConnectorService2<S> {
+impl<S: Service<St = St>, St> SslConnectorService<S, St> {
     /// Establish a TLS connection on top of an existing I/O stream.
     pub async fn connect<F: Filter>(
         &self,
@@ -203,11 +103,13 @@ impl<S> SslConnectorService2<S> {
     }
 }
 
-impl<A: Address, S> Service<Connect<A>> for SslConnectorService2<S>
+impl<A: Address, S, St> Service for SslConnectorService<S, St>
 where
-    S: Service<Connect<A>, Response = Io, Error = Error<ConnectError>>,
+    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type Response = Io<Layer<SslFilter>>;
+    type St = St;
+    type Req = Connect<A>;
+    type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
 
     ntex_service::forward_ready!(svc);
@@ -218,7 +120,7 @@ where
         &self,
         message: Connect<A>,
         ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Error> {
         let host = message.host().split(':').next().unwrap().to_string();
         let io = ctx.call(&self.svc, message).await?;
         self.connect(io, &host).await

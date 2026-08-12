@@ -6,7 +6,7 @@ use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
-use ntex_service::{IntoService, Pipeline, PipelineBinding, PipelineCall, Service};
+use ntex_service::{PipelineBinding, PipelineCall, Service};
 use ntex_util::{future::Either, spawn, time::Seconds};
 
 type Response<U> = <U as Encoder>::Item;
@@ -49,7 +49,7 @@ pin_project_lite::pin_project! {
     /// and pass them to the service.
     pub struct Dispatcher<S, U>
     where
-        S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+        S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
         U: Encoder,
         U: Decoder,
         U: 'static,
@@ -72,13 +72,13 @@ bitflags::bitflags! {
 
 struct DispatcherInner<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder + 'static,
 {
     st: DispatcherState,
     error: Option<S::Error>,
     shared: Rc<DispatcherShared<S, U>>,
-    response: Option<PipelineCall<S, DispatchItem<U>>>,
+    response: Option<PipelineCall<S>>,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
@@ -86,12 +86,12 @@ where
 
 pub(crate) struct DispatcherShared<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     io: IoBoxed,
     codec: U,
-    service: PipelineBinding<S, DispatchItem<U>>,
+    service: PipelineBinding<S>,
     flags: Cell<Flags>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
@@ -129,14 +129,13 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
 
 impl<S, U> Dispatcher<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Dispatcher<S, U>
+    pub fn new<Io, F>(io: Io, codec: U, service: PipelineBinding<S>) -> Dispatcher<S, U>
     where
         IoBoxed: From<Io>,
-        F: IntoService<S, DispatchItem<U>>,
     {
         let io = IoBoxed::from(io);
         let flags = if io.cfg().keepalive_timeout().is_zero() {
@@ -148,10 +147,10 @@ where
         let shared = Rc::new(DispatcherShared {
             io,
             codec,
+            service,
             flags: Cell::new(flags),
             error: Cell::new(None),
             inflight: Cell::new(0),
-            service: Pipeline::new(service.into_service()).bind(),
         });
 
         Dispatcher {
@@ -170,10 +169,10 @@ where
 
 impl<S, U> DispatcherShared<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
-    fn handle_result(&self, item: Result<S::Response, S::Error>, io: &IoBoxed, wake: bool) {
+    fn handle_result(&self, item: Result<S::Res, S::Error>, io: &IoBoxed, wake: bool) {
         match item {
             Ok(Some(val)) => {
                 if let Err(err) = io.encode(val, &self.codec) {
@@ -217,7 +216,7 @@ where
 
 impl<S, U> Future for Dispatcher<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     type Output = Result<(), S::Error>;
@@ -377,7 +376,7 @@ where
 
 impl<S, U> DispatcherInner<S, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {

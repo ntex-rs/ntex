@@ -133,6 +133,16 @@ impl<S> Pipeline<S> {
     {
         PipelineBinding::new(self, st)
     }
+
+    #[inline]
+    /// Bind pipeline to a state.
+    pub fn bind_default(self) -> PipelineBinding<S>
+    where
+        S: Service + 'static,
+        S::St: Default + 'static,
+    {
+        PipelineBinding::new(self, Default::default())
+    }
 }
 
 impl<S> From<S> for Pipeline<S> {

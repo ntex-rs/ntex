@@ -14,10 +14,10 @@ pub struct Connector<T>(marker::PhantomData<T>);
 
 #[derive(Clone, Debug)]
 /// Basic tcp stream connector
-pub struct ConnectorService<T> {
+pub struct ConnectorService<T, St = ()> {
     cfg: Cfg<IoConfig>,
     shared: SharedCfg,
-    _t: marker::PhantomData<T>,
+    _t: marker::PhantomData<(T, St)>,
 }
 
 impl<T> Connector<T> {
@@ -33,7 +33,7 @@ impl<T> Default for Connector<T> {
     }
 }
 
-impl<T> ConnectorService<T> {
+impl<T, St> ConnectorService<T, St> {
     #[inline]
     /// Construct new connect service with default configuration
     pub fn new() -> Self {
@@ -51,125 +51,13 @@ impl<T> ConnectorService<T> {
     }
 }
 
-impl<T> Default for ConnectorService<T> {
+impl<T, St> Default for ConnectorService<T, St> {
     fn default() -> Self {
         ConnectorService::new()
     }
 }
 
-impl<T: Address> ConnectorService<T> {
-    /// Resolve and connect to remote host
-    pub async fn connect<U>(&self, message: U) -> Result<Io, ConnectError>
-    where
-        Connect<T>: From<U>,
-    {
-        timeout_checked(self.cfg.connect_timeout(), async {
-            // resolve first
-            let msg = resolve::lookup(message.into(), self.shared.tag())
-                .await
-                .map_err(Error::into_error)?;
-
-            let port = msg.port();
-            let Connect { req, addr, .. } = msg;
-
-            if let Some(addr) = addr {
-                connect(req, port, addr, self.shared.clone())
-                    .await
-                    .map_err(Error::into_error)
-            } else if let Some(addr) = req.addr() {
-                connect(req, addr.port(), Either::Left(addr), self.shared.clone())
-                    .await
-                    .map_err(Error::into_error)
-            } else {
-                log::error!("{}: TCP connector: got unresolved address", self.cfg.tag());
-                Err(ConnectError::Unresolved)
-            }
-        })
-        .await
-        .map_err(|()| {
-            ConnectError::Io(io::Error::new(io::ErrorKind::TimedOut, "Connect timeout"))
-        })
-        .and_then(|item| item)
-    }
-}
-
-impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
-    type Response = Io;
-    type Error = ConnectError;
-    type Service = ConnectorService<T>;
-    type InitError = ConnectServiceError;
-
-    fn create(
-        &self,
-        cfg: SharedCfg,
-    ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
-        Ready::Ok(ConnectorService::with(cfg))
-    }
-}
-
-impl<T: Address> Service<Connect<T>> for ConnectorService<T> {
-    type Response = Io;
-    type Error = ConnectError;
-
-    async fn call(
-        &self,
-        req: Connect<T>,
-        _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        self.connect(req).await
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-/// Basic tcp stream connector
-pub struct Connector2<T>(marker::PhantomData<T>);
-
-#[derive(Clone, Debug)]
-/// Basic tcp stream connector
-pub struct ConnectorService2<T> {
-    cfg: Cfg<IoConfig>,
-    shared: SharedCfg,
-    _t: marker::PhantomData<T>,
-}
-
-impl<T> Connector2<T> {
-    /// Construct new connect service with default configuration
-    pub fn new() -> Self {
-        Connector2(marker::PhantomData)
-    }
-}
-
-impl<T> Default for Connector2<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<T> ConnectorService2<T> {
-    #[inline]
-    /// Construct new connect service with default configuration
-    pub fn new() -> Self {
-        ConnectorService2::with(SharedCfg::default())
-    }
-
-    #[inline]
-    /// Construct new connect service with custom configuration
-    pub fn with(cfg: SharedCfg) -> Self {
-        ConnectorService2 {
-            cfg: cfg.get(),
-            shared: cfg,
-            _t: marker::PhantomData,
-        }
-    }
-}
-
-impl<T> Default for ConnectorService2<T> {
-    fn default() -> Self {
-        ConnectorService2::new()
-    }
-}
-
-impl<T: Address> ConnectorService2<T> {
+impl<T: Address, St> ConnectorService<T, St> {
     /// Resolve and connect to remote host
     pub async fn connect<U>(&self, message: U) -> Result<Io, Error<ConnectError>>
     where
@@ -202,29 +90,32 @@ impl<T: Address> ConnectorService2<T> {
     }
 }
 
-impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector2<T> {
-    type Response = Io;
+impl<T: Address, St> ServiceFactory<St, Connect<T>> for Connector<T> {
+    type Res = Io;
     type Error = Error<ConnectError>;
-    type Service = ConnectorService2<T>;
+    type Service = ConnectorService<T, St>;
+    type InitCfg = SharedCfg;
     type InitError = ConnectServiceError;
 
     fn create(
         &self,
-        cfg: SharedCfg,
+        cfg: &SharedCfg,
     ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
-        Ready::Ok(ConnectorService2::with(cfg))
+        Ready::Ok(ConnectorService::with(cfg.clone()))
     }
 }
 
-impl<T: Address> Service<Connect<T>> for ConnectorService2<T> {
-    type Response = Io;
+impl<T: Address, St> Service for ConnectorService<T, St> {
+    type St = St;
+    type Req = Connect<T>;
+    type Res = Io;
     type Error = Error<ConnectError>;
 
     async fn call(
         &self,
         req: Connect<T>,
         _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    ) -> Result<Self::Res, Self::Error> {
         self.connect(req).await
     }
 }
