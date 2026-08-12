@@ -394,7 +394,6 @@ where
 impl<S> Clone for PipelineBinding<S>
 where
     S: Service,
-    S::St: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -403,6 +402,40 @@ where
             state: self.state.clone(),
             st: cell::UnsafeCell::new(State::New),
         }
+    }
+}
+
+impl<S> Service for PipelineBinding<S>
+where
+    S: Service,
+{
+    type St = S::St;
+    type Req = S::Req;
+    type Res = S::Res;
+    type Error = S::Error;
+
+    #[inline]
+    async fn call(
+        &self,
+        req: S::Req,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Res, Self::Error> {
+        ctx.call_with_st(&self.pl.state.svc, req, &self.state).await
+    }
+
+    #[inline]
+    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        ctx.ready_with_st(&self.pl.state.svc, &self.state).await
+    }
+
+    #[inline]
+    async fn shutdown(&self) {
+        self.pl.shutdown().await;
+    }
+
+    #[inline]
+    fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
+        self.pl.poll(cx)
     }
 }
 

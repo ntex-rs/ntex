@@ -54,7 +54,7 @@ impl<Svc: Service> ServiceChain<Svc> {
     where
         Self: Sized,
         F: IntoService<Next>,
-        Next: Service<Req = Svc::Res, Error = Svc::Error>,
+        Next: Service<St = Svc::St, Req = Svc::Res, Error = Svc::Error>,
     {
         ServiceChain {
             service: AndThen::new(self.service, service.into_service()),
@@ -67,7 +67,7 @@ impl<Svc: Service> ServiceChain<Svc> {
     where
         Self: Sized,
         F: IntoService<Next>,
-        Next: Service<Req = Result<Svc::Res, Svc::Error>, Error = Svc::Error>,
+        Next: Service<St = Svc::St, Req = Result<Svc::Res, Svc::Error>, Error = Svc::Error>,
     {
         ServiceChain {
             service: Then::new(self.service, service.into_service()),

@@ -2,12 +2,12 @@
 use std::task::{Context, Poll, Waker};
 use std::{cell, fmt, future::Future, marker, pin::Pin, ptr, rc::Rc};
 
-use crate::{FromSt, FromStResult, Service};
+use crate::Service;
 
 pub struct ServiceCtx<'a, S: Service + ?Sized> {
     idx: u32,
-    waiters: &'a WaitersRef,
     st: &'a S::St,
+    waiters: &'a WaitersRef,
     _t: marker::PhantomData<Rc<S>>,
 }
 
@@ -154,22 +154,34 @@ impl<'a, S: Service> ServiceCtx<'a, S> {
     /// Returns when the service is able to process requests.
     pub async fn ready<T>(&self, svc: &'a T) -> Result<(), T::Error>
     where
-        T: Service,
-        T::St: FromSt<S::St>,
+        T: Service<St = S::St>,
     {
-        let st = <T::St>::from_state(self.st());
-        let stref = match &st {
-            FromStResult::Ref(r) => r,
-            FromStResult::Owned(s) => s,
-        };
-
         // check readiness and notify waiters
         ReadyCall {
             completed: false,
             fut: svc.ready(ServiceCtx {
+                st: self.st,
                 idx: self.idx,
                 waiters: self.waiters,
-                st: stref,
+                _t: marker::PhantomData,
+            }),
+            ctx: *self,
+        }
+        .await
+    }
+
+    /// Returns when the service is able to process requests.
+    pub async fn ready_with_st<T>(&self, svc: &'a T, st: &'a T::St) -> Result<(), T::Error>
+    where
+        T: Service,
+    {
+        // check readiness and notify waiters
+        ReadyCall {
+            completed: false,
+            fut: svc.ready(ServiceCtx {
+                st,
+                idx: self.idx,
+                waiters: self.waiters,
                 _t: marker::PhantomData,
             }),
             ctx: *self,
@@ -181,19 +193,41 @@ impl<'a, S: Service> ServiceCtx<'a, S> {
     /// Wait for service readiness and then call service
     pub async fn call<T>(&self, svc: &'a T, req: T::Req) -> Result<T::Res, T::Error>
     where
-        T: Service,
-        T::St: FromSt<S::St>,
+        T: Service<St = S::St>,
     {
-        let st = <T::St>::from_state(self.st());
-        let stref = match &st {
-            FromStResult::Ref(r) => r,
-            FromStResult::Owned(s) => s,
-        };
-
         let ctx = ServiceCtx {
             idx: self.idx,
+            st: self.st,
             waiters: self.waiters,
-            st: stref,
+            _t: marker::PhantomData,
+        };
+
+        // check readiness and notify waiters
+        ReadyCall {
+            completed: false,
+            fut: svc.ready(ctx),
+            ctx: *self,
+        }
+        .await?;
+
+        svc.call(req, ctx).await
+    }
+
+    #[inline]
+    /// Wait for service readiness and then call service
+    pub async fn call_with_st<T>(
+        &self,
+        svc: &'a T,
+        req: T::Req,
+        st: &T::St,
+    ) -> Result<T::Res, T::Error>
+    where
+        T: Service,
+    {
+        let ctx = ServiceCtx {
+            st,
+            idx: self.idx,
+            waiters: self.waiters,
             _t: marker::PhantomData,
         };
 
@@ -212,21 +246,14 @@ impl<'a, S: Service> ServiceCtx<'a, S> {
     /// Call service, do not check service readiness
     pub async fn call_nowait<T>(&self, svc: &'a T, req: T::Req) -> Result<T::Res, T::Error>
     where
-        T: Service,
-        T::St: FromSt<S::St>,
+        T: Service<St = S::St>,
     {
-        let st = <T::St>::from_state(self.st());
-        let stref = match &st {
-            FromStResult::Ref(r) => r,
-            FromStResult::Owned(s) => s,
-        };
-
         svc.call(
             req,
             ServiceCtx {
+                st: self.st,
                 idx: self.idx,
                 waiters: self.waiters,
-                st: stref,
                 _t: marker::PhantomData,
             },
         )

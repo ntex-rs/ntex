@@ -36,10 +36,8 @@ pub(crate) async fn ready<S, A, B>(
 ) -> Result<(), A::Error>
 where
     S: Service,
-    A: Service,
-    B: Service<Error = A::Error>,
-    A::St: FromSt<S::St>,
-    B::St: FromSt<S::St>,
+    A: Service<St = S::St>,
+    B: Service<St = S::St, Error = A::Error> + FromSt<S>,
 {
     let mut fut1 = pin::pin!(ctx.ready(svc1));
     let mut fut2 = pin::pin!(ctx.ready(svc2));
