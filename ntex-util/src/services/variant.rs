@@ -254,17 +254,17 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv1;
 
-    impl Service<()> for Srv1 {
+    impl Service<(), ()> for Srv1 {
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
+        async fn call(&self, _: (), _: Ctx<'_, Self, ()>) -> Result<usize, ()> {
             Ok(1)
         }
     }
@@ -272,17 +272,17 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv2;
 
-    impl Service<()> for Srv2 {
+    impl Service<(), ()> for Srv2 {
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
+        async fn call(&self, _: (), _: Ctx<'_, Self, ()>) -> Result<usize, ()> {
             Ok(2)
         }
     }
@@ -302,12 +302,12 @@ mod tests {
         assert!(format!("{service:?}").contains("Variant"));
 
         assert!(crate::future::lazy(|cx| service.poll(cx)).await.is_ok());
-        assert!(service.ready().await.is_ok());
+        assert!(service.ready(&()).await.is_ok());
         service.shutdown().await;
 
-        assert_eq!(service.call(Variant3::V1(())).await, Ok(1));
-        assert_eq!(service.call(Variant3::V2(())).await, Ok(2));
-        assert_eq!(service.call(Variant3::V3(())).await, Ok(2));
+        assert_eq!(service.call(Variant3::V1(()), &()).await, Ok(1));
+        assert_eq!(service.call(Variant3::V2(()), &()).await, Ok(2));
+        assert_eq!(service.call(Variant3::V3(()), &()).await, Ok(2));
     }
 
     #[ntex::test]
@@ -315,10 +315,10 @@ mod tests {
         #[derive(Debug, Clone)]
         struct Srv5;
 
-        impl Service<()> for Srv5 {
+        impl Service<(), ()> for Srv5 {
             type Res = usize;
             type Error = ();
-            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
@@ -326,7 +326,7 @@ mod tests {
                 Ok(())
             }
             async fn shutdown(&self) {}
-            async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
+            async fn call(&self, _r: (), _: Ctx<'_, Self, ()>) -> Result<usize, ()> {
                 Ok(2)
             }
         }
@@ -340,7 +340,7 @@ mod tests {
         assert!(format!("{service:?}").contains("Variant"));
 
         let service = factory.pipeline(&()).await.unwrap().clone();
-        assert!(service.ready().await.is_ok());
+        assert!(service.ready(&()).await.is_ok());
         assert!(format!("{service:?}").contains("Variant"));
     }
 }

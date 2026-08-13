@@ -659,19 +659,19 @@ mod tests {
             .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/path10").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app2/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app2/Path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -687,11 +687,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -708,13 +708,13 @@ mod tests {
 
         for url in &["/app", "/app2"] {
             let req = TestRequest::with_uri(url).to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
         }
 
         for url in &["/app/", "/app2/"] {
             let req = TestRequest::with_uri(url).to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), StatusCode::CREATED);
         }
     }
@@ -730,11 +730,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -750,13 +750,13 @@ mod tests {
 
         for url in &["/app", "/app2"] {
             let req = TestRequest::with_uri(url).to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         }
 
         for url in &["/app/", "/app2/"] {
             let req = TestRequest::with_uri(url).to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
         }
     }
@@ -772,11 +772,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -799,7 +799,7 @@ mod tests {
             let req = TestRequest::with_uri("/app/path1")
                 .method(m.clone())
                 .to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), status.clone());
         }
     }
@@ -823,13 +823,13 @@ mod tests {
             let req = TestRequest::with_uri("/app/path1")
                 .method(m.clone())
                 .to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), status.clone());
 
             let req = TestRequest::with_uri("/app2/path1")
                 .method(m.clone())
                 .to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), status.clone());
         }
     }
@@ -848,19 +848,19 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::DELETE)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::POST)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -885,19 +885,19 @@ mod tests {
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::POST)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::GET)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::DELETE)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
@@ -911,7 +911,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/ab-project1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -920,7 +920,7 @@ mod tests {
         }
 
         let req = TestRequest::with_uri("/aa-project1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -934,7 +934,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/ab-project1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -943,7 +943,7 @@ mod tests {
         }
 
         let req = TestRequest::with_uri("/ab-project1/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -952,7 +952,7 @@ mod tests {
         }
 
         let req = TestRequest::with_uri("/aa-project1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -982,7 +982,7 @@ mod tests {
             .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -1002,11 +1002,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/t1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/t1/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -1025,13 +1025,13 @@ mod tests {
         let req = TestRequest::with_uri("/app/t1/path1")
             .method(Method::POST)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app/t1/path1")
             .method(Method::GET)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -1048,7 +1048,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/project_1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -1073,7 +1073,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/test/1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -1082,7 +1082,7 @@ mod tests {
         }
 
         let req = TestRequest::with_uri("/app/test/1/path2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -1100,11 +1100,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/path2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let req = TestRequest::with_uri("/path2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -1123,15 +1123,15 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 
         let req = TestRequest::with_uri("/app1/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let req = TestRequest::with_uri("/app2/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -1191,7 +1191,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -1226,7 +1226,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/v1/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 

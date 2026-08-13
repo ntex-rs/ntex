@@ -26,7 +26,8 @@ async fn web_ws() {
     let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
-                ws::start::<_, _, &str, web::Error>(
+                //ws::start::<_, _, &str, web::Error>(
+                ws::start(
                     req,
                     None,
                     fn_factory_with_config(|_| async {
@@ -377,18 +378,17 @@ async fn web_ws_shutdown_propagation() {
         App::new().service(web::resource("/").route(web::to(move |req: HttpRequest| {
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                ws::start::<_, _, &str, web::Error>(
+                ws::start::<_, &str, web::Error>(
                     req,
                     None,
-                    fn_factory_with_config(move |_| {
+                    fn_factory_with_config(async move |_t: &ws::WsSink| {
                         let shutdown_tx = shutdown_tx.clone();
-                        async move {
-                            let service = fn_service(service);
-                            let on_shutdown = fn_shutdown(move || async move {
+                        //let service = fn_service(service);
+                        Ok::<_, web::Error>(chain(service).and_then(fn_shutdown(
+                            move || async move {
                                 let _ = shutdown_tx.send(());
-                            });
-                            Ok::<_, web::Error>(chain(service).and_then(on_shutdown))
-                        }
+                            },
+                        )))
                     }),
                 )
                 .await

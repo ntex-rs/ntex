@@ -102,12 +102,12 @@ mod tests {
                 .unwrap();
             Ok::<_, ()>(())
         }))
-        .pipeline(())
+        .pipeline(&())
         .await
         .unwrap();
 
         let srv: Io<Sealed> = Io::new(server, SharedCfg::default()).boxed().into();
-        let _ = svc.call(srv).await;
+        let _ = svc.call(srv, &()).await;
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, b"RES".as_ref());

@@ -361,13 +361,13 @@ impl<'a, Svc, St> ReadyCtx<'a, Svc, St> {
         S: Service<St, Req>,
         St: Default,
     {
-        let mut _st;
+        let st2;
 
         let st = if let Some(st) = self.st {
             st
         } else {
-            _st = St::default();
-            &_st
+            st2 = St::default();
+            &st2
         };
 
         svc.call(
@@ -446,13 +446,11 @@ mod tests {
 
     struct Srv(Rc<Cell<usize>>, condition::Waiter);
 
-    impl Service for Srv {
-        type St = ();
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())
@@ -461,7 +459,7 @@ mod tests {
         async fn call(
             &self,
             req: &'static str,
-            ctx: ServiceCtx<'_, Self>,
+            ctx: Ctx<'_, Self, ()>,
         ) -> Result<Self::Res, Self::Error> {
             let _ = format!("{ctx:?}");
             let _ = format!("{:?}", ctx.id());

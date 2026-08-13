@@ -51,14 +51,14 @@ mod openssl {
     impl<F, Sf, B, C> H1Service<Layer<SslFilter, F>, Sf, B, C>
     where
         F: Filter,
-        S: ServiceFactory<(), Req = Request, InitCfg = SharedCfg> + 'static,
+        Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
         Sf::Res: Into<Response<B>>,
         Sf::Error: ResponseError,
         Sf::InitError: fmt::Debug,
         B: MessageBody,
         C: ServiceFactory<
                 (),
-                Control<Layer<SslFilter, F>, S::Error>,
+                Control<Layer<SslFilter, F>, Sf::Error>,
                 Res = ControlAck<Layer<SslFilter, F>>,
                 InitCfg = SharedCfg,
             > + 'static,
@@ -94,7 +94,7 @@ mod rustls {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B, C> H1Service<Layer<TlsServerFilter, F>, S, B, C>
+    impl<F, Sf, B, C> H1Service<Layer<TlsServerFilter, F>, Sf, B, C>
     where
         F: Filter,
         Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
@@ -104,7 +104,7 @@ mod rustls {
         B: MessageBody,
         C: ServiceFactory<
                 (),
-                Control<Layer<TlsServerFilter, F>, S::Error>,
+                Control<Layer<TlsServerFilter, F>, Sf::Error>,
                 Res = ControlAck<Layer<TlsServerFilter, F>>,
                 InitCfg = SharedCfg,
             > + 'static,

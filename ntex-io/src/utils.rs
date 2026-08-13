@@ -148,10 +148,10 @@ mod tests {
                 .unwrap();
             Ok::<_, ()>(())
         }))
-        .pipeline(())
+        .pipeline(&())
         .await
         .unwrap();
-        let _ = svc.call(Io::new(server, SharedCfg::default())).await;
+        let _ = svc.call(Io::new(server, SharedCfg::default()), &()).await;
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, b"RES".as_ref());

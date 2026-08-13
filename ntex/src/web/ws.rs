@@ -69,16 +69,14 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 ///     ws::start(req, chosen, factory).await
 /// }
 /// ```
-pub async fn start<Sf, St, F, P, Err>(
+pub async fn start<Sf, P, Err>(
     req: HttpRequest,
     subprotocol: Option<P>,
-    f: F,
+    f: impl IntoServiceFactory<Sf, (), Frame>,
 ) -> Result<HttpResponse, Err>
 where
-    St: Default + 'static,
-    Sf: ServiceFactory<St, Frame, Res = Option<Message>, InitCfg = WsSink> + 'static,
+    Sf: ServiceFactory<(), Frame, Res = Option<Message>, InitCfg = WsSink> + 'static,
     Sf::Error: fmt::Debug,
-    F: IntoServiceFactory<Sf, St, Frame>,
     P: AsRef<str>,
     Err: From<Sf::InitError> + From<HandshakeError>,
 {
@@ -101,17 +99,15 @@ where
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. If `None`, the header is omitted.
-pub async fn start_with<Sf, St, F, P, Err>(
+pub async fn start_with<Sf, P, Err>(
     req: HttpRequest,
     subprotocol: Option<P>,
-    factory: F,
+    factory: impl IntoServiceFactory<Sf, (), DispatchItem<ws::Codec>>,
 ) -> Result<HttpResponse, Err>
 where
-    St: Default + 'static,
-    Sf: ServiceFactory<St, DispatchItem<ws::Codec>, Res = Option<Message>, InitCfg = WsSink>
+    Sf: ServiceFactory<(), DispatchItem<ws::Codec>, Res = Option<Message>, InitCfg = WsSink>
         + 'static,
     Sf::Error: fmt::Debug,
-    F: IntoServiceFactory<Sf, St, DispatchItem<ws::Codec>>,
     P: AsRef<str>,
     Err: From<Sf::InitError> + From<HandshakeError>,
 {
@@ -150,9 +146,7 @@ where
 
     // start websockets service dispatcher
     rt::spawn(async move {
-        let res =
-            crate::io::Dispatcher::new(io, codec, Pipeline::new(srv).bind(St::default()))
-                .await;
+        let res = crate::io::Dispatcher::new(io, codec, Pipeline::new(srv).bind(())).await;
         log::trace!("Ws handler is terminated: {res:?}");
     });
 

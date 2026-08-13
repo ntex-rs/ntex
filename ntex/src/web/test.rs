@@ -1240,7 +1240,7 @@ mod tests {
         .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
-        let res = app.call(req).await.unwrap();
+        let res = app.call(req, &()).await.unwrap();
         assert!(res.status().is_success());
     }
 
@@ -1257,7 +1257,7 @@ mod tests {
         .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
-        let res = app.call(req).await.unwrap();
+        let res = app.call(req, &()).await.unwrap();
         assert!(res.status().is_success());
     }
 

@@ -13,10 +13,9 @@ use crate::then::{Then, ThenFactory};
 use crate::{IntoService, IntoServiceFactory, Pipeline, Service, ServiceFactory};
 
 /// Constructs new chain with one service.
-pub fn chain<S, St, Req, F>(service: F) -> ServiceChain<S, St, Req>
+pub fn chain<St, S, Req>(service: impl IntoService<S, St, Req>) -> ServiceChain<S, St, Req>
 where
     S: Service<St, Req>,
-    F: IntoService<S, St, Req>,
 {
     ServiceChain {
         service: service.into_service(),
@@ -25,10 +24,11 @@ where
 }
 
 /// Constructs new chain factory with one service factory.
-pub fn chain_factory<Sf, St, Req, F>(factory: F) -> ServiceChainFactory<Sf, St, Req>
+pub fn chain_factory<St, Sf, Req>(
+    factory: impl IntoServiceFactory<Sf, St, Req>,
+) -> ServiceChainFactory<Sf, St, Req>
 where
     Sf: ServiceFactory<St, Req>,
-    F: IntoServiceFactory<Sf, St, Req>,
 {
     ServiceChainFactory {
         factory: factory.into_factory(),

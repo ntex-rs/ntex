@@ -161,13 +161,11 @@ mod tests {
         }
     }
 
-    impl Service for SleepService {
-        type St = ();
-        type Req = ();
+    impl Service<(), ()> for SleepService {
         type Res = ();
-        type Err = SrvError;
+        type Error = SrvError;
 
-        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), SrvError> {
+        async fn call(&self, _: (), _: Ctx<'_, Self, ()>) -> Result<(), SrvError> {
             crate::time::sleep(self.0).await;
             Ok::<_, SrvError>(())
         }
@@ -180,8 +178,8 @@ mod tests {
 
         let timeout =
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)).clone());
-        assert_eq!(timeout.call(()).await, Ok(()));
-        assert_eq!(timeout.ready().await, Ok(()));
+        assert_eq!(timeout.call((), &()).await, Ok(()));
+        assert_eq!(timeout.ready(&()).await, Ok(()));
         timeout.shutdown().await;
     }
 
@@ -192,8 +190,8 @@ mod tests {
 
         let timeout =
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
-        assert_eq!(timeout.call(()).await, Ok(()));
-        assert_eq!(timeout.ready().await, Ok(()));
+        assert_eq!(timeout.call((), &()).await, Ok(()));
+        assert_eq!(timeout.ready(&()).await, Ok(()));
     }
 
     #[ntex::test]
@@ -203,7 +201,7 @@ mod tests {
 
         let timeout =
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
-        assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
+        assert_eq!(timeout.call((), &()).await, Err(TimeoutError::Timeout));
     }
 
     #[ntex::test]
@@ -218,7 +216,7 @@ mod tests {
         );
         let srv = timeout.pipeline(&()).await.unwrap();
 
-        let res = srv.call(()).await.unwrap_err();
+        let res = srv.call((), &()).await.unwrap_err();
         assert_eq!(res, TimeoutError::Timeout);
     }
 

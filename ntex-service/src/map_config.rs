@@ -6,20 +6,23 @@ use super::{IntoServiceFactory, ServiceFactory};
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<Sf, St, Req, U, F, C>(sf: U, f: F) -> MapConfig<Sf, F, C>
+pub fn map_config<St, Sf, Req, F, C>(
+    sf: impl IntoServiceFactory<Sf, St, Req>,
+    f: F,
+) -> MapConfig<Sf, F, C>
 where
     Sf: ServiceFactory<St, Req>,
-    U: IntoServiceFactory<Sf, St, Req>,
     F: Fn(&C) -> Sf::InitCfg,
 {
     MapConfig::new(sf.into_factory(), f)
 }
 
 /// Replace config with unit
-pub fn unit_config<Sf, St, Req, C, U>(factory: U) -> UnitConfig<Sf, C>
+pub fn unit_config<St, Sf, Req, C>(
+    factory: impl IntoServiceFactory<Sf, St, Req>,
+) -> UnitConfig<Sf, C>
 where
     Sf: ServiceFactory<St, Req>,
-    U: IntoServiceFactory<Sf, St, Req>,
 {
     UnitConfig::new(factory.into_factory())
 }
@@ -128,7 +131,7 @@ mod tests {
         let item = Rc::new(Cell::new(1usize));
 
         let factory = map_config(
-            fn_service(|item: usize| async move { Ok::<_, ()>(item) }),
+            fn_service(async move |item: usize| Ok::<_, ()>(item)),
             |t: &usize| {
                 item.set(item.get() + *t);
             },

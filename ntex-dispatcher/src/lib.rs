@@ -640,7 +640,7 @@ mod tests {
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
-    use ntex_service::{ServiceCtx, cfg::SharedCfg};
+    use ntex_service::{Ctx, Pipeline, ReadyCtx, cfg::SharedCfg};
     use ntex_util::{channel::oneshot, time::Millis, time::sleep};
     use rand::Rng;
 
@@ -688,9 +688,9 @@ mod tests {
         }
     }
 
-    impl<S, U> Dispatcher<S, U>
+    impl<S, U> Dispatcher<S, (), U>
     where
-        S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+        S: Service<(), DispatchItem<U>, Res = Option<Response<U>>> + 'static,
         U: Decoder + Encoder + 'static,
     {
         /// Construct new `Dispatcher` instance
@@ -710,7 +710,7 @@ mod tests {
                 flags: Cell::new(flags),
                 error: Cell::new(None),
                 inflight: Cell::new(0),
-                service: Pipeline::new(service).bind(),
+                service: Pipeline::new(service).bind(()),
             });
 
             (
@@ -853,11 +853,11 @@ mod tests {
 
         struct Srv(Rc<Cell<usize>>);
 
-        impl Service<DispatchItem<BytesCodec>> for Srv {
-            type Response = Option<Response<BytesCodec>>;
+        impl Service<(), DispatchItem<BytesCodec>> for Srv {
+            type Res = Option<Response<BytesCodec>>;
             type Error = &'static str;
 
-            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
                 self.0.set(self.0.get() + 1);
                 Err("test")
             }
@@ -865,8 +865,8 @@ mod tests {
             async fn call(
                 &self,
                 _: DispatchItem<BytesCodec>,
-                _: ServiceCtx<'_, Self>,
-            ) -> Result<Self::Response, Self::Error> {
+                _: Ctx<'_, Self, ()>,
+            ) -> Result<Self::Res, Self::Error> {
                 Ok(None)
             }
         }
@@ -1338,11 +1338,11 @@ mod tests {
             Cell<bool>,
         );
 
-        impl Service<DispatchItem<BytesCodec>> for Srv {
-            type Response = Option<Bytes>;
+        impl Service<(), DispatchItem<BytesCodec>> for Srv {
+            type Res = Option<Bytes>;
             type Error = ();
 
-            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
                 if self.2.get()
                     && let Some(rx) = self.0.take()
                 {
@@ -1354,7 +1354,7 @@ mod tests {
             async fn call(
                 &self,
                 msg: DispatchItem<BytesCodec>,
-                _: ServiceCtx<'_, Self>,
+                _: Ctx<'_, Self, ()>,
             ) -> Result<Option<Bytes>, Self::Error> {
                 if let DispatchItem::Item(msg) = msg {
                     self.2.set(true);

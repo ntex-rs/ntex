@@ -538,16 +538,16 @@ async fn test_h2_graceful_shutdown() -> io::Result<()> {
     let req = srv.srequest(Method::GET, "/");
     rt::spawn(async move {
         assert!(matches!(
-            req.send().await,
-            Err(client::error::ClientError::H2 { .. })
+            req.send().await.err().unwrap().into_error(),
+            client::error::ClientError::H2 { .. }
         ));
         sleep(Millis(100000)).await;
     });
     let req = srv.srequest(Method::GET, "/");
     rt::spawn(async move {
         assert!(matches!(
-            req.send().await,
-            Err(client::error::ClientError::H2 { .. })
+            req.send().await.err().unwrap().into_error(),
+            client::error::ClientError::H2 { .. }
         ));
         sleep(Millis(100000)).await;
     });

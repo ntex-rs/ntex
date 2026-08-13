@@ -76,7 +76,7 @@ mod tests {
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = chain_factory(fn_factory_with_config(|err: &bool| {
+        let factory = chain_factory::<(), _, _>(fn_factory_with_config(|err: &bool| {
             let err = *err;
             async move {
                 if err {
@@ -96,7 +96,7 @@ mod tests {
 
     #[ntex::test]
     async fn map_init_err2() {
-        let factory = fn_factory_with_config(|err: &bool| {
+        let factory = fn_factory_with_config::<(), _, _, _, _>(|err: &bool| {
             let err = *err;
             async move {
                 if err {

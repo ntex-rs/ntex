@@ -9,13 +9,16 @@ use crate::time::{Millis, Sleep, now, sleep};
 /// `KeepAlive` service factory
 ///
 /// Controls min time between requests.
-pub struct KeepAlive<E, F, C> {
+pub struct KeepAlive<F, R, E, C>
+where
+    F: Fn() -> E + Clone,
+{
     f: F,
     ka: Millis,
-    _t: marker::PhantomData<(E, C)>,
+    _t: marker::PhantomData<(E, R, C)>,
 }
 
-impl<E, F, C> KeepAlive<E, F, C>
+impl<F, R, E, C> KeepAlive<F, R, E, C>
 where
     F: Fn() -> E + Clone,
 {
@@ -23,18 +26,18 @@ where
     ///
     /// ka - keep-alive timeout
     /// err - error factory function
-    pub fn new(ka: Millis, err: F) -> Self {
+    pub fn new(ka: Millis, f: F) -> Self {
         KeepAlive {
+            f,
             ka,
-            f: err,
             _t: marker::PhantomData,
         }
     }
 }
 
-impl<E, F, C> Clone for KeepAlive<E, F, C>
+impl<F, R, E, C> Clone for KeepAlive<F, R, E, C>
 where
-    F: Clone,
+    F: Fn() -> E + Clone,
 {
     fn clone(&self) -> Self {
         KeepAlive {
@@ -45,7 +48,10 @@ where
     }
 }
 
-impl<E, F, C> fmt::Debug for KeepAlive<E, F, C> {
+impl<F, R, E, C> fmt::Debug for KeepAlive<F, R, E, C>
+where
+    F: Fn() -> E + Clone,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeepAlive")
             .field("ka", &self.ka)
@@ -54,14 +60,14 @@ impl<E, F, C> fmt::Debug for KeepAlive<E, F, C> {
     }
 }
 
-impl<St, Req, E, F, C> ServiceFactory<St, Req> for KeepAlive<E, F, C>
+impl<St, Req, F, E, C> ServiceFactory<St, Req> for KeepAlive<F, Req, E, C>
 where
     F: Fn() -> E + Clone,
 {
     type Res = Req;
     type Error = E;
 
-    type Service = KeepAliveService<E, F>;
+    type Service = KeepAliveService<St, E, F>;
     type InitCfg = C;
     type InitError = Infallible;
 
@@ -74,15 +80,18 @@ where
     }
 }
 
-pub struct KeepAliveService<E, F> {
+pub struct KeepAliveService<St, E, F>
+where
+    F: Fn() -> E,
+{
     f: F,
     dur: Millis,
     sleep: Sleep,
     expire: Cell<time::Instant>,
-    _t: marker::PhantomData<E>,
+    _t: marker::PhantomData<(St, E)>,
 }
 
-impl<E, F> KeepAliveService<E, F>
+impl<St, E, F> KeepAliveService<St, E, F>
 where
     F: Fn() -> E,
 {
@@ -99,7 +108,10 @@ where
     }
 }
 
-impl<E, F> fmt::Debug for KeepAliveService<E, F> {
+impl<St, E, F> fmt::Debug for KeepAliveService<St, E, F>
+where
+    F: Fn() -> E,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeepAliveService")
             .field("dur", &self.dur)
@@ -109,7 +121,7 @@ impl<E, F> fmt::Debug for KeepAliveService<E, F> {
     }
 }
 
-impl<St, Req, E, F> Service<St, Req> for KeepAliveService<E, F>
+impl<St, Req, E, F> Service<St, Req> for KeepAliveService<St, E, F>
 where
     F: Fn() -> E,
 {
@@ -159,11 +171,11 @@ mod tests {
 
     #[ntex::test]
     async fn test_ka() {
-        let factory = KeepAlive::new(Millis(100), || TestErr);
+        let factory = KeepAlive::<_, usize, _, _>::new(Millis(100), || TestErr);
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 
-        let service = factory.pipeline(&()).await.unwrap().bind();
+        let service = factory.pipeline(&()).await.unwrap().bind(());
         assert!(format!("{service:?}").contains("KeepAliveService"));
 
         assert_eq!(service.call(1usize).await, Ok(1usize));

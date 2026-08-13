@@ -11,7 +11,7 @@ use super::control::{Control, ControlAck};
 /// Default control service
 pub struct DefaultControlService;
 
-impl<St, F, Err> ServiceFactory<St, Control<F, Err>> for DefaultControlService
+impl<F, Err> ServiceFactory<(), Control<F, Err>> for DefaultControlService
 where
     F: Filter,
     Err: ResponseError,
@@ -28,7 +28,7 @@ where
     }
 }
 
-impl<St, F, Err> Service<St, Control<F, Err>> for DefaultControlService
+impl<F, Err> Service<(), Control<F, Err>> for DefaultControlService
 where
     F: Filter,
     Err: ResponseError,
@@ -40,7 +40,7 @@ where
     async fn call(
         &self,
         req: Control<F, Err>,
-        _: Ctx<'_, Self, St>,
+        _: Ctx<'_, Self, ()>,
     ) -> Result<Self::Res, Self::Error> {
         Ok(req.ack())
     }

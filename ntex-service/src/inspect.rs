@@ -261,17 +261,15 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv(bool, bool, Rc<Cell<usize>>);
 
-    impl Service for Srv {
-        type St = ();
-        type Req = ();
+    impl Service<(), ()> for Srv {
         type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
             if self.1 { Err(()) } else { Ok(()) }
         }
 
-        async fn call(&self, _m: (), _: Ctx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _m: (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
             if self.0 { Err(()) } else { Ok(()) }
         }
 

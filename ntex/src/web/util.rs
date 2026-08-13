@@ -297,7 +297,7 @@ where
 ///         .await
 /// }
 /// ```
-pub fn server<F, I, Sf, St, B>(factory: F) -> HttpServer<F, I, Sf, B>
+pub fn server<F, I, Sf, B>(factory: F) -> HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<Sf, (), Request>,

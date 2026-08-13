@@ -95,18 +95,16 @@ mod tests {
     use ntex::util::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
 
-    use crate::{Ctx, Service, chain, chain_factory, fn_factory};
+    use crate::{Ctx, ReadyCtx, Service, chain, chain_factory, fn_factory};
 
     #[derive(Debug, Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service for Srv1 {
-        type St = ();
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv1 {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -116,7 +114,11 @@ mod tests {
             Ok(())
         }
 
-        async fn call(&self, req: &'static str, _: Ctx<'_, Self>) -> Result<Self::Res, ()> {
+        async fn call(
+            &self,
+            req: &'static str,
+            _: Ctx<'_, Self, ()>,
+        ) -> Result<Self::Res, ()> {
             Ok(req)
         }
 
@@ -128,13 +130,11 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service for Srv2 {
-        type St = ();
-        type Req = &'static str;
+    impl Service<(), &'static str> for Srv2 {
         type Res = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -144,7 +144,11 @@ mod tests {
             Ok(())
         }
 
-        async fn call(&self, req: &'static str, _: Ctx<'_, Self>) -> Result<Self::Res, ()> {
+        async fn call(
+            &self,
+            req: &'static str,
+            _: Ctx<'_, Self, ()>,
+        ) -> Result<Self::Res, ()> {
             Ok((req, "srv2"))
         }
 

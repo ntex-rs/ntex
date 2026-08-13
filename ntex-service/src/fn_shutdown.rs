@@ -4,19 +4,19 @@ use crate::{Ctx, Service, ServiceFactory};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
-pub fn fn_shutdown<F, Err, Cfg>(f: F) -> FnShutdown<F, Err, Cfg>
+pub fn fn_shutdown<St, F, Req, Err, Cfg>(f: F) -> FnShutdown<St, F, Req, Err, Cfg>
 where
     F: AsyncFnOnce(),
 {
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<F, Err, Cfg = ()> {
+pub struct FnShutdown<St, F, Req, Err, Cfg> {
     f_shutdown: Cell<Option<F>>,
-    _t: PhantomData<(Err, Cfg)>,
+    _t: PhantomData<(St, Req, Err, Cfg)>,
 }
 
-impl<F, Err, Cfg> FnShutdown<F, Err, Cfg> {
+impl<St, F, Req, Err, Cfg> FnShutdown<St, F, Req, Err, Cfg> {
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
@@ -25,7 +25,7 @@ impl<F, Err, Cfg> FnShutdown<F, Err, Cfg> {
     }
 }
 
-impl<F, Err, Cfg> Clone for FnShutdown<F, Err, Cfg>
+impl<St, F, Req, Err, Cfg> Clone for FnShutdown<St, F, Req, Err, Cfg>
 where
     F: Clone,
 {
@@ -40,7 +40,7 @@ where
     }
 }
 
-impl<F, Err, Cfg> fmt::Debug for FnShutdown<F, Err, Cfg> {
+impl<St, F, Req, Err, Cfg> fmt::Debug for FnShutdown<St, F, Req, Err, Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnShutdown")
             .field("fn", &std::any::type_name::<F>())
@@ -48,13 +48,13 @@ impl<F, Err, Cfg> fmt::Debug for FnShutdown<F, Err, Cfg> {
     }
 }
 
-impl<F, St, Req, Err, Cfg> ServiceFactory<St, Req> for FnShutdown<F, Err, Cfg>
+impl<St, F, Req, Err, Cfg> ServiceFactory<St, Req> for FnShutdown<St, F, Req, Err, Cfg>
 where
     F: AsyncFnOnce() + Clone,
 {
     type Res = Req;
     type Error = Err;
-    type Service = FnShutdown<F, Err>;
+    type Service = FnShutdown<St, F, Req, Err, Cfg>;
     type InitCfg = Cfg;
     type InitError = ();
 
@@ -72,7 +72,7 @@ where
     }
 }
 
-impl<F, St, Req, Err, Cfg> Service<St, Req> for FnShutdown<F, Err, Cfg>
+impl<St, F, Req, Err, Cfg> Service<St, Req> for FnShutdown<St, F, Req, Err, Cfg>
 where
     F: AsyncFnOnce(),
 {
@@ -109,7 +109,7 @@ mod tests {
             is_called2.set(true);
         });
 
-        let pipe = chain_factory(srv)
+        let pipe = chain_factory::<(), _, _>(srv)
             .and_then(on_shutdown)
             .clone()
             .pipeline(&())
@@ -121,7 +121,7 @@ mod tests {
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "pipe");
         assert!(!pipe.is_shutdown());
-        pipe.shutdown().await;
+        pipe.shutdown::<(), _>().await;
         assert!(is_called.get());
         assert!(!pipe.is_shutdown());
 
@@ -138,7 +138,7 @@ mod tests {
     async fn test_fn_shutdown_panic() {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
-        let on_shutdown = fn_shutdown::<(), (), _, (), _>(async move || {
+        let on_shutdown = fn_shutdown::<(), _, (), (), ()>(async move || {
             is_called2.set(true);
         });
 

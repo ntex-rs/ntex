@@ -165,48 +165,52 @@ mod tests {
 
     #[derive(Copy, Clone, Debug, PartialEq)]
     struct Svc1;
-    impl Service<()> for Svc1 {
-        type Response = &'static str;
+    impl Service<(), ()> for Svc1 {
+        type Res = &'static str;
         type Error = ();
 
-        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<&'static str, ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self, ()>) -> Result<&'static str, ()> {
             Ok("svc1")
         }
     }
 
     #[derive(Clone)]
     struct Svc1Factory;
-    impl ServiceFactory<(), &'static str> for Svc1Factory {
-        type Response = &'static str;
+    impl ServiceFactory<(), ()> for Svc1Factory {
+        type Res = &'static str;
         type Error = ();
-        type InitError = ();
-        type Service = Svc1;
 
-        async fn create(&self, _: &'static str) -> Result<Self::Service, Self::InitError> {
+        type Service = Svc1;
+        type InitCfg = &'static str;
+        type InitError = ();
+
+        async fn create(&self, _: &&'static str) -> Result<Self::Service, Self::InitError> {
             Ok(Svc1)
         }
     }
 
     #[derive(Copy, Clone, Debug, PartialEq)]
     struct Svc2;
-    impl Service<()> for Svc2 {
-        type Response = &'static str;
+    impl Service<(), ()> for Svc2 {
+        type Res = &'static str;
         type Error = ();
 
-        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<&'static str, ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self, ()>) -> Result<&'static str, ()> {
             Ok("svc2")
         }
     }
 
     #[derive(Clone)]
     struct Svc2Factory;
-    impl ServiceFactory<(), &'static str> for Svc2Factory {
-        type Response = &'static str;
+    impl ServiceFactory<(), ()> for Svc2Factory {
+        type Res = &'static str;
         type Error = ();
+
+        type InitCfg = &'static str;
         type InitError = ();
         type Service = Svc2;
 
-        async fn create(&self, _: &'static str) -> Result<Self::Service, Self::InitError> {
+        async fn create(&self, _: &&'static str) -> Result<Self::Service, Self::InitError> {
             Ok(Svc2)
         }
     }
@@ -217,13 +221,13 @@ mod tests {
     #[ntex::test]
     async fn test_success() {
         let svc = Pipeline::new(Either::left(Svc1).clone());
-        assert_eq!(svc.call(()).await, Ok("svc1"));
-        assert_eq!(svc.ready().await, Ok(()));
+        assert_eq!(svc.call((), &()).await, Ok("svc1"));
+        assert_eq!(svc.ready(&()).await, Ok(()));
         svc.shutdown().await;
 
         let svc = Pipeline::new(Either::right(Svc2).clone());
-        assert_eq!(svc.call(()).await, Ok("svc2"));
-        assert_eq!(svc.ready().await, Ok(()));
+        assert_eq!(svc.call((), &()).await, Ok("svc2"));
+        assert_eq!(svc.ready(&()).await, Ok(()));
         svc.shutdown().await;
 
         assert!(format!("{svc:?}").contains("EitherService"));
@@ -236,10 +240,10 @@ mod tests {
                 .clone();
         assert!(format!("{factory:?}").contains("EitherServiceFactory"));
 
-        let svc = factory.pipeline("svc1").await.unwrap();
-        assert_eq!(svc.call(()).await, Ok("svc1"));
+        let svc = factory.pipeline(&"svc1").await.unwrap();
+        assert_eq!(svc.call((), &()).await, Ok("svc1"));
 
-        let svc = factory.pipeline("other").await.unwrap();
-        assert_eq!(svc.call(()).await, Ok("svc2"));
+        let svc = factory.pipeline(&"other").await.unwrap();
+        assert_eq!(svc.call((), &()).await, Ok("svc2"));
     }
 }

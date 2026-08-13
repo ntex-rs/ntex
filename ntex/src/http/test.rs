@@ -484,7 +484,7 @@ impl TestServer {
         path: &str,
     ) -> Result<
         WsConnection<crate::io::Layer<crate::connect::openssl::SslFilter>>,
-        WsClientError,
+        Error<WsClientError>,
     > {
         use tls_openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 

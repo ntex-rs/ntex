@@ -55,16 +55,20 @@ mod openssl {
 
     use super::*;
 
-    impl<F, S, B, C> H2Service<Layer<SslFilter, F>, S, B, C>
+    impl<F, Sf, B, C> H2Service<Layer<SslFilter, F>, Sf, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request, SharedCfg> + 'static,
-        S::Error: ResponseError,
-        S::InitError: fmt::Debug,
-        S::Response: Into<Response<B>>,
+        Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+        Sf::Error: ResponseError,
+        Sf::InitError: fmt::Debug,
+        Sf::Res: Into<Response<B>>,
         B: MessageBody,
-        C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
-            + 'static,
+        C: ServiceFactory<
+                (),
+                h2::Control<H2Error>,
+                InitCfg = SharedCfg,
+                Res = h2::ControlAck,
+            > + 'static,
         C::Error: StdError,
         C::InitError: fmt::Debug,
     {
@@ -73,10 +77,11 @@ mod openssl {
             self,
             acceptor: ssl::SslAcceptor,
         ) -> impl ServiceFactory<
+            (),
             Io<F>,
-            SharedCfg,
-            Response = (),
+            Res = (),
             Error = SslError<DispatchError>,
+            InitCfg = SharedCfg,
             InitError = (),
         > {
             SslAcceptor::new(acceptor)
@@ -96,16 +101,20 @@ mod rustls {
     use super::*;
     use crate::{io::Layer, server::SslError};
 
-    impl<F, S, B, C> H2Service<Layer<TlsServerFilter, F>, S, B, C>
+    impl<F, Sf, B, C> H2Service<Layer<TlsServerFilter, F>, Sf, B, C>
     where
         F: Filter,
-        S: ServiceFactory<Request, SharedCfg> + 'static,
-        S::Error: ResponseError,
-        S::InitError: fmt::Debug,
-        S::Response: Into<Response<B>>,
+        Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+        Sf::Res: Into<Response<B>>,
+        Sf::Error: ResponseError,
+        Sf::InitError: fmt::Debug,
         B: MessageBody,
-        C: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
-            + 'static,
+        C: ServiceFactory<
+                (),
+                h2::Control<H2Error>,
+                InitCfg = SharedCfg,
+                Res = h2::ControlAck,
+            > + 'static,
         C::Error: StdError,
         C::InitError: fmt::Debug,
     {
@@ -114,10 +123,11 @@ mod rustls {
             self,
             mut config: ServerConfig,
         ) -> impl ServiceFactory<
+            (),
             Io<F>,
-            SharedCfg,
-            Response = (),
+            Res = (),
             Error = SslError<DispatchError>,
+            InitCfg = SharedCfg,
             InitError = (),
         > {
             let protos = vec!["h2".to_string().into()];

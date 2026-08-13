@@ -75,13 +75,11 @@ pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
 ///
 /// struct MyService;
 ///
-/// impl Service for MyService {
-///     type St = ();
-///     type Req = u8;
+/// impl Service<(), u8> for MyService {
 ///     type Res = u64;
 ///     type Error = Infallible;
 ///
-///     async fn call(&self, req: u8, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+///     async fn call(&self, req: u8, ctx: Ctx<'_, Self, ()>) -> Result<Self::Res, Self::Error> {
 ///         Ok(req as u64)
 ///     }
 /// }
