@@ -1,7 +1,7 @@
 use std::{fmt, marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
+use ntex_service::{Service, Ctx, ReadyCtx, ServiceFactory, boxed, cfg::SharedCfg};
 use ntex_util::future::BoxFuture;
 
 use super::{Config, Token, socket::Stream};
@@ -174,11 +174,11 @@ where
     type Res = ();
     type Error = ();
 
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), ()> {
         ctx.ready(&self.inner).await.map_err(|_| ())
     }
 
-    async fn call(&self, req: Io, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
+    async fn call(&self, req: Io, ctx: Ctx<'_, Self>) -> Result<(), ()> {
         ctx.call(&self.inner, req).await.map(|_| ()).map_err(|_| ())
     }
 

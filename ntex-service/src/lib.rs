@@ -32,7 +32,7 @@ mod util;
 
 pub use self::apply::{apply_fn, apply_fn_factory};
 pub use self::chain::{chain, chain_factory};
-pub use self::ctx::ServiceCtx;
+pub use self::ctx::{Ctx, ReadyCtx};
 pub use self::fn_service::{fn_factory, fn_factory_with_config, fn_service};
 pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
@@ -73,7 +73,7 @@ pub use self::st::{FromSt, FromStResult};
 /// ```rust
 /// # use std::convert::Infallible;
 /// #
-/// # use ntex_service::{Service, ServiceCtx};
+/// # use ntex_service::{Service, Ctx};
 ///
 /// struct MyService;
 ///
@@ -83,7 +83,7 @@ pub use self::st::{FromSt, FromStResult};
 ///     type Res = u64;
 ///     type Error = Infallible;
 ///
-///     async fn call(&self, req: u8, ctx: ServiceCtx<'_, Self>) -> Result<Self::Res, Self::Error> {
+///     async fn call(&self, req: u8, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
 ///         Ok(req as u64)
 ///     }
 /// }
@@ -98,10 +98,7 @@ pub use self::st::{FromSt, FromStResult};
 ///
 /// Service cannot be called directly, it must be wrapped to an instance of [`Pipeline`] or
 /// by using `ctx` argument of the call method in case of chanined services.
-pub trait Service {
-    /// Shared state
-    type St;
-
+pub trait Service<St> {
     /// Request accepted by the service.
     type Req;
 
@@ -120,7 +117,7 @@ pub trait Service {
     async fn call(
         &self,
         req: Self::Req,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error>;
 
     #[inline]
@@ -132,7 +129,7 @@ pub trait Service {
     ///
     /// **Note:** Pipeline readiness is maintained across all services in the pipeline.
     /// The pipeline can process requests only if every service in the pipeline is ready.
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -203,7 +200,7 @@ pub trait ServiceFactory<St, Req> {
     type Error;
 
     /// The type of `Service` produced by this factory.
-    type Service: Service<St = St, Req = Req, Res = Self::Res, Error = Self::Error>;
+    type Service: Service<St, Req = Req, Res = Self::Res, Error = Self::Error>;
 
     /// Configuration type for the service factory.
     type InitCfg;
@@ -297,7 +294,7 @@ where
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
     }
 
@@ -312,11 +309,7 @@ where
     }
 
     #[inline]
-    async fn call(
-        &self,
-        req: S::Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
         ctx.call_nowait(&**self, req).await
     }
 }
@@ -331,7 +324,7 @@ where
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
     }
 
@@ -341,12 +334,8 @@ where
     }
 
     #[inline]
-    async fn call(
-        &self,
-        request: Self::Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
-        ctx.call_nowait(&**self, request).await
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+        ctx.call_nowait(&**self, req).await
     }
 
     #[inline]

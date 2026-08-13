@@ -1,7 +1,7 @@
 //! Service that limits number of in-flight async requests to 1.
 use std::{cell::Cell, future::poll_fn, task::Poll};
 
-use ntex_service::{Middleware, Service, ServiceCtx};
+use ntex_service::{Ctx, Middleware, ReadyCtx, Service};
 
 use crate::task::LocalWaker;
 
@@ -52,7 +52,7 @@ where
     type Error = T::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         if !self.ready.get() {
             poll_fn(|cx| {
                 self.waker.register(cx.waker());
@@ -68,11 +68,7 @@ where
     }
 
     #[inline]
-    async fn call(
-        &self,
-        req: T::Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<T::Res, T::Error> {
+    async fn call(&self, req: T::Req, ctx: Ctx<'_, Self>) -> Result<T::Res, T::Error> {
         self.ready.set(false);
 
         let result = ctx.call(&self.service, req).await;
@@ -99,7 +95,7 @@ mod tests {
         type Response = ();
         type Error = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             let _ = self.0.recv().await;
             Ok::<_, ()>(())
         }

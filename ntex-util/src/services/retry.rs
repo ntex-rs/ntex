@@ -1,7 +1,7 @@
 #![allow(async_fn_in_trait)]
 use std::future::{Future, ready};
 
-use ntex_service::{Middleware, Service, ServiceCtx};
+use ntex_service::{Ctx, Middleware, Service};
 
 /// Trait defines retry policy
 pub trait Policy<S: Service>: Sized + Clone {
@@ -66,11 +66,7 @@ where
     ntex_service::forward_ready!(service);
     ntex_service::forward_shutdown!(service);
 
-    async fn call(
-        &self,
-        mut req: S::Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<S::Res, S::Error> {
+    async fn call(&self, mut req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
         let mut policy = self.policy.clone();
         let mut cloned = policy.clone_request(&req);
 
@@ -154,7 +150,7 @@ mod tests {
         type Response = ();
         type Error = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             let cnt = self.0.get();
             if cnt == 0 {
                 Ok(())

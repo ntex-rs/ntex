@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 use std::{fmt, future::Future, pin::Pin, task::Context};
 
-use crate::ctx::{ServiceCtx, WaitersRef};
+use crate::ctx::{Ctx, ReadyCtx, WaitersRef};
 
 type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 pub struct BoxService<St, Req, Res, Err>(
@@ -55,7 +55,7 @@ trait ServiceObj {
         &'a self,
         idx: u32,
         waiters: &'a WaitersRef,
-        st: &'a Self::St,
+        st: Option<&'a Self::St>,
     ) -> BoxFuture<'a, (), Self::Error>;
 
     fn call<'a>(
@@ -85,11 +85,9 @@ where
         &'a self,
         idx: u32,
         waiters: &'a WaitersRef,
-        st: &'a S::St,
+        st: Option<&'a S::St>,
     ) -> BoxFuture<'a, (), Self::Error> {
-        Box::pin(
-            async move { ServiceCtx::<'a, S>::new(idx, waiters, st).ready(self).await },
-        )
+        Box::pin(async move { ReadyCtx::<'a, S>::new(idx, waiters, st).ready(self).await })
     }
 
     #[inline]
@@ -106,7 +104,7 @@ where
         st: &'a S::St,
     ) -> BoxFuture<'a, Self::Res, Self::Error> {
         Box::pin(async move {
-            ServiceCtx::<'a, S>::new(idx, waiters, st)
+            Ctx::<'a, S>::new(idx, waiters, st)
                 .call_nowait(self, req)
                 .await
         })
@@ -167,9 +165,9 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
-        let (idx, waiters, _) = ctx.inner();
-        self.0.ready(idx, waiters, ctx.st()).await
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        let (idx, waiters, st) = ctx.inner();
+        self.0.ready(idx, waiters, st).await
     }
 
     #[inline]
@@ -178,7 +176,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: ServiceCtx<'_, Self>) -> Result<Res, Err> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self>) -> Result<Res, Err> {
         let (idx, waiters, st) = ctx.inner();
         self.0.call(req, idx, waiters, st).await
     }

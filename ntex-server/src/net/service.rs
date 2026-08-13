@@ -1,7 +1,7 @@
 use std::{fmt, sync::Arc, task::Context};
 
 use ntex_io::Io;
-use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
+use ntex_service::{Service, Ctx, ReadyCtx, ServiceFactory, boxed, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter};
 
 use crate::ServerConfiguration;
@@ -172,7 +172,7 @@ impl Service for StreamServiceImpl {
     type Res = ();
     type Error = ();
 
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }
@@ -207,7 +207,7 @@ impl Service for StreamServiceImpl {
         );
     }
 
-    async fn call(&self, con: Connection, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
+    async fn call(&self, con: Connection, ctx: Ctx<'_, Self>) -> Result<(), ()> {
         if let Some((idx, name, cfg)) = self.tokens.get(&con.token) {
             let mut io = con.io;
             if let Some(ref f) = self.on_accept {

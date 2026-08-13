@@ -1,4 +1,4 @@
-use super::{Service, ServiceCtx, ServiceFactory, util};
+use super::{Ctx, ReadyCtx, Service, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
 /// Service for the `then` combinator, chaining a computation onto the end of
@@ -28,7 +28,7 @@ where
     type Error = B::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
@@ -47,7 +47,7 @@ where
     async fn call(
         &self,
         req: A::Req,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
     }
@@ -99,7 +99,7 @@ mod tests {
     use ntex::util::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
 
-    use crate::{Service, ServiceCtx, chain, chain_factory, fn_factory};
+    use crate::{Ctx, Service, chain, chain_factory, fn_factory};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
@@ -110,7 +110,7 @@ mod tests {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -123,7 +123,7 @@ mod tests {
         async fn call(
             &self,
             req: Result<&'static str, &'static str>,
-            _: ServiceCtx<'_, Self>,
+            _: Ctx<'_, Self>,
         ) -> Result<&'static str, ()> {
             match req {
                 Ok(msg) => Ok(msg),
@@ -145,7 +145,7 @@ mod tests {
         type Res = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -158,7 +158,7 @@ mod tests {
         async fn call(
             &self,
             req: Result<&'static str, ()>,
-            _: ServiceCtx<'_, Self>,
+            _: Ctx<'_, Self>,
         ) -> Result<Self::Res, ()> {
             match req {
                 Ok(msg) => Ok((msg, "ok")),

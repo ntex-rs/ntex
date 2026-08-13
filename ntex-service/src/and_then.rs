@@ -1,4 +1,4 @@
-use super::{Service, ServiceCtx, ServiceFactory, util};
+use super::{Ctx, ReadyCtx, Service, ServiceFactory, util};
 
 #[derive(Clone, Debug)]
 /// Service for the `and_then` combinator, chaining a computation onto the end
@@ -17,18 +17,23 @@ impl<A, B> AndThen<A, B> {
     }
 }
 
-impl<A, B> Service for AndThen<A, B>
+impl<A, B, St> Service<St> for AndThen<A, B>
 where
-    A: Service,
-    B: Service<Req = A::Res, St = A::St, Error = A::Error>,
+    A: Service<St>,
+    B: Service<St, Req = A::Res, Error = A::Error>,
 {
-    type St = A::St;
     type Req = A::Req;
     type Res = B::Res;
     type Error = A::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, A::Error> {
+        let result = ctx.call(&self.svc1, req).await?;
+        ctx.call(&self.svc2, result).await
+    }
+
+    #[inline]
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
@@ -41,16 +46,6 @@ where
     #[inline]
     async fn shutdown(&self) {
         util::shutdown(&self.svc1, &self.svc2).await;
-    }
-
-    #[inline]
-    async fn call(
-        &self,
-        req: A::Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<B::Res, A::Error> {
-        let result = ctx.call(&self.svc1, req).await?;
-        ctx.call(&self.svc2, result).await
     }
 }
 
@@ -101,7 +96,7 @@ mod tests {
     use ntex::util::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
 
-    use crate::{Service, ServiceCtx, chain, chain_factory, fn_factory};
+    use crate::{Ctx, Service, chain, chain_factory, fn_factory};
 
     #[derive(Debug, Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
@@ -112,7 +107,7 @@ mod tests {
         type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -122,11 +117,7 @@ mod tests {
             Ok(())
         }
 
-        async fn call(
-            &self,
-            req: &'static str,
-            _: ServiceCtx<'_, Self>,
-        ) -> Result<Self::Res, ()> {
+        async fn call(&self, req: &'static str, _: Ctx<'_, Self>) -> Result<Self::Res, ()> {
             Ok(req)
         }
 
@@ -144,7 +135,7 @@ mod tests {
         type Res = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -154,11 +145,7 @@ mod tests {
             Ok(())
         }
 
-        async fn call(
-            &self,
-            req: &'static str,
-            _: ServiceCtx<'_, Self>,
-        ) -> Result<Self::Res, ()> {
+        async fn call(&self, req: &'static str, _: Ctx<'_, Self>) -> Result<Self::Res, ()> {
             Ok((req, "srv2"))
         }
 

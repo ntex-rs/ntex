@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::{cell::Cell, convert::Infallible, fmt, marker, task::Context, task::Poll, time};
 
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
 
 use crate::future::Ready;
 use crate::time::{Millis, Sleep, now, sleep};
@@ -120,7 +120,7 @@ where
 
     fn ready(
         &self,
-        _: ServiceCtx<'_, Self>,
+        _: ReadyCtx<'_, Self>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
         let expire = self.expire.get() + time::Duration::from(self.dur);
         if expire <= now() {
@@ -150,7 +150,7 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R, _: ServiceCtx<'_, Self>) -> impl Future<Output = Result<R, E>> {
+    fn call(&self, req: R, _: Ctx<'_, Self>) -> impl Future<Output = Result<R, E>> {
         self.expire.set(now());
         Ready::Ok(req)
     }

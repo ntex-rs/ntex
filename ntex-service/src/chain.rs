@@ -3,7 +3,7 @@ use std::{fmt, marker::PhantomData};
 
 use crate::and_then::{AndThen, AndThenFactory};
 use crate::apply::{Apply, ApplyCtx, ApplyFactory};
-use crate::ctx::ServiceCtx;
+use crate::ctx::Ctx;
 use crate::inspect::{Inspect, InspectErr, InspectErrFactory, InspectFactory};
 use crate::map::{Map, MapFactory};
 use crate::map_err::{MapErr, MapErrFactory};
@@ -187,7 +187,7 @@ impl<Svc: Service> Service for ServiceChain<Svc> {
     async fn call(
         &self,
         req: Svc::Req,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         ctx.call(&self.service, req).await
     }

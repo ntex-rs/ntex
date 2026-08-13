@@ -28,7 +28,7 @@ where
 /// For example, timeout middleware:
 ///
 /// ```rust
-/// use ntex_service::{Service, ServiceCtx};
+/// use ntex_service::{Service, Ctx};
 /// use ntex::{time::sleep, util::Either, util::select};
 ///
 /// pub struct Timeout<S> {
@@ -50,11 +50,11 @@ where
 ///     type Res = S::Res;
 ///     type Error = TimeoutError<S::Error>;
 ///
-///     async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+///     async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
 ///         ctx.ready(&self.service).await.map_err(TimeoutError::Service)
 ///     }
 ///
-///     async fn call(&self, req: S::Req, ctx: ServiceCtx<'_, Self>) -> Result<Self::Res, Self::Error> {
+///     async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
 ///         match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
 ///             Either::Left(_) => Err(TimeoutError::Timeout),
 ///             Either::Right(res) => res.map_err(TimeoutError::Service),
@@ -268,7 +268,7 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::*;
-    use crate::{Pipeline, ServiceCtx, fn_service};
+    use crate::{Ctx, Pipeline, fn_service};
 
     #[derive(Debug, Clone)]
     struct Mw(Rc<Cell<usize>>);
@@ -291,15 +291,11 @@ mod tests {
         type Res = S::Res;
         type Error = S::Error;
 
-        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             ctx.ready(&self.0).await
         }
 
-        async fn call(
-            &self,
-            req: S::Req,
-            ctx: ServiceCtx<'_, Self>,
-        ) -> Result<S::Res, S::Error> {
+        async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
             ctx.call(&self.0, req).await
         }
 

@@ -3,7 +3,7 @@ use std::{fmt, marker};
 
 use crate::ctx::WaitersRef;
 use crate::dev::{ServiceChain, ServiceChainFactory};
-use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
+use crate::{Ctx, IntoService, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
 
 /// Apply transform function to a service.
 pub fn apply_fn<T, F, In, Out, Err, U>(
@@ -48,10 +48,9 @@ impl<S: Service> ApplyCtx<'_, S> {
     where
         S: Service,
     {
-        let ctx = ServiceCtx::new(self.idx, self.waiters, self.st);
-
-        self.service.ready(ctx).await?;
-        self.service.call(req, ctx).await
+        Ctx::<S>::new(self.idx, self.waiters, self.st)
+            .call(&self.service, req)
+            .await
     }
 }
 
@@ -115,16 +114,12 @@ where
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Err> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Err> {
         ctx.ready(&self.service).await.map_err(From::from)
     }
 
     #[inline]
-    async fn call(
-        &self,
-        req: In,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: In, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
         let (idx, waiters, st) = ctx.inner();
 
         let ctx = ApplyCtx {
@@ -238,7 +233,7 @@ mod tests {
         type Res = ();
         type Error = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             Ok(())
         }
 

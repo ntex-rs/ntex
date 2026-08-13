@@ -2,7 +2,7 @@
 #![allow(non_snake_case)]
 use std::{fmt, marker::PhantomData, task::Poll};
 
-use ntex_service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
 
 /// Construct `Variant` service factory.
 ///
@@ -126,7 +126,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         type Res = V1::Res;
         type Error = V1::Error;
 
-        async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             use std::{future::Future, pin::Pin};
 
             let mut fut1 = ::std::pin::pin!(ctx.ready(&self.V1));
@@ -162,7 +162,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             $(self.$T.shutdown().await;)+
         }
 
-        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: ServiceCtx<'_, Self>) -> Result<Self::Res, Self::Error> {
+        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
             match req {
                 $enum_type::V1(req) => ctx.call(&self.V1, req).await,
                 $($enum_type::$T(req) => ctx.call(&self.$T, req).await,)+
@@ -260,13 +260,13 @@ mod tests {
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _c: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _r: (), _c: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
             Ok(1)
         }
     }
@@ -278,13 +278,13 @@ mod tests {
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _c: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
             Ok(2)
         }
     }
@@ -320,7 +320,7 @@ mod tests {
         impl Service<()> for Srv5 {
             type Res = usize;
             type Error = ();
-            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
@@ -328,7 +328,7 @@ mod tests {
                 Ok(())
             }
             async fn shutdown(&self) {}
-            async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<usize, ()> {
+            async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
                 Ok(2)
             }
         }

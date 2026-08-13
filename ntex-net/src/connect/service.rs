@@ -3,7 +3,7 @@ use std::{collections::VecDeque, future::Future, io, marker, net::SocketAddr};
 use ntex_error::Error;
 use ntex_io::{Io, IoConfig, types};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Ctx, Service, ServiceFactory};
 use ntex_util::{future::Either, future::Ready, time::timeout_checked};
 
 use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
@@ -114,7 +114,7 @@ impl<T: Address, St> Service for ConnectorService<T, St> {
     async fn call(
         &self,
         req: Connect<T>,
-        _: ServiceCtx<'_, Self>,
+        _: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         self.connect(req).await
     }

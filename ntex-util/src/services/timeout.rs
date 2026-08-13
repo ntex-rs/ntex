@@ -4,7 +4,7 @@
 //! will be aborted.
 use std::{fmt, marker};
 
-use ntex_service::{Middleware, Service, ServiceCtx};
+use ntex_service::{Ctx, Middleware, Service};
 
 use crate::future::{Either, select};
 use crate::time::{Millis, sleep};
@@ -128,7 +128,7 @@ where
     async fn call(
         &self,
         req: S::Req,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         if self.timeout.is_zero() {
             ctx.call(&self.service, req)
@@ -173,7 +173,7 @@ mod tests {
         type Res = ();
         type Err = SrvError;
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), SrvError> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), SrvError> {
             crate::time::sleep(self.0).await;
             Ok::<_, SrvError>(())
         }

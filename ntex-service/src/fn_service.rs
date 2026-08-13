@@ -1,6 +1,6 @@
 use std::{fmt, future::Future, future::ready, marker::PhantomData};
 
-use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
+use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 
 #[inline]
 /// Create `ServiceFactory` for function
@@ -133,7 +133,7 @@ where
     type Error = Err;
 
     #[inline]
-    async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Res, Err> {
         (self.f)(req).await
     }
 }
@@ -202,7 +202,7 @@ where
     type Error = Err;
 
     #[inline]
-    async fn call(&self, req: Req, _: ServiceCtx<'_, Self>) -> Result<Res, Err> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Res, Err> {
         (self.f)(req).await
     }
 }

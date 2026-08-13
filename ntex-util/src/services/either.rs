@@ -1,7 +1,7 @@
 //! Either service allows to use different services for handling request
 use std::{fmt, task::Context};
 
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
 
 use crate::future::Either;
 
@@ -123,7 +123,7 @@ where
     type Error = SLeft::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.ready(svc).await,
             Either::Right(ref svc) => ctx.ready(svc).await,
@@ -142,7 +142,7 @@ where
     async fn call(
         &self,
         req: Self::Req,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<Self::Res, Self::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.call(svc, req).await,
@@ -172,7 +172,7 @@ mod tests {
         type Response = &'static str;
         type Error = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<&'static str, ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<&'static str, ()> {
             Ok("svc1")
         }
     }
@@ -196,7 +196,7 @@ mod tests {
         type Response = &'static str;
         type Error = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<&'static str, ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<&'static str, ()> {
             Ok("svc2")
         }
     }

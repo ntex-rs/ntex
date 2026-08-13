@@ -1,6 +1,6 @@
 use std::{cell::Cell, fmt, future::Future, future::ready, marker::PhantomData};
 
-use crate::{Service, ServiceCtx, ServiceFactory};
+use crate::{Ctx, Service, ServiceFactory};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
@@ -92,11 +92,7 @@ where
     }
 
     #[inline]
-    fn call(
-        &self,
-        req: Req,
-        _: ServiceCtx<'_, Self>,
-    ) -> impl Future<Output = Result<Req, Err>> {
+    fn call(&self, req: Req, _: Ctx<'_, Self>) -> impl Future<Output = Result<Req, Err>> {
         ready(Ok(req))
     }
 }
