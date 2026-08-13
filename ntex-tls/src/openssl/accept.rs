@@ -3,7 +3,7 @@ use std::{cell::RefCell, error::Error, fmt, io, marker::PhantomData};
 use ntex_bytes::BytePages;
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory};
 use ntex_util::{services::Counter, time};
 use tls_openssl::ssl;
 
@@ -39,7 +39,7 @@ impl From<ssl::SslAcceptor> for SslAcceptor {
 impl<F: Filter, St> ServiceFactory<St, Io<F>> for SslAcceptor {
     type Res = Io<Layer<SslFilter, F>>;
     type Error = Box<dyn Error>;
-    type Service = SslAcceptorService<St, F>;
+    type Service = SslAcceptorService<F>;
     type InitCfg = SharedCfg;
     type InitError = ();
 
@@ -59,20 +59,19 @@ impl<F: Filter, St> ServiceFactory<St, Io<F>> for SslAcceptor {
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type
-pub struct SslAcceptorService<St, F> {
+pub struct SslAcceptorService<F> {
     acceptor: ssl::SslAcceptor,
     cfg: Cfg<TlsConfig>,
     conns: Counter,
-    _t: PhantomData<(St, F)>,
+    _t: PhantomData<F>,
 }
 
-impl<St, F: Filter> Service for SslAcceptorService<St, F> {
-    type St = St;
+impl<St, F: Filter> Service<St> for SslAcceptorService<F> {
     type Req = Io<F>;
     type Res = Io<Layer<SslFilter, F>>;
     type Error = Box<dyn Error>;
 
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }
@@ -82,7 +81,7 @@ impl<St, F: Filter> Service for SslAcceptorService<St, F> {
     async fn call(
         &self,
         io: Io<F>,
-        _: ServiceCtx<'_, Self>,
+        _: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         let _guard = self.conns.get();
         let ctx_result = ssl::Ssl::new(self.acceptor.context());
@@ -122,7 +121,7 @@ impl<St, F: Filter> Service for SslAcceptorService<St, F> {
     }
 }
 
-impl<St, F> fmt::Debug for SslAcceptorService<St, F> {
+impl<F> fmt::Debug for SslAcceptorService<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SslAcceptorService")
             .field("cfg", &self.cfg)

@@ -116,17 +116,16 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1, $($T,)+ V1R, $($R,)+> Service for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, V1, $($T,)+ V1R, $($R,)+> Service<St> for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
     where
-        V1: Service<St = St, Req = V1R>,
-        $($T: Service<St = St, Req = $R, Res = V1::Res, Error = V1::Error>),+
+        V1: Service<St, Req = V1R>,
+        $($T: Service<St, Req = $R, Res = V1::Res, Error = V1::Error>),+
     {
-        type St = St;
         type Req = $enum_type<V1R, $($R,)+>;
         type Res = V1::Res;
         type Error = V1::Error;
 
-        async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
             use std::{future::Future, pin::Pin};
 
             let mut fut1 = ::std::pin::pin!(ctx.ready(&self.V1));
@@ -162,7 +161,7 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
             $(self.$T.shutdown().await;)+
         }
 
-        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+        async fn call(&self, req: $enum_type<V1R, $($R,)+>, ctx: Ctx<'_, Self, St>) -> Result<Self::Res, Self::Error> {
             match req {
                 $enum_type::V1(req) => ctx.call(&self.V1, req).await,
                 $($enum_type::$T(req) => ctx.call(&self.$T, req).await,)+

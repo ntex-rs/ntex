@@ -108,7 +108,7 @@ pub trait Middleware<Svc, Cfg = ()> {
     where
         Fac: ServiceFactory<St, Req, Service = Svc, InitCfg = Cfg>,
         Self: Sized,
-        Self::Service: Service<St = St, Req = Req>,
+        Self::Service: Service<St, Req = Req>,
     {
         crate::chain_factory(ApplyMiddleware::new(self, factory))
     }
@@ -158,10 +158,10 @@ impl<M, Fac, St, Req> ServiceFactory<St, Req> for ApplyMiddleware<M, Fac>
 where
     Fac: ServiceFactory<St, Req>,
     M: Middleware<Fac::Service, Fac::InitCfg>,
-    M::Service: Service<St = St, Req = Req>,
+    M::Service: Service<St, Req = Req>,
 {
-    type Res = <M::Service as Service>::Res;
-    type Error = <M::Service as Service>::Error;
+    type Res = <M::Service as Service<St>>::Res;
+    type Error = <M::Service as Service<St>>::Error;
 
     type Service = M::Service;
     type InitCfg = Fac::InitCfg;
@@ -215,21 +215,21 @@ where
 
 #[doc(hidden)]
 /// Service factory that produces `middleware` from `Fn`.
-pub fn fn_layer<T, F, In, Out, Err>(f: F) -> FnMiddleware<T, F, In, Out, Err>
+pub fn fn_layer<T, St, F, In, Out, Err>(f: F) -> FnMiddleware<T, St, F, In, Out, Err>
 where
-    F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err> + Clone,
+    F: AsyncFn(In, &ApplyCtx<'_, T, St>) -> Result<Out, Err> + Clone,
 {
     FnMiddleware { f, r: PhantomData }
 }
 
 #[allow(clippy::type_complexity)]
 /// `FnMiddleware` service combinator
-pub struct FnMiddleware<T, F, In, Out, Err> {
+pub struct FnMiddleware<T, St, F, In, Out, Err> {
     f: F,
-    r: PhantomData<fn(T) -> (In, Out, Err)>,
+    r: PhantomData<fn(T) -> (St, In, Out, Err)>,
 }
 
-impl<T, F, In, Out, Err> Clone for FnMiddleware<T, F, In, Out, Err>
+impl<T, St, F, In, Out, Err> Clone for FnMiddleware<T, St, F, In, Out, Err>
 where
     F: Clone,
 {
@@ -241,7 +241,7 @@ where
     }
 }
 
-impl<T, F, In, Out, Err> fmt::Debug for FnMiddleware<T, F, In, Out, Err> {
+impl<T, St, F, In, Out, Err> fmt::Debug for FnMiddleware<T, St, F, In, Out, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnMiddleware")
             .field("layer", &std::any::type_name::<F>())
@@ -249,13 +249,13 @@ impl<T, F, In, Out, Err> fmt::Debug for FnMiddleware<T, F, In, Out, Err> {
     }
 }
 
-impl<T, C, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, F, In, Out, Err>
+impl<T, C, St, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, St, F, In, Out, Err>
 where
-    T: Service,
-    F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err> + Clone,
+    T: Service<St>,
+    F: AsyncFn(In, &ApplyCtx<'_, T, St>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
-    type Service = Apply<T, F, In, Out, Err>;
+    type Service = Apply<T, St, F, In, Out, Err>;
 
     fn create(&self, service: T, _: &C) -> Self::Service {
         Apply::new(service, self.f.clone())

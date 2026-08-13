@@ -4,18 +4,18 @@ use std::{cell, fmt, future::Future, marker, pin::Pin, ptr, rc::Rc};
 
 use crate::Service;
 
-pub struct Ctx<'a, S: Service + ?Sized, St: ?Sized> {
+pub struct Ctx<'a, Svc: ?Sized, St: ?Sized> {
     idx: u32,
     st: &'a St,
     waiters: &'a WaitersRef,
-    _t: marker::PhantomData<Rc<S>>,
+    _t: marker::PhantomData<Rc<Svc>>,
 }
 
-pub struct ReadyCtx<'a, S: Service + ?Sized, St: ?Sized> {
+pub struct ReadyCtx<'a, Svc: ?Sized, St: ?Sized> {
     idx: u32,
     st: Option<&'a St>,
     waiters: &'a WaitersRef,
-    _t: marker::PhantomData<Rc<S>>,
+    _t: marker::PhantomData<Rc<Svc>>,
 }
 
 #[derive(Debug)]
@@ -132,7 +132,7 @@ impl WaitersRef {
     }
 }
 
-impl<'a, S: Service, St> Ctx<'a, S, St> {
+impl<'a, Svc, St> Ctx<'a, Svc, St> {
     pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: &'a St) -> Self {
         Self {
             idx,
@@ -154,14 +154,14 @@ impl<'a, S: Service, St> Ctx<'a, S, St> {
 
     #[inline]
     /// Application state
-    pub fn st(&'a self) -> &'a S::St {
+    pub fn st(&'a self) -> &'a St {
         self.st
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<T>(&self, svc: &'a T) -> Result<(), T::Error>
+    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
     where
-        T: Service<St>,
+        S: Service<St>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -179,13 +179,13 @@ impl<'a, S: Service, St> Ctx<'a, S, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub(crate) async fn ready_with_st<T, St1>(
+    pub(crate) async fn ready_with_st<S, St1>(
         &self,
-        svc: &'a T,
+        svc: &'a S,
         st: &'a St1,
-    ) -> Result<(), T::Error>
+    ) -> Result<(), S::Error>
     where
-        T: Service<St1>,
+        S: Service<St1>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -204,9 +204,9 @@ impl<'a, S: Service, St> Ctx<'a, S, St> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub async fn call<T>(&self, svc: &'a T, req: T::Req) -> Result<T::Res, T::Error>
+    pub async fn call<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
     where
-        T: Service<St>,
+        S: Service<St>,
     {
         self.ready(svc).await?;
 
@@ -224,14 +224,14 @@ impl<'a, S: Service, St> Ctx<'a, S, St> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub(crate) async fn call_with_st<T, St1>(
+    pub(crate) async fn call_with_st<S, St1>(
         &self,
-        svc: &'a T,
-        req: T::Req,
+        svc: &'a S,
+        req: S::Req,
         st: &St1,
-    ) -> Result<T::Res, T::Error>
+    ) -> Result<S::Res, S::Error>
     where
-        T: Service<St1>,
+        S: Service<St1>,
     {
         self.ready_with_st(svc, st).await?;
 
@@ -249,9 +249,9 @@ impl<'a, S: Service, St> Ctx<'a, S, St> {
 
     #[inline]
     /// Call service, do not check service readiness
-    pub async fn call_nowait<T>(&self, svc: &'a T, req: T::Req) -> Result<T::Res, T::Error>
+    pub async fn call_nowait<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
     where
-        T: Service<St>,
+        S: Service<St>,
     {
         svc.call(
             req,
@@ -266,16 +266,16 @@ impl<'a, S: Service, St> Ctx<'a, S, St> {
     }
 }
 
-impl<S: Service, St> Copy for Ctx<'_, S, St> {}
+impl<Svc, St> Copy for Ctx<'_, Svc, St> {}
 
-impl<S: Service, St> Clone for Ctx<'_, S, Sta> {
+impl<Svc, St> Clone for Ctx<'_, Svc, St> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<S: Service, St> fmt::Debug for Ctx<'_, S, St> {
+impl<Svc, St> fmt::Debug for Ctx<'_, Svc, St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx")
             .field("idx", &self.idx)
@@ -284,7 +284,7 @@ impl<S: Service, St> fmt::Debug for Ctx<'_, S, St> {
     }
 }
 
-impl<'a, S: Service, St> ReadyCtx<'a, S, St> {
+impl<'a, Svc, St> ReadyCtx<'a, Svc, St> {
     pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: Option<&'a St>) -> Self {
         Self {
             idx,
@@ -311,9 +311,9 @@ impl<'a, S: Service, St> ReadyCtx<'a, S, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<T>(&self, svc: &'a T) -> Result<(), T::Error>
+    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
     where
-        T: Service<St>,
+        S: Service<St>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -331,13 +331,13 @@ impl<'a, S: Service, St> ReadyCtx<'a, S, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub(crate) async fn ready_with_st<T, St1>(
+    pub(crate) async fn ready_with_st<S, St1>(
         &self,
-        svc: &'a T,
+        svc: &'a S,
         st: &'a St1,
-    ) -> Result<(), T::Error>
+    ) -> Result<(), S::Error>
     where
-        T: Service<St1>,
+        S: Service<St1>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -355,16 +355,16 @@ impl<'a, S: Service, St> ReadyCtx<'a, S, St> {
     }
 }
 
-impl<S: Service, St> Copy for ReadyCtx<'_, S, St> {}
+impl<Svc, St> Copy for ReadyCtx<'_, Svc, St> {}
 
-impl<S: Service, St> Clone for ReadyCtx<'_, S, St> {
+impl<Svc, St> Clone for ReadyCtx<'_, Svc, St> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<S: Service, St> fmt::Debug for ReadyCtx<'_, S, St> {
+impl<Svc, St> fmt::Debug for ReadyCtx<'_, Svc, St> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReadyCtx")
             .field("idx", &self.idx)

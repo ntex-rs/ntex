@@ -26,7 +26,7 @@ mod map_err;
 mod map_init_err;
 mod middleware;
 mod pipeline;
-mod st;
+// mod st;
 mod then;
 mod util;
 
@@ -38,7 +38,7 @@ pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
-pub use self::st::{FromSt, FromStResult};
+// pub use self::st::{FromSt, FromStResult};
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.
@@ -156,7 +156,7 @@ pub trait Service<St> {
     ///
     /// This function consumes the original service and returns a wrapped version,
     /// following the pattern of standard library `map` methods.
-    fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Res>>
+    fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Res>, St>
     where
         Self: Sized,
         F: Fn(Self::Res) -> Res,
@@ -172,7 +172,7 @@ pub trait Service<St> {
     /// services have the same error type.
     ///
     /// This function consumes the original service and returns a wrapped version.
-    fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>>
+    fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>, St>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E,
@@ -284,17 +284,16 @@ pub trait ServiceFactory<St, Req> {
     }
 }
 
-impl<S> Service for &S
+impl<S, St> Service<St> for &S
 where
-    S: Service,
+    S: Service<St>,
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
     }
 
@@ -309,22 +308,21 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.call_nowait(&**self, req).await
     }
 }
 
-impl<S> Service for Box<S>
+impl<S, St> Service<St> for Box<S>
 where
-    S: Service,
+    S: Service<St>,
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), S::Error> {
         ctx.ready(&**self).await
     }
 
@@ -334,7 +332,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.call_nowait(&**self, req).await
     }
 
@@ -360,10 +358,7 @@ where
 }
 
 /// Trait for types that can be converted to a `Service`
-pub trait IntoService<Svc>
-where
-    Svc: Service,
-{
+pub trait IntoService<Svc> {
     /// Convert to a `Service`
     fn into_service(self) -> Svc;
 }
@@ -377,10 +372,7 @@ where
     fn into_factory(self) -> T;
 }
 
-impl<Svc> IntoService<Svc> for Svc
-where
-    Svc: Service,
-{
+impl<Svc> IntoService<Svc> for Svc {
     #[inline]
     fn into_service(self) -> Svc {
         self

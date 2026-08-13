@@ -105,17 +105,12 @@ impl<T: Address, St> ServiceFactory<St, Connect<T>> for Connector<T> {
     }
 }
 
-impl<T: Address, St> Service for ConnectorService<T, St> {
-    type St = St;
+impl<T: Address, St> Service<St> for ConnectorService<T, St> {
     type Req = Connect<T>;
     type Res = Io;
     type Error = Error<ConnectError>;
 
-    async fn call(
-        &self,
-        req: Connect<T>,
-        _: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: Connect<T>, _: Ctx<'_, Self, St>) -> Result<Io, Self::Error> {
         self.connect(req).await
     }
 }

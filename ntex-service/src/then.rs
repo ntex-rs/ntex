@@ -17,18 +17,22 @@ impl<A, B> Then<A, B> {
     }
 }
 
-impl<A, B> Service for Then<A, B>
+impl<A, B, St> Service<St> for Then<A, B>
 where
-    A: Service,
-    B: Service<Req = Result<A::Res, A::Error>, St = A::St, Error = A::Error>,
+    A: Service<St>,
+    B: Service<St, Req = Result<A::Res, A::Error>, Error = A::Error>,
 {
-    type St = A::St;
     type Req = A::Req;
     type Res = B::Res;
     type Error = B::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
+        ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
+    }
+
+    #[inline]
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
@@ -41,15 +45,6 @@ where
     #[inline]
     async fn shutdown(&self) {
         util::shutdown(&self.svc1, &self.svc2).await;
-    }
-
-    #[inline]
-    async fn call(
-        &self,
-        req: A::Req,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
-        ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
     }
 }
 

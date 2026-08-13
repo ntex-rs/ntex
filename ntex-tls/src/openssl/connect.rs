@@ -4,7 +4,7 @@ use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Ctx, Service, ServiceFactory};
 use ntex_util::time::timeout_checked;
 use tls_openssl::ssl::SslConnector as OpensslConnector;
 
@@ -18,7 +18,7 @@ pub struct SslConnector<S> {
 }
 
 #[derive(Clone, Debug)]
-pub struct SslConnectorService<S: Service<St = St>, St> {
+pub struct SslConnectorService<S> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     openssl: OpensslConnector,
@@ -46,7 +46,7 @@ where
 {
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
-    type Service = SslConnectorService<S::Service, St>;
+    type Service = SslConnectorService<S::Service>;
     type InitCfg = SharedCfg;
     type InitError = S::InitError;
 
@@ -61,13 +61,16 @@ where
     }
 }
 
-impl<S: Service<St = St>, St> SslConnectorService<S, St> {
+impl<S> SslConnectorService<S> {
     /// Establish a TLS connection on top of an existing I/O stream.
-    pub async fn connect<F: Filter>(
+    pub async fn connect<F: Filter, St>(
         &self,
         io: Io<F>,
         host: &str,
-    ) -> Result<Io<Layer<SslFilter, F>>, Error<ConnectError>> {
+    ) -> Result<Io<Layer<SslFilter, F>>, Error<ConnectError>>
+    where
+        S: Service<St>,
+    {
         let tag = io.tag();
         log::trace!("{tag}: SSL Handshake start for: {host:?} {io:?}");
 
@@ -103,23 +106,22 @@ impl<S: Service<St = St>, St> SslConnectorService<S, St> {
     }
 }
 
-impl<A: Address, S, St> Service for SslConnectorService<S, St>
+impl<A: Address, S, St> Service<St> for SslConnectorService<S>
 where
-    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type St = St;
     type Req = Connect<A>;
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
 
-    ntex_service::forward_ready!(svc);
+    ntex_service::forward_ready!(St, svc);
     ntex_service::forward_poll!(svc);
     ntex_service::forward_shutdown!(svc);
 
     async fn call(
         &self,
         message: Connect<A>,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         let host = message.host().split(':').next().unwrap().to_string();
         let io = ctx.call(&self.svc, message).await?;

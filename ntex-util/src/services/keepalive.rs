@@ -61,7 +61,7 @@ where
     type Res = R;
     type Error = E;
 
-    type Service = KeepAliveService<St, R, E, F>;
+    type Service = KeepAliveService<R, E, F>;
     type InitCfg = C;
     type InitError = Infallible;
 
@@ -74,15 +74,15 @@ where
     }
 }
 
-pub struct KeepAliveService<St, R, E, F> {
+pub struct KeepAliveService<R, E, F> {
     f: F,
     dur: Millis,
     sleep: Sleep,
     expire: Cell<time::Instant>,
-    _t: marker::PhantomData<(St, R, E)>,
+    _t: marker::PhantomData<(R, E)>,
 }
 
-impl<St, R, E, F> KeepAliveService<St, R, E, F>
+impl<R, E, F> KeepAliveService<R, E, F>
 where
     F: Fn() -> E,
 {
@@ -99,7 +99,7 @@ where
     }
 }
 
-impl<St, R, E, F> fmt::Debug for KeepAliveService<St, R, E, F> {
+impl<R, E, F> fmt::Debug for KeepAliveService<R, E, F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeepAliveService")
             .field("dur", &self.dur)
@@ -109,25 +109,17 @@ impl<St, R, E, F> fmt::Debug for KeepAliveService<St, R, E, F> {
     }
 }
 
-impl<St, R, E, F> Service for KeepAliveService<St, R, E, F>
+impl<St, R, E, F> Service<St> for KeepAliveService<R, E, F>
 where
     F: Fn() -> E,
 {
-    type St = St;
     type Req = R;
     type Res = R;
     type Error = E;
 
-    fn ready(
-        &self,
-        _: ReadyCtx<'_, Self>,
-    ) -> impl Future<Output = Result<(), Self::Error>> {
+    async fn ready(&self, _: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         let expire = self.expire.get() + time::Duration::from(self.dur);
-        if expire <= now() {
-            Ready::Err((self.f)())
-        } else {
-            Ready::Ok(())
-        }
+        if expire <= now() { Err((self.f)()) } else { Ok(()) }
     }
 
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
@@ -150,9 +142,9 @@ where
     }
 
     #[inline]
-    fn call(&self, req: R, _: Ctx<'_, Self>) -> impl Future<Output = Result<R, E>> {
+    async fn call(&self, req: R, _: Ctx<'_, Self, St>) -> Result<R, E> {
         self.expire.set(now());
-        Ready::Ok(req)
+        Ok(req)
     }
 }
 

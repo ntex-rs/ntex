@@ -14,9 +14,9 @@ pub struct MapErr<A, F, E> {
 
 impl<A, F, E> MapErr<A, F, E> {
     /// Create new `MapErr` combinator
-    pub(crate) fn new(service: A, f: F) -> Self
+    pub(crate) fn new<St>(service: A, f: F) -> Self
     where
-        A: Service,
+        A: Service<St>,
         F: Fn(A::Error) -> E,
     {
         Self {
@@ -54,33 +54,28 @@ where
     }
 }
 
-impl<A, F, E> Service for MapErr<A, F, E>
+impl<St, A, F, E> Service<St> for MapErr<A, F, E>
 where
-    A: Service,
+    A: Service<St>,
     F: Fn(A::Error) -> E,
 {
-    type St = A::St;
     type Req = A::Req;
     type Res = A::Res;
     type Error = E;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<A::Res, E> {
+        ctx.call(&self.service, req).await.map_err(|e| (self.f)(e))
+    }
+
+    #[inline]
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         ctx.ready(&self.service).await.map_err(&self.f)
     }
 
     #[inline]
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         self.service.poll(cx).map_err(&self.f)
-    }
-
-    #[inline]
-    async fn call(
-        &self,
-        req: A::Req,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
-        ctx.call(&self.service, req).await.map_err(|e| (self.f)(e))
     }
 
     crate::forward_shutdown!(service);

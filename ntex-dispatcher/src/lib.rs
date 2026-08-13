@@ -47,14 +47,14 @@ pub enum Reason<U: Encoder + Decoder> {
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
     /// and pass them to the service.
-    pub struct Dispatcher<S, U>
+    pub struct Dispatcher<S, St, U>
     where
-        S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
+        S: Service<St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
         U: Encoder,
         U: Decoder,
         U: 'static,
     {
-        inner: DispatcherInner<S, U>,
+        inner: DispatcherInner<S, St, U>,
     }
 }
 
@@ -70,28 +70,28 @@ bitflags::bitflags! {
     }
 }
 
-struct DispatcherInner<S, U>
+struct DispatcherInner<S, St, U>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder + 'static,
 {
     st: DispatcherState,
     error: Option<S::Error>,
-    shared: Rc<DispatcherShared<S, U>>,
-    response: Option<PipelineCall<S>>,
+    shared: Rc<DispatcherShared<S, St, U>>,
+    response: Option<PipelineCall<S, St>>,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
 }
 
-pub(crate) struct DispatcherShared<S, U>
+pub(crate) struct DispatcherShared<S, St, U>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     io: IoBoxed,
     codec: U,
-    service: PipelineBinding<S>,
+    service: PipelineBinding<S, St>,
     flags: Cell<Flags>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
@@ -127,13 +127,17 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
     }
 }
 
-impl<S, U> Dispatcher<S, U>
+impl<S, St, U> Dispatcher<S, St, U>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    S: Service<St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F>(io: Io, codec: U, service: PipelineBinding<S>) -> Dispatcher<S, U>
+    pub fn new<Io, F>(
+        io: Io,
+        codec: U,
+        service: PipelineBinding<S, St>,
+    ) -> Dispatcher<S, St, U>
     where
         IoBoxed: From<Io>,
     {
@@ -167,9 +171,9 @@ where
     }
 }
 
-impl<S, U> DispatcherShared<S, U>
+impl<S, St, U> DispatcherShared<S, St, U>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>>,
+    S: Service<St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     fn handle_result(&self, item: Result<S::Res, S::Error>, io: &IoBoxed, wake: bool) {
@@ -214,9 +218,10 @@ where
     }
 }
 
-impl<S, U> Future for Dispatcher<S, U>
+impl<S, St, U> Future for Dispatcher<S, St, U>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    S: Service<St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    St: 'static,
     U: Decoder + Encoder + 'static,
 {
     type Output = Result<(), S::Error>;
@@ -374,9 +379,10 @@ where
     }
 }
 
-impl<S, U> DispatcherInner<S, U>
+impl<S, St, U> DispatcherInner<S, St, U>
 where
-    S: Service<Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    S: Service<St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    St: 'static,
     U: Decoder + Encoder + 'static,
 {
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {

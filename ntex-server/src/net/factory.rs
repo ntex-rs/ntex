@@ -1,7 +1,7 @@
 use std::{fmt, marker::PhantomData, sync::Arc};
 
 use ntex_io::Io;
-use ntex_service::{Service, Ctx, ReadyCtx, ServiceFactory, boxed, cfg::SharedCfg};
+use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory, boxed, cfg::SharedCfg};
 use ntex_util::future::BoxFuture;
 
 use super::{Config, Token, socket::Stream};
@@ -165,20 +165,19 @@ struct ServerService<S> {
     inner: S,
 }
 
-impl<S> Service for ServerService<S>
+impl<S, St> Service<St> for ServerService<S>
 where
-    S: Service<Req = Io>,
+    S: Service<St, Req = Io>,
 {
-    type St = S::St;
     type Req = Io;
     type Res = ();
     type Error = ();
 
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), ()> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), ()> {
         ctx.ready(&self.inner).await.map_err(|_| ())
     }
 
-    async fn call(&self, req: Io, ctx: Ctx<'_, Self>) -> Result<(), ()> {
+    async fn call(&self, req: Io, ctx: Ctx<'_, Self, St>) -> Result<(), ()> {
         ctx.call(&self.inner, req).await.map(|_| ()).map_err(|_| ())
     }
 

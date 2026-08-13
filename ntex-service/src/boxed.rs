@@ -5,7 +5,7 @@ use crate::ctx::{Ctx, ReadyCtx, WaitersRef};
 
 type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 pub struct BoxService<St, Req, Res, Err>(
-    Box<dyn ServiceObj<St = St, Req = Req, Res = Res, Error = Err>>,
+    Box<dyn ServiceObj<St, Req = Req, Res = Res, Error = Err>>,
 );
 pub struct BoxServiceFactory<St, Req, Res, Err, Cfg, InitError>(
     Box<dyn ServiceFactoryObj<St, Req, Cfg, Res = Res, Error = Err, InitError = InitError>>,
@@ -24,9 +24,10 @@ where
 }
 
 /// Creates a boxed service.
-pub fn service<S>(service: S) -> BoxService<S::St, S::Req, S::Res, S::Error>
+pub fn service<S, St>(service: S) -> BoxService<St, S::Req, S::Res, S::Error>
 where
-    S: crate::Service + 'static,
+    S: crate::Service<St> + 'static,
+    St: 'static,
 {
     BoxService(Box::new(service))
 }
@@ -45,8 +46,7 @@ impl<St, Req, Res, Err, Cfg, InitError> fmt::Debug
     }
 }
 
-trait ServiceObj {
-    type St;
+trait ServiceObj<St> {
     type Req;
     type Res;
     type Error;
@@ -55,7 +55,7 @@ trait ServiceObj {
         &'a self,
         idx: u32,
         waiters: &'a WaitersRef,
-        st: Option<&'a Self::St>,
+        st: Option<&'a St>,
     ) -> BoxFuture<'a, (), Self::Error>;
 
     fn call<'a>(
@@ -63,7 +63,7 @@ trait ServiceObj {
         req: Self::Req,
         idx: u32,
         waiters: &'a WaitersRef,
-        st: &'a Self::St,
+        st: &'a St,
     ) -> BoxFuture<'a, Self::Res, Self::Error>;
 
     fn shutdown<'a>(&'a self) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
@@ -71,11 +71,11 @@ trait ServiceObj {
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error>;
 }
 
-impl<S> ServiceObj for S
+impl<S, St> ServiceObj<St> for S
 where
-    S: crate::Service,
+    S: crate::Service<St>,
+    St: 'static,
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
@@ -85,9 +85,13 @@ where
         &'a self,
         idx: u32,
         waiters: &'a WaitersRef,
-        st: Option<&'a S::St>,
+        st: Option<&'a St>,
     ) -> BoxFuture<'a, (), Self::Error> {
-        Box::pin(async move { ReadyCtx::<'a, S>::new(idx, waiters, st).ready(self).await })
+        Box::pin(async move {
+            ReadyCtx::<'a, S, St>::new(idx, waiters, st)
+                .ready(self)
+                .await
+        })
     }
 
     #[inline]
@@ -101,10 +105,10 @@ where
         req: S::Req,
         idx: u32,
         waiters: &'a WaitersRef,
-        st: &'a S::St,
+        st: &'a St,
     ) -> BoxFuture<'a, Self::Res, Self::Error> {
         Box::pin(async move {
-            Ctx::<'a, S>::new(idx, waiters, st)
+            Ctx::<'a, S, St>::new(idx, waiters, st)
                 .call_nowait(self, req)
                 .await
         })
@@ -132,6 +136,7 @@ trait ServiceFactoryObj<St, Req, Cfg> {
 
 impl<F, St, Req, Cfg> ServiceFactoryObj<St, Req, Cfg> for F
 where
+    St: 'static,
     Cfg: 'static,
     Req: 'static,
     F: crate::ServiceFactory<St, Req, InitCfg = Cfg>,
@@ -155,17 +160,16 @@ where
     }
 }
 
-impl<St, Req, Res, Err> crate::Service for BoxService<St, Req, Res, Err>
+impl<St, Req, Res, Err> crate::Service<St> for BoxService<St, Req, Res, Err>
 where
     Req: 'static,
 {
-    type St = St;
     type Req = Req;
     type Res = Res;
     type Error = Err;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         let (idx, waiters, st) = ctx.inner();
         self.0.ready(idx, waiters, st).await
     }
@@ -176,7 +180,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: Req, ctx: Ctx<'_, Self>) -> Result<Res, Err> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<Res, Err> {
         let (idx, waiters, st) = ctx.inner();
         self.0.call(req, idx, waiters, st).await
     }

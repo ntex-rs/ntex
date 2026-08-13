@@ -4,19 +4,19 @@ use crate::{Ctx, Service, ServiceFactory};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
-pub fn fn_shutdown<Req, Err, F, St, Cfg>(f: F) -> FnShutdown<Req, Err, F, St, Cfg>
+pub fn fn_shutdown<Req, Err, F, Cfg>(f: F) -> FnShutdown<Req, Err, F, Cfg>
 where
     F: AsyncFnOnce(),
 {
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<Req, Err, F, St, Cfg = ()> {
+pub struct FnShutdown<Req, Err, F, Cfg = ()> {
     f_shutdown: Cell<Option<F>>,
-    _t: PhantomData<(Req, Err, St, Cfg)>,
+    _t: PhantomData<(Req, Err, Cfg)>,
 }
 
-impl<Req, Err, F, St, Cfg> FnShutdown<Req, Err, F, St, Cfg> {
+impl<Req, Err, F, Cfg> FnShutdown<Req, Err, F, Cfg> {
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
@@ -25,7 +25,7 @@ impl<Req, Err, F, St, Cfg> FnShutdown<Req, Err, F, St, Cfg> {
     }
 }
 
-impl<Req, Err, F, St, Cfg> Clone for FnShutdown<Req, Err, F, St, Cfg>
+impl<Req, Err, F, Cfg> Clone for FnShutdown<Req, Err, F, Cfg>
 where
     F: Clone,
 {
@@ -40,7 +40,7 @@ where
     }
 }
 
-impl<Req, Err, F, St, Cfg> fmt::Debug for FnShutdown<Req, Err, F, St, Cfg> {
+impl<Req, Err, F, Cfg> fmt::Debug for FnShutdown<Req, Err, F, Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnShutdown")
             .field("fn", &std::any::type_name::<F>())
@@ -48,13 +48,13 @@ impl<Req, Err, F, St, Cfg> fmt::Debug for FnShutdown<Req, Err, F, St, Cfg> {
     }
 }
 
-impl<Req, Err, F, St, Cfg> ServiceFactory<St, Req> for FnShutdown<Req, Err, F, St, Cfg>
+impl<Req, Err, F, St, Cfg> ServiceFactory<St, Req> for FnShutdown<Req, Err, F, Cfg>
 where
     F: AsyncFnOnce() + Clone,
 {
     type Res = Req;
     type Error = Err;
-    type Service = FnShutdown<Req, Err, F, St>;
+    type Service = FnShutdown<Req, Err, F, Cfg>;
     type InitCfg = Cfg;
     type InitError = ();
 
@@ -75,11 +75,10 @@ where
     }
 }
 
-impl<Req, Err, F, St> Service for FnShutdown<Req, Err, F, St>
+impl<Req, Err, F, St, Cfg> Service<St> for FnShutdown<Req, Err, F, Cfg>
 where
     F: AsyncFnOnce(),
 {
-    type St = St;
     type Req = Req;
     type Res = Req;
     type Error = Err;
@@ -92,8 +91,8 @@ where
     }
 
     #[inline]
-    fn call(&self, req: Req, _: Ctx<'_, Self>) -> impl Future<Output = Result<Req, Err>> {
-        ready(Ok(req))
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Req, Err> {
+        Ok(req)
     }
 }
 

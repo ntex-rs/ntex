@@ -4,7 +4,7 @@ use std::future::{Future, ready};
 use ntex_service::{Ctx, Middleware, Service};
 
 /// Trait defines retry policy
-pub trait Policy<S: Service>: Sized + Clone {
+pub trait Policy<S: Service<St>, St>: Sized + Clone {
     async fn retry(&mut self, req: &S::Req, res: &Result<S::Res, S::Error>) -> bool;
 
     fn clone_request(&self, req: &S::Req) -> Option<S::Req>;
@@ -52,21 +52,24 @@ impl<P, S> RetryService<P, S> {
     }
 }
 
-impl<P, S> Service for RetryService<P, S>
+impl<P, S, St> Service<St> for RetryService<P, S>
 where
-    P: Policy<S>,
-    S: Service,
+    P: Policy<S, St>,
+    S: Service<St>,
 {
-    type St = S::St;
     type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     ntex_service::forward_poll!(service);
-    ntex_service::forward_ready!(service);
     ntex_service::forward_shutdown!(service);
+    ntex_service::forward_ready!(St, service);
 
-    async fn call(&self, mut req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+    async fn call(
+        &self,
+        mut req: S::Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<S::Res, S::Error> {
         let mut policy = self.policy.clone();
         let mut cloned = policy.clone_request(&req);
 
@@ -106,9 +109,9 @@ impl Default for DefaultRetryPolicy {
     }
 }
 
-impl<S> Policy<S> for DefaultRetryPolicy
+impl<S, St> Policy<S, St> for DefaultRetryPolicy
 where
-    S: Service,
+    S: Service<St>,
     S::Req: Clone,
 {
     fn retry(

@@ -13,9 +13,9 @@ pub struct Map<A, F, Res> {
 
 impl<A, F, Res> Map<A, F, Res> {
     /// Create new `Map` combinator
-    pub(crate) fn new(service: A, f: F) -> Self
+    pub(crate) fn new<St>(service: A, f: F) -> Self
     where
-        A: Service,
+        A: Service<St>,
         F: Fn(A::Res) -> Res,
     {
         Self {
@@ -53,26 +53,21 @@ where
     }
 }
 
-impl<A, F, Res> Service for Map<A, F, Res>
+impl<A, F, St, Res> Service<St> for Map<A, F, Res>
 where
-    A: Service,
+    A: Service<St>,
     F: Fn(A::Res) -> Res,
 {
-    type St = A::St;
     type Req = A::Req;
     type Res = Res;
     type Error = A::Error;
 
-    crate::forward_ready!(service);
+    crate::forward_ready!(St, service);
     crate::forward_poll!(service);
     crate::forward_shutdown!(service);
 
     #[inline]
-    async fn call(
-        &self,
-        req: Self::Req,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
+    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<Res, A::Error> {
         ctx.call(&self.service, req).await.map(|r| (self.f)(r))
     }
 }

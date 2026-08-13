@@ -3,7 +3,7 @@ use std::{fmt, io, sync::Arc};
 use ntex_error::Error;
 use ntex_io::{Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector};
-use ntex_service::{Service, ServiceCtx, ServiceFactory, cfg::Cfg, cfg::SharedCfg};
+use ntex_service::{Ctx, Service, ServiceFactory, cfg::Cfg, cfg::SharedCfg};
 use ntex_util::time::timeout_checked;
 use tls_rustls::{ClientConfig, pki_types::ServerName};
 
@@ -16,7 +16,7 @@ pub struct TlsConnector<S> {
 }
 
 #[derive(Clone, Debug)]
-pub struct TlsConnectorService<S: Service<St = St>, St> {
+pub struct TlsConnectorService<S> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     config: Arc<ClientConfig>,
@@ -76,7 +76,7 @@ where
 {
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
-    type Service = TlsConnectorService<S::Service, St>;
+    type Service = TlsConnectorService<S::Service>;
     type InitCfg = SharedCfg;
     type InitError = S::InitError;
 
@@ -91,23 +91,22 @@ where
     }
 }
 
-impl<A: Address, S, St> Service for TlsConnectorService<S, St>
+impl<A: Address, S, St> Service<St> for TlsConnectorService<S>
 where
-    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type St = St;
     type Req = Connect<A>;
     type Res = Io<Layer<TlsClientFilter>>;
     type Error = Error<ConnectError>;
 
-    ntex_service::forward_ready!(svc);
+    ntex_service::forward_ready!(St, svc);
     ntex_service::forward_poll!(svc);
     ntex_service::forward_shutdown!(svc);
 
     async fn call(
         &self,
         req: Connect<A>,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         let host = req.host().split(':').next().unwrap().to_owned();
 

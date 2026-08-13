@@ -111,19 +111,29 @@ impl<SLeft, SRight> fmt::Debug for EitherService<SLeft, SRight> {
     }
 }
 
-impl<SLeft, SRight> Service for EitherService<SLeft, SRight>
+impl<SLeft, SRight, St> Service<St> for EitherService<SLeft, SRight>
 where
-    SLeft: Service,
-    SRight:
-        Service<St = SLeft::St, Req = SLeft::Req, Res = SLeft::Res, Error = SLeft::Error>,
+    SLeft: Service<St>,
+    SRight: Service<St, Req = SLeft::Req, Res = SLeft::Res, Error = SLeft::Error>,
 {
-    type St = SLeft::St;
     type Req = SLeft::Req;
     type Res = SLeft::Res;
     type Error = SLeft::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn call(
+        &self,
+        req: Self::Req,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
+        match self.svc {
+            Either::Left(ref svc) => ctx.call(svc, req).await,
+            Either::Right(ref svc) => ctx.call(svc, req).await,
+        }
+    }
+
+    #[inline]
+    async fn ready(&self, ctx: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
         match self.svc {
             Either::Left(ref svc) => ctx.ready(svc).await,
             Either::Right(ref svc) => ctx.ready(svc).await,
@@ -135,18 +145,6 @@ where
         match self.svc {
             Either::Left(ref svc) => svc.shutdown().await,
             Either::Right(ref svc) => svc.shutdown().await,
-        }
-    }
-
-    #[inline]
-    async fn call(
-        &self,
-        req: Self::Req,
-        ctx: Ctx<'_, Self>,
-    ) -> Result<Self::Res, Self::Error> {
-        match self.svc {
-            Either::Left(ref svc) => ctx.call(svc, req).await,
-            Either::Right(ref svc) => ctx.call(svc, req).await,
         }
     }
 
