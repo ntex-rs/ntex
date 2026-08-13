@@ -8,7 +8,9 @@ use ntex_tls::TlsConfig;
 use uuid::Uuid;
 
 use crate::channel::bstream;
+use crate::client::error::ClientPayloadError;
 use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::error::Error;
 #[cfg(feature = "ws")]
 use crate::io::Filter;
 use crate::io::{Io, IoConfig};
@@ -18,10 +20,8 @@ use crate::service::{ServiceFactory, cfg::SharedCfg};
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{rt::System, time::Millis, time::Seconds, time::sleep, util::Bytes};
 
-use super::error::{HttpError, PayloadError};
 use super::header::{self, HeaderMap, HeaderName, HeaderValue};
-use super::payload::Payload;
-use super::{Method, Request, Uri, Version};
+use super::{Method, Request, Uri, Version, error::HttpError, payload::Payload};
 
 #[derive(Debug)]
 /// Test `Request` builder
@@ -232,7 +232,7 @@ fn parts(parts: &mut Option<Inner>) -> &mut Inner {
 pub async fn server<F, R>(factory: F) -> TestServer
 where
     F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedCfg> + 'static,
+    R: ServiceFactory<(), Io, InitCfg = SharedCfg> + 'static,
 {
     server_with_config(
         factory,
@@ -276,7 +276,7 @@ where
 pub async fn server_with_config<F, R, U>(factory: F, cfg: U) -> TestServer
 where
     F: AsyncFn() -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedCfg> + 'static,
+    R: ServiceFactory<(), Io, InitCfg = SharedCfg> + 'static,
     U: Into<SharedCfg>,
 {
     let sys = System::current().config();
@@ -437,13 +437,16 @@ impl TestServer {
     }
 
     /// Load response's body
-    pub async fn load_body(&self, response: ClientResponse) -> Result<Bytes, PayloadError> {
+    pub async fn load_body(
+        &self,
+        response: ClientResponse,
+    ) -> Result<Bytes, Error<ClientPayloadError>> {
         response.body().limit(10_485_760).await
     }
 
     #[cfg(feature = "ws")]
     /// Connect to a websocket server
-    pub async fn ws(&self) -> Result<WsConnection<impl Filter>, WsClientError> {
+    pub async fn ws(&self) -> Result<WsConnection<impl Filter>, Error<WsClientError>> {
         self.ws_at("/").await
     }
 
@@ -452,7 +455,7 @@ impl TestServer {
     pub async fn ws_at(
         &self,
         path: &str,
-    ) -> Result<WsConnection<impl Filter>, WsClientError> {
+    ) -> Result<WsConnection<impl Filter>, Error<WsClientError>> {
         WsClient::builder(self.url(path))
             .address(self.addr)
             .timeout(Seconds(30))
@@ -469,7 +472,7 @@ impl TestServer {
         &self,
     ) -> Result<
         WsConnection<crate::io::Layer<crate::connect::openssl::SslFilter>>,
-        WsClientError,
+        Error<WsClientError>,
     > {
         self.wss_at("/").await
     }

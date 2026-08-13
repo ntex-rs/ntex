@@ -1,6 +1,6 @@
 [package]
 name = "ntex"
-version = "3.13.0"
+version = "4.0.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "Framework for composable network services"
 readme = "README.md"
@@ -15,7 +15,7 @@ categories = [
 ]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 
 [package.metadata.docs.rs]
 toolchain = "nightly"

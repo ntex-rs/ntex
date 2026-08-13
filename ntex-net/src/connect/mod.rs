@@ -15,22 +15,22 @@ use ntex_io::Io;
 use ntex_service::cfg::SharedCfg;
 
 /// Resolve and connect to remote host
-pub async fn connect<T, U>(message: U) -> Result<Io, Error<ConnectError>>
+pub async fn connect<A, U>(message: U) -> Result<Io, Error<ConnectError>>
 where
-    T: Address,
-    Connect<T>: From<U>,
+    A: Address,
+    Connect<A>: From<U>,
 {
-    ConnectorService::<T, ()>::new().connect(message).await
+    ConnectorService::<A>::new().connect(message).await
 }
 
 /// Resolve and connect to remote host
-pub async fn connect_with<T, U>(
+pub async fn connect_with<A, U>(
     message: U,
     cfg: SharedCfg,
 ) -> Result<Io, Error<ConnectError>>
 where
-    T: Address,
-    Connect<T>: From<U>,
+    A: Address,
+    Connect<A>: From<U>,
 {
-    ConnectorService::<T, ()>::with(cfg).connect(message).await
+    ConnectorService::<A>::with(cfg).connect(message).await
 }

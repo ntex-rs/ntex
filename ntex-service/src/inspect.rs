@@ -10,9 +10,9 @@ pub struct Inspect<S, F> {
 
 impl<S, F> Inspect<S, F> {
     /// Create new `Inspect` service combinator.
-    pub(crate) fn new<St>(svc: S, f: F) -> Self
+    pub(crate) fn new<St, Req>(svc: S, f: F) -> Self
     where
-        S: Service<St>,
+        S: Service<St, Req>,
         F: Fn(&S::Res),
     {
         Self { svc, f }
@@ -45,17 +45,16 @@ where
     }
 }
 
-impl<S, St, F> Service<St> for Inspect<S, F>
+impl<S, St, Req, F> Service<St, Req> for Inspect<S, F>
 where
-    S: Service<St>,
+    S: Service<St, Req>,
     F: Fn(&S::Res),
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.call(&self.svc, req).await.inspect(&self.f)
     }
 
@@ -72,9 +71,9 @@ pub struct InspectErr<S, F> {
 
 impl<S, F> InspectErr<S, F> {
     /// Create new `InspectErr` service combinator.
-    pub(crate) fn new<St>(svc: S, f: F) -> Self
+    pub(crate) fn new<St, Req>(svc: S, f: F) -> Self
     where
-        S: Service<St>,
+        S: Service<St, Req>,
         F: Fn(&S::Error),
     {
         Self { svc, f }
@@ -107,17 +106,16 @@ where
     }
 }
 
-impl<S, St, F> Service<St> for InspectErr<S, F>
+impl<S, St, Req, F> Service<St, Req> for InspectErr<S, F>
 where
-    S: Service<St>,
+    S: Service<St, Req>,
     F: Fn(&S::Error),
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.call(&self.svc, req).await.inspect_err(&self.f)
     }
 
@@ -172,21 +170,20 @@ where
     }
 }
 
-impl<S, F, St> ServiceFactory<St> for InspectFactory<S, F>
+impl<Sf, St, Req, F> ServiceFactory<St, Req> for InspectFactory<Sf, F>
 where
-    S: ServiceFactory<St>,
-    F: Fn(&S::Res) + Clone,
+    Sf: ServiceFactory<St, Req>,
+    F: Fn(&Sf::Res) + Clone,
 {
-    type Req = S::Req;
-    type Res = S::Res;
-    type Error = S::Error;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
 
-    type Service = Inspect<S::Service, F>;
-    type InitCfg = S::InitCfg;
-    type InitError = S::InitError;
+    type Service = Inspect<Sf::Service, F>;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &S::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.s.create(cfg).await.map(|svc| Inspect {
             svc,
             f: self.f.clone(),
@@ -195,21 +192,21 @@ where
 }
 
 /// Factory for the `inspect_err` combinator.
-pub struct InspectErrFactory<S, F> {
-    s: S,
+pub struct InspectErrFactory<Sf, F> {
+    s: Sf,
     f: F,
 }
 
-impl<S, F> InspectErrFactory<S, F> {
+impl<Sf, F> InspectErrFactory<Sf, F> {
     /// Create new `InspectErrFactory` factory instance.
-    pub(crate) fn new(s: S, f: F) -> Self {
+    pub(crate) fn new(s: Sf, f: F) -> Self {
         Self { s, f }
     }
 }
 
-impl<S, F> Clone for InspectErrFactory<S, F>
+impl<Sf, F> Clone for InspectErrFactory<Sf, F>
 where
-    S: Clone,
+    Sf: Clone,
     F: Clone,
 {
     fn clone(&self) -> Self {
@@ -220,9 +217,9 @@ where
     }
 }
 
-impl<S, F> fmt::Debug for InspectErrFactory<S, F>
+impl<Sf, F> fmt::Debug for InspectErrFactory<Sf, F>
 where
-    S: fmt::Debug,
+    Sf: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InspectErrFactory")
@@ -232,21 +229,20 @@ where
     }
 }
 
-impl<S, F, St> ServiceFactory<St> for InspectErrFactory<S, F>
+impl<Sf, St, Req, F> ServiceFactory<St, Req> for InspectErrFactory<Sf, F>
 where
-    S: ServiceFactory<St>,
-    F: Fn(&S::Error) + Clone,
+    Sf: ServiceFactory<St, Req>,
+    F: Fn(&Sf::Error) + Clone,
 {
-    type Req = S::Req;
-    type Res = S::Res;
-    type Error = S::Error;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
 
-    type Service = InspectErr<S::Service, F>;
-    type InitCfg = S::InitCfg;
-    type InitError = S::InitError;
+    type Service = InspectErr<Sf::Service, F>;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &S::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.s.create(cfg).await.map(|svc| InspectErr {
             svc,
             f: self.f.clone(),

@@ -6,7 +6,7 @@ pub use crate::ws::{CloseCode, CloseReason, Frame, Message, WsSink};
 use crate::http::{StatusCode, body::BodySize, h1, header};
 use crate::io::{DispatchItem, IoConfig, Reason};
 use crate::service::{
-    IntoServiceFactory, Service, ServiceCtx, ServiceFactory, chain_factory,
+    Ctx, IntoServiceFactory, Pipeline, Service, ServiceFactory, chain_factory,
     fn_factory_with_config,
 };
 use crate::web::{HttpRequest, HttpResponse};
@@ -69,25 +69,28 @@ pub fn subprotocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
 ///     ws::start(req, chosen, factory).await
 /// }
 /// ```
-pub async fn start<T, F, P, Err>(
+pub async fn start<Sf, St, F, P, Err>(
     req: HttpRequest,
     subprotocol: Option<P>,
-    factory: F,
+    f: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<Frame, WsSink, Response = Option<Message>> + 'static,
-    T::Error: fmt::Debug,
-    F: IntoServiceFactory<T, Frame, WsSink>,
+    St: Default + 'static,
+    Sf: ServiceFactory<St, Frame, Res = Option<Message>, InitCfg = WsSink> + 'static,
+    Sf::Error: fmt::Debug,
+    F: IntoServiceFactory<Sf, St, Frame>,
     P: AsRef<str>,
-    Err: From<T::InitError> + From<HandshakeError>,
+    Err: From<Sf::InitError> + From<HandshakeError>,
 {
-    let inner_factory = Rc::new(chain_factory(factory).map_err(WsError::Service));
+    let inner_factory = Rc::new(chain_factory(f.into_factory()).map_err(WsError::Service));
 
-    let factory = fn_factory_with_config(async move |sink: WsSink| {
-        let srv = inner_factory.create(sink.clone()).await?;
-        let sink = sink.clone();
+    let factory = fn_factory_with_config(async move |sink: &WsSink| {
+        let srv = inner_factory.create(&sink).await?;
 
-        Ok::<_, T::InitError>(DispatchService { srv, sink })
+        Ok::<_, Sf::InitError>(DispatchService {
+            srv,
+            sink: sink.clone(),
+        })
     });
 
     start_with(req, subprotocol, factory).await
@@ -98,18 +101,19 @@ where
 ///
 /// If `subprotocol` is `Some`, the `Sec-Websocket-Protocol` header will be included
 /// in the response with the chosen protocol. If `None`, the header is omitted.
-pub async fn start_with<T, F, P, Err>(
+pub async fn start_with<Sf, St, F, P, Err>(
     req: HttpRequest,
     subprotocol: Option<P>,
     factory: F,
 ) -> Result<HttpResponse, Err>
 where
-    T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Response = Option<Message>>
+    St: Default + 'static,
+    Sf: ServiceFactory<St, DispatchItem<ws::Codec>, Res = Option<Message>, InitCfg = WsSink>
         + 'static,
-    T::Error: fmt::Debug,
-    F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
+    Sf::Error: fmt::Debug,
+    F: IntoServiceFactory<Sf, St, DispatchItem<ws::Codec>>,
     P: AsRef<str>,
-    Err: From<T::InitError> + From<HandshakeError>,
+    Err: From<Sf::InitError> + From<HandshakeError>,
 {
     log::trace!("Start ws handshake verification for {:?}", req.path());
 
@@ -137,7 +141,7 @@ where
     let sink = WsSink::new(io.get_ref(), codec.clone());
 
     // create ws service
-    let srv = factory.into_factory().create(sink.clone()).await?;
+    let srv = factory.into_factory().create(&sink).await?;
     io.set_config(CFG.with(Clone::clone));
 
     // the h1 dispatcher may have started a headers-read timer on this IO;
@@ -146,7 +150,9 @@ where
 
     // start websockets service dispatcher
     rt::spawn(async move {
-        let res = crate::io::Dispatcher::new(io, codec, srv).await;
+        let res =
+            crate::io::Dispatcher::new(io, codec, Pipeline::new(srv).bind(St::default()))
+                .await;
         log::trace!("Ws handler is terminated: {res:?}");
     });
 
@@ -159,23 +165,23 @@ struct DispatchService<S> {
     sink: WsSink,
 }
 
-impl<S, E> Service<DispatchItem<ws::Codec>> for DispatchService<S>
+impl<S, St, E> Service<St, DispatchItem<ws::Codec>> for DispatchService<S>
 where
-    S: Service<Frame, Response = Option<Message>, Error = WsError<E>>,
+    S: Service<St, Frame, Res = Option<Message>, Error = WsError<E>>,
     E: fmt::Debug,
 {
-    type Response = Option<Message>;
+    type Res = Option<Message>;
     type Error = WsError<E>;
 
-    crate::forward_ready!(srv);
+    crate::forward_ready!(St, srv);
     crate::forward_poll!(srv);
     crate::forward_shutdown!(srv);
 
     async fn call(
         &self,
         req: DispatchItem<ws::Codec>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
         match req {
             DispatchItem::Item(item) => {
                 let s = if matches!(item, Frame::Close(_)) {

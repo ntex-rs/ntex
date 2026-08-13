@@ -3,7 +3,7 @@ use std::io;
 
 use crate::http::ResponseError;
 use crate::io::Filter;
-use crate::service::{Service, ServiceCtx, ServiceFactory, cfg::SharedCfg};
+use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
 
 use super::control::{Control, ControlAck};
 
@@ -11,36 +11,37 @@ use super::control::{Control, ControlAck};
 /// Default control service
 pub struct DefaultControlService;
 
-impl<F, Err> ServiceFactory<Control<F, Err>, SharedCfg> for DefaultControlService
+impl<St, F, Err> ServiceFactory<St, Control<F, Err>> for DefaultControlService
 where
     F: Filter,
     Err: ResponseError,
 {
-    type Response = ControlAck<F>;
+    type Res = ControlAck<F>;
     type Error = io::Error;
     type Service = DefaultControlService;
+    type InitCfg = SharedCfg;
     type InitError = io::Error;
 
     #[inline]
-    async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(DefaultControlService)
     }
 }
 
-impl<F, Err> Service<Control<F, Err>> for DefaultControlService
+impl<St, F, Err> Service<St, Control<F, Err>> for DefaultControlService
 where
     F: Filter,
     Err: ResponseError,
 {
-    type Response = ControlAck<F>;
+    type Res = ControlAck<F>;
     type Error = io::Error;
 
     #[inline]
     async fn call(
         &self,
         req: Control<F, Err>,
-        _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        _: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, Self::Error> {
         Ok(req.ack())
     }
 }

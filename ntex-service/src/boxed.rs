@@ -5,37 +5,39 @@ use crate::ctx::{Ctx, ReadyCtx, WaitersRef};
 
 type BoxFuture<'a, I, E> = Pin<Box<dyn Future<Output = Result<I, E>> + 'a>>;
 pub struct BoxService<St, Req, Res, Err>(
-    Box<dyn ServiceObj<St, Req = Req, Res = Res, Error = Err>>,
+    Box<dyn ServiceObj<St, Req, Res = Res, Error = Err>>,
 );
-pub struct BoxServiceFactory<St, Req, Res, Err, Cfg, InitError>(
+pub struct BoxServiceFactory<St, Req, Res, Err, InitCfg, InitError>(
     Box<
         dyn ServiceFactoryObj<
                 St,
-                Cfg,
-                Req = Req,
+                Req,
                 Res = Res,
                 Error = Err,
+                InitCfg = InitCfg,
                 InitError = InitError,
             >,
     >,
 );
 
 /// Creates a boxed service factory.
-pub fn factory<F, St>(
-    factory: F,
-) -> BoxServiceFactory<St, F::Req, F::Res, F::Error, F::InitCfg, F::InitError>
+pub fn factory<Sf, St, Req>(
+    factory: Sf,
+) -> BoxServiceFactory<St, Req, Sf::Res, Sf::Error, Sf::InitCfg, Sf::InitError>
 where
+    Sf: crate::ServiceFactory<St, Req> + 'static,
     St: 'static,
-    F: crate::ServiceFactory<St> + 'static,
+    Req: 'static,
 {
     BoxServiceFactory(Box::new(factory))
 }
 
 /// Creates a boxed service.
-pub fn service<S, St>(service: S) -> BoxService<St, S::Req, S::Res, S::Error>
+pub fn service<S, St, Req>(service: S) -> BoxService<St, Req, S::Res, S::Error>
 where
-    S: crate::Service<St> + 'static,
+    S: crate::Service<St, Req> + 'static,
     St: 'static,
+    Req: 'static,
 {
     BoxService(Box::new(service))
 }
@@ -54,8 +56,7 @@ impl<St, Req, Res, Err, Cfg, InitError> fmt::Debug
     }
 }
 
-trait ServiceObj<St> {
-    type Req;
+trait ServiceObj<St, Req> {
     type Res;
     type Error;
 
@@ -68,7 +69,7 @@ trait ServiceObj<St> {
 
     fn call<'a>(
         &'a self,
-        req: Self::Req,
+        req: Req,
         idx: u32,
         waiters: &'a WaitersRef,
         st: &'a St,
@@ -79,12 +80,12 @@ trait ServiceObj<St> {
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error>;
 }
 
-impl<S, St> ServiceObj<St> for S
+impl<S, St, Req> ServiceObj<St, Req> for S
 where
-    S: crate::Service<St>,
+    S: crate::Service<St, Req>,
     St: 'static,
+    Req: 'static,
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
@@ -110,7 +111,7 @@ where
     #[inline]
     fn call<'a>(
         &'a self,
-        req: S::Req,
+        req: Req,
         idx: u32,
         waiters: &'a WaitersRef,
         st: &'a St,
@@ -128,52 +129,51 @@ where
     }
 }
 
-trait ServiceFactoryObj<St, Cfg> {
-    type Req;
+trait ServiceFactoryObj<St, Req> {
     type Res;
     type Error;
+    type InitCfg;
     type InitError;
 
     fn create<'a>(
         &'a self,
-        cfg: &'a Cfg,
-    ) -> BoxFuture<'a, BoxService<St, Self::Req, Self::Res, Self::Error>, Self::InitError>
+        cfg: &'a Self::InitCfg,
+    ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitError>
     where
-        Cfg: 'a,
-        St: 'a;
+        St: 'a,
+        Req: 'a;
 }
 
-impl<F, St, Cfg> ServiceFactoryObj<St, Cfg> for F
+impl<Sf, St, Req> ServiceFactoryObj<St, Req> for Sf
 where
     St: 'static,
-    Cfg: 'static,
-    F: crate::ServiceFactory<St, InitCfg = Cfg>,
-    F::Service: 'static,
+    Req: 'static,
+    Sf: crate::ServiceFactory<St, Req>,
+    Sf::Service: 'static,
 {
-    type Req = F::Req;
-    type Res = F::Res;
-    type Error = F::Error;
-    type InitError = F::InitError;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
     #[inline]
     fn create<'a>(
         &'a self,
-        cfg: &'a Cfg,
-    ) -> BoxFuture<'a, BoxService<St, Self::Req, Self::Res, Self::Error>, Self::InitError>
+        cfg: &'a Self::InitCfg,
+    ) -> BoxFuture<'a, BoxService<St, Req, Self::Res, Self::Error>, Self::InitError>
     where
-        Cfg: 'a,
         St: 'a,
+        Req: 'a,
     {
         let fut = crate::ServiceFactory::create(self, cfg);
         Box::pin(async move { fut.await.map(service) })
     }
 }
 
-impl<St, Req, Res, Err> crate::Service<St> for BoxService<St, Req, Res, Err>
+impl<St, Req, Res, Err> crate::Service<St, Req> for BoxService<St, Req, Res, Err>
 where
     Req: 'static,
 {
-    type Req = Req;
     type Res = Res;
     type Error = Err;
 
@@ -200,12 +200,11 @@ where
     }
 }
 
-impl<St, Req, Res, Err, InitCfg, InitError> crate::ServiceFactory<St>
+impl<St, Req, Res, Err, InitCfg, InitError> crate::ServiceFactory<St, Req>
     for BoxServiceFactory<St, Req, Res, Err, InitCfg, InitError>
 where
     Req: 'static,
 {
-    type Req = Req;
     type Res = Res;
     type Error = Err;
 

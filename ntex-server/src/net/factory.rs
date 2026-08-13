@@ -165,11 +165,10 @@ struct ServerService<S> {
     inner: S,
 }
 
-impl<S, St> Service<St> for ServerService<S>
+impl<S, St> Service<St, Io> for ServerService<S>
 where
-    S: Service<St, Req = Io>,
+    S: Service<St, Io>,
 {
-    type Req = Io;
     type Res = ();
     type Error = ();
 

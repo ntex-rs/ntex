@@ -17,17 +17,16 @@ impl<A, B> Then<A, B> {
     }
 }
 
-impl<A, B, St> Service<St> for Then<A, B>
+impl<A, B, St, Req> Service<St, Req> for Then<A, B>
 where
-    A: Service<St>,
-    B: Service<St, Req = Result<A::Res, A::Error>, Error = A::Error>,
+    A: Service<St, Req>,
+    B: Service<St, Result<A::Res, A::Error>, Error = A::Error>,
 {
-    type Req = A::Req;
     type Res = B::Res;
     type Error = B::Error;
 
     #[inline]
-    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<B::Res, B::Error> {
         ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
     }
 
@@ -62,18 +61,17 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, S> ServiceFactory<S> for ThenFactory<A, B>
+impl<A, B, St, Req> ServiceFactory<St, Req> for ThenFactory<A, B>
 where
-    A: ServiceFactory<S>,
+    A: ServiceFactory<St, Req>,
     B: ServiceFactory<
-            S,
-            Req = Result<A::Res, A::Error>,
+            St,
+            Result<A::Res, A::Error>,
             Error = A::Error,
             InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
 {
-    type Req = A::Req;
     type Res = B::Res;
     type Error = A::Error;
 

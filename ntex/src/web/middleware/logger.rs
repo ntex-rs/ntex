@@ -7,7 +7,7 @@ use regex::Regex;
 
 use crate::http::body::{Body, BodySize, MessageBody, ResponseBody};
 use crate::http::header::HeaderName;
-use crate::service::{Middleware, Service, ServiceCtx, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
 use crate::util::{Bytes, HashSet};
 use crate::web::{HttpResponse, WebRequest, WebResponse};
 
@@ -116,7 +116,7 @@ impl Default for Logger {
 impl<S> Middleware<S, SharedCfg> for Logger {
     type Service = LoggerMiddleware<S>;
 
-    fn create(&self, service: S, _: SharedCfg) -> Self::Service {
+    fn create(&self, service: S, _: &SharedCfg) -> Self::Service {
         LoggerMiddleware {
             service,
             inner: self.inner.clone(),
@@ -131,22 +131,22 @@ pub struct LoggerMiddleware<S> {
     service: S,
 }
 
-impl<S, E> Service<WebRequest<E>> for LoggerMiddleware<S>
+impl<S, St, E> Service<St, WebRequest<E>> for LoggerMiddleware<S>
 where
-    S: Service<WebRequest<E>, Response = WebResponse>,
+    S: Service<St, WebRequest<E>, Res = WebResponse>,
 {
-    type Response = WebResponse;
+    type Res = WebResponse;
     type Error = S::Error;
 
     crate::forward_poll!(service);
-    crate::forward_ready!(service);
+    crate::forward_ready!(St, service);
     crate::forward_shutdown!(service);
 
     async fn call(
         &self,
         req: WebRequest<E>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, S::Error> {
         if self.inner.exclude.contains(req.path()) {
             ctx.call(&self.service, req).await
         } else {

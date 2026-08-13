@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::http::error::HttpError;
 use crate::http::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
-use crate::service::{Middleware, Service, ServiceCtx, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
 use crate::web::{WebRequest, WebResponse};
 
 /// `Middleware` for setting default response headers.
@@ -91,7 +91,7 @@ impl DefaultHeaders {
 impl<S> Middleware<S, SharedCfg> for DefaultHeaders {
     type Service = DefaultHeadersMiddleware<S>;
 
-    fn create(&self, service: S, _: SharedCfg) -> Self::Service {
+    fn create(&self, service: S, _: &SharedCfg) -> Self::Service {
         DefaultHeadersMiddleware {
             service,
             inner: self.inner.clone(),
@@ -105,23 +105,23 @@ pub struct DefaultHeadersMiddleware<S> {
     inner: Rc<Inner>,
 }
 
-impl<S, E> Service<WebRequest<E>> for DefaultHeadersMiddleware<S>
+impl<S, St, E> Service<St, WebRequest<E>> for DefaultHeadersMiddleware<S>
 where
-    S: Service<WebRequest<E>, Response = WebResponse>,
+    S: Service<St, WebRequest<E>, Res = WebResponse>,
 {
-    type Response = WebResponse;
+    type Res = WebResponse;
     type Error = S::Error;
 
     crate::forward_poll!(service);
-    crate::forward_ready!(service);
+    crate::forward_ready!(St, service);
     crate::forward_shutdown!(service);
 
     async fn call(
         &self,
-        req: WebRequest<E>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        let mut res = ctx.call(&self.service, req).await?;
+        r: WebRequest<E>,
+        ctx: Ctx<'_, Self, St>,
+    ) -> Result<Self::Res, S::Error> {
+        let mut res = ctx.call(&self.service, r).await?;
 
         // set response headers
         for (key, value) in &self.inner.headers {

@@ -50,7 +50,6 @@ where
 pub fn fn_factory<F, Srv, St, Err>(f: F) -> FnServiceNoConfig<F, Srv, Err>
 where
     F: AsyncFn() -> Result<Srv, Err>,
-    Srv: Service<St>,
 {
     FnServiceNoConfig::new(f)
 }
@@ -118,11 +117,10 @@ impl<F, Req> fmt::Debug for FnService<F, Req> {
     }
 }
 
-impl<F, St, Req, Res, Err> Service<St> for FnService<F, Req>
+impl<F, St, Req, Res, Err> Service<St, Req> for FnService<F, Req>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
-    type Req = Req;
     type Res = Res;
     type Error = Err;
 
@@ -132,7 +130,7 @@ where
     }
 }
 
-impl<F, Req, Res, Err> IntoService<FnService<F, Req>> for F
+impl<F, St, Req, Res, Err> IntoService<FnService<F, Req>, St, Req> for F
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
@@ -186,11 +184,10 @@ where
     }
 }
 
-impl<F, St, Req, Res, Err> Service<St> for FnServiceFactory<F, Req, Res, Err, ()>
+impl<F, St, Req, Res, Err> Service<St, Req> for FnServiceFactory<F, Req, Res, Err, ()>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
 {
-    type Req = Req;
     type Res = Res;
     type Error = Err;
 
@@ -200,12 +197,11 @@ where
     }
 }
 
-impl<F, St, Req, Res, Err, Cfg> ServiceFactory<St>
+impl<F, St, Req, Res, Err, Cfg> ServiceFactory<St, Req>
     for FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
-    type Req = Req;
     type Res = Res;
     type Error = Err;
 
@@ -222,7 +218,7 @@ where
     }
 }
 
-impl<F, Req, Res, Err> IntoService<FnService<F, Req>>
+impl<F, St, Req, Res, Err> IntoService<FnService<F, Req>, St, Req>
     for FnServiceFactory<F, Req, Res, Err, ()>
 where
     F: AsyncFn(Req) -> Result<Res, Err>,
@@ -268,16 +264,15 @@ where
     }
 }
 
-impl<F, St, Cfg, Srv, Err> ServiceFactory<St> for FnServiceConfig<F, Cfg, Srv, Err>
+impl<F, Cfg, S, St, Req, Err> ServiceFactory<St, Req> for FnServiceConfig<F, Cfg, S, Err>
 where
-    F: AsyncFn(&Cfg) -> Result<Srv, Err>,
-    Srv: Service<St>,
+    F: AsyncFn(&Cfg) -> Result<S, Err>,
+    S: Service<St, Req>,
 {
-    type Req = Srv::Req;
-    type Res = Srv::Res;
-    type Error = Srv::Error;
+    type Res = S::Res;
+    type Error = S::Error;
 
-    type Service = Srv;
+    type Service = S;
     type InitCfg = Cfg;
     type InitError = Err;
 
@@ -305,13 +300,12 @@ where
     }
 }
 
-impl<F, S, St, E, C> ServiceFactory<St> for FnServiceNoConfig<F, S, E, C>
+impl<F, S, St, Req, E, C> ServiceFactory<St, Req> for FnServiceNoConfig<F, S, E, C>
 where
     F: AsyncFn() -> Result<S, E>,
-    S: Service<St>,
+    S: Service<St, Req>,
     C: 'static,
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
     type Service = S;

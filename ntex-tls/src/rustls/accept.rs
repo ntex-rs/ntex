@@ -1,4 +1,4 @@
-use std::{future::Future, io, marker::PhantomData, sync::Arc};
+use std::{future::Future, io, sync::Arc};
 
 use tls_rustls::ServerConfig;
 
@@ -13,32 +13,27 @@ use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 /// Support `TLS` connections via rustls package
 ///
 /// `rust-tls` feature enables `TlsAcceptor` type
-pub struct TlsAcceptor<F> {
+pub struct TlsAcceptor {
     config: Arc<ServerConfig>,
-    _t: PhantomData<F>,
 }
 
-impl<F> TlsAcceptor<F> {
+impl TlsAcceptor {
     /// Create rustls based `Acceptor` service factory
     pub fn new(config: Arc<ServerConfig>) -> Self {
-        Self {
-            config,
-            _t: PhantomData,
-        }
+        Self { config }
     }
 }
 
-impl<F> From<ServerConfig> for TlsAcceptor<F> {
+impl From<ServerConfig> for TlsAcceptor {
     fn from(cfg: ServerConfig) -> Self {
         Self::new(Arc::new(cfg))
     }
 }
 
-impl<F: Filter, St> ServiceFactory<St> for TlsAcceptor<F> {
-    type Req = Io<F>;
+impl<F: Filter, St> ServiceFactory<St, Io<F>> for TlsAcceptor {
     type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
-    type Service = TlsAcceptorService<F>;
+    type Service = TlsAcceptorService;
     type InitCfg = SharedCfg;
     type InitError = ();
 
@@ -51,7 +46,6 @@ impl<F: Filter, St> ServiceFactory<St> for TlsAcceptor<F> {
                 cfg: cfg.get(),
                 config: self.config.clone(),
                 conns: conns.clone(),
-                _t: PhantomData,
             })
         })
     }
@@ -59,15 +53,13 @@ impl<F: Filter, St> ServiceFactory<St> for TlsAcceptor<F> {
 
 #[derive(Debug)]
 /// `RusTLS` based `Acceptor` service
-pub struct TlsAcceptorService<F> {
+pub struct TlsAcceptorService {
     cfg: Cfg<TlsConfig>,
     config: Arc<ServerConfig>,
     conns: Counter,
-    _t: PhantomData<F>,
 }
 
-impl<F: Filter, St> Service<St> for TlsAcceptorService<F> {
-    type Req = Io<F>;
+impl<F: Filter, St> Service<St, Io<F>> for TlsAcceptorService {
     type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
 

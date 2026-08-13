@@ -13,13 +13,14 @@ use nanorand::{Rng, WyRand};
 
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};
+use crate::error::{Error, ErrorMapping};
 use crate::http::header::{self, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use crate::http::{ConnectionType, Message, Method, RequestHead, StatusCode, Uri};
 use crate::http::{body::BodySize, error::HttpError};
 use crate::io::{Base, DispatchItem, Dispatcher, Filter, Io, Layer, Reason, Sealed};
 use crate::service::{IntoService, Pipeline, apply_fn, fn_service};
 use crate::time::{Millis, timeout};
-use crate::{Service, ServiceFactory, SharedCfg, channel::mpsc, rt, util::Ready, ws};
+use crate::{Service, ServiceFactory, SharedCfg, channel::mpsc, rt, ws};
 
 use super::error::{WsClientBuilderError, WsClientError, WsError};
 use super::transport::WsTransport;
@@ -77,7 +78,13 @@ impl WsClient<Base, ()> {
         Uri: TryFrom<U>,
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter,
-        T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
+        T: ServiceFactory<
+                (),
+                Connect<Uri>,
+                Res = Io<F>,
+                Error = Error<ConnectError>,
+                InitCfg = SharedCfg,
+            >,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
@@ -132,10 +139,10 @@ impl<F, T> WsClient<F, T> {
 impl<F, T> WsClient<F, T>
 where
     F: Filter,
-    T: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
+    T: Service<(), Connect<Uri>, Res = Io<F>, Error = Error<ConnectError>>,
 {
     /// Complete request construction and connect to a websockets server.
-    pub async fn connect(&self) -> Result<WsConnection<F>, WsClientError> {
+    pub async fn connect(&self) -> Result<WsConnection<F>, Error<WsClientError>> {
         let head = self.head.clone();
         let max_size = self.max_size;
         let server_mode = self.server_mode;
@@ -157,7 +164,7 @@ where
         let msg = Connect::new(head.uri.clone()).set_addr(self.addr);
         log::trace!("Open ws connection to {:?} addr: {:?}", head.uri, self.addr);
 
-        let io = self.connector.call(msg).await?;
+        let io = self.connector.call(msg, &()).await.into_error()?;
         let tag = io.tag();
 
         // create Framed and send request
@@ -195,7 +202,9 @@ where
 
         // verify response
         if response.status != StatusCode::SWITCHING_PROTOCOLS {
-            return Err(WsClientError::InvalidResponseStatus(response.status));
+            return Err(Error::from(WsClientError::InvalidResponseStatus(
+                response.status,
+            )));
         }
 
         // Check for "UPGRADE" to websocket header
@@ -210,7 +219,7 @@ where
         };
         if !has_hdr {
             log::trace!("{tag}: Invalid upgrade header");
-            return Err(WsClientError::InvalidUpgradeHeader);
+            return Err(Error::from(WsClientError::InvalidUpgradeHeader));
         }
 
         // Check for "CONNECTION" header
@@ -218,33 +227,40 @@ where
             if let Ok(s) = conn.to_str() {
                 if !s.to_ascii_lowercase().contains("upgrade") {
                     log::trace!("{tag}: Invalid connection header: {s}");
-                    return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
+                    return Err(Error::from(WsClientError::InvalidConnectionHeader(
+                        conn.clone(),
+                    )));
                 }
             } else {
                 log::trace!("{tag}: Invalid connection header: {conn:?}");
-                return Err(WsClientError::InvalidConnectionHeader(conn.clone()));
+                return Err(Error::from(WsClientError::InvalidConnectionHeader(
+                    conn.clone(),
+                )));
             }
         } else {
             log::trace!("{tag}: Missing connection header");
-            return Err(WsClientError::MissingConnectionHeader);
+            return Err(Error::from(WsClientError::MissingConnectionHeader));
         }
 
         if let Some(hdr_key) = response.headers.get(&header::SEC_WEBSOCKET_ACCEPT) {
             let encoded = ws::hash_key(key.as_ref()).map_err(|_| {
-                WsClientError::InvalidChallengeResponse(String::new(), hdr_key.clone())
+                Error::from(WsClientError::InvalidChallengeResponse(
+                    String::new(),
+                    hdr_key.clone(),
+                ))
             })?;
             if hdr_key.as_bytes() != encoded.as_bytes() {
                 log::trace!(
                     "{tag}: Invalid challenge response: expected: {encoded} received: {key:?}"
                 );
-                return Err(WsClientError::InvalidChallengeResponse(
+                return Err(Error::from(WsClientError::InvalidChallengeResponse(
                     encoded,
                     hdr_key.clone(),
-                ));
+                )));
             }
         } else {
             log::trace!("{tag}: Missing SEC-WEBSOCKET-ACCEPT header");
-            return Err(WsClientError::MissingWebSocketAcceptHeader);
+            return Err(Error::from(WsClientError::MissingWebSocketAcceptHeader));
         }
         log::trace!("{tag}: Ws handshake response verification is completed");
 
@@ -313,7 +329,13 @@ impl WsClientBuilder<Base, ()> {
 
 impl<F, T> WsClientBuilder<F, T>
 where
-    T: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F>, Error = ConnectError>,
+    T: ServiceFactory<
+            (),
+            Connect<Uri>,
+            Res = Io<F>,
+            Error = Error<ConnectError>,
+            InitCfg = SharedCfg,
+        >,
 {
     /// Set socket address of the server.
     ///
@@ -497,7 +519,13 @@ where
     pub fn connector<F1, T1>(&mut self, connector: T1) -> WsClientBuilder<F1, T1>
     where
         F1: Filter,
-        T1: ServiceFactory<Connect<Uri>, SharedCfg, Response = Io<F1>, Error = ConnectError>,
+        T1: ServiceFactory<
+                (),
+                Connect<Uri>,
+                Res = Io<F1>,
+                Error = Error<ConnectError>,
+                InitCfg = SharedCfg,
+            >,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 
@@ -565,6 +593,7 @@ where
             return Err(WsClientBuilderError::Http(e));
         }
 
+        let cfg = cfg.into();
         let mut inner = self.inner.take().expect("cannot reuse WsClient builder");
 
         // validate uri
@@ -635,7 +664,7 @@ where
 
         let connector = inner
             .connector
-            .create(cfg.into())
+            .create(&cfg)
             .await
             .map_err(WsClientBuilderError::Connector)?;
 
@@ -730,12 +759,12 @@ impl WsConnection<Sealed> {
             let io = self.io.get_ref();
 
             let result = self
-                .start(fn_service(move |item: ws::Frame| {
+                .start(fn_service(async move |item: ws::Frame| {
                     match tx.send(Ok(item)) {
                         Ok(()) => (),
                         Err(_) => io.close(),
                     }
-                    Ready::Ok::<Option<ws::Message>, ()>(None)
+                    Ok::<Option<ws::Message>, ()>(None)
                 }))
                 .await;
 
@@ -748,10 +777,9 @@ impl WsConnection<Sealed> {
     }
 
     /// Start client websockets service.
-    pub async fn start<T, U>(self, service: U) -> Result<(), WsError<T::Error>>
+    pub async fn start<T>(self, service: T) -> Result<(), WsError<T::Error>>
     where
-        T: Service<ws::Frame, Response = Option<ws::Message>> + 'static,
-        U: IntoService<T, ws::Frame>,
+        T: Service<(), ws::Frame, Res = Option<ws::Message>> + 'static,
     {
         let service = apply_fn(
             service.into_service().map_err(WsError::Service),
@@ -767,7 +795,7 @@ impl WsConnection<Sealed> {
             },
         );
 
-        Dispatcher::new(self.io, self.codec, service).await
+        Dispatcher::new(self.io, self.codec, Pipeline::new(service).bind(())).await
     }
 }
 

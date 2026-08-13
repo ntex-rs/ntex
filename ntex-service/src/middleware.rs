@@ -4,14 +4,14 @@ use crate::dev::{Apply, ApplyCtx, ServiceChainFactory};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply middleware to a service.
-pub fn apply<M, S, St, U>(
+pub fn apply<M, Sf, St, Req, U>(
     mw: M,
     factory: U,
-) -> ServiceChainFactory<ApplyMiddleware<M, S>, St>
+) -> ServiceChainFactory<ApplyMiddleware<M, Sf>, St, Req>
 where
-    S: ServiceFactory<St>,
-    M: Middleware<S::Service, S::InitCfg>,
-    U: IntoServiceFactory<S, St>,
+    Sf: ServiceFactory<St, Req>,
+    M: Middleware<Sf::Service, Sf::InitCfg>,
+    U: IntoServiceFactory<Sf, St, Req>,
 {
     ServiceChainFactory {
         factory: ApplyMiddleware::new(mw, factory.into_factory()),
@@ -101,50 +101,50 @@ pub trait Middleware<Svc, Cfg = ()> {
     /// the current middleware to it.
     ///
     /// This is equivalent to `apply(self, factory)`.
-    fn apply<Fac, St, Req>(
+    fn apply<Sf, St, Req>(
         self,
-        factory: Fac,
-    ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac>, St>
+        factory: Sf,
+    ) -> ServiceChainFactory<ApplyMiddleware<Self, Sf>, St, Req>
     where
-        Fac: ServiceFactory<St, Service = Svc, InitCfg = Cfg>,
+        Sf: ServiceFactory<St, Req, Service = Svc, InitCfg = Cfg>,
         Self: Sized,
-        Self::Service: Service<St, Req = Req>,
+        Self::Service: Service<St, Req>,
     {
         crate::chain_factory(ApplyMiddleware::new(self, factory))
     }
 }
 
-impl<M, Svc, Cfg> Middleware<Svc, Cfg> for Rc<M>
+impl<M, S, Cfg> Middleware<S, Cfg> for Rc<M>
 where
-    M: Middleware<Svc, Cfg>,
+    M: Middleware<S, Cfg>,
 {
     type Service = M::Service;
 
-    fn create(&self, service: Svc, cfg: &Cfg) -> M::Service {
+    fn create(&self, service: S, cfg: &Cfg) -> M::Service {
         self.as_ref().create(service, cfg)
     }
 }
 
 /// `Apply` middleware to a service factory.
-pub struct ApplyMiddleware<M, Fac>(Rc<(M, Fac)>);
+pub struct ApplyMiddleware<M, Sf>(Rc<(M, Sf)>);
 
-impl<M, Fac> ApplyMiddleware<M, Fac> {
+impl<M, Sf> ApplyMiddleware<M, Sf> {
     /// Create new `ApplyMiddleware` service factory instance
-    pub(crate) fn new(mw: M, fac: Fac) -> Self {
-        Self(Rc::new((mw, fac)))
+    pub(crate) fn new(mw: M, sf: Sf) -> Self {
+        Self(Rc::new((mw, sf)))
     }
 }
 
-impl<M, Fac> Clone for ApplyMiddleware<M, Fac> {
+impl<M, Sf> Clone for ApplyMiddleware<M, Sf> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<M, Fac> fmt::Debug for ApplyMiddleware<M, Fac>
+impl<M, Sf> fmt::Debug for ApplyMiddleware<M, Sf>
 where
     M: fmt::Debug,
-    Fac: fmt::Debug,
+    Sf: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApplyMiddleware")
@@ -154,22 +154,21 @@ where
     }
 }
 
-impl<M, Fac, St> ServiceFactory<St> for ApplyMiddleware<M, Fac>
+impl<M, Sf, St, Req> ServiceFactory<St, Req> for ApplyMiddleware<M, Sf>
 where
-    Fac: ServiceFactory<St>,
-    M: Middleware<Fac::Service, Fac::InitCfg>,
-    M::Service: Service<St>,
+    Sf: ServiceFactory<St, Req>,
+    M: Middleware<Sf::Service, Sf::InitCfg>,
+    M::Service: Service<St, Req>,
 {
-    type Req = <M::Service as Service<St>>::Req;
-    type Res = <M::Service as Service<St>>::Res;
-    type Error = <M::Service as Service<St>>::Error;
+    type Res = <M::Service as Service<St, Req>>::Res;
+    type Error = <M::Service as Service<St, Req>>::Error;
 
     type Service = M::Service;
-    type InitCfg = Fac::InitCfg;
-    type InitError = Fac::InitError;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Fac::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(self.0.0.create(self.0.1.create(cfg).await?, cfg))
     }
 }
@@ -216,21 +215,23 @@ where
 
 #[doc(hidden)]
 /// Service factory that produces `middleware` from `Fn`.
-pub fn fn_layer<T, St, F, In, Out, Err>(f: F) -> FnMiddleware<T, St, F, In, Out, Err>
+pub fn fn_layer<S, St, Req, F, In, Out, Err>(
+    f: F,
+) -> FnMiddleware<S, St, Req, F, In, Out, Err>
 where
-    F: AsyncFn(In, &ApplyCtx<'_, T, St>) -> Result<Out, Err> + Clone,
+    F: AsyncFn(In, &ApplyCtx<'_, S, St>) -> Result<Out, Err> + Clone,
 {
     FnMiddleware { f, r: PhantomData }
 }
 
 #[allow(clippy::type_complexity)]
 /// `FnMiddleware` service combinator
-pub struct FnMiddleware<T, St, F, In, Out, Err> {
+pub struct FnMiddleware<S, St, Req, F, In, Out, Err> {
     f: F,
-    r: PhantomData<fn(T) -> (St, In, Out, Err)>,
+    r: PhantomData<fn(S, St, Req) -> (In, Out, Err)>,
 }
 
-impl<T, St, F, In, Out, Err> Clone for FnMiddleware<T, St, F, In, Out, Err>
+impl<S, St, Req, F, In, Out, Err> Clone for FnMiddleware<S, St, Req, F, In, Out, Err>
 where
     F: Clone,
 {
@@ -242,7 +243,7 @@ where
     }
 }
 
-impl<T, St, F, In, Out, Err> fmt::Debug for FnMiddleware<T, St, F, In, Out, Err> {
+impl<S, St, Req, F, In, Out, Err> fmt::Debug for FnMiddleware<S, St, Req, F, In, Out, Err> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnMiddleware")
             .field("layer", &std::any::type_name::<F>())
@@ -250,15 +251,16 @@ impl<T, St, F, In, Out, Err> fmt::Debug for FnMiddleware<T, St, F, In, Out, Err>
     }
 }
 
-impl<T, C, St, F, In, Out, Err> Middleware<T, C> for FnMiddleware<T, St, F, In, Out, Err>
+impl<S, St, Req, F, In, Out, Err, C> Middleware<S, C>
+    for FnMiddleware<S, St, Req, F, In, Out, Err>
 where
-    T: Service<St>,
-    F: AsyncFn(In, &ApplyCtx<'_, T, St>) -> Result<Out, Err> + Clone,
-    Err: From<T::Error>,
+    S: Service<St, Req>,
+    F: AsyncFn(In, &ApplyCtx<'_, S, St>) -> Result<Out, Err> + Clone,
+    Err: From<S::Error>,
 {
-    type Service = Apply<T, St, F, In, Out, Err>;
+    type Service = Apply<S, St, Req, F, In, Out, Err>;
 
-    fn create(&self, service: T, _: &C) -> Self::Service {
+    fn create(&self, service: S, _: &C) -> Self::Service {
         Apply::new(service, self.f.clone())
     }
 }

@@ -3,69 +3,68 @@ use std::{fmt, marker::PhantomData};
 use super::ServiceFactory;
 
 /// `MapInitError` service combinator
-pub struct MapInitErr<A, St, F, Err> {
-    a: A,
+pub struct MapInitErr<Sf, F, Err> {
+    sf: Sf,
     f: F,
-    e: PhantomData<fn(St) -> Err>,
+    e: PhantomData<fn() -> Err>,
 }
 
-impl<A, St, F, Err> MapInitErr<A, St, F, Err>
-where
-    A: ServiceFactory<St>,
-    F: Fn(A::InitError) -> Err,
-{
+impl<Sf, F, Err> MapInitErr<Sf, F, Err> {
     /// Create new `MapInitErr` combinator
-    pub(crate) fn new(a: A, f: F) -> Self {
+    pub(crate) fn new<St, Req>(sf: Sf, f: F) -> Self
+    where
+        Sf: ServiceFactory<St, Req>,
+        F: Fn(Sf::InitError) -> Err,
+    {
         Self {
-            a,
+            sf,
             f,
             e: PhantomData,
         }
     }
 }
 
-impl<A, St, F, Err> Clone for MapInitErr<A, St, F, Err>
+impl<Sf, F, Err> Clone for MapInitErr<Sf, F, Err>
 where
-    A: Clone,
+    Sf: Clone,
     F: Clone,
 {
     fn clone(&self) -> Self {
         Self {
-            a: self.a.clone(),
+            sf: self.sf.clone(),
             f: self.f.clone(),
             e: PhantomData,
         }
     }
 }
 
-impl<A, St, F, Err> fmt::Debug for MapInitErr<A, St, F, Err>
+impl<Sf, F, Err> fmt::Debug for MapInitErr<Sf, F, Err>
 where
-    A: fmt::Debug,
+    Sf: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MapInitErr")
-            .field("service", &self.a)
+            .field("sf", &self.sf)
             .field("map", &std::any::type_name::<F>())
             .finish()
     }
 }
 
-impl<A, St, F, Err> ServiceFactory<St> for MapInitErr<A, St, F, Err>
+impl<Sf, St, Req, F, Err> ServiceFactory<St, Req> for MapInitErr<Sf, F, Err>
 where
-    A: ServiceFactory<St>,
-    F: Fn(A::InitError) -> Err + Clone,
+    Sf: ServiceFactory<St, Req>,
+    F: Fn(Sf::InitError) -> Err + Clone,
 {
-    type Req = A::Req;
-    type Res = A::Res;
-    type Error = A::Error;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
 
-    type Service = A::Service;
-    type InitCfg = A::InitCfg;
+    type Service = Sf::Service;
+    type InitCfg = Sf::InitCfg;
     type InitError = Err;
 
     #[inline]
-    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
-        self.a.create(cfg).await.map_err(|e| (self.f)(e))
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
+        self.sf.create(cfg).await.map_err(|e| (self.f)(e))
     }
 }
 

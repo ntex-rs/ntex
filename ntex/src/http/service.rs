@@ -1,7 +1,7 @@
 use std::{cell::Cell, cell::RefCell, error, fmt, marker, rc::Rc, task::Context};
 
 use crate::io::{Filter, Io, IoRef, types};
-use crate::service::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
+use crate::service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
 use crate::{SharedCfg, channel::oneshot, util::HashSet, util::join};
 
 use super::body::MessageBody;
@@ -16,30 +16,30 @@ use super::{h1, h2};
 #[debug("HttpService")]
 pub struct HttpService<
     F,
-    S,
+    Sf,
     B,
     C1 = h1::DefaultControlService,
     C2 = h2::DefaultControlService,
 > {
-    srv: S,
+    srv: Sf,
     h1_control: C1,
     h2_control: Rc<C2>,
     _t: marker::PhantomData<(F, B)>,
 }
 
-impl<F, S, B> HttpService<F, S, B>
+impl<F, Sf, B> HttpService<F, Sf, B>
 where
     F: Filter,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
+    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: fmt::Debug,
     B: MessageBody,
 {
     /// Create new `HttpService` instance.
     pub fn new<U>(service: U) -> Self
     where
-        U: IntoServiceFactory<S, Request, SharedCfg>,
+        U: IntoServiceFactory<Sf, (), Request>,
     {
         HttpService {
             srv: service.into_factory(),
@@ -50,53 +50,59 @@ where
     }
 }
 
-impl<F, S, B> HttpService<F, S, B>
+impl<F, Sf, B> HttpService<F, Sf, B>
 where
     F: Filter,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
+    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: fmt::Debug,
     B: MessageBody,
 {
     /// Create *http service* for HTTP/1 protocol.
-    pub fn h1<U: IntoServiceFactory<S, Request, SharedCfg>>(
+    pub fn h1<U: IntoServiceFactory<Sf, (), Request>>(
         service: U,
-    ) -> h1::H1Service<F, S, B, h1::DefaultControlService> {
+    ) -> h1::H1Service<F, Sf, B, h1::DefaultControlService> {
         h1::H1Service::new(service)
     }
 
     /// Create *http service* for HTTP/2 protocol.
-    pub fn h2<U: IntoServiceFactory<S, Request, SharedCfg>>(
+    pub fn h2<U: IntoServiceFactory<Sf, (), Request>>(
         service: U,
-    ) -> h2::H2Service<F, S, B, h2::DefaultControlService> {
+    ) -> h2::H2Service<F, Sf, B, h2::DefaultControlService> {
         h2::H2Service::new(service)
     }
 }
 
-impl<F, S, B, C1, C2> HttpService<F, S, B, C1, C2>
+impl<F, Sf, B, C1, C2> HttpService<F, Sf, B, C1, C2>
 where
     F: Filter,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
+    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: fmt::Debug,
     B: MessageBody,
-    C1: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck<F>>,
+    C1: ServiceFactory<
+            (),
+            h1::Control<F, Sf::Error>,
+            Res = h1::ControlAck<F>,
+            InitCfg = SharedCfg,
+        >,
     C1::Error: error::Error,
     C1::InitError: fmt::Debug,
-    C2: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
+    C2: ServiceFactory<(), h2::Control<H2Error>, InitCfg = SharedCfg, Res = h2::ControlAck>,
     C2::Error: error::Error,
     C2::InitError: fmt::Debug,
 {
     /// Provide http/1 control service.
-    pub fn h1_control<CT, U>(self, control: U) -> HttpService<F, S, B, CT, C2>
+    pub fn h1_control<CT, U>(self, control: U) -> HttpService<F, Sf, B, CT, C2>
     where
-        U: IntoServiceFactory<CT, h1::Control<F, S::Error>, SharedCfg>,
+        U: IntoServiceFactory<CT, (), h1::Control<F, Sf::Error>>,
         CT: ServiceFactory<
-                h1::Control<F, S::Error>,
-                SharedCfg,
-                Response = h1::ControlAck<F>,
+                (),
+                h1::Control<F, Sf::Error>,
+                Res = h1::ControlAck<F>,
+                InitCfg = SharedCfg,
             >,
         CT::Error: error::Error,
         CT::InitError: fmt::Debug,
@@ -110,10 +116,15 @@ where
     }
 
     /// Provide http/1 control service.
-    pub fn h2_control<CT, U>(self, control: U) -> HttpService<F, S, B, C1, CT>
+    pub fn h2_control<CT, U>(self, control: U) -> HttpService<F, Sf, B, C1, CT>
     where
-        U: IntoServiceFactory<CT, h2::Control<H2Error>, SharedCfg>,
-        CT: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>,
+        U: IntoServiceFactory<CT, (), h2::Control<H2Error>>,
+        CT: ServiceFactory<
+                (),
+                h2::Control<H2Error>,
+                InitCfg = SharedCfg,
+                Res = h2::ControlAck,
+            >,
         CT::Error: error::Error,
         CT::InitError: fmt::Debug,
     {
@@ -144,9 +155,10 @@ mod openssl {
         S::Response: Into<Response<B>>,
         B: MessageBody,
         C1: ServiceFactory<
+                (),
                 h1::Control<Layer<SslFilter, F>, S::Error>,
-                SharedCfg,
-                Response = h1::ControlAck<Layer<SslFilter, F>>,
+                Res = h1::ControlAck<Layer<SslFilter, F>>,
+                InitCfg = SharedCfg,
             > + 'static,
         C1::Error: error::Error,
         C1::InitError: fmt::Debug,
@@ -160,10 +172,11 @@ mod openssl {
             self,
             acceptor: ssl::SslAcceptor,
         ) -> impl ServiceFactory<
+            (),
             Io<F>,
-            SharedCfg,
-            Response = (),
+            Res = (),
             Error = SslError<DispatchError>,
+            InitCfg = SharedCfg,
             InitError = (),
         > {
             SslAcceptor::new(acceptor)
@@ -192,9 +205,10 @@ mod rustls {
         S::Response: Into<Response<B>>,
         B: MessageBody,
         C1: ServiceFactory<
+                (),
                 h1::Control<Layer<TlsServerFilter, F>, S::Error>,
-                SharedCfg,
-                Response = h1::ControlAck<Layer<TlsServerFilter, F>>,
+                Res = h1::ControlAck<Layer<TlsServerFilter, F>>,
+                InitCfg = SharedCfg,
             > + 'static,
         C1::Error: error::Error,
         C1::InitError: fmt::Debug,
@@ -225,37 +239,46 @@ mod rustls {
     }
 }
 
-impl<F, S, B, C1, C2> ServiceFactory<Io<F>, SharedCfg> for HttpService<F, S, B, C1, C2>
+impl<F, Sf, B, C1, C2> ServiceFactory<(), Io<F>> for HttpService<F, Sf, B, C1, C2>
 where
     F: Filter,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
+    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError + 'static,
+    Sf::InitError: fmt::Debug,
+    Sf::Service: 'static,
     B: MessageBody,
-    C1: ServiceFactory<h1::Control<F, S::Error>, SharedCfg, Response = h1::ControlAck<F>>
-        + 'static,
-    C1::Error: error::Error,
+    C1: ServiceFactory<
+            (),
+            h1::Control<F, Sf::Error>,
+            Res = h1::ControlAck<F>,
+            InitCfg = SharedCfg,
+        > + 'static,
+    C1::Error: error::Error + 'static,
     C1::InitError: fmt::Debug,
-    C2: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
+    C1::Service: 'static,
+    C2: ServiceFactory<(), h2::Control<H2Error>, Res = h2::ControlAck, InitCfg = SharedCfg>
         + 'static,
-    C2::Error: error::Error,
+    C2::Error: error::Error + 'static,
     C2::InitError: fmt::Debug,
+    C2::Service: 'static,
 {
-    type Response = ();
+    type Res = ();
     type Error = DispatchError;
-    type InitError = ();
-    type Service = HttpServiceHandler<F, S::Service, B, C1::Service, C2>;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    type Service = HttpServiceHandler<F, Sf::Service, B, C1::Service, C2>;
+    type InitCfg = SharedCfg;
+    type InitError = ();
+
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let service = self
             .srv
-            .create(cfg.clone())
+            .create(cfg)
             .await
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
         let control = self
             .h1_control
-            .create(cfg.clone())
+            .create(cfg)
             .await
             .map_err(|e| log::error!("Cannot construct control service: {e:?}"))?;
 
@@ -263,7 +286,7 @@ where
         let config = DispatcherConfig::new(cfg.get(), service, control);
 
         Ok(HttpServiceHandler {
-            cfg,
+            cfg: cfg.clone(),
             config: Rc::new(config),
             h2_control: self.h2_control.clone(),
             inflight: RefCell::new(HashSet::default()),
@@ -287,27 +310,28 @@ pub struct HttpServiceHandler<F, S, B, C1, C2> {
     _t: marker::PhantomData<(F, B)>,
 }
 
-impl<F, S, B, C1, C2> Service<Io<F>> for HttpServiceHandler<F, S, B, C1, C2>
+impl<F, S, B, C1, C2> Service<(), Io<F>> for HttpServiceHandler<F, S, B, C1, C2>
 where
     F: Filter,
-    S: Service<Request> + 'static,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>>,
+    S: Service<(), Request> + 'static,
+    S::Res: Into<Response<B>>,
+    S::Error: ResponseError + 'static,
     B: MessageBody,
-    C1: Service<h1::Control<F, S::Error>, Response = h1::ControlAck<F>> + 'static,
+    C1: Service<(), h1::Control<F, S::Error>, Res = h1::ControlAck<F>> + 'static,
     C1::Error: error::Error,
-    C2: ServiceFactory<h2::Control<H2Error>, SharedCfg, Response = h2::ControlAck>
+    C2: ServiceFactory<(), h2::Control<H2Error>, Res = h2::ControlAck, InitCfg = SharedCfg>
         + 'static,
-    C2::Error: error::Error,
+    C2::Error: error::Error + 'static,
     C2::InitError: fmt::Debug,
+    C2::Service: 'static,
 {
-    type Response = ();
+    type Res = ();
     type Error = DispatchError;
 
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
         let cfg = self.config.as_ref();
 
-        let (ready1, ready2) = join(cfg.control.ready(), cfg.service.ready()).await;
+        let (ready1, ready2) = join(cfg.control.ready(&()), cfg.service.ready(&())).await;
         ready1.map_err(|e| {
             log::error!("Http control service readiness error: {e:?}");
             DispatchError::Control(Rc::new(e))
@@ -360,23 +384,19 @@ where
     async fn call(
         &self,
         io: Io<F>,
-        _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        _: Ctx<'_, Self, ()>,
+    ) -> Result<Self::Res, Self::Error> {
         let id = self.config.next_id();
         let ioref = io.get_ref();
 
         let result = if io.query::<types::HttpProtocol>().get()
             == Some(types::HttpProtocol::Http2)
         {
-            let control = self
-                .h2_control
-                .create(self.cfg.clone())
-                .await
-                .map_err(|e| {
-                    DispatchError::Control(crate::util::str_rc_error(format!(
-                        "Cannot construct control service: {e:?}"
-                    )))
-                })?;
+            let control = self.h2_control.create(&self.cfg).await.map_err(|e| {
+                DispatchError::Control(crate::util::str_rc_error(format!(
+                    "Cannot construct control service: {e:?}"
+                )))
+            })?;
             let inflight = {
                 let mut inflight = self.inflight.borrow_mut();
                 inflight.insert(io.get_ref());

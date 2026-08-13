@@ -297,14 +297,14 @@ where
 ///         .await
 /// }
 /// ```
-pub fn server<F, I, S, B>(factory: F) -> HttpServer<F, I, S, B>
+pub fn server<F, I, Sf, St, B>(factory: F) -> HttpServer<F, I, Sf, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
-    S::Error: ResponseError,
-    S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
+    I: IntoServiceFactory<Sf, (), Request>,
+    Sf: ServiceFactory<(), Request, InitCfg = SharedCfg> + 'static,
+    Sf::Res: Into<Response<B>>,
+    Sf::Error: ResponseError,
+    Sf::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
     HttpServer::new(factory)

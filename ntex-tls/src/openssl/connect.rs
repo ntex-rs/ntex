@@ -34,17 +34,16 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, S, St> ServiceFactory<St> for SslConnector<S>
+impl<A: Address, S, St> ServiceFactory<St, Connect<A>> for SslConnector<S>
 where
     S: ServiceFactory<
             St,
-            Req = Connect<A>,
+            Connect<A>,
             Res = Io,
             Error = Error<ConnectError>,
             InitCfg = SharedCfg,
         >,
 {
-    type Req = Connect<A>;
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
     type Service = SslConnectorService<S::Service>;
@@ -64,14 +63,11 @@ where
 
 impl<S> SslConnectorService<S> {
     /// Establish a TLS connection on top of an existing I/O stream.
-    pub async fn connect<F: Filter, St>(
+    pub async fn connect<F: Filter>(
         &self,
         io: Io<F>,
         host: &str,
-    ) -> Result<Io<Layer<SslFilter, F>>, Error<ConnectError>>
-    where
-        S: Service<St>,
-    {
+    ) -> Result<Io<Layer<SslFilter, F>>, Error<ConnectError>> {
         let tag = io.tag();
         log::trace!("{tag}: SSL Handshake start for: {host:?} {io:?}");
 
@@ -107,11 +103,10 @@ impl<S> SslConnectorService<S> {
     }
 }
 
-impl<A: Address, S, St> Service<St> for SslConnectorService<S>
+impl<A: Address, S, St> Service<St, Connect<A>> for SslConnectorService<S>
 where
-    S: Service<St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
+    S: Service<St, Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type Req = Connect<A>;
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
 

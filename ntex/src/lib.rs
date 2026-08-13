@@ -37,7 +37,7 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    IntoService, IntoServiceFactory, Middleware, Pipeline, Service, ServiceCtx,
+    Ctx, IntoService, IntoServiceFactory, Middleware, Pipeline, ReadyCtx, Service,
     ServiceFactory, cfg::Cfg, cfg::SharedCfg, chain, chain_factory, fn_service,
 };
 

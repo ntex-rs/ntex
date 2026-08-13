@@ -1,11 +1,6 @@
-use crate::{Service, ServiceCtx};
-
 #[cfg(feature = "compress")]
-use crate::http::Payload;
-#[cfg(feature = "compress")]
-use crate::http::encoding::Decoder;
-
-use crate::http::body::MessageBody;
+use crate::http::{Payload, encoding::Decoder};
+use crate::{Ctx, Service, error::Error, http::body::MessageBody};
 
 use super::connector::ConnectorService;
 use super::error::ClientError;
@@ -24,19 +19,19 @@ impl Sender {
 }
 
 #[allow(unused_variables)]
-impl Service<ServiceRequest> for Sender {
-    type Response = ServiceResponse;
-    type Error = ClientError;
+impl Service<(), ServiceRequest> for Sender {
+    type Res = ServiceResponse;
+    type Error = Error<ClientError>;
 
-    crate::forward_ready!(connector);
+    crate::forward_ready!((), connector);
     crate::forward_poll!(connector);
     crate::forward_shutdown!(connector);
 
     async fn call(
         &self,
         req: ServiceRequest,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        ctx: Ctx<'_, Self, ()>,
+    ) -> Result<Self::Res, Self::Error> {
         let ServiceRequest {
             head,
             addr,
@@ -46,15 +41,8 @@ impl Service<ServiceRequest> for Sender {
             response_decompress,
         } = req;
 
-        let con = ctx
-            .call(
-                &self.connector,
-                Connect {
-                    addr,
-                    uri: head.uri.clone(),
-                },
-            )
-            .await?;
+        let uri = head.uri.clone();
+        let con = ctx.call(&self.connector, Connect { addr, uri }).await?;
 
         if timeout.is_zero() {
             timeout = self.config.timeout();

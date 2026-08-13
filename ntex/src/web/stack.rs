@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::service::{Middleware, Service, ServiceCtx, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
 use crate::web::{ErrorRenderer, WebRequest, WebResponse};
 
 /// Stack of middlewares.
@@ -25,15 +25,13 @@ impl<S, Inner, Outer, Err> Middleware<S, SharedCfg> for WebStack<Inner, Outer, E
 where
     Inner: Middleware<S, SharedCfg>,
     Outer: Middleware<Inner::Service, SharedCfg>,
-    Outer::Service: Service<WebRequest<Err>, Response = WebResponse>,
+    Outer::Service: Service<(), WebRequest<Err>, Res = WebResponse>,
 {
     type Service = WebMiddleware<Outer::Service, Err>;
 
-    fn create(&self, service: S, cfg: SharedCfg) -> Self::Service {
+    fn create(&self, service: S, cfg: &SharedCfg) -> Self::Service {
         WebMiddleware {
-            svc: self
-                .outer
-                .create(self.inner.create(service, cfg.clone()), cfg),
+            svc: self.outer.create(self.inner.create(service, cfg), cfg),
             err: PhantomData,
         }
     }
@@ -57,25 +55,25 @@ where
     }
 }
 
-impl<S, Err> Service<WebRequest<Err>> for WebMiddleware<S, Err>
+impl<S, Err> Service<(), WebRequest<Err>> for WebMiddleware<S, Err>
 where
-    S: Service<WebRequest<Err>, Response = WebResponse>,
+    S: Service<(), WebRequest<Err>, Res = WebResponse>,
     Err: ErrorRenderer,
     Err::Container: From<S::Error>,
 {
-    type Response = WebResponse;
+    type Res = WebResponse;
     type Error = Err::Container;
 
     #[inline]
     async fn call(
         &self,
         req: WebRequest<Err>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        ctx: Ctx<'_, Self, ()>,
+    ) -> Result<Self::Res, Self::Error> {
         ctx.call(&self.svc, req).await.map_err(Into::into)
     }
 
     crate::forward_poll!(svc);
-    crate::forward_ready!(svc);
+    crate::forward_ready!((), svc);
     crate::forward_shutdown!(svc);
 }

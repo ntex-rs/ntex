@@ -46,21 +46,20 @@ impl<ChooseFn, SFLeft, SFRight> fmt::Debug
     }
 }
 
-impl<St, ChooseFn, SFLeft, SFRight> ServiceFactory<St>
+impl<St, Req, ChooseFn, SFLeft, SFRight> ServiceFactory<St, Req>
     for EitherServiceFactory<ChooseFn, SFLeft, SFRight>
 where
     ChooseFn: Fn(&SFLeft::InitCfg) -> bool,
-    SFLeft: ServiceFactory<St>,
+    SFLeft: ServiceFactory<St, Req>,
     SFRight: ServiceFactory<
             St,
-            Req = SFLeft::Req,
+            Req,
             Res = SFLeft::Res,
             Error = SFLeft::Error,
             InitCfg = SFLeft::InitCfg,
             InitError = SFLeft::InitError,
         >,
 {
-    type Req = SFLeft::Req;
     type Res = SFLeft::Res;
     type Error = SFLeft::Error;
     type InitCfg = SFLeft::InitCfg;
@@ -112,19 +111,18 @@ impl<SLeft, SRight> fmt::Debug for EitherService<SLeft, SRight> {
     }
 }
 
-impl<SLeft, SRight, St> Service<St> for EitherService<SLeft, SRight>
+impl<SLeft, SRight, St, Req> Service<St, Req> for EitherService<SLeft, SRight>
 where
-    SLeft: Service<St>,
-    SRight: Service<St, Req = SLeft::Req, Res = SLeft::Res, Error = SLeft::Error>,
+    SLeft: Service<St, Req>,
+    SRight: Service<St, Req, Res = SLeft::Res, Error = SLeft::Error>,
 {
-    type Req = SLeft::Req;
     type Res = SLeft::Res;
     type Error = SLeft::Error;
 
     #[inline]
     async fn call(
         &self,
-        req: Self::Req,
+        req: Req,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error> {
         match self.svc {

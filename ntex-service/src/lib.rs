@@ -96,10 +96,7 @@ pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
 ///
 /// Service cannot be called directly, it must be wrapped to an instance of [`Pipeline`] or
 /// by using `ctx` argument of the call method in case of chanined services.
-pub trait Service<St> {
-    /// Request accepted by the service.
-    type Req;
-
+pub trait Service<St, Req> {
     /// Responses given by the service.
     type Res;
 
@@ -114,7 +111,7 @@ pub trait Service<St> {
     /// before it is invoked.
     async fn call(
         &self,
-        req: Self::Req,
+        req: Req,
         ctx: Ctx<'_, Self, St>,
     ) -> Result<Self::Res, Self::Error>;
 
@@ -154,7 +151,7 @@ pub trait Service<St> {
     ///
     /// This function consumes the original service and returns a wrapped version,
     /// following the pattern of standard library `map` methods.
-    fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Res>, St>
+    fn map<F, Res>(self, f: F) -> dev::ServiceChain<dev::Map<Self, F, Res>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::Res) -> Res,
@@ -170,7 +167,7 @@ pub trait Service<St> {
     /// services have the same error type.
     ///
     /// This function consumes the original service and returns a wrapped version.
-    fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>, St>
+    fn map_err<F, E>(self, f: F) -> dev::ServiceChain<dev::MapErr<Self, F, E>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E,
@@ -190,10 +187,7 @@ pub trait Service<St> {
 ///
 /// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
 /// to reduce boilerplate.
-pub trait ServiceFactory<St> {
-    /// Request accepted by the service.
-    type Req;
-
+pub trait ServiceFactory<St, Req> {
     /// Responses given by the created services.
     type Res;
 
@@ -201,7 +195,7 @@ pub trait ServiceFactory<St> {
     type Error;
 
     /// The type of `Service` produced by this factory.
-    type Service: Service<St, Req = Self::Req, Res = Self::Res, Error = Self::Error>;
+    type Service: Service<St, Req, Res = Self::Res, Error = Self::Error>;
 
     /// Configuration type for the service factory.
     type InitCfg;
@@ -229,7 +223,7 @@ pub trait ServiceFactory<St> {
     fn map<F, Res>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, St, Res>, St>
+    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, Res>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::Res) -> Res + Clone,
@@ -243,7 +237,7 @@ pub trait ServiceFactory<St> {
     fn map_err<F, E>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, St, F, E>, St>
+    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, F, E>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
@@ -257,7 +251,7 @@ pub trait ServiceFactory<St> {
     fn map_init_err<F, E>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, St, F, E>, St>
+    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, F, E>, St, Req>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
@@ -270,7 +264,7 @@ pub trait ServiceFactory<St> {
         self,
     ) -> boxed::BoxServiceFactory<
         St,
-        Self::Req,
+        Req,
         Self::Res,
         Self::Error,
         Self::InitCfg,
@@ -278,17 +272,17 @@ pub trait ServiceFactory<St> {
     >
     where
         St: 'static,
+        Req: 'static,
         Self: Sized + 'static,
     {
         boxed::factory(self)
     }
 }
 
-impl<S, St> Service<St> for &S
+impl<S, St, Req> Service<St, Req> for &S
 where
-    S: Service<St>,
+    S: Service<St, Req>,
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
@@ -308,16 +302,15 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.call_nowait(&**self, req).await
     }
 }
 
-impl<S, St> Service<St> for Box<S>
+impl<S, St, Req> Service<St, Req> for Box<S>
 where
-    S: Service<St>,
+    S: Service<St, Req>,
 {
-    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
@@ -332,7 +325,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
+    async fn call(&self, req: Req, ctx: Ctx<'_, Self, St>) -> Result<S::Res, S::Error> {
         ctx.call_nowait(&**self, req).await
     }
 
@@ -342,50 +335,55 @@ where
     }
 }
 
-impl<S, St> ServiceFactory<St> for Rc<S>
+impl<Sf, St, Req> ServiceFactory<St, Req> for Rc<Sf>
 where
-    S: ServiceFactory<St>,
+    Sf: ServiceFactory<St, Req>,
 {
-    type Req = S::Req;
-    type Res = S::Res;
-    type Error = S::Error;
-    type Service = S::Service;
-    type InitCfg = S::InitCfg;
-    type InitError = S::InitError;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
+    type Service = Sf::Service;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
-    async fn create(&self, cfg: &S::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.as_ref().create(cfg).await
     }
 }
 
 /// Trait for types that can be converted to a `Service`
-pub trait IntoService<Svc> {
+pub trait IntoService<S, St, Req>
+where
+    S: Service<St, Req>,
+{
     /// Convert to a `Service`
-    fn into_service(self) -> Svc;
+    fn into_service(self) -> S;
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
-pub trait IntoServiceFactory<T, St>
+pub trait IntoServiceFactory<Sf, St, Req>
 where
-    T: ServiceFactory<St>,
+    Sf: ServiceFactory<St, Req>,
 {
     /// Convert `Self` to a `ServiceFactory`
-    fn into_factory(self) -> T;
+    fn into_factory(self) -> Sf;
 }
 
-impl<Svc> IntoService<Svc> for Svc {
+impl<S, St, Req> IntoService<S, St, Req> for S
+where
+    S: Service<St, Req>,
+{
     #[inline]
-    fn into_service(self) -> Svc {
+    fn into_service(self) -> S {
         self
     }
 }
 
-impl<T, St> IntoServiceFactory<T, St> for T
+impl<Sf, St, Req> IntoServiceFactory<Sf, St, Req> for Sf
 where
-    T: ServiceFactory<St>,
+    Sf: ServiceFactory<St, Req>,
 {
     #[inline]
-    fn into_factory(self) -> T {
+    fn into_factory(self) -> Sf {
         self
     }
 }

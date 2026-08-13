@@ -1,6 +1,7 @@
 //! Utilities for ntex framework
 #![deny(clippy::pedantic)]
 #![allow(
+    async_fn_in_trait,
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc

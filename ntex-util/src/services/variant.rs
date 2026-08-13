@@ -7,7 +7,7 @@ use ntex_service::{Ctx, IntoServiceFactory, ReadyCtx, Service, ServiceFactory};
 /// Construct `Variant` service factory.
 ///
 /// Variant service allow to combine multiple different services into a single service.
-pub fn variant<V1: ServiceFactory<St>, St, V1R>(factory: V1) -> Variant<V1, St, V1R> {
+pub fn variant<V1: ServiceFactory<St, V1R>, St, V1R>(factory: V1) -> Variant<V1, St, V1R> {
     Variant {
         factory,
         _t: PhantomData,
@@ -22,20 +22,20 @@ pub struct Variant<A, St, AR> {
 
 impl<A, St, AR> Variant<A, St, AR>
 where
-    A: ServiceFactory<St>,
+    A: ServiceFactory<St, AR>,
 {
     /// Convert to a Variant with two request types
     pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<St, A, B, AR, BR>
     where
         B: ServiceFactory<
                 St,
-                Req = BR,
+                BR,
                 Res = A::Res,
                 Error = A::Error,
                 InitCfg = A::InitCfg,
                 InitError = A::InitError,
             >,
-        F: IntoServiceFactory<B, St>,
+        F: IntoServiceFactory<B, St, BR>,
     {
         VariantFactory2 {
             V1: self.factory,
@@ -61,17 +61,16 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
     #[allow(non_snake_case)]
     impl<St, V1, $($T,)+ V1R, $($R,)+> $fac1_type<St, V1, $($T,)+ V1R, $($R,)+>
         where
-            V1: ServiceFactory<St>,
+            V1: ServiceFactory<St, V1R>,
         {
             /// Convert to a Variant with more request types
             pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<St, V1, $($T,)+ $name, V1R, $($R,)+ $r_name>
-            where $name: ServiceFactory<St,
-                    Req = $r_name,
+            where $name: ServiceFactory<St, $r_name,
                     Res = V1::Res,
                     Error = V1::Error,
                     InitCfg = V1::InitCfg,
                     InitError = V1::InitError>,
-                  F: IntoServiceFactory<$name, St>,
+                  F: IntoServiceFactory<$name, St, $r_name>,
             {
                 $fac2_type {
                     V1: self.V1,
@@ -117,12 +116,11 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1, $($T,)+ V1R, $($R,)+> Service<St> for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, V1, $($T,)+ V1R, $($R,)+> Service<St, $enum_type<V1R, $($R,)+>> for $srv_type<St, V1, $($T,)+ V1R, $($R,)+>
     where
-        V1: Service<St, Req = V1R>,
-        $($T: Service<St, Req = $R, Res = V1::Res, Error = V1::Error>),+
+        V1: Service<St, V1R>,
+        $($T: Service<St, $R, Res = V1::Res, Error = V1::Error>),+
     {
-        type Req = $enum_type<V1R, $($R,)+>;
         type Res = V1::Res;
         type Error = V1::Error;
 
@@ -196,12 +194,11 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<St, V1, $($T,)+ V1R, $($R,)+> ServiceFactory<St> for $fac_type<St, V1, $($T,)+ V1R, $($R,)+>
+    impl<St, V1, $($T,)+ V1R, $($R,)+> ServiceFactory<St, $enum_type<V1R, $($R),+>> for $fac_type<St, V1, $($T,)+ V1R, $($R,)+>
     where
-        V1: ServiceFactory<St, Req = V1R>,
-        $($T: ServiceFactory<St, Req = $R, Res = V1::Res, Error = V1::Error, InitCfg = V1::InitCfg, InitError = V1::InitError>),+
+        V1: ServiceFactory<St, V1R>,
+        $($T: ServiceFactory<St, $R, Res = V1::Res, Error = V1::Error, InitCfg = V1::InitCfg, InitError = V1::InitError>),+
     {
-        type Req = $enum_type<V1R, $($R),+>;
         type Res = V1::Res;
         type Error = V1::Error;
         type Service = $srv_type<St, V1::Service, $($T::Service,)+ V1R, $($R,)+>;

@@ -166,8 +166,7 @@ impl fmt::Debug for StreamServiceImpl {
     }
 }
 
-impl Service<()> for StreamServiceImpl {
-    type Req = Connection;
+impl Service<(), Connection> for StreamServiceImpl {
     type Res = ();
     type Error = ();
 

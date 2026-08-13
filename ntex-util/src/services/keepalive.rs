@@ -9,13 +9,13 @@ use crate::time::{Millis, Sleep, now, sleep};
 /// `KeepAlive` service factory
 ///
 /// Controls min time between requests.
-pub struct KeepAlive<R, E, F, C> {
+pub struct KeepAlive<E, F, C> {
     f: F,
     ka: Millis,
-    _t: marker::PhantomData<(R, E, C)>,
+    _t: marker::PhantomData<(E, C)>,
 }
 
-impl<R, E, F, C> KeepAlive<R, E, F, C>
+impl<E, F, C> KeepAlive<E, F, C>
 where
     F: Fn() -> E + Clone,
 {
@@ -32,7 +32,7 @@ where
     }
 }
 
-impl<R, E, F, C> Clone for KeepAlive<R, E, F, C>
+impl<E, F, C> Clone for KeepAlive<E, F, C>
 where
     F: Clone,
 {
@@ -45,7 +45,7 @@ where
     }
 }
 
-impl<R, E, F, C> fmt::Debug for KeepAlive<R, E, F, C> {
+impl<E, F, C> fmt::Debug for KeepAlive<E, F, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeepAlive")
             .field("ka", &self.ka)
@@ -54,36 +54,35 @@ impl<R, E, F, C> fmt::Debug for KeepAlive<R, E, F, C> {
     }
 }
 
-impl<St, R, E, F, C> ServiceFactory<St> for KeepAlive<R, E, F, C>
+impl<St, Req, E, F, C> ServiceFactory<St, Req> for KeepAlive<E, F, C>
 where
     F: Fn() -> E + Clone,
 {
-    type Req = R;
-    type Res = R;
+    type Res = Req;
     type Error = E;
 
-    type Service = KeepAliveService<R, E, F>;
+    type Service = KeepAliveService<E, F>;
     type InitCfg = C;
     type InitError = Infallible;
 
     #[inline]
     fn create(
         &self,
-        _: &Self::InitCfg,
+        _: &C,
     ) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
         Ready::Ok(KeepAliveService::new(self.ka, self.f.clone()))
     }
 }
 
-pub struct KeepAliveService<R, E, F> {
+pub struct KeepAliveService<E, F> {
     f: F,
     dur: Millis,
     sleep: Sleep,
     expire: Cell<time::Instant>,
-    _t: marker::PhantomData<(R, E)>,
+    _t: marker::PhantomData<E>,
 }
 
-impl<R, E, F> KeepAliveService<R, E, F>
+impl<E, F> KeepAliveService<E, F>
 where
     F: Fn() -> E,
 {
@@ -100,7 +99,7 @@ where
     }
 }
 
-impl<R, E, F> fmt::Debug for KeepAliveService<R, E, F> {
+impl<E, F> fmt::Debug for KeepAliveService<E, F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeepAliveService")
             .field("dur", &self.dur)
@@ -110,12 +109,11 @@ impl<R, E, F> fmt::Debug for KeepAliveService<R, E, F> {
     }
 }
 
-impl<St, R, E, F> Service<St> for KeepAliveService<R, E, F>
+impl<St, Req, E, F> Service<St, Req> for KeepAliveService<E, F>
 where
     F: Fn() -> E,
 {
-    type Req = R;
-    type Res = R;
+    type Res = Req;
     type Error = E;
 
     async fn ready(&self, _: ReadyCtx<'_, Self, St>) -> Result<(), Self::Error> {
@@ -143,7 +141,7 @@ where
     }
 
     #[inline]
-    async fn call(&self, req: R, _: Ctx<'_, Self, St>) -> Result<R, E> {
+    async fn call(&self, req: Req, _: Ctx<'_, Self, St>) -> Result<Req, E> {
         self.expire.set(now());
         Ok(req)
     }

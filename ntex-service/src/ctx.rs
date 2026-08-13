@@ -159,9 +159,9 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
+    pub async fn ready<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -179,13 +179,13 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub(crate) async fn ready_with_st<S, St1>(
+    pub(crate) async fn ready_with_st<S, St1, Req>(
         &self,
         svc: &'a S,
         st: &'a St1,
     ) -> Result<(), S::Error>
     where
-        S: Service<St1>,
+        S: Service<St1, Req>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -204,9 +204,9 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub async fn call<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
+    pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         self.ready(svc).await?;
 
@@ -224,14 +224,14 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub(crate) async fn call_with_st<S, St1>(
+    pub(crate) async fn call_with_st<S, St1, Req>(
         &self,
         svc: &'a S,
-        req: S::Req,
+        req: Req,
         st: &St1,
     ) -> Result<S::Res, S::Error>
     where
-        S: Service<St1>,
+        S: Service<St1, Req>,
     {
         self.ready_with_st(svc, st).await?;
 
@@ -249,9 +249,9 @@ impl<'a, Svc, St> Ctx<'a, Svc, St> {
 
     #[inline]
     /// Call service, do not check service readiness
-    pub async fn call_nowait<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
+    pub async fn call_nowait<S, R>(&self, svc: &'a S, req: R) -> Result<S::Res, S::Error>
     where
-        S: Service<St>,
+        S: Service<St, R>,
     {
         svc.call(
             req,
@@ -311,9 +311,9 @@ impl<'a, Svc, St> ReadyCtx<'a, Svc, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
+    pub async fn ready<S, Req>(&self, svc: &'a S) -> Result<(), S::Error>
     where
-        S: Service<St>,
+        S: Service<St, Req>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -331,13 +331,13 @@ impl<'a, Svc, St> ReadyCtx<'a, Svc, St> {
     }
 
     /// Returns when the service is able to process requests.
-    pub(crate) async fn ready_with_st<S, St1>(
+    pub(crate) async fn ready_with_st<S, St1, Req>(
         &self,
         svc: &'a S,
         st: &'a St1,
     ) -> Result<(), S::Error>
     where
-        S: Service<St1>,
+        S: Service<St1, Req>,
     {
         // check readiness and notify waiters
         ReadyCall {
@@ -351,6 +351,34 @@ impl<'a, Svc, St> ReadyCtx<'a, Svc, St> {
             idx: self.idx,
             waiters: self.waiters,
         }
+        .await
+    }
+
+    #[inline]
+    /// Call service without waiting for service readiness.
+    pub async fn call<S, Req>(&self, svc: &'a S, req: Req) -> Result<S::Res, S::Error>
+    where
+        S: Service<St, Req>,
+        St: Default,
+    {
+        let mut _st;
+
+        let st = if let Some(st) = self.st {
+            st
+        } else {
+            _st = St::default();
+            &_st
+        };
+
+        svc.call(
+            req,
+            Ctx {
+                st,
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            },
+        )
         .await
     }
 }
