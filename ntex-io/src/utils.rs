@@ -19,7 +19,7 @@ pub fn seal<F, S, St>(
     srv: S,
 ) -> impl ServiceFactory<
     St,
-    Io<F>,
+    Req = Io<F>,
     Res = S::Res,
     Error = S::Error,
     InitCfg = S::InitCfg,
@@ -27,7 +27,7 @@ pub fn seal<F, S, St>(
 >
 where
     F: Filter,
-    S: ServiceFactory<St, IoBoxed>,
+    S: ServiceFactory<St, Req = IoBoxed>,
 {
     chain_factory(fn_service(|io: Io<F>| Ready::Ok(io.boxed())))
         .map_init_err(|()| unreachable!())

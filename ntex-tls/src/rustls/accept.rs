@@ -13,24 +13,29 @@ use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
 /// Support `TLS` connections via rustls package
 ///
 /// `rust-tls` feature enables `TlsAcceptor` type
-pub struct TlsAcceptor {
+pub struct TlsAcceptor<F> {
     config: Arc<ServerConfig>,
+    _t: PhantomData<F>,
 }
 
-impl TlsAcceptor {
+impl<F> TlsAcceptor<F> {
     /// Create rustls based `Acceptor` service factory
     pub fn new(config: Arc<ServerConfig>) -> Self {
-        Self { config }
+        Self {
+            config,
+            _t: PhantomData,
+        }
     }
 }
 
-impl From<ServerConfig> for TlsAcceptor {
+impl<F> From<ServerConfig> for TlsAcceptor<F> {
     fn from(cfg: ServerConfig) -> Self {
         Self::new(Arc::new(cfg))
     }
 }
 
-impl<F: Filter, St> ServiceFactory<St, Io<F>> for TlsAcceptor {
+impl<F: Filter, St> ServiceFactory<St> for TlsAcceptor<F> {
+    type Req = Io<F>;
     type Res = Io<Layer<TlsServerFilter, F>>;
     type Error = io::Error;
     type Service = TlsAcceptorService<F>;

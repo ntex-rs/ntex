@@ -4,14 +4,14 @@ use crate::dev::{Apply, ApplyCtx, ServiceChainFactory};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply middleware to a service.
-pub fn apply<M, S, St, Req, U>(
+pub fn apply<M, S, St, U>(
     mw: M,
     factory: U,
-) -> ServiceChainFactory<ApplyMiddleware<M, S>, St, Req>
+) -> ServiceChainFactory<ApplyMiddleware<M, S>, St>
 where
-    S: ServiceFactory<St, Req>,
+    S: ServiceFactory<St>,
     M: Middleware<S::Service, S::InitCfg>,
-    U: IntoServiceFactory<S, St, Req>,
+    U: IntoServiceFactory<S, St>,
 {
     ServiceChainFactory {
         factory: ApplyMiddleware::new(mw, factory.into_factory()),
@@ -104,9 +104,9 @@ pub trait Middleware<Svc, Cfg = ()> {
     fn apply<Fac, St, Req>(
         self,
         factory: Fac,
-    ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac>, St, Req>
+    ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac>, St>
     where
-        Fac: ServiceFactory<St, Req, Service = Svc, InitCfg = Cfg>,
+        Fac: ServiceFactory<St, Service = Svc, InitCfg = Cfg>,
         Self: Sized,
         Self::Service: Service<St, Req = Req>,
     {
@@ -154,12 +154,13 @@ where
     }
 }
 
-impl<M, Fac, St, Req> ServiceFactory<St, Req> for ApplyMiddleware<M, Fac>
+impl<M, Fac, St> ServiceFactory<St> for ApplyMiddleware<M, Fac>
 where
-    Fac: ServiceFactory<St, Req>,
+    Fac: ServiceFactory<St>,
     M: Middleware<Fac::Service, Fac::InitCfg>,
-    M::Service: Service<St, Req = Req>,
+    M::Service: Service<St>,
 {
+    type Req = <M::Service as Service<St>>::Req;
     type Res = <M::Service as Service<St>>::Res;
     type Error = <M::Service as Service<St>>::Error;
 

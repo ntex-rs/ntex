@@ -26,7 +26,6 @@ mod map_err;
 mod map_init_err;
 mod middleware;
 mod pipeline;
-// mod st;
 mod then;
 mod util;
 
@@ -38,7 +37,6 @@ pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
-// pub use self::st::{FromSt, FromStResult};
 
 #[allow(unused_variables)]
 /// An asynchronous function from a `Request` to a `Response`.
@@ -192,7 +190,10 @@ pub trait Service<St> {
 ///
 /// Simple factories can often use [`fn_factory`] or [`fn_factory_with_config`]
 /// to reduce boilerplate.
-pub trait ServiceFactory<St, Req> {
+pub trait ServiceFactory<St> {
+    /// Request accepted by the service.
+    type Req;
+
     /// Responses given by the created services.
     type Res;
 
@@ -200,7 +201,7 @@ pub trait ServiceFactory<St, Req> {
     type Error;
 
     /// The type of `Service` produced by this factory.
-    type Service: Service<St, Req = Req, Res = Self::Res, Error = Self::Error>;
+    type Service: Service<St, Req = Self::Req, Res = Self::Res, Error = Self::Error>;
 
     /// Configuration type for the service factory.
     type InitCfg;
@@ -228,7 +229,7 @@ pub trait ServiceFactory<St, Req> {
     fn map<F, Res>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, St, Req, Res>, St, Req>
+    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, St, Res>, St>
     where
         Self: Sized,
         F: Fn(Self::Res) -> Res + Clone,
@@ -242,7 +243,7 @@ pub trait ServiceFactory<St, Req> {
     fn map_err<F, E>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, St, Req, F, E>, St, Req>
+    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, St, F, E>, St>
     where
         Self: Sized,
         F: Fn(Self::Error) -> E + Clone,
@@ -256,7 +257,7 @@ pub trait ServiceFactory<St, Req> {
     fn map_init_err<F, E>(
         self,
         f: F,
-    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, St, Req, F, E>, St, Req>
+    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, St, F, E>, St>
     where
         Self: Sized,
         F: Fn(Self::InitError) -> E + Clone,
@@ -269,7 +270,7 @@ pub trait ServiceFactory<St, Req> {
         self,
     ) -> boxed::BoxServiceFactory<
         St,
-        Req,
+        Self::Req,
         Self::Res,
         Self::Error,
         Self::InitCfg,
@@ -277,7 +278,6 @@ pub trait ServiceFactory<St, Req> {
     >
     where
         St: 'static,
-        Req: 'static,
         Self: Sized + 'static,
     {
         boxed::factory(self)
@@ -342,10 +342,11 @@ where
     }
 }
 
-impl<S, St, Req> ServiceFactory<St, Req> for Rc<S>
+impl<S, St> ServiceFactory<St> for Rc<S>
 where
-    S: ServiceFactory<St, Req>,
+    S: ServiceFactory<St>,
 {
+    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
     type Service = S::Service;
@@ -364,9 +365,9 @@ pub trait IntoService<Svc> {
 }
 
 /// Trait for types that can be converted to a `ServiceFactory`
-pub trait IntoServiceFactory<T, St, Req>
+pub trait IntoServiceFactory<T, St>
 where
-    T: ServiceFactory<St, Req>,
+    T: ServiceFactory<St>,
 {
     /// Convert `Self` to a `ServiceFactory`
     fn into_factory(self) -> T;
@@ -379,9 +380,9 @@ impl<Svc> IntoService<Svc> for Svc {
     }
 }
 
-impl<T, Req, St> IntoServiceFactory<T, St, Req> for T
+impl<T, St> IntoServiceFactory<T, St> for T
 where
-    T: ServiceFactory<St, Req>,
+    T: ServiceFactory<St>,
 {
     #[inline]
     fn into_factory(self) -> T {

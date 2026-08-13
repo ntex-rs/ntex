@@ -54,10 +54,11 @@ impl<R, E, F, C> fmt::Debug for KeepAlive<R, E, F, C> {
     }
 }
 
-impl<St, R, E, F, C> ServiceFactory<St, R> for KeepAlive<R, E, F, C>
+impl<St, R, E, F, C> ServiceFactory<St> for KeepAlive<R, E, F, C>
 where
     F: Fn() -> E + Clone,
 {
+    type Req = R;
     type Res = R;
     type Error = E;
 

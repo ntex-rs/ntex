@@ -20,14 +20,14 @@ where
 }
 
 /// Service factory that produces `apply_fn` service.
-pub fn apply_fn_factory<T, St, Req, F, In, Out, Err, U>(
+pub fn apply_fn_factory<T, St, F, In, Out, Err, U>(
     service: U,
     f: F,
-) -> ServiceChainFactory<ApplyFactory<T, St, Req, F, In, Out, Err>, St, In>
+) -> ServiceChainFactory<ApplyFactory<T, St, F, In, Out, Err>, St>
 where
-    T: ServiceFactory<St, Req>,
+    T: ServiceFactory<St>,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service, St>) -> Result<Out, Err> + Clone,
-    U: IntoServiceFactory<T, St, Req>,
+    U: IntoServiceFactory<T, St>,
     Err: From<T::Error>,
 {
     crate::chain_factory(ApplyFactory::new(service.into_factory(), f))
@@ -132,19 +132,19 @@ where
 }
 
 /// `apply()` service factory
-pub struct ApplyFactory<T, St, Req, F, In, Out, Err>
+pub struct ApplyFactory<T, St, F, In, Out, Err>
 where
-    T: ServiceFactory<St, Req>,
+    T: ServiceFactory<St>,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service, St>) -> Result<Out, Err> + Clone,
 {
     service: T,
     f: F,
-    r: marker::PhantomData<fn(St, Req) -> (In, Out)>,
+    r: marker::PhantomData<fn(St) -> (In, Out)>,
 }
 
-impl<T, St, Req, F, In, Out, Err> ApplyFactory<T, St, Req, F, In, Out, Err>
+impl<T, St, F, In, Out, Err> ApplyFactory<T, St, F, In, Out, Err>
 where
-    T: ServiceFactory<St, Req>,
+    T: ServiceFactory<St>,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
@@ -158,9 +158,9 @@ where
     }
 }
 
-impl<T, St, Req, F, In, Out, Err> Clone for ApplyFactory<T, St, Req, F, In, Out, Err>
+impl<T, St, F, In, Out, Err> Clone for ApplyFactory<T, St, F, In, Out, Err>
 where
-    T: ServiceFactory<St, Req> + Clone,
+    T: ServiceFactory<St> + Clone,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
@@ -173,9 +173,9 @@ where
     }
 }
 
-impl<T, St, Req, F, In, Out, Err> fmt::Debug for ApplyFactory<T, St, Req, F, In, Out, Err>
+impl<T, St, F, In, Out, Err> fmt::Debug for ApplyFactory<T, St, F, In, Out, Err>
 where
-    T: ServiceFactory<St, Req> + fmt::Debug,
+    T: ServiceFactory<St> + fmt::Debug,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
@@ -187,13 +187,13 @@ where
     }
 }
 
-impl<T, St, Req, F, In, Out, Err> ServiceFactory<St, In>
-    for ApplyFactory<T, St, Req, F, In, Out, Err>
+impl<T, St, F, In, Out, Err> ServiceFactory<St> for ApplyFactory<T, St, F, In, Out, Err>
 where
-    T: ServiceFactory<St, Req>,
+    T: ServiceFactory<St>,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service, St>) -> Result<Out, Err> + Clone,
     Err: From<T::Error>,
 {
+    type Req = In;
     type Res = Out;
     type Error = Err;
 

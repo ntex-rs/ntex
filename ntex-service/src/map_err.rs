@@ -85,19 +85,19 @@ where
 /// service's error.
 ///
 /// This is created by the `NewServiceExt::map_err` method.
-pub struct MapErrFactory<A, S, R, F, E>
+pub struct MapErrFactory<A, S, F, E>
 where
-    A: ServiceFactory<S, R>,
+    A: ServiceFactory<S>,
     F: Fn(A::Error) -> E + Clone,
 {
     a: A,
     f: F,
-    e: PhantomData<fn(S, R) -> E>,
+    e: PhantomData<fn(S) -> E>,
 }
 
-impl<A, S, R, F, E> MapErrFactory<A, S, R, F, E>
+impl<A, S, F, E> MapErrFactory<A, S, F, E>
 where
-    A: ServiceFactory<S, R>,
+    A: ServiceFactory<S>,
     F: Fn(A::Error) -> E + Clone,
 {
     /// Create new `MapErr` new service instance
@@ -110,9 +110,9 @@ where
     }
 }
 
-impl<A, S, R, F, E> Clone for MapErrFactory<A, S, R, F, E>
+impl<A, S, F, E> Clone for MapErrFactory<A, S, F, E>
 where
-    A: ServiceFactory<S, R> + Clone,
+    A: ServiceFactory<S> + Clone,
     F: Fn(A::Error) -> E + Clone,
 {
     fn clone(&self) -> Self {
@@ -124,9 +124,9 @@ where
     }
 }
 
-impl<A, S, R, F, E> fmt::Debug for MapErrFactory<A, S, R, F, E>
+impl<A, S, F, E> fmt::Debug for MapErrFactory<A, S, F, E>
 where
-    A: ServiceFactory<S, R> + fmt::Debug,
+    A: ServiceFactory<S> + fmt::Debug,
     F: Fn(A::Error) -> E + Clone,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -137,11 +137,12 @@ where
     }
 }
 
-impl<A, S, R, F, E> ServiceFactory<S, R> for MapErrFactory<A, S, R, F, E>
+impl<A, S, F, E> ServiceFactory<S> for MapErrFactory<A, S, F, E>
 where
-    A: ServiceFactory<S, R>,
+    A: ServiceFactory<S>,
     F: Fn(A::Error) -> E + Clone,
 {
+    type Req = A::Req;
     type Res = A::Res;
     type Error = E;
 

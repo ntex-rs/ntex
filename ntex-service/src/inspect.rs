@@ -172,11 +172,12 @@ where
     }
 }
 
-impl<S, F, St, R> ServiceFactory<St, R> for InspectFactory<S, F>
+impl<S, F, St> ServiceFactory<St> for InspectFactory<S, F>
 where
-    S: ServiceFactory<St, R>,
+    S: ServiceFactory<St>,
     F: Fn(&S::Res) + Clone,
 {
+    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 
@@ -231,11 +232,12 @@ where
     }
 }
 
-impl<S, F, St, R> ServiceFactory<St, R> for InspectErrFactory<S, F>
+impl<S, F, St> ServiceFactory<St> for InspectErrFactory<S, F>
 where
-    S: ServiceFactory<St, R>,
+    S: ServiceFactory<St>,
     F: Fn(&S::Error) + Clone,
 {
+    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
 

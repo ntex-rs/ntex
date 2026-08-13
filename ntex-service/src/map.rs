@@ -73,15 +73,15 @@ where
 }
 
 /// `MapNewService` new service combinator
-pub struct MapFactory<A, F, St, Req, Res> {
+pub struct MapFactory<A, F, St, Res> {
     a: A,
     f: F,
-    r: PhantomData<fn(St, Req) -> Res>,
+    r: PhantomData<fn(St) -> Res>,
 }
 
-impl<A, F, St, Req, Res> MapFactory<A, F, St, Req, Res>
+impl<A, F, St, Res> MapFactory<A, F, St, Res>
 where
-    A: ServiceFactory<St, Req>,
+    A: ServiceFactory<St>,
     F: Fn(A::Res) -> Res,
 {
     /// Create new `Map` new service instance
@@ -94,7 +94,7 @@ where
     }
 }
 
-impl<A, F, St, Req, Res> Clone for MapFactory<A, F, St, Req, Res>
+impl<A, F, St, Res> Clone for MapFactory<A, F, St, Res>
 where
     A: Clone,
     F: Clone,
@@ -109,7 +109,7 @@ where
     }
 }
 
-impl<A, F, St, Req, Res> fmt::Debug for MapFactory<A, F, St, Req, Res>
+impl<A, F, St, Res> fmt::Debug for MapFactory<A, F, St, Res>
 where
     A: fmt::Debug,
 {
@@ -121,11 +121,12 @@ where
     }
 }
 
-impl<A, F, St, Req, Res> ServiceFactory<St, Req> for MapFactory<A, F, St, Req, Res>
+impl<A, F, St, Res> ServiceFactory<St> for MapFactory<A, F, St, Res>
 where
-    A: ServiceFactory<St, Req>,
+    A: ServiceFactory<St>,
     F: Fn(A::Res) -> Res + Clone,
 {
+    type Req = A::Req;
     type Res = Res;
     type Error = A::Error;
 

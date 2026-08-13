@@ -90,7 +90,8 @@ impl<T: Address, St> ConnectorService<T, St> {
     }
 }
 
-impl<T: Address, St> ServiceFactory<St, Connect<T>> for Connector<T> {
+impl<T: Address, St> ServiceFactory<St> for Connector<T> {
+    type Req = Connect<T>;
     type Res = Io;
     type Error = Error<ConnectError>;
     type Service = ConnectorService<T, St>;

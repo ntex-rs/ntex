@@ -200,11 +200,12 @@ where
     }
 }
 
-impl<F, St, Req, Res, Err, Cfg> ServiceFactory<St, Req>
+impl<F, St, Req, Res, Err, Cfg> ServiceFactory<St>
     for FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
+    type Req = Req;
     type Res = Res;
     type Error = Err;
 
@@ -267,12 +268,12 @@ where
     }
 }
 
-impl<F, St, Cfg, Srv, Req, Err> ServiceFactory<St, Req>
-    for FnServiceConfig<F, Cfg, Srv, Err>
+impl<F, St, Cfg, Srv, Err> ServiceFactory<St> for FnServiceConfig<F, Cfg, Srv, Err>
 where
     F: AsyncFn(&Cfg) -> Result<Srv, Err>,
-    Srv: Service<St, Req = Req>,
+    Srv: Service<St>,
 {
+    type Req = Srv::Req;
     type Res = Srv::Res;
     type Error = Srv::Error;
 
@@ -304,12 +305,13 @@ where
     }
 }
 
-impl<F, S, St, Req, E, C> ServiceFactory<St, Req> for FnServiceNoConfig<F, S, E, C>
+impl<F, S, St, E, C> ServiceFactory<St> for FnServiceNoConfig<F, S, E, C>
 where
     F: AsyncFn() -> Result<S, E>,
-    S: Service<St, Req = Req>,
+    S: Service<St>,
     C: 'static,
 {
+    type Req = S::Req;
     type Res = S::Res;
     type Error = S::Error;
     type Service = S;

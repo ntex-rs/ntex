@@ -6,20 +6,20 @@ use super::{IntoServiceFactory, ServiceFactory};
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<T, S, R, U, F, C>(factory: U, f: F) -> MapConfig<T, F, C>
+pub fn map_config<T, S, U, F, C>(factory: U, f: F) -> MapConfig<T, F, C>
 where
-    T: ServiceFactory<R, S>,
-    U: IntoServiceFactory<T, R, S>,
+    T: ServiceFactory<S>,
+    U: IntoServiceFactory<T, S>,
     F: Fn(&C) -> T::InitCfg,
 {
     MapConfig::new(factory.into_factory(), f)
 }
 
 /// Replace config with unit
-pub fn unit_config<T, C, S, R, U>(factory: U) -> UnitConfig<T, C>
+pub fn unit_config<T, C, S, U>(factory: U) -> UnitConfig<T, C>
 where
-    T: ServiceFactory<R, S>,
-    U: IntoServiceFactory<T, R, S>,
+    T: ServiceFactory<S>,
+    U: IntoServiceFactory<T, S>,
 {
     UnitConfig::new(factory.into_factory())
 }
@@ -68,11 +68,12 @@ where
     }
 }
 
-impl<A, F, C, S, R> ServiceFactory<S, R> for MapConfig<A, F, C>
+impl<A, F, C, S> ServiceFactory<S> for MapConfig<A, F, C>
 where
-    A: ServiceFactory<S, R>,
+    A: ServiceFactory<S>,
     F: Fn(&C) -> A::InitCfg,
 {
+    type Req = A::Req;
     type Res = A::Res;
     type Error = A::Error;
 
@@ -102,10 +103,11 @@ impl<A, C> UnitConfig<A, C> {
     }
 }
 
-impl<A, C, S, R> ServiceFactory<S, R> for UnitConfig<A, C>
+impl<A, C, S> ServiceFactory<S> for UnitConfig<A, C>
 where
-    A: ServiceFactory<S, R, InitCfg = ()>,
+    A: ServiceFactory<S, InitCfg = ()>,
 {
+    type Req = A::Req;
     type Res = A::Res;
     type Error = A::Error;
 

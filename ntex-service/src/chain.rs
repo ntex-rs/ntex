@@ -25,10 +25,10 @@ where
 }
 
 /// Constructs new chain factory with one service factory.
-pub fn chain_factory<Fac, St, Req, F>(factory: F) -> ServiceChainFactory<Fac, St, Req>
+pub fn chain_factory<Sf, St, F>(factory: F) -> ServiceChainFactory<Sf, St>
 where
-    Fac: ServiceFactory<St, Req>,
-    F: IntoServiceFactory<Fac, St, Req>,
+    Sf: ServiceFactory<St>,
+    F: IntoServiceFactory<Sf, St>,
 {
     ServiceChainFactory {
         factory: factory.into_factory(),
@@ -202,26 +202,26 @@ impl<Svc: Service<St>, St> Service<St> for ServiceChain<Svc, St> {
 }
 
 /// Service factory builder
-pub struct ServiceChainFactory<Fac, St, Req> {
-    pub(crate) factory: Fac,
-    pub(crate) _t: PhantomData<(St, Req)>,
+pub struct ServiceChainFactory<Sf, St> {
+    pub(crate) factory: Sf,
+    pub(crate) _t: PhantomData<St>,
 }
 
-impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
+impl<Sf: ServiceFactory<St>, St> ServiceChainFactory<Sf, St> {
     /// Call another service after call to this one has resolved successfully.
     pub fn and_then<F, U>(
         self,
         factory: F,
-    ) -> ServiceChainFactory<AndThenFactory<Fac, U>, St, Req>
+    ) -> ServiceChainFactory<AndThenFactory<Sf, U>, St>
     where
         Self: Sized,
-        F: IntoServiceFactory<U, St, Fac::Res>,
+        F: IntoServiceFactory<U, St>,
         U: ServiceFactory<
                 St,
-                Fac::Res,
-                Error = Fac::Error,
-                InitCfg = Fac::InitCfg,
-                InitError = Fac::InitError,
+                Req = Sf::Res,
+                Error = Sf::Error,
+                InitCfg = Sf::InitCfg,
+                InitError = Sf::InitError,
             >,
     {
         ServiceChainFactory {
@@ -233,9 +233,9 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     /// Apply Middleware to current service factory.
     ///
     /// Short version of `apply(middleware, chain_factory(...))`
-    pub fn apply<U>(self, tr: U) -> ServiceChainFactory<ApplyMiddleware<U, Fac>, St, Req>
+    pub fn apply<U>(self, tr: U) -> ServiceChainFactory<ApplyMiddleware<U, Sf>, St>
     where
-        U: Middleware<Fac::Service, Fac::InitCfg>,
+        U: Middleware<Sf::Service, Sf::InitCfg>,
     {
         crate::apply(tr, self.factory)
     }
@@ -246,11 +246,11 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     pub fn apply_fn<F, In, Out, Err>(
         self,
         f: F,
-    ) -> ServiceChainFactory<ApplyFactory<Fac, St, Req, F, In, Out, Err>, St, In>
+    ) -> ServiceChainFactory<ApplyFactory<Sf, St, F, In, Out, Err>, St>
     where
-        F: AsyncFn(In, &ApplyCtx<'_, Fac::Service, St>) -> Result<Out, Err> + Clone,
-        Fac: ServiceFactory<St, Req>,
-        Err: From<Fac::Error>,
+        F: AsyncFn(In, &ApplyCtx<'_, Sf::Service, St>) -> Result<Out, Err> + Clone,
+        Sf: ServiceFactory<St>,
+        Err: From<Sf::Error>,
     {
         crate::apply_fn_factory(self.factory, f)
     }
@@ -261,16 +261,16 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     ///
     /// Note that this function consumes the receiving factory and returns a
     /// wrapped version of it.
-    pub fn then<F, U>(self, factory: F) -> ServiceChainFactory<ThenFactory<Fac, U>, St, Req>
+    pub fn then<F, U>(self, factory: F) -> ServiceChainFactory<ThenFactory<Sf, U>, St>
     where
         Self: Sized,
-        F: IntoServiceFactory<U, St, Result<Fac::Res, Fac::Error>>,
+        F: IntoServiceFactory<U, St>,
         U: ServiceFactory<
                 St,
-                Result<Fac::Res, Fac::Error>,
-                Error = Fac::Error,
-                InitCfg = Fac::InitCfg,
-                InitError = Fac::InitError,
+                Req = Result<Sf::Res, Sf::Error>,
+                Error = Sf::Error,
+                InitCfg = Sf::InitCfg,
+                InitError = Sf::InitError,
             >,
     {
         ServiceChainFactory {
@@ -281,13 +281,10 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
 
     /// Map this service's output to a different type, returning a new service
     /// of the resulting type.
-    pub fn map<F, Res>(
-        self,
-        f: F,
-    ) -> ServiceChainFactory<MapFactory<Fac, F, St, Req, Res>, St, Req>
+    pub fn map<F, Res>(self, f: F) -> ServiceChainFactory<MapFactory<Sf, F, St, Res>, St>
     where
         Self: Sized,
-        F: Fn(Fac::Res) -> Res + Clone,
+        F: Fn(Sf::Res) -> Res + Clone,
     {
         ServiceChainFactory {
             factory: MapFactory::new(self.factory, f),
@@ -296,13 +293,10 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     }
 
     /// Map this service's error to a different error.
-    pub fn map_err<F, E>(
-        self,
-        f: F,
-    ) -> ServiceChainFactory<MapErrFactory<Fac, St, Req, F, E>, St, Req>
+    pub fn map_err<F, E>(self, f: F) -> ServiceChainFactory<MapErrFactory<Sf, St, F, E>, St>
     where
         Self: Sized,
-        F: Fn(Fac::Error) -> E + Clone,
+        F: Fn(Sf::Error) -> E + Clone,
     {
         ServiceChainFactory {
             factory: MapErrFactory::new(self.factory, f),
@@ -314,10 +308,10 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     pub fn map_init_err<F, E>(
         self,
         f: F,
-    ) -> ServiceChainFactory<MapInitErr<Fac, St, Req, F, E>, St, Req>
+    ) -> ServiceChainFactory<MapInitErr<Sf, St, F, E>, St>
     where
         Self: Sized,
-        F: Fn(Fac::InitError) -> E + Clone,
+        F: Fn(Sf::InitError) -> E + Clone,
     {
         ServiceChainFactory {
             factory: MapInitErr::new(self.factory, f),
@@ -328,10 +322,10 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     /// Calls a function with a reference to the contained value if Ok.
     ///
     /// Returns the original result.
-    pub fn inspect<F>(self, f: F) -> ServiceChainFactory<InspectFactory<Fac, F>, St, Req>
+    pub fn inspect<F>(self, f: F) -> ServiceChainFactory<InspectFactory<Sf, F>, St>
     where
         Self: Sized,
-        F: Fn(&Fac::Res) + Clone,
+        F: Fn(&Sf::Res) + Clone,
     {
         ServiceChainFactory {
             factory: InspectFactory::new(self.factory, f),
@@ -342,13 +336,10 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     /// Calls a function with a reference to the contained value if Err.
     ///
     /// Returns the original result.
-    pub fn inspect_err<F>(
-        self,
-        f: F,
-    ) -> ServiceChainFactory<InspectErrFactory<Fac, F>, St, Req>
+    pub fn inspect_err<F>(self, f: F) -> ServiceChainFactory<InspectErrFactory<Sf, F>, St>
     where
         Self: Sized,
-        F: Fn(&Fac::Error) + Clone,
+        F: Fn(&Sf::Error) + Clone,
     {
         ServiceChainFactory {
             factory: InspectErrFactory::new(self.factory, f),
@@ -359,8 +350,8 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     /// Create and return a new service value asynchronously and wrap into a container
     pub async fn pipeline(
         &self,
-        cfg: &Fac::InitCfg,
-    ) -> Result<Pipeline<Fac::Service>, Fac::InitError>
+        cfg: &Sf::InitCfg,
+    ) -> Result<Pipeline<Sf::Service>, Sf::InitError>
     where
         Self: Sized,
     {
@@ -368,9 +359,9 @@ impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceChainFactory<Fac, St, Req> {
     }
 }
 
-impl<Fac, St, Req> Clone for ServiceChainFactory<Fac, St, Req>
+impl<Sf, St> Clone for ServiceChainFactory<Sf, St>
 where
-    Fac: Clone,
+    Sf: Clone,
 {
     fn clone(&self) -> Self {
         ServiceChainFactory {
@@ -380,9 +371,9 @@ where
     }
 }
 
-impl<Fac, St, Req> fmt::Debug for ServiceChainFactory<Fac, St, Req>
+impl<Sf, St> fmt::Debug for ServiceChainFactory<Sf, St>
 where
-    Fac: fmt::Debug,
+    Sf: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ServiceChainFactory")
@@ -391,17 +382,16 @@ where
     }
 }
 
-impl<Fac: ServiceFactory<St, Req>, St, Req> ServiceFactory<St, Req>
-    for ServiceChainFactory<Fac, St, Req>
-{
-    type Res = Fac::Res;
-    type Error = Fac::Error;
-    type Service = Fac::Service;
-    type InitCfg = Fac::InitCfg;
-    type InitError = Fac::InitError;
+impl<Sf: ServiceFactory<St>, St> ServiceFactory<St> for ServiceChainFactory<Sf, St> {
+    type Req = Sf::Req;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
+    type Service = Sf::Service;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: &Fac::InitCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Sf::Service, Sf::InitError> {
         self.factory.create(cfg).await
     }
 }

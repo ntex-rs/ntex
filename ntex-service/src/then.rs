@@ -62,17 +62,18 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, S, R> ServiceFactory<S, R> for ThenFactory<A, B>
+impl<A, B, S> ServiceFactory<S> for ThenFactory<A, B>
 where
-    A: ServiceFactory<S, R>,
+    A: ServiceFactory<S>,
     B: ServiceFactory<
             S,
-            Result<A::Res, A::Error>,
+            Req = Result<A::Res, A::Error>,
             Error = A::Error,
             InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
 {
+    type Req = A::Req;
     type Res = B::Res;
     type Error = A::Error;
 

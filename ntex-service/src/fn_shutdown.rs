@@ -48,10 +48,11 @@ impl<Req, Err, F, Cfg> fmt::Debug for FnShutdown<Req, Err, F, Cfg> {
     }
 }
 
-impl<Req, Err, F, St, Cfg> ServiceFactory<St, Req> for FnShutdown<Req, Err, F, Cfg>
+impl<Req, Err, F, St, Cfg> ServiceFactory<St> for FnShutdown<Req, Err, F, Cfg>
 where
     F: AsyncFnOnce() + Clone,
 {
+    type Req = Req;
     type Res = Req;
     type Error = Err;
     type Service = FnShutdown<Req, Err, F, Cfg>;

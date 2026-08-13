@@ -46,20 +46,21 @@ impl<ChooseFn, SFLeft, SFRight> fmt::Debug
     }
 }
 
-impl<St, Req, ChooseFn, SFLeft, SFRight> ServiceFactory<St, Req>
+impl<St, ChooseFn, SFLeft, SFRight> ServiceFactory<St>
     for EitherServiceFactory<ChooseFn, SFLeft, SFRight>
 where
     ChooseFn: Fn(&SFLeft::InitCfg) -> bool,
-    SFLeft: ServiceFactory<St, Req>,
+    SFLeft: ServiceFactory<St>,
     SFRight: ServiceFactory<
             St,
-            Req,
+            Req = SFLeft::Req,
             Res = SFLeft::Res,
             Error = SFLeft::Error,
             InitCfg = SFLeft::InitCfg,
             InitError = SFLeft::InitError,
         >,
 {
+    type Req = SFLeft::Req;
     type Res = SFLeft::Res;
     type Error = SFLeft::Error;
     type InitCfg = SFLeft::InitCfg;

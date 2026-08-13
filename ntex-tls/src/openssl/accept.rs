@@ -13,30 +13,35 @@ use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, openssl::SslFilter};
 /// Support `TLS` server connections via openssl package
 ///
 /// `openssl` feature enables `Acceptor` type
-pub struct SslAcceptor {
+pub struct SslAcceptor<F> {
     acceptor: ssl::SslAcceptor,
+    _t: PhantomData<F>,
 }
 
-impl SslAcceptor {
+impl<F> SslAcceptor<F> {
     /// Create default openssl acceptor service
     pub fn new(acceptor: ssl::SslAcceptor) -> Self {
-        SslAcceptor { acceptor }
+        SslAcceptor {
+            acceptor,
+            _t: PhantomData,
+        }
     }
 }
 
-impl fmt::Debug for SslAcceptor {
+impl<F> fmt::Debug for SslAcceptor<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SslAcceptor").finish()
     }
 }
 
-impl From<ssl::SslAcceptor> for SslAcceptor {
+impl<F> From<ssl::SslAcceptor> for SslAcceptor<F> {
     fn from(acceptor: ssl::SslAcceptor) -> Self {
         Self::new(acceptor)
     }
 }
 
-impl<F: Filter, St> ServiceFactory<St, Io<F>> for SslAcceptor {
+impl<F: Filter, St> ServiceFactory<St> for SslAcceptor<F> {
+    type Req = Io<F>;
     type Res = Io<Layer<SslFilter, F>>;
     type Error = Box<dyn Error>;
     type Service = SslAcceptorService<F>;

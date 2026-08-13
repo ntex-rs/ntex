@@ -34,16 +34,17 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, S, St> ServiceFactory<St, Connect<A>> for SslConnector<S>
+impl<A: Address, S, St> ServiceFactory<St> for SslConnector<S>
 where
     S: ServiceFactory<
             St,
-            Connect<A>,
+            Req = Connect<A>,
             Res = Io,
             Error = Error<ConnectError>,
             InitCfg = SharedCfg,
         >,
 {
+    type Req = Connect<A>;
     type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
     type Service = SslConnectorService<S::Service>;
