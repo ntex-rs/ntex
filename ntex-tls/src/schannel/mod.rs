@@ -30,9 +30,7 @@ use windows_sys::Win32::Security::Cryptography::{
 };
 
 mod connect;
-pub use self::connect::{
-    TlsConnector, TlsConnector2, TlsConnectorService, TlsConnectorService2,
-};
+pub use self::connect::{TlsConnector, TlsConnectorService};
 
 /// Windows Schannel client configuration.
 #[derive(Clone, Debug)]
