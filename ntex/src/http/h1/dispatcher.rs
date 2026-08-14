@@ -819,7 +819,7 @@ mod tests {
     pub(crate) fn h1<F, S, B>(
         stream: IoTest,
         service: F,
-    ) -> Dispatcher<Base, S, B, DefaultControlService<F, S::Error>>
+    ) -> Dispatcher<Base, S, B, DefaultControlService<Base, S::Error>>
     where
         F: IntoService<S>,
         S: Service<St = (), Req = Request>,
@@ -868,7 +868,7 @@ mod tests {
             Rc::new(DispatcherConfig::new(
                 SharedCfg::default().get(),
                 service.into_service(),
-                DefaultControlService,
+                DefaultControlService::new(),
             )),
         ));
     }

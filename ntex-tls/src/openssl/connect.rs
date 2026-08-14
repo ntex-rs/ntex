@@ -146,9 +146,9 @@ mod tests {
         let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::new(ssl.build()).clone();
 
-        let srv = factory.pipeline(SharedCfg::default()).await.unwrap();
+        let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
         // always ready
-        assert!(srv.ready().await.is_ok());
+        assert!(srv.ready(&()).await.is_ok());
         let result = srv
             .call(Connect::new("").set_addr(Some(server.addr())), &())
             .await;

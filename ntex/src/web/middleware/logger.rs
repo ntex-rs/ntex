@@ -411,7 +411,7 @@ impl fmt::Display for FormatDisplay<'_> {
 mod tests {
     use super::*;
     use crate::http::{StatusCode, header};
-    use crate::service::{IntoService, Pipeline};
+    use crate::service::{IntoService, Pipeline, ustate_chain};
     use crate::util::lazy;
     use crate::web::test::{self, TestRequest};
     use crate::web::{DefaultError, Error};
@@ -431,11 +431,11 @@ mod tests {
         let logger = Logger::new("%% %{User-Agent}i %{X-Test}o %{HOME}e %D %% test")
             .exclude("/test");
 
-        let srv = Pipeline::new(Middleware::create(
+        let srv = Pipeline::new(ustate_chain(Middleware::create(
             &logger,
             srv.into_service(),
             &SharedCfg::default(),
-        ))
+        )))
         .bind();
         assert!(lazy(|cx| srv.poll_ready(cx).is_ready()).await);
         assert!(lazy(|cx| srv.poll_shutdown(cx).is_ready()).await);

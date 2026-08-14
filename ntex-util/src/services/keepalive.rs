@@ -174,11 +174,11 @@ mod tests {
 
     #[ntex::test]
     async fn test_ka() {
-        let factory = KeepAlive::<_, usize, _, _>::new(Millis(100), || TestErr);
+        let factory = KeepAlive::<_, (), usize, _, _>::new(Millis(100), || TestErr);
         assert!(format!("{factory:?}").contains("KeepAlive"));
         let _ = factory.clone();
 
-        let service = factory.pipeline(&()).await.unwrap().bind(());
+        let service = factory.pipeline(&()).await.unwrap().bind();
         assert!(format!("{service:?}").contains("KeepAliveService"));
 
         assert_eq!(service.call(1usize).await, Ok(1usize));

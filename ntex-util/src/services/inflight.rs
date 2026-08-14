@@ -93,11 +93,13 @@ mod tests {
 
     struct SleepService(mpmc::Receiver<()>);
 
-    impl Service<(), ()> for SleepService {
+    impl Service for SleepService {
+        type St = ();
+        type Req = ();
         type Res = ();
         type Error = ();
 
-        async fn call(&self, _r: (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             let _ = self.0.recv().await;
             Ok(())
         }
@@ -108,7 +110,7 @@ mod tests {
         let (tx, rx) = mpmc::unbounded();
         let counter = Rc::new(Cell::new(0));
 
-        let srv = Pipeline::new(InFlightService::new(1, SleepService(rx))).bind(());
+        let srv = Pipeline::new(InFlightService::new(1, SleepService(rx))).bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let counter2 = counter.clone();
@@ -172,7 +174,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind(());
+        let srv = srv.pipeline(&()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();
@@ -205,7 +207,7 @@ mod tests {
             }),
         );
 
-        let srv = srv.pipeline(&()).await.unwrap().bind(());
+        let srv = srv.pipeline(&()).await.unwrap().bind();
         assert_eq!(lazy(|cx| srv.poll_ready(cx)).await, Poll::Ready(Ok(())));
 
         let srv2 = srv.clone();

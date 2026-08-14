@@ -138,11 +138,13 @@ mod tests {
     #[derive(Clone, Debug, PartialEq)]
     struct TestService(Rc<Cell<usize>>);
 
-    impl Service<(), ()> for TestService {
+    impl Service for TestService {
+        type St = ();
+        type Req = ();
         type Res = ();
         type Error = ();
 
-        async fn call(&self, _r: (), _: Ctx<'_, Self, ()>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             let cnt = self.0.get();
             if cnt == 0 {
                 Ok(())

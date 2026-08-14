@@ -258,17 +258,19 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv1;
 
-    impl Service<(), ()> for Srv1 {
+    impl Service for Srv1 {
+        type St = ();
+        type Req = ();
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _: (), _: Ctx<'_, Self, ()>) -> Result<usize, ()> {
+        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
             Ok(1)
         }
     }
@@ -276,17 +278,19 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv2;
 
-    impl Service<(), ()> for Srv2 {
+    impl Service for Srv2 {
+        type St = ();
+        type Req = ();
         type Res = usize;
         type Error = ();
 
-        async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _: (), _: Ctx<'_, Self, ()>) -> Result<usize, ()> {
+        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
             Ok(2)
         }
     }
@@ -319,10 +323,12 @@ mod tests {
         #[derive(Debug, Clone)]
         struct Srv5;
 
-        impl Service<(), ()> for Srv5 {
+        impl Service for Srv5 {
+            type St = ();
+            type Req = ();
             type Res = usize;
             type Error = ();
-            async fn ready(&self, _: ReadyCtx<'_, Self, ()>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
                 time::sleep(time::Millis(50)).await;
@@ -330,7 +336,7 @@ mod tests {
                 Ok(())
             }
             async fn shutdown(&self) {}
-            async fn call(&self, _r: (), _: Ctx<'_, Self, ()>) -> Result<usize, ()> {
+            async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
                 Ok(2)
             }
         }

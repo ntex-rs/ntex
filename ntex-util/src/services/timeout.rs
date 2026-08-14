@@ -163,11 +163,13 @@ mod tests {
         }
     }
 
-    impl Service<(), ()> for SleepService {
+    impl Service for SleepService {
+        type St = ();
+        type Req = ();
         type Res = ();
         type Error = SrvError;
 
-        async fn call(&self, _: (), _: Ctx<'_, Self, ()>) -> Result<(), SrvError> {
+        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<(), SrvError> {
             crate::time::sleep(self.0).await;
             Ok::<_, SrvError>(())
         }
