@@ -1,4 +1,3 @@
-use crate::service::PipelineSvc;
 use crate::{Service, ServiceCtx};
 
 #[cfg(feature = "compress")]
@@ -15,14 +14,11 @@ use super::{ClientConfig, ClientRawRequest, Connect, ServiceRequest, ServiceResp
 #[derive(Debug)]
 pub struct Sender {
     config: ClientConfig,
-    connector: PipelineSvc<ConnectorService, ()>,
+    connector: ConnectorService,
 }
 
 impl Sender {
-    pub(crate) fn new(
-        connector: PipelineSvc<ConnectorService, ()>,
-        config: ClientConfig,
-    ) -> Self {
+    pub(crate) fn new(connector: ConnectorService, config: ClientConfig) -> Self {
         Self { config, connector }
     }
 }

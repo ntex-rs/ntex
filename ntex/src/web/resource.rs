@@ -76,15 +76,8 @@ impl<Err: ErrorRenderer> Resource<Err> {
 
 impl<Err, M, T> Resource<Err, M, T>
 where
-    T: ServiceFactory<
-            WebRequest<Err>,
-            SharedCfg,
-            Data = (),
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-            InitError = (),
-        >,
-    T::Service: Service<
+    T: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()>,
+    T::Response: Service<
             WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
@@ -259,24 +252,11 @@ where
     ) -> Resource<
         Err,
         M,
-        impl ServiceFactory<
-            WebRequest<Err>,
-            SharedCfg,
-            Data = (),
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-            InitError = (),
-        >,
+        impl ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()>,
     >
     where
-        U: ServiceFactory<
-                WebRequest<Err>,
-                SharedCfg,
-                Data = (),
-                Response = WebRequest<Err>,
-                Error = Err::Container,
-            >,
-        U::Service: Service<
+        U: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()>,
+        U::Response: Service<
                 WebRequest<Err>,
                 Response = WebRequest<Err>,
                 Error = Err::Container,
@@ -331,20 +311,14 @@ where
     pub fn default_service<F, S>(mut self, f: F) -> Self
     where
         F: IntoServiceFactory<S, WebRequest<Err>, SharedCfg>,
-        S: ServiceFactory<
-                WebRequest<Err>,
-                SharedCfg,
-                Data = (),
-                Response = WebResponse,
-                Error = Err::Container,
-            > + 'static,
-        S::Service: Service<
+        S: ServiceFactory<WebRequest<Err>, SharedCfg, Data = ()> + 'static,
+        S::Response: Service<
                 WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
                 Data = (),
             >,
-        S::InitError: fmt::Debug,
+        S::Error: fmt::Debug,
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
@@ -358,21 +332,14 @@ where
 
 impl<Err, M, T> WebServiceFactory<Err> for Resource<Err, M, T>
 where
-    T: ServiceFactory<
-            WebRequest<Err>,
-            SharedCfg,
-            Data = (),
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-            InitError = (),
-        > + 'static,
-    T::Service: Service<
+    T: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()> + 'static,
+    T::Response: Service<
             WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             Data = (),
         >,
-    M: Middleware<ResourcePipeline<T::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<T::Response, Err>, SharedCfg> + 'static,
     M::Service:
         Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container, Data = ()>,
     Err: ErrorRenderer,
@@ -426,21 +393,14 @@ impl<Err, M, F>
         SharedCfg,
     > for Resource<Err, M, F>
 where
-    F: ServiceFactory<
-            WebRequest<Err>,
-            SharedCfg,
-            Data = (),
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-            InitError = (),
-        > + 'static,
-    F::Service: Service<
+    F: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()> + 'static,
+    F::Response: Service<
             WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
             Data = (),
         >,
-    M: Middleware<ResourcePipeline<F::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<F::Response, Err>, SharedCfg> + 'static,
     M::Service:
         Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container, Data = ()>,
     Err: ErrorRenderer,
@@ -472,21 +432,13 @@ pub struct ResourceServiceFactory<Err: ErrorRenderer, M, F> {
     routing: ResourceRouterFactory<Err>,
 }
 
-impl<Err, M, F> ServiceFactory<WebRequest<Err>, SharedCfg>
-    for ResourceServiceFactory<Err, M, F>
+impl<Err, M, F> Service<SharedCfg> for ResourceServiceFactory<Err, M, F>
 where
-    M: Middleware<ResourcePipeline<F::Service, Err>, SharedCfg> + 'static,
+    M: Middleware<ResourcePipeline<F::Response, Err>, SharedCfg> + 'static,
     M::Service:
         Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container, Data = ()>,
-    F: ServiceFactory<
-            WebRequest<Err>,
-            SharedCfg,
-            Data = (),
-            Response = WebRequest<Err>,
-            Error = Err::Container,
-            InitError = (),
-        > + 'static,
-    F::Service: Service<
+    F: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()> + 'static,
+    F::Response: Service<
             WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
@@ -494,22 +446,19 @@ where
         >,
     Err: ErrorRenderer,
 {
-    type Response = WebResponse;
-    type Error = Err::Container;
-    type Service = M::Service;
-    type InitError = ();
+    type Response = M::Service;
+    type Error = ();
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        self.filter.map_data(&cfg, &()).await?;
-        self.routing.map_data(&cfg, &()).await?;
-        let filter = self.filter.create(cfg.clone()).await?;
-        let routing = self.routing.create(cfg.clone()).await?;
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let filter = ctx.call(&self.filter, cfg.clone(), data).await?;
+        let routing = ctx.call(&self.routing, cfg.clone(), data).await?;
         Ok(self.middleware.create(chain(filter).and_then(routing), cfg))
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 
@@ -519,19 +468,19 @@ struct ResourceRouterFactory<Err: ErrorRenderer> {
     state: Option<AppState>,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
-    for ResourceRouterFactory<Err>
-{
-    type Response = WebResponse;
-    type Error = Err::Container;
-    type Service = ResourceRouter<Err>;
-    type InitError = ();
+impl<Err: ErrorRenderer> Service<SharedCfg> for ResourceRouterFactory<Err> {
+    type Response = ResourceRouter<Err>;
+    type Error = ();
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         let default = if let Some(ref default) = self.default {
-            default.map_data(&cfg, &()).await?;
-            Some(default.create(cfg).await?)
+            Some(ctx.call(&**default, cfg, data).await?)
         } else {
             None
         };
@@ -540,10 +489,6 @@ impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
             state: self.state.clone(),
             routes: self.routes.iter().map(Route::service).collect(),
         })
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

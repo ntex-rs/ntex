@@ -4,7 +4,7 @@ use tls_rustls::ServerConfig;
 
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx};
 use ntex_util::services::Counter;
 
 use crate::{MAX_SSL_ACCEPT_COUNTER, TlsConfig, rustls::TlsServerFilter};
@@ -30,14 +30,17 @@ impl From<ServerConfig> for TlsAcceptor {
     }
 }
 
-impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for TlsAcceptor {
-    type Response = Io<Layer<TlsServerFilter, F>>;
-    type Error = io::Error;
-    type Service = TlsAcceptorService;
-    type InitError = ();
+impl Service<SharedCfg> for TlsAcceptor {
+    type Response = TlsAcceptorService;
+    type Error = ();
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ok(TlsAcceptorService {
                 cfg: cfg.get(),
@@ -45,10 +48,6 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for TlsAcceptor {
                 conns: conns.clone(),
             })
         })
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

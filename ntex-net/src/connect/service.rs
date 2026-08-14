@@ -3,7 +3,7 @@ use std::{collections::VecDeque, io, marker, net::SocketAddr};
 use ntex_error::Error;
 use ntex_io::{Io, IoConfig, types};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx};
 use ntex_util::{future::Either, time::timeout_checked};
 
 use super::{Address, Connect, ConnectError, ConnectServiceError, resolve};
@@ -93,19 +93,18 @@ impl<T: Address> ConnectorService<T> {
     }
 }
 
-impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector<T> {
-    type Response = Io;
-    type Error = ConnectError;
-    type Service = ConnectorService<T>;
-    type InitError = ConnectServiceError;
+impl<T: Address> Service<SharedCfg> for Connector<T> {
+    type Response = ConnectorService<T>;
+    type Error = ConnectServiceError;
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(ConnectorService::with(cfg))
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 
@@ -206,19 +205,18 @@ impl<T: Address> ConnectorService2<T> {
     }
 }
 
-impl<T: Address> ServiceFactory<Connect<T>, SharedCfg> for Connector2<T> {
-    type Response = Io;
-    type Error = Error<ConnectError>;
-    type Service = ConnectorService2<T>;
-    type InitError = ConnectServiceError;
+impl<T: Address> Service<SharedCfg> for Connector2<T> {
+    type Response = ConnectorService2<T>;
+    type Error = ConnectServiceError;
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(ConnectorService2::with(cfg))
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

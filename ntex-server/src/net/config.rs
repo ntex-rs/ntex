@@ -1,7 +1,7 @@
 use std::{cell::RefCell, fmt, io, marker, mem, net, rc::Rc};
 
 use ntex_io::Io;
-use ntex_service::{IntoServiceFactory, ServiceFactory, cfg::SharedCfg};
+use ntex_service::{IntoServiceFactory, Service, ServiceFactory, cfg::SharedCfg};
 use ntex_util::{HashMap, future::BoxFuture, future::Ready};
 
 use super::factory::{
@@ -310,8 +310,8 @@ impl ServiceRuntime {
     pub fn service<T, F>(&self, name: &str, service: F) -> &Self
     where
         F: IntoServiceFactory<T, Io, SharedCfg>,
-        T: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
-        T::Service: 'static,
+        T: ServiceFactory<Io, SharedCfg> + Service<SharedCfg, Data = ()> + 'static,
+        T::Response: 'static,
         T::Error: fmt::Debug,
     {
         let mut inner = self.0.borrow_mut();

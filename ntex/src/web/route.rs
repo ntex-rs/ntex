@@ -1,7 +1,7 @@
 use std::{fmt, mem, rc::Rc};
 
 use crate::http::Method;
-use crate::service::{Service, ServiceCtx, ServiceFactory, cfg::SharedCfg};
+use crate::service::{Service, ServiceCtx, cfg::SharedCfg};
 
 use super::HttpResponse;
 use super::error::ErrorRenderer;
@@ -67,19 +67,18 @@ impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg> for Route<Err> {
-    type Response = WebResponse;
-    type Error = Err::Container;
-    type Service = RouteService<Err>;
-    type InitError = ();
+impl<Err: ErrorRenderer> Service<SharedCfg> for Route<Err> {
+    type Response = RouteService<Err>;
+    type Error = ();
     type Data = ();
 
-    async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        _: SharedCfg,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<RouteService<Err>, ()> {
         Ok(self.service())
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

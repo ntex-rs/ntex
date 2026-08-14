@@ -174,15 +174,8 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         nested: Option<Rc<ResourceMap>>,
     ) where
         F: IntoServiceFactory<S, WebRequest<Err>, SharedCfg>,
-        S: ServiceFactory<
-                WebRequest<Err>,
-                SharedCfg,
-                Data = (),
-                Response = WebResponse,
-                Error = Err::Container,
-                InitError = (),
-            > + 'static,
-        S::Service: Service<
+        S: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()> + 'static,
+        S::Response: Service<
                 WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
@@ -265,14 +258,8 @@ impl WebServiceAdapter {
     pub fn finish<T, F, Err>(self, service: F) -> impl WebServiceFactory<Err>
     where
         F: IntoServiceFactory<T, WebRequest<Err>, SharedCfg>,
-        T: ServiceFactory<
-                WebRequest<Err>,
-                SharedCfg,
-                Data = (),
-                Response = WebResponse,
-                Error = Err::Container,
-            > + 'static,
-        T::Service: Service<
+        T: ServiceFactory<WebRequest<Err>, SharedCfg, Data = ()> + 'static,
+        T::Response: Service<
                 WebRequest<Err>,
                 Response = WebResponse,
                 Error = Err::Container,
@@ -298,15 +285,8 @@ struct WebServiceImpl<T> {
 
 impl<T, Err> WebServiceFactory<Err> for WebServiceImpl<T>
 where
-    T: ServiceFactory<
-            WebRequest<Err>,
-            SharedCfg,
-            Data = (),
-            Response = WebResponse,
-            Error = Err::Container,
-            InitError = (),
-        > + 'static,
-    T::Service:
+    T: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()> + 'static,
+    T::Response:
         Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container, Data = ()>,
     Err: ErrorRenderer,
 {

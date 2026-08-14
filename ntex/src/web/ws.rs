@@ -76,11 +76,11 @@ pub async fn start<T, F, P, Err>(
 ) -> Result<HttpResponse, Err>
 where
     T: ServiceFactory<Frame, WsSink, Data = ()> + 'static,
-    T::Service: Service<Frame, Response = Option<Message>>,
-    <T::Service as Service<Frame>>::Error: fmt::Debug,
+    T::Response: Service<Frame, Response = Option<Message>>,
+    <T::Response as Service<Frame>>::Error: fmt::Debug,
     F: IntoServiceFactory<T, Frame, WsSink>,
     P: AsRef<str>,
-    Err: From<T::InitError> + From<HandshakeError>,
+    Err: From<T::Error> + From<HandshakeError>,
 {
     let inner_factory = Rc::new(factory.into_factory());
 
@@ -88,7 +88,7 @@ where
         let srv = inner_factory.pipeline(sink.clone(), &()).await?;
         let sink = sink.clone();
 
-        Ok::<_, T::InitError>(DispatchService { srv, sink })
+        Ok::<_, T::Error>(DispatchService { srv, sink })
     });
 
     start_with(req, subprotocol, factory).await
@@ -106,11 +106,11 @@ pub async fn start_with<T, F, P, Err>(
 ) -> Result<HttpResponse, Err>
 where
     T: ServiceFactory<DispatchItem<ws::Codec>, WsSink, Data = ()> + 'static,
-    T::Service: Service<DispatchItem<ws::Codec>, Response = Option<Message>>,
-    <T::Service as Service<DispatchItem<ws::Codec>>>::Error: fmt::Debug,
+    T::Response: Service<DispatchItem<ws::Codec>, Response = Option<Message>>,
+    <T::Response as Service<DispatchItem<ws::Codec>>>::Error: fmt::Debug,
     F: IntoServiceFactory<T, DispatchItem<ws::Codec>, WsSink>,
     P: AsRef<str>,
-    Err: From<T::InitError> + From<HandshakeError>,
+    Err: From<T::Error> + From<HandshakeError>,
 {
     log::trace!("Start ws handshake verification for {:?}", req.path());
 

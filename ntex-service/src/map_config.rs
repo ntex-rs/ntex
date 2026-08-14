@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{IntoServiceFactory, Pipeline, Service, ServiceFactory};
+use super::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
 /// Adapt external config argument to a config for provided service factory
 ///
@@ -68,39 +68,23 @@ where
     }
 }
 
-impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2, R>
+impl<A, F, R, C, C2> Service<C> for MapConfig<A, F, C, C2, R>
 where
     A: ServiceFactory<R, C2>,
+    A::Response: Service<R, Data = A::Data>,
     F: Fn(C) -> C2,
-    C: Clone,
 {
     type Response = A::Response;
     type Error = A::Error;
-    type Service = A::Service;
-    type InitError = A::InitError;
     type Data = A::Data;
 
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.a.create((self.f)(cfg)).await
-    }
-
-    async fn map_data(
-        &self,
-        cfg: &C,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
-        self.a.map_data(&(self.f)(cfg.clone()), data).await
-    }
-
-    async fn pipeline(
+    async fn call(
         &self,
         cfg: C,
         data: &Self::Data,
-    ) -> Result<Pipeline<Self::Service, <Self::Service as Service<R>>::Data>, Self::InitError>
-    {
-        let cfg = (self.f)(cfg);
-        let svc_data = self.a.map_data(&cfg, data).await?;
-        Ok(Pipeline::new(self.a.create(cfg).await?, svc_data))
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.a, (self.f)(cfg), data).await
     }
 }
 
@@ -121,26 +105,22 @@ impl<A, R> UnitConfig<A, R> {
     }
 }
 
-impl<A, R, C> ServiceFactory<R, C> for UnitConfig<A, R>
+impl<A, R, C> Service<C> for UnitConfig<A, R>
 where
     A: ServiceFactory<R, ()>,
+    A::Response: Service<R, Data = A::Data>,
 {
     type Response = A::Response;
     type Error = A::Error;
-    type Service = A::Service;
-    type InitError = A::InitError;
     type Data = A::Data;
 
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        self.factory.create(()).await
-    }
-
-    async fn map_data(
+    async fn call(
         &self,
-        _: &C,
+        _: C,
         data: &Self::Data,
-    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
-        self.factory.map_data(&(), data).await
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.factory, (), data).await
     }
 }
 

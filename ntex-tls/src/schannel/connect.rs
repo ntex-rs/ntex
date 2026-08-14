@@ -4,7 +4,7 @@ use ntex_error::Error;
 use ntex_io::{Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector, Connector2};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx};
 use ntex_util::time::timeout_checked;
 
 use super::{ClientConfig, SchannelFilter, connect as connect_io};
@@ -47,31 +47,28 @@ impl<A: Address> TlsConnector<Connector<A>> {
     }
 }
 
-impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for TlsConnector<S>
+impl<S> Service<SharedCfg> for TlsConnector<S>
 where
-    A: Address,
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
+    S: Service<SharedCfg>,
 {
-    type Response = Io<Layer<SchannelFilter>>;
-    type Error = ConnectError;
-    type Service = TlsConnectorService<S::Service>;
-    type InitError = S::InitError;
+    type Response = TlsConnectorService<S::Response>;
+    type Error = S::Error;
     type Data = S::Data;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let tls_cfg = cfg.get();
+        let svc = ctx.call(&self.connector, cfg, data).await?;
+
         Ok(TlsConnectorService {
-            svc: self.connector.create(cfg.clone()).await?,
-            cfg: cfg.get(),
+            svc,
+            cfg: tls_cfg,
             config: self.config.clone(),
         })
-    }
-
-    async fn map_data(
-        &self,
-        cfg: &SharedCfg,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<Connect<A>>>::Data, Self::InitError> {
-        self.connector.map_data(cfg, data).await
     }
 }
 
@@ -158,31 +155,28 @@ impl<A: Address> TlsConnector2<Connector2<A>> {
     }
 }
 
-impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for TlsConnector2<S>
+impl<S> Service<SharedCfg> for TlsConnector2<S>
 where
-    A: Address,
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = Error<ConnectError>>,
+    S: Service<SharedCfg>,
 {
-    type Response = Io<Layer<SchannelFilter>>;
-    type Error = Error<ConnectError>;
-    type Service = TlsConnectorService2<S::Service>;
-    type InitError = S::InitError;
+    type Response = TlsConnectorService2<S::Response>;
+    type Error = S::Error;
     type Data = S::Data;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let tls_cfg = cfg.get();
+        let svc = ctx.call(&self.connector, cfg, data).await?;
+
         Ok(TlsConnectorService2 {
-            svc: self.connector.create(cfg.clone()).await?,
-            cfg: cfg.get(),
+            svc,
+            cfg: tls_cfg,
             config: self.config.clone(),
         })
-    }
-
-    async fn map_data(
-        &self,
-        cfg: &SharedCfg,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<Connect<A>>>::Data, Self::InitError> {
-        self.connector.map_data(cfg, data).await
     }
 }
 

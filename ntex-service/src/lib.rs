@@ -24,6 +24,7 @@ mod map_err;
 mod map_init_err;
 mod middleware;
 mod pipeline;
+mod svc_ext;
 mod svc_fct;
 mod then;
 mod util;
@@ -36,6 +37,7 @@ pub use self::fn_shutdown::fn_shutdown;
 pub use self::map_config::{map_config, unit_config};
 pub use self::middleware::{Identity, Middleware, Stack, apply, fn_layer};
 pub use self::pipeline::{Pipeline, PipelineBinding, PipelineCall, PipelineSvc};
+pub use self::svc_ext::ServiceExt;
 pub use self::svc_fct::ServiceFactory;
 
 #[allow(unused_variables)]

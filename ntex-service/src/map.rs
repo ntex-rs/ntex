@@ -5,7 +5,7 @@ use crate::svc_fct::{ResponseOf, ServiceOf};
 
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
-/// This is created by the `Service::map` method.
+/// This is created by the `ServiceExt::map` method.
 pub struct Map<A, F, Req, Res> {
     service: A,
     f: F,
@@ -129,33 +129,29 @@ where
     }
 }
 
-impl<S, F, Req, Res, Cfg> ServiceFactory<Req, Cfg> for MapFactory<S, F, Req, Res, Cfg>
+impl<S, F, Req, Res, Cfg> Service<Cfg> for MapFactory<S, F, Req, Res, Cfg>
 where
     S: ServiceFactory<Req, Cfg>,
+    S::Response: Service<Req, Data = S::Data>,
+    S::Data: Clone,
     F: Fn(ResponseOf<S, Req, Cfg>) -> Res + Clone,
 {
-    type Response = Res;
+    type Response = Map<ServiceOf<S, Cfg>, F, Req, Res>;
     type Error = S::Error;
-    type Service = Map<ServiceOf<S, Req, Cfg>, F, Req, Res>;
-    type InitError = S::InitError;
     type Data = S::Data;
 
     #[inline]
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: Cfg,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(Map {
-            service: self.s.create(cfg).await?,
+            service: ctx.call(&self.s, cfg, data).await?,
             f: self.f.clone(),
             _t: PhantomData,
         })
-    }
-
-    #[inline]
-    async fn map_data(
-        &self,
-        cfg: &Cfg,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<Req>>::Data, Self::InitError> {
-        self.s.map_data(cfg, data).await
     }
 }
 

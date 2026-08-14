@@ -1,12 +1,12 @@
 use std::marker::PhantomData;
 
-use super::{Service, ServiceCtx, ServiceFactory, util};
+use super::{Service, ServiceCtx, util};
 
 #[derive(Clone, Debug)]
 /// Service for the `and_then` combinator, chaining a computation onto the end
 /// of another service which completes successfully.
 ///
-/// This is created by the `ServiceChain::and_then` method.
+/// This is created by the `ServiceExt::and_then` method.
 pub struct AndThen<A, B> {
     svc1: A,
     svc2: B,
@@ -83,40 +83,33 @@ impl<A, B, Req> AndThenFactory<A, B, Req> {
     }
 }
 
-impl<A, B, Req, Cfg> ServiceFactory<Req, Cfg> for AndThenFactory<A, B, Req>
+impl<A, B, Req, Cfg> Service<Cfg> for AndThenFactory<A, B, Req>
 where
-    A: ServiceFactory<Req, Cfg>,
-    B: ServiceFactory<
-            A::Response,
-            Cfg,
-            Error = A::Error,
-            InitError = A::InitError,
+    A: Service<Cfg>,
+    A::Response: Service<Req, Data = A::Data>,
+    B: Service<Cfg, Error = A::Error, Data = A::Data>,
+    B::Response: Service<
+            <A::Response as Service<Req>>::Response,
+            Error = <A::Response as Service<Req>>::Error,
             Data = A::Data,
         >,
-    B::Service:
-        Service<A::Response, Error = A::Error, Data = <A::Service as Service<Req>>::Data>,
     Cfg: Clone,
 {
-    type Response = B::Response;
-    type Error = B::Error;
-    type Service = AndThen<A::Service, B::Service>;
-    type InitError = A::InitError;
+    type Response = AndThen<A::Response, B::Response>;
+
+    type Error = A::Error;
+
     type Data = A::Data;
 
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
-        let svc1 = self.svc1.create(cfg.clone()).await?;
-        let svc2 = self.svc2.create(cfg).await?;
-        Ok(AndThen { svc1, svc2 })
-    }
-
-    async fn map_data(
+    async fn call(
         &self,
-        cfg: &Cfg,
+        cfg: Cfg,
         data: &Self::Data,
-    ) -> Result<<Self::Service as Service<Req>>::Data, Self::InitError> {
-        let svc_data = self.svc1.map_data(cfg, data).await?;
-        self.svc2.map_data(cfg, data).await?;
-        Ok(svc_data)
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let svc1 = ctx.call(&self.svc1, cfg.clone(), data).await?;
+        let svc2 = ctx.call(&self.svc2, cfg.clone(), data).await?;
+        Ok(AndThen { svc1, svc2 })
     }
 }
 

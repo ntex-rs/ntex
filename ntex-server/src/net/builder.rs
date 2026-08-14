@@ -3,6 +3,7 @@ use std::{fmt, io, net, sync::Arc};
 
 use ntex_io::Io;
 use ntex_rt::System;
+use ntex_service::Service;
 use ntex_service::{ServiceFactory, cfg::SharedCfg};
 use ntex_util::time::Millis;
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -248,8 +249,8 @@ impl ServerBuilder {
         U: net::ToSocketAddrs,
         N: AsRef<str>,
         F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
-        R::Service: 'static,
+        R: ServiceFactory<Io, SharedCfg> + Service<SharedCfg, Data = ()> + 'static,
+        R::Response: 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -277,8 +278,8 @@ impl ServerBuilder {
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
         F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
-        R::Service: 'static,
+        R: ServiceFactory<Io, SharedCfg> + Service<SharedCfg, Data = ()> + 'static,
+        R::Response: 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -307,8 +308,8 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
-        R::Service: 'static,
+        R: ServiceFactory<Io, SharedCfg> + Service<SharedCfg, Data = ()> + 'static,
+        R::Response: 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
@@ -330,8 +331,8 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
-        R::Service: 'static,
+        R: ServiceFactory<Io, SharedCfg> + Service<SharedCfg, Data = ()> + 'static,
+        R::Response: 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(

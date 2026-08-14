@@ -1,6 +1,6 @@
 use std::{cell::Cell, fmt, future::Future, marker, task::Context, task::Poll, time};
 
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx};
 
 use crate::future::Ready;
 use crate::time::{Millis, Sleep, now, sleep};
@@ -53,24 +53,22 @@ impl<R, E, F> fmt::Debug for KeepAlive<R, E, F> {
     }
 }
 
-impl<R, E, F, C> ServiceFactory<R, C> for KeepAlive<R, E, F>
+impl<R, E, F, C> Service<C> for KeepAlive<R, E, F>
 where
     F: Fn() -> E + Clone,
 {
-    type Response = R;
-    type Error = E;
-    type Service = KeepAliveService<R, E, F>;
-    type InitError = std::convert::Infallible;
+    type Response = KeepAliveService<R, E, F>;
+    type Error = std::convert::Infallible;
     type Data = ();
 
     #[inline]
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        _: C,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(KeepAliveService::new(self.ka, self.f.clone()))
-    }
-
-    #[inline]
-    async fn map_data(&self, _: &C, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

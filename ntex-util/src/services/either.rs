@@ -49,56 +49,42 @@ impl<ChooseFn, SFLeft, SFRight, Req> fmt::Debug
     }
 }
 
-impl<R, C, ChooseFn, SFLeft, SFRight> ServiceFactory<R, C>
+impl<R, C, ChooseFn, SFLeft, SFRight> Service<C>
     for EitherServiceFactory<ChooseFn, SFLeft, SFRight, R>
 where
     ChooseFn: Fn(&C) -> bool,
     SFLeft: ServiceFactory<R, C>,
-    SFRight: ServiceFactory<
+    SFRight: ServiceFactory<R, C, Data = SFLeft::Data, Error = SFLeft::Error>,
+    SFLeft::Response: Service<R, Data = SFLeft::Data>,
+    SFRight::Response: Service<
             R,
-            C,
+            Response = <SFLeft::Response as Service<R>>::Response,
+            Error = <SFLeft::Response as Service<R>>::Error,
             Data = SFLeft::Data,
-            Error = SFLeft::Error,
-            InitError = SFLeft::InitError,
-        >,
-    SFRight::Service: Service<
-            R,
-            Response = SFLeft::Response,
-            Error = SFLeft::Error,
-            Data = <SFLeft::Service as Service<R>>::Data,
         >,
 {
-    type Response = SFLeft::Response;
+    type Response = EitherService<SFLeft::Response, SFRight::Response>;
     type Error = SFLeft::Error;
-    type Service = EitherService<SFLeft::Service, SFRight::Service>;
-    type InitError = SFLeft::InitError;
     type Data = SFLeft::Data;
 
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: C,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         let choose_left = (self.choose_left_fn)(&cfg);
 
         if choose_left {
-            let svc = self.left.create(cfg).await?;
+            let svc = ctx.call(&self.left, cfg, data).await?;
             Ok(EitherService {
                 svc: Either::Left(svc),
             })
         } else {
-            let svc = self.right.create(cfg).await?;
+            let svc = ctx.call(&self.right, cfg, data).await?;
             Ok(EitherService {
                 svc: Either::Right(svc),
             })
-        }
-    }
-
-    async fn map_data(
-        &self,
-        cfg: &C,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
-        if (self.choose_left_fn)(cfg) {
-            self.left.map_data(cfg, data).await
-        } else {
-            self.right.map_data(cfg, data).await
         }
     }
 }
@@ -206,19 +192,18 @@ mod tests {
 
     #[derive(Clone)]
     struct Svc1Factory;
-    impl ServiceFactory<(), &'static str> for Svc1Factory {
-        type Response = &'static str;
+    impl Service<&'static str> for Svc1Factory {
+        type Response = Svc1;
         type Error = ();
-        type Service = Svc1;
-        type InitError = ();
         type Data = ();
 
-        async fn create(&self, _: &'static str) -> Result<Self::Service, Self::InitError> {
+        async fn call(
+            &self,
+            _: &'static str,
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<Self::Response, Self::Error> {
             Ok(Svc1)
-        }
-
-        async fn map_data(&self, _: &&'static str, _: &Self::Data) -> Result<(), ()> {
-            Ok(())
         }
     }
 
@@ -241,19 +226,18 @@ mod tests {
 
     #[derive(Clone)]
     struct Svc2Factory;
-    impl ServiceFactory<(), &'static str> for Svc2Factory {
-        type Response = &'static str;
+    impl Service<&'static str> for Svc2Factory {
+        type Response = Svc2;
         type Error = ();
-        type Service = Svc2;
-        type InitError = ();
         type Data = ();
 
-        async fn create(&self, _: &'static str) -> Result<Self::Service, Self::InitError> {
+        async fn call(
+            &self,
+            _: &'static str,
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<Self::Response, Self::Error> {
             Ok(Svc2)
-        }
-
-        async fn map_data(&self, _: &&'static str, _: &Self::Data) -> Result<(), ()> {
-            Ok(())
         }
     }
 

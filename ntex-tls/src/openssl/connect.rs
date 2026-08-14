@@ -4,7 +4,7 @@ use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
 use ntex_net::connect::{Address, Connect, ConnectError, Connector, Connector2};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx};
 use ntex_util::time::timeout_checked;
 use tls_openssl::ssl::SslConnector as OpensslConnector;
 
@@ -34,31 +34,28 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector<S>
+impl<S> Service<SharedCfg> for SslConnector<S>
 where
-    A: Address,
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
+    S: Service<SharedCfg>,
 {
-    type Response = Io<Layer<SslFilter>>;
-    type Error = ConnectError;
-    type Service = SslConnectorService<S::Service>;
-    type InitError = S::InitError;
+    type Response = SslConnectorService<S::Response>;
+    type Error = S::Error;
     type Data = S::Data;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let tls_cfg = cfg.get();
+        let svc = ctx.call(&self.connector, cfg, data).await?;
+
         Ok(SslConnectorService {
-            svc: self.connector.create(cfg.clone()).await?,
-            cfg: cfg.get(),
+            svc,
+            cfg: tls_cfg,
             openssl: self.openssl.clone(),
         })
-    }
-
-    async fn map_data(
-        &self,
-        cfg: &SharedCfg,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<Connect<A>>>::Data, Self::InitError> {
-        self.connector.map_data(cfg, data).await
     }
 }
 
@@ -151,31 +148,28 @@ impl<A: Address> SslConnector2<Connector2<A>> {
     }
 }
 
-impl<A, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector2<S>
+impl<S> Service<SharedCfg> for SslConnector2<S>
 where
-    A: Address,
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = Error<ConnectError>>,
+    S: Service<SharedCfg>,
 {
-    type Response = Io<Layer<SslFilter>>;
-    type Error = Error<ConnectError>;
-    type Service = SslConnectorService2<S::Service>;
-    type InitError = S::InitError;
+    type Response = SslConnectorService2<S::Response>;
+    type Error = S::Error;
     type Data = S::Data;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let tls_cfg = cfg.get();
+        let svc = ctx.call(&self.connector, cfg, data).await?;
+
         Ok(SslConnectorService2 {
-            svc: self.connector.create(cfg.clone()).await?,
-            cfg: cfg.get(),
+            svc,
+            cfg: tls_cfg,
             openssl: self.openssl.clone(),
         })
-    }
-
-    async fn map_data(
-        &self,
-        cfg: &SharedCfg,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<Connect<A>>>::Data, Self::InitError> {
-        self.connector.map_data(cfg, data).await
     }
 }
 

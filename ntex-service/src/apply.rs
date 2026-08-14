@@ -27,15 +27,9 @@ pub fn apply_fn_factory<T, Req, Cfg, F, In, Out, Err, U>(
 ) -> ServiceChainFactory<ApplyFactory<T, Req, Cfg, F, In, Out, Err>, In, Cfg>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: AsyncFn(
-            In,
-            &ApplyCtx<
-                '_,
-                ServiceOf<T, Req, Cfg>,
-                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
-            >,
-        ) -> Result<Out, Err>
-        + Clone,
+    T::Response: Service<Req, Data = T::Data>,
+    T::Data: Clone,
+    F: AsyncFn(In, &ApplyCtx<'_, ServiceOf<T, Cfg>, T::Data>) -> Result<Out, Err> + Clone,
     U: IntoServiceFactory<T, Req, Cfg>,
     Err: From<ErrorOf<T, Req, Cfg>>,
 {
@@ -154,15 +148,8 @@ where
 pub struct ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: AsyncFn(
-            In,
-            &ApplyCtx<
-                '_,
-                ServiceOf<T, Req, Cfg>,
-                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
-            >,
-        ) -> Result<Out, Err>
-        + Clone,
+    T::Response: Service<Req, Data = T::Data>,
+    F: AsyncFn(In, &ApplyCtx<'_, ServiceOf<T, Cfg>, T::Data>) -> Result<Out, Err> + Clone,
 {
     service: T,
     f: F,
@@ -172,15 +159,8 @@ where
 impl<T, Req, Cfg, F, In, Out, Err> ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: AsyncFn(
-            In,
-            &ApplyCtx<
-                '_,
-                ServiceOf<T, Req, Cfg>,
-                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
-            >,
-        ) -> Result<Out, Err>
-        + Clone,
+    T::Response: Service<Req, Data = T::Data>,
+    F: AsyncFn(In, &ApplyCtx<'_, ServiceOf<T, Cfg>, T::Data>) -> Result<Out, Err> + Clone,
     Err: From<ErrorOf<T, Req, Cfg>>,
 {
     /// Create new `ApplyNewService` new service instance
@@ -196,15 +176,8 @@ where
 impl<T, Req, Cfg, F, In, Out, Err> Clone for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg> + Clone,
-    F: AsyncFn(
-            In,
-            &ApplyCtx<
-                '_,
-                ServiceOf<T, Req, Cfg>,
-                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
-            >,
-        ) -> Result<Out, Err>
-        + Clone,
+    T::Response: Service<Req, Data = T::Data>,
+    F: AsyncFn(In, &ApplyCtx<'_, ServiceOf<T, Cfg>, T::Data>) -> Result<Out, Err> + Clone,
     Err: From<ErrorOf<T, Req, Cfg>>,
 {
     fn clone(&self) -> Self {
@@ -219,15 +192,8 @@ where
 impl<T, Req, Cfg, F, In, Out, Err> fmt::Debug for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg> + fmt::Debug,
-    F: AsyncFn(
-            In,
-            &ApplyCtx<
-                '_,
-                ServiceOf<T, Req, Cfg>,
-                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
-            >,
-        ) -> Result<Out, Err>
-        + Clone,
+    T::Response: Service<Req, Data = T::Data>,
+    F: AsyncFn(In, &ApplyCtx<'_, ServiceOf<T, Cfg>, T::Data>) -> Result<Out, Err> + Clone,
     Err: From<ErrorOf<T, Req, Cfg>>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -238,43 +204,32 @@ where
     }
 }
 
-impl<T, Req, Cfg, F, In, Out, Err> ServiceFactory<In, Cfg>
+impl<T, Req, Cfg, F, In, Out, Err> Service<Cfg>
     for ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
-    F: AsyncFn(
-            In,
-            &ApplyCtx<
-                '_,
-                ServiceOf<T, Req, Cfg>,
-                <ServiceOf<T, Req, Cfg> as Service<Req>>::Data,
-            >,
-        ) -> Result<Out, Err>
-        + Clone,
+    T::Response: Service<Req, Data = T::Data>,
+    F: AsyncFn(In, &ApplyCtx<'_, ServiceOf<T, Cfg>, T::Data>) -> Result<Out, Err> + Clone,
     Err: From<ErrorOf<T, Req, Cfg>>,
 {
-    type Response = Out;
-    type Error = Err;
-    type Service = Apply<ServiceOf<T, Req, Cfg>, Req, F, In, Out, Err>;
-    type InitError = T::InitError;
+    type Response = Apply<ServiceOf<T, Cfg>, Req, F, In, Out, Err>;
+    type Error = T::Error;
     type Data = T::Data;
 
     #[inline]
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
-        self.service.create(cfg).await.map(|service| Apply {
-            service,
-            f: self.f.clone(),
-            r: marker::PhantomData,
-        })
-    }
-
-    #[inline]
-    async fn map_data(
+    async fn call(
         &self,
-        cfg: &Cfg,
+        cfg: Cfg,
         data: &Self::Data,
-    ) -> Result<<Self::Service as Service<In>>::Data, Self::InitError> {
-        self.service.map_data(cfg, data).await
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.service, cfg, data)
+            .await
+            .map(|service| Apply {
+                service,
+                f: self.f.clone(),
+                r: marker::PhantomData,
+            })
     }
 }
 

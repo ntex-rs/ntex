@@ -1,137 +1,85 @@
-use crate::{Pipeline, Service, boxed, chain_factory, dev};
+use crate::{Pipeline, Service, ServiceCtx, ctx::WaitersRef};
 
-pub(crate) type ServiceOf<F, Req, Cfg> = <F as ServiceFactory<Req, Cfg>>::Service;
-pub(crate) type ResponseOf<F, Req, Cfg> = <F as ServiceFactory<Req, Cfg>>::Response;
-pub(crate) type ErrorOf<F, Req, Cfg> = <F as ServiceFactory<Req, Cfg>>::Error;
+pub(crate) type ServiceOf<F, Cfg> = <F as Service<Cfg>>::Response;
+pub(crate) type ResponseOf<F, Req, Cfg> = <ServiceOf<F, Cfg> as Service<Req>>::Response;
+pub(crate) type ErrorOf<F, Req, Cfg> = <ServiceOf<F, Cfg> as Service<Req>>::Error;
 
-/// A factory for creating [`Service`] values.
-pub trait ServiceFactory<Req, Cfg = ()> {
-    /// Responses given by the created services.
-    type Response;
-
-    /// Errors produced by the created services.
-    type Error;
-
-    /// The type of service produced by this factory.
-    type Service: Service<Req, Response = Self::Response, Error = Self::Error>;
-
-    /// Possible errors encountered during service construction or data mapping.
-    type InitError;
-
-    /// Data supplied by the outer pipeline that executes this factory.
-    type Data;
-
-    /// Creates a new service asynchronously.
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError>;
-
-    /// Maps outer pipeline data to data for the generated service pipeline.
-    async fn map_data(
-        &self,
-        cfg: &Cfg,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<Req>>::Data, Self::InitError>;
-
-    /// Creates a new service and wraps it with its mapped execution data.
+/// Service factories are [`Service`] implementations that create other services.
+/// They are also responsible for mapping data from outer pipelines
+/// into data for inner pipelines.
+///
+/// Service factories are used to create dynamic service pipelines.
+/// For instance, a connect service may create a service for handling the http requests
+/// on the created connection, passing in the connection as the data for the new pipeline.
+pub trait ServiceFactory<Req, Cfg>: Service<Cfg, Response: Service<Req>> {
+    /// Asynchronously creates a new service and wraps it in a container.
     #[inline]
     async fn pipeline(
         &self,
         cfg: Cfg,
         data: &Self::Data,
-    ) -> Result<
-        Pipeline<Self::Service, <Self::Service as Service<Req>>::Data>,
-        Self::InitError,
-    >
+    ) -> Result<Pipeline<Self::Response, <Self::Response as Service<Req>>::Data>, Self::Error>
     where
         Self: Sized,
     {
+        let (idx, waiters) = WaitersRef::new();
+        let ctx = ServiceCtx::new(idx, &waiters);
         let svc_data = self.map_data(&cfg, data).await?;
-        Ok(Pipeline::new(self.create(cfg).await?, svc_data))
+        Ok(Pipeline::new(self.call(cfg, data, ctx).await?, svc_data))
     }
 
-    #[inline]
-    fn map<F, Res>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapFactory<Self, F, Req, Res, Cfg>, Req, Cfg>
+    /// Maps the outer pipeline data to the data stored by the produced pipeline.
+    async fn map_data(
+        &self,
+        cfg: &Cfg,
+        data: &Self::Data,
+    ) -> Result<<Self::Response as Service<Req>>::Data, Self::Error>
+    where
+        Self: Sized;
+}
+
+impl<SF, Req, Cfg> ServiceFactory<Req, Cfg> for SF
+where
+    SF: Service<Cfg>,
+    SF::Data: Clone,
+    SF::Response: Service<Req, Data = SF::Data>,
+{
+    async fn map_data(
+        &self,
+        _: &Cfg,
+        data: &Self::Data,
+    ) -> Result<<Self::Response as Service<Req>>::Data, Self::Error>
     where
         Self: Sized,
-        F: Fn(Self::Response) -> Res + Clone,
     {
-        chain_factory(dev::MapFactory::new(self, f))
-    }
-
-    #[inline]
-    fn map_err<F, E>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapErrFactory<Self, Req, Cfg, F, E>, Req, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::Error) -> E + Clone,
-    {
-        chain_factory(dev::MapErrFactory::new(self, f))
-    }
-
-    #[inline]
-    fn map_init_err<F, E>(
-        self,
-        f: F,
-    ) -> dev::ServiceChainFactory<dev::MapInitErr<Self, Req, Cfg, F, E>, Req, Cfg>
-    where
-        Self: Sized,
-        F: Fn(Self::InitError) -> E + Clone,
-    {
-        chain_factory(dev::MapInitErr::new(self, f))
-    }
-
-    /// Creates a boxed service factory.
-    fn boxed(
-        self,
-    ) -> boxed::BoxServiceFactory<
-        Cfg,
-        Req,
-        Self::Response,
-        Self::Error,
-        Self::InitError,
-        Self::Data,
-        <Self::Service as Service<Req>>::Data,
-    >
-    where
-        Cfg: 'static,
-        Req: 'static,
-        Self: 'static + Sized,
-        Self::Service: 'static,
-        Self::Data: 'static,
-        <Self::Service as Service<Req>>::Data: 'static,
-    {
-        boxed::factory(self)
+        Ok(data.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ServiceCtx;
 
     #[derive(Debug)]
     struct Factory;
 
-    impl ServiceFactory<(), ()> for Factory {
-        type Response = String;
+    impl Service<()> for Factory {
+        type Response = DataService;
         type Error = ();
-        type Service = DataService;
-        type InitError = ();
         type Data = usize;
 
-        async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+        async fn call(
+            &self,
+            _: (),
+            _: &Self::Data,
+            _: ServiceCtx<'_, Self>,
+        ) -> Result<Self::Response, Self::Error> {
             Ok(DataService)
         }
+    }
 
-        async fn map_data(
-            &self,
-            _: &(),
-            data: &Self::Data,
-        ) -> Result<String, Self::InitError> {
+    impl ServiceFactory<(), ()> for Factory {
+        async fn map_data(&self, _: &(), data: &Self::Data) -> Result<String, Self::Error> {
             Ok(data.to_string())
         }
     }
@@ -157,17 +105,6 @@ mod tests {
     #[ntex::test]
     async fn maps_pipeline_data() {
         let pipeline = Factory.pipeline((), &42).await.unwrap();
-        assert_eq!(pipeline.call(()).await.unwrap(), "42");
-    }
-
-    #[ntex::test]
-    async fn preserves_distinct_factory_and_service_data() {
-        let factory = chain_factory(Factory).map(|value| format!("{value}!"));
-        let pipeline = factory.pipeline((), &42).await.unwrap();
-        assert_eq!(pipeline.call(()).await.unwrap(), "42!");
-
-        let factory = boxed::factory(Factory);
-        let pipeline = factory.pipeline((), &42).await.unwrap();
         assert_eq!(pipeline.call(()).await.unwrap(), "42");
     }
 }

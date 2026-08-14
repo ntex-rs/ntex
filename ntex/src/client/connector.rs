@@ -147,16 +147,11 @@ impl Connector {
     /// Use custom connector to open un-secured connections.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
-        T: ServiceFactory<
-                TcpConnect<Uri>,
-                SharedCfg,
-                Data = (),
-                Error = crate::connect::ConnectError,
-            > + 'static,
-        T::Service:
+        T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Data = ()> + 'static,
+        T::Response:
             Service<TcpConnect<Uri>, Error = crate::connect::ConnectError, Data = ()>,
-        T::InitError: Error,
-        IoBoxed: From<T::Response>,
+        T::Error: Error,
+        IoBoxed: From<<T::Response as Service<TcpConnect<Uri>>>::Response>,
     {
         self.svc = boxed::factory(
             apply_fn_factory(connector, async move |msg: Connect, svc| {
@@ -173,16 +168,11 @@ impl Connector {
     /// Use custom connector to open secure connections.
     pub fn secure_connector<T>(mut self, connector: T) -> Self
     where
-        T: ServiceFactory<
-                TcpConnect<Uri>,
-                SharedCfg,
-                Data = (),
-                Error = crate::connect::ConnectError,
-            > + 'static,
-        T::Service:
+        T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Data = ()> + 'static,
+        T::Response:
             Service<TcpConnect<Uri>, Error = crate::connect::ConnectError, Data = ()>,
-        T::InitError: Error,
-        IoBoxed: From<T::Response>,
+        T::Error: Error,
+        IoBoxed: From<<T::Response as Service<TcpConnect<Uri>>>::Response>,
     {
         self.secure_svc = Some(boxed::factory(
             apply_fn_factory(connector, async move |msg: Connect, svc| {
@@ -196,17 +186,20 @@ impl Connector {
     }
 }
 
-impl ServiceFactory<Connect, SharedCfg> for Connector {
-    type Response = Connection;
-    type Error = ConnectError;
-    type Service = ConnectorService;
-    type InitError = Box<dyn Error>;
+impl Service<SharedCfg> for Connector {
+    type Response = ConnectorService;
+    type Error = Box<dyn Error>;
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        _: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         let ssl_pool = if let Some(ref svc) = self.secure_svc {
             Some(ConnectionPool::new(
-                svc.pipeline(cfg.clone(), &()).await?,
+                ctx.call(svc, cfg.clone(), &()).await?.into(),
                 self.conn_lifetime,
                 self.conn_keep_alive,
                 self.limit,
@@ -216,17 +209,13 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
             None
         };
         let tcp_pool = ConnectionPool::new(
-            self.svc.pipeline(cfg.clone(), &()).await?,
+            ctx.call(&self.svc, cfg.clone(), &()).await?.into(),
             self.conn_lifetime,
             self.conn_keep_alive,
             self.limit,
             cfg,
         );
         Ok(ConnectorService { tcp_pool, ssl_pool })
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

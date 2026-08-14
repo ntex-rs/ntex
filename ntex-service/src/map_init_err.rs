@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{Service, ServiceFactory};
+use super::{Service, ServiceCtx, ServiceFactory};
 
 /// `MapInitErr` service combinator
 pub struct MapInitErr<A, R, C, F, E> {
@@ -12,7 +12,7 @@ pub struct MapInitErr<A, R, C, F, E> {
 impl<A, R, C, F, E> MapInitErr<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E,
+    F: Fn(A::Error) -> E,
 {
     /// Create new `MapInitErr` combinator
     pub(crate) fn new(a: A, f: F) -> Self {
@@ -50,29 +50,24 @@ where
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapInitErr<A, R, C, F, E>
+impl<A, R, C, F, E> Service<C> for MapInitErr<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E + Clone,
+    A::Response: Service<R, Data = A::Data>,
+    F: Fn(A::Error) -> E + Clone,
 {
     type Response = A::Response;
-    type Error = A::Error;
-    type Service = A::Service;
-    type InitError = E;
+    type Error = E;
     type Data = A::Data;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.a.create(cfg).await.map_err(&self.f)
-    }
-
-    #[inline]
-    async fn map_data(
+    async fn call(
         &self,
-        cfg: &C,
+        cfg: C,
         data: &Self::Data,
-    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
-        self.a.map_data(cfg, data).await.map_err(&self.f)
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.a, cfg, data).await.map_err(|e| (self.f)(e))
     }
 }
 

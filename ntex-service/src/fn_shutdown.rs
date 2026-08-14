@@ -1,6 +1,6 @@
 use std::{cell::Cell, fmt, future::ready, marker::PhantomData};
 
-use crate::{Service, ServiceCtx, ServiceFactory};
+use crate::{Service, ServiceCtx};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
@@ -61,32 +61,30 @@ impl<Req, Err, F> fmt::Debug for FnShutdown<Req, Err, F> {
     }
 }
 
-impl<Req, Err, C, F> ServiceFactory<Req, C> for FnShutdown<Req, Err, F>
+impl<Req, Err, C, F> Service<C> for FnShutdown<Req, Err, F>
 where
     F: AsyncFnOnce() + Clone,
 {
-    type Response = Req;
-    type Error = Err;
-    type Service = FnShutdownService<Req, Err, F>;
-    type InitError = ();
+    type Response = FnShutdownService<Req, Err, F>;
+    type Error = ();
     type Data = ();
 
     #[inline]
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+    fn call(
+        &self,
+        _: C,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> impl Future<Output = Result<Self::Response, Self::Error>> {
         if let Some(f) = self.f_shutdown.take() {
             self.f_shutdown.set(Some(f.clone()));
-            Ok(FnShutdownService {
+            ready(Ok(FnShutdownService {
                 f_shutdown: Cell::new(Some(f)),
                 _t: PhantomData,
-            })
+            }))
         } else {
             panic!("FnShutdown was used already");
         }
-    }
-
-    #[inline]
-    async fn map_data(&self, _: &C, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

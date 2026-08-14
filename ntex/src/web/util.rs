@@ -302,11 +302,10 @@ where
     F: AsyncFn() -> I + Send + Clone + 'static,
     I: IntoServiceFactory<S, Request, SharedCfg>,
     S: ServiceFactory<Request, SharedCfg, Data = ()> + 'static,
-    S::Service: Service<Request>,
-    S::Error: ResponseError,
-    S::Response: Into<Response<B>>,
+    S::Response: Service<Request>,
+    <S::Response as Service<Request>>::Error: ResponseError,
+    <S::Response as Service<Request>>::Response: Into<Response<B>>,
     S::Error: fmt::Debug,
-    S::InitError: fmt::Debug,
     B: MessageBody + 'static,
 {
     HttpServer::new(factory)

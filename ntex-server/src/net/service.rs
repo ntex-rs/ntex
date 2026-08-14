@@ -117,24 +117,29 @@ impl fmt::Debug for StreamService {
     }
 }
 
-impl ServiceFactory<Connection, ()> for StreamService {
-    type Response = ();
+impl Service<()> for StreamService {
+    type Response = StreamServiceImpl;
     type Error = ();
-    type Service = StreamServiceImpl;
-    type InitError = ();
     type Data = ();
 
-    async fn create(&self, _: ()) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        _: (),
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(StreamServiceImpl {
             on_accept: self.on_accept.as_ref().map(|f| f.clone_fn()),
         })
     }
+}
 
+impl ServiceFactory<Connection, ()> for StreamService {
     async fn map_data(
         &self,
         _: &(),
         _: &Self::Data,
-    ) -> Result<StreamServiceData, Self::InitError> {
+    ) -> Result<StreamServiceData, Self::Error> {
         let mut tokens = HashMap::default();
         let mut services = Vec::new();
 

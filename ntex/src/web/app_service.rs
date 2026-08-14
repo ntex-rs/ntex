@@ -31,14 +31,8 @@ type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extens
 #[debug("AppFactory")]
 pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
-    F: ServiceFactory<
-            WebRequest<Err>,
-            SharedCfg,
-            Data = (),
-            Error = Err::Container,
-            InitError = (),
-        >,
-    F::Service: Service<
+    F: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()>,
+    F::Response: Service<
             WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
@@ -56,19 +50,13 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, F, Err> ServiceFactory<Request, SharedCfg> for AppFactory<T, F, Err>
+impl<T, F, Err> Service<SharedCfg> for AppFactory<T, F, Err>
 where
-    T: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
+    T: Middleware<AppService<F::Response, Err>, SharedCfg> + 'static,
     T::Service:
         Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container, Data = ()>,
-    F: ServiceFactory<
-            WebRequest<Err>,
-            SharedCfg,
-            Data = (),
-            Error = Err::Container,
-            InitError = (),
-        >,
-    F::Service: Service<
+    F: ServiceFactory<WebRequest<Err>, SharedCfg, Data = (), Error = ()>,
+    F::Response: Service<
             WebRequest<Err>,
             Response = WebRequest<Err>,
             Error = Err::Container,
@@ -76,13 +64,16 @@ where
         >,
     Err: ErrorRenderer,
 {
-    type Response = WebResponse;
-    type Error = Err::Container;
-    type Service = AppFactoryService<T::Service, Err>;
-    type InitError = ();
+    type Response = AppFactoryService<T::Service, Err>;
+    type Error = ();
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         let services = std::mem::take(&mut *self.services.borrow_mut());
 
         // update resource default service
@@ -142,12 +133,8 @@ where
 
         // create http services
         for (path, factory, guards) in &mut services.iter() {
-            factory
-                .map_data(&cfg, &())
-                .await
-                .map_err(|()| log::error!("Cannot map app service data"))?;
-            let service = factory
-                .create(cfg.clone())
+            let service = ctx
+                .call(factory, cfg.clone(), data)
                 .await
                 .map_err(|()| log::error!("Cannot construct app service"))?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
@@ -155,28 +142,18 @@ where
 
         let routing = AppRouting {
             router: router.finish(),
-            default: Some({
-                default
-                    .map_data(&cfg, &())
+            default: Some(
+                ctx.call(default.as_ref(), cfg.clone(), data)
                     .await
-                    .map_err(|()| log::error!("Cannot map default service data"))?;
-                default
-                    .create(cfg.clone())
-                    .await
-                    .map_err(|()| log::error!("Cannot construct default service"))?
-            }),
+                    .map_err(|()| log::error!("Cannot construct default service"))?,
+            ),
         };
 
         // main service
-        self.filter
-            .map_data(&cfg, &())
-            .await
-            .map_err(|()| log::error!("Cannot map app filter data"))?;
         let service = AppService {
             routing,
-            filter: self
-                .filter
-                .create(cfg.clone())
+            filter: ctx
+                .call(&self.filter, cfg.clone(), data)
                 .await
                 .map_err(|()| log::error!("Cannot construct app filter"))?,
         };
@@ -187,10 +164,6 @@ where
             service: middleware.create(service, cfg),
             _t: marker::PhantomData,
         })
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

@@ -3,7 +3,7 @@ use std::{cell::RefCell, error::Error, fmt, io};
 use ntex_bytes::BytePages;
 use ntex_io::{Filter, Io, Layer};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Service, ServiceCtx};
 use ntex_util::{services::Counter, time};
 use tls_openssl::ssl;
 
@@ -36,14 +36,17 @@ impl From<ssl::SslAcceptor> for SslAcceptor {
     }
 }
 
-impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for SslAcceptor {
-    type Response = Io<Layer<SslFilter, F>>;
-    type Error = Box<dyn Error>;
-    type Service = SslAcceptorService;
-    type InitError = ();
+impl Service<SharedCfg> for SslAcceptor {
+    type Response = SslAcceptorService;
+    type Error = ();
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         MAX_SSL_ACCEPT_COUNTER.with(|conns| {
             Ok(SslAcceptorService {
                 acceptor: self.acceptor.clone(),
@@ -51,10 +54,6 @@ impl<F: Filter> ServiceFactory<Io<F>, SharedCfg> for SslAcceptor {
                 cfg: cfg.get(),
             })
         })
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

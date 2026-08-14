@@ -30,18 +30,13 @@ where
     /// Convert to a Variant with two request types
     pub fn v2<B, BR, F>(self, factory: F) -> VariantFactory2<A, AC, B, AR, BR>
     where
-        B: ServiceFactory<
+        A::Response: Service<AR, Data = A::Data>,
+        B: ServiceFactory<BR, AC, Data = A::Data, Error = A::Error>,
+        B::Response: Service<
                 BR,
-                AC,
+                Response = <A::Response as Service<AR>>::Response,
+                Error = <A::Response as Service<AR>>::Error,
                 Data = A::Data,
-                Error = A::Error,
-                InitError = A::InitError,
-            >,
-        B::Service: Service<
-                BR,
-                Response = A::Response,
-                Error = A::Error,
-                Data = <A::Service as Service<AR>>::Data,
             >,
         F: IntoServiceFactory<B, BR, AC>,
     {
@@ -73,12 +68,12 @@ macro_rules! variant_impl_and ({$fac1_type:ident, $fac2_type:ident, $name:ident,
         {
             /// Convert to a Variant with more request types
             pub fn $m_name<$name, $r_name, F>(self, factory: F) -> $fac2_type<V1, V1C, $($T,)+ $name, V1R, $($R,)+ $r_name>
-            where $name: ServiceFactory<$r_name, V1C,
-                    Data = V1::Data, Error = V1::Error, InitError = V1::InitError>,
-                  $name::Service: Service<$r_name,
-                    Response = V1::Response,
-                    Error = V1::Error,
-                    Data = <V1::Service as Service<V1R>>::Data>,
+            where V1::Response: Service<V1R, Data = V1::Data>,
+                  $name: ServiceFactory<$r_name, V1C, Data = V1::Data, Error = V1::Error>,
+                  $name::Response: Service<$r_name,
+                    Response = <V1::Response as Service<V1R>>::Response,
+                    Error = <V1::Response as Service<V1R>>::Error,
+                    Data = V1::Data>,
                   F: IntoServiceFactory<$name, $r_name, V1C>,
             {
                 $fac2_type {
@@ -204,38 +199,32 @@ macro_rules! variant_impl ({$mod_name:ident, $enum_type:ident, $srv_type:ident, 
         }
     }
 
-    impl<V1, V1C, $($T,)+ V1R, $($R,)+> ServiceFactory<$enum_type<V1R, $($R,)+>, V1C> for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+>
+    impl<V1, V1C, $($T,)+ V1R, $($R,)+> Service<V1C> for $fac_type<V1, V1C, $($T,)+ V1R, $($R,)+>
     where
         V1: ServiceFactory<V1R, V1C>,
+        V1::Response: Service<V1R, Data = V1::Data>,
         V1C: Clone,
-        $($T: ServiceFactory<$R, V1C, Data = V1::Data, Error = V1::Error, InitError = V1::InitError>,
-          $T::Service: Service<$R,
-            Response = V1::Response,
-            Error = V1::Error,
-            Data = <V1::Service as Service<V1R>>::Data>),+
+        $($T: ServiceFactory<$R, V1C, Data = V1::Data, Error = V1::Error>,
+          $T::Response: Service<$R,
+            Response = <V1::Response as Service<V1R>>::Response,
+            Error = <V1::Response as Service<V1R>>::Error,
+            Data = V1::Data>),+
     {
-        type Response = V1::Response;
+        type Response = $srv_type<V1::Response, $($T::Response,)+ V1R, $($R,)+>;
         type Error = V1::Error;
-        type Service = $srv_type<V1::Service, $($T::Service,)+ V1R, $($R,)+>;
-        type InitError = V1::InitError;
         type Data = V1::Data;
 
-        async fn create(&self, cfg: V1C) -> Result<Self::Service, Self::InitError> {
+        async fn call(
+            &self,
+            cfg: V1C,
+            data: &Self::Data,
+            ctx: ServiceCtx<'_, Self>,
+        ) -> Result<Self::Response, Self::Error> {
             Ok($srv_type {
-                V1: self.V1.create(cfg.clone()).await?,
-                $($T: self.$T.create(cfg.clone()).await?,)+
+                V1: ctx.call(&self.V1, cfg.clone(), data).await?,
+                $($T: ctx.call(&self.$T, cfg.clone(), data).await?,)+
                 _t: PhantomData
             })
-        }
-
-        async fn map_data(
-            &self,
-            cfg: &V1C,
-            data: &Self::Data,
-        ) -> Result<<Self::Service as Service<$enum_type<V1R, $($R,)+>>>::Data, Self::InitError> {
-            let svc_data = self.V1.map_data(cfg, data).await?;
-            $(self.$T.map_data(cfg, data).await?;)+
-            Ok(svc_data)
         }
     }
 });

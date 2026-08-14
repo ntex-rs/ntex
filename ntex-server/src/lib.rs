@@ -7,7 +7,7 @@
     clippy::missing_errors_doc
 )]
 
-use ntex_service::ServiceFactory;
+use ntex_service::{Service, ServiceFactory};
 
 mod manager;
 pub mod net;
@@ -38,7 +38,7 @@ impl WorkerId {
 /// Worker service factory.
 pub trait ServerConfiguration: Send + Clone + 'static {
     type Item: Send + 'static;
-    type Factory: ServiceFactory<Self::Item, (), Data = ()> + 'static;
+    type Factory: ServiceFactory<Self::Item, ()> + Service<(), Data = ()> + 'static;
 
     /// Create service factory for handling `WorkerMessage<T>` messages.
     async fn create(&self) -> Result<Self::Factory, ()>;

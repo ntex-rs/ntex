@@ -84,47 +84,33 @@ impl<A, B, R> ThenFactory<A, B, R> {
     }
 }
 
-impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B, R>
+impl<A, B, R, C> Service<C> for ThenFactory<A, B, R>
 where
     A: ServiceFactory<R, C>,
-    B: ServiceFactory<
+    A::Response: Service<R, Data = A::Data>,
+    B: ServiceFactory<Result<ResponseOf<A, R, C>, ErrorOf<A, R, C>>, C>,
+    B: Service<C, Error = A::Error, Data = A::Data>,
+    B::Response: Service<
             Result<ResponseOf<A, R, C>, ErrorOf<A, R, C>>,
-            C,
             Error = ErrorOf<A, R, C>,
-            InitError = A::InitError,
             Data = A::Data,
-        >,
-    B::Service: Service<
-            Result<ResponseOf<A, R, C>, ErrorOf<A, R, C>>,
-            Error = ErrorOf<A, R, C>,
-            Data = <A::Service as Service<R>>::Data,
         >,
     C: Clone,
 {
-    type Response = B::Response;
-    type Error = B::Error;
-    type Service = Then<
-        ServiceOf<A, R, C>,
-        ServiceOf<B, Result<ResponseOf<A, R, C>, ErrorOf<A, R, C>>, C>,
-    >;
-    type InitError = A::InitError;
+    type Response = Then<ServiceOf<A, C>, ServiceOf<B, C>>;
+    type Error = A::Error;
     type Data = A::Data;
 
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        Ok(Then {
-            svc1: self.svc1.create(cfg.clone()).await?,
-            svc2: self.svc2.create(cfg).await?,
-        })
-    }
-
-    async fn map_data(
+    async fn call(
         &self,
-        cfg: &C,
+        cfg: C,
         data: &Self::Data,
-    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
-        let svc_data = self.svc1.map_data(cfg, data).await?;
-        self.svc2.map_data(cfg, data).await?;
-        Ok(svc_data)
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        Ok(Then {
+            svc1: ctx.call(&self.svc1, cfg.clone(), data).await?,
+            svc2: ctx.call(&self.svc2, cfg, data).await?,
+        })
     }
 }
 

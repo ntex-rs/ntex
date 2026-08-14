@@ -38,8 +38,8 @@ struct Factory {
 
 pub(crate) fn create_boxed_factory<S>(name: String, factory: S) -> BoxServerService
 where
-    S: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
-    S::Service: 'static,
+    S: ServiceFactory<Io, SharedCfg> + Service<SharedCfg, Data = ()> + 'static,
+    S::Response: 'static,
 {
     boxed::factory(ServerServiceFactory {
         name: Arc::from(name),
@@ -54,8 +54,8 @@ pub(crate) fn create_factory_service<F, R>(
 ) -> FactoryServiceType
 where
     F: AsyncFn(Config) -> R + Send + Clone + 'static,
-    R: ServiceFactory<Io, SharedCfg, Data = ()> + 'static,
-    R::Service: 'static,
+    R: ServiceFactory<Io, SharedCfg> + Service<SharedCfg, Data = ()> + 'static,
+    R::Response: 'static,
 {
     let name: Arc<str> = Arc::from(name);
 
@@ -144,27 +144,33 @@ struct ServerServiceFactory<S> {
     factory: S,
 }
 
-impl<S> ServiceFactory<Io, SharedCfg> for ServerServiceFactory<S>
+impl<S> Service<SharedCfg> for ServerServiceFactory<S>
 where
-    S: ServiceFactory<Io, SharedCfg, Data = ()>,
+    S: ServiceFactory<Io, SharedCfg> + Service<SharedCfg, Data = ()>,
 {
-    type Response = ();
+    type Response = ServerService<S::Response>;
     type Error = ();
-    type Service = ServerService<S::Service>;
-    type InitError = ();
     type Data = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let inner = self
+    async fn call(
+        &self,
+        cfg: SharedCfg,
+        _: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        let data = self
             .factory
-            .pipeline(cfg, &())
+            .map_data(&cfg, &())
             .await
             .map_err(|_| log::error!("Cannot construct {:?} service", self.name))?;
-        Ok(ServerService { inner })
-    }
+        let inner = ctx
+            .call(&self.factory, cfg, &())
+            .await
+            .map_err(|_| log::error!("Cannot construct {:?} service", self.name))?;
 
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
+        Ok(ServerService {
+            inner: Pipeline::new(inner, data),
+        })
     }
 }
 

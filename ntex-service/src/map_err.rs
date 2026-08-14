@@ -6,7 +6,7 @@ use crate::svc_fct::{ErrorOf, ServiceOf};
 /// Service for the `map_err` combinator, changing the type of a service's
 /// error.
 ///
-/// This is created by the `Service::map_err` method.
+/// This is created by the `ServiceExt::map_err` method.
 pub struct MapErr<A, F, E> {
     service: A,
     f: F,
@@ -96,7 +96,7 @@ where
 /// Factory for the `map_err` combinator, changing the type of a new
 /// service's error.
 ///
-/// This is created by the `ServiceFactory::map_err` method.
+/// This is created by the `NewServiceExt::map_err` method.
 pub struct MapErrFactory<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
@@ -149,33 +149,28 @@ where
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapErrFactory<A, R, C, F, E>
+impl<A, R, C, F, E> Service<C> for MapErrFactory<A, R, C, F, E>
 where
     A: ServiceFactory<R, C>,
+    A::Response: Service<R, Data = A::Data>,
     F: Fn(ErrorOf<A, R, C>) -> E + Clone,
 {
-    type Response = A::Response;
-    type Error = E;
-    type Service = MapErr<ServiceOf<A, R, C>, F, E>;
-    type InitError = A::InitError;
+    type Response = MapErr<ServiceOf<A, C>, F, E>;
+    type Error = A::Error;
     type Data = A::Data;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.a.create(cfg).await.map(|service| MapErr {
+    async fn call(
+        &self,
+        cfg: C,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.a, cfg, data).await.map(|service| MapErr {
             service,
             f: self.f.clone(),
             _t: PhantomData,
         })
-    }
-
-    #[inline]
-    async fn map_data(
-        &self,
-        cfg: &C,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
-        self.a.map_data(cfg, data).await
     }
 }
 

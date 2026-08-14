@@ -1,7 +1,7 @@
 use std::{fmt, marker::PhantomData, rc::Rc};
 
 use crate::dev::{Apply, ApplyCtx, ServiceChainFactory};
-use crate::{IntoServiceFactory, Service, ServiceFactory};
+use crate::{IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
 /// Apply middleware to a service.
 pub fn apply<M, S, R, C, U>(
@@ -10,8 +10,10 @@ pub fn apply<M, S, R, C, U>(
 ) -> ServiceChainFactory<ApplyMiddleware<M, S, C, R>, R, C>
 where
     S: ServiceFactory<R, C>,
-    M: Middleware<S::Service, C>,
-    M::Service: Service<R, Data = <S::Service as Service<R>>::Data>,
+    S::Response: Service<R, Data = S::Data>,
+    M: Middleware<S::Response, C>,
+    M::Service: Service<R, Data = S::Data>,
+    S::Data: Clone,
     U: IntoServiceFactory<S, R, C>,
 {
     ServiceChainFactory {
@@ -106,11 +108,12 @@ pub trait Middleware<Svc, Cfg = ()> {
         factory: Fac,
     ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac, Cfg, Req>, Req, Cfg>
     where
-        Fac: ServiceFactory<Req, Cfg, Service = Svc>,
-        Svc: Service<Req>,
+        Fac: ServiceFactory<Req, Cfg> + Service<Cfg, Response = Svc>,
+        Svc: Service<Req, Data = Fac::Data>,
+        Fac::Data: Clone,
         Cfg: Clone,
         Self: Sized,
-        Self::Service: Service<Req, Data = Svc::Data>,
+        Self::Service: Service<Req, Data = Fac::Data>,
     {
         crate::chain_factory(ApplyMiddleware::new(self, factory))
     }
@@ -156,31 +159,29 @@ where
     }
 }
 
-impl<M, Fac, Req, Cfg> ServiceFactory<Req, Cfg> for ApplyMiddleware<M, Fac, Cfg, Req>
+impl<M, Fac, Req, Cfg> Service<Cfg> for ApplyMiddleware<M, Fac, Cfg, Req>
 where
     Fac: ServiceFactory<Req, Cfg>,
-    M: Middleware<Fac::Service, Cfg>,
-    M::Service: Service<Req, Data = <Fac::Service as Service<Req>>::Data>,
+    Fac::Response: Service<Req, Data = Fac::Data>,
+    M: Middleware<Fac::Response, Cfg>,
+    M::Service: Service<Req, Data = Fac::Data>,
     Cfg: Clone,
 {
-    type Response = <M::Service as Service<Req>>::Response;
-    type Error = <M::Service as Service<Req>>::Error;
-    type Service = M::Service;
-    type InitError = Fac::InitError;
+    type Response = M::Service;
+    type Error = Fac::Error;
     type Data = Fac::Data;
 
     #[inline]
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
-        Ok(self.0.0.create(self.0.1.create(cfg.clone()).await?, cfg))
-    }
-
-    #[inline]
-    async fn map_data(
+    async fn call(
         &self,
-        cfg: &Cfg,
+        cfg: Cfg,
         data: &Self::Data,
-    ) -> Result<<Self::Service as Service<Req>>::Data, Self::InitError> {
-        self.0.1.map_data(cfg, data).await
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        Ok(self
+            .0
+            .0
+            .create(ctx.call(&self.0.1, cfg.clone(), data).await?, cfg))
     }
 }
 

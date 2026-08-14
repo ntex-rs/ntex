@@ -283,10 +283,10 @@ struct WorkerSt<T, F: ServiceFactory<T, ()>> {
     availability: WorkerAvailabilityTx,
 }
 
-async fn run_worker<T, F>(mut svc: PipelineBinding<F::Service, T>, mut wrk: WorkerSt<T, F>)
+async fn run_worker<T, F>(mut svc: PipelineBinding<F::Response, T>, mut wrk: WorkerSt<T, F>)
 where
     T: Send + 'static,
-    F: ServiceFactory<T, (), Data = ()> + 'static,
+    F: ServiceFactory<T, ()> + Service<(), Data = ()> + 'static,
 {
     loop {
         let mut recv = std::pin::pin!(wrk.rx.recv());
@@ -310,7 +310,7 @@ where
                 spawn(async move {
                     let _ = fut.await;
                 });
-                Poll::Ready(Ok::<_, F::Error>(true))
+                Poll::Ready(Ok::<_, <F::Response as Service<T>>::Error>(true))
             } else {
                 log::error!("Server is gone");
                 Poll::Ready(Ok(false))
@@ -376,10 +376,10 @@ async fn create<T, F>(
     stop: Receiver<Shutdown>,
     factory: Result<F, ()>,
     availability: WorkerAvailabilityTx,
-) -> Result<(PipelineBinding<F::Service, T>, WorkerSt<T, F>), ()>
+) -> Result<(PipelineBinding<F::Response, T>, WorkerSt<T, F>), ()>
 where
     T: Send + 'static,
-    F: ServiceFactory<T, (), Data = ()> + 'static,
+    F: ServiceFactory<T, ()> + Service<(), Data = ()> + 'static,
 {
     availability.set(false);
     let factory = factory?;

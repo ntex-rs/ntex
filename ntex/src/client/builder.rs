@@ -4,9 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as base64};
 
 use crate::http::error::HttpError;
 use crate::http::header::{self, HeaderName, HeaderValue};
-use crate::service::{
-    Identity, Middleware, Pipeline, Service, ServiceFactory, Stack, boxed,
-};
+use crate::service::{Identity, Middleware, Pipeline, Service, Stack, boxed};
 use crate::{SharedCfg, time::Millis};
 
 use super::error::{ClientBuilderError, ClientError};
@@ -215,16 +213,15 @@ impl<M> ClientBuilder<M> {
         self.config.cfg = cfg.clone();
         let config = ClientConfig::new(self.config);
 
-        let svc = self
-            .connector
-            .pipeline(cfg, &())
+        let svc = Pipeline::new(self.connector, ())
+            .call(cfg)
             .await
             .map_err(|_| ClientBuilderError::ConnectorFailed)?;
 
-        let svc = boxed::service(self.middleware.create(
-            Sender::new(crate::service::PipelineSvc::new(svc), config.clone()),
-            config.clone(),
-        ));
+        let svc = boxed::service(
+            self.middleware
+                .create(Sender::new(svc, config.clone()), config.clone()),
+        );
 
         Ok(Client::with_service(Pipeline::new(svc, ()), config))
     }

@@ -1,9 +1,9 @@
 use std::{fmt, marker::PhantomData};
 
-use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
+use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx};
 
 #[inline]
-/// Create a `Service` from an async function.
+/// Create `ServiceFactory` for function that can act as a `Service`
 pub fn fn_service<F, Req, Res, Err>(f: F) -> FnService<F, Req>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
@@ -37,7 +37,7 @@ where
 ///     });
 ///
 ///     // construct new service
-///     let srv = factory.pipeline((), &()).await?;
+///     let srv = factory.pipeline(&(), &()).await?;
 ///
 ///     // now we can use `div` service
 ///     let result = srv.call((10, 20)).await?;
@@ -194,28 +194,25 @@ where
     }
 }
 
-impl<F, Req, Res, Err, Cfg> ServiceFactory<Req, Cfg>
-    for FnServiceFactory<F, Req, Res, Err, Cfg>
+impl<F, Req, Res, Err, Cfg> Service<Cfg> for FnServiceFactory<F, Req, Res, Err, Cfg>
 where
     F: AsyncFn(Req) -> Result<Res, Err> + Clone,
 {
-    type Response = Res;
-    type Error = Err;
-    type Service = FnService<F, Req>;
-    type InitError = ();
+    type Response = FnService<F, Req>;
+    type Error = ();
     type Data = ();
 
     #[inline]
-    async fn create(&self, _: Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        _: Cfg,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(FnService {
             f: self.f.clone(),
             _t: PhantomData,
         })
-    }
-
-    #[inline]
-    async fn map_data(&self, _: &Cfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 
@@ -278,31 +275,23 @@ where
     }
 }
 
-impl<F, Cfg, Srv, Req, Err> ServiceFactory<Req, Cfg>
-    for FnServiceConfig<F, Cfg, Srv, Req, Err>
+impl<F, Cfg, Srv, Req, Err> Service<Cfg> for FnServiceConfig<F, Cfg, Srv, Req, Err>
 where
     F: AsyncFn(Cfg) -> Result<Srv, Err>,
     Srv: Service<Req>,
-    Srv::Data: Clone,
 {
-    type Response = Srv::Response;
-    type Error = Srv::Error;
-    type Service = Srv;
-    type InitError = Err;
+    type Response = Srv;
+    type Error = Err;
     type Data = Srv::Data;
 
     #[inline]
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
-        (self.f)(cfg).await
-    }
-
-    #[inline]
-    async fn map_data(
+    async fn call(
         &self,
-        _: &Cfg,
-        data: &Self::Data,
-    ) -> Result<Srv::Data, Self::InitError> {
-        Ok(data.clone())
+        cfg: Cfg,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        (self.f)(cfg).await
     }
 }
 
@@ -326,27 +315,19 @@ where
     }
 }
 
-impl<F, S, Req, E, C> ServiceFactory<Req, C> for FnServiceNoConfig<F, S, Req, E>
+impl<F, S, Req, E, C> Service<C> for FnServiceNoConfig<F, S, Req, E>
 where
     F: AsyncFn() -> Result<S, E>,
     S: Service<Req>,
-    S::Data: Clone,
     C: 'static,
 {
-    type Response = S::Response;
-    type Error = S::Error;
-    type Service = S;
-    type InitError = E;
+    type Response = S;
+    type Error = E;
     type Data = S::Data;
 
     #[inline]
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
+    async fn call(&self, _: C, _: &Self::Data, _: ServiceCtx<'_, Self>) -> Result<S, E> {
         (self.f)().await
-    }
-
-    #[inline]
-    async fn map_data(&self, _: &C, data: &Self::Data) -> Result<S::Data, Self::InitError> {
-        Ok(data.clone())
     }
 }
 

@@ -3,25 +3,24 @@ use std::io;
 use ntex_h2 as h2;
 
 use crate::http::error::H2Error;
-use crate::service::{Service, ServiceCtx, ServiceFactory, cfg::SharedCfg};
+use crate::service::{Service, ServiceCtx, cfg::SharedCfg};
 
 #[derive(Debug, Default)]
 /// Default control service
 pub struct DefaultControlService;
 
-impl ServiceFactory<h2::Control<H2Error>, SharedCfg> for DefaultControlService {
-    type Response = h2::ControlAck;
+impl Service<SharedCfg> for DefaultControlService {
+    type Response = DefaultControlService;
     type Error = io::Error;
-    type Service = DefaultControlService;
-    type InitError = io::Error;
     type Data = ();
 
-    async fn create(&self, _: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn call(
+        &self,
+        _: SharedCfg,
+        _: &Self::Data,
+        _: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
         Ok(DefaultControlService)
-    }
-
-    async fn map_data(&self, _: &SharedCfg, _: &Self::Data) -> Result<(), Self::InitError> {
-        Ok(())
     }
 }
 

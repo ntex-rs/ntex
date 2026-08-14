@@ -193,32 +193,27 @@ where
     }
 }
 
-impl<S, F, R, C> ServiceFactory<R, C> for InspectFactory<S, F, R>
+impl<S, F, R, C> Service<C> for InspectFactory<S, F, R>
 where
     S: ServiceFactory<R, C>,
+    S::Response: Service<R, Data = S::Data>,
     F: Fn(&ResponseOf<S, R, C>) + Clone,
 {
-    type Response = S::Response;
+    type Response = Inspect<ServiceOf<S, C>, F>;
     type Error = S::Error;
-    type Service = Inspect<ServiceOf<S, R, C>, F>;
-    type InitError = S::InitError;
     type Data = S::Data;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.s.create(cfg).await.map(|svc| Inspect {
+    async fn call(
+        &self,
+        cfg: C,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.s, cfg, data).await.map(|svc| Inspect {
             svc,
             f: self.f.clone(),
         })
-    }
-
-    #[inline]
-    async fn map_data(
-        &self,
-        cfg: &C,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
-        self.s.map_data(cfg, data).await
     }
 }
 
@@ -266,32 +261,27 @@ where
     }
 }
 
-impl<S, F, R, C> ServiceFactory<R, C> for InspectErrFactory<S, F, R>
+impl<S, F, R, C> Service<C> for InspectErrFactory<S, F, R>
 where
     S: ServiceFactory<R, C>,
+    S::Response: Service<R, Data = S::Data>,
     F: Fn(&ErrorOf<S, R, C>) + Clone,
 {
-    type Response = S::Response;
+    type Response = InspectErr<ServiceOf<S, C>, F>;
     type Error = S::Error;
-    type Service = InspectErr<ServiceOf<S, R, C>, F>;
-    type InitError = S::InitError;
     type Data = S::Data;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.s.create(cfg).await.map(|svc| InspectErr {
+    async fn call(
+        &self,
+        cfg: C,
+        data: &Self::Data,
+        ctx: ServiceCtx<'_, Self>,
+    ) -> Result<Self::Response, Self::Error> {
+        ctx.call(&self.s, cfg, data).await.map(|svc| InspectErr {
             svc,
             f: self.f.clone(),
         })
-    }
-
-    #[inline]
-    async fn map_data(
-        &self,
-        cfg: &C,
-        data: &Self::Data,
-    ) -> Result<<Self::Service as Service<R>>::Data, Self::InitError> {
-        self.s.map_data(cfg, data).await
     }
 }
 

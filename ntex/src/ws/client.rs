@@ -78,7 +78,7 @@ impl WsClient<Base, ()> {
         <Uri as TryFrom<U>>::Error: Into<HttpError>,
         F: Filter,
         T: ServiceFactory<Connect<Uri>, SharedCfg, Data = ()>,
-        T::Service: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
+        T::Response: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
     {
         WsClientBuilder::new(uri).connector(connector)
     }
@@ -315,7 +315,7 @@ impl WsClientBuilder<Base, ()> {
 impl<F, T> WsClientBuilder<F, T>
 where
     T: ServiceFactory<Connect<Uri>, SharedCfg, Data = ()>,
-    T::Service: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
+    T::Response: Service<Connect<Uri>, Response = Io<F>, Error = ConnectError>,
 {
     /// Set socket address of the server.
     ///
@@ -500,7 +500,7 @@ where
     where
         F1: Filter,
         T1: ServiceFactory<Connect<Uri>, SharedCfg, Data = ()>,
-        T1::Service: Service<Connect<Uri>, Response = Io<F1>, Error = ConnectError>,
+        T1::Response: Service<Connect<Uri>, Response = Io<F1>, Error = ConnectError>,
     {
         let inner = self.inner.take().expect("cannot reuse WsClient builder");
 
@@ -564,8 +564,8 @@ where
         &mut self,
         cfg: U,
     ) -> Result<
-        WsClient<F, T::Service, <T::Service as Service<Connect<Uri>>>::Data>,
-        WsClientBuilderError<T::InitError>,
+        WsClient<F, T::Response, <T::Response as Service<Connect<Uri>>>::Data>,
+        WsClientBuilderError<T::Error>,
     > {
         if let Some(e) = self.err.take() {
             return Err(WsClientBuilderError::Http(e));
