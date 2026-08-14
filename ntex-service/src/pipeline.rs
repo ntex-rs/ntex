@@ -1,4 +1,4 @@
-use std::{cell, fmt, future, marker, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
+use std::{cell, fmt, future, pin::Pin, ptr, rc::Rc, task::Context, task::Poll};
 
 use crate::{Ctx, IntoService, ReadyCtx, Service, ctx::WaitersRef};
 

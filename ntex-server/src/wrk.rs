@@ -95,14 +95,13 @@ impl<T> Worker<T> {
                                     );
                                     wrk.run().await;
                                 }
-                                Err(_) => {
-                                    log::error!("Cannot start worker {n:?}")
+                                Err(()) => {
+                                    log::error!("Cannot start worker {n:?}");
                                 }
                             }
                         }
                         Err(e) => log::error!("Cannot start worker {n:?}: {e:?}"),
-                    };
-
+                    }
                     Arbiter::current().stop();
                 });
             });
@@ -295,7 +294,7 @@ where
     F: ServiceFactory<Req, St = (), InitCfg = ()> + 'static,
 {
     async fn create(
-        name: &String,
+        name: &str,
         factory: F,
         reqs: Receiver<Req>,
         stop: Receiver<Shutdown>,
@@ -321,7 +320,7 @@ where
             reqs,
             stop,
             availability,
-            name: name.clone(),
+            name: name.to_string(),
         })
     }
 

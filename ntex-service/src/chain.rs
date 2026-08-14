@@ -47,7 +47,7 @@ where
 
 /// Constructs new chain factory with one service factory.
 ///
-/// ServiceFactory state is hardcoded to `()`
+/// `ServiceFactory` state is hardcoded to `()`
 pub fn ustate_chain_factory<Sf, Req>(
     factory: impl IntoServiceFactory<Sf, Req>,
 ) -> ServiceChainFactory<Sf, Req>

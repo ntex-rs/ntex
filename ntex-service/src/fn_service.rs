@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, future::ready, marker::PhantomData};
+use std::{fmt, marker::PhantomData};
 
 use crate::{Ctx, IntoService, IntoServiceFactory, Service, ServiceFactory};
 

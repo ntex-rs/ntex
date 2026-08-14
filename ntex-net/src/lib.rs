@@ -6,7 +6,8 @@
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc,
-    clippy::missing_panics_doc
+    clippy::missing_panics_doc,
+    clippy::unused_async_trait_impl
 )]
 use std::{any::Any, io, net, net::SocketAddr, panic};
 

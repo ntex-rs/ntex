@@ -1,4 +1,4 @@
-use std::{cell::Cell, fmt, future::Future, future::ready, marker::PhantomData};
+use std::{cell::Cell, fmt, marker::PhantomData};
 
 use crate::{Ctx, Service, ServiceFactory};
 

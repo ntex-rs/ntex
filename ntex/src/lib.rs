@@ -16,7 +16,8 @@
     clippy::missing_panics_doc,
     clippy::must_use_candidate,
     clippy::too_many_lines,
-    clippy::type_complexity
+    clippy::type_complexity,
+    clippy::unused_async_trait_impl
 )]
 // Used for fake variadics
 #![cfg_attr(any(docsrs, docsrs_dep), feature(rustdoc_internals))]

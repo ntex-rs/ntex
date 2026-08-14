@@ -420,7 +420,7 @@ where
         }
 
         let this = self.get_mut();
-        let body = match Pin::new(&mut this.fut.as_mut().unwrap()).poll(cx) {
+        let body = match Pin::new(&mut *this.fut.as_mut().unwrap()).poll(cx) {
             Poll::Ready(result) => result.map_err(|e| e.map(JsonPayloadError::from))?,
             Poll::Pending => return Poll::Pending,
         };

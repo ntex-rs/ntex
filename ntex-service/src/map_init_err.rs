@@ -71,10 +71,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        IntoService, ServiceFactory, chain, chain_factory, fn_factory_with_config,
-        fn_service, ustate_chain,
-    };
+    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, ustate_chain};
 
     #[ntex::test]
     async fn map_init_err() {

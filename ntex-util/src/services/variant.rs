@@ -270,7 +270,7 @@ mod tests {
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
+        async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<usize, ()> {
             Ok(1)
         }
     }
@@ -290,7 +290,7 @@ mod tests {
 
         async fn shutdown(&self) {}
 
-        async fn call(&self, _: (), _: Ctx<'_, Self>) -> Result<usize, ()> {
+        async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<usize, ()> {
             Ok(2)
         }
     }

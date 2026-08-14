@@ -1,12 +1,12 @@
 //! See [`Service`] docs for information on this crate's foundational trait.
 #![deny(clippy::pedantic)]
 #![allow(
-    clippy::unused_async,
+    clippy::type_complexity,
     clippy::missing_fields_in_debug,
     clippy::must_use_candidate,
     clippy::missing_errors_doc,
-    unused_imports,
-    dead_code
+    clippy::unused_async,
+    clippy::unused_async_trait_impl
 )]
 use std::{rc::Rc, task::Context};
 

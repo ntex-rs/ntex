@@ -44,7 +44,7 @@ impl Service for Sender {
         } = req;
 
         let uri = head.uri.clone();
-        let con = ctx.call(&self.connector, Connect { addr, uri }).await?;
+        let con = ctx.call(&self.connector, Connect { uri, addr }).await?;
 
         if timeout.is_zero() {
             timeout = self.config.timeout();

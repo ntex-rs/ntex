@@ -205,7 +205,7 @@ where
     async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let service = self
             .srv
-            .create(&cfg)
+            .create(cfg)
             .await
             .map_err(|e| log::error!("Cannot construct publish service: {e:?}"))?;
 

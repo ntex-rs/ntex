@@ -1,6 +1,6 @@
 use std::{future::Future, future::poll_fn, pin, pin::Pin, task::Poll};
 
-use crate::{Ctx, ReadyCtx, Service};
+use crate::{ReadyCtx, Service};
 
 pub(crate) async fn shutdown<A, B>(svc1: &A, svc2: &B)
 where
