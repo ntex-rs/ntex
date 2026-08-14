@@ -4,7 +4,7 @@ use ntex::codec::BytesCodec;
 use ntex::http::test::server as test_server;
 use ntex::http::{HttpService, Response, body::BodySize, h1};
 use ntex::io::{DispatchItem, Dispatcher, IoConfig};
-use ntex::service::{cfg::SharedCfg, fn_factory_with_config, fn_service};
+use ntex::service::{Pipeline, cfg::SharedCfg, fn_factory_with_config, ustate_chain};
 use ntex::web::{self, App, HttpRequest};
 use ntex::ws::{self, handshake_response};
 use ntex::{time::Seconds, util::ByteString, util::Bytes, util::Ready};
@@ -44,7 +44,12 @@ async fn test_simple() {
                         .unwrap();
 
                         // start websocket service
-                        Dispatcher::new(io.seal(), ws::Codec::default(), ws_service).await
+                        Dispatcher::new(
+                            io.seal(),
+                            ws::Codec::default(),
+                            Pipeline::new(ustate_chain(ws_service)).bind(),
+                        )
+                        .await
                     })
                 } else {
                     req.ack()
@@ -106,7 +111,7 @@ async fn test_transport() {
                         Dispatcher::new(
                             io.seal(),
                             ws::Codec::default(),
-                            fn_service(ws_service),
+                            Pipeline::new(ustate_chain(ws_service)).bind(),
                         )
                         .await
                     })
@@ -154,7 +159,7 @@ async fn test_keepalive_timeout() {
                         Dispatcher::new(
                             io.seal(),
                             ws::Codec::default(),
-                            fn_service(ws_service),
+                            Pipeline::new(ustate_chain(ws_service)).bind(),
                         )
                         .await
                     })
@@ -203,11 +208,11 @@ async fn test_upgrade_handler_with_await() {
                 // some async context switch
                 ntex::time::sleep(ntex::time::Seconds::ZERO).await;
 
-                web::ws::start::<_, _, _, web::Error>(
-                    req,
-                    None::<&str>,
-                    fn_factory_with_config(|_| async {
-                        Ok::<_, web::Error>(fn_service(service))
+                web::ws::start(
+                    &req,
+                    None,
+                    fn_factory_with_config(|_: &ws::WsSink| async {
+                        Ok::<_, web::Error>(ustate_chain(service))
                     }),
                 )
                 .await

@@ -117,11 +117,8 @@ async fn test_timeout() {
         .await
         .unwrap();
 
-    let request = client.get(srv.url("/")).send().await;
-    match request {
-        Err(ClientError::Timeout) => (),
-        _ => panic!(),
-    }
+    let err = client.get(srv.url("/")).send().await.err().unwrap();
+    assert!(matches!(err.into_error(), ClientError::Timeout));
 }
 
 #[ntex::test]
@@ -139,11 +136,13 @@ async fn test_timeout_override() {
         .build(SharedCfg::default())
         .await
         .unwrap();
-    let request = client.get(srv.url("/")).timeout(Seconds(1)).send();
-    match request.await {
-        Err(ClientError::Timeout) => (),
-        _ => panic!(),
-    }
+    let err = client
+        .get(srv.url("/"))
+        .timeout(Seconds(1))
+        .send()
+        .await
+        .err();
+    assert!(matches!(err.unwrap().into_error(), ClientError::Timeout));
 }
 
 #[ntex::test]
@@ -680,7 +679,7 @@ async fn test_client_timeout() {
         .await
         .err()
         .unwrap();
-    assert!(matches!(err, ClientError::Timeout));
+    assert!(matches!(err.into_error(), ClientError::Timeout));
 }
 
 #[ntex::test]

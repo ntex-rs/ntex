@@ -2,85 +2,84 @@ use std::{fmt, marker::PhantomData};
 
 use super::ServiceFactory;
 
-/// `MapInitErr` service combinator
-pub struct MapInitErr<A, R, C, F, E> {
-    a: A,
+/// `MapInitError` service combinator
+pub struct MapInitErr<Sf, F, Err> {
+    sf: Sf,
     f: F,
-    e: PhantomData<fn(R, C) -> E>,
+    e: PhantomData<fn() -> Err>,
 }
 
-impl<A, R, C, F, E> MapInitErr<A, R, C, F, E>
-where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E,
-{
+impl<Sf, F, Err> MapInitErr<Sf, F, Err> {
     /// Create new `MapInitErr` combinator
-    pub(crate) fn new(a: A, f: F) -> Self {
+    pub(crate) fn new<Req>(sf: Sf, f: F) -> Self
+    where
+        Sf: ServiceFactory<Req>,
+        F: Fn(Sf::InitError) -> Err,
+    {
         Self {
-            a,
+            sf,
             f,
             e: PhantomData,
         }
     }
 }
 
-impl<A, R, C, F, E> Clone for MapInitErr<A, R, C, F, E>
+impl<Sf, F, Err> Clone for MapInitErr<Sf, F, Err>
 where
-    A: Clone,
+    Sf: Clone,
     F: Clone,
 {
     fn clone(&self) -> Self {
         Self {
-            a: self.a.clone(),
+            sf: self.sf.clone(),
             f: self.f.clone(),
             e: PhantomData,
         }
     }
 }
 
-impl<A, R, C, F, E> fmt::Debug for MapInitErr<A, R, C, F, E>
+impl<Sf, F, Err> fmt::Debug for MapInitErr<Sf, F, Err>
 where
-    A: fmt::Debug,
+    Sf: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MapInitErr")
-            .field("service", &self.a)
+            .field("sf", &self.sf)
             .field("map", &std::any::type_name::<F>())
             .finish()
     }
 }
 
-impl<A, R, C, F, E> ServiceFactory<R, C> for MapInitErr<A, R, C, F, E>
+impl<Sf, Req, F, Err> ServiceFactory<Req> for MapInitErr<Sf, F, Err>
 where
-    A: ServiceFactory<R, C>,
-    F: Fn(A::InitError) -> E + Clone,
+    Sf: ServiceFactory<Req>,
+    F: Fn(Sf::InitError) -> Err + Clone,
 {
-    type Response = A::Response;
-    type Error = A::Error;
+    type St = Sf::St;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
 
-    type Service = A::Service;
-    type InitError = E;
+    type Service = Sf::Service;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Err;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.a.create(cfg).await.map_err(|e| (self.f)(e))
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
+        self.sf.create(cfg).await.map_err(|e| (self.f)(e))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, fn_service};
+    use crate::{ServiceFactory, chain_factory, fn_factory_with_config, ustate_chain};
 
     #[ntex::test]
     async fn map_init_err() {
-        let factory = chain_factory(fn_factory_with_config(|err: &bool| {
-            let err = *err;
-            async move {
-                if err {
-                    Err(())
-                } else {
-                    Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-                }
+        let factory = chain_factory(fn_factory_with_config(async move |err: &bool| {
+            if *err {
+                Err(())
+            } else {
+                Ok(ustate_chain(async |i: usize| Ok::<_, ()>(i * 2)))
             }
         }))
         .map_init_err(|()| std::io::Error::other("err"))
@@ -93,14 +92,11 @@ mod tests {
 
     #[ntex::test]
     async fn map_init_err2() {
-        let factory = fn_factory_with_config(|err: &bool| {
-            let err = *err;
-            async move {
-                if err {
-                    Err(())
-                } else {
-                    Ok(fn_service(|i: usize| async move { Ok::<_, ()>(i * 2) }))
-                }
+        let factory = fn_factory_with_config(async |err: &bool| {
+            if *err {
+                Err(())
+            } else {
+                Ok(ustate_chain(async |i: usize| Ok::<_, ()>(i * 2)))
             }
         })
         .map_init_err(|()| std::io::Error::other("err"))

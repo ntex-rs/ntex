@@ -10,10 +10,6 @@ use crate::error::ErrorDiagnostic;
 use crate::http::error::{DecodeError, EncodeError, HttpError, PayloadError};
 use crate::util::{Either, clone_io_error};
 
-#[doc(hidden)]
-#[deprecated(since = "3.7.0", note = "ClientError")]
-pub type SendRequestError = ClientError;
-
 /// A set of errors that can occur during parsing json payloads
 #[derive(thiserror::Error, Debug)]
 pub enum JsonPayloadError {

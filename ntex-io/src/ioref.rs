@@ -73,23 +73,6 @@ impl IoRef {
         self.0.terminate_connection(None);
     }
 
-    #[doc(hidden)]
-    #[deprecated(since = "3.10.0", note = "use IoRef::terminate() instead")]
-    /// Force close connection
-    ///
-    /// Dispatcher does not wait for uncompleted responses. Io stream get terminated
-    /// without any graceful period.
-    pub fn force_close(&self) {
-        self.terminate();
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.11.0", note = "use IoRef::close() instead")]
-    /// Gracefully shuts down the I/O stream.
-    pub fn wants_shutdown(&self) {
-        self.0.start_shutdown();
-    }
-
     /// Queries filter-specific data.
     pub fn query<T: 'static>(&self) -> types::QueryItem<T> {
         types::QueryItem::new(self.filter().query(any::TypeId::of::<T>()))
@@ -348,13 +331,6 @@ impl IoRef {
     /// Make sure buffer has enough free space
     pub fn resize_read_buf(&self, buf: &mut BytesMut) {
         self.0.cfg.read_buf().resize(buf);
-    }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.10.3", note = "Use .notify_disapatcher()")]
-    /// Wakeup dispatcher
-    pub fn wake(&self) {
-        self.notify_dispatcher();
     }
 
     /// Wakeup dispatcher

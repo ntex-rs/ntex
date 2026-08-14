@@ -1,10 +1,9 @@
 //! An implementation of `WebSockets` base bytes streams
-use std::{cell::Cell, future::Future, io, task::Poll};
+use std::{cell::Cell, io, marker::PhantomData, task::Poll};
 
 use crate::codec::{Decoder, Encoder};
 use crate::io::{Filter, FilterBuf, FilterLayer, Io, Layer};
-use crate::service::{Service, ServiceCtx};
-use crate::util::Ready;
+use crate::service::{Ctx, Service};
 
 use super::{CloseCode, CloseReason, Codec, Frame, Item, Message};
 
@@ -154,26 +153,28 @@ impl FilterLayer for WsTransport {
 
 #[derive(Clone, Debug)]
 /// `WebSockets` transport service
-pub struct WsTransportService {
+pub struct WsTransportService<F> {
     codec: Codec,
+    f: PhantomData<F>,
 }
 
-impl WsTransportService {
+impl<F> WsTransportService<F> {
     /// Create websockets transport service
     pub fn new(codec: Codec) -> Self {
-        Self { codec }
+        Self {
+            codec,
+            f: PhantomData,
+        }
     }
 }
 
-impl<F: Filter> Service<Io<F>> for WsTransportService {
-    type Response = Io<Layer<WsTransport, F>>;
+impl<F: Filter> Service for WsTransportService<F> {
+    type St = ();
+    type Req = Io<F>;
+    type Res = Io<Layer<WsTransport, F>>;
     type Error = io::Error;
 
-    fn call(
-        &self,
-        io: Io<F>,
-        _: ServiceCtx<'_, Self>,
-    ) -> impl Future<Output = Result<Self::Response, Self::Error>> {
-        Ready::Ok(WsTransport::create(io, self.codec.clone()))
+    async fn call(&self, io: Io<F>, _: Ctx<'_, Self>) -> Result<Self::Res, Self::Error> {
+        Ok(WsTransport::create(io, self.codec.clone()))
     }
 }

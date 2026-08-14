@@ -1,22 +1,22 @@
 //! Service that buffers incoming requests.
 use std::cell::{Cell, RefCell};
 use std::task::{Poll, Waker, ready};
-use std::{collections::VecDeque, fmt, future::poll_fn, marker::PhantomData};
+use std::{collections::VecDeque, fmt, future::poll_fn};
 
-use ntex_service::{Middleware, Pipeline, PipelineBinding, Service, ServiceCtx};
+use ntex_service::{Middleware, Pipeline, Service, Ctx, ReadyCtx};
 
 use crate::channel::oneshot;
 
+#[derive(Copy, Clone, Debug)]
 /// Buffer - service factory for service that can buffer incoming request.
 ///
 /// Default number of buffered requests is 16
-pub struct Buffer<R> {
+pub struct Buffer {
     buf_size: usize,
     cancel_on_shutdown: bool,
-    _t: PhantomData<R>,
 }
 
-impl<R> Buffer<R> {
+impl Buffer {
     /// Set size of the buffer.
     ///
     /// Default is set to 16
@@ -36,43 +36,22 @@ impl<R> Buffer<R> {
     }
 }
 
-impl<R> Default for Buffer<R> {
+impl Default for Buffer {
     fn default() -> Self {
         Self {
             buf_size: 16,
             cancel_on_shutdown: false,
-            _t: PhantomData,
         }
     }
 }
 
-impl<R> fmt::Debug for Buffer<R> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Buffer")
-            .field("buf_size", &self.buf_size)
-            .field("cancel_on_shutdown", &self.cancel_on_shutdown)
-            .finish()
-    }
-}
-
-impl<R> Clone for Buffer<R> {
-    fn clone(&self) -> Self {
-        Self {
-            buf_size: self.buf_size,
-            cancel_on_shutdown: self.cancel_on_shutdown,
-            _t: PhantomData,
-        }
-    }
-}
-
-impl<R, S, C> Middleware<S, C> for Buffer<R>
+impl<S, C> Middleware<S, C> for Buffer
 where
-    S: Service<R> + 'static,
-    R: 'static,
+    S: Service + 'static,
 {
-    type Service = BufferService<R, S>;
+    type Service = BufferService<S>;
 
-    fn create(&self, service: S, _: C) -> Self::Service {
+    fn create(&self, service: S, _: &C) -> Self::Service {
         BufferService::new(self.buf_size, service)
     }
 }
@@ -89,10 +68,10 @@ impl<E> From<E> for BufferServiceError<E> {
     }
 }
 
-impl<E: std::fmt::Display> std::fmt::Display for BufferServiceError<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<E: fmt::Display> fmt::Display for BufferServiceError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BufferServiceError::Service(e) => std::fmt::Display::fmt(e, f),
+            BufferServiceError::Service(e) => fmt::Display::fmt(e, f),
             BufferServiceError::RequestCanceled => {
                 f.write_str("buffer service request canceled")
             }
@@ -100,38 +79,35 @@ impl<E: std::fmt::Display> std::fmt::Display for BufferServiceError<E> {
     }
 }
 
-impl<E: std::fmt::Display + std::fmt::Debug> std::error::Error for BufferServiceError<E> {}
+impl<E: fmt::Display + fmt::Debug> std::error::Error for BufferServiceError<E> {}
 
 /// Buffer service - service that can buffer incoming requests.
 ///
 /// Default number of buffered requests is 16
-pub struct BufferService<R, S: Service<R>> {
+pub struct BufferService<S: Service> {
     size: usize,
     ready: Cell<bool>,
-    service: PipelineBinding<S, R>,
+    service: Pipeline<S>,
     buf: RefCell<VecDeque<oneshot::Sender<oneshot::Sender<()>>>>,
     next_call: RefCell<Option<oneshot::Receiver<()>>>,
     cancel_on_shutdown: bool,
     readiness: Cell<Option<Waker>>,
-    _t: PhantomData<R>,
 }
 
-impl<R, S> BufferService<R, S>
+impl<S> BufferService<S>
 where
-    S: Service<R> + 'static,
-    R: 'static,
+    S: Service + 'static,
 {
     #[must_use]
     pub fn new(size: usize, service: S) -> Self {
         Self {
             size,
-            service: Pipeline::new(service).bind(),
+            service: Pipeline::new(service),
             ready: Cell::new(false),
             buf: RefCell::new(VecDeque::with_capacity(size)),
             next_call: RefCell::default(),
             cancel_on_shutdown: false,
             readiness: Cell::new(None),
-            _t: PhantomData,
         }
     }
 
@@ -144,9 +120,9 @@ where
     }
 }
 
-impl<R, S> Clone for BufferService<R, S>
+impl<S> Clone for BufferService<S>
 where
-    S: Service<R> + Clone,
+    S: Service + Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -157,14 +133,13 @@ where
             next_call: RefCell::default(),
             cancel_on_shutdown: self.cancel_on_shutdown,
             readiness: Cell::new(None),
-            _t: PhantomData,
         }
     }
 }
 
-impl<R, S> fmt::Debug for BufferService<R, S>
+impl<S> fmt::Debug for BufferService<S>
 where
-    S: Service<R> + fmt::Debug,
+    S: Service + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BufferService")
@@ -178,15 +153,17 @@ where
     }
 }
 
-impl<R, S> Service<R> for BufferService<R, S>
+impl<S> Service for BufferService<S>
 where
-    S: Service<R> + 'static,
-    R: 'static,
+    S: Service + 'static,
+    S::St: Clone,
 {
-    type Response = S::Response;
+    type St = S::St;
+    type Req = S::Req;
+    type Res = S::Res;
     type Error = BufferServiceError<S::Error>;
 
-    async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         // hold advancement until the last released task either makes a call or is dropped
         let next_call = self.next_call.borrow_mut().take();
         if let Some(next_call) = next_call {
@@ -274,12 +251,12 @@ where
 
     async fn call(
         &self,
-        req: R,
-        _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        req: S::Req,
+        ctx: Ctx<'_, Self>,
+    ) -> Result<Self::Res, Self::Error> {
         if self.ready.get() {
             self.ready.set(false);
-            Ok(self.service.call_nowait(req).await?)
+            Ok(self.service.call_nowait(req, ctx.st().clone()).await?)
         } else {
             let (tx, rx) = oneshot::channel();
             self.buf.borrow_mut().push_back(tx);
@@ -291,7 +268,7 @@ where
             })?;
 
             // call service
-            Ok(self.service.call(req).await?)
+            Ok(self.service.call(req, ctx.st()).await?)
         }
     }
 
@@ -321,7 +298,7 @@ mod tests {
         type Response = ();
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             poll_fn(|cx| {
                 self.0.waker.register(cx.waker());
                 if self.0.ready.get() {
@@ -333,7 +310,7 @@ mod tests {
             .await
         }
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             self.0.ready.set(false);
             self.0.count.set(self.0.count.get() + 1);
             Ok(())

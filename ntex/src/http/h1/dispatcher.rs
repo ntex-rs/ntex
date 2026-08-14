@@ -31,10 +31,12 @@ bitflags::bitflags! {
 
 pin_project_lite::pin_project! {
     /// Dispatcher for HTTP/1.1 protocol
-    pub struct Dispatcher<F, S: Service<Request>, B, C: Service<Control<F, S::Error>>>
+    pub struct Dispatcher<F, S, B, C>
     where
         F: 'static,
+        S: Service<St = (), Req = Request>,
         S::Error: 'static,
+        C: Service<St = (), Req = Control<F, S::Error>>,
     {
         st: State<F, C, S, B>,
         inner: DispatcherInner<F, C, S, B>,
@@ -45,21 +47,15 @@ pin_project_lite::pin_project! {
 enum State<F, C, S, B>
 where
     F: 'static,
-    S: Service<Request>,
+    S: Service<St = (), Req = Request>,
     S::Error: 'static,
-    C: Service<Control<F, S::Error>>,
+    C: Service<St = (), Req = Control<F, S::Error>>,
 {
-    CallPublish {
-        fut: PipelineCall<S, Request>,
-    },
-    CallControl {
-        fut: PipelineCall<C, Control<F, S::Error>>,
-    },
+    CallPublish { fut: PipelineCall<S> },
+    CallControl { fut: PipelineCall<C> },
     ReadRequest,
     ReadPayload,
-    SendPayload {
-        body: ResponseBody<B>,
-    },
+    SendPayload { body: ResponseBody<B> },
     Stop,
 }
 
@@ -79,10 +75,10 @@ struct DispatcherInner<F, C, S, B> {
 impl<F, S, B, C> Dispatcher<F, S, B, C>
 where
     F: Filter,
-    C: Service<Control<F, S::Error>, Response = ControlAck<F>>,
-    S: Service<Request>,
+    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>>,
+    S: Service<St = (), Req = Request>,
+    S::Res: Into<Response<B>>,
     S::Error: ResponseError,
-    S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     /// Construct new `Dispatcher` instance with outgoing messages stream.
@@ -122,11 +118,11 @@ where
 impl<F, S, B, C> future::Future for Dispatcher<F, S, B, C>
 where
     F: Filter,
-    C: Service<Control<F, S::Error>, Response = ControlAck<F>> + 'static,
+    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
     C::Error: error::Error,
-    S: Service<Request> + 'static,
+    S: Service<St = (), Req = Request> + 'static,
     S::Error: ResponseError + 'static,
-    S::Response: Into<Response<B>>,
+    S::Res: Into<Response<B>>,
     B: MessageBody,
 {
     type Output = Result<(), Rc<dyn error::Error>>;
@@ -246,10 +242,10 @@ where
 impl<F, C, S, B> DispatcherInner<F, C, S, B>
 where
     F: Filter,
-    C: Service<Control<F, S::Error>, Response = ControlAck<F>> + 'static,
-    S: Service<Request> + 'static,
+    C: Service<St = (), Req = Control<F, S::Error>, Res = ControlAck<F>> + 'static,
+    S: Service<St = (), Req = Request> + 'static,
+    S::Res: Into<Response<B>>,
     S::Error: ResponseError,
-    S::Response: Into<Response<B>>,
     B: MessageBody,
 {
     fn poll_read_request(&mut self, cx: &mut Context<'_>) -> Poll<State<F, C, S, B>> {
@@ -716,13 +712,13 @@ where
 
     fn publish(&self, req: Request) -> State<F, C, S, B> {
         State::CallPublish {
-            fut: self.config.service.call_nowait(req),
+            fut: self.config.service.call_nowait(req, ()),
         }
     }
 
     fn control(&self, req: Control<F, S::Error>) -> State<F, C, S, B> {
         State::CallControl {
-            fut: self.config.control.call_nowait(req),
+            fut: self.config.control.call_nowait(req, ()),
         }
     }
 
@@ -734,28 +730,31 @@ where
     fn ctl_keepalive(&mut self, enabled: bool) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::keepalive(enabled)),
+            fut: self
+                .config
+                .control
+                .call_nowait(Control::keepalive(enabled), ()),
         }
     }
 
     fn ctl_error(&mut self, err: S::Error) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::err(err)),
+            fut: self.config.control.call_nowait(Control::err(err), ()),
         }
     }
 
     fn ctl_proto_err(&mut self, err: ProtocolError) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::proto_err(err)),
+            fut: self.config.control.call_nowait(Control::proto_err(err), ()),
         }
     }
 
     fn ctl_peer_gone(&mut self, err: Option<io::Error>) -> State<F, C, S, B> {
         self.flags.insert(Flags::DISCONNECT_SENT);
         State::CallControl {
-            fut: self.config.control.call_nowait(Control::peer_gone(err)),
+            fut: self.config.control.call_nowait(Control::peer_gone(err), ()),
         }
     }
 
@@ -768,7 +767,7 @@ where
                 fut: self
                     .config
                     .control
-                    .call_nowait(Control::svc_disconnect(reason)),
+                    .call_nowait(Control::svc_disconnect(reason), ()),
             }
         }
     }
@@ -782,7 +781,7 @@ where
                 fut: self
                     .config
                     .control
-                    .call_nowait(Control::svc_disconnect(reason)),
+                    .call_nowait(Control::svc_disconnect(reason), ()),
             })
         } else {
             None
@@ -820,12 +819,12 @@ mod tests {
     pub(crate) fn h1<F, S, B>(
         stream: IoTest,
         service: F,
-    ) -> Dispatcher<Base, S, B, DefaultControlService>
+    ) -> Dispatcher<Base, S, B, DefaultControlService<Base, S::Error>>
     where
-        F: IntoService<S, Request>,
-        S: Service<Request>,
+        F: IntoService<S>,
+        S: Service<St = (), Req = Request>,
+        S::Res: Into<Response<B>>,
         S::Error: ResponseError + 'static,
-        S::Response: Into<Response<B>>,
         B: MessageBody,
     {
         let config: SharedCfg = SharedCfg::new("DBG")
@@ -842,17 +841,17 @@ mod tests {
             Rc::new(DispatcherConfig::new(
                 config.get(),
                 service.into_service(),
-                DefaultControlService,
+                DefaultControlService::new(),
             )),
         )
     }
 
     pub(crate) fn spawn_h1<F, S, B>(stream: IoTest, service: F)
     where
-        F: IntoService<S, Request>,
-        S: Service<Request> + 'static,
+        F: IntoService<S>,
+        S: Service<St = (), Req = Request> + 'static,
+        S::Res: Into<Response<B>>,
         S::Error: ResponseError,
-        S::Response: Into<Response<B>>,
         B: MessageBody + 'static,
     {
         let config: SharedCfg = SharedCfg::new("DBG")
@@ -869,7 +868,7 @@ mod tests {
             Rc::new(DispatcherConfig::new(
                 SharedCfg::default().get(),
                 service.into_service(),
-                DefaultControlService,
+                DefaultControlService::new(),
             )),
         ));
     }

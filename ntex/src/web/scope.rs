@@ -4,7 +4,7 @@ use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
-use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
+use crate::service::{Ctx, Identity, Middleware, ReadyCtx, Service, ServiceFactory};
 use crate::service::{IntoServiceFactory, chain_factory, dev::ServiceChainFactory};
 use crate::util::{Extensions, join};
 
@@ -23,9 +23,9 @@ use super::stack::WebStack;
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
-    BoxService<WebRequest<Err>, WebResponse, Err::Container>;
+    BoxService<(), WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<SharedCfg, WebRequest<Err>, WebResponse, Err::Container, ()>;
+    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
 
 /// Resources scope.
 ///
@@ -60,7 +60,7 @@ type HttpNewService<Err: ErrorRenderer> =
 #[debug("Scope({rdef:?})")]
 pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: ServiceChainFactory<T, WebRequest<Err>, SharedCfg>,
+    filter: ServiceChainFactory<T, WebRequest<Err>>,
     rdef: Vec<String>,
     state: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
@@ -92,9 +92,10 @@ impl<Err, M, T> Scope<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
-            SharedCfg,
-            Response = WebRequest<Err>,
+            St = (),
+            Res = WebRequest<Err>,
             Error = Err::Container,
+            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
@@ -290,12 +291,13 @@ where
     /// If default resource is not registered, app's default resource is being used.
     pub fn default_service<F, S>(mut self, f: F) -> Self
     where
-        F: IntoServiceFactory<S, WebRequest<Err>, SharedCfg>,
+        F: IntoServiceFactory<S, WebRequest<Err>>,
         S: ServiceFactory<
                 WebRequest<Err>,
-                SharedCfg,
-                Response = WebResponse,
+                St = (),
+                Res = WebResponse,
                 Error = Err::Container,
+                InitCfg = SharedCfg,
             > + 'static,
         S::InitError: fmt::Debug,
     {
@@ -316,28 +318,29 @@ where
     /// necessary, across all requests managed by the *Scope*.
     ///
     /// This is similar to `App's` filters, but filter get invoked on scope level.
-    pub fn filter<U, F>(
+    pub fn filter<U>(
         self,
-        filter: F,
+        filter: impl IntoServiceFactory<U, WebRequest<Err>>,
     ) -> Scope<
         Err,
         M,
         impl ServiceFactory<
             WebRequest<Err>,
-            SharedCfg,
-            Response = WebRequest<Err>,
+            St = (),
+            Res = WebRequest<Err>,
             Error = Err::Container,
+            InitCfg = SharedCfg,
             InitError = (),
         >,
     >
     where
         U: ServiceFactory<
                 WebRequest<Err>,
-                SharedCfg,
-                Response = WebRequest<Err>,
+                St = (),
+                Res = WebRequest<Err>,
                 Error = Err::Container,
+                InitCfg = SharedCfg,
             >,
-        F: IntoServiceFactory<U, WebRequest<Err>, SharedCfg>,
     {
         Scope {
             filter: self
@@ -376,25 +379,21 @@ where
             case_insensitive: self.case_insensitive,
         }
     }
-
-    #[doc(hidden)]
-    #[deprecated(since = "3.2.0", note = "use `middleware()` instead")]
-    pub fn wrap<U>(self, mw: U) -> Scope<Err, WebStack<M, U, Err>, T> {
-        self.middleware(mw)
-    }
 }
 
 impl<Err, M, T> WebServiceFactory<Err> for Scope<Err, M, T>
 where
     T: ServiceFactory<
             WebRequest<Err>,
-            SharedCfg,
-            Response = WebRequest<Err>,
+            St = (),
+            Res = WebRequest<Err>,
             Error = Err::Container,
+            InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     M: Middleware<ScopeService<T::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn register(mut self, config: &mut WebServiceConfig<Err>) {
@@ -475,30 +474,33 @@ struct ScopeServiceFactory<M, F, Err: ErrorRenderer> {
     routing: ScopeRouterFactory<Err>,
 }
 
-impl<M, F, Err> ServiceFactory<WebRequest<Err>, SharedCfg>
-    for ScopeServiceFactory<M, F, Err>
+impl<M, F, Err> ServiceFactory<WebRequest<Err>> for ScopeServiceFactory<M, F, Err>
 where
     M: Middleware<ScopeService<F::Service, Err>, SharedCfg> + 'static,
-    M::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    M::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
-            SharedCfg,
-            Response = WebRequest<Err>,
+            St = (),
+            Res = WebRequest<Err>,
             Error = Err::Container,
+            InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
 {
-    type Response = WebResponse;
+    type St = ();
+    type Res = WebResponse;
     type Error = Err::Container;
     type Service = M::Service;
+    type InitCfg = SharedCfg;
     type InitError = ();
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         Ok(self.middleware.create(
             ScopeService {
-                filter: self.filter.create(cfg.clone()).await?,
-                routing: self.routing.create(cfg.clone()).await?,
+                filter: self.filter.create(cfg).await?,
+                routing: self.routing.create(cfg).await?,
             },
             cfg,
         ))
@@ -512,16 +514,33 @@ pub struct ScopeService<F, Err: ErrorRenderer> {
     routing: ScopeRouter<Err>,
 }
 
-impl<F, Err> Service<WebRequest<Err>> for ScopeService<F, Err>
+impl<F, Err> Service for ScopeService<F, Err>
 where
-    F: Service<WebRequest<Err>, Response = WebRequest<Err>, Error = Err::Container>,
+    F: Service<
+            St = (),
+            Req = WebRequest<Err>,
+            Res = WebRequest<Err>,
+            Error = Err::Container,
+        >,
     Err: ErrorRenderer,
 {
-    type Response = WebResponse;
+    type St = ();
+    type Req = WebRequest<Err>;
+    type Res = WebResponse;
     type Error = Err::Container;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn call(
+        &self,
+        req: WebRequest<Err>,
+        ctx: Ctx<'_, Self>,
+    ) -> Result<Self::Res, Self::Error> {
+        let req = ctx.call(&self.filter, req).await?;
+        ctx.call(&self.routing, req).await
+    }
+
+    #[inline]
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         let (ready1, ready2) =
             join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
         ready1?;
@@ -533,16 +552,6 @@ where
         self.filter.poll(cx)?;
         self.routing.poll(cx)
     }
-
-    #[inline]
-    async fn call(
-        &self,
-        req: WebRequest<Err>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        let req = ctx.call(&self.filter, req).await?;
-        ctx.call(&self.routing, req).await
-    }
 }
 
 struct ScopeRouterFactory<Err: ErrorRenderer> {
@@ -552,22 +561,23 @@ struct ScopeRouterFactory<Err: ErrorRenderer> {
     case_insensitive: bool,
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg>
-    for ScopeRouterFactory<Err>
-{
-    type Response = WebResponse;
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for ScopeRouterFactory<Err> {
+    type St = ();
+    type Res = WebResponse;
     type Error = Err::Container;
+
+    type InitCfg = SharedCfg;
     type InitError = ();
     type Service = ScopeRouter<Err>;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         // create http services
         let mut router = Router::build();
         if self.case_insensitive {
             router.case_insensitive();
         }
         for (path, factory, guards) in &mut self.services.iter() {
-            let service = factory.create(cfg.clone()).await?;
+            let service = factory.create(cfg).await?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
         }
 
@@ -591,15 +601,17 @@ struct ScopeRouter<Err: ErrorRenderer> {
     default: Option<HttpService<Err>>,
 }
 
-impl<Err: ErrorRenderer> Service<WebRequest<Err>> for ScopeRouter<Err> {
-    type Response = WebResponse;
+impl<Err: ErrorRenderer> Service for ScopeRouter<Err> {
+    type St = ();
+    type Req = WebRequest<Err>;
+    type Res = WebResponse;
     type Error = Err::Container;
 
     async fn call(
         &self,
         mut req: WebRequest<Err>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        ctx: Ctx<'_, Self>,
+    ) -> Result<Self::Res, Self::Error> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
                 for f in guards {
@@ -653,19 +665,19 @@ mod tests {
             .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/path10").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app2/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app2/Path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -681,11 +693,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -702,13 +714,13 @@ mod tests {
 
         for url in &["/app", "/app2"] {
             let req = TestRequest::with_uri(url).to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
         }
 
         for url in &["/app/", "/app2/"] {
             let req = TestRequest::with_uri(url).to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), StatusCode::CREATED);
         }
     }
@@ -724,11 +736,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -744,13 +756,13 @@ mod tests {
 
         for url in &["/app", "/app2"] {
             let req = TestRequest::with_uri(url).to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         }
 
         for url in &["/app/", "/app2/"] {
             let req = TestRequest::with_uri(url).to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
         }
     }
@@ -766,11 +778,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -793,7 +805,7 @@ mod tests {
             let req = TestRequest::with_uri("/app/path1")
                 .method(m.clone())
                 .to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), status.clone());
         }
     }
@@ -817,13 +829,13 @@ mod tests {
             let req = TestRequest::with_uri("/app/path1")
                 .method(m.clone())
                 .to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), status.clone());
 
             let req = TestRequest::with_uri("/app2/path1")
                 .method(m.clone())
                 .to_request();
-            let resp = srv.call(req).await.unwrap();
+            let resp = srv.call(req, &()).await.unwrap();
             assert_eq!(resp.status(), status.clone());
         }
     }
@@ -842,19 +854,19 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::DELETE)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::POST)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -879,19 +891,19 @@ mod tests {
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::POST)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::GET)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/path1")
             .method(Method::DELETE)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     }
 
@@ -905,7 +917,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/ab-project1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -914,7 +926,7 @@ mod tests {
         }
 
         let req = TestRequest::with_uri("/aa-project1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -928,7 +940,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/ab-project1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -937,7 +949,7 @@ mod tests {
         }
 
         let req = TestRequest::with_uri("/ab-project1/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -946,7 +958,7 @@ mod tests {
         }
 
         let req = TestRequest::with_uri("/aa-project1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -961,7 +973,7 @@ mod tests {
             .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -976,7 +988,7 @@ mod tests {
             .await;
 
         let req = TestRequest::with_uri("/app/t1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -996,11 +1008,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/t1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let req = TestRequest::with_uri("/app/t1/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
@@ -1019,13 +1031,13 @@ mod tests {
         let req = TestRequest::with_uri("/app/t1/path1")
             .method(Method::POST)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
         let req = TestRequest::with_uri("/app/t1/path1")
             .method(Method::GET)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -1042,7 +1054,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/project_1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -1067,7 +1079,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/test/1/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         if let ResponseBody::Body(Body::Bytes(b)) = resp.response().body() {
@@ -1076,7 +1088,7 @@ mod tests {
         }
 
         let req = TestRequest::with_uri("/app/test/1/path2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -1094,11 +1106,11 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/path2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let req = TestRequest::with_uri("/path2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -1117,15 +1129,15 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 
         let req = TestRequest::with_uri("/app1/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let req = TestRequest::with_uri("/app2/non-exist").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -1185,7 +1197,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/path1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -1220,7 +1232,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/v1/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -1246,7 +1258,7 @@ mod tests {
         .await;
 
         let req = TestRequest::with_uri("/app/v1/").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = read_body(resp).await;
         assert_eq!(body, &b"https://youtube.com/watch/xxxxxx"[..]);

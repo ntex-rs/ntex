@@ -4,10 +4,18 @@ use std::{cell, fmt, future::Future, marker, pin::Pin, rc::Rc};
 
 use crate::Service;
 
-pub struct ServiceCtx<'a, S: ?Sized> {
+pub struct Ctx<'a, Svc: Service + ?Sized> {
     idx: u32,
+    st: &'a Svc::St,
     waiters: &'a WaitersRef,
-    _t: marker::PhantomData<Rc<S>>,
+    _t: marker::PhantomData<Rc<Svc>>,
+}
+
+pub struct ReadyCtx<'a, Svc: Service + ?Sized> {
+    idx: u32,
+    st: Option<&'a Svc::St>,
+    waiters: &'a WaitersRef,
+    _t: marker::PhantomData<Rc<Svc>>,
 }
 
 #[derive(Debug)]
@@ -124,17 +132,18 @@ impl WaitersRef {
     }
 }
 
-impl<'a, S> ServiceCtx<'a, S> {
-    pub(crate) fn new(idx: u32, waiters: &'a WaitersRef) -> Self {
+impl<'a, Svc: Service> Ctx<'a, Svc> {
+    pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: &'a Svc::St) -> Self {
         Self {
             idx,
             waiters,
+            st,
             _t: marker::PhantomData,
         }
     }
 
-    pub(crate) fn inner(self) -> (u32, &'a WaitersRef) {
-        (self.idx, self.waiters)
+    pub(crate) fn inner(self) -> (u32, &'a WaitersRef, &'a Svc::St) {
+        (self.idx, self.waiters, self.st)
     }
 
     #[inline]
@@ -143,36 +152,94 @@ impl<'a, S> ServiceCtx<'a, S> {
         self.idx
     }
 
+    #[inline]
+    /// Application state
+    pub fn st(&'a self) -> &'a Svc::St {
+        self.st
+    }
+
     /// Returns when the service is able to process requests.
-    pub async fn ready<T, R>(&self, svc: &'a T) -> Result<(), T::Error>
+    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
     where
-        T: Service<R>,
+        S: Service<St = Svc::St>,
     {
         // check readiness and notify waiters
         ReadyCall {
             completed: false,
-            fut: svc.ready(ServiceCtx {
+            fut: svc.ready(ReadyCtx {
+                st: Some(self.st),
                 idx: self.idx,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
             }),
-            ctx: *self,
+            idx: self.idx,
+            waiters: self.waiters,
+        }
+        .await
+    }
+
+    /// Returns when the service is able to process requests.
+    pub(crate) async fn ready_with_st<S>(
+        &self,
+        svc: &'a S,
+        st: &'a S::St,
+    ) -> Result<(), S::Error>
+    where
+        S: Service,
+    {
+        // check readiness and notify waiters
+        ReadyCall {
+            completed: false,
+            fut: svc.ready(ReadyCtx {
+                st: Some(st),
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            }),
+            idx: self.idx,
+            waiters: self.waiters,
         }
         .await
     }
 
     #[inline]
     /// Wait for service readiness and then call service
-    pub async fn call<T, R>(&self, svc: &'a T, req: R) -> Result<T::Response, T::Error>
+    pub async fn call<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
     where
-        T: Service<R>,
-        R: 'a,
+        Svc: Service,
+        S: Service<St = Svc::St>,
     {
         self.ready(svc).await?;
 
         svc.call(
             req,
-            ServiceCtx {
+            Ctx {
+                idx: self.idx,
+                st: self.st,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            },
+        )
+        .await
+    }
+
+    #[inline]
+    /// Wait for service readiness and then call service
+    pub(crate) async fn call_with_st<S>(
+        &self,
+        svc: &'a S,
+        req: S::Req,
+        st: &S::St,
+    ) -> Result<S::Res, S::Error>
+    where
+        S: Service,
+    {
+        self.ready_with_st(svc, st).await?;
+
+        svc.call(
+            req,
+            Ctx {
+                st,
                 idx: self.idx,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
@@ -183,18 +250,14 @@ impl<'a, S> ServiceCtx<'a, S> {
 
     #[inline]
     /// Call service, do not check service readiness
-    pub async fn call_nowait<T, R>(
-        &self,
-        svc: &'a T,
-        req: R,
-    ) -> Result<T::Response, T::Error>
+    pub async fn call_nowait<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
     where
-        T: Service<R>,
-        R: 'a,
+        S: Service<St = Svc::St>,
     {
         svc.call(
             req,
-            ServiceCtx {
+            Ctx {
+                st: self.st,
                 idx: self.idx,
                 waiters: self.waiters,
                 _t: marker::PhantomData,
@@ -204,45 +267,163 @@ impl<'a, S> ServiceCtx<'a, S> {
     }
 }
 
-impl<S> Copy for ServiceCtx<'_, S> {}
+impl<Svc: Service> Copy for Ctx<'_, Svc> {}
 
-impl<S> Clone for ServiceCtx<'_, S> {
+impl<Svc: Service> Clone for Ctx<'_, Svc> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<S> fmt::Debug for ServiceCtx<'_, S> {
+impl<Svc: Service> fmt::Debug for Ctx<'_, Svc> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ServiceCtx")
+        f.debug_struct("Ctx")
             .field("idx", &self.idx)
             .field("waiters", &self.waiters.get().len())
             .finish()
     }
 }
 
-struct ReadyCall<'a, S: ?Sized, F: Future> {
-    completed: bool,
-    fut: F,
-    ctx: ServiceCtx<'a, S>,
+impl<'a, Svc: Service> ReadyCtx<'a, Svc> {
+    pub(crate) fn new(idx: u32, waiters: &'a WaitersRef, st: Option<&'a Svc::St>) -> Self {
+        Self {
+            idx,
+            waiters,
+            st,
+            _t: marker::PhantomData,
+        }
+    }
+
+    pub(crate) fn inner(self) -> (u32, &'a WaitersRef, Option<&'a Svc::St>) {
+        (self.idx, self.waiters, self.st)
+    }
+
+    #[inline]
+    /// Unique id for this pipeline
+    pub fn id(&self) -> u32 {
+        self.idx
+    }
+
+    #[inline]
+    /// Application state
+    pub fn st(&'a self) -> Option<&'a Svc::St> {
+        self.st
+    }
+
+    /// Returns when the service is able to process requests.
+    pub async fn ready<S>(&self, svc: &'a S) -> Result<(), S::Error>
+    where
+        S: Service<St = Svc::St>,
+    {
+        // check readiness and notify waiters
+        ReadyCall {
+            completed: false,
+            fut: svc.ready(ReadyCtx {
+                st: self.st,
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            }),
+            idx: self.idx,
+            waiters: self.waiters,
+        }
+        .await
+    }
+
+    /// Returns when the service is able to process requests.
+    pub(crate) async fn ready_with_st<S>(
+        &self,
+        svc: &'a S,
+        st: &'a S::St,
+    ) -> Result<(), S::Error>
+    where
+        S: Service,
+    {
+        // check readiness and notify waiters
+        ReadyCall {
+            completed: false,
+            fut: svc.ready(ReadyCtx {
+                st: Some(st),
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            }),
+            idx: self.idx,
+            waiters: self.waiters,
+        }
+        .await
+    }
+
+    #[inline]
+    /// Call service without waiting for service readiness.
+    pub async fn call<S>(&self, svc: &'a S, req: S::Req) -> Result<S::Res, S::Error>
+    where
+        S: Service<St = Svc::St>,
+        Svc::St: Default,
+    {
+        let st2;
+
+        let st = if let Some(st) = self.st {
+            st
+        } else {
+            st2 = Svc::St::default();
+            &st2
+        };
+
+        svc.call(
+            req,
+            Ctx {
+                st,
+                idx: self.idx,
+                waiters: self.waiters,
+                _t: marker::PhantomData,
+            },
+        )
+        .await
+    }
 }
 
-impl<S: ?Sized, F: Future> Drop for ReadyCall<'_, S, F> {
+impl<Svc: Service> Copy for ReadyCtx<'_, Svc> {}
+
+impl<Svc: Service> Clone for ReadyCtx<'_, Svc> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Svc: Service> fmt::Debug for ReadyCtx<'_, Svc> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadyCtx")
+            .field("idx", &self.idx)
+            .field("waiters", &self.waiters.get().len())
+            .finish()
+    }
+}
+
+struct ReadyCall<'a, F: Future> {
+    completed: bool,
+    fut: F,
+    idx: u32,
+    waiters: &'a WaitersRef,
+}
+
+impl<F: Future> Drop for ReadyCall<'_, F> {
     fn drop(&mut self) {
-        if !self.completed && self.ctx.waiters.cur.get() == self.ctx.idx {
-            self.ctx.waiters.notify();
+        if !self.completed && self.waiters.cur.get() == self.idx {
+            self.waiters.notify();
         }
     }
 }
 
-impl<S: ?Sized, F: Future> Unpin for ReadyCall<'_, S, F> {}
+impl<F: Future> Unpin for ReadyCall<'_, F> {}
 
-impl<S: ?Sized, F: Future> Future for ReadyCall<'_, S, F> {
+impl<F: Future> Future for ReadyCall<'_, F> {
     type Output = F::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.ctx.waiters.run(self.ctx.idx, cx, |cx| {
+        self.waiters.run(self.idx, cx, |cx| {
             // SAFETY: `fut` never moves
             let result = unsafe { Pin::new_unchecked(&mut self.as_mut().fut).poll(cx) };
             if result.is_ready() {
@@ -266,11 +447,13 @@ mod tests {
 
     struct Srv(Rc<Cell<usize>>, condition::Waiter);
 
-    impl Service<&'static str> for Srv {
-        type Response = &'static str;
+    impl Service for Srv {
+        type St = ();
+        type Req = &'static str;
+        type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             self.1.ready().await;
             Ok(())
@@ -279,8 +462,8 @@ mod tests {
         async fn call(
             &self,
             req: &'static str,
-            ctx: ServiceCtx<'_, Self>,
-        ) -> Result<Self::Response, Self::Error> {
+            ctx: Ctx<'_, Self>,
+        ) -> Result<Self::Res, Self::Error> {
             let _ = format!("{ctx:?}");
             let _ = format!("{:?}", ctx.id());
             #[allow(clippy::clone_on_copy)]
@@ -294,7 +477,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
+        let srv1 = Pipeline::new(Srv(cnt.clone(), con.wait())).bind();
         let srv2 = srv1.clone();
 
         let res = lazy(|cx| srv1.poll_ready(cx)).await;
@@ -328,14 +511,14 @@ mod tests {
     async fn test_ready_on_drop() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
 
         let srv1 = srv.clone();
         let srv2 = srv1.clone().bind();
 
         let (tx, rx) = oneshot::channel();
         spawn(async move {
-            select(rx, srv1.ready()).await;
+            select(rx, srv1.ready(&())).await;
             time::sleep(time::Millis(25000)).await;
         });
         time::sleep(time::Millis(250)).await;
@@ -358,7 +541,7 @@ mod tests {
     async fn test_ready_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::from(Srv(cnt.clone(), con.wait()));
+        let srv = Pipeline::new(Srv(cnt.clone(), con.wait()));
 
         let srv1 = srv.clone().bind();
         let srv2 = srv1.clone();
@@ -390,7 +573,7 @@ mod tests {
     async fn test_pipeline_binding_after_shutdown() {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
-        let srv = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
+        let srv = Pipeline::new(Srv(cnt.clone(), con.wait())).bind();
         poll_fn(|cx| srv.poll_shutdown(cx)).await;
         let _ = poll_fn(|cx| srv.poll_ready(cx)).await;
     }
@@ -402,7 +585,7 @@ mod tests {
         let cnt = Rc::new(Cell::new(0));
         let con = condition::Condition::new();
 
-        let srv1 = Pipeline::from(Srv(cnt.clone(), con.wait())).bind();
+        let srv1 = Pipeline::new(Srv(cnt.clone(), con.wait())).bind();
         let srv2 = srv1.clone();
         let _: Pipeline<_> = srv1.pipeline();
 

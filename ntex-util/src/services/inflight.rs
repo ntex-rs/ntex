@@ -1,5 +1,5 @@
 //! Service that limits number of in-flight async requests.
-use ntex_service::{Middleware, Service, ServiceCtx};
+use ntex_service::{Ctx, Middleware, ReadyCtx, Service};
 
 use super::counter::Counter;
 
@@ -27,7 +27,7 @@ impl Default for InFlight {
 impl<S, C> Middleware<S, C> for InFlight {
     type Service = InFlightService<S>;
 
-    fn create(&self, service: S, _: C) -> Self::Service {
+    fn create(&self, service: S, _: &C) -> Self::Service {
         InFlightService {
             service,
             count: Counter::new(self.max_inflight),
@@ -42,10 +42,7 @@ pub struct InFlightService<S> {
 }
 
 impl<S> InFlightService<S> {
-    pub fn new<R>(max: usize, service: S) -> Self
-    where
-        S: Service<R>,
-    {
+    pub fn new(max: usize, service: S) -> Self {
         Self {
             service,
             count: Counter::new(max),
@@ -53,15 +50,17 @@ impl<S> InFlightService<S> {
     }
 }
 
-impl<T, R> Service<R> for InFlightService<T>
+impl<S> Service for InFlightService<S>
 where
-    T: Service<R>,
+    S: Service,
 {
-    type Response = T::Response;
-    type Error = T::Error;
+    type St = S::St;
+    type Req = S::Req;
+    type Res = S::Res;
+    type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), S::Error> {
         if self.count.is_available() {
             ctx.ready(&self.service).await
         } else {
@@ -72,11 +71,7 @@ where
     }
 
     #[inline]
-    async fn call(
-        &self,
-        req: R,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
         ctx.ready(self).await?;
         let _guard = self.count.get();
         ctx.call(&self.service, req).await
@@ -98,11 +93,13 @@ mod tests {
 
     struct SleepService(mpmc::Receiver<()>);
 
-    impl Service<()> for SleepService {
-        type Response = ();
+    impl Service for SleepService {
+        type St = ();
+        type Req = ();
+        type Res = ();
         type Error = ();
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             let _ = self.0.recv().await;
             Ok(())
         }

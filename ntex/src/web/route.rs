@@ -1,7 +1,7 @@
 use std::{fmt, mem, rc::Rc};
 
 use crate::http::Method;
-use crate::service::{Service, ServiceCtx, ServiceFactory, cfg::SharedCfg};
+use crate::service::{Ctx, Service, ServiceFactory, cfg::SharedCfg};
 
 use super::HttpResponse;
 use super::error::ErrorRenderer;
@@ -67,13 +67,16 @@ impl<Err: ErrorRenderer> fmt::Debug for Route<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>, SharedCfg> for Route<Err> {
-    type Response = WebResponse;
+impl<Err: ErrorRenderer> ServiceFactory<WebRequest<Err>> for Route<Err> {
+    type St = ();
+    type Res = WebResponse;
     type Error = Err::Container;
+
+    type InitCfg = SharedCfg;
     type InitError = ();
     type Service = RouteService<Err>;
 
-    async fn create(&self, _: SharedCfg) -> Result<RouteService<Err>, ()> {
+    async fn create(&self, _: &SharedCfg) -> Result<RouteService<Err>, ()> {
         Ok(self.service())
     }
 }
@@ -104,15 +107,17 @@ impl<Err: ErrorRenderer> fmt::Debug for RouteService<Err> {
     }
 }
 
-impl<Err: ErrorRenderer> Service<WebRequest<Err>> for RouteService<Err> {
-    type Response = WebResponse;
+impl<Err: ErrorRenderer> Service for RouteService<Err> {
+    type St = ();
+    type Req = WebRequest<Err>;
+    type Res = WebResponse;
     type Error = Err::Container;
 
     async fn call(
         &self,
         req: WebRequest<Err>,
-        _: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        _: Ctx<'_, Self>,
+    ) -> Result<Self::Res, Self::Error> {
         self.handler.call(req).await
     }
 }
@@ -271,13 +276,11 @@ mod m {
 
 #[cfg(test)]
 mod tests {
-    use ntex_service::ServiceFactory;
-
     use crate::http::{Method, StatusCode, header};
     use crate::time::{Millis, sleep};
     use crate::web::test::{TestRequest, call_service, init_service, read_body};
     use crate::web::{self, App, DefaultError, HttpResponse, error, guard};
-    use crate::{SharedCfg, util::Bytes};
+    use crate::{ServiceFactory, SharedCfg, util::Bytes};
 
     #[derive(serde::Serialize, PartialEq, Debug)]
     struct MyObject {
@@ -379,7 +382,7 @@ mod tests {
         assert!(repr.contains("methods: [GET]"));
         assert!(repr.contains("guards: AllGuard()"));
 
-        assert!(route.create(SharedCfg::default()).await.is_ok());
+        assert!(route.create(&SharedCfg::default()).await.is_ok());
 
         let route_service = route.service();
         let repr = format!("{route_service:?}");

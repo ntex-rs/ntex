@@ -260,8 +260,8 @@ impl<S, C> DispatcherConfig<S, C> {
     pub(super) fn new(config: Cfg<HttpServiceConfig>, service: S, control: C) -> Self {
         DispatcherConfig {
             idx: Cell::new(0),
-            service: service.into(),
-            control: control.into(),
+            service: Pipeline::new(service),
+            control: Pipeline::new(control),
             flags: Cell::new(Flags::empty()),
             config,
         }

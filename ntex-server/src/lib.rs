@@ -19,9 +19,6 @@ pub use self::pool::WorkerPool;
 pub use self::server::Server;
 pub use self::wrk::{Worker, WorkerStatus, WorkerStop};
 
-#[deprecated(since = "3.10.0", note = "use ntex_rt::signals")]
-pub use ntex_rt::signals::{Signal, signal};
-
 /// Worker id
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WorkerId(pub(crate) usize);
@@ -38,7 +35,7 @@ impl WorkerId {
 /// Worker service factory.
 pub trait ServerConfiguration: Send + Clone + 'static {
     type Item: Send + 'static;
-    type Factory: ServiceFactory<Self::Item> + 'static;
+    type Factory: ServiceFactory<Self::Item, St = (), InitCfg = ()> + 'static;
 
     /// Create service factory for handling `WorkerMessage<T>` messages.
     async fn create(&self) -> Result<Self::Factory, ()>;

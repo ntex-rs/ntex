@@ -1,10 +1,10 @@
-use std::io;
+use std::{io, marker::PhantomData};
 
 use ntex_error::Error;
 use ntex_io::{Filter, Io, Layer};
-use ntex_net::connect::{Address, Connect, ConnectError, Connector, Connector2};
+use ntex_net::connect::{Address, Connect, ConnectError, Connector};
 use ntex_service::cfg::{Cfg, SharedCfg};
-use ntex_service::{Service, ServiceCtx, ServiceFactory};
+use ntex_service::{Ctx, Service, ServiceFactory};
 use ntex_util::time::timeout_checked;
 use tls_openssl::ssl::SslConnector as OpensslConnector;
 
@@ -12,20 +12,21 @@ use super::{SslFilter, connect as connect_io};
 use crate::TlsConfig;
 
 #[derive(Clone, Debug)]
-pub struct SslConnector<S> {
-    connector: S,
+pub struct SslConnector<Sf> {
+    connector: Sf,
     openssl: OpensslConnector,
 }
 
 #[derive(Clone, Debug)]
-pub struct SslConnectorService<S> {
+pub struct SslConnectorService<S, St> {
     svc: S,
     cfg: Cfg<TlsConfig>,
     openssl: OpensslConnector,
+    st: PhantomData<St>,
 }
 
 impl<A: Address> SslConnector<Connector<A>> {
-    /// Construct new `SslConnector` factory.
+    /// Construct new `SslConnector` factory
     pub fn new(connector: OpensslConnector) -> Self {
         SslConnector {
             openssl: connector,
@@ -34,134 +35,35 @@ impl<A: Address> SslConnector<Connector<A>> {
     }
 }
 
-impl<A: Address, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector<S>
+impl<A: Address, Sf> ServiceFactory<Connect<A>> for SslConnector<Sf>
 where
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = ConnectError>,
+    Sf: ServiceFactory<
+            Connect<A>,
+            Res = Io,
+            Error = Error<ConnectError>,
+            InitCfg = SharedCfg,
+        >,
 {
-    type Response = Io<Layer<SslFilter>>;
-    type Error = ConnectError;
-    type Service = SslConnectorService<S::Service>;
-    type InitError = S::InitError;
+    type St = Sf::St;
+    type Res = Io<Layer<SslFilter>>;
+    type Error = Error<ConnectError>;
+    type Service = SslConnectorService<Sf::Service, Sf::St>;
+    type InitCfg = SharedCfg;
+    type InitError = Sf::InitError;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg.clone()).await?;
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
+        let svc = self.connector.create(cfg).await?;
 
         Ok(SslConnectorService {
             svc,
             cfg: cfg.get(),
             openssl: self.openssl.clone(),
+            st: PhantomData,
         })
     }
 }
 
-impl<S> SslConnectorService<S> {
-    /// Establish a TLS connection on top of an existing I/O stream.
-    pub async fn connect<F: Filter>(
-        &self,
-        io: Io<F>,
-        host: &str,
-    ) -> Result<Io<Layer<SslFilter, F>>, ConnectError> {
-        let tag = io.tag();
-        log::trace!("{tag}: SSL Handshake start for: {host:?}");
-
-        match self.openssl.configure() {
-            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidInput, e).into()),
-            Ok(config) => {
-                let ssl = config
-                    .into_ssl(host)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-
-                match timeout_checked(self.cfg.handshake_timeout(), connect_io(io, ssl))
-                    .await
-                {
-                    Ok(Ok(io)) => {
-                        log::trace!("{tag}: SSL Handshake success: {host:?}");
-                        Ok(io)
-                    }
-                    Ok(Err(e)) => {
-                        log::trace!("{tag}: SSL Handshake error: {e:?}");
-                        Err(e.into())
-                    }
-                    Err(()) => {
-                        log::trace!("{tag}: SSL Handshake timeout");
-                        Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "SSL Handshake timeout",
-                        )
-                        .into())
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<A: Address, S> Service<Connect<A>> for SslConnectorService<S>
-where
-    S: Service<Connect<A>, Response = Io, Error = ConnectError>,
-{
-    type Response = Io<Layer<SslFilter>>;
-    type Error = ConnectError;
-
-    ntex_service::forward_ready!(svc);
-    ntex_service::forward_poll!(svc);
-    ntex_service::forward_shutdown!(svc);
-
-    async fn call(
-        &self,
-        message: Connect<A>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        let host = message.host().split(':').next().unwrap().to_string();
-        let io = ctx.call(&self.svc, message).await?;
-        self.connect(io, &host).await
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SslConnector2<S> {
-    connector: S,
-    openssl: OpensslConnector,
-}
-
-#[derive(Clone, Debug)]
-pub struct SslConnectorService2<S> {
-    svc: S,
-    cfg: Cfg<TlsConfig>,
-    openssl: OpensslConnector,
-}
-
-impl<A: Address> SslConnector2<Connector2<A>> {
-    /// Construct new `SslConnector2` factory
-    pub fn new(connector: OpensslConnector) -> Self {
-        SslConnector2 {
-            openssl: connector,
-            connector: Connector2::default(),
-        }
-    }
-}
-
-impl<A: Address, S> ServiceFactory<Connect<A>, SharedCfg> for SslConnector2<S>
-where
-    S: ServiceFactory<Connect<A>, SharedCfg, Response = Io, Error = Error<ConnectError>>,
-{
-    type Response = Io<Layer<SslFilter>>;
-    type Error = Error<ConnectError>;
-    type Service = SslConnectorService2<S::Service>;
-    type InitError = S::InitError;
-
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
-        let svc = self.connector.create(cfg.clone()).await?;
-
-        Ok(SslConnectorService2 {
-            svc,
-            cfg: cfg.get(),
-            openssl: self.openssl.clone(),
-        })
-    }
-}
-
-impl<S> SslConnectorService2<S> {
+impl<S, St> SslConnectorService<S, St> {
     /// Establish a TLS connection on top of an existing I/O stream.
     pub async fn connect<F: Filter>(
         &self,
@@ -203,11 +105,13 @@ impl<S> SslConnectorService2<S> {
     }
 }
 
-impl<A: Address, S> Service<Connect<A>> for SslConnectorService2<S>
+impl<A: Address, S, St> Service for SslConnectorService<S, St>
 where
-    S: Service<Connect<A>, Response = Io, Error = Error<ConnectError>>,
+    S: Service<St = St, Req = Connect<A>, Res = Io, Error = Error<ConnectError>>,
 {
-    type Response = Io<Layer<SslFilter>>;
+    type St = St;
+    type Req = Connect<A>;
+    type Res = Io<Layer<SslFilter>>;
     type Error = Error<ConnectError>;
 
     ntex_service::forward_ready!(svc);
@@ -217,8 +121,8 @@ where
     async fn call(
         &self,
         message: Connect<A>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        ctx: Ctx<'_, Self>,
+    ) -> Result<Self::Res, Self::Error> {
         let host = message.host().split(':').next().unwrap().to_string();
         let io = ctx.call(&self.svc, message).await?;
         self.connect(io, &host).await
@@ -242,32 +146,11 @@ mod tests {
         let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
         let factory = SslConnector::new(ssl.build()).clone();
 
-        let srv = factory.pipeline(SharedCfg::default()).await.unwrap();
+        let srv = factory.pipeline(&SharedCfg::default()).await.unwrap();
         // always ready
-        assert!(srv.ready().await.is_ok());
+        assert!(srv.ready(&()).await.is_ok());
         let result = srv
-            .call(Connect::new("").set_addr(Some(server.addr())))
-            .await;
-        assert!(result.is_err());
-        assert!(format!("{srv:?}").contains("SslConnector"));
-    }
-
-    #[ntex::test]
-    async fn test_openssl_connect2() {
-        let server = ntex::server::test_server(async || {
-            ntex::service::fn_service(|_| async { Ok::<_, ()>(()) })
-        });
-
-        let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
-        let _: SslConnector2<Connector2<&'static str>> = SslConnector2::new(ssl.build());
-        let ssl = OpensslConnector::builder(SslMethod::tls()).unwrap();
-        let factory = SslConnector2::new(ssl.build()).clone();
-
-        let srv = factory.pipeline(SharedCfg::default()).await.unwrap();
-        // always ready
-        assert!(srv.ready().await.is_ok());
-        let result = srv
-            .call(Connect::new("").set_addr(Some(server.addr())))
+            .call(Connect::new("").set_addr(Some(server.addr())), &())
             .await;
         assert!(result.is_err());
         assert!(format!("{srv:?}").contains("SslConnector"));

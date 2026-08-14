@@ -3,7 +3,7 @@ use std::{cmp, str::FromStr};
 
 use crate::http::encoding::Encoder;
 use crate::http::header::{ACCEPT_ENCODING, ContentEncoding};
-use crate::service::{Middleware, Service, ServiceCtx, cfg::SharedCfg};
+use crate::service::{Ctx, Middleware, Service, cfg::SharedCfg};
 use crate::web::{BodyEncoding, ErrorRenderer, WebRequest, WebResponse};
 
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ impl Default for Compress {
 impl<S> Middleware<S, SharedCfg> for Compress {
     type Service = CompressMiddleware<S>;
 
-    fn create(&self, service: S, _: SharedCfg) -> Self::Service {
+    fn create(&self, service: S, _: &SharedCfg) -> Self::Service {
         CompressMiddleware {
             service,
             encoding: self.enc,
@@ -59,12 +59,14 @@ pub struct CompressMiddleware<S> {
     encoding: ContentEncoding,
 }
 
-impl<S, E> Service<WebRequest<E>> for CompressMiddleware<S>
+impl<S, E> Service for CompressMiddleware<S>
 where
-    S: Service<WebRequest<E>, Response = WebResponse>,
+    S: Service<Req = WebRequest<E>, Res = WebResponse>,
     E: ErrorRenderer,
 {
-    type Response = WebResponse;
+    type St = S::St;
+    type Req = WebRequest<E>;
+    type Res = WebResponse;
     type Error = S::Error;
 
     crate::forward_poll!(service);
@@ -74,7 +76,7 @@ where
     async fn call(
         &self,
         req: WebRequest<E>,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<WebResponse, S::Error> {
         // negotiate content-encoding
         let encoding = if let Some(val) = req.headers().get(&ACCEPT_ENCODING) {

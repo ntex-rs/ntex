@@ -1,10 +1,14 @@
-use std::{error::Error, task::Context, time::Duration};
+use std::{error::Error as StdError, task::Context, time::Duration};
 
-use crate::connect::{Connect as TcpConnect, Connector as TcpConnector};
-use crate::service::{Service, ServiceCtx, ServiceFactory, apply_fn_factory, boxed};
+use crate::connect::{self, Connect as TcpConnect, Connector as TcpConnector};
+use crate::error::{Error, ErrorMapping, with_service};
+use crate::service::{
+    Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, apply_fn_factory, boxed,
+};
 use crate::{SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
-use super::{Connect, Connection, error::ConnectError, pool::ConnectionPool};
+use super::error::{ClientError, ConnectError};
+use super::{Connect, Connection, pool::ConnectionPool};
 
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::SslConnector as OpensslConnector;
@@ -12,8 +16,14 @@ use tls_openssl::ssl::SslConnector as OpensslConnector;
 #[cfg(feature = "rustls")]
 use tls_rustls::ClientConfig;
 
-type BoxedConnector =
-    boxed::BoxServiceFactory<SharedCfg, Connect, IoBoxed, ConnectError, Box<dyn Error>>;
+type BoxedConnector = boxed::BoxServiceFactory<
+    (),
+    Connect,
+    IoBoxed,
+    Error<ConnectError>,
+    SharedCfg,
+    Box<dyn StdError>,
+>;
 
 #[derive(Debug)]
 /// Manages http client network connectivity.
@@ -49,8 +59,8 @@ impl Connector {
                     svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
                 })
                 .map(IoBoxed::from)
-                .map_err(ConnectError::from)
-                .map_init_err(|e| Box::new(e) as Box<dyn Error>),
+                .map_err(|e| e.map(ConnectError::from))
+                .map_init_err(|e| Box::new(e) as Box<dyn StdError>),
             ),
             secure_svc: None,
             conn_lifetime: Duration::from_secs(75),
@@ -147,18 +157,22 @@ impl Connector {
     /// Use custom connector to open un-secured connections.
     pub fn connector<T>(mut self, connector: T) -> Self
     where
-        T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Error = crate::connect::ConnectError>
-            + 'static,
-        T::InitError: Error,
-        IoBoxed: From<T::Response>,
+        T: ServiceFactory<
+                TcpConnect<Uri>,
+                St = (),
+                Error = Error<connect::ConnectError>,
+                InitCfg = SharedCfg,
+            > + 'static,
+        T::InitError: StdError,
+        IoBoxed: From<T::Res>,
     {
         self.svc = boxed::factory(
             apply_fn_factory(connector, async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
             .map(IoBoxed::from)
-            .map_err(ConnectError::from)
-            .map_init_err(|e| Box::new(e) as Box<dyn Error>),
+            .map_err(|e| e.map(ConnectError::from))
+            .map_init_err(|e| Box::new(e) as Box<dyn StdError>),
         );
         self
     }
@@ -167,33 +181,39 @@ impl Connector {
     /// Use custom connector to open secure connections.
     pub fn secure_connector<T>(mut self, connector: T) -> Self
     where
-        T: ServiceFactory<TcpConnect<Uri>, SharedCfg, Error = crate::connect::ConnectError>
-            + 'static,
-        T::InitError: Error,
-        IoBoxed: From<T::Response>,
+        T: ServiceFactory<
+                TcpConnect<Uri>,
+                St = (),
+                Error = Error<connect::ConnectError>,
+                InitCfg = SharedCfg,
+            > + 'static,
+        T::InitError: StdError,
+        IoBoxed: From<T::Res>,
     {
         self.secure_svc = Some(boxed::factory(
             apply_fn_factory(connector, async move |msg: Connect, svc| {
                 svc.call(TcpConnect::new(msg.uri).set_addr(msg.addr)).await
             })
             .map(IoBoxed::from)
-            .map_err(ConnectError::from)
-            .map_init_err(|e| Box::new(e) as Box<dyn Error>),
+            .map_err(|e| e.map(ConnectError::from))
+            .map_init_err(|e| Box::new(e) as Box<dyn StdError>),
         ));
         self
     }
 }
 
-impl ServiceFactory<Connect, SharedCfg> for Connector {
-    type Response = Connection;
-    type Error = ConnectError;
+impl ServiceFactory<Connect> for Connector {
+    type St = ();
+    type Res = Connection;
+    type Error = Error<ClientError>;
     type Service = ConnectorService;
-    type InitError = Box<dyn Error>;
+    type InitCfg = SharedCfg;
+    type InitError = Box<dyn StdError>;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let ssl_pool = if let Some(ref svc) = self.secure_svc {
             Some(ConnectionPool::new(
-                svc.create(cfg.clone()).await?.into(),
+                Pipeline::new(svc.create(cfg).await?),
                 self.conn_lifetime,
                 self.conn_keep_alive,
                 self.limit,
@@ -203,43 +223,50 @@ impl ServiceFactory<Connect, SharedCfg> for Connector {
             None
         };
         let tcp_pool = ConnectionPool::new(
-            self.svc.create(cfg.clone()).await?.into(),
+            Pipeline::new(self.svc.create(cfg).await?),
             self.conn_lifetime,
             self.conn_keep_alive,
             self.limit,
-            cfg,
+            cfg.clone(),
         );
-        Ok(ConnectorService { tcp_pool, ssl_pool })
+        Ok(ConnectorService {
+            tcp_pool,
+            ssl_pool,
+            cfg: cfg.clone(),
+        })
     }
 }
 
 /// Manages http client network connectivity.
 #[derive(Clone, Debug)]
 pub struct ConnectorService {
+    cfg: SharedCfg,
     tcp_pool: ConnectionPool,
     ssl_pool: Option<ConnectionPool>,
 }
 
-impl Service<Connect> for ConnectorService {
-    type Response = Connection;
-    type Error = ConnectError;
+impl Service for ConnectorService {
+    type St = ();
+    type Req = Connect;
+    type Res = Connection;
+    type Error = Error<ClientError>;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         if let Some(ref ssl_pool) = self.ssl_pool {
             let (r1, r2) = join(ctx.ready(&self.tcp_pool), ctx.ready(ssl_pool)).await;
-            r1?;
-            r2
+            r1.into_error()?;
+            r2.into_error()
         } else {
-            ctx.ready(&self.tcp_pool).await
+            ctx.ready(&self.tcp_pool).await.into_error()
         }
     }
 
     #[inline]
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
-        self.tcp_pool.poll(cx)?;
+        self.tcp_pool.poll(cx).into_error()?;
         if let Some(ref ssl_pool) = self.ssl_pool {
-            ssl_pool.poll(cx)?;
+            ssl_pool.poll(cx).into_error()?;
         }
         Ok(())
     }
@@ -254,18 +281,23 @@ impl Service<Connect> for ConnectorService {
     async fn call(
         &self,
         req: Connect,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        match req.uri.scheme_str() {
-            Some("https" | "wss") => {
-                if let Some(ref conn) = self.ssl_pool {
-                    ctx.call(conn, req).await
-                } else {
-                    Err(ConnectError::SslIsNotSupported)
+        ctx: Ctx<'_, Self>,
+    ) -> Result<Self::Res, Self::Error> {
+        with_service(self.cfg.service(), async {
+            match req.uri.scheme_str() {
+                Some("https" | "wss") => {
+                    if let Some(ref conn) = self.ssl_pool {
+                        ctx.call(conn, req).await.into_error()
+                    } else {
+                        Err(Error::from(ClientError::from(
+                            ConnectError::SslIsNotSupported,
+                        )))
+                    }
                 }
+                _ => ctx.call(&self.tcp_pool, req).await.into_error(),
             }
-            _ => ctx.call(&self.tcp_pool, req).await,
-        }
+        })
+        .await
     }
 }
 
@@ -278,7 +310,7 @@ mod tests {
     async fn test_readiness() {
         let conn = Pipeline::new(
             Connector::default()
-                .create(SharedCfg::default())
+                .create(&SharedCfg::default())
                 .await
                 .unwrap(),
         )

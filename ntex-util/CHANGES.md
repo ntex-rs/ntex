@@ -1,5 +1,9 @@
 # Changes
 
+## [4.0.0] - 2026-08-xx
+
+* Migrate to ntex-service 5
+
 ## [3.6.1] - 2026-05-11
 
 * Add helper method bstream::Sender::is_closed()

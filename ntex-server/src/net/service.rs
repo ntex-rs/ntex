@@ -1,7 +1,7 @@
 use std::{fmt, sync::Arc, task::Context};
 
 use ntex_io::Io;
-use ntex_service::{Service, ServiceCtx, ServiceFactory, boxed, cfg::SharedCfg};
+use ntex_service::{Ctx, ReadyCtx, Service, ServiceFactory, boxed, cfg::SharedCfg};
 use ntex_util::{HashMap, future::join_all, services::Counter};
 
 use crate::ServerConfiguration;
@@ -10,7 +10,7 @@ use super::accept::{AcceptNotify, AcceptorCommand};
 use super::factory::{FactoryServiceType, NetService, OnAccept, OnWorkerStart};
 use super::{MAX_CONNS_COUNTER, Token, socket::Connection};
 
-pub(super) type BoxService = boxed::BoxService<Io, (), ()>;
+pub(super) type BoxService = boxed::BoxService<(), Io, (), ()>;
 
 /// Net streaming server
 pub struct StreamServer {
@@ -116,17 +116,19 @@ impl fmt::Debug for StreamService {
 }
 
 impl ServiceFactory<Connection> for StreamService {
-    type Response = ();
+    type St = ();
+    type Res = ();
     type Error = ();
     type Service = StreamServiceImpl;
+    type InitCfg = ();
     type InitError = ();
 
-    async fn create(&self, _r: ()) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, _r: &()) -> Result<Self::Service, Self::InitError> {
         let mut tokens = HashMap::default();
         let mut services = Vec::new();
 
         for info in &self.services {
-            if let Ok(svc) = info.factory.create(info.config.clone()).await {
+            if let Ok(svc) = info.factory.create(&info.config).await {
                 log::trace!("Constructed server service for {:?}", info.tokens);
                 services.push(svc);
                 let idx = services.len() - 1;
@@ -165,11 +167,13 @@ impl fmt::Debug for StreamServiceImpl {
     }
 }
 
-impl Service<Connection> for StreamServiceImpl {
-    type Response = ();
+impl Service for StreamServiceImpl {
+    type St = ();
+    type Req = Connection;
+    type Res = ();
     type Error = ();
 
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         if !self.conns.is_available() {
             self.conns.available().await;
         }
@@ -204,7 +208,7 @@ impl Service<Connection> for StreamServiceImpl {
         );
     }
 
-    async fn call(&self, con: Connection, ctx: ServiceCtx<'_, Self>) -> Result<(), ()> {
+    async fn call(&self, con: Connection, ctx: Ctx<'_, Self>) -> Result<(), ()> {
         if let Some((idx, name, cfg)) = self.tokens.get(&con.token) {
             let mut io = con.io;
             if let Some(ref f) = self.on_accept {

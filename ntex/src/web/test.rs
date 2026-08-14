@@ -1,4 +1,5 @@
 //! Various helpers for ntex applications to use during testing.
+use std::convert::Infallible;
 use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
@@ -6,9 +7,11 @@ use coo_kie::Cookie;
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
+use crate::client::error::ClientPayloadError;
 use crate::client::{Client, ClientRequest, ClientResponse, Connector};
+use crate::error::Error;
 use crate::http::body::MessageBody;
-use crate::http::error::{HttpError, PayloadError, ResponseError};
+use crate::http::error::{HttpError, ResponseError};
 use crate::http::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::http::test::TestRequest as HttpTestRequest;
 use crate::http::{
@@ -17,9 +20,9 @@ use crate::http::{
 #[cfg(feature = "ws")]
 use crate::io::Sealed;
 use crate::router::{Path, ResourceDef};
-use crate::service::{IntoService, IntoServiceFactory, Pipeline};
+use crate::service::{IntoServiceFactory, Pipeline, fn_service};
 use crate::time::{Millis, Seconds, sleep};
-use crate::util::{Bytes, BytesMut, Extensions, Ready, Stream, stream_recv};
+use crate::util::{Bytes, BytesMut, Extensions, Stream, stream_recv};
 #[cfg(feature = "ws")]
 use crate::ws::{WsClient, WsConnection, error::WsClientError};
 use crate::{Service, ServiceFactory, SharedCfg, io::IoConfig, rt::System, server::Server};
@@ -31,20 +34,22 @@ use crate::web::{FromRequest, HttpResponse, Responder, WebRequest, WebResponse};
 use crate::web::{config::WebAppConfig, service::AppState};
 
 /// Create service that always responds with `HttpResponse::Ok()`
-pub fn ok_service<Err: ErrorRenderer>()
--> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible> {
+pub fn ok_service<Err: ErrorRenderer>() -> impl Service<
+    St = (),
+    Req = WebRequest<Err>,
+    Res = WebResponse,
+    Error = std::convert::Infallible,
+> {
     default_service::<Err>(StatusCode::OK)
 }
 
 /// Create service that responds with response with specified status code
 pub fn default_service<Err: ErrorRenderer>(
     status_code: StatusCode,
-) -> impl Service<WebRequest<Err>, Response = WebResponse, Error = std::convert::Infallible>
-{
-    (move |req: WebRequest<Err>| {
-        Ready::Ok(req.into_response(HttpResponse::build(status_code).finish()))
+) -> impl Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Infallible> {
+    fn_service(async move |req: WebRequest<Err>| {
+        Ok::<_, Infallible>(req.into_response(HttpResponse::build(status_code).finish()))
     })
-    .into_service()
 }
 
 /// This method accepts application builder instance, and constructs
@@ -72,15 +77,15 @@ pub fn default_service<Err: ErrorRenderer>(
 /// ```
 pub async fn init_service<R, S, E>(
     app: R,
-) -> Pipeline<impl Service<Request, Response = WebResponse, Error = E>>
+) -> Pipeline<impl Service<St = (), Req = Request, Res = WebResponse, Error = E>>
 where
-    R: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg, Response = WebResponse, Error = E>,
+    R: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), Res = WebResponse, Error = E, InitCfg = SharedCfg>,
     S::InitError: fmt::Debug,
 {
     let srv = app.into_factory();
     srv.pipeline(
-        SharedCfg::new("WEB")
+        &SharedCfg::new("WEB")
             .add(IoConfig::new())
             .add(WebAppConfig::new())
             .into(),
@@ -112,12 +117,12 @@ where
 ///     assert_eq!(resp.status(), StatusCode::OK);
 /// }
 /// ```
-pub async fn call_service<S, R, E>(app: &Pipeline<S>, req: R) -> S::Response
+pub async fn call_service<S, R, E>(app: &Pipeline<S>, req: R) -> S::Res
 where
-    S: Service<R, Response = WebResponse, Error = E>,
-    E: std::fmt::Debug,
+    S: Service<St = (), Req = R, Res = WebResponse, Error = E>,
+    E: fmt::Debug,
 {
-    app.call(req).await.unwrap()
+    app.call(req, &()).await.unwrap()
 }
 
 /// Helper function that returns a response body of a `TestRequest`
@@ -147,10 +152,10 @@ where
 /// ```
 pub async fn read_response<S>(app: &Pipeline<S>, req: Request) -> Bytes
 where
-    S: Service<Request, Response = WebResponse>,
+    S: Service<St = (), Req = Request, Res = WebResponse>,
 {
     let mut resp = app
-        .call(req)
+        .call(req, &())
         .await
         .unwrap_or_else(|_| panic!("read_response failed at application call"));
 
@@ -246,7 +251,7 @@ where
 /// ```
 pub async fn read_response_json<S, T>(app: &Pipeline<S>, req: Request) -> T
 where
-    S: Service<Request, Response = WebResponse>,
+    S: Service<St = (), Req = Request, Res = WebResponse>,
     T: DeserializeOwned,
 {
     let body = read_response::<S>(app, req).await;
@@ -571,11 +576,11 @@ impl TestRequest {
 pub async fn server<F, I, S, B>(factory: F) -> TestServer
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<HttpResponse<B>>,
+    S::Res: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
     server_with(TestServerConfig::default(), factory).await
@@ -609,11 +614,11 @@ where
 pub async fn server_with<F, I, S, B>(cfg: TestServerConfig, factory: F) -> TestServer
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<HttpResponse<B>>,
+    S::Res: Into<HttpResponse<B>>,
     B: MessageBody + 'static,
 {
     let sys = System::current().config();
@@ -978,13 +983,19 @@ impl TestServer {
     }
 
     /// Load response's body
-    pub async fn load_body(&self, response: ClientResponse) -> Result<Bytes, PayloadError> {
+    pub async fn load_body(
+        &self,
+        response: ClientResponse,
+    ) -> Result<Bytes, Error<ClientPayloadError>> {
         response.body().limit(10_485_760).await
     }
 
     #[cfg(feature = "ws")]
     /// Connect to websocket server at a given path
-    pub async fn ws_at(&self, path: &str) -> Result<WsConnection<Sealed>, WsClientError> {
+    pub async fn ws_at(
+        &self,
+        path: &str,
+    ) -> Result<WsConnection<Sealed>, Error<WsClientError>> {
         if self.ssl {
             #[cfg(feature = "openssl")]
             {
@@ -1027,7 +1038,7 @@ impl TestServer {
 
     #[cfg(feature = "ws")]
     /// Connect to a websocket server
-    pub async fn ws(&self) -> Result<WsConnection<Sealed>, WsClientError> {
+    pub async fn ws(&self) -> Result<WsConnection<Sealed>, Error<WsClientError>> {
         self.ws_at("/").await
     }
 
@@ -1050,7 +1061,6 @@ impl Drop for TestServer {
 #[cfg(test)]
 mod tests {
     use serde::{Deserialize, Serialize};
-    use std::convert::Infallible;
 
     use super::*;
     use crate::http::{HttpMessage, header};
@@ -1234,7 +1244,7 @@ mod tests {
         .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
-        let res = app.call(req).await.unwrap();
+        let res = app.call(req, &()).await.unwrap();
         assert!(res.status().is_success());
     }
 
@@ -1251,7 +1261,7 @@ mod tests {
         .await;
 
         let req = TestRequest::post().uri("/index.html").to_request();
-        let res = app.call(req).await.unwrap();
+        let res = app.call(req, &()).await.unwrap();
         assert!(res.status().is_success());
     }
 

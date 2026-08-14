@@ -911,17 +911,16 @@ async fn test_h1_gracefull_shutdown_2() {
     let srv = test_server(async move || {
         let tx = tx.clone();
         let count = count2.clone();
-        HttpService::new(move |_: Request| {
+        HttpService::new(async move |_: Request| {
             let count = count.clone();
             count.fetch_add(1, Ordering::Relaxed);
             if count.load(Ordering::Relaxed) == 2 {
                 let _ = tx.lock().unwrap().take().unwrap().send(());
             }
-            async move {
-                sleep(Millis(1000)).await;
-                count.fetch_sub(1, Ordering::Relaxed);
-                Ok::<_, io::Error>(Response::Ok().finish())
-            }
+
+            sleep(Millis(1000)).await;
+            count.fetch_sub(1, Ordering::Relaxed);
+            Ok::<_, io::Error>(Response::Ok().finish())
         })
     })
     .await;

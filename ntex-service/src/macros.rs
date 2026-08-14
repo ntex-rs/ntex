@@ -3,10 +3,7 @@
 macro_rules! forward_ready {
     ($field:ident) => {
         #[inline]
-        async fn ready(
-            &self,
-            ctx: $crate::ServiceCtx<'_, Self>,
-        ) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: $crate::ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             ctx.ready(&self.$field)
                 .await
                 .map_err(::core::convert::Into::into)
@@ -14,10 +11,7 @@ macro_rules! forward_ready {
     };
     ($field:ident, $err:expr) => {
         #[inline]
-        async fn ready(
-            &self,
-            ctx: $crate::ServiceCtx<'_, Self>,
-        ) -> Result<(), Self::Error> {
+        async fn ready(&self, ctx: $crate::ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             ctx.ready(&self.$field).await.map_err($err)
         }
     };

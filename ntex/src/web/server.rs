@@ -37,11 +37,11 @@ struct Config {
 pub struct HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg>,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
+    S::Res: Into<Response<B>>,
     B: MessageBody,
 {
     pub(super) factory: F,
@@ -54,11 +54,11 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg> + 'static,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg> + 'static,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
+    S::Res: Into<Response<B>>,
     B: MessageBody + 'static,
 {
     #[must_use]
@@ -411,11 +411,11 @@ where
 impl<F, I, S, B> HttpServer<F, I, S, B>
 where
     F: AsyncFn() -> I + Send + Clone + 'static,
-    I: IntoServiceFactory<S, Request, SharedCfg>,
-    S: ServiceFactory<Request, SharedCfg>,
+    I: IntoServiceFactory<S, Request>,
+    S: ServiceFactory<Request, St = (), InitCfg = SharedCfg>,
+    S::Res: Into<Response<B>>,
     S::Error: ResponseError,
     S::InitError: fmt::Debug,
-    S::Response: Into<Response<B>>,
     S::Service: 'static,
     B: MessageBody,
 {

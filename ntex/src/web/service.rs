@@ -44,8 +44,14 @@ where
 }
 
 type Guards = Vec<Box<dyn Guard>>;
-type HttpServiceFactory<Err: ErrorRenderer> =
-    boxed::BoxServiceFactory<SharedCfg, WebRequest<Err>, WebResponse, Err::Container, ()>;
+type HttpServiceFactory<Err: ErrorRenderer> = boxed::BoxServiceFactory<
+    (),
+    WebRequest<Err>,
+    WebResponse,
+    Err::Container,
+    SharedCfg,
+    (),
+>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppState(pub(crate) Rc<AppStateInner>);
@@ -173,12 +179,13 @@ impl<Err: ErrorRenderer> WebServiceConfig<Err> {
         factory: F,
         nested: Option<Rc<ResourceMap>>,
     ) where
-        F: IntoServiceFactory<S, WebRequest<Err>, SharedCfg>,
+        F: IntoServiceFactory<S, WebRequest<Err>>,
         S: ServiceFactory<
                 WebRequest<Err>,
-                SharedCfg,
-                Response = WebResponse,
+                St = (),
+                Res = WebResponse,
                 Error = Err::Container,
+                InitCfg = SharedCfg,
                 InitError = (),
             > + 'static,
     {
@@ -257,12 +264,13 @@ impl WebServiceAdapter {
     /// Set a service factory implementation and generate web service.
     pub fn finish<T, F, Err>(self, service: F) -> impl WebServiceFactory<Err>
     where
-        F: IntoServiceFactory<T, WebRequest<Err>, SharedCfg>,
+        F: IntoServiceFactory<T, WebRequest<Err>>,
         T: ServiceFactory<
                 WebRequest<Err>,
-                SharedCfg,
-                Response = WebResponse,
+                St = (),
+                Res = WebResponse,
                 Error = Err::Container,
+                InitCfg = SharedCfg,
             > + 'static,
         Err: ErrorRenderer,
     {
@@ -275,20 +283,21 @@ impl WebServiceAdapter {
     }
 }
 
-struct WebServiceImpl<T> {
-    srv: T,
+struct WebServiceImpl<Sf> {
+    srv: Sf,
     rdef: Vec<String>,
     name: Option<String>,
     guards: AllGuard,
 }
 
-impl<T, Err> WebServiceFactory<Err> for WebServiceImpl<T>
+impl<Sf, Err> WebServiceFactory<Err> for WebServiceImpl<Sf>
 where
-    T: ServiceFactory<
+    Sf: ServiceFactory<
             WebRequest<Err>,
-            SharedCfg,
-            Response = WebResponse,
+            St = (),
+            Res = WebResponse,
             Error = Err::Container,
+            InitCfg = SharedCfg,
             InitError = (),
         > + 'static,
     Err: ErrorRenderer,
@@ -399,7 +408,7 @@ mod tests {
         ))
         .await;
         let req = TestRequest::with_uri("/test").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(App::new().service(
@@ -413,7 +422,7 @@ mod tests {
         let req = TestRequest::with_uri("/test")
             .method(Method::PUT)
             .to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -425,10 +434,10 @@ mod tests {
         ]))
         .await;
         let req = TestRequest::with_uri("/test1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let req = TestRequest::with_uri("/test2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(App::new().service((
@@ -437,10 +446,10 @@ mod tests {
         )))
         .await;
         let req = TestRequest::with_uri("/test1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let req = TestRequest::with_uri("/test2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let srv = init_service(App::new().service(vec![
@@ -449,10 +458,10 @@ mod tests {
         ]))
         .await;
         let req = TestRequest::with_uri("/test1").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let req = TestRequest::with_uri("/test2").to_request();
-        let resp = srv.call(req).await.unwrap();
+        let resp = srv.call(req, &()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 

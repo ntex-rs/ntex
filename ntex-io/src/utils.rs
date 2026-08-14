@@ -1,7 +1,7 @@
 use std::{cell::Cell, task::Poll, task::Waker};
 
 use ntex_service::{ServiceFactory, chain_factory, fn_service};
-use ntex_util::{future::Ready, task::LocalWaker};
+use ntex_util::task::LocalWaker;
 
 use crate::{Filter, Io, IoBoxed, IoCallbacks};
 
@@ -15,23 +15,23 @@ pub struct Decoded<T> {
 }
 
 /// Service that converts any `Io<F>` stream to `IoBoxed` stream
-pub fn seal<F, S, C>(
-    srv: S,
+pub fn seal<F, Sf>(
+    sf: Sf,
 ) -> impl ServiceFactory<
     Io<F>,
-    C,
-    Response = S::Response,
-    Error = S::Error,
-    InitError = S::InitError,
+    St = Sf::St,
+    Res = Sf::Res,
+    Error = Sf::Error,
+    InitCfg = Sf::InitCfg,
+    InitError = Sf::InitError,
 >
 where
     F: Filter,
-    S: ServiceFactory<IoBoxed, C>,
-    C: Clone,
+    Sf: ServiceFactory<IoBoxed>,
 {
-    chain_factory(fn_service(|io: Io<F>| Ready::Ok(io.boxed())))
+    chain_factory(fn_service(async |io: Io<F>| Ok(io.boxed())))
         .map_init_err(|()| unreachable!())
-        .and_then(srv)
+        .and_then(sf)
 }
 
 pub(crate) struct Extensions(Cell<Option<Box<ExtensionsInner>>>);
@@ -148,10 +148,10 @@ mod tests {
                 .unwrap();
             Ok::<_, ()>(())
         }))
-        .pipeline(())
+        .pipeline(&())
         .await
         .unwrap();
-        let _ = svc.call(Io::new(server, SharedCfg::default())).await;
+        let _ = svc.call(Io::new(server, SharedCfg::default()), &()).await;
 
         let buf = client.read().await.unwrap();
         assert_eq!(buf, b"RES".as_ref());

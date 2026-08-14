@@ -1,4 +1,4 @@
-use super::{Service, ServiceCtx, ServiceFactory, util};
+use super::{Ctx, ReadyCtx, Service, ServiceFactory, util};
 
 #[derive(Debug, Clone)]
 /// Service for the `then` combinator, chaining a computation onto the end of
@@ -17,16 +17,23 @@ impl<A, B> Then<A, B> {
     }
 }
 
-impl<A, B, R> Service<R> for Then<A, B>
+impl<A, B> Service for Then<A, B>
 where
-    A: Service<R>,
-    B: Service<Result<A::Response, A::Error>, Error = A::Error>,
+    A: Service,
+    B: Service<Req = Result<A::Res, A::Error>, St = A::St, Error = A::Error>,
 {
-    type Response = B::Response;
+    type St = A::St;
+    type Req = A::Req;
+    type Res = B::Res;
     type Error = B::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn call(&self, req: A::Req, ctx: Ctx<'_, Self>) -> Result<B::Res, B::Error> {
+        ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
+    }
+
+    #[inline]
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         util::ready(&self.svc1, &self.svc2, ctx).await
     }
 
@@ -39,15 +46,6 @@ where
     #[inline]
     async fn shutdown(&self) {
         util::shutdown(&self.svc1, &self.svc2).await;
-    }
-
-    #[inline]
-    async fn call(
-        &self,
-        req: R,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        ctx.call(&self.svc2, ctx.call(&self.svc1, req).await).await
     }
 }
 
@@ -65,26 +63,28 @@ impl<A, B> ThenFactory<A, B> {
     }
 }
 
-impl<A, B, R, C> ServiceFactory<R, C> for ThenFactory<A, B>
+impl<A, B, Req> ServiceFactory<Req> for ThenFactory<A, B>
 where
-    A: ServiceFactory<R, C>,
+    A: ServiceFactory<Req>,
     B: ServiceFactory<
-            Result<A::Response, A::Error>,
-            C,
+            Result<A::Res, A::Error>,
+            St = A::St,
             Error = A::Error,
+            InitCfg = A::InitCfg,
             InitError = A::InitError,
         >,
-    C: Clone,
 {
-    type Response = B::Response;
+    type St = A::St;
+    type Res = B::Res;
     type Error = A::Error;
 
     type Service = Then<A::Service, B::Service>;
+    type InitCfg = A::InitCfg;
     type InitError = A::InitError;
 
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &A::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Then {
-            svc1: self.svc1.create(cfg.clone()).await?,
+            svc1: self.svc1.create(cfg).await?,
             svc2: self.svc2.create(cfg).await?,
         })
     }
@@ -96,16 +96,18 @@ mod tests {
     use ntex::util::lazy;
     use std::{cell::Cell, rc::Rc, task::Context};
 
-    use crate::{Service, ServiceCtx, chain, chain_factory, fn_factory};
+    use crate::{Ctx, ReadyCtx, Service, chain, chain_factory, fn_factory};
 
     #[derive(Clone)]
     struct Srv1(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service<Result<&'static str, &'static str>> for Srv1 {
-        type Response = &'static str;
+    impl Service for Srv1 {
+        type St = ();
+        type Req = Result<&'static str, &'static str>;
+        type Res = &'static str;
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -118,7 +120,7 @@ mod tests {
         async fn call(
             &self,
             req: Result<&'static str, &'static str>,
-            _: ServiceCtx<'_, Self>,
+            _: Ctx<'_, Self>,
         ) -> Result<&'static str, ()> {
             match req {
                 Ok(msg) => Ok(msg),
@@ -134,11 +136,13 @@ mod tests {
     #[derive(Clone)]
     struct Srv2(Rc<Cell<usize>>, Rc<Cell<usize>>);
 
-    impl Service<Result<&'static str, ()>> for Srv2 {
-        type Response = (&'static str, &'static str);
+    impl Service for Srv2 {
+        type St = ();
+        type Req = Result<&'static str, ()>;
+        type Res = (&'static str, &'static str);
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             self.0.set(self.0.get() + 1);
             Ok(())
         }
@@ -151,8 +155,8 @@ mod tests {
         async fn call(
             &self,
             req: Result<&'static str, ()>,
-            _: ServiceCtx<'_, Self>,
-        ) -> Result<Self::Response, ()> {
+            _: Ctx<'_, Self>,
+        ) -> Result<Self::Res, ()> {
             match req {
                 Ok(msg) => Ok((msg, "ok")),
                 Err(()) => Ok(("srv2", "err")),
@@ -171,7 +175,7 @@ mod tests {
         let srv = chain(Srv1(cnt.clone(), cnt_sht.clone()))
             .then(Srv2(cnt.clone(), cnt_sht.clone()))
             .into_pipeline();
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
         assert_eq!(cnt.get(), 2);
 
@@ -190,11 +194,11 @@ mod tests {
             .clone()
             .into_pipeline();
 
-        let res = srv.call(Ok("srv1")).await;
+        let res = srv.call(Ok("srv1"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));
 
-        let res = srv.call(Err("srv")).await;
+        let res = srv.call(Err("srv"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv2", "err"));
     }
@@ -214,11 +218,11 @@ mod tests {
             }))
             .clone();
         let srv = factory.pipeline(&()).await.unwrap();
-        let res = srv.call(Ok("srv1")).await;
+        let res = srv.call(Ok("srv1"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv1", "ok"));
 
-        let res = srv.call(Err("srv")).await;
+        let res = srv.call(Err("srv"), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("srv2", "err"));
     }

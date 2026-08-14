@@ -5,7 +5,7 @@ use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
 use crate::service::dev::ServiceChainFactory;
-use crate::service::{Middleware, Service, ServiceCtx, ServiceFactory, fn_service};
+use crate::service::{Ctx, Middleware, ReadyCtx, Service, ServiceFactory, fn_service};
 use crate::util::{BoxFuture, Extensions, join};
 
 use super::error::ErrorRenderer;
@@ -18,9 +18,9 @@ use super::service::{AppServiceFactory, AppState, WebServiceConfig};
 
 type Guards = Vec<Box<dyn Guard>>;
 type HttpService<Err: ErrorRenderer> =
-    BoxService<WebRequest<Err>, WebResponse, Err::Container>;
+    BoxService<(), WebRequest<Err>, WebResponse, Err::Container>;
 type HttpNewService<Err: ErrorRenderer> =
-    BoxServiceFactory<SharedCfg, WebRequest<Err>, WebResponse, Err::Container, ()>;
+    BoxServiceFactory<(), WebRequest<Err>, WebResponse, Err::Container, SharedCfg, ()>;
 type FnStateFactory = Box<dyn Fn(Extensions) -> BoxFuture<'static, Result<Extensions, ()>>>;
 
 /// Service factory to convert `Request` to a `WebRequest<S>`.
@@ -31,15 +31,16 @@ pub struct AppFactory<T, F, Err: ErrorRenderer>
 where
     F: ServiceFactory<
             WebRequest<Err>,
-            SharedCfg,
-            Response = WebRequest<Err>,
+            St = (),
+            Res = WebRequest<Err>,
             Error = Err::Container,
+            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: ServiceChainFactory<F, WebRequest<Err>, SharedCfg>,
+    pub(super) filter: ServiceChainFactory<F, WebRequest<Err>>,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,
@@ -48,25 +49,30 @@ where
     pub(super) case_insensitive: bool,
 }
 
-impl<T, F, Err> ServiceFactory<Request, SharedCfg> for AppFactory<T, F, Err>
+impl<T, F, Err> ServiceFactory<Request> for AppFactory<T, F, Err>
 where
     T: Middleware<AppService<F::Service, Err>, SharedCfg> + 'static,
-    T::Service: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    T::Service:
+        Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     F: ServiceFactory<
             WebRequest<Err>,
-            SharedCfg,
-            Response = WebRequest<Err>,
+            St = (),
+            Res = WebRequest<Err>,
             Error = Err::Container,
+            InitCfg = SharedCfg,
             InitError = (),
         >,
     Err: ErrorRenderer,
 {
-    type Response = WebResponse;
+    type St = ();
+    type Res = WebResponse;
     type Error = Err::Container;
+
+    type InitCfg = SharedCfg;
     type InitError = ();
     type Service = AppFactoryService<T::Service, Err>;
 
-    async fn create(&self, cfg: SharedCfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &SharedCfg) -> Result<Self::Service, Self::InitError> {
         let services = std::mem::take(&mut *self.services.borrow_mut());
 
         // update resource default service
@@ -78,7 +84,7 @@ where
             )))
         });
 
-        let filter_fut = self.filter.create(cfg.clone());
+        let filter_fut = self.filter.create(cfg);
         let state_factories = self.state_factories.clone();
         let mut extensions = self.extensions.borrow_mut().take().unwrap_or_default();
         let middleware = self.middleware.clone();
@@ -128,7 +134,7 @@ where
         // create http services
         for (path, factory, guards) in &mut services.iter() {
             let service = factory
-                .create(cfg.clone())
+                .create(cfg)
                 .await
                 .map_err(|()| log::error!("Cannot construct app service"))?;
             router.rdef(path.clone(), service).2 = guards.borrow_mut().take();
@@ -138,7 +144,7 @@ where
             router: router.finish(),
             default: Some(
                 default
-                    .create(cfg.clone())
+                    .create(cfg)
                     .await
                     .map_err(|()| log::error!("Cannot construct default service"))?,
             ),
@@ -166,7 +172,7 @@ where
 #[debug("AppFactoryService")]
 pub struct AppFactoryService<T, Err>
 where
-    T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    T: Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     service: T,
@@ -175,23 +181,21 @@ where
     _t: marker::PhantomData<Err>,
 }
 
-impl<T, Err> Service<Request> for AppFactoryService<T, Err>
+impl<S, Err> Service for AppFactoryService<S, Err>
 where
-    T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    S: Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
-    type Response = WebResponse;
-    type Error = T::Error;
+    type St = ();
+    type Req = Request;
+    type Res = WebResponse;
+    type Error = S::Error;
 
     crate::forward_poll!(service);
     crate::forward_ready!(service);
     crate::forward_shutdown!(service);
 
-    async fn call(
-        &self,
-        req: Request,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    async fn call(&self, req: Request, ctx: Ctx<'_, Self>) -> Result<Self::Res, S::Error> {
         let (head, payload) = req.into_parts();
 
         let req = if let Some(mut req) = self.state.config().get_request() {
@@ -216,7 +220,7 @@ where
 
 impl<T, Err> Drop for AppFactoryService<T, Err>
 where
-    T: Service<WebRequest<Err>, Response = WebResponse, Error = Err::Container>,
+    T: Service<St = (), Req = WebRequest<Err>, Res = WebResponse, Error = Err::Container>,
     Err: ErrorRenderer,
 {
     fn drop(&mut self) {
@@ -229,14 +233,16 @@ struct AppRouting<Err: ErrorRenderer> {
     default: Option<HttpService<Err>>,
 }
 
-impl<Err: ErrorRenderer> Service<WebRequest<Err>> for AppRouting<Err> {
-    type Response = WebResponse;
+impl<Err: ErrorRenderer> Service for AppRouting<Err> {
+    type St = ();
+    type Req = WebRequest<Err>;
+    type Res = WebResponse;
     type Error = Err::Container;
 
     async fn call(
         &self,
         mut req: WebRequest<Err>,
-        ctx: ServiceCtx<'_, Self>,
+        ctx: Ctx<'_, Self>,
     ) -> Result<WebResponse, Err::Container> {
         let res = self.router.recognize_checked(&mut req, |req, guards| {
             if let Some(guards) = guards {
@@ -268,16 +274,23 @@ pub struct AppService<F, Err: ErrorRenderer> {
     routing: AppRouting<Err>,
 }
 
-impl<F, Err> Service<WebRequest<Err>> for AppService<F, Err>
+impl<F, Err> Service for AppService<F, Err>
 where
-    F: Service<WebRequest<Err>, Response = WebRequest<Err>, Error = Err::Container>,
+    F: Service<
+            St = (),
+            Req = WebRequest<Err>,
+            Res = WebRequest<Err>,
+            Error = Err::Container,
+        >,
     Err: ErrorRenderer,
 {
-    type Response = WebResponse;
+    type St = ();
+    type Req = WebRequest<Err>;
+    type Res = WebResponse;
     type Error = Err::Container;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         let (ready1, ready2) =
             join(ctx.ready(&self.filter), ctx.ready(&self.routing)).await;
         ready1?;
@@ -293,8 +306,8 @@ where
     async fn call(
         &self,
         req: WebRequest<Err>,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+        ctx: Ctx<'_, Self>,
+    ) -> Result<Self::Res, Self::Error> {
         let req = ctx.call(&self.filter, req).await?;
         ctx.call(&self.routing, req).await
     }
@@ -328,7 +341,7 @@ mod tests {
             )
             .await;
             let req = TestRequest::with_uri("/test").to_request();
-            let _ = app.call(req).await.unwrap();
+            let _ = app.call(req, &()).await.unwrap();
         }
         assert!(data.load(Ordering::Relaxed));
     }

@@ -6,109 +6,117 @@ use super::{IntoServiceFactory, ServiceFactory};
 ///
 /// Note that this function consumes the receiving service factory and returns
 /// a wrapped version of it.
-pub fn map_config<T, R, U, F, C, C2>(factory: U, f: F) -> MapConfig<T, F, C, C2>
+pub fn map_config<Sf, Req, F, C>(
+    sf: impl IntoServiceFactory<Sf, Req>,
+    f: F,
+) -> MapConfig<Sf, F, C>
 where
-    T: ServiceFactory<R, C2>,
-    U: IntoServiceFactory<T, R, C2>,
-    F: Fn(C) -> C2,
+    Sf: ServiceFactory<Req>,
+    F: Fn(&C) -> Sf::InitCfg,
 {
-    MapConfig::new(factory.into_factory(), f)
+    MapConfig::new(sf.into_factory(), f)
 }
 
 /// Replace config with unit
-pub fn unit_config<T, R, U>(factory: U) -> UnitConfig<T>
+pub fn unit_config<Sf, Req, C>(
+    factory: impl IntoServiceFactory<Sf, Req>,
+) -> UnitConfig<Sf, C>
 where
-    T: ServiceFactory<R>,
-    U: IntoServiceFactory<T, R>,
+    Sf: ServiceFactory<Req>,
 {
     UnitConfig::new(factory.into_factory())
 }
 
 /// `map_config()` adapter service factory
-pub struct MapConfig<A, F, C, C2> {
-    a: A,
+pub struct MapConfig<Sf, F, Cfg> {
+    sf: Sf,
     f: F,
-    e: PhantomData<(C, C2)>,
+    c: PhantomData<Cfg>,
 }
 
-impl<A, F, C, C2> MapConfig<A, F, C, C2> {
+impl<Sf, F, Cfg> MapConfig<Sf, F, Cfg> {
     /// Create new `MapConfig` combinator
-    pub(crate) fn new(a: A, f: F) -> Self {
+    pub(crate) fn new(sf: Sf, f: F) -> Self {
         Self {
-            a,
+            sf,
             f,
-            e: PhantomData,
+            c: PhantomData,
         }
     }
 }
 
-impl<A, F, C, C2> Clone for MapConfig<A, F, C, C2>
+impl<Sf, F, Cfg> Clone for MapConfig<Sf, F, Cfg>
 where
-    A: Clone,
+    Sf: Clone,
     F: Clone,
 {
     fn clone(&self) -> Self {
         Self {
-            a: self.a.clone(),
+            sf: self.sf.clone(),
             f: self.f.clone(),
-            e: PhantomData,
+            c: PhantomData,
         }
     }
 }
 
-impl<A, F, C, C2> fmt::Debug for MapConfig<A, F, C, C2>
+impl<Sf, F, Cfg> fmt::Debug for MapConfig<Sf, F, Cfg>
 where
-    A: fmt::Debug,
+    Sf: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MapConfig")
-            .field("factory", &self.a)
+            .field("factory", &self.sf)
             .field("map", &std::any::type_name::<F>())
             .finish()
     }
 }
 
-impl<A, F, R, C, C2> ServiceFactory<R, C> for MapConfig<A, F, C, C2>
+impl<Sf, Req, F, Cfg> ServiceFactory<Req> for MapConfig<Sf, F, Cfg>
 where
-    A: ServiceFactory<R, C2>,
-    F: Fn(C) -> C2,
+    Sf: ServiceFactory<Req>,
+    F: Fn(&Cfg) -> Sf::InitCfg,
 {
-    type Response = A::Response;
-    type Error = A::Error;
+    type St = Sf::St;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
 
-    type Service = A::Service;
-    type InitError = A::InitError;
+    type Service = Sf::Service;
+    type InitCfg = Cfg;
+    type InitError = Sf::InitError;
 
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
-        self.a.create((self.f)(cfg)).await
+    async fn create(&self, cfg: &Cfg) -> Result<Self::Service, Self::InitError> {
+        self.sf.create(&(self.f)(cfg)).await
     }
 }
 
 #[derive(Clone, Debug)]
 /// `unit_config()` config combinator
-pub struct UnitConfig<A> {
-    factory: A,
+pub struct UnitConfig<Sf, Cfg> {
+    sf: Sf,
+    c: PhantomData<Cfg>,
 }
 
-impl<A> UnitConfig<A> {
+impl<Sf, Cfg> UnitConfig<Sf, Cfg> {
     /// Create new `UnitConfig` combinator
-    pub(crate) fn new(factory: A) -> Self {
-        Self { factory }
+    pub(crate) fn new(sf: Sf) -> Self {
+        Self { sf, c: PhantomData }
     }
 }
 
-impl<A, R, C> ServiceFactory<R, C> for UnitConfig<A>
+impl<Sf, Req, Cfg> ServiceFactory<Req> for UnitConfig<Sf, Cfg>
 where
-    A: ServiceFactory<R>,
+    Sf: ServiceFactory<Req, InitCfg = ()>,
 {
-    type Response = A::Response;
-    type Error = A::Error;
+    type St = Sf::St;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
 
-    type Service = A::Service;
-    type InitError = A::InitError;
+    type Service = Sf::Service;
+    type InitCfg = Cfg;
+    type InitError = Sf::InitError;
 
-    async fn create(&self, _: C) -> Result<Self::Service, Self::InitError> {
-        self.factory.create(()).await
+    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
+        self.sf.create(&()).await
     }
 }
 
@@ -125,7 +133,7 @@ mod tests {
         let item = Rc::new(Cell::new(1usize));
 
         let factory = map_config(
-            fn_service(|item: usize| async move { Ok::<_, ()>(item) }),
+            fn_service(async move |item: usize| Ok::<_, ()>(item)),
             |t: &usize| {
                 item.set(item.get() + *t);
             },
@@ -136,16 +144,16 @@ mod tests {
         assert_eq!(item.get(), 11);
         let _ = format!("{factory:?}");
 
-        assert_eq!(svc.call(1).await.unwrap(), 1);
+        assert_eq!(svc.call(1, &()).await.unwrap(), 1);
     }
 
     #[ntex::test]
     async fn test_unit_config() {
-        let svc = unit_config(fn_service(|item: usize| async move { Ok::<_, ()>(item) }))
+        let svc = unit_config(fn_service(async move |item: usize| Ok::<_, ()>(item)))
             .clone()
             .pipeline(&10)
             .await
             .unwrap();
-        assert_eq!(svc.call(1).await.unwrap(), 1);
+        assert_eq!(svc.call(1, &()).await.unwrap(), 1);
     }
 }

@@ -1,6 +1,6 @@
 use std::{fmt, task::Context};
 
-use super::{Service, ServiceCtx, ServiceFactory};
+use super::{Ctx, ReadyCtx, Service, ServiceFactory};
 
 /// Service for the `inspect` combinator.
 pub struct Inspect<S, F> {
@@ -10,10 +10,10 @@ pub struct Inspect<S, F> {
 
 impl<S, F> Inspect<S, F> {
     /// Create new `Inspect` service combinator.
-    pub(crate) fn new<R>(svc: S, f: F) -> Self
+    pub(crate) fn new(svc: S, f: F) -> Self
     where
-        S: Service<R>,
-        F: Fn(&S::Response),
+        S: Service,
+        F: Fn(&S::Res),
     {
         Self { svc, f }
     }
@@ -45,17 +45,19 @@ where
     }
 }
 
-impl<S, F, R> Service<R> for Inspect<S, F>
+impl<S, F> Service for Inspect<S, F>
 where
-    S: Service<R>,
-    F: Fn(&S::Response),
+    S: Service,
+    F: Fn(&S::Res),
 {
-    type Response = S::Response;
+    type St = S::St;
+    type Req = S::Req;
+    type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn call(&self, r: R, ctx: ServiceCtx<'_, Self>) -> Result<S::Response, S::Error> {
-        ctx.call(&self.svc, r).await.inspect(&self.f)
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+        ctx.call(&self.svc, req).await.inspect(&self.f)
     }
 
     crate::forward_ready!(svc);
@@ -71,9 +73,9 @@ pub struct InspectErr<S, F> {
 
 impl<S, F> InspectErr<S, F> {
     /// Create new `InspectErr` service combinator.
-    pub(crate) fn new<R>(svc: S, f: F) -> Self
+    pub(crate) fn new(svc: S, f: F) -> Self
     where
-        S: Service<R>,
+        S: Service,
         F: Fn(&S::Error),
     {
         Self { svc, f }
@@ -106,27 +108,29 @@ where
     }
 }
 
-impl<S, F, R> Service<R> for InspectErr<S, F>
+impl<S, F> Service for InspectErr<S, F>
 where
-    S: Service<R>,
+    S: Service,
     F: Fn(&S::Error),
 {
-    type Response = S::Response;
+    type St = S::St;
+    type Req = S::Req;
+    type Res = S::Res;
     type Error = S::Error;
 
     #[inline]
-    async fn ready(&self, ctx: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, S::Error> {
+        ctx.call(&self.svc, req).await.inspect_err(&self.f)
+    }
+
+    #[inline]
+    async fn ready(&self, ctx: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
         ctx.ready(&self.svc).await.inspect_err(&self.f)
     }
 
     #[inline]
     fn poll(&self, cx: &mut Context<'_>) -> Result<(), Self::Error> {
         self.svc.poll(cx).inspect_err(&self.f)
-    }
-
-    #[inline]
-    async fn call(&self, r: R, ctx: ServiceCtx<'_, Self>) -> Result<S::Response, S::Error> {
-        ctx.call(&self.svc, r).await.inspect_err(&self.f)
     }
 
     crate::forward_shutdown!(svc);
@@ -170,19 +174,21 @@ where
     }
 }
 
-impl<S, F, R, C> ServiceFactory<R, C> for InspectFactory<S, F>
+impl<Sf, Req, F> ServiceFactory<Req> for InspectFactory<Sf, F>
 where
-    S: ServiceFactory<R, C>,
-    F: Fn(&S::Response) + Clone,
+    Sf: ServiceFactory<Req>,
+    F: Fn(&Sf::Res) + Clone,
 {
-    type Response = S::Response;
-    type Error = S::Error;
+    type St = Sf::St;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
 
-    type Service = Inspect<S::Service, F>;
-    type InitError = S::InitError;
+    type Service = Inspect<Sf::Service, F>;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.s.create(cfg).await.map(|svc| Inspect {
             svc,
             f: self.f.clone(),
@@ -191,21 +197,21 @@ where
 }
 
 /// Factory for the `inspect_err` combinator.
-pub struct InspectErrFactory<S, F> {
-    s: S,
+pub struct InspectErrFactory<Sf, F> {
+    s: Sf,
     f: F,
 }
 
-impl<S, F> InspectErrFactory<S, F> {
+impl<Sf, F> InspectErrFactory<Sf, F> {
     /// Create new `InspectErrFactory` factory instance.
-    pub(crate) fn new(s: S, f: F) -> Self {
+    pub(crate) fn new(s: Sf, f: F) -> Self {
         Self { s, f }
     }
 }
 
-impl<S, F> Clone for InspectErrFactory<S, F>
+impl<Sf, F> Clone for InspectErrFactory<Sf, F>
 where
-    S: Clone,
+    Sf: Clone,
     F: Clone,
 {
     fn clone(&self) -> Self {
@@ -216,9 +222,9 @@ where
     }
 }
 
-impl<S, F> fmt::Debug for InspectErrFactory<S, F>
+impl<Sf, F> fmt::Debug for InspectErrFactory<Sf, F>
 where
-    S: fmt::Debug,
+    Sf: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InspectErrFactory")
@@ -228,19 +234,21 @@ where
     }
 }
 
-impl<S, F, R, C> ServiceFactory<R, C> for InspectErrFactory<S, F>
+impl<Sf, Req, F> ServiceFactory<Req> for InspectErrFactory<Sf, F>
 where
-    S: ServiceFactory<R, C>,
-    F: Fn(&S::Error) + Clone,
+    Sf: ServiceFactory<Req>,
+    F: Fn(&Sf::Error) + Clone,
 {
-    type Response = S::Response;
-    type Error = S::Error;
+    type St = Sf::St;
+    type Res = Sf::Res;
+    type Error = Sf::Error;
 
-    type Service = InspectErr<S::Service, F>;
-    type InitError = S::InitError;
+    type Service = InspectErr<Sf::Service, F>;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: C) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
         self.s.create(cfg).await.map(|svc| InspectErr {
             svc,
             f: self.f.clone(),
@@ -259,15 +267,17 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Srv(bool, bool, Rc<Cell<usize>>);
 
-    impl Service<()> for Srv {
-        type Response = ();
+    impl Service for Srv {
+        type St = ();
+        type Req = ();
+        type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             if self.1 { Err(()) } else { Ok(()) }
         }
 
-        async fn call(&self, _m: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _m: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             if self.0 { Err(()) } else { Ok(()) }
         }
 
@@ -283,7 +293,7 @@ mod tests {
         let srv = chain(Srv(false, false, cnt.clone()))
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .into_pipeline();
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -297,7 +307,7 @@ mod tests {
         let srv = chain(Srv(true, true, cnt.clone()))
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .into_pipeline();
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Err(()));
 
         srv.shutdown().await;
@@ -312,7 +322,7 @@ mod tests {
             .inspect(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
             .into_pipeline();
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
 
         let _ = format!("{srv:?}");
@@ -329,7 +339,7 @@ mod tests {
             .inspect_err(move |&()| cnt2.set(cnt2.get() + 1))
             .clone()
             .into_pipeline();
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());
 
@@ -350,7 +360,7 @@ mod tests {
         .inspect(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
         let srv = new_srv.pipeline(&()).await.unwrap();
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         let _ = format!("{new_srv:?}");
         srv.shutdown().await;
@@ -368,7 +378,7 @@ mod tests {
         .inspect_err(move |&()| cnt3.set(cnt3.get() + 1))
         .clone();
         let srv = new_srv.pipeline(&()).await.unwrap();
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_err());
         assert_eq!(res.err().unwrap(), ());
         let _ = format!("{new_srv:?}");

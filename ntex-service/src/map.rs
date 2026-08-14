@@ -1,144 +1,144 @@
 use std::{fmt, marker::PhantomData};
 
-use super::{Service, ServiceCtx, ServiceFactory};
+use super::{Ctx, Service, ServiceFactory};
 
 /// Service for the `map` combinator, changing the type of a service's response.
 ///
 /// This is created by the `ServiceExt::map` method.
-pub struct Map<A, F, Req, Res> {
-    service: A,
+pub struct Map<S, F, Res> {
+    svc: S,
     f: F,
-    _t: PhantomData<fn(Req) -> Res>,
+    _t: PhantomData<fn() -> Res>,
 }
 
-impl<A, F, Req, Res> Map<A, F, Req, Res> {
+impl<S, F, Res> Map<S, F, Res> {
     /// Create new `Map` combinator
-    pub(crate) fn new(service: A, f: F) -> Self
+    pub(crate) fn new(svc: S, f: F) -> Self
     where
-        A: Service<Req>,
-        F: Fn(A::Response) -> Res,
+        S: Service,
+        F: Fn(S::Res) -> Res,
     {
         Self {
-            service,
+            svc,
             f,
             _t: PhantomData,
         }
     }
 }
 
-impl<A, F, Req, Res> Clone for Map<A, F, Req, Res>
+impl<S, F, Res> Clone for Map<S, F, Res>
 where
-    A: Clone,
+    S: Clone,
     F: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
         Map {
-            service: self.service.clone(),
+            svc: self.svc.clone(),
             f: self.f.clone(),
             _t: PhantomData,
         }
     }
 }
 
-impl<A, F, Req, Res> fmt::Debug for Map<A, F, Req, Res>
+impl<S, F, Res> fmt::Debug for Map<S, F, Res>
 where
-    A: fmt::Debug,
+    S: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Map")
-            .field("service", &self.service)
+            .field("svc", &self.svc)
             .field("map", &std::any::type_name::<F>())
             .finish()
     }
 }
 
-impl<A, F, Req, Res> Service<Req> for Map<A, F, Req, Res>
+impl<S, F, Res> Service for Map<S, F, Res>
 where
-    A: Service<Req>,
-    F: Fn(A::Response) -> Res,
+    S: Service,
+    F: Fn(S::Res) -> Res,
 {
-    type Response = Res;
-    type Error = A::Error;
+    type St = S::St;
+    type Req = S::Req;
+    type Res = Res;
+    type Error = S::Error;
 
-    crate::forward_ready!(service);
-    crate::forward_poll!(service);
-    crate::forward_shutdown!(service);
+    crate::forward_ready!(svc);
+    crate::forward_poll!(svc);
+    crate::forward_shutdown!(svc);
 
     #[inline]
-    async fn call(
-        &self,
-        req: Req,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
-        ctx.call(&self.service, req).await.map(|r| (self.f)(r))
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<Res, S::Error> {
+        ctx.call(&self.svc, req).await.map(|r| (self.f)(r))
     }
 }
 
 /// `MapNewService` new service combinator
-pub struct MapFactory<A, F, Req, Res, Cfg> {
-    a: A,
+pub struct MapFactory<Sf, F, Res> {
+    sf: Sf,
     f: F,
-    r: PhantomData<fn(Req, Cfg) -> Res>,
+    r: PhantomData<fn() -> Res>,
 }
 
-impl<A, F, Req, Res, Cfg> MapFactory<A, F, Req, Res, Cfg>
-where
-    A: ServiceFactory<Req, Cfg>,
-    F: Fn(A::Response) -> Res,
-{
+impl<Sf, F, Res> MapFactory<Sf, F, Res> {
     /// Create new `Map` new service instance
-    pub(crate) fn new(a: A, f: F) -> Self {
+    pub(crate) fn new<Req>(sf: Sf, f: F) -> Self
+    where
+        Sf: ServiceFactory<Req>,
+        F: Fn(Sf::Res) -> Res,
+    {
         Self {
-            a,
+            sf,
             f,
             r: PhantomData,
         }
     }
 }
 
-impl<A, F, Req, Res, Cfg> Clone for MapFactory<A, F, Req, Res, Cfg>
+impl<Sf, F, Res> Clone for MapFactory<Sf, F, Res>
 where
-    A: Clone,
+    Sf: Clone,
     F: Clone,
 {
     #[inline]
     fn clone(&self) -> Self {
         Self {
-            a: self.a.clone(),
+            sf: self.sf.clone(),
             f: self.f.clone(),
             r: PhantomData,
         }
     }
 }
 
-impl<A, F, Req, Res, Cfg> fmt::Debug for MapFactory<A, F, Req, Res, Cfg>
+impl<Sf, F, Res> fmt::Debug for MapFactory<Sf, F, Res>
 where
-    A: fmt::Debug,
+    Sf: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MapFactory")
-            .field("factory", &self.a)
+            .field("factory", &self.sf)
             .field("map", &std::any::type_name::<F>())
             .finish()
     }
 }
 
-impl<A, F, Req, Res, Cfg> ServiceFactory<Req, Cfg> for MapFactory<A, F, Req, Res, Cfg>
+impl<Sf, Req, F, Res> ServiceFactory<Req> for MapFactory<Sf, F, Res>
 where
-    A: ServiceFactory<Req, Cfg>,
-    F: Fn(A::Response) -> Res + Clone,
+    Sf: ServiceFactory<Req>,
+    F: Fn(Sf::Res) -> Res + Clone,
 {
-    type Response = Res;
-    type Error = A::Error;
+    type St = Sf::St;
+    type Res = Res;
+    type Error = Sf::Error;
 
-    type Service = Map<A::Service, F, Req, Res>;
-    type InitError = A::InitError;
+    type Service = Map<Sf::Service, F, Res>;
+    type InitCfg = Sf::InitCfg;
+    type InitError = Sf::InitError;
 
     #[inline]
-    async fn create(&self, cfg: Cfg) -> Result<Self::Service, Self::InitError> {
+    async fn create(&self, cfg: &Sf::InitCfg) -> Result<Self::Service, Self::InitError> {
         Ok(Map {
-            service: self.a.create(cfg).await?,
+            svc: self.sf.create(cfg).await?,
             f: self.f.clone(),
             _t: PhantomData,
         })
@@ -150,20 +150,22 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use crate::{Pipeline, Service, ServiceCtx, ServiceFactory, fn_factory};
+    use crate::{Ctx, Pipeline, ReadyCtx, Service, ServiceFactory, fn_factory};
 
     #[derive(Debug, Default, Clone)]
     struct Srv(Rc<Cell<usize>>);
 
-    impl Service<()> for Srv {
-        type Response = ();
+    impl Service for Srv {
+        type St = ();
+        type Req = ();
+        type Res = ();
         type Error = ();
 
-        async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+        async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
             Ok(())
         }
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), ()> {
+        async fn call(&self, _r: (), _: Ctx<'_, Self>) -> Result<(), ()> {
             Ok(())
         }
 
@@ -176,11 +178,11 @@ mod tests {
     async fn test_service() {
         let cnt_sht = Rc::new(Cell::new(0));
         let srv = Pipeline::new(Srv(cnt_sht.clone()).map(|()| "ok").clone());
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -190,11 +192,11 @@ mod tests {
         let cnt_sht = Rc::new(Cell::new(0));
         let svc = Srv(cnt_sht.clone()).map(|()| "ok");
         let srv = Pipeline::new(&svc);
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
 
         srv.shutdown().await;
@@ -205,11 +207,11 @@ mod tests {
     #[ntex::test]
     async fn test_pipeline() {
         let srv = Pipeline::new(crate::chain(Srv::default()).map(|()| "ok").clone());
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "ok");
 
-        let res = srv.ready().await;
+        let res = srv.ready(&()).await;
         assert_eq!(res, Ok(()));
     }
 
@@ -219,7 +221,7 @@ mod tests {
             .map(|()| "ok")
             .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
 
@@ -233,7 +235,7 @@ mod tests {
                 .map(|()| "ok")
                 .clone();
         let srv = Pipeline::new(new_srv.create(&()).await.unwrap());
-        let res = srv.call(()).await;
+        let res = srv.call((), &()).await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), ("ok"));
 

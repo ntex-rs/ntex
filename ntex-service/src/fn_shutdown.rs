@@ -1,22 +1,22 @@
-use std::{cell::Cell, fmt, future::Future, future::ready, marker::PhantomData};
+use std::{cell::Cell, fmt, marker::PhantomData};
 
-use crate::{Service, ServiceCtx, ServiceFactory};
+use crate::{Ctx, Service, ServiceFactory};
 
 #[inline]
 /// Create `FnShutdown` for function that can act as a `on_shutdown` callback.
-pub fn fn_shutdown<Req, Err, F>(f: F) -> FnShutdown<Req, Err, F>
+pub fn fn_shutdown<St, F, Req, Err>(f: F) -> FnShutdown<St, F, Req, Err>
 where
     F: AsyncFnOnce(),
 {
     FnShutdown::new(f)
 }
 
-pub struct FnShutdown<Req, Err, F> {
+pub struct FnShutdown<St, F, Req, Err, Cfg = ()> {
     f_shutdown: Cell<Option<F>>,
-    _t: PhantomData<(Req, Err)>,
+    _t: PhantomData<(St, Req, Err, Cfg)>,
 }
 
-impl<Req, Err, F> FnShutdown<Req, Err, F> {
+impl<St, F, Req, Err, Cfg> FnShutdown<St, F, Req, Err, Cfg> {
     pub(crate) fn new(f: F) -> Self {
         Self {
             f_shutdown: Cell::new(Some(f)),
@@ -25,7 +25,7 @@ impl<Req, Err, F> FnShutdown<Req, Err, F> {
     }
 }
 
-impl<Req, Err, F> Clone for FnShutdown<Req, Err, F>
+impl<St, F, Req, Err, Cfg> Clone for FnShutdown<St, F, Req, Err, Cfg>
 where
     F: Clone,
 {
@@ -40,7 +40,7 @@ where
     }
 }
 
-impl<Req, Err, F> fmt::Debug for FnShutdown<Req, Err, F> {
+impl<St, F, Req, Err, Cfg> fmt::Debug for FnShutdown<St, F, Req, Err, Cfg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FnShutdown")
             .field("fn", &std::any::type_name::<F>())
@@ -48,34 +48,38 @@ impl<Req, Err, F> fmt::Debug for FnShutdown<Req, Err, F> {
     }
 }
 
-impl<Req, Err, C, F> ServiceFactory<Req, C> for FnShutdown<Req, Err, F>
+impl<St, F, Req, Err, Cfg> ServiceFactory<Req> for FnShutdown<St, F, Req, Err, Cfg>
 where
     F: AsyncFnOnce() + Clone,
 {
-    type Response = Req;
+    type St = St;
+    type Res = Req;
     type Error = Err;
-    type Service = FnShutdown<Req, Err, F>;
+    type Service = FnShutdown<St, F, Req, Err, Cfg>;
+    type InitCfg = Cfg;
     type InitError = ();
 
     #[inline]
-    fn create(&self, _: C) -> impl Future<Output = Result<Self::Service, Self::InitError>> {
+    async fn create(&self, _: &Cfg) -> Result<Self::Service, Self::InitError> {
         if let Some(f) = self.f_shutdown.take() {
             self.f_shutdown.set(Some(f.clone()));
-            ready(Ok(FnShutdown {
+            Ok(FnShutdown {
                 f_shutdown: Cell::new(Some(f)),
                 _t: PhantomData,
-            }))
+            })
         } else {
             panic!("FnShutdown was used already");
         }
     }
 }
 
-impl<Req, Err, F> Service<Req> for FnShutdown<Req, Err, F>
+impl<St, F, Req, Err, Cfg> Service for FnShutdown<St, F, Req, Err, Cfg>
 where
     F: AsyncFnOnce(),
 {
-    type Response = Req;
+    type St = St;
+    type Req = Req;
+    type Res = Req;
     type Error = Err;
 
     #[inline]
@@ -86,12 +90,8 @@ where
     }
 
     #[inline]
-    fn call(
-        &self,
-        req: Req,
-        _: ServiceCtx<'_, Self>,
-    ) -> impl Future<Output = Result<Req, Err>> {
-        ready(Ok(req))
+    async fn call(&self, req: Req, _: Ctx<'_, Self>) -> Result<Req, Err> {
+        Ok(req)
     }
 }
 
@@ -115,12 +115,12 @@ mod tests {
         let pipe = chain_factory(srv)
             .and_then(on_shutdown)
             .clone()
-            .pipeline(())
+            .pipeline(&())
             .await
             .unwrap();
 
-        let res = pipe.call(()).await;
-        assert_eq!(pipe.ready().await, Ok(()));
+        let res = pipe.call((), &()).await;
+        assert_eq!(pipe.ready(&()).await, Ok(()));
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), "pipe");
         assert!(!pipe.is_shutdown());
@@ -141,15 +141,15 @@ mod tests {
     async fn test_fn_shutdown_panic() {
         let is_called = Rc::new(Cell::new(false));
         let is_called2 = is_called.clone();
-        let on_shutdown = fn_shutdown::<(), (), _>(async move || {
+        let on_shutdown = fn_shutdown::<(), _, (), ()>(async move || {
             is_called2.set(true);
         });
 
-        let pipe = chain_factory(on_shutdown).pipeline(()).await.unwrap();
+        let pipe = chain_factory(on_shutdown).pipeline(&()).await.unwrap();
         pipe.shutdown().await;
         assert!(is_called.get());
         assert!(!pipe.is_shutdown());
 
-        let _factory = pipe.get_ref().create(()).await;
+        let _factory = pipe.get_ref().create(&()).await;
     }
 }

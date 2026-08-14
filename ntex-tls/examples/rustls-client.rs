@@ -20,7 +20,7 @@ async fn main() -> io::Result<()> {
     let connector = Pipeline::new(
         connect::rustls::TlsConnector::new(config.clone())
             .create(
-                SharedCfg::new("CLIENT")
+                &SharedCfg::new("CLIENT")
                     .add(TlsConfig::new().set_handshake_timeout(10))
                     .into(),
             )
@@ -29,7 +29,7 @@ async fn main() -> io::Result<()> {
     );
 
     //let io = connector.call("www.rust-lang.org:443").await.unwrap();
-    let io = connector.call("127.0.0.1:8443".into()).await.unwrap();
+    let io = connector.call("127.0.0.1:8443".into(), &()).await.unwrap();
     println!("Connected to tls server {:?}", io.query::<PeerAddr>().get());
     io.send(Bytes::from_static(b"GET /\r\n\r\n"), &codec::BytesCodec)
         .await

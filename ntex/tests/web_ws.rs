@@ -25,11 +25,11 @@ async fn web_ws() {
 
     let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
-            |req: HttpRequest| async move {
-                ws::start::<_, _, &str, web::Error>(
-                    req,
+            async move |req: HttpRequest| {
+                ws::start(
+                    &req,
                     None,
-                    fn_factory_with_config(|_| async {
+                    fn_factory_with_config(|_: &ws::WsSink| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -75,7 +75,7 @@ async fn web_no_ws() {
     let srv = test::server(async || {
         App::new()
             .service(web::resource("/").route(web::to(|| async { HttpResponse::Ok() })))
-            .service(web::resource("/ws_error").route(web::to(|| async {
+            .service(web::resource("/ws_error").route(web::to(async || {
                 Err::<HttpResponse, _>(io::Error::other("test"))
             })))
     })
@@ -83,14 +83,14 @@ async fn web_no_ws() {
 
     let err = srv.ws().await.err().unwrap();
     assert!(matches!(
-        err,
+        *err,
         WsClientError::InvalidResponseStatus(StatusCode::OK)
     ));
     assert_eq!(err.to_string(), "Invalid response status: 200 OK");
 
     let err = srv.ws_at("/ws_error").await.err().unwrap();
     assert!(matches!(
-        err,
+        *err,
         WsClientError::InvalidResponseStatus(StatusCode::INTERNAL_SERVER_ERROR)
     ));
     assert_eq!(
@@ -105,10 +105,10 @@ async fn web_ws_after_pooled_post_request() {
         App::new()
             .service(
                 web::resource("/").route(web::to(|req: HttpRequest| async move {
-                    ws::start::<_, _, &str, web::Error>(
-                        req,
+                    ws::start(
+                        &req,
                         None,
-                        fn_factory_with_config(|_| async {
+                        fn_factory_with_config(async |_: &ws::WsSink| {
                             Ok::<_, web::Error>(fn_service(service))
                         }),
                     )
@@ -165,10 +165,10 @@ async fn web_ws_client() {
     let srv = test::server(async || {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
-                ws::start::<_, _, _, web::Error>(
-                    req,
-                    None::<&str>,
-                    fn_factory_with_config(|_| async {
+                ws::start(
+                    &req,
+                    None,
+                    fn_factory_with_config(|_: &ws::WsSink| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -224,14 +224,13 @@ async fn web_ws_subprotocol() {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // choose first supported protocol, convert to owned String
-                let protocol: Option<String> = ws::subprotocols(&req)
-                    .find(|p| *p == "my-subprotocol" || *p == "others-subprotocol")
-                    .map(String::from);
+                let protocol: Option<&str> = ws::subprotocols(&req)
+                    .find(|p| *p == "my-subprotocol" || *p == "others-subprotocol");
 
-                ws::start::<_, _, _, web::Error>(
-                    req,
+                ws::start(
+                    &req,
                     protocol,
-                    fn_factory_with_config(|_| async {
+                    fn_factory_with_config(|_: &ws::WsSink| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -273,14 +272,13 @@ async fn web_ws_subprotocol_none() {
         App::new().service(web::resource("/").route(web::to(
             |req: HttpRequest| async move {
                 // choose first supported protocol (none will match), convert to owned String
-                let protocol: Option<String> = ws::subprotocols(&req)
-                    .find(|p| *p == "unsupported")
-                    .map(String::from);
+                let protocol: Option<&str> =
+                    ws::subprotocols(&req).find(|p| *p == "unsupported");
 
-                ws::start::<_, _, _, web::Error>(
-                    req,
+                ws::start(
+                    &req,
                     protocol,
-                    fn_factory_with_config(|_| async {
+                    fn_factory_with_config(|_: &ws::WsSink| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -330,12 +328,12 @@ async fn web_ws_protocols_parsing() {
                     .iter()
                     .find(|p| *p == "proto2")
                     .or_else(|| protocols.iter().find(|p| *p == "proto1"))
-                    .cloned();
+                    .map(|s| s.as_ref());
 
-                ws::start::<_, _, _, web::Error>(
-                    req,
+                ws::start(
+                    &req,
                     protocol,
-                    fn_factory_with_config(|_| async {
+                    fn_factory_with_config(|_: &ws::WsSink| async {
                         Ok::<_, web::Error>(fn_service(service))
                     }),
                 )
@@ -374,26 +372,24 @@ async fn web_ws_shutdown_propagation() {
 
     let srv = test::server(async move || {
         let shutdown_tx = shutdown_tx.clone();
-        App::new().service(web::resource("/").route(web::to(move |req: HttpRequest| {
-            let shutdown_tx = shutdown_tx.clone();
-            async move {
-                ws::start::<_, _, &str, web::Error>(
-                    req,
+        App::new().service(web::resource("/").route(web::to(
+            async move |req: HttpRequest| {
+                let shutdown_tx = shutdown_tx.clone();
+                ws::start(
+                    &req,
                     None,
-                    fn_factory_with_config(move |_| {
+                    fn_factory_with_config(async move |_t: &ws::WsSink| {
                         let shutdown_tx = shutdown_tx.clone();
-                        async move {
-                            let service = fn_service(service);
-                            let on_shutdown = fn_shutdown(move || async move {
+                        Ok::<_, web::Error>(chain(service).and_then(fn_shutdown(
+                            async move || {
                                 let _ = shutdown_tx.send(());
-                            });
-                            Ok::<_, web::Error>(chain(service).and_then(on_shutdown))
-                        }
+                            },
+                        )))
                     }),
                 )
                 .await
-            }
-        })))
+            },
+        )))
     })
     .await;
 

@@ -6,7 +6,7 @@ use std::{cell::Cell, fmt, future::Future, io, pin::Pin, rc::Rc};
 
 use ntex_codec::{Decoder, Encoder};
 use ntex_io::{Decoded, IoBoxed, IoStatusUpdate, RecvError};
-use ntex_service::{IntoService, Pipeline, PipelineBinding, PipelineCall, Service};
+use ntex_service::{PipelineBinding, PipelineCall, Service};
 use ntex_util::{future::Either, spawn, time::Seconds};
 
 type Response<U> = <U as Encoder>::Item;
@@ -47,14 +47,14 @@ pub enum Reason<U: Encoder + Decoder> {
 pin_project_lite::pin_project! {
     /// Dispatcher - is a future that reads frames from bytes stream
     /// and pass them to the service.
-    pub struct Dispatcher<S, U>
+    pub struct Dispatcher<S, St, U>
     where
-        S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+        S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
         U: Encoder,
         U: Decoder,
         U: 'static,
     {
-        inner: DispatcherInner<S, U>,
+        inner: DispatcherInner<S, St, U>,
     }
 }
 
@@ -70,28 +70,28 @@ bitflags::bitflags! {
     }
 }
 
-struct DispatcherInner<S, U>
+struct DispatcherInner<S, St, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder + 'static,
 {
     st: DispatcherState,
     error: Option<S::Error>,
-    shared: Rc<DispatcherShared<S, U>>,
-    response: Option<PipelineCall<S, DispatchItem<U>>>,
+    shared: Rc<DispatcherShared<S, St, U>>,
+    response: Option<PipelineCall<S>>,
     read_remains: u32,
     read_remains_prev: u32,
     read_max_timeout: Seconds,
 }
 
-pub(crate) struct DispatcherShared<S, U>
+pub(crate) struct DispatcherShared<S, St, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
     io: IoBoxed,
     codec: U,
-    service: PipelineBinding<S, DispatchItem<U>>,
+    service: PipelineBinding<S>,
     flags: Cell<Flags>,
     error: Cell<Option<DispatcherError<S::Error, <U as Encoder>::Error>>>,
     inflight: Cell<u32>,
@@ -127,16 +127,15 @@ impl<S, U> From<Either<S, U>> for DispatcherError<S, U> {
     }
 }
 
-impl<S, U> Dispatcher<S, U>
+impl<S, St, U> Dispatcher<S, St, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     /// Construct new `Dispatcher` instance.
-    pub fn new<Io, F>(io: Io, codec: U, service: F) -> Dispatcher<S, U>
+    pub fn new<Io>(io: Io, codec: U, service: PipelineBinding<S>) -> Dispatcher<S, St, U>
     where
         IoBoxed: From<Io>,
-        F: IntoService<S, DispatchItem<U>>,
     {
         let io = IoBoxed::from(io);
         let flags = if io.cfg().keepalive_timeout().is_zero() {
@@ -148,10 +147,10 @@ where
         let shared = Rc::new(DispatcherShared {
             io,
             codec,
+            service,
             flags: Cell::new(flags),
             error: Cell::new(None),
             inflight: Cell::new(0),
-            service: Pipeline::new(service.into_service()).bind(),
         });
 
         Dispatcher {
@@ -168,12 +167,12 @@ where
     }
 }
 
-impl<S, U> DispatcherShared<S, U>
+impl<S, St, U> DispatcherShared<S, St, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>>,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>>,
     U: Encoder + Decoder,
 {
-    fn handle_result(&self, item: Result<S::Response, S::Error>, io: &IoBoxed, wake: bool) {
+    fn handle_result(&self, item: Result<S::Res, S::Error>, io: &IoBoxed, wake: bool) {
         match item {
             Ok(Some(val)) => {
                 if let Err(err) = io.encode(val, &self.codec) {
@@ -215,9 +214,10 @@ where
     }
 }
 
-impl<S, U> Future for Dispatcher<S, U>
+impl<S, St, U> Future for Dispatcher<S, St, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    St: 'static,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
     U: Decoder + Encoder + 'static,
 {
     type Output = Result<(), S::Error>;
@@ -375,9 +375,10 @@ where
     }
 }
 
-impl<S, U> DispatcherInner<S, U>
+impl<S, St, U> DispatcherInner<S, St, U>
 where
-    S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+    S: Service<St = St, Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
+    St: 'static,
     U: Decoder + Encoder + 'static,
 {
     fn call_service(&mut self, cx: &mut Context<'_>, item: DispatchItem<U>, nowait: bool) {
@@ -635,7 +636,7 @@ mod tests {
     use ntex_bytes::{BytePages, Bytes, BytesMut};
     use ntex_codec::BytesCodec;
     use ntex_io::{Flags, Io, IoConfig, IoRef, testing::IoTest};
-    use ntex_service::{ServiceCtx, cfg::SharedCfg};
+    use ntex_service::{Ctx, Pipeline, ReadyCtx, cfg::SharedCfg};
     use ntex_util::{channel::oneshot, time::Millis, time::sleep};
     use rand::Rng;
 
@@ -683,9 +684,9 @@ mod tests {
         }
     }
 
-    impl<S, U> Dispatcher<S, U>
+    impl<S, U> Dispatcher<S, (), U>
     where
-        S: Service<DispatchItem<U>, Response = Option<Response<U>>> + 'static,
+        S: Service<St = (), Req = DispatchItem<U>, Res = Option<Response<U>>> + 'static,
         U: Decoder + Encoder + 'static,
     {
         /// Construct new `Dispatcher` instance
@@ -848,11 +849,13 @@ mod tests {
 
         struct Srv(Rc<Cell<usize>>);
 
-        impl Service<DispatchItem<BytesCodec>> for Srv {
-            type Response = Option<Response<BytesCodec>>;
+        impl Service for Srv {
+            type St = ();
+            type Req = DispatchItem<BytesCodec>;
+            type Res = Option<Response<BytesCodec>>;
             type Error = &'static str;
 
-            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
                 self.0.set(self.0.get() + 1);
                 Err("test")
             }
@@ -860,8 +863,8 @@ mod tests {
             async fn call(
                 &self,
                 _: DispatchItem<BytesCodec>,
-                _: ServiceCtx<'_, Self>,
-            ) -> Result<Self::Response, Self::Error> {
+                _: Ctx<'_, Self>,
+            ) -> Result<Self::Res, Self::Error> {
                 Ok(None)
             }
         }
@@ -1333,11 +1336,13 @@ mod tests {
             Cell<bool>,
         );
 
-        impl Service<DispatchItem<BytesCodec>> for Srv {
-            type Response = Option<Bytes>;
+        impl Service for Srv {
+            type St = ();
+            type Req = DispatchItem<BytesCodec>;
+            type Res = Option<Bytes>;
             type Error = ();
 
-            async fn ready(&self, _: ServiceCtx<'_, Self>) -> Result<(), Self::Error> {
+            async fn ready(&self, _: ReadyCtx<'_, Self>) -> Result<(), Self::Error> {
                 if self.2.get()
                     && let Some(rx) = self.0.take()
                 {
@@ -1349,7 +1354,7 @@ mod tests {
             async fn call(
                 &self,
                 msg: DispatchItem<BytesCodec>,
-                _: ServiceCtx<'_, Self>,
+                _: Ctx<'_, Self>,
             ) -> Result<Option<Bytes>, Self::Error> {
                 if let DispatchItem::Item(msg) = msg {
                     self.2.set(true);

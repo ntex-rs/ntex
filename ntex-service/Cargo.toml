@@ -1,6 +1,6 @@
 [package]
 name = "ntex-service"
-version = "4.6.0"
+version = "5.0.0"
 authors = ["ntex contributors <team@ntex.rs>"]
 description = "ntex service"
 keywords = ["network", "framework", "async", "futures"]
@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ntex-service/"
 categories = ["network-programming", "asynchronous"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 
 [lib]
 name = "ntex_service"

@@ -248,7 +248,7 @@ impl ServerBuilder {
         U: net::ToSocketAddrs,
         N: AsRef<str>,
         F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedCfg> + 'static,
+        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
     {
         let sockets = bind_addr(addr, self.backlog)?;
 
@@ -276,7 +276,7 @@ impl ServerBuilder {
         N: AsRef<str>,
         U: AsRef<std::path::Path>,
         F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedCfg> + 'static,
+        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
     {
         use std::os::unix::net::UnixListener;
 
@@ -305,7 +305,7 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedCfg> + 'static,
+        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(
@@ -327,7 +327,7 @@ impl ServerBuilder {
     ) -> io::Result<Self>
     where
         F: AsyncFn(Config) -> R + Send + Clone + 'static,
-        R: ServiceFactory<Io, SharedCfg> + 'static,
+        R: ServiceFactory<Io, St = (), InitCfg = SharedCfg> + 'static,
     {
         let token = self.token.next();
         self.services.push(factory::create_factory_service(

@@ -16,7 +16,8 @@
     clippy::missing_panics_doc,
     clippy::must_use_candidate,
     clippy::too_many_lines,
-    clippy::type_complexity
+    clippy::type_complexity,
+    clippy::unused_async_trait_impl
 )]
 // Used for fake variadics
 #![cfg_attr(any(docsrs, docsrs_dep), feature(rustdoc_internals))]
@@ -37,7 +38,7 @@ pub mod web;
 pub mod ws;
 
 pub use self::service::{
-    IntoService, IntoServiceFactory, Middleware, Pipeline, Service, ServiceCtx,
+    Ctx, IntoService, IntoServiceFactory, Middleware, Pipeline, ReadyCtx, Service,
     ServiceFactory, cfg::Cfg, cfg::SharedCfg, chain, chain_factory, fn_service,
 };
 
@@ -83,8 +84,6 @@ pub mod server {
     //! General purpose tcp server
     pub use ntex_server::net::*;
 
-    pub use ntex_server::{Signal, signal};
-
     #[cfg(feature = "openssl")]
     pub use ntex_tls::openssl;
 
@@ -123,10 +122,6 @@ pub mod util {
     pub use ntex_bytes::{Buf, BufMut, ByteString, Bytes, BytesMut};
     pub use ntex_bytes::{BytePage, BytePageSize, BytePages};
     pub use ntex_util::{HashMap, HashSet, future::*, services::*};
-
-    #[doc(hidden)]
-    #[allow(deprecated)]
-    pub use ntex_util::error::*;
 
     #[doc(hidden)]
     pub fn enable_test_logging() {

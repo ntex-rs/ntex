@@ -4,7 +4,7 @@
 //! will be aborted.
 use std::{fmt, marker};
 
-use ntex_service::{Middleware, Service, ServiceCtx};
+use ntex_service::{Ctx, Middleware, Service};
 
 use crate::future::{Either, select};
 use crate::time::{Millis, sleep};
@@ -88,7 +88,7 @@ impl Clone for Timeout {
 impl<S, C> Middleware<S, C> for Timeout {
     type Service = TimeoutService<S>;
 
-    fn create(&self, service: S, _: C) -> Self::Service {
+    fn create(&self, service: S, _: &C) -> Self::Service {
         TimeoutService {
             service,
             timeout: self.timeout,
@@ -104,10 +104,10 @@ pub struct TimeoutService<S> {
 }
 
 impl<S> TimeoutService<S> {
-    pub fn new<T, R>(timeout: T, service: S) -> Self
+    pub fn new<T>(timeout: T, service: S) -> Self
     where
         T: Into<Millis>,
-        S: Service<R>,
+        S: Service,
     {
         TimeoutService {
             service,
@@ -116,24 +116,22 @@ impl<S> TimeoutService<S> {
     }
 }
 
-impl<S, R> Service<R> for TimeoutService<S>
+impl<S> Service for TimeoutService<S>
 where
-    S: Service<R>,
+    S: Service,
 {
-    type Response = S::Response;
+    type St = S::St;
+    type Req = S::Req;
+    type Res = S::Res;
     type Error = TimeoutError<S::Error>;
 
-    async fn call(
-        &self,
-        request: R,
-        ctx: ServiceCtx<'_, Self>,
-    ) -> Result<Self::Response, Self::Error> {
+    async fn call(&self, req: S::Req, ctx: Ctx<'_, Self>) -> Result<S::Res, Self::Error> {
         if self.timeout.is_zero() {
-            ctx.call(&self.service, request)
+            ctx.call(&self.service, req)
                 .await
                 .map_err(TimeoutError::Service)
         } else {
-            match select(sleep(self.timeout), ctx.call(&self.service, request)).await {
+            match select(sleep(self.timeout), ctx.call(&self.service, req)).await {
                 Either::Left(()) => Err(TimeoutError::Timeout),
                 Either::Right(res) => res.map_err(TimeoutError::Service),
             }
@@ -165,11 +163,13 @@ mod tests {
         }
     }
 
-    impl Service<()> for SleepService {
-        type Response = ();
+    impl Service for SleepService {
+        type St = ();
+        type Req = ();
+        type Res = ();
         type Error = SrvError;
 
-        async fn call(&self, _r: (), _: ServiceCtx<'_, Self>) -> Result<(), SrvError> {
+        async fn call(&self, (): (), _: Ctx<'_, Self>) -> Result<(), SrvError> {
             crate::time::sleep(self.0).await;
             Ok::<_, SrvError>(())
         }
@@ -182,8 +182,8 @@ mod tests {
 
         let timeout =
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)).clone());
-        assert_eq!(timeout.call(()).await, Ok(()));
-        assert_eq!(timeout.ready().await, Ok(()));
+        assert_eq!(timeout.call((), &()).await, Ok(()));
+        assert_eq!(timeout.ready(&()).await, Ok(()));
         timeout.shutdown().await;
     }
 
@@ -194,8 +194,8 @@ mod tests {
 
         let timeout =
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
-        assert_eq!(timeout.call(()).await, Ok(()));
-        assert_eq!(timeout.ready().await, Ok(()));
+        assert_eq!(timeout.call((), &()).await, Ok(()));
+        assert_eq!(timeout.ready(&()).await, Ok(()));
     }
 
     #[ntex::test]
@@ -205,7 +205,7 @@ mod tests {
 
         let timeout =
             Pipeline::new(TimeoutService::new(resolution, SleepService(wait_time)));
-        assert_eq!(timeout.call(()).await, Err(TimeoutError::Timeout));
+        assert_eq!(timeout.call((), &()).await, Err(TimeoutError::Timeout));
     }
 
     #[ntex::test]
@@ -220,7 +220,7 @@ mod tests {
         );
         let srv = timeout.pipeline(&()).await.unwrap();
 
-        let res = srv.call(()).await.unwrap_err();
+        let res = srv.call((), &()).await.unwrap_err();
         assert_eq!(res, TimeoutError::Timeout);
     }
 
