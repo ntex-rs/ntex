@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use ntex_service::ServiceFactoryExt as _;
+
 use crate::router::{IntoPattern, ResourceDef};
 use crate::service::cfg::{Cfg, SharedCfg};
 use crate::service::{IntoServiceFactory, ServiceFactory, boxed};

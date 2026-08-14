@@ -1,22 +1,19 @@
 use std::{fmt, marker::PhantomData, rc::Rc};
 
-use crate::dev::{Apply, ApplyCtx, ServiceChainFactory};
+use crate::dev::{Apply, ApplyCtx};
 use crate::{IntoServiceFactory, Service, ServiceFactory};
 
 /// Apply middleware to a service.
 pub fn apply<M, S, R, C, U>(
     mw: M,
     factory: U,
-) -> ServiceChainFactory<ApplyMiddleware<M, S, C>, R, C>
+) -> ApplyMiddleware<M, S, C>
 where
     S: ServiceFactory<R, C>,
     M: Middleware<S::Service, C>,
     U: IntoServiceFactory<S, R, C>,
 {
-    ServiceChainFactory {
-        factory: ApplyMiddleware::new(mw, factory.into_factory()),
-        _t: PhantomData,
-    }
+    ApplyMiddleware::new(mw, factory.into_factory())
 }
 
 /// The `Middleware` trait defines the interface for a service factory
@@ -102,14 +99,14 @@ pub trait Middleware<Svc, Cfg = ()> {
     fn apply<Fac, Req>(
         self,
         factory: Fac,
-    ) -> ServiceChainFactory<ApplyMiddleware<Self, Fac, Cfg>, Req, Cfg>
+    ) -> ApplyMiddleware<Self, Fac, Cfg>
     where
         Fac: ServiceFactory<Req, Cfg, Service = Svc>,
         Cfg: Clone,
         Self: Sized,
         Self::Service: Service<Req>,
     {
-        crate::chain_factory(ApplyMiddleware::new(self, factory))
+        ApplyMiddleware::new(self, factory)
     }
 }
 

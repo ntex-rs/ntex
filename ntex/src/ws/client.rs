@@ -10,6 +10,7 @@ use coo_kie::{Cookie, CookieJar};
 
 use base64::{Engine, engine::general_purpose::STANDARD as base64};
 use nanorand::{Rng, WyRand};
+use ntex_service::ServiceExt as _;
 
 use crate::client::{ClientCodec, ClientConfig, ClientRawRequest, ClientResponse};
 use crate::connect::{Connect, ConnectError, Connector};

@@ -2,35 +2,34 @@
 use std::{fmt, marker};
 
 use crate::ctx::WaitersRef;
-use crate::dev::{ServiceChain, ServiceChainFactory};
 use crate::{IntoService, IntoServiceFactory, Service, ServiceCtx, ServiceFactory};
 
 /// Apply transform function to a service.
 pub fn apply_fn<T, Req, F, In, Out, Err, U>(
     service: U,
     f: F,
-) -> ServiceChain<Apply<T, Req, F, In, Out, Err>, In>
+) -> Apply<T, Req, F, In, Out, Err>
 where
     T: Service<Req>,
     F: AsyncFn(In, &ApplyCtx<'_, T>) -> Result<Out, Err>,
     U: IntoService<T, Req>,
     Err: From<T::Error>,
 {
-    crate::chain(Apply::new(service.into_service(), f))
+    Apply::new(service.into_service(), f)
 }
 
 /// Service factory that produces `apply_fn` service.
 pub fn apply_fn_factory<T, Req, Cfg, F, In, Out, Err, U>(
     service: U,
     f: F,
-) -> ServiceChainFactory<ApplyFactory<T, Req, Cfg, F, In, Out, Err>, In, Cfg>
+) -> ApplyFactory<T, Req, Cfg, F, In, Out, Err>
 where
     T: ServiceFactory<Req, Cfg>,
     F: AsyncFn(In, &ApplyCtx<'_, T::Service>) -> Result<Out, Err> + Clone,
     U: IntoServiceFactory<T, Req, Cfg>,
     Err: From<T::Error>,
 {
-    crate::chain_factory(ApplyFactory::new(service.into_factory(), f))
+    ApplyFactory::new(service.into_factory(), f)
 }
 
 #[derive(Debug)]

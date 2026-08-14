@@ -6,6 +6,7 @@ use crate::{SharedCfg, http::Uri, io::IoBoxed, time::Seconds, util::join};
 
 use super::{Connect, Connection, error::ConnectError, pool::ConnectionPool};
 
+use ntex_service::ServiceFactoryExt as _;
 #[cfg(feature = "openssl")]
 use tls_openssl::ssl::SslConnector as OpensslConnector;
 

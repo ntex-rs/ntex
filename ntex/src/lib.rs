@@ -38,7 +38,7 @@ pub mod ws;
 
 pub use self::service::{
     IntoService, IntoServiceFactory, Middleware, Pipeline, Service, ServiceCtx,
-    ServiceFactory, cfg::Cfg, cfg::SharedCfg, chain, chain_factory, fn_service,
+    ServiceFactory, cfg::Cfg, cfg::SharedCfg, fn_service,
 };
 
 pub use ntex_util::{channel, task};

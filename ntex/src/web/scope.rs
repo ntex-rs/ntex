@@ -1,11 +1,13 @@
 use std::{cell::RefCell, fmt, rc::Rc, task::Context};
 
+use ntex_service::ServiceFactoryExt as _;
+
 use crate::http::Response;
 use crate::router::{IntoPattern, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
 use crate::service::{Identity, Middleware, Service, ServiceCtx, ServiceFactory};
-use crate::service::{IntoServiceFactory, chain_factory, dev::ServiceChainFactory};
+use crate::service::IntoServiceFactory;
 use crate::util::{Extensions, join};
 
 use super::app::Filter;
@@ -60,7 +62,7 @@ type HttpNewService<Err: ErrorRenderer> =
 #[debug("Scope({rdef:?})")]
 pub struct Scope<Err: ErrorRenderer, M = Identity, T = Filter<Err>> {
     middleware: M,
-    filter: ServiceChainFactory<T, WebRequest<Err>, SharedCfg>,
+    filter: T,
     rdef: Vec<String>,
     state: Option<Extensions>,
     services: Vec<Box<dyn AppServiceFactory<Err>>>,
@@ -76,7 +78,7 @@ impl<Err: ErrorRenderer> Scope<Err> {
     pub fn new<T: IntoPattern>(path: T) -> Scope<Err> {
         Scope {
             middleware: Identity,
-            filter: chain_factory(Filter::new()),
+            filter: Filter::new(),
             rdef: path.patterns(),
             state: None,
             guards: Vec::new(),
@@ -301,7 +303,7 @@ where
     {
         // create and configure default resource
         self.default = Rc::new(RefCell::new(Some(Rc::new(boxed::factory(
-            chain_factory(f.into_factory())
+            f.into_factory()
                 .map_init_err(|e| log::error!("Cannot construct default service: {e:?}")),
         )))));
 

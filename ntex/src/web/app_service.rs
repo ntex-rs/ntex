@@ -4,7 +4,6 @@ use crate::http::{Request, Response};
 use crate::router::{Path, ResourceDef, Router};
 use crate::service::boxed::{self, BoxService, BoxServiceFactory};
 use crate::service::cfg::SharedCfg;
-use crate::service::dev::ServiceChainFactory;
 use crate::service::{Middleware, Service, ServiceCtx, ServiceFactory, fn_service};
 use crate::util::{BoxFuture, Extensions, join};
 
@@ -39,7 +38,7 @@ where
     Err: ErrorRenderer,
 {
     pub(super) middleware: Rc<T>,
-    pub(super) filter: ServiceChainFactory<F, WebRequest<Err>, SharedCfg>,
+    pub(super) filter: F,
     pub(super) extensions: RefCell<Option<Extensions>>,
     pub(super) state_factories: Rc<Vec<FnStateFactory>>,
     pub(super) services: Rc<RefCell<Vec<Box<dyn AppServiceFactory<Err>>>>>,

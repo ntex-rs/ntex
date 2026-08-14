@@ -3,6 +3,7 @@ use std::{fmt, net, net::SocketAddr, rc::Rc, sync::mpsc, thread, time};
 
 #[cfg(feature = "cookie")]
 use coo_kie::Cookie;
+use ntex_service::ServiceFactoryExt as _;
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
